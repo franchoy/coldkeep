@@ -20,6 +20,20 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.4 - 2026-05-18 — GC Reachability & Deletion Correctness
+
+Fixes-only release focused on GC reachability/deletion correctness evidence consolidation, tracker/matrix closure finalization for selected v1.10.4 rows, and release-candidate documentation readiness.
+
+Highlights:
+
+- evidence chain consolidated across Phases 1-9 for included v1.10.4 scope
+- closure outcomes finalized: CK-110-M014 fixed, CK-110-M036 fixed, CK-110-M079 fixed (35 linked issue rows closed)
+- local validation boundary recorded (`go vet`, targeted package tests, targeted race tests, targeted GC/snapshot/retention/repair/report/parity/concurrency suite all pass)
+- known local full-suite timeout at `TestConcurrentStoreMultiChunkFilesAtomicCompletion` remains documented
+- no production behavior, test behavior, CI workflow, or dependency changes introduced in release-candidate documentation phases
+
+------------------------------------------------------------------------
+
 ## v1.10.3 - 2026-05-17 — Packed Storage Metadata Integrity
 
 Fixes-only release focused on packed-storage metadata integrity evidence, tracker/matrix closure accounting for selected v1.10.3 rows, and release-candidate documentation readiness.
