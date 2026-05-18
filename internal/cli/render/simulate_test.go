@@ -192,3 +192,70 @@ func TestRenderSimulationJSONIsDeterministic(t *testing.T) {
 		t.Fatalf("expected sorted containers by id, got %v", firstContainer["container_id"])
 	}
 }
+
+func TestRenderSimulationJSONPreservesCategoryDistinctions(t *testing.T) {
+	r := &SimulationResult{
+		Kind: "gc",
+		GC: &observability.GCSimulationResult{
+			Kind: "gc",
+			Summary: observability.GCSimulationSummary{
+				LogicallyReclaimableBytes:          4096,
+				PhysicallyReclaimableBytes:         1024,
+				PackedBytesReclaimable:             512,
+				RetainedDeadBytesDueToPackedBlocks: 3072,
+				FullyReclaimableContainers:         1,
+				PartiallyDeadContainers:            2,
+			},
+			Warnings: []observability.ObservationWarning{{
+				Code:    "CHUNK_MISSING_PLACEMENT",
+				Message: "chunk has no physical placement",
+			}},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := (JSONRenderer{}).RenderSimulation(&buf, r); err != nil {
+		t.Fatalf("RenderSimulation json: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
+		t.Fatalf("decode simulation json: %v", err)
+	}
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object: %v", payload)
+	}
+	gcData, ok := data["gc"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing gc object: %v", data)
+	}
+	summary, ok := gcData["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing summary object: %v", gcData)
+	}
+
+	checkNumber := func(field string, want int) {
+		t.Helper()
+		got, ok := summary[field].(float64)
+		if !ok {
+			t.Fatalf("summary[%s] missing or not numeric: %v", field, summary[field])
+		}
+		if int(got) != want {
+			t.Fatalf("summary[%s]=%d, want %d", field, int(got), want)
+		}
+	}
+
+	checkNumber("logically_reclaimable_bytes", 4096)
+	checkNumber("physically_reclaimable_bytes", 1024)
+	checkNumber("packed_bytes_reclaimable", 512)
+	checkNumber("retained_dead_bytes_due_to_packed_blocks", 3072)
+	checkNumber("fully_reclaimable_containers", 1)
+	checkNumber("partially_dead_containers", 2)
+
+	warnings, ok := payload["warnings"].([]any)
+	if !ok || len(warnings) == 0 {
+		t.Fatalf("expected warnings array with entries, got %v", payload["warnings"])
+	}
+}
