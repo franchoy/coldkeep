@@ -349,3 +349,97 @@ func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
 		}
 	}
 }
+
+// TestRunGCDeletesMetadataWhenContainerFileIsMissing verifies that destructive GC
+// still deletes the container metadata row when the physical container file is already
+// missing on disk. The run should remain successful and report the container as reclaimed.
+func TestRunGCDeletesMetadataWhenContainerFileIsMissing(t *testing.T) {
+	requireParityDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+
+	applyParitySchema(t, dbconn)
+	resetParityDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	originalContainersDir := container.ContainersDir
+	t.Cleanup(func() {
+		container.ContainersDir = originalContainersDir
+	})
+	container.ContainersDir = containersDir
+
+	payload := []byte("missing-file-payload")
+	filename := "missing-file.bin"
+	containerPath := filepath.Join(containersDir, filename)
+	if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)
+		 RETURNING id`,
+		filename,
+		int64(len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, 'COMPLETED', 0, 0, 'v2-fastcdc')
+		 RETURNING id`,
+		"missing-file-chunk",
+		int64(len(payload)),
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, 0)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		containerID,
+	); err != nil {
+		t.Fatalf("insert block row: %v", err)
+	}
+
+	if err := os.Remove(containerPath); err != nil {
+		t.Fatalf("remove container file before gc: %v", err)
+	}
+
+	result, err := maintenance.RunGCWithContainersDirResult(false, containersDir)
+	if err != nil {
+		t.Fatalf("destructive gc with missing file: %v", err)
+	}
+	if result.DryRun {
+		t.Fatal("expected DryRun=false")
+	}
+	if result.AffectedContainers != 1 {
+		t.Fatalf("affected containers = %d, want 1", result.AffectedContainers)
+	}
+	if len(result.ContainerFilenames) != 1 || result.ContainerFilenames[0] != filename {
+		t.Fatalf("container filenames = %v, want [%s]", result.ContainerFilenames, filename)
+	}
+
+	if _, err := os.Stat(containerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected missing container file to remain absent, stat err=%v", err)
+	}
+
+	var remaining int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&remaining); err != nil {
+		t.Fatalf("count remaining container rows: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expected metadata row to be deleted, got %d rows", remaining)
+	}
+}
