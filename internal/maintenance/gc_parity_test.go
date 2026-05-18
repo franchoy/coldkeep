@@ -159,3 +159,193 @@ func TestSimulateGCMatchesActualGCDeletion(t *testing.T) {
 		t.Fatalf("expected container metadata to be deleted, got %d rows", remainingContainers)
 	}
 }
+
+// TestRunGCDryRunIsNonMutating verifies that RunGCWithContainersDirResult(dryRun=true)
+// does not delete physical container files and does not remove container metadata rows.
+// This directly exercises the dryRun=true code path (not the observability simulation).
+func TestRunGCDryRunIsNonMutating(t *testing.T) {
+	requireParityDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+
+	applyParitySchema(t, dbconn)
+	resetParityDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	originalContainersDir := container.ContainersDir
+	t.Cleanup(func() {
+		container.ContainersDir = originalContainersDir
+	})
+	container.ContainersDir = containersDir
+
+	payload := []byte("dry-run-non-mutation-payload")
+	filename := "dry-run-non-mutation.bin"
+	containerPath := filepath.Join(containersDir, filename)
+	if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)
+		 RETURNING id`,
+		filename,
+		int64(len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, 'COMPLETED', 0, 0, 'v2-fastcdc')
+		 RETURNING id`,
+		"dry-run-non-mutation-chunk",
+		int64(len(payload)),
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, 0)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		containerID,
+	); err != nil {
+		t.Fatalf("insert block row: %v", err)
+	}
+
+	// Run dry-run GC — must not delete anything.
+	dryResult, err := maintenance.RunGCWithContainersDirResult(true, containersDir)
+	if err != nil {
+		t.Fatalf("dry-run gc: %v", err)
+	}
+	if !dryResult.DryRun {
+		t.Fatal("expected DryRun=true in result")
+	}
+	if dryResult.AffectedContainers != 1 {
+		t.Fatalf("dry-run AffectedContainers = %d, want 1", dryResult.AffectedContainers)
+	}
+
+	// Container file must still exist after dry-run.
+	if _, err := os.Stat(containerPath); err != nil {
+		t.Fatalf("expected container file to still exist after dry-run, stat err=%v", err)
+	}
+
+	// Container metadata row must still exist after dry-run.
+	var count int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&count); err != nil {
+		t.Fatalf("count container rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected container metadata to still exist after dry-run, got %d rows", count)
+	}
+}
+
+// TestRunGCDryRunCandidateCountMatchesDestructiveGC verifies that the candidate count
+// (AffectedContainers) and filenames (ContainerFilenames) produced by dryRun=true match
+// those produced by dryRun=false on an equivalent repository fixture.
+// This directly exercises the dryRun=true code path (not the observability simulation).
+func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
+	requireParityDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+
+	applyParitySchema(t, dbconn)
+	resetParityDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	originalContainersDir := container.ContainersDir
+	t.Cleanup(func() {
+		container.ContainersDir = originalContainersDir
+	})
+	container.ContainersDir = containersDir
+
+	insertDeadContainer := func(filename string, payload []byte) {
+		t.Helper()
+		containerPath := filepath.Join(containersDir, filename)
+		if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+			t.Fatalf("write container file %s: %v", filename, err)
+		}
+		var cID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+			 VALUES ($1, $2, $3, TRUE, FALSE)
+			 RETURNING id`,
+			filename, int64(len(payload)), container.GetContainerMaxSize(),
+		).Scan(&cID); err != nil {
+			t.Fatalf("insert container %s: %v", filename, err)
+		}
+		var chkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+			 VALUES ($1, $2, 'COMPLETED', 0, 0, 'v2-fastcdc')
+			 RETURNING id`,
+			filename+"-chunk", int64(len(payload)),
+		).Scan(&chkID); err != nil {
+			t.Fatalf("insert chunk for %s: %v", filename, err)
+		}
+		if _, err := dbconn.Exec(
+			`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+			 VALUES ($1, 'plain', 1, $2, $3, $4, 0)`,
+			chkID, int64(len(payload)), int64(len(payload)), cID,
+		); err != nil {
+			t.Fatalf("insert block for %s: %v", filename, err)
+		}
+	}
+
+	insertDeadContainer("parity-dead-a.bin", []byte("parity candidate a"))
+	insertDeadContainer("parity-dead-b.bin", []byte("parity candidate b"))
+
+	// Run dry-run and capture the candidate set.
+	dryResult, err := maintenance.RunGCWithContainersDirResult(true, containersDir)
+	if err != nil {
+		t.Fatalf("dry-run gc: %v", err)
+	}
+	if dryResult.AffectedContainers != 2 {
+		t.Fatalf("dry-run AffectedContainers = %d, want 2", dryResult.AffectedContainers)
+	}
+
+	// Run destructive GC on the same state.
+	gcResult, err := maintenance.RunGCWithContainersDirResult(false, containersDir)
+	if err != nil {
+		t.Fatalf("destructive gc: %v", err)
+	}
+
+	// AffectedContainers must match.
+	if gcResult.AffectedContainers != dryResult.AffectedContainers {
+		t.Fatalf("candidate count mismatch: dry-run=%d destructive=%d",
+			dryResult.AffectedContainers, gcResult.AffectedContainers)
+	}
+
+	// ContainerFilenames must be the same set (both paths sort by container id ASC).
+	if len(gcResult.ContainerFilenames) != len(dryResult.ContainerFilenames) {
+		t.Fatalf("filename count mismatch: dry-run=%v destructive=%v",
+			dryResult.ContainerFilenames, gcResult.ContainerFilenames)
+	}
+	for i, fn := range dryResult.ContainerFilenames {
+		if gcResult.ContainerFilenames[i] != fn {
+			t.Fatalf("filename[%d] mismatch: dry-run=%q destructive=%q", i, fn, gcResult.ContainerFilenames[i])
+		}
+	}
+
+	// Destructive GC must have deleted the files.
+	for _, fn := range gcResult.ContainerFilenames {
+		p := filepath.Join(containersDir, fn)
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected %s to be deleted by destructive GC, stat err=%v", fn, err)
+		}
+	}
+}
