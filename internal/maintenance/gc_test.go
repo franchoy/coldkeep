@@ -79,6 +79,86 @@ func resetDB(t *testing.T, dbconn *sql.DB) {
 	}
 }
 
+func setupAdvisoryLockHeldGCFixture(t *testing.T) (*sql.DB, *sql.DB, string, string, string) {
+	t.Helper()
+
+	lockerDB, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect locker db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = lockerDB.Close()
+	})
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = dbconn.Close()
+	})
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	originalContainersDir := container.ContainersDir
+	t.Cleanup(func() {
+		container.ContainersDir = originalContainersDir
+	})
+	container.ContainersDir = containersDir
+
+	filename := "gc-lock-held.bin"
+	containerPath := filepath.Join(containersDir, filename)
+	payload := []byte("gc lock held")
+	if err := os.WriteFile(containerPath, payload, 0o600); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)`,
+		filename,
+		int64(len(payload)),
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	return lockerDB, dbconn, containersDir, filename, containerPath
+}
+
+func holdGCAdvisoryLock(t *testing.T, lockerDB *sql.DB) {
+	t.Helper()
+
+	var locked bool
+	if err := lockerDB.QueryRow(`SELECT pg_try_advisory_lock($1)`, gcAdvisoryLockID).Scan(&locked); err != nil {
+		t.Fatalf("acquire advisory lock: %v", err)
+	}
+	if !locked {
+		t.Fatal("expected to acquire advisory lock in test setup")
+	}
+	t.Cleanup(func() {
+		_, _ = lockerDB.Exec(`SELECT pg_advisory_unlock($1)`, gcAdvisoryLockID)
+	})
+}
+
+func assertGCRefusalPreservesContainerState(t *testing.T, dbconn *sql.DB, containerPath, filename string) {
+	t.Helper()
+
+	if _, err := os.Stat(containerPath); err != nil {
+		t.Fatalf("expected container file to remain after lock-held refusal, stat err=%v", err)
+	}
+
+	var remaining int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE filename = $1`, filename).Scan(&remaining); err != nil {
+		t.Fatalf("count remaining container rows: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("expected metadata to remain after lock-held refusal, got %d rows", remaining)
+	}
+}
+
 func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
 	requireDB(t)
 
@@ -139,62 +219,11 @@ func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
 	}
 }
 
-// nolint:cyclop,funlen
-// TestRunGCRefusesWhenAdvisoryLockAlreadyHeld verifies that RunGC refuses to execute
-// when an advisory lock is already held. Complexity justified by lock setup, concurrent
-// DB connection, and detailed assertion of lock-held error. Test-code cyclomatic complexity
-// and line count do not apply to production code standards.
 func TestRunGCRefusesWhenAdvisoryLockAlreadyHeld(t *testing.T) {
 	requireDB(t)
 
-	lockerDB, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect locker db: %v", err)
-	}
-	defer lockerDB.Close()
-
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect db: %v", err)
-	}
-	defer dbconn.Close()
-
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
-
-	containersDir := t.TempDir()
-	originalContainersDir := container.ContainersDir
-	t.Cleanup(func() {
-		container.ContainersDir = originalContainersDir
-	})
-	container.ContainersDir = containersDir
-
-	filename := "gc-lock-held.bin"
-	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, []byte("gc lock held"), 0o600); err != nil {
-		t.Fatalf("write container file: %v", err)
-	}
-
-	if _, err := dbconn.Exec(
-		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
-		 VALUES ($1, $2, $3, TRUE, FALSE)`,
-		filename,
-		int64(len("gc lock held")),
-		container.GetContainerMaxSize(),
-	); err != nil {
-		t.Fatalf("insert container row: %v", err)
-	}
-
-	var locked bool
-	if err := lockerDB.QueryRow(`SELECT pg_try_advisory_lock($1)`, gcAdvisoryLockID).Scan(&locked); err != nil {
-		t.Fatalf("acquire advisory lock: %v", err)
-	}
-	if !locked {
-		t.Fatal("expected to acquire advisory lock in test setup")
-	}
-	t.Cleanup(func() {
-		_, _ = lockerDB.Exec(`SELECT pg_advisory_unlock($1)`, gcAdvisoryLockID)
-	})
+	lockerDB, dbconn, containersDir, filename, containerPath := setupAdvisoryLockHeldGCFixture(t)
+	holdGCAdvisoryLock(t, lockerDB)
 
 	_, gcErr := RunGCWithContainersDirResult(false, containersDir)
 	if gcErr == nil {
@@ -203,18 +232,7 @@ func TestRunGCRefusesWhenAdvisoryLockAlreadyHeld(t *testing.T) {
 	if !strings.Contains(gcErr.Error(), "already running") {
 		t.Fatalf("expected lock-held refusal message, got: %v", gcErr)
 	}
-
-	if _, err := os.Stat(containerPath); err != nil {
-		t.Fatalf("expected container file to remain after lock-held refusal, stat err=%v", err)
-	}
-
-	var remaining int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE filename = $1`, filename).Scan(&remaining); err != nil {
-		t.Fatalf("count remaining container rows: %v", err)
-	}
-	if remaining != 1 {
-		t.Fatalf("expected metadata to remain after lock-held refusal, got %d rows", remaining)
-	}
+	assertGCRefusalPreservesContainerState(t, dbconn, containerPath, filename)
 }
 
 func TestRunGCRefusesOnPhysicalIntegrityIssues(t *testing.T) {
