@@ -77,7 +77,7 @@ func TestSimulateGCMatchesActualGCDeletion(t *testing.T) {
 	payload := []byte("gc parity payload")
 	filename := "gc-parity.bin"
 	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+	if err := os.WriteFile(containerPath, payload, 0o600); err != nil {
 		t.Fatalf("write container file: %v", err)
 	}
 
@@ -160,9 +160,11 @@ func TestSimulateGCMatchesActualGCDeletion(t *testing.T) {
 	}
 }
 
+// nolint:cyclop,funlen
 // TestRunGCDryRunIsNonMutating verifies that RunGCWithContainersDirResult(dryRun=true)
 // does not delete physical container files and does not remove container metadata rows.
 // This directly exercises the dryRun=true code path (not the observability simulation).
+// Complexity justified by comprehensive setup/validation to ensure non-mutation guarantee.
 func TestRunGCDryRunIsNonMutating(t *testing.T) {
 	requireParityDB(t)
 
@@ -185,7 +187,7 @@ func TestRunGCDryRunIsNonMutating(t *testing.T) {
 	payload := []byte("dry-run-non-mutation-payload")
 	filename := "dry-run-non-mutation.bin"
 	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+	if err := os.WriteFile(containerPath, payload, 0o600); err != nil {
 		t.Fatalf("write container file: %v", err)
 	}
 
@@ -250,10 +252,12 @@ func TestRunGCDryRunIsNonMutating(t *testing.T) {
 	}
 }
 
+// nolint:cyclop,funlen
 // TestRunGCDryRunCandidateCountMatchesDestructiveGC verifies that the candidate count
 // (AffectedContainers) and filenames (ContainerFilenames) produced by dryRun=true match
 // those produced by dryRun=false on an equivalent repository fixture.
 // This directly exercises the dryRun=true code path (not the observability simulation).
+// Complexity justified by parity validation requiring dual GC runs and comprehensive assertions.
 func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
 	requireParityDB(t)
 
@@ -276,7 +280,7 @@ func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
 	insertDeadContainer := func(filename string, payload []byte) {
 		t.Helper()
 		containerPath := filepath.Join(containersDir, filename)
-		if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+		if err := os.WriteFile(containerPath, payload, 0o600); err != nil {
 			t.Fatalf("write container file %s: %v", filename, err)
 		}
 		var cID int64
@@ -350,10 +354,12 @@ func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
 	}
 }
 
+// nolint:cyclop,funlen
 // TestRunGCDryRunDoesNotAuthorizeLaterDeletionAfterMutation verifies that
 // a dry-run candidate result is only a point-in-time preview. If repository
 // liveness mutates before destructive GC, the destructive pass must re-evaluate
-// safety and avoid deletion of now-live data.
+// safety and avoid deletion of now-live data. Complexity justified by liveness
+// mutation simulation and detailed safety boundary validation.
 func TestRunGCDryRunDoesNotAuthorizeLaterDeletionAfterMutation(t *testing.T) {
 	requireParityDB(t)
 
@@ -376,7 +382,7 @@ func TestRunGCDryRunDoesNotAuthorizeLaterDeletionAfterMutation(t *testing.T) {
 	payload := []byte("dry-run-authorization-boundary")
 	filename := "dry-run-not-authorization.bin"
 	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+	if err := os.WriteFile(containerPath, payload, 0o600); err != nil {
 		t.Fatalf("write container file: %v", err)
 	}
 
@@ -443,13 +449,15 @@ func TestRunGCDryRunDoesNotAuthorizeLaterDeletionAfterMutation(t *testing.T) {
 		t.Fatalf("count container rows after destructive gc: %v", err)
 	}
 	if remaining != 1 {
-		t.Fatalf("expected metadata row to remain after liveness mutation, got %d", remaining)
+		t.Fatalf("expected 1 container row after destructive gc, got %d", remaining)
 	}
 }
 
+// nolint:cyclop,funlen
 // TestRunGCDeletesMetadataWhenContainerFileIsMissing verifies that destructive GC
 // still deletes the container metadata row when the physical container file is already
 // missing on disk. The run should remain successful and report the container as reclaimed.
+// Complexity justified by orphaned metadata handling and multi-state verification
 func TestRunGCDeletesMetadataWhenContainerFileIsMissing(t *testing.T) {
 	requireParityDB(t)
 
@@ -472,7 +480,7 @@ func TestRunGCDeletesMetadataWhenContainerFileIsMissing(t *testing.T) {
 	payload := []byte("missing-file-payload")
 	filename := "missing-file.bin"
 	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+	if err := os.WriteFile(containerPath, payload, 0o600); err != nil {
 		t.Fatalf("write container file: %v", err)
 	}
 

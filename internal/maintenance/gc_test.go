@@ -100,7 +100,7 @@ func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
 
 	filename := "gc-unlock-failure.bin"
 	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, []byte("gc unlock failure test"), 0o644); err != nil {
+	if err := os.WriteFile(containerPath, []byte("gc unlock failure test"), 0o600); err != nil {
 		t.Fatalf("write container file: %v", err)
 	}
 
@@ -139,6 +139,11 @@ func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
 	}
 }
 
+// nolint:cyclop,funlen
+// TestRunGCRefusesWhenAdvisoryLockAlreadyHeld verifies that RunGC refuses to execute
+// when an advisory lock is already held. Complexity justified by lock setup, concurrent
+// DB connection, and detailed assertion of lock-held error. Test-code cyclomatic complexity
+// and line count do not apply to production code standards.
 func TestRunGCRefusesWhenAdvisoryLockAlreadyHeld(t *testing.T) {
 	requireDB(t)
 
@@ -166,7 +171,7 @@ func TestRunGCRefusesWhenAdvisoryLockAlreadyHeld(t *testing.T) {
 
 	filename := "gc-lock-held.bin"
 	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, []byte("gc lock held"), 0o644); err != nil {
+	if err := os.WriteFile(containerPath, []byte("gc lock held"), 0o600); err != nil {
 		t.Fatalf("write container file: %v", err)
 	}
 
@@ -443,7 +448,7 @@ func setupSnapshotRetainedContainer(t *testing.T, dbconn *sql.DB, containersDir 
 
 	filename = "snap-retained.bin"
 	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, []byte("snap retained test"), 0o644); err != nil {
+	if err := os.WriteFile(containerPath, []byte("snap retained test"), 0o600); err != nil {
 		t.Fatalf("write container file: %v", err)
 	}
 
@@ -1036,7 +1041,7 @@ func writeTestContainerFileWithPayload(path string, payload []byte) error {
 	binary.LittleEndian.PutUint32(hdr[52:56], crc32.ChecksumIEEE(hdr[0:52]))
 
 	buf := append(hdr, payload...)
-	return os.WriteFile(path, buf, 0o644)
+	return os.WriteFile(path, buf, 0o600)
 }
 
 func insertPackedStorageBlockFixtureWithCompression(t *testing.T, dbconn *sql.DB, containersDir, containerFilename string, chunkIDs []int64, chunkPayloads [][]byte, compressionCodec string) (int64, int64) {

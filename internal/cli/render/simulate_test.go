@@ -193,6 +193,10 @@ func TestRenderSimulationJSONIsDeterministic(t *testing.T) {
 	}
 }
 
+// nolint:funlen
+// TestRenderSimulationJSONPreservesCategoryDistinctions verifies that category distinctions
+// (logically vs physically reclaimable bytes, fully vs partially dead containers, etc.) are
+// preserved through JSON rendering. Requires comprehensive result structure validation.
 func TestRenderSimulationJSONPreservesCategoryDistinctions(t *testing.T) {
 	r := &SimulationResult{
 		Kind: "gc",
