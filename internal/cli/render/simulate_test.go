@@ -192,3 +192,90 @@ func TestRenderSimulationJSONIsDeterministic(t *testing.T) {
 		t.Fatalf("expected sorted containers by id, got %v", firstContainer["container_id"])
 	}
 }
+
+func TestRenderSimulationJSONPreservesCategoryDistinctions(t *testing.T) {
+	r := newCategoryDistinctionSimulationResult()
+
+	var buf bytes.Buffer
+	if err := (JSONRenderer{}).RenderSimulation(&buf, r); err != nil {
+		t.Fatalf("RenderSimulation json: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
+		t.Fatalf("decode simulation json: %v", err)
+	}
+	summary := extractGCSummaryMap(t, payload)
+
+	checks := []struct {
+		field string
+		want  int
+	}{
+		{field: "logically_reclaimable_bytes", want: 4096},
+		{field: "physically_reclaimable_bytes", want: 1024},
+		{field: "packed_bytes_reclaimable", want: 512},
+		{field: "retained_dead_bytes_due_to_packed_blocks", want: 3072},
+		{field: "fully_reclaimable_containers", want: 1},
+		{field: "partially_dead_containers", want: 2},
+	}
+	for _, tc := range checks {
+		assertSummaryNumericField(t, summary, tc.field, tc.want)
+	}
+
+	warnings, ok := payload["warnings"].([]any)
+	if !ok || len(warnings) == 0 {
+		t.Fatalf("expected warnings array with entries, got %v", payload["warnings"])
+	}
+}
+
+func newCategoryDistinctionSimulationResult() *SimulationResult {
+	return &SimulationResult{
+		Kind: "gc",
+		GC: &observability.GCSimulationResult{
+			Kind: "gc",
+			Summary: observability.GCSimulationSummary{
+				LogicallyReclaimableBytes:          4096,
+				PhysicallyReclaimableBytes:         1024,
+				PackedBytesReclaimable:             512,
+				RetainedDeadBytesDueToPackedBlocks: 3072,
+				FullyReclaimableContainers:         1,
+				PartiallyDeadContainers:            2,
+			},
+			Warnings: []observability.ObservationWarning{{
+				Code:    "CHUNK_MISSING_PLACEMENT",
+				Message: "chunk has no physical placement",
+			}},
+		},
+	}
+}
+
+func extractGCSummaryMap(t *testing.T, payload map[string]any) map[string]any {
+	t.Helper()
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object: %v", payload)
+	}
+	gcData, ok := data["gc"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing gc object: %v", data)
+	}
+	summary, ok := gcData["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing summary object: %v", gcData)
+	}
+
+	return summary
+}
+
+func assertSummaryNumericField(t *testing.T, summary map[string]any, field string, want int) {
+	t.Helper()
+
+	got, ok := summary[field].(float64)
+	if !ok {
+		t.Fatalf("summary[%s] missing or not numeric: %v", field, summary[field])
+	}
+	if int(got) != want {
+		t.Fatalf("summary[%s]=%d, want %d", field, int(got), want)
+	}
+}
