@@ -1,0 +1,469 @@
+rule_id,severity,confidence,file,line,column,details,code,triage_decision,triage_rationale,release_action,notes
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/chunk/fastcdc/chunker.go,134,20,integer overflow conversion uint64 -> uint32,"133: 		z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+134: 		table[i] = uint32(z ^ (z >> 31))
+135: 	}
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/store.go,3157,9,integer overflow conversion uint64 -> int64,"3156: 			int64(entry.Offset),
+3157: 			int64(entry.Size),
+3158: 		); err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/store.go,3156,9,integer overflow conversion uint64 -> int64,"3155: 			blockID,
+3156: 			int64(entry.Offset),
+3157: 			int64(entry.Size),
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/store.go,3154,9,integer overflow conversion uint64 -> int64,"3153: 			 ON CONFLICT (chunk_id) DO NOTHING`,
+3154: 			int64(entry.ChunkID),
+3155: 			blockID,
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/store.go,3146,17,integer overflow conversion uint64 -> int64,"3145: 			Offset: payloadPrefixBytes + int64(entry.Offset),
+3146: 			Size:   int64(entry.Size),
+3147: 		}
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/store.go,3145,38,integer overflow conversion uint64 -> int64,"3144: 		segments[int64(entry.ChunkID)] = packedChunkSegment{
+3145: 			Offset: payloadPrefixBytes + int64(entry.Offset),
+3146: 			Size:   int64(entry.Size),
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/store.go,3144,17,integer overflow conversion uint64 -> int64,"3143: 	for _, entry := range enc.encodedBlock.Entries {
+3144: 		segments[int64(entry.ChunkID)] = packedChunkSegment{
+3145: 			Offset: payloadPrefixBytes + int64(entry.Offset),
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/container/local_writer.go,325,23,integer overflow conversion uint64 -> int64,"324: 		n := binary.LittleEndian.Uint64(b[:])
+325: 		return time.Duration(n % uint64(max+1))
+326: 	}
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/container/format.go,153,21,integer overflow conversion uint64 -> int64,"152: 		CreatedAt:   int64(binary.LittleEndian.Uint64(h[hdrCreatedAt:hdrMaxSize])),
+153: 		MaxSize:     int64(binary.LittleEndian.Uint64(h[hdrMaxSize:hdrUIDStart])),
+154: 		CodecID:     codecID,
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/container/format.go,152,21,integer overflow conversion uint64 -> int64,"151: 		Flags:       binary.LittleEndian.Uint32(h[hdrFlags:hdrCreatedAt]),
+152: 		CreatedAt:   int64(binary.LittleEndian.Uint64(h[hdrCreatedAt:hdrMaxSize])),
+153: 		MaxSize:     int64(binary.LittleEndian.Uint64(h[hdrMaxSize:hdrUIDStart])),
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/blocks/block_builder.go,134,42,integer overflow conversion uint64 -> int64,"133: 	}
+134: 	return b.Add(PendingChunk{ChunkID: int64(id), Data: data, Size: int64(len(data))})
+135: }
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/blocks/block_format_v1.go,260,21,integer overflow conversion uint64 -> int,"259: 
+260: 	payload := data[int(totalMin):]
+261: 	if uint64(len(payload)) != header.PlaintextSize {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/blocks/block_format_v1.go,131,29,integer overflow conversion uint64 -> int,"130: 	tableSize := uint64(len(b.Entries)) * chunkEntrySizeV1
+131: 	encoded := make([]byte, int(uint64(blockHeaderSizeV1)+tableSize+b.Header.PlaintextSize))
+132: 
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/cli/render/inspect.go,272,15,integer overflow conversion uint -> int64,"271: 	case uint:
+272: 		return int64(n), true
+273: 	case uint8:
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/restore_service.go,76,17,integer overflow conversion int64 -> uint64,"75: 		Offset: uint64(offset),
+76: 		Size:   uint64(size),
+77: 	})
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/restore_service.go,75,17,integer overflow conversion int64 -> uint64,"74: 	chunk, err := blocks.SliceChunkFromPayload(block.Payload, blocks.ChunkEntry{
+75: 		Offset: uint64(offset),
+76: 		Size:   uint64(size),
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/restore.go,1143,19,integer overflow conversion int64 -> uint64,"1142: 				Offset: uint64(seg.Offset),
+1143: 				Size:   uint64(seg.Size),
+1144: 			})
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/restore.go,1142,19,integer overflow conversion int64 -> uint64,"1141: 			plaintext, err := blocks.SliceChunkFromPayload(cachedBlock.Payload, blocks.ChunkEntry{
+1142: 				Offset: uint64(seg.Offset),
+1143: 				Size:   uint64(seg.Size),
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/container/format.go,93,65,integer overflow conversion int64 -> uint64,"92: 	// max container size policy
+93: 	binary.LittleEndian.PutUint64(h[hdrMaxSize:hdrUIDStart], uint64(maxSize))
+94: 
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/blocks/block_builder.go,149,19,integer overflow conversion int64 -> uint64,"148: 			Offset:  offset,
+149: 			Size:    uint64(chunk.Size),
+150: 		}
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/blocks/block_builder.go,147,19,integer overflow conversion int64 -> uint64,"146: 		entry := ChunkEntry{
+147: 			ChunkID: uint64(chunk.ChunkID),
+148: 			Offset:  offset,
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/storage/restore.go,1412,45,integer overflow conversion int64 -> uint32,"1411: 	if descriptor.Mode.Valid {
+1412: 		if err := os.Chmod(outputPath, os.FileMode(descriptor.Mode.Int64)); err != nil {
+1413: 			metadataErrs = append(metadataErrs, fmt.Sprintf(""chmod: %v"", err))
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/snapshot/snapshot.go,1226,45,integer overflow conversion int64 -> uint32,"1225: 	if mode.Valid {
+1226: 		if err := os.Chmod(outputPath, os.FileMode(mode.Int64)); err != nil {
+1227: 			metadataErrs = append(metadataErrs, fmt.Sprintf(""chmod: %v"", err))
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/blocks/block_format_v1.go,284,20,integer overflow conversion int -> uint64,"283: func validateChunkCountSane(chunkCount uint32, totalDataLen int) (tableSize uint64, totalMin uint64, err error) {
+284: 	totalLen := uint64(totalDataLen)
+285: 	tableSize = uint64(chunkCount) * chunkEntrySizeV1
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/blocks/block_format_v1.go,211,24,integer overflow conversion int -> uint32,"210: 		Codec:         BlockCodecNoneV1,
+211: 		ChunkCount:    uint32(len(entries)),
+212: 		PlaintextSize: uint64(len(payload)),
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/blocks/block_format_v1.go,120,34,integer overflow conversion int -> uint32,"119: 	}
+120: 	if b.Header.ChunkCount != uint32(len(b.Entries)) {
+121: 		return nil, ErrBlockFormatInvalidLayout
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/chunk/benchmark/datasets.go,187,18,integer overflow conversion int -> byte,"186: 	for i := 0; i < len(block); i++ {
+187: 		block[i] = byte(rng.Intn(256))
+188: 	}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/scenarios.go,398,17,integer overflow conversion int -> byte,"397: 		for i := range buf {
+398: 			buf[i] = byte(rng.Intn(256))
+399: 		}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/dataset.go,86,17,integer overflow conversion int -> byte,"85: 	for i := range data {
+86: 		data[i] = byte(rng.Intn(256))
+87: 	}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/corpus.go,585,16,integer overflow conversion int -> byte,"584: 	for i := 0; i < len(buf); i++ {
+585: 		buf[i] = byte(rng.Intn(256))
+586: 	}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/corpus.go,576,16,integer overflow conversion int -> byte,"575: 	for i := 4; i < len(buf); i++ {
+576: 		buf[i] = byte(rng.Intn(256))
+577: 	}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/corpus.go,552,16,integer overflow conversion int -> byte,"551: 	for i := 2; i < len(buf); i++ {
+552: 		buf[i] = byte(rng.Intn(256))
+553: 	}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/corpus.go,538,16,integer overflow conversion int -> byte,"537: 		// ASCII printable range for text portions
+538: 		buf[i] = byte(32 + rng.Intn(95))
+539: 	}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G115,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/corpus.go,531,16,integer overflow conversion int -> byte,"530: 	for i := 0; i < len(buf); i++ {
+531: 		buf[i] = byte(rng.Intn(256))
+532: 	}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G404,HIGH,MEDIUM,/workspaces/coldkeep/internal/container/local_writer.go,328,23,Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand),"327: 
+328: 	return time.Duration(rand.Int63n(int64(max) + 1))
+329: }
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G404,HIGH,MEDIUM,/workspaces/coldkeep/internal/chunk/benchmark/datasets.go,184,9,Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand),"183: 	}
+184: 	rng := rand.New(rand.NewSource(seed))
+185: 	block := make([]byte, size)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G404,HIGH,MEDIUM,/workspaces/coldkeep/internal/chunk/benchmark/datasets.go,138,9,Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand),"137: 	}
+138: 	rng := rand.New(rand.NewSource(seed))
+139: 	var buffer bytes.Buffer
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G404,HIGH,MEDIUM,/workspaces/coldkeep/internal/chunk/benchmark/datasets.go,100,9,Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand),"99: 	}
+100: 	rng := rand.New(rand.NewSource(seed))
+101: 	data := make([]byte, size)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G404,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/scenarios.go,393,9,Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand),"392: 
+393: 	rng := rand.New(rand.NewSource(seed))
+394: 	buf := make([]byte, 64*1024)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G404,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/scenarios.go,353,9,Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand),"352: 
+353: 	rng := rand.New(rand.NewSource(seed))
+354: 	paths := make([]string, 0, fileCount)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G404,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/dataset.go,38,9,Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand),"37: 
+38: 	rng := rand.New(rand.NewSource(cfg.Seed))
+39: 	var repeatedTemplate []byte
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G404,HIGH,MEDIUM,/workspaces/coldkeep/internal/benchmark/corpus.go,396,9,Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand),"395: func generateCorpusContent(cc CorpusContent, size int64) ([]byte, error) {
+396: 	rng := rand.New(rand.NewSource(cc.Seed))
+397: 	buf := make([]byte, size)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G703,HIGH,HIGH,/workspaces/coldkeep/tests/utils/common.go,948,22,Path traversal via taint analysis,"947: 		}
+948: 		return os.WriteFile(target, data, 0o644)
+949: 	})
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G703,HIGH,HIGH,/workspaces/coldkeep/internal/iodebug/counters.go,159,23,Path traversal via taint analysis,"158: 
+159: 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+160: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G703,HIGH,HIGH,/workspaces/coldkeep/cmd/coldkeep/main.go,3189,25,Path traversal via taint analysis,"3188: 
+3189: 	raw, err := os.ReadFile(baselinePath)
+3190: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G703,HIGH,HIGH,/workspaces/coldkeep/cmd/coldkeep/init.go,100,24,Path traversal via taint analysis,"99: 
+100: 	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
+101: 		return fmt.Errorf(""write .env: %w"", err)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G122,HIGH,MEDIUM,/workspaces/coldkeep/tests/utils/common.go,944,27,Filesystem operation in filepath.Walk/WalkDir callback uses race-prone path; consider root-scoped APIs (e.g. os.Root) to prevent symlink TOCTOU traversal,"943: 
+944: 		data, err := os.ReadFile(path)
+945: 		if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G204,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,121,9,Subprocess launched with variable,"120: 
+121: 	cmd := exec.Command(binPath, args...)
+122: 	cmd.Dir = repoRoot
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G204,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,86,9,Subprocess launched with variable,"85: 	binPath := filepath.Join(t.TempDir(), ""coldkeep-test-bin"")
+86: 	cmd := exec.Command(""go"", ""build"", ""-o"", binPath, ""./cmd/coldkeep"")
+87: 	cmd.Dir = repoRoot
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G204,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/scenarios.go,449,9,Subprocess launched with a potential tainted input or cmd arguments,"448: func defaultCommandRunner(spec CommandSpec) error {
+449: 	cmd := exec.Command(spec.Executable, spec.Args...)
+450: 	cmd.Dir = spec.WorkingDir
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G201,MEDIUM,HIGH,/workspaces/coldkeep/internal/maintenance/gc.go,741-746,17,SQL string formatting,"740: 		`)
+741: 		emptyQuery := fmt.Sprintf(`
+742: 			WITH locked AS (%s)
+743: 			SELECT NOT EXISTS (
+744: 				SELECT 1 FROM locked WHERE live_ref_count > 0 OR pin_count > 0
+745: 			)
+746: 		`, chunkLockQuery)
+747: 		if err := tx.QueryRowContext(ctx, emptyQuery, ac.id).Scan(&stillFullyDead); err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G201,MEDIUM,HIGH,/workspaces/coldkeep/internal/maintenance/gc.go,270-277,27,SQL string formatting,"269: 			`)
+270: 			emptyContainerQuery := fmt.Sprintf(`
+271: 				WITH locked_chunks AS (
+272: 					%s
+273: 				)
+274: 				SELECT NOT EXISTS (
+275: 					SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0
+276: 				)
+277: 			`, chunkLockQuery)
+278: 			err = tx.QueryRowContext(ctx, emptyContainerQuery, containerID).Scan(&stillEmpty)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G202,MEDIUM,HIGH,/workspaces/coldkeep/internal/observability/stats.go,353,12,SQL string concatenation,"352: 
+353: 		query := `SELECT id, size FROM chunk WHERE id IN (` + strings.Join(placeholders, "", "") + `)`
+354: 
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G202,MEDIUM,HIGH,/workspaces/coldkeep/internal/observability/inspect.go,1145,12,SQL string concatenation,"1144: 
+1145: 		query := `SELECT id, total_size FROM logical_file WHERE id IN (` + strings.Join(placeholders, "", "") + `)`
+1146: 		rows, err := s.db.QueryContext(ctx, query, args...)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G202,MEDIUM,HIGH,/workspaces/coldkeep/internal/listing/search.go,69,4,SQL string concatenation,"68: 			}
+69: 			query += fmt.Sprintf("" AND total_size <= $%d"", paramIndex)
+70: 			params = append(params, size)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,1191,24,Potential file inclusion via variable,"1190: 		}
+1191: 		restored, readErr := os.ReadFile(outPath)
+1192: 		if readErr != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,1187,20,Potential file inclusion via variable,"1186: 		}
+1187: 		orig, readErr := os.ReadFile(srcPath)
+1188: 		if readErr != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,944,16,Potential file inclusion via variable,"943: 
+944: 		data, err := os.ReadFile(path)
+945: 		if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,547,12,Potential file inclusion via variable,"546: 	t.Helper()
+547: 	b, err := os.ReadFile(p)
+548: 	if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,520,12,Potential file inclusion via variable,"519: 	containerPath := filepath.Join(containersDir, ContainerFilename)
+520: 	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+521: 	if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,323,12,Potential file inclusion via variable,"322: 	t.Helper()
+323: 	b, err := os.ReadFile(path)
+324: 	if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/utils_hash/hash.go,12,15,Potential file inclusion via variable,"11: 
+12: 	file, err := os.Open(path)
+13: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/storage/store.go,83,12,Potential file inclusion via variable,"82: func hashFile(path string) (string, error) {
+83: 	f, err := os.Open(path)
+84: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/iodebug/counters.go,159,12,Potential file inclusion via variable,"158: 
+159: 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+160: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/container.go,487,12,Potential file inclusion via variable,"486: 
+487: 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+488: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/container.go,96,12,Potential file inclusion via variable,"95: 	} else {
+96: 		f, err = os.OpenFile(path, os.O_RDWR, 0644)
+97: 	}
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/container.go,94,12,Potential file inclusion via variable,"93: 	if readonly {
+94: 		f, err = os.OpenFile(path, os.O_RDONLY, 0644)
+95: 	} else {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/chunk/simplecdc/chunker.go,37,15,Potential file inclusion via variable,"36: func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
+37: 	file, err := os.Open(filePath)
+38: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/chunk/fastcdc/chunker.go,47,15,Potential file inclusion via variable,"46: func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
+47: 	file, err := os.Open(filePath)
+48: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/scenarios.go,387,15,Potential file inclusion via variable,"386: 
+387: 	file, err := os.Create(path)
+388: 	if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/runner.go,139,12,Potential file inclusion via variable,"138: 
+139: 	f, err := os.Open(path)
+140: 	if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/corpus_registry.go,92,15,Potential file inclusion via variable,"91: 	manifestPath := filepath.Join(cr.GetCorpusPath(corpusType, version), ""CORPUS_MANIFEST.txt"")
+92: 	data, err := os.ReadFile(manifestPath)
+93: 	if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/corpus.go,372,13,Potential file inclusion via variable,"371: 		// Verify content hash
+372: 		f, err := os.Open(filePath)
+373: 		if err != nil {
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/corpus.go,334,14,Potential file inclusion via variable,"333: 		filePath := filepath.Join(corpusDir, file.Name)
+334: 		data, _ := os.ReadFile(filePath) // Error already validated during generation
+335: 		hash := sha256.Sum256(data)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/internal/batch/loader.go,21,15,Potential file inclusion via variable,"20: 
+21: 	file, err := os.Open(inputFile)
+22: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G304,MEDIUM,HIGH,/workspaces/coldkeep/cmd/coldkeep/main.go,3189,14,Potential file inclusion via variable,"3188: 
+3189: 	raw, err := os.ReadFile(baselinePath)
+3190: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G302,MEDIUM,HIGH,/workspaces/coldkeep/internal/iodebug/counters.go,159,12,Expect file permissions to be 0600 or less,"158: 
+159: 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+160: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G302,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/container.go,487,12,Expect file permissions to be 0600 or less,"486: 
+487: 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+488: 	if err != nil {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G302,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/container.go,96,12,Expect file permissions to be 0600 or less,"95: 	} else {
+96: 		f, err = os.OpenFile(path, os.O_RDWR, 0644)
+97: 	}
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G302,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/container.go,94,12,Expect file permissions to be 0600 or less,"93: 	if readonly {
+94: 		f, err = os.OpenFile(path, os.O_RDONLY, 0644)
+95: 	} else {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,1131,12,Expect directory permissions to be 0750 or less,"1130: 	outDir := filepath.Join(tmp, ""out"")
+1131: 	if err := os.MkdirAll(outDir, 0o755); err != nil {
+1132: 		t.Fatalf(""mkdir out: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,1032,12,Expect directory permissions to be 0750 or less,"1031: 	outDir := filepath.Join(tmp, ""out"")
+1032: 	if err := os.MkdirAll(outDir, 0o755); err != nil {
+1033: 		t.Fatalf(""mkdir out for %s: %v"", fixtureDir, err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,941,11,Expect directory permissions to be 0750 or less,"940: 		if d.IsDir() {
+941: 			return os.MkdirAll(target, 0o755)
+942: 		}
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,922,12,Expect directory permissions to be 0750 or less,"921: 
+922: 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+923: 		t.Fatalf(""mkdir dstDir %s: %v"", dstDir, err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,432,12,Expect directory permissions to be 0750 or less,"431: 	inputDir := filepath.Join(tmp, ""input"")
+432: 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+433: 		_ = dbconn.Close()
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,316,12,Expect directory permissions to be 0750 or less,"315: 	_ = os.RemoveAll(container.ContainersDir)
+316: 	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
+317: 		t.Fatalf(""mkdir ContainersDir: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/storage/restore.go,974,12,Expect directory permissions to be 0750 or less,"973: 	// Create parent directories if they don't exist
+974: 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+975: 		return RestoreFileResult{}, fmt.Errorf(""create parent directories for %s: %w"", outputPath, err)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/storage/restore.go,956,13,Expect directory permissions to be 0750 or less,"955: 		// if user passed a non-existing dir with trailing slash
+956: 		if err := os.MkdirAll(outputPath, 0755); err != nil {
+957: 			return RestoreFileResult{}, fmt.Errorf(""create output directory: %w"", err)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/snapshot/snapshot.go,1268,13,Expect directory permissions to be 0750 or less,"1267: 
+1268: 		if err := os.MkdirAll(dir, 0o755); err != nil {
+1269: 			return nil, fmt.Errorf(""create destination directory %s: %w"", dir, err)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/local_writer.go,356,12,Expect directory permissions to be 0750 or less,"355: 	}
+356: 	if err := os.MkdirAll(w.dir, 0755); err != nil {
+357: 		return fmt.Errorf(""ensure container directory %s: %w"", w.dir, err)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/local_writer.go,96,6,Expect directory permissions to be 0750 or less,"95: 	// Best-effort: pre-create directory to reduce first-write surprises.
+96: 	_ = os.MkdirAll(dir, 0755)
+97: 	if maxSize <= ContainerHdrLen {
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/container/container.go,465,12,Expect directory permissions to be 0750 or less,"464: 
+465: 	if err := os.MkdirAll(containersDir, 0755); err != nil {
+466: 		return ActiveContainer{}, err
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/chunk/benchmark/runner.go,120,12,Expect directory permissions to be 0750 or less,"119: func runDatasetVariant(workDir string, chunker chunk.Chunker, datasetName string, variant Variant) (RunResult, error) {
+120: 	if err := os.MkdirAll(workDir, 0o755); err != nil {
+121: 		return RunResult{}, fmt.Errorf(""create benchmark work dir: %w"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/scenarios.go,383,12,Expect directory permissions to be 0750 or less,"382: 	}
+383: 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+384: 		return fmt.Errorf(""create file parent dir for %q: %w"", path, err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/scenarios.go,349,12,Expect directory permissions to be 0750 or less,"348: 	}
+349: 	if err := os.MkdirAll(dir, 0o755); err != nil {
+350: 		return nil, 0, fmt.Errorf(""create mixed dataset dir %q: %w"", dir, err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/scenarios.go,201,13,Expect directory permissions to be 0750 or less,"200: 		restoreRoot := filepath.Join(ctx.RepoPath, ""restore-output"", ""many"")
+201: 		if err := os.MkdirAll(restoreRoot, 0o755); err != nil {
+202: 			return fmt.Errorf(""create restore root: %w"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/scenarios.go,171,13,Expect directory permissions to be 0750 or less,"170: 		restoreDest := filepath.Join(ctx.RepoPath, ""restore-output"", ""large"", ""file.bin"")
+171: 		if err := os.MkdirAll(filepath.Dir(restoreDest), 0o755); err != nil {
+172: 			return fmt.Errorf(""create restore destination dir: %w"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/runner.go,185,12,Expect directory permissions to be 0750 or less,"184: 	}
+185: 	if err := os.MkdirAll(dataPath, 0o755); err != nil {
+186: 		_ = os.RemoveAll(root)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/runner.go,181,12,Expect directory permissions to be 0750 or less,"180: 	dataPath := filepath.Join(root, ""data"")
+181: 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+182: 		_ = os.RemoveAll(root)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/dataset.go,34,12,Expect directory permissions to be 0750 or less,"33: 	}
+34: 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+35: 		return fmt.Errorf(""create dataset directory %q: %w"", baseDir, err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/internal/benchmark/corpus.go,287,12,Expect directory permissions to be 0750 or less,"286: 	corpusDir := filepath.Join(cb.baseDir, string(def.Type), def.Version)
+287: 	if err := os.MkdirAll(corpusDir, 0o755); err != nil {
+288: 		return fmt.Errorf(""create corpus directory %q: %w"", corpusDir, err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/cmd/coldkeep/main.go,3442,12,Expect directory permissions to be 0750 or less,"3441: 	restoreDir := filepath.Join(workDir, ""restore-output"")
+3442: 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+3443: 		return nil, fmt.Errorf(""create restore output dir: %w"", err)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/cmd/coldkeep/main.go,3424,12,Expect directory permissions to be 0750 or less,"3423: 	storageDir := filepath.Join(workDir, ""storage"", ""containers"")
+3424: 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
+3425: 		return nil, fmt.Errorf(""create storage dir: %w"", err)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G301,MEDIUM,HIGH,/workspaces/coldkeep/cmd/coldkeep/main.go,1735,13,Expect directory permissions to be 0750 or less,"1734: 	if createIfMissing {
+1735: 		if err := os.MkdirAll(path, 0755); err != nil {
+1736: 			return """", fmt.Errorf(""create output directory %q: %w"", path, err)
+",defer-baseline,Finding is inherited baseline debt outside the changed release delta; document and defer unless later triage selects a narrow fix-now case.,defer,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,948,10,Expect WriteFile permissions to be 0600 or less,"947: 		}
+948: 		return os.WriteFile(target, data, 0o644)
+949: 	})
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,798,13,Expect WriteFile permissions to be 0600 or less,"797: 
+798: 		if err := os.WriteFile(p, data, 0o644); err != nil {
+799: 			t.Fatalf(""write hybrid: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,775,12,Expect WriteFile permissions to be 0600 or less,"774: 	}
+775: 	if err := os.WriteFile(p2, dup, 0o644); err != nil {
+776: 		t.Fatalf(""write dup2: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,772,12,Expect WriteFile permissions to be 0600 or less,"771: 
+772: 	if err := os.WriteFile(p1, dup, 0o644); err != nil {
+773: 		t.Fatalf(""write dup1: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,758,12,Expect WriteFile permissions to be 0600 or less,"757: 	p = filepath.Join(dir, ""binary.bin"")
+758: 	if err := os.WriteFile(p, bin, 0o644); err != nil {
+759: 		t.Fatalf(""write binary: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,747,12,Expect WriteFile permissions to be 0600 or less,"746: 	p = filepath.Join(dir, ""lorem.txt"")
+747: 	if err := os.WriteFile(p, lorem, 0o644); err != nil {
+748: 		t.Fatalf(""write lorem: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,739,12,Expect WriteFile permissions to be 0600 or less,"738: 	p = filepath.Join(dir, ""config.yaml"")
+739: 	if err := os.WriteFile(p, config, 0o644); err != nil {
+740: 		t.Fatalf(""write config: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,731,12,Expect WriteFile permissions to be 0600 or less,"730: 	p = filepath.Join(dir, ""small.txt"")
+731: 	if err := os.WriteFile(p, []byte{0x42}, 0o644); err != nil {
+732: 		t.Fatalf(""write small file: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,724,12,Expect WriteFile permissions to be 0600 or less,"723: 	p := filepath.Join(dir, ""empty.txt"")
+724: 	if err := os.WriteFile(p, []byte{}, 0o644); err != nil {
+725: 		t.Fatalf(""write empty file: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
+G306,MEDIUM,HIGH,/workspaces/coldkeep/tests/utils/common.go,341,12,Expect WriteFile permissions to be 0600 or less,"340: 
+341: 	if err := os.WriteFile(p, data, 0o644); err != nil {
+342: 		t.Fatalf(""write temp file: %v"", err)
+",test-only-accepted,"Finding is in test, benchmark, or helper code and does not change production runtime behavior; classify explicitly rather than ignore.",documented,baseline_not_in_changed_go_file
