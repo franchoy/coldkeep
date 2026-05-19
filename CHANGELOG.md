@@ -20,6 +20,23 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.5 - 2026-05-19 — Release Validation Debt Hardening
+
+Fixes-only release that consolidates validation debt from v1.10.x development: gosec baseline triage, Codacy finding workflow hardening, full-suite timeout investigation, local-vs-CI validation boundary clarification, regression matrix, tracker/matrix closure accounting, and full local PRE_RELEASE_CHECKLIST.md execution.
+
+Highlights:
+
+- gosec baseline triage completed: 114 findings classified, 0 direct closures, 2 inherited from v1.10.4
+- Codacy finding workflow hardened: PR workflow, evidence format, and merge-blocking rules defined
+- full-suite timeout at `TestConcurrentStoreMultiChunkFilesAtomicCompletion` investigated and classified as documented boundary
+- local-vs-CI validation boundary clarified: Phase 5 policy for local failure classification and CI authority
+- validation regression matrix constructed: Phase 8 matrix covering Phases 1–7 evidence
+- tracker/matrix closure accounting completed: 2 inherited closure rows from v1.10.4, 13 linked issues covered
+- full local PRE_RELEASE_CHECKLIST.md execution recorded: all active sections executed or classified
+- no production behavior, test behavior, CI workflow, or dependency changes introduced in release-candidate documentation phases
+
+------------------------------------------------------------------------
+
 ## v1.10.4 - 2026-05-18 — GC Reachability & Deletion Correctness
 
 Fixes-only release focused on GC reachability/deletion correctness evidence consolidation, tracker/matrix closure finalization for selected v1.10.4 rows, and release-candidate documentation readiness.
