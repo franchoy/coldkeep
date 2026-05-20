@@ -20,7 +20,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.10.5 - 2026-05-19 — Release Validation Debt Hardening
+## v1.10.5 - 2026-05-20 — Release Validation Debt Hardening
 
 Fixes-only release that consolidates validation debt from v1.10.x development: gosec baseline triage, Codacy finding workflow hardening, full-suite timeout investigation, local-vs-CI validation boundary clarification, regression matrix, tracker/matrix closure accounting, and full local PRE_RELEASE_CHECKLIST.md execution.
 

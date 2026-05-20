@@ -3,6 +3,7 @@
 You are working on a Coldkeep v1.10.x stabilization phase.
 
 Before editing:
+
 1. Identify the phase goal.
 2. Identify the core invariant.
 3. List expected files.

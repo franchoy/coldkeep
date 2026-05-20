@@ -1,6 +1,7 @@
 # Coldkeep Codacy Triage Prompt
 
 Classify Codacy findings as:
+
 - real correctness/security risk;
 - dependency vulnerability;
 - test-only false positive;
