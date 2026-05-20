@@ -12,6 +12,7 @@ Classify Codacy findings as:
 Do not recommend fixing style-only findings during v1.10 unless they block correctness or CI integrity.
 
 For each finding:
+
 - severity;
 - domain;
 - production vs test;

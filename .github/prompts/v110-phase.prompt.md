@@ -12,6 +12,7 @@ Before editing:
 6. Identify docs/checklists that may need updates.
 
 Rules:
+
 - no broad refactor;
 - no engine extraction;
 - no catalog abstraction;
@@ -23,11 +24,13 @@ Rules:
 - do not close tracker/matrix rows unless explicitly asked.
 
 Implementation:
+
 - make the smallest safe change;
 - prefer regression or invariant tests;
 - avoid changing unrelated packages.
 
 Final response:
+
 - invariant protected;
 - files changed;
 - tests run;
