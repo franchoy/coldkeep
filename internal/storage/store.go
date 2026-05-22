@@ -1267,6 +1267,7 @@ func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chun
 	}
 	defer func() { _ = deletePackedStmt.Close() }()
 
+	// nosemgrep: SQL is static and parameterized; execution uses bound chunkID.
 	if _, err := deletePackedStmt.ExecContext(ctx, chunkID); err != nil {
 		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
 	}
@@ -1278,6 +1279,7 @@ func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chun
 	}
 	defer func() { _ = deleteLegacyStmt.Close() }()
 
+	// nosemgrep: SQL is static and parameterized; execution uses bound chunkID.
 	if _, err := deleteLegacyStmt.ExecContext(ctx, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while rebuilding chunk %d: %w", chunkID, err)
 	}
