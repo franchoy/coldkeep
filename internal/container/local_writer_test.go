@@ -177,8 +177,31 @@ func TestLockContainerRowNowaitWithRetryUsesBackendAwareQueryWhenDBProvided(t *t
 	if len(tx.queries) != 1 {
 		t.Fatalf("expected one query, got %d", len(tx.queries))
 	}
+	if strings.Contains(tx.queries[0], "FOR UPDATE") {
+		t.Fatalf("expected sqlite backend query without FOR UPDATE suffix, got: %q", tx.queries[0])
+	}
+}
+
+func TestLockContainerRowNowaitWithRetryUsesForUpdateWhenPostgresDBProvided(t *testing.T) {
+	tx := &stubTx{}
+	dbconn, err := sql.Open("postgres", "postgres://user:pass@127.0.0.1:5432/db?sslmode=disable")
+	if err != nil {
+		t.Fatalf("open postgres db handle: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	err = lockContainerRowNowaitWithRetry(tx, dbconn, 5, 1, time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected lock acquisition success, got: %v", err)
+	}
+	if len(tx.queries) != 1 {
+		t.Fatalf("expected one query, got %d", len(tx.queries))
+	}
+	if !strings.Contains(tx.queries[0], "FOR UPDATE") {
+		t.Fatalf("expected postgres backend query with FOR UPDATE, got: %q", tx.queries[0])
+	}
 	if strings.Contains(tx.queries[0], "FOR UPDATE NOWAIT") {
-		t.Fatalf("expected sqlite backend query without NOWAIT suffix, got: %q", tx.queries[0])
+		t.Fatalf("expected postgres backend query without NOWAIT, got: %q", tx.queries[0])
 	}
 }
 
