@@ -1254,10 +1254,27 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 }
 
 func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkID); err != nil {
+	if chunkID <= 0 {
+		return fmt.Errorf("invalid chunk id for physical cleanup: %d", chunkID)
+	}
+
+	deletePackedStmt, err := dbconn.PrepareContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`)
+	if err != nil {
+		return fmt.Errorf("prepare stale chunk_block_refs delete for chunk %d: %w", chunkID, err)
+	}
+	defer func() { _ = deletePackedStmt.Close() }()
+
+	if _, err := deletePackedStmt.ExecContext(ctx, chunkID); err != nil {
 		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
 	}
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
+
+	deleteLegacyStmt, err := dbconn.PrepareContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`)
+	if err != nil {
+		return fmt.Errorf("prepare stale blocks delete for chunk %d: %w", chunkID, err)
+	}
+	defer func() { _ = deleteLegacyStmt.Close() }()
+
+	if _, err := deleteLegacyStmt.ExecContext(ctx, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while rebuilding chunk %d: %w", chunkID, err)
 	}
 
