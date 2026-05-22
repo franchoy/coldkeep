@@ -1100,10 +1100,6 @@ func queryRowStaticSQLContext(ctx context.Context, dbconn *sql.DB, query string,
 	return dbconn.QueryRowContext(ctx, query, args...)
 }
 
-func execStaticSQLContext(ctx context.Context, dbconn *sql.DB, query string, args ...any) (sql.Result, error) {
-	return dbconn.ExecContext(ctx, query, args...)
-}
-
 func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx, fileID int64, markChunksSuspicious bool) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
@@ -1273,11 +1269,11 @@ func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chun
 		return fmt.Errorf("invalid chunk id for physical cleanup: %d", chunkID)
 	}
 
-	if _, err := execStaticSQLContext(ctx, dbconn, deleteChunkBlockRefsByChunkIDQuery, chunkID); err != nil {
+	if _, err := dbconn.ExecContext(ctx, deleteChunkBlockRefsByChunkIDQuery, chunkID); err != nil {
 		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
 	}
 
-	if _, err := execStaticSQLContext(ctx, dbconn, deleteBlocksByChunkIDQuery, chunkID); err != nil {
+	if _, err := dbconn.ExecContext(ctx, deleteBlocksByChunkIDQuery, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while rebuilding chunk %d: %w", chunkID, err)
 	}
 
