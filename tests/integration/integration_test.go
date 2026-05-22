@@ -137,6 +137,11 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	repoRoot := testutils.FindRepoRoot(t)
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
+	// The scenario is validating repository-config-driven compression switches.
+	// Clear any inherited process-level compression overrides so the CLI path
+	// cannot accidentally bypass the repository state under test.
+	env["COLDKEEP_COMPRESSION"] = ""
+	env["COLDKEEP_COMPRESSION_LEVEL"] = ""
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
