@@ -2930,6 +2930,69 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithMissingContainerFile(t *testing
 	}
 }
 
+func TestMarkChunkForRebuildClearsPackedAndLegacyPhysicalRows(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	chunkID := insertReusableTestChunk(t, dbconn, "rebuild-clear-physical", filestate.ChunkCompleted)
+	containerID := insertReusableTestContainer(t, dbconn, "rebuild-clear-physical.bin", false)
+	insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
+
+	var packedBlockID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES (1, 'none', 64, 64, $1, 64, x'')
+		 RETURNING id`,
+		containerID,
+	).Scan(&packedBlockID); err != nil {
+		t.Fatalf("insert storage_blocks packed row: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, 0, 64)`,
+		chunkID,
+		packedBlockID,
+	); err != nil {
+		t.Fatalf("insert chunk_block_refs row: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+		t.Fatalf("mark chunk for rebuild: %v", err)
+	}
+
+	var status string
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
+		t.Fatalf("read chunk status after rebuild mark: %v", err)
+	}
+	if status != filestate.ChunkAborted {
+		t.Fatalf("expected chunk status %s after rebuild mark, got %s", filestate.ChunkAborted, status)
+	}
+
+	var legacyRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE chunk_id = $1`, chunkID).Scan(&legacyRows); err != nil {
+		t.Fatalf("count legacy blocks rows: %v", err)
+	}
+	if legacyRows != 0 {
+		t.Fatalf("expected no legacy block rows after rebuild mark, got %d", legacyRows)
+	}
+
+	var packedRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs WHERE chunk_id = $1`, chunkID).Scan(&packedRows); err != nil {
+		t.Fatalf("count chunk_block_refs rows: %v", err)
+	}
+	if packedRows != 0 {
+		t.Fatalf("expected no packed chunk refs after rebuild mark, got %d", packedRows)
+	}
+}
+
 func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testing.T) {
 	testCases := []struct {
 		name    string

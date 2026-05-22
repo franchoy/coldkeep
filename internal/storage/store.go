@@ -490,26 +490,34 @@ func commitPreparedChunksWithContext(
 				return StoreFileResult{}, err
 			}
 			if hasPackedRef || hasLegacyBlock {
-				tx, err := dbconn.BeginTx(ctx, nil)
-				if err != nil {
-					return StoreFileResult{}, err
-				}
+				reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, claimedChunkID, commitInfo.validationContainerDir)
+				if reuseErr != nil {
+					log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", claimedChunkID, reuseErr)
+					if err := clearChunkPhysicalRowsWithContext(ctx, dbconn, claimedChunkID); err != nil {
+						return StoreFileResult{}, errors.Join(reuseErr, err)
+					}
+				} else {
+					tx, err := dbconn.BeginTx(ctx, nil)
+					if err != nil {
+						return StoreFileResult{}, err
+					}
 
-				if _, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err != nil {
-					_ = tx.Rollback()
-					return StoreFileResult{}, err
-				}
+					if _, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err != nil {
+						_ = tx.Rollback()
+						return StoreFileResult{}, err
+					}
 
-				if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
-					_ = tx.Rollback()
-					return StoreFileResult{}, err
-				}
+					if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
+						_ = tx.Rollback()
+						return StoreFileResult{}, err
+					}
 
-				if err := tx.Commit(); err != nil {
-					_ = tx.Rollback()
-					return StoreFileResult{}, err
+					if err := tx.Commit(); err != nil {
+						_ = tx.Rollback()
+						return StoreFileResult{}, err
+					}
+					continue
 				}
-				continue
 			}
 		}
 
@@ -1238,8 +1246,19 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 	if _, err := result.RowsAffected(); err != nil {
 		return fmt.Errorf("rows affected while marking chunk %d for rebuild: %w", chunkID, err)
 	}
+	if err := clearChunkPhysicalRowsWithContext(ctx, dbconn, chunkID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
+	if _, err := dbconn.ExecContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkID); err != nil {
+		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
+	}
 	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
-		return fmt.Errorf("delete stale blocks while marking chunk %d for rebuild: %w", chunkID, err)
+		return fmt.Errorf("delete stale blocks while rebuilding chunk %d: %w", chunkID, err)
 	}
 
 	return nil
