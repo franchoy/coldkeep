@@ -1063,6 +1063,47 @@ type reusableCompletedChunkSummary struct {
 	quarantinedContainerRows int64
 }
 
+const reusableCompletedChunkSummaryQuery = `
+		SELECT
+			COUNT(b.id) AS block_rows,
+			COUNT(r.chunk_id) AS packed_rows,
+			COUNT(ctr.id) AS existing_container_rows,
+			COALESCE(SUM(CASE WHEN ctr.quarantine THEN 1 ELSE 0 END), 0) AS quarantined_container_rows
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		WHERE c.id = $1
+	`
+
+const reusableCompletedChunkPlacementQuery = `
+		SELECT
+			ctr.id,
+			ctr.filename,
+			COALESCE(b.block_offset, sb.container_offset),
+			COALESCE(b.stored_size, sb.stored_size),
+			ctr.current_size,
+			ctr.max_size
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		WHERE c.id = $1
+	`
+
+const deleteChunkBlockRefsByChunkIDQuery = `DELETE FROM chunk_block_refs WHERE chunk_id = $1`
+const deleteBlocksByChunkIDQuery = `DELETE FROM blocks WHERE chunk_id = $1`
+
+func queryRowStaticSQLContext(ctx context.Context, dbconn *sql.DB, query string, args ...any) *sql.Row {
+	return dbconn.QueryRowContext(ctx, query, args...)
+}
+
+func execStaticSQLContext(ctx context.Context, dbconn *sql.DB, query string, args ...any) (sql.Result, error) {
+	return dbconn.ExecContext(ctx, query, args...)
+}
+
 func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx, fileID int64, markChunksSuspicious bool) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
@@ -1129,20 +1170,7 @@ func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx,
 
 func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
 	var summary reusableCompletedChunkSummary
-	// nosemgrep: Semgrep_go_sql_rule-concat-sqli -- SQL is static and parameterized; no user-controlled SQL construction.
-	err := dbconn.QueryRowContext(ctx, `
-		SELECT
-			COUNT(b.id) AS block_rows,
-			COUNT(r.chunk_id) AS packed_rows,
-			COUNT(ctr.id) AS existing_container_rows,
-			COALESCE(SUM(CASE WHEN ctr.quarantine THEN 1 ELSE 0 END), 0) AS quarantined_container_rows
-		FROM chunk c
-		LEFT JOIN blocks b ON b.chunk_id = c.id
-		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
-		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
-		WHERE c.id = $1
-	`, chunkID).Scan(
+	err := queryRowStaticSQLContext(ctx, dbconn, reusableCompletedChunkSummaryQuery, chunkID).Scan(
 		&summary.blockRows,
 		&summary.packedRows,
 		&summary.existingContainerRows,
@@ -1174,22 +1202,7 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		containerSize int64
 		maxSize       int64
 	)
-	// nosemgrep: Semgrep_go_sql_rule-concat-sqli -- SQL is static and parameterized; no user-controlled SQL construction.
-	err = dbconn.QueryRowContext(ctx, `
-		SELECT
-			ctr.id,
-			ctr.filename,
-			COALESCE(b.block_offset, sb.container_offset),
-			COALESCE(b.stored_size, sb.stored_size),
-			ctr.current_size,
-			ctr.max_size
-		FROM chunk c
-		LEFT JOIN blocks b ON b.chunk_id = c.id
-		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
-		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
-		WHERE c.id = $1
-	`, chunkID).Scan(
+	err = queryRowStaticSQLContext(ctx, dbconn, reusableCompletedChunkPlacementQuery, chunkID).Scan(
 		&containerID,
 		&filename,
 		&blockOffset,
@@ -1260,13 +1273,11 @@ func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chun
 		return fmt.Errorf("invalid chunk id for physical cleanup: %d", chunkID)
 	}
 
-	// nosemgrep: Semgrep_go_sql_rule-concat-sqli -- SQL is static and parameterized; no user-controlled SQL construction.
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkID); err != nil {
+	if _, err := execStaticSQLContext(ctx, dbconn, deleteChunkBlockRefsByChunkIDQuery, chunkID); err != nil {
 		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
 	}
 
-	// nosemgrep: Semgrep_go_sql_rule-concat-sqli -- SQL is static and parameterized; no user-controlled SQL construction.
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
+	if _, err := execStaticSQLContext(ctx, dbconn, deleteBlocksByChunkIDQuery, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while rebuilding chunk %d: %w", chunkID, err)
 	}
 
