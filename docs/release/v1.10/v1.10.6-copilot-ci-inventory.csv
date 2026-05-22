@@ -1,0 +1,10 @@
+artifact_id,path,artifact_type,current_status,phase_owner,expected_decision,notes
+COPILOT-ROOT,.github/copilot-instructions.md,repository-copilot-instructions,existing,Phase 1,audit,Confirm v1.10.x stabilization constraints remain correct
+PROMPT-V110,.github/prompts/v110-phase.prompt.md,copilot-prompt,existing,Phase 1,audit,Confirm phase workflow remains aligned with v1.10.6
+PROMPT-REGRESSION,.github/prompts/regression-fix.prompt.md,copilot-prompt,existing,Phase 1,audit,Confirm regression workflow remains narrow
+PROMPT-PR,.github/prompts/release-pr-summary.prompt.md,copilot-prompt,existing,Phase 1,audit,Confirm PR summary avoids overclaiming
+PROMPT-CODACY,.github/prompts/codacy-triage.prompt.md,copilot-prompt,existing,Phase 1,audit,Confirm Codacy triage prompt exists and avoids style-only fixes
+INSTR-CI,.github/instructions/ci.instructions.md,path-specific-instructions,missing,Phase 2,add_or_confirm,Recommended for v1.10.6/v1.10.7
+PROMPT-COVERAGE,.github/prompts/critical-path-coverage.prompt.md,copilot-prompt,missing,Phase 3,add_or_confirm,Recommended for v1.10.6/v1.10.7
+CI-WORKFLOWS,.github/workflows,ci-workflows,existing,Phase 7,audit_only,Do not change unless justified
+SCRIPTS,scripts,release-scripts,existing,Phase 7,audit_only,Do not change unless justified
