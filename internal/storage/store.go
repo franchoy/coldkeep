@@ -1129,6 +1129,7 @@ func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx,
 
 func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
 	var summary reusableCompletedChunkSummary
+	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
 	err := dbconn.QueryRowContext(ctx, `
 		SELECT
 			COUNT(b.id) AS block_rows,
@@ -1173,6 +1174,7 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		containerSize int64
 		maxSize       int64
 	)
+	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
 	err = dbconn.QueryRowContext(ctx, `
 		SELECT
 			ctr.id,
@@ -1258,6 +1260,7 @@ func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chun
 		return fmt.Errorf("invalid chunk id for physical cleanup: %d", chunkID)
 	}
 
+	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
 	deletePackedStmt, err := dbconn.PrepareContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`)
 	if err != nil {
 		return fmt.Errorf("prepare stale chunk_block_refs delete for chunk %d: %w", chunkID, err)
@@ -1268,6 +1271,7 @@ func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chun
 		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
 	}
 
+	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
 	deleteLegacyStmt, err := dbconn.PrepareContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`)
 	if err != nil {
 		return fmt.Errorf("prepare stale blocks delete for chunk %d: %w", chunkID, err)
