@@ -184,7 +184,7 @@ func TestLockContainerRowNowaitWithRetryUsesBackendAwareQueryWhenDBProvided(t *t
 
 func TestLockContainerRowNowaitWithRetryUsesForUpdateWhenPostgresDBProvided(t *testing.T) {
 	tx := &stubTx{}
-	dbconn, err := sql.Open("postgres", "postgres://user:pass@127.0.0.1:5432/db?sslmode=disable")
+	dbconn, err := sql.Open("postgres", "postgres://127.0.0.1:5432/db?connect_timeout=1&sslmode=disable")
 	if err != nil {
 		t.Fatalf("open postgres db handle: %v", err)
 	}
