@@ -327,6 +327,14 @@ func TestCompressionActivationSwitchingIntegration(t *testing.T) {
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 	env := testutils.DefaultCLIEnv(containersDir)
 
+	// This scenario validates repository-config-driven compression switching.
+	// Clear inherited process-level compression overrides so subprocess stores
+	// use repository_config values set by the test.
+	env["COLDKEEP_COMPRESSION"] = ""
+	env["COLDKEEP_COMPRESSION_LEVEL"] = ""
+	t.Setenv("COLDKEEP_COMPRESSION", "")
+	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "")
+
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
