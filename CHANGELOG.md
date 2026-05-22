@@ -20,7 +20,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.10.6 — CI / Codacy / Copilot Workflow Hardening
+## v1.10.6 - 2026-05-22 —  CI / Codacy / Copilot Workflow Hardening
 
 - Added CI-specific Copilot instructions.
 - Added critical-path coverage prompt.
