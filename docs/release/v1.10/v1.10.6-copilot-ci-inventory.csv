@@ -5,6 +5,6 @@ PROMPT-REGRESSION,.github/prompts/regression-fix.prompt.md,copilot-prompt,existi
 PROMPT-PR,.github/prompts/release-pr-summary.prompt.md,copilot-prompt,existing_audited,Phase 1,keep-as-is,PR summary avoids overclaiming and unsupported readiness claims
 PROMPT-CODACY,.github/prompts/codacy-triage.prompt.md,copilot-prompt,existing_audited,Phase 1,keep-as-is,Codacy triage prompt exists and avoids style-only fixes
 INSTR-CI,.github/instructions/ci.instructions.md,path-specific-instructions,added,Phase 2,active,CI-specific Copilot guidance added for correctness-first CI/Codacy/coverage boundaries
-PROMPT-COVERAGE,.github/prompts/critical-path-coverage.prompt.md,copilot-prompt,missing,Phase 3,add_or_confirm,Recommended for v1.10.6/v1.10.7
+PROMPT-COVERAGE,.github/prompts/critical-path-coverage.prompt.md,copilot-prompt,added,Phase 3,active,Critical-path coverage prompt added to guide correctness-first coverage work and avoid noisy global threshold chasing
 CI-WORKFLOWS,.github/workflows,ci-workflows,existing,Phase 7,audit_only,Do not change unless justified
 SCRIPTS,scripts,release-scripts,existing,Phase 7,audit_only,Do not change unless justified
