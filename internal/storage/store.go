@@ -1129,7 +1129,7 @@ func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx,
 
 func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
 	var summary reusableCompletedChunkSummary
-	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
+	// nosemgrep: Semgrep_go_sql_rule-concat-sqli -- SQL is static and parameterized; no user-controlled SQL construction.
 	err := dbconn.QueryRowContext(ctx, `
 		SELECT
 			COUNT(b.id) AS block_rows,
@@ -1174,7 +1174,7 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		containerSize int64
 		maxSize       int64
 	)
-	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
+	// nosemgrep: Semgrep_go_sql_rule-concat-sqli -- SQL is static and parameterized; no user-controlled SQL construction.
 	err = dbconn.QueryRowContext(ctx, `
 		SELECT
 			ctr.id,
