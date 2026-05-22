@@ -511,16 +511,12 @@ func verifyChunkPhysicalLocationRules(ctx context.Context, dbconn *sql.DB) error
 			// Pure legacy mapping is valid.
 			continue
 		case s.hasPacked && s.legacyRows == 1:
-			ok, detail, err := isValidMigrationCompanionMapping(ctx, dbconn, s.chunkID, s.chunkSize)
+			ok, err := isValidMigrationCompanionMapping(ctx, dbconn, s.chunkID, s.chunkSize)
 			if err != nil {
 				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: check migration companion for chunk %d", s.chunkID), err)
 			}
 			if !ok {
-				detail = strings.TrimSpace(detail)
-				if detail == "" {
-					detail = "no mismatch detail available"
-				}
-				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: chunk %d has both packed and legacy mappings outside migration companion contract: %s", s.chunkID, detail), nil)
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: chunk %d has both packed and legacy mappings outside migration companion contract", s.chunkID), nil)
 			}
 		default:
 			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: chunk %d has invalid physical location shape packed=%t legacy_rows=%d", s.chunkID, s.hasPacked, s.legacyRows), nil)
@@ -530,7 +526,7 @@ func verifyChunkPhysicalLocationRules(ctx context.Context, dbconn *sql.DB) error
 	return nil
 }
 
-func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunkID, chunkSize int64) (bool, string, error) {
+func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunkID, chunkSize int64) (bool, error) {
 	var blockID int64
 	var offsetInBlock int64
 	var sizeInBlock int64
@@ -538,7 +534,7 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 		`SELECT block_id, offset_in_block, size_in_block FROM chunk_block_refs WHERE chunk_id = $1`,
 		chunkID,
 	).Scan(&blockID, &offsetInBlock, &sizeInBlock); err != nil {
-		return false, "", err
+		return false, err
 	}
 
 	var packedContainerID int64
@@ -548,7 +544,7 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 		`SELECT container_id, container_offset, plaintext_size FROM storage_blocks WHERE id = $1`,
 		blockID,
 	).Scan(&packedContainerID, &packedContainerOffset, &packedPlaintextSize); err != nil {
-		return false, "", err
+		return false, err
 	}
 
 	var totalReferencedBytes int64
@@ -556,11 +552,11 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 		`SELECT COALESCE(SUM(size_in_block), 0) FROM chunk_block_refs WHERE block_id = $1`,
 		blockID,
 	).Scan(&totalReferencedBytes); err != nil {
-		return false, "", err
+		return false, err
 	}
 	payloadPrefixBytes := packedPlaintextSize - totalReferencedBytes
 	if payloadPrefixBytes < 0 {
-		return false, fmt.Sprintf("negative payload prefix bytes block_id=%d packed_plaintext_size=%d total_referenced_bytes=%d", blockID, packedPlaintextSize, totalReferencedBytes), nil
+		return false, nil
 	}
 
 	var codec string
@@ -576,63 +572,43 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 		 WHERE chunk_id = $1`,
 		chunkID,
 	).Scan(&codec, &formatVersion, &plaintextSize, &storedSize, &nonce, &legacyContainerID, &legacyOffset); err != nil {
-		return false, "", err
+		return false, err
 	}
 
-	baseDetail := fmt.Sprintf(
-		"chunk_size=%d block_id=%d packed_container_id=%d packed_container_offset=%d packed_plaintext_size=%d total_referenced_bytes=%d payload_prefix_bytes=%d offset_in_block=%d size_in_block=%d legacy_codec=%s legacy_format_version=%d legacy_plaintext_size=%d legacy_stored_size=%d legacy_container_id=%d legacy_offset=%d legacy_nonce_len=%d",
-		chunkSize,
-		blockID,
-		packedContainerID,
-		packedContainerOffset,
-		packedPlaintextSize,
-		totalReferencedBytes,
-		payloadPrefixBytes,
-		offsetInBlock,
-		sizeInBlock,
-		codec,
-		formatVersion,
-		plaintextSize,
-		storedSize,
-		legacyContainerID,
-		legacyOffset,
-		len(nonce),
-	)
-
 	if formatVersion != 1 {
-		return false, "legacy format_version mismatch: " + baseDetail, nil
+		return false, nil
 	}
 
 	switch codec {
 	case "plain":
 		if plaintextSize != chunkSize || storedSize != chunkSize {
-			return false, "plain companion size mismatch: " + baseDetail, nil
+			return false, nil
 		}
 		if sizeInBlock != chunkSize {
-			return false, "packed ref size mismatch for plain companion: " + baseDetail, nil
+			return false, nil
 		}
 		expectedLegacyOffset := packedContainerOffset + payloadPrefixBytes + offsetInBlock
 		if legacyContainerID != packedContainerID || legacyOffset != expectedLegacyOffset {
-			return false, fmt.Sprintf("plain companion location mismatch expected_container_id=%d expected_legacy_offset=%d %s", packedContainerID, expectedLegacyOffset, baseDetail), nil
+			return false, nil
 		}
 	case "aes-gcm":
 		if plaintextSize != chunkSize {
-			return false, "aes-gcm companion plaintext size mismatch: " + baseDetail, nil
+			return false, nil
 		}
 		if storedSize <= 0 {
-			return false, "aes-gcm companion stored size invalid: " + baseDetail, nil
+			return false, nil
 		}
 		if len(nonce) != 12 {
-			return false, "aes-gcm companion nonce length mismatch: " + baseDetail, nil
+			return false, nil
 		}
 		if legacyContainerID != packedContainerID || legacyOffset != packedContainerOffset {
-			return false, fmt.Sprintf("aes-gcm companion location mismatch expected_container_id=%d expected_legacy_offset=%d %s", packedContainerID, packedContainerOffset, baseDetail), nil
+			return false, nil
 		}
 	default:
-		return false, "unsupported legacy codec in migration companion: " + baseDetail, nil
+		return false, nil
 	}
 
-	return true, "", nil
+	return true, nil
 }
 
 func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {

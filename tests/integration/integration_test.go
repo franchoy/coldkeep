@@ -137,11 +137,6 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	repoRoot := testutils.FindRepoRoot(t)
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
-	// The scenario is validating repository-config-driven compression switches.
-	// Clear any inherited process-level compression overrides so the CLI path
-	// cannot accidentally bypass the repository state under test.
-	env["COLDKEEP_COMPRESSION"] = ""
-	env["COLDKEEP_COMPRESSION_LEVEL"] = ""
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -289,12 +284,11 @@ func TestCompressionActivationSwitchingIntegration(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
-	containersDir := filepath.Join(tmp, "containers")
-	t.Setenv("COLDKEEP_STORAGE_DIR", containersDir)
-	_ = os.RemoveAll(containersDir)
-	if err := os.MkdirAll(containersDir, 0o755); err != nil {
-		t.Fatalf("mkdir containers dir: %v", err)
-	}
+	origContainersDir := container.ContainersDir
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -325,15 +319,7 @@ func TestCompressionActivationSwitchingIntegration(t *testing.T) {
 
 	repoRoot := testutils.FindRepoRoot(t)
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
-	env := testutils.DefaultCLIEnv(containersDir)
-
-	// This scenario validates repository-config-driven compression switching.
-	// Clear inherited process-level compression overrides so subprocess stores
-	// use repository_config values set by the test.
-	env["COLDKEEP_COMPRESSION"] = ""
-	env["COLDKEEP_COMPRESSION_LEVEL"] = ""
-	t.Setenv("COLDKEEP_COMPRESSION", "")
-	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "")
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {

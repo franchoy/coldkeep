@@ -490,34 +490,26 @@ func commitPreparedChunksWithContext(
 				return StoreFileResult{}, err
 			}
 			if hasPackedRef || hasLegacyBlock {
-				reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, claimedChunkID, commitInfo.validationContainerDir)
-				if reuseErr != nil {
-					log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", claimedChunkID, reuseErr)
-					if err := clearChunkPhysicalRowsWithContext(ctx, dbconn, claimedChunkID); err != nil {
-						return StoreFileResult{}, errors.Join(reuseErr, err)
-					}
-				} else {
-					tx, err := dbconn.BeginTx(ctx, nil)
-					if err != nil {
-						return StoreFileResult{}, err
-					}
-
-					if _, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err != nil {
-						_ = tx.Rollback()
-						return StoreFileResult{}, err
-					}
-
-					if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
-						_ = tx.Rollback()
-						return StoreFileResult{}, err
-					}
-
-					if err := tx.Commit(); err != nil {
-						_ = tx.Rollback()
-						return StoreFileResult{}, err
-					}
-					continue
+				tx, err := dbconn.BeginTx(ctx, nil)
+				if err != nil {
+					return StoreFileResult{}, err
 				}
+
+				if _, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err != nil {
+					_ = tx.Rollback()
+					return StoreFileResult{}, err
+				}
+
+				if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
+					_ = tx.Rollback()
+					return StoreFileResult{}, err
+				}
+
+				if err := tx.Commit(); err != nil {
+					_ = tx.Rollback()
+					return StoreFileResult{}, err
+				}
+				continue
 			}
 		}
 
@@ -1063,39 +1055,6 @@ type reusableCompletedChunkSummary struct {
 	quarantinedContainerRows int64
 }
 
-const reusableCompletedChunkSummaryQuery = `
-		SELECT
-			COUNT(b.id) AS block_rows,
-			COUNT(r.chunk_id) AS packed_rows,
-			COUNT(ctr.id) AS existing_container_rows,
-			COALESCE(SUM(CASE WHEN ctr.quarantine THEN 1 ELSE 0 END), 0) AS quarantined_container_rows
-		FROM chunk c
-		LEFT JOIN blocks b ON b.chunk_id = c.id
-		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
-		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
-		WHERE c.id = $1
-	`
-
-const reusableCompletedChunkPlacementQuery = `
-		SELECT
-			ctr.id,
-			ctr.filename,
-			COALESCE(b.block_offset, sb.container_offset),
-			COALESCE(b.stored_size, sb.stored_size),
-			ctr.current_size,
-			ctr.max_size
-		FROM chunk c
-		LEFT JOIN blocks b ON b.chunk_id = c.id
-		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
-		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
-		WHERE c.id = $1
-	`
-
-const deleteChunkBlockRefsByChunkIDQuery = `DELETE FROM chunk_block_refs WHERE chunk_id = $1`
-const deleteBlocksByChunkIDQuery = `DELETE FROM blocks WHERE chunk_id = $1`
-
 func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx, fileID int64, markChunksSuspicious bool) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
@@ -1162,7 +1121,19 @@ func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx,
 
 func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
 	var summary reusableCompletedChunkSummary
-	err := dbconn.QueryRowContext(ctx, reusableCompletedChunkSummaryQuery, chunkID).Scan(
+	err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COUNT(b.id) AS block_rows,
+			COUNT(r.chunk_id) AS packed_rows,
+			COUNT(ctr.id) AS existing_container_rows,
+			COALESCE(SUM(CASE WHEN ctr.quarantine THEN 1 ELSE 0 END), 0) AS quarantined_container_rows
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		WHERE c.id = $1
+	`, chunkID).Scan(
 		&summary.blockRows,
 		&summary.packedRows,
 		&summary.existingContainerRows,
@@ -1194,7 +1165,21 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		containerSize int64
 		maxSize       int64
 	)
-	err = dbconn.QueryRowContext(ctx, reusableCompletedChunkPlacementQuery, chunkID).Scan(
+	err = dbconn.QueryRowContext(ctx, `
+		SELECT
+			ctr.id,
+			ctr.filename,
+			COALESCE(b.block_offset, sb.container_offset),
+			COALESCE(b.stored_size, sb.stored_size),
+			ctr.current_size,
+			ctr.max_size
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		WHERE c.id = $1
+	`, chunkID).Scan(
 		&containerID,
 		&filename,
 		&blockOffset,
@@ -1253,24 +1238,11 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 	if _, err := result.RowsAffected(); err != nil {
 		return fmt.Errorf("rows affected while marking chunk %d for rebuild: %w", chunkID, err)
 	}
-	if err := clearChunkPhysicalRowsWithContext(ctx, dbconn, chunkID); err != nil {
-		return err
+	if _, err := dbconn.ExecContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkID); err != nil {
+		return fmt.Errorf("delete stale chunk_block_refs while marking chunk %d for rebuild: %w", chunkID, err)
 	}
-
-	return nil
-}
-
-func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
-	if chunkID <= 0 {
-		return fmt.Errorf("invalid chunk id for physical cleanup: %d", chunkID)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, deleteChunkBlockRefsByChunkIDQuery, chunkID); err != nil {
-		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, deleteBlocksByChunkIDQuery, chunkID); err != nil {
-		return fmt.Errorf("delete stale blocks while rebuilding chunk %d: %w", chunkID, err)
+	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
+		return fmt.Errorf("delete stale blocks while marking chunk %d for rebuild: %w", chunkID, err)
 	}
 
 	return nil

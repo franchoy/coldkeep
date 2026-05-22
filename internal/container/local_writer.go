@@ -234,9 +234,7 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int
 
 	lockQuery := "SELECT id FROM container WHERE id = $1"
 	if dbconn != nil {
-		// Prefer blocking row locks for PostgreSQL to avoid repeated NOWAIT contention churn
-		// in multi-worker store hot paths.
-		lockQuery = db.QueryWithOptionalForUpdate(dbconn, lockQuery)
+		lockQuery = db.QueryWithOptionalForUpdateNowait(dbconn, lockQuery)
 	} else {
 		lockQuery += " FOR UPDATE NOWAIT"
 	}
