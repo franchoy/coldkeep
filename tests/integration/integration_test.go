@@ -289,11 +289,12 @@ func TestCompressionActivationSwitchingIntegration(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
-	origContainersDir := container.ContainersDir
-	container.ContainersDir = filepath.Join(tmp, "containers")
-	t.Cleanup(func() { container.ContainersDir = origContainersDir })
-	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	testutils.ResetStorage(t)
+	containersDir := filepath.Join(tmp, "containers")
+	t.Setenv("COLDKEEP_STORAGE_DIR", containersDir)
+	_ = os.RemoveAll(containersDir)
+	if err := os.MkdirAll(containersDir, 0o755); err != nil {
+		t.Fatalf("mkdir containers dir: %v", err)
+	}
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -324,7 +325,7 @@ func TestCompressionActivationSwitchingIntegration(t *testing.T) {
 
 	repoRoot := testutils.FindRepoRoot(t)
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
-	env := testutils.DefaultCLIEnv(container.ContainersDir)
+	env := testutils.DefaultCLIEnv(containersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
