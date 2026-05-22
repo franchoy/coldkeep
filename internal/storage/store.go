@@ -1096,10 +1096,6 @@ const reusableCompletedChunkPlacementQuery = `
 const deleteChunkBlockRefsByChunkIDQuery = `DELETE FROM chunk_block_refs WHERE chunk_id = $1`
 const deleteBlocksByChunkIDQuery = `DELETE FROM blocks WHERE chunk_id = $1`
 
-func queryRowStaticSQLContext(ctx context.Context, dbconn *sql.DB, query string, args ...any) *sql.Row {
-	return dbconn.QueryRowContext(ctx, query, args...)
-}
-
 func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx, fileID int64, markChunksSuspicious bool) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
@@ -1166,7 +1162,7 @@ func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx,
 
 func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
 	var summary reusableCompletedChunkSummary
-	err := queryRowStaticSQLContext(ctx, dbconn, reusableCompletedChunkSummaryQuery, chunkID).Scan(
+	err := dbconn.QueryRowContext(ctx, reusableCompletedChunkSummaryQuery, chunkID).Scan(
 		&summary.blockRows,
 		&summary.packedRows,
 		&summary.existingContainerRows,
@@ -1198,7 +1194,7 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		containerSize int64
 		maxSize       int64
 	)
-	err = queryRowStaticSQLContext(ctx, dbconn, reusableCompletedChunkPlacementQuery, chunkID).Scan(
+	err = dbconn.QueryRowContext(ctx, reusableCompletedChunkPlacementQuery, chunkID).Scan(
 		&containerID,
 		&filename,
 		&blockOffset,
