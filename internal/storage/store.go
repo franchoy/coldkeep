@@ -1131,7 +1131,7 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		LEFT JOIN blocks b ON b.chunk_id = c.id
 		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
 		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		LEFT JOIN container ctr ON ctr.id = COALESCE(sb.container_id, b.container_id)
 		WHERE c.id = $1
 	`, chunkID).Scan(
 		&summary.blockRows,
@@ -1169,15 +1169,15 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		SELECT
 			ctr.id,
 			ctr.filename,
-			COALESCE(b.block_offset, sb.container_offset),
-			COALESCE(b.stored_size, sb.stored_size),
+			COALESCE(sb.container_offset, b.block_offset),
+			COALESCE(sb.stored_size, b.stored_size),
 			ctr.current_size,
 			ctr.max_size
 		FROM chunk c
 		LEFT JOIN blocks b ON b.chunk_id = c.id
 		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
 		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		LEFT JOIN container ctr ON ctr.id = COALESCE(sb.container_id, b.container_id)
 		WHERE c.id = $1
 	`, chunkID).Scan(
 		&containerID,
