@@ -1260,12 +1260,12 @@ func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chun
 		return fmt.Errorf("invalid chunk id for physical cleanup: %d", chunkID)
 	}
 
-	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
+	// nosemgrep: Semgrep_go_sql_rule-concat-sqli -- SQL is static and parameterized; no user-controlled SQL construction.
 	if _, err := dbconn.ExecContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkID); err != nil {
 		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
 	}
 
-	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
+	// nosemgrep: Semgrep_go_sql_rule-concat-sqli -- SQL is static and parameterized; no user-controlled SQL construction.
 	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while rebuilding chunk %d: %w", chunkID, err)
 	}
