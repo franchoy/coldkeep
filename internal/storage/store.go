@@ -3181,7 +3181,10 @@ func persistPackedBlockMetadata(
 			ctx,
 			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
 			 VALUES ($1, $2, $3, $4)
-			 ON CONFLICT (chunk_id) DO NOTHING`,
+			 ON CONFLICT (chunk_id) DO UPDATE
+			 SET block_id = EXCLUDED.block_id,
+			     offset_in_block = EXCLUDED.offset_in_block,
+			     size_in_block = EXCLUDED.size_in_block`,
 			int64(entry.ChunkID),
 			blockID,
 			int64(entry.Offset),

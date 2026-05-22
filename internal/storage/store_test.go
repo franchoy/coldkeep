@@ -1572,6 +1572,133 @@ func TestStorePackedBlockWithWriterRollbackLeavesNoRefsOrBlockRows(t *testing.T)
 	}
 }
 
+func TestStorePackedBlockWithWriterRepairsStaleChunkRefOnConflict(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	insertChunk := func(hash string, size int64) int64 {
+		t.Helper()
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, 1, 'v1-simple-rolling')
+			 RETURNING id`,
+			hash,
+			size,
+			filestate.ChunkProcessing,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert chunk %q: %v", hash, err)
+		}
+		return chunkID
+	}
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+
+	ctx := context.Background()
+	seedTx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin seed tx: %v", err)
+	}
+	seedPlacement, err := writer.AppendPayload(seedTx, []byte("seed"))
+	if err != nil {
+		_ = seedTx.Rollback()
+		t.Fatalf("seed append payload: %v", err)
+	}
+	if err := seedTx.Commit(); err != nil {
+		t.Fatalf("commit seed tx: %v", err)
+	}
+
+	staleContainerID := seedPlacement.ContainerID
+	chunk1 := insertChunk("packed-repair-1", 3)
+	chunk2 := insertChunk("packed-repair-2", 4)
+
+	var staleBlockID int64
+	staleHash := bytes.Repeat([]byte{0xA5}, 32)
+	if err := dbconn.QueryRow(
+		`INSERT INTO storage_blocks (
+			format_version, codec, plaintext_size, compression_codec, compressed_size, stored_size,
+			container_id, container_offset, block_hash, compression_ratio, payload_hash
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 RETURNING id`,
+		1,
+		"none",
+		int64(16),
+		"none",
+		int64(16),
+		int64(16),
+		staleContainerID,
+		int64(0),
+		staleHash,
+		1.0,
+		hex.EncodeToString(staleHash),
+	).Scan(&staleBlockID); err != nil {
+		t.Fatalf("insert stale storage block: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, $3, $4)`,
+		chunk1,
+		staleBlockID,
+		int64(999),
+		int64(1),
+	); err != nil {
+		t.Fatalf("insert stale chunk ref: %v", err)
+	}
+
+	builder := blocks.NewBlockBuilder(64)
+	if err := builder.Add(blocks.PendingChunk{ChunkID: chunk1, Data: []byte("abc"), Size: 3}); err != nil {
+		t.Fatalf("add chunk1: %v", err)
+	}
+	if err := builder.Add(blocks.PendingChunk{ChunkID: chunk2, Data: []byte("wxyz"), Size: 4}); err != nil {
+		t.Fatalf("add chunk2: %v", err)
+	}
+
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("get plain transformer: %v", err)
+	}
+
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+
+	result, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, storeRuntimeCompression{}, builder)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("store packed block: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit packed block tx: %v", err)
+	}
+
+	var gotBlockID, gotOffset, gotSize int64
+	if err := dbconn.QueryRow(
+		`SELECT block_id, offset_in_block, size_in_block
+		 FROM chunk_block_refs
+		 WHERE chunk_id = $1`,
+		chunk1,
+	).Scan(&gotBlockID, &gotOffset, &gotSize); err != nil {
+		t.Fatalf("read repaired chunk ref: %v", err)
+	}
+
+	if gotBlockID != result.BlockID {
+		t.Fatalf("expected chunk1 ref to point at new block_id=%d, got %d", result.BlockID, gotBlockID)
+	}
+	if gotOffset != 0 || gotSize != 3 {
+		t.Fatalf("expected chunk1 ref offset/size=(0,3), got (%d,%d)", gotOffset, gotSize)
+	}
+}
+
 func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 	const customChunkerVersion chunk.Version = "v1-simple-rolling-test-injected"
 	repo := NewRepository(nil)
