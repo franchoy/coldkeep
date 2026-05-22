@@ -1260,27 +1260,16 @@ func clearChunkPhysicalRowsWithContext(ctx context.Context, dbconn *sql.DB, chun
 		return fmt.Errorf("invalid chunk id for physical cleanup: %d", chunkID)
 	}
 
-	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
-	deletePackedStmt, err := dbconn.PrepareContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`)
-	if err != nil {
-		return fmt.Errorf("prepare stale chunk_block_refs delete for chunk %d: %w", chunkID, err)
-	}
-	defer func() { _ = deletePackedStmt.Close() }()
+	const deleteChunkBlockRefsQuery = `DELETE FROM chunk_block_refs WHERE chunk_id = $1`
+	const deleteLegacyBlocksQuery = `DELETE FROM blocks WHERE chunk_id = $1`
 
-	// nosemgrep: SQL is static and parameterized; execution uses bound chunkID.
-	if _, err := deletePackedStmt.ExecContext(ctx, chunkID); err != nil {
+	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
+	if _, err := dbconn.ExecContext(ctx, deleteChunkBlockRefsQuery, chunkID); err != nil {
 		return fmt.Errorf("delete stale chunk_block_refs while rebuilding chunk %d: %w", chunkID, err)
 	}
 
 	// nosemgrep: SQL is static and parameterized; no user-controlled SQL construction.
-	deleteLegacyStmt, err := dbconn.PrepareContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`)
-	if err != nil {
-		return fmt.Errorf("prepare stale blocks delete for chunk %d: %w", chunkID, err)
-	}
-	defer func() { _ = deleteLegacyStmt.Close() }()
-
-	// nosemgrep: SQL is static and parameterized; execution uses bound chunkID.
-	if _, err := deleteLegacyStmt.ExecContext(ctx, chunkID); err != nil {
+	if _, err := dbconn.ExecContext(ctx, deleteLegacyBlocksQuery, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while rebuilding chunk %d: %w", chunkID, err)
 	}
 
