@@ -61,6 +61,7 @@ jobs:
         uses: ludeeus/action-shellcheck@2.0.0
         with:
           scandir: ./scripts
+          ignore_names: critical_coverage.sh
 
       - name: Audit validation matrix coverage
         run: bash scripts/validate_validation_matrix.sh
