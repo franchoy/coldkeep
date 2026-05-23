@@ -1,0 +1,18 @@
+package,tier,domain,gate_mode,release_blocking_in_v1107,coverage_percent,coverage_role
+internal/storage,Tier 1,storage,baseline-report-and-soft-gate,yes,67.7,release-critical coverage target
+internal/verify,Tier 1,verify,baseline-report-and-soft-gate,yes,66.6,release-critical coverage target
+internal/maintenance,Tier 1,gc-repair-stats,baseline-report-and-soft-gate,yes,47.6,release-critical coverage target
+internal/gc,Tier 1,gc,baseline-report-and-soft-gate,yes,81.2,release-critical coverage target
+internal/snapshot,Tier 1,snapshot,baseline-report-and-soft-gate,yes,86.3,release-critical coverage target
+internal/recovery,Tier 1,recovery,baseline-report-and-soft-gate,yes,44.9,release-critical coverage target
+internal/db,Tier 2,catalog,baseline-report-and-soft-gate,yes,76.6,catalog-critical coverage target
+internal/graph,Tier 2,graph,baseline-report-and-soft-gate,yes,75.3,catalog-critical coverage target
+internal/blocks,Tier 2,blocks,baseline-report-and-soft-gate,yes,85.1,storage-infrastructure coverage target
+internal/container,Tier 2,container,baseline-report-and-soft-gate,yes,62.1,storage-infrastructure coverage target
+internal/retention,Tier 2,retention,baseline-report-and-soft-gate,yes,82.1,policy-critical coverage target
+cmd/coldkeep,Tier 3,cli,report-only,no,64.7,observe-only
+internal/observability,Tier 3,observability,report-only,no,77.1,observe-only
+internal/benchmark,Tier 3,benchmark,report-only,no,82.2,observe-only
+scripts,Tier 3,release-tooling,report-only,no,n/a,observe-only
+tests/adversarial,Tier 3,test-suite,report-only,no,n/a,observe-only
+tests/integration,Tier 3,test-suite,report-only,no,n/a,observe-only
