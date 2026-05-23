@@ -20,6 +20,20 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.6 - 2026-05-22 —  CI / Codacy / Copilot Workflow Hardening
+
+- Added CI-specific Copilot instructions.
+- Added critical-path coverage prompt.
+- Defined Codacy passive-mode policy.
+- Defined scanner suppression / acceptance policy.
+- Defined CI/Codacy release gate boundaries.
+- Reviewed CI workflow delta options and kept CI workflow behavior unchanged.
+- Recorded local validation and workflow consistency evidence.
+- Confirmed `go vet ./...`, `go test ./... -count=1`, and `go test -race ./... -count=1` passed.
+- No product behavior, CI workflow behavior, Codacy configuration, dependency, storage, restore, GC, verify, repair, CLI, or JSON contract changes intended.
+
+------------------------------------------------------------------------
+
 ## v1.10.5 - 2026-05-20 — Release Validation Debt Hardening
 
 Fixes-only release that consolidates validation debt from v1.10.x development: gosec baseline triage, Codacy finding workflow hardening, full-suite timeout investigation, local-vs-CI validation boundary clarification, regression matrix, tracker/matrix closure accounting, and full local PRE_RELEASE_CHECKLIST.md execution.

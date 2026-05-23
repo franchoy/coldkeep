@@ -1131,7 +1131,7 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		LEFT JOIN blocks b ON b.chunk_id = c.id
 		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
 		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		LEFT JOIN container ctr ON ctr.id = COALESCE(sb.container_id, b.container_id)
 		WHERE c.id = $1
 	`, chunkID).Scan(
 		&summary.blockRows,
@@ -1169,15 +1169,15 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		SELECT
 			ctr.id,
 			ctr.filename,
-			COALESCE(b.block_offset, sb.container_offset),
-			COALESCE(b.stored_size, sb.stored_size),
+			COALESCE(sb.container_offset, b.block_offset),
+			COALESCE(sb.stored_size, b.stored_size),
 			ctr.current_size,
 			ctr.max_size
 		FROM chunk c
 		LEFT JOIN blocks b ON b.chunk_id = c.id
 		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
 		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		LEFT JOIN container ctr ON ctr.id = COALESCE(sb.container_id, b.container_id)
 		WHERE c.id = $1
 	`, chunkID).Scan(
 		&containerID,
@@ -1237,6 +1237,9 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 	}
 	if _, err := result.RowsAffected(); err != nil {
 		return fmt.Errorf("rows affected while marking chunk %d for rebuild: %w", chunkID, err)
+	}
+	if _, err := dbconn.ExecContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkID); err != nil {
+		return fmt.Errorf("delete stale chunk_block_refs while marking chunk %d for rebuild: %w", chunkID, err)
 	}
 	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while marking chunk %d for rebuild: %w", chunkID, err)
@@ -3150,7 +3153,10 @@ func persistPackedBlockMetadata(
 			ctx,
 			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
 			 VALUES ($1, $2, $3, $4)
-			 ON CONFLICT (chunk_id) DO NOTHING`,
+			 ON CONFLICT (chunk_id) DO UPDATE
+			 SET block_id = EXCLUDED.block_id,
+			     offset_in_block = EXCLUDED.offset_in_block,
+			     size_in_block = EXCLUDED.size_in_block`,
 			int64(entry.ChunkID),
 			blockID,
 			int64(entry.Offset),

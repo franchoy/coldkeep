@@ -15,6 +15,8 @@ func (s *testTraceSink) Event(event TraceEvent) {
 func TestEmitTraceSanitizesSensitiveMetadataAndMessage(t *testing.T) {
 	sink := &testTraceSink{}
 
+	// These values intentionally look like credentials so the sanitizer is
+	// forced to redact them rather than relying on benign test placeholders.
 	emitTrace(TraceOptions{Enabled: true, Sink: sink}, TraceEvent{
 		Step:    "test.trace",
 		Message: "reading from /home/user/private.txt",
