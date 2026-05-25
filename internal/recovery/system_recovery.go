@@ -204,61 +204,9 @@ func recoverSealingContainersWithFS(dbconn *sql.DB, containersDir string, stats 
 		if err := rows.Scan(&id, &filename, &currentSize); err != nil {
 			return fmt.Errorf("scan sealing container row: %w", err)
 		}
-
-		path, err := container.SafeContainerPath(containersDir, filename)
-		if err != nil {
-			return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		if err := recoverOneSealingContainer(ctx, dbconn, id, filename, currentSize, containersDir, fsys, stats); err != nil {
+			return err
 		}
-		fileInfo, statErr := fsys.Stat(path)
-		if statErr == nil && fileInfo.Size() != currentSize {
-			if _, qErr := dbconn.ExecContext(ctx,
-				`UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`,
-				id,
-				fileInfo.Size(),
-			); qErr != nil {
-				return fmt.Errorf("quarantine sealing container %d after size mismatch: %w", id, qErr)
-			}
-
-			stats.sealingQuarantined++
-			logRecoveryEvent(
-				"recover_sealing_container_quarantined",
-				fmt.Sprintf("container_id=%d", id),
-				"filename="+filename,
-				"reason=size_mismatch",
-				fmt.Sprintf("db_current_size=%d", currentSize),
-				fmt.Sprintf("physical_size=%d", fileInfo.Size()),
-			)
-			continue
-		}
-
-		sealErr := container.SealContainerInDir(dbconn, id, filename, containersDir)
-		if sealErr == nil {
-			stats.sealingCompleted++
-			logRecoveryEvent(
-				"recover_sealing_container_completed",
-				fmt.Sprintf("container_id=%d", id),
-				"filename="+filename,
-			)
-			continue
-		}
-
-		// Physical file missing/unreadable: execute quarantine path and
-		// clear sealing marker.
-		if _, qErr := dbconn.ExecContext(ctx,
-			`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
-			id,
-		); qErr != nil {
-			return fmt.Errorf("quarantine unresolved sealing container %d after seal error %v: %w", id, sealErr, qErr)
-		}
-
-		stats.sealingQuarantined++
-		logRecoveryEvent(
-			"recover_sealing_container_quarantined",
-			fmt.Sprintf("container_id=%d", id),
-			"filename="+filename,
-			"reason=seal_failed",
-			"error="+sealErr.Error(),
-		)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -276,6 +224,63 @@ func recoverSealingContainersWithFS(dbconn *sql.DB, containersDir string, stats 
 // quarantineMissingContainerIfNeeded handles the per-container stat result
 // during the missing-container scan. If the file is confirmed absent it marks
 // the container row quarantined. Any other stat error is returned as fatal.
+
+// recoverOneSealingContainer processes a single container row from the sealing
+// recovery scan. It quarantines the container if the physical file size does not
+// match the DB record, completes the seal if possible, or quarantines on failure.
+func recoverOneSealingContainer(ctx context.Context, dbconn *sql.DB, id int64, filename string, currentSize int64, containersDir string, fsys fsx.FS, stats *recoveryStats) error {
+	path, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
+	fileInfo, statErr := fsys.Stat(path)
+	if statErr == nil && fileInfo.Size() != currentSize {
+		if _, qErr := dbconn.ExecContext(ctx,
+			`UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`,
+			id,
+			fileInfo.Size(),
+		); qErr != nil {
+			return fmt.Errorf("quarantine sealing container %d after size mismatch: %w", id, qErr)
+		}
+		stats.sealingQuarantined++
+		logRecoveryEvent(
+			"recover_sealing_container_quarantined",
+			fmt.Sprintf("container_id=%d", id),
+			"filename="+filename,
+			"reason=size_mismatch",
+			fmt.Sprintf("db_current_size=%d", currentSize),
+			fmt.Sprintf("physical_size=%d", fileInfo.Size()),
+		)
+		return nil
+	}
+	sealErr := container.SealContainerInDir(dbconn, id, filename, containersDir)
+	if sealErr == nil {
+		stats.sealingCompleted++
+		logRecoveryEvent(
+			"recover_sealing_container_completed",
+			fmt.Sprintf("container_id=%d", id),
+			"filename="+filename,
+		)
+		return nil
+	}
+	// Physical file missing/unreadable: quarantine and clear sealing marker.
+	if _, qErr := dbconn.ExecContext(ctx,
+		`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
+		id,
+	); qErr != nil {
+		return fmt.Errorf("quarantine unresolved sealing container %d after seal error %v: %w", id, sealErr, qErr)
+	}
+	stats.sealingQuarantined++
+	logRecoveryEvent(
+		"recover_sealing_container_quarantined",
+		fmt.Sprintf("container_id=%d", id),
+		"filename="+filename,
+		"reason=seal_failed",
+		"error="+sealErr.Error(),
+	)
+	return nil
+}
+
 func quarantineMissingContainerIfNeeded(ctx context.Context, dbconn *sql.DB, id int64, filename string, statErr error, stats *recoveryStats) error {
 	if statErr == nil {
 		return nil // file exists, nothing to do
