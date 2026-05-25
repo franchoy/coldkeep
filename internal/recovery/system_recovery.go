@@ -390,77 +390,17 @@ func quarantineCorruptActiveContainerTailsWithFS(dbconn *sql.DB, containersDir s
 		}
 
 		physicalSize := fileInfo.Size()
-		reason := ""
-		switch {
-		case currentSize > physicalSize:
-			reason = "db_current_size_past_eof"
-		case physicalSize > currentSize:
-			// Ghost bytes on disk: payload write reached disk but DB tx rolled back.
-			// Any size mismatch is treated as suspicious for v1.0 strict recovery.
-			reason = "physical_size_past_db_current_size"
-		default:
-			// Sizes match; check completed-block bounds.
-			var hasOutOfBoundsBlock bool
-			err = dbconn.QueryRowContext(ctx, `
-				SELECT EXISTS (
-					SELECT 1
-					FROM blocks b
-					JOIN chunk c ON c.id = b.chunk_id
-					WHERE b.container_id = $1
-					  AND c.status = $2
-					  AND NOT EXISTS (
-						SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
-					  )
-					  AND (
-						b.block_offset < 0
-						OR b.stored_size <= 0
-						OR b.block_offset > ($3 - b.stored_size)
-					  )
-				)
-			`, id, filestate.ChunkCompleted, physicalSize).Scan(&hasOutOfBoundsBlock)
-			if err != nil {
-				return fmt.Errorf("query active container block bounds: %w", err)
-			}
-			if hasOutOfBoundsBlock {
-				reason = "completed_block_past_eof"
-			}
-
-			// Check for interior gaps: first block not at header or non-contiguous offsets.
-			if reason == "" {
-				reason, err = detectInteriorGaps(ctx, dbconn, id, filestate.ChunkCompleted)
-				if err != nil {
-					return fmt.Errorf("query active container block continuity for container %d: %w", id, err)
-				}
-			}
-
-			if reason == "" {
-				hasTrailingBytes, err := hasTrailingUnreferencedBytes(ctx, dbconn, id, currentSize, filestate.ChunkCompleted)
-				if err != nil {
-					return fmt.Errorf("query active container trailing bytes for container %d: %w", id, err)
-				}
-				if hasTrailingBytes {
-					reason = "trailing_unreferenced_bytes"
-				}
-			}
+		reason, err := detectCorruptionReason(ctx, dbconn, id, currentSize, physicalSize)
+		if err != nil {
+			return err
 		}
 		if reason == "" {
 			continue
 		}
 
-		_, err = dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`, id, physicalSize)
-		if err != nil {
-			return fmt.Errorf("query update active container to quarantine due to corrupt tail: %w", err)
+		if err := quarantineOneActiveCorruptTail(ctx, dbconn, id, filename, currentSize, physicalSize, reason, stats); err != nil {
+			return err
 		}
-
-		stats.quarantinedCorruptTail++
-		logRecoveryEvent(
-			"quarantine_corrupt_active_container_tail",
-			fmt.Sprintf("container_id=%d", id),
-			"filename="+filename,
-			fmt.Sprintf("db_current_size=%d", currentSize),
-			fmt.Sprintf("physical_size=%d", physicalSize),
-			"reason="+reason,
-		)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -468,6 +408,78 @@ func quarantineCorruptActiveContainerTailsWithFS(dbconn *sql.DB, containersDir s
 	}
 
 	logRecoveryEvent("quarantine_corrupt_active_container_tails_done", fmt.Sprintf("quarantined_count=%d", stats.quarantinedCorruptTail))
+	return nil
+}
+
+// detectCorruptionReason checks whether an active container has a corrupt tail.
+// Returns a non-empty reason string if quarantine is warranted, "" if healthy.
+func detectCorruptionReason(ctx context.Context, dbconn *sql.DB, id int64, currentSize, physicalSize int64) (string, error) {
+	switch {
+	case currentSize > physicalSize:
+		return "db_current_size_past_eof", nil
+	case physicalSize > currentSize:
+		// Ghost bytes on disk: payload write reached disk but DB tx rolled back.
+		// Any size mismatch is treated as suspicious for v1.0 strict recovery.
+		return "physical_size_past_db_current_size", nil
+	default:
+		var hasOutOfBoundsBlock bool
+		err := dbconn.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM blocks b
+				JOIN chunk c ON c.id = b.chunk_id
+				WHERE b.container_id = $1
+				  AND c.status = $2
+				  AND NOT EXISTS (
+					SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+				  )
+				  AND (
+					b.block_offset < 0
+					OR b.stored_size <= 0
+					OR b.block_offset > ($3 - b.stored_size)
+				  )
+			)
+		`, id, filestate.ChunkCompleted, physicalSize).Scan(&hasOutOfBoundsBlock)
+		if err != nil {
+			return "", fmt.Errorf("query active container block bounds: %w", err)
+		}
+		if hasOutOfBoundsBlock {
+			return "completed_block_past_eof", nil
+		}
+		reason, err := detectInteriorGaps(ctx, dbconn, id, filestate.ChunkCompleted)
+		if err != nil {
+			return "", fmt.Errorf("query active container block continuity for container %d: %w", id, err)
+		}
+		if reason != "" {
+			return reason, nil
+		}
+		hasTrailingBytes, err := hasTrailingUnreferencedBytes(ctx, dbconn, id, currentSize, filestate.ChunkCompleted)
+		if err != nil {
+			return "", fmt.Errorf("query active container trailing bytes for container %d: %w", id, err)
+		}
+		if hasTrailingBytes {
+			return "trailing_unreferenced_bytes", nil
+		}
+		return "", nil
+	}
+}
+
+// quarantineOneActiveCorruptTail marks a container as quarantined in the DB
+// and logs the corrective-recovery event.
+func quarantineOneActiveCorruptTail(ctx context.Context, dbconn *sql.DB, id int64, filename string, currentSize, physicalSize int64, reason string, stats *recoveryStats) error {
+	_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`, id, physicalSize)
+	if err != nil {
+		return fmt.Errorf("query update active container to quarantine due to corrupt tail: %w", err)
+	}
+	stats.quarantinedCorruptTail++
+	logRecoveryEvent(
+		"quarantine_corrupt_active_container_tail",
+		fmt.Sprintf("container_id=%d", id),
+		"filename="+filename,
+		fmt.Sprintf("db_current_size=%d", currentSize),
+		fmt.Sprintf("physical_size=%d", physicalSize),
+		"reason="+reason,
+	)
 	return nil
 }
 
