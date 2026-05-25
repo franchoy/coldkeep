@@ -265,6 +265,10 @@ func recoverOneSealingContainer(ctx context.Context, dbconn *sql.DB, id int64, f
 		return nil
 	}
 	// Physical file missing/unreadable: quarantine and clear sealing marker.
+	return quarantineSealingContainerSealFailed(ctx, dbconn, id, filename, sealErr, stats)
+}
+
+func quarantineSealingContainerSealFailed(ctx context.Context, dbconn *sql.DB, id int64, filename string, sealErr error, stats *recoveryStats) error {
 	if _, qErr := dbconn.ExecContext(ctx,
 		`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
 		id,
