@@ -495,7 +495,7 @@ func createNewContainerWithFS(tx db.DBTX, dbconn *sql.DB, containersDir string, 
 	filename := newContainerFilename()
 
 	var id int64
-	err := tx.QueryRow(`
+	err := tx.QueryRowContext(context.Background(), `
 		INSERT INTO container (filename, current_size, max_size, sealed)
 		VALUES ($1, $2, $3, FALSE)
 		RETURNING id

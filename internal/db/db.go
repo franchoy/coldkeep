@@ -323,4 +323,5 @@ func ConnectDB() (*sql.DB, error) {
 type DBTX interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	QueryRow(query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
