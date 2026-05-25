@@ -147,9 +147,7 @@ func TestContainerSeamPreservesRetireRemoveBehavior(t *testing.T) {
 	createTestContainerFile(t, path, maxSize)
 
 	handle, err := OpenWritableContainer(path, maxSize)
-	if err != nil {
-		t.Fatalf("open writable container: %v", err)
-	}
+	mustNoErr(t, err, "open writable container")
 
 	w := NewLocalWriterWithDirAndDB(dir, maxSize, dbconn)
 	// Inject NoopFS to verify seam flows through w.fs.Stat inside
@@ -162,9 +160,8 @@ func TestContainerSeamPreservesRetireRemoveBehavior(t *testing.T) {
 	w.activeHandle = handle
 	w.activeSize = ContainerHdrLen
 
-	if err := w.quarantineContainer(1); err != nil {
-		t.Fatalf("quarantine container: %v", err)
-	}
+	err = w.quarantineContainer(1)
+	mustNoErr(t, err, "quarantine container")
 
 	// Active state must be cleared.
 	if w.hasActive || w.activeID != 0 || w.activeHandle != nil || w.activeFile != "" {
@@ -174,9 +171,8 @@ func TestContainerSeamPreservesRetireRemoveBehavior(t *testing.T) {
 
 	// DB row must be quarantined.
 	var quarantine bool
-	if err := dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = ?`, 1).Scan(&quarantine); err != nil {
-		t.Fatalf("query quarantine flag: %v", err)
-	}
+	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = ?`, 1).Scan(&quarantine)
+	mustNoErr(t, err, "query quarantine flag")
 	if !quarantine {
 		t.Fatalf("expected container 1 to be quarantined in DB after quarantine path")
 	}
@@ -199,33 +195,21 @@ func TestContainerFilesystemEquivalenceDefaultAndNoop(t *testing.T) {
 	wDefault := NewLocalWriterWithDirAndDB(dirDefault, maxSize, dbDefault)
 
 	txDefault, err := dbDefault.Begin()
-	if err != nil {
-		t.Fatalf("begin tx (default): %v", err)
-	}
+	mustNoErr(t, err, "begin tx (default)")
 	defer func() { _ = txDefault.Rollback() }()
 
 	placementDefault, err := wDefault.AppendPayload(txDefault, payload)
-	if err != nil {
-		t.Fatalf("append payload (default): %v", err)
-	}
+	mustNoErr(t, err, "append payload (default)")
 	wDefault.AcknowledgeAppendCommitted()
-	if err := txDefault.Commit(); err != nil {
-		t.Fatalf("commit tx (default): %v", err)
-	}
-	if err := wDefault.FinalizeContainer(); err != nil {
-		t.Fatalf("finalize container (default): %v", err)
-	}
+	mustNoErr(t, txDefault.Commit(), "commit tx (default)")
+	mustNoErr(t, wDefault.FinalizeContainer(), "finalize container (default)")
 
 	rcDefault, err := OpenReadOnlyContainer(filepath.Join(wDefault.Dir(), placementDefault.Filename), maxSize)
-	if err != nil {
-		t.Fatalf("open readonly container (default): %v", err)
-	}
+	mustNoErr(t, err, "open readonly container (default)")
 	defer func() { _ = rcDefault.Close() }()
 
 	defaultBytes, err := rcDefault.ReadAt(placementDefault.Offset, int64(len(payload)))
-	if err != nil {
-		t.Fatalf("read payload (default): %v", err)
-	}
+	mustNoErr(t, err, "read payload (default)")
 
 	// --- noop FS ---
 	dbNoop := openSeamTestDB(t)
@@ -234,33 +218,21 @@ func TestContainerFilesystemEquivalenceDefaultAndNoop(t *testing.T) {
 	wNoop.fs = fsx.NewNoop(fsx.Default())
 
 	txNoop, err := dbNoop.Begin()
-	if err != nil {
-		t.Fatalf("begin tx (noop): %v", err)
-	}
+	mustNoErr(t, err, "begin tx (noop)")
 	defer func() { _ = txNoop.Rollback() }()
 
 	placementNoop, err := wNoop.AppendPayload(txNoop, payload)
-	if err != nil {
-		t.Fatalf("append payload (noop): %v", err)
-	}
+	mustNoErr(t, err, "append payload (noop)")
 	wNoop.AcknowledgeAppendCommitted()
-	if err := txNoop.Commit(); err != nil {
-		t.Fatalf("commit tx (noop): %v", err)
-	}
-	if err := wNoop.FinalizeContainer(); err != nil {
-		t.Fatalf("finalize container (noop): %v", err)
-	}
+	mustNoErr(t, txNoop.Commit(), "commit tx (noop)")
+	mustNoErr(t, wNoop.FinalizeContainer(), "finalize container (noop)")
 
 	rcNoop, err := OpenReadOnlyContainer(filepath.Join(wNoop.Dir(), placementNoop.Filename), maxSize)
-	if err != nil {
-		t.Fatalf("open readonly container (noop): %v", err)
-	}
+	mustNoErr(t, err, "open readonly container (noop)")
 	defer func() { _ = rcNoop.Close() }()
 
 	noopBytes, err := rcNoop.ReadAt(placementNoop.Offset, int64(len(payload)))
-	if err != nil {
-		t.Fatalf("read payload (noop): %v", err)
-	}
+	mustNoErr(t, err, "read payload (noop)")
 
 	// --- head-to-head equivalence assertion ---
 	if !bytes.Equal(defaultBytes, noopBytes) {
