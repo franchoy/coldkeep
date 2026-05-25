@@ -431,46 +431,53 @@ func detectCorruptionReason(ctx context.Context, dbconn *sql.DB, id int64, curre
 		// Any size mismatch is treated as suspicious for v1.0 strict recovery.
 		return "physical_size_past_db_current_size", nil
 	default:
-		var hasOutOfBoundsBlock bool
-		err := dbconn.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM blocks b
-				JOIN chunk c ON c.id = b.chunk_id
-				WHERE b.container_id = $1
-				  AND c.status = $2
-				  AND NOT EXISTS (
-					SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
-				  )
-				  AND (
-					b.block_offset < 0
-					OR b.stored_size <= 0
-					OR b.block_offset > ($3 - b.stored_size)
-				  )
-			)
-		`, id, filestate.ChunkCompleted, physicalSize).Scan(&hasOutOfBoundsBlock)
-		if err != nil {
-			return "", fmt.Errorf("query active container block bounds: %w", err)
-		}
-		if hasOutOfBoundsBlock {
-			return "completed_block_past_eof", nil
-		}
-		reason, err := detectInteriorGaps(ctx, dbconn, id, filestate.ChunkCompleted)
-		if err != nil {
-			return "", fmt.Errorf("query active container block continuity for container %d: %w", id, err)
-		}
-		if reason != "" {
-			return reason, nil
-		}
-		hasTrailingBytes, err := hasTrailingUnreferencedBytes(ctx, dbconn, id, currentSize, filestate.ChunkCompleted)
-		if err != nil {
-			return "", fmt.Errorf("query active container trailing bytes for container %d: %w", id, err)
-		}
-		if hasTrailingBytes {
-			return "trailing_unreferenced_bytes", nil
-		}
-		return "", nil
+		return checkActiveContainerIntegrity(ctx, dbconn, id, currentSize, physicalSize)
 	}
+}
+
+// checkActiveContainerIntegrity checks block bounds, interior gaps, and trailing
+// unreferenced bytes when db size == physical size (the default case of
+// detectCorruptionReason). CCN 7.
+func checkActiveContainerIntegrity(ctx context.Context, dbconn *sql.DB, id int64, currentSize, physicalSize int64) (string, error) {
+	var hasOutOfBoundsBlock bool
+	err := dbconn.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = $1
+			  AND c.status = $2
+			  AND NOT EXISTS (
+				SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+			  )
+			  AND (
+				b.block_offset < 0
+				OR b.stored_size <= 0
+				OR b.block_offset > ($3 - b.stored_size)
+			  )
+		)
+	`, id, filestate.ChunkCompleted, physicalSize).Scan(&hasOutOfBoundsBlock)
+	if err != nil {
+		return "", fmt.Errorf("query active container block bounds: %w", err)
+	}
+	if hasOutOfBoundsBlock {
+		return "completed_block_past_eof", nil
+	}
+	reason, err := detectInteriorGaps(ctx, dbconn, id, filestate.ChunkCompleted)
+	if err != nil {
+		return "", fmt.Errorf("query active container block continuity for container %d: %w", id, err)
+	}
+	if reason != "" {
+		return reason, nil
+	}
+	hasTrailingBytes, err := hasTrailingUnreferencedBytes(ctx, dbconn, id, currentSize, filestate.ChunkCompleted)
+	if err != nil {
+		return "", fmt.Errorf("query active container trailing bytes for container %d: %w", id, err)
+	}
+	if hasTrailingBytes {
+		return "trailing_unreferenced_bytes", nil
+	}
+	return "", nil
 }
 
 // quarantineOneActiveCorruptTail marks a container as quarantined in the DB
