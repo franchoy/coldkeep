@@ -64,14 +64,10 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 
 	content := []byte("coldkeep-phase6-seam-noop")
 	srcFile := filepath.Join(t.TempDir(), "source.txt")
-	if err := os.WriteFile(filepath.Clean(srcFile), content, 0o600); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
+	mustNoErr(t, os.WriteFile(filepath.Clean(srcFile), content, 0o600), "write source file")
 
 	storeResult, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, srcFile, blocks.CodecPlain)
-	if err != nil {
-		t.Fatalf("store file: %v", err)
-	}
+	mustNoErr(t, err, "store file")
 
 	outDefault := filepath.Join(t.TempDir(), "restored-default.txt")
 	defaultResult, err := RestoreFileWithStorageContextResultOptions(
@@ -80,9 +76,7 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 		outDefault,
 		RestoreOptions{Overwrite: true},
 	)
-	if err != nil {
-		t.Fatalf("restore with default fs: %v", err)
-	}
+	mustNoErr(t, err, "restore with default fs")
 
 	outNoop := filepath.Join(t.TempDir(), "restored-noop.txt")
 	noopResult, err := RestoreFileWithStorageContextResultOptions(
@@ -91,22 +85,16 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 		outNoop,
 		RestoreOptions{Overwrite: true, fs: fsx.NewNoop(fsx.Default())},
 	)
-	if err != nil {
-		t.Fatalf("restore with noop fs: %v", err)
-	}
+	mustNoErr(t, err, "restore with noop fs")
 
 	if noopResult.RestoredHash != defaultResult.RestoredHash {
 		t.Fatalf("hash mismatch: noop=%s default=%s", noopResult.RestoredHash, defaultResult.RestoredHash)
 	}
 
 	defaultBytes, err := os.ReadFile(filepath.Clean(defaultResult.OutputPath)) // nosemgrep: dynamic-file-access -- t.TempDir() path, not user input
-	if err != nil {
-		t.Fatalf("read default restored file: %v", err)
-	}
+	mustNoErr(t, err, "read default restored file")
 	noopBytes, err := os.ReadFile(filepath.Clean(noopResult.OutputPath)) // nosemgrep: dynamic-file-access -- t.TempDir() path, not user input
-	if err != nil {
-		t.Fatalf("read noop restored file: %v", err)
-	}
+	mustNoErr(t, err, "read noop restored file")
 	if !bytes.Equal(noopBytes, defaultBytes) {
 		t.Fatalf("content mismatch between default and noop restore: default=%d bytes noop=%d bytes", len(defaultBytes), len(noopBytes))
 	}
