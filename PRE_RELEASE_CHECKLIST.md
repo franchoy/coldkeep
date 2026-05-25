@@ -161,7 +161,7 @@ if command -v shellcheck >/dev/null 2>&1; then
   # CI excludes critical_coverage.sh (ignore_names: critical_coverage.sh in
   # ludeeus/action-shellcheck). Match that exclusion here to avoid local
   # failures that CI would not surface.
-  shellcheck $(ls scripts/*.sh | grep -v critical_coverage.sh)
+  shellcheck $(find scripts/ -maxdepth 1 -name '*.sh' ! -name 'critical_coverage.sh')
 else
   echo "shellcheck not found. Install it to match CI parity (e.g., apt install shellcheck or brew install shellcheck)."
   exit 1
@@ -289,6 +289,7 @@ results will often produce warnings or HARD FAILs on under-powered or virtualize
 hardware even when the code itself is correct.
 
 Triage rule:
+
 - `workers=1` failures: investigate as potential real regressions.
 - `workers=4` failures: compare against CI results. If CI passes, treat local
   failure as environment variance (not a code defect) and proceed.

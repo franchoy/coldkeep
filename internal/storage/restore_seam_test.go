@@ -42,7 +42,7 @@ func TestRestoreSeamDefaultFSPreservesRestoredBytes(t *testing.T) {
 		t.Fatalf("restore with default fs: %v", err)
 	}
 
-	got, err := os.ReadFile(restoreResult.OutputPath)
+	got, err := os.ReadFile(filepath.Clean(restoreResult.OutputPath))
 	if err != nil {
 		t.Fatalf("read restored file: %v", err)
 	}
@@ -99,11 +99,11 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 		t.Fatalf("hash mismatch: noop=%s default=%s", noopResult.RestoredHash, defaultResult.RestoredHash)
 	}
 
-	defaultBytes, err := os.ReadFile(defaultResult.OutputPath)
+	defaultBytes, err := os.ReadFile(filepath.Clean(defaultResult.OutputPath))
 	if err != nil {
 		t.Fatalf("read default restored file: %v", err)
 	}
-	noopBytes, err := os.ReadFile(noopResult.OutputPath)
+	noopBytes, err := os.ReadFile(filepath.Clean(noopResult.OutputPath))
 	if err != nil {
 		t.Fatalf("read noop restored file: %v", err)
 	}
