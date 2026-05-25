@@ -112,7 +112,7 @@ func writeNewContainerHeader(f fsx.File, maxSize int64) error {
 func readAndValidateContainerHeader(f fsx.File) (Header, error) {
 	h := make([]byte, ContainerHdrLen)
 	n, err := f.ReadAt(h, 0)
-	if err != nil && err != io.EOF {
+	if !isHeaderReadComplete(err) {
 		return Header{}, fmt.Errorf("read container header: %w", err)
 	}
 	if n < ContainerHdrLen {
@@ -130,7 +130,7 @@ func readAndValidateContainerHeader(f fsx.File) (Header, error) {
 		return Header{}, fmt.Errorf("unsupported container header length: %d", hdrLen)
 	}
 
-	if major != ContainerFormatVersionMajor && major != LegacyContainerFormatVersionMajor {
+	if !isSupportedContainerMajorVersion(major) {
 		return Header{}, fmt.Errorf("unsupported container format version: %d.%d", major, minor)
 	}
 
@@ -154,6 +154,20 @@ func readAndValidateContainerHeader(f fsx.File) (Header, error) {
 		MaxSize:     int64(binary.LittleEndian.Uint64(h[hdrMaxSize:hdrUIDStart])),
 		CodecID:     codecID,
 	}, nil
+}
+
+// isHeaderReadComplete reports whether a ReadAt error should be treated as a
+// complete read. ReadAt on a file smaller than ContainerHdrLen returns (n, io.EOF),
+// which is handled separately by the size check. Any other non-nil error is fatal.
+func isHeaderReadComplete(err error) bool {
+	return err == nil || err == io.EOF
+}
+
+// isSupportedContainerMajorVersion reports whether major is a known container
+// format major version. Both the current v1 format and the legacy v0 format
+// (pre-v1 headers that encoded the app semantic version) are supported.
+func isSupportedContainerMajorVersion(major uint16) bool {
+	return major == ContainerFormatVersionMajor || major == LegacyContainerFormatVersionMajor
 }
 
 func computeHeaderCRC(h []byte, major uint16) uint32 {
