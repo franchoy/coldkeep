@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -375,11 +376,12 @@ func containersDirOrDefault(dir string) string {
 // goroutines attempt to create a new container at the same instant.
 func newContainerFilename() string {
 	var rnd [8]byte
+	ts := strconv.FormatInt(time.Now().UnixNano(), 10)
 	if _, err := rand.Read(rnd[:]); err != nil {
 		// Extremely unlikely; fall back to an extra timestamp component.
-		return fmt.Sprintf("container_%d_%d.bin", time.Now().UnixNano(), time.Now().UnixNano())
+		return "container_" + ts + "_" + strconv.FormatInt(time.Now().UnixNano(), 10) + ".bin"
 	}
-	return fmt.Sprintf("container_%d_%s.bin", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
+	return "container_" + ts + "_" + hex.EncodeToString(rnd[:]) + ".bin"
 }
 
 func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containersDir string, excludeID int64, fsys fsx.FS) (ActiveContainer, error) {
