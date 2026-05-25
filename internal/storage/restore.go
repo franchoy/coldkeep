@@ -16,6 +16,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/fsx"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/pathsafe"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -36,6 +37,7 @@ type RestoreOptions struct {
 	Destination     string
 	StrictMetadata  bool
 	NoMetadata      bool
+	fs              fsx.FS
 }
 
 type RestoreDestinationMode string
@@ -907,6 +909,10 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 
 func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
 	result.FileID = fileID
+	fsys := opts.fs
+	if fsys == nil {
+		fsys = fsx.Default()
+	}
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -949,11 +955,11 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// ================================================================
 	// STAGE 5a: Prepare output file and harness
 	// ================================================================
-	if st, err := os.Stat(outputPath); err == nil && st.IsDir() {
+	if st, err := fsys.Stat(outputPath); err == nil && st.IsDir() {
 		outputPath = filepath.Join(outputPath, originalName)
 	} else if strings.HasSuffix(outputPath, string(os.PathSeparator)) {
 		// if user passed a non-existing dir with trailing slash
-		if err := os.MkdirAll(outputPath, 0755); err != nil {
+		if err := fsys.MkdirAll(outputPath, 0755); err != nil {
 			return RestoreFileResult{}, fmt.Errorf("create output directory: %w", err)
 		}
 		outputPath = filepath.Join(outputPath, originalName)
@@ -963,7 +969,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 	result.OutputPath = outputPath
 	if !opts.Overwrite {
-		if _, statErr := os.Stat(outputPath); statErr == nil {
+		if _, statErr := fsys.Stat(outputPath); statErr == nil {
 			return RestoreFileResult{}, fmt.Errorf("output file already exists: %s (use --overwrite)", outputPath)
 		} else if !os.IsNotExist(statErr) {
 			return RestoreFileResult{}, fmt.Errorf("check output path %s: %w", outputPath, statErr)
@@ -971,7 +977,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 
 	// Create parent directories if they don't exist
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := fsys.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("create parent directories for %s: %w", outputPath, err)
 	}
 
@@ -987,7 +993,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 		if cleanupTemp {
 			if shouldCleanupRestoreTempPath(tempOutputPath, outputPath) {
-				_ = os.Remove(tempOutputPath)
+				_ = fsys.Remove(tempOutputPath)
 			} else {
 				log.Printf("event=restore_temp_cleanup_skip action=path_not_owned file_id=%d temp_path=%q output_path=%q", fileID, tempOutputPath, outputPath)
 			}
@@ -1346,18 +1352,18 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 	}
 	if !opts.Overwrite {
-		if _, statErr := os.Stat(outputPath); statErr == nil {
+		if _, statErr := fsys.Stat(outputPath); statErr == nil {
 			return RestoreFileResult{}, fmt.Errorf("output file already exists: %s (use --overwrite)", outputPath)
 		} else if !os.IsNotExist(statErr) {
 			return RestoreFileResult{}, fmt.Errorf("check output path %s before rename: %w", outputPath, statErr)
 		}
 	}
 
-	if err := os.Rename(tempOutputPath, outputPath); err != nil {
+	if err := fsys.Rename(tempOutputPath, outputPath); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("atomically replace output file %s: %w", outputPath, err)
 	}
 	// Flush directory metadata so the rename is durable across crashes on stricter filesystems.
-	dir, err := os.Open(filepath.Dir(outputPath))
+	dir, err := fsys.Open(filepath.Dir(outputPath))
 	if err != nil {
 		return RestoreFileResult{}, fmt.Errorf("open output directory for fsync: %w", err)
 	}
