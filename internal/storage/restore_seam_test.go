@@ -20,7 +20,7 @@ func TestRestoreSeamDefaultFSPreservesRestoredBytes(t *testing.T) {
 
 	content := []byte("coldkeep-phase6-seam-default")
 	srcFile := filepath.Join(t.TempDir(), "source.txt")
-	if err := os.WriteFile(srcFile, content, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Clean(srcFile), content, 0o600); err != nil {
 		t.Fatalf("write source file: %v", err)
 	}
 
@@ -64,7 +64,7 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 
 	content := []byte("coldkeep-phase6-seam-noop")
 	srcFile := filepath.Join(t.TempDir(), "source.txt")
-	if err := os.WriteFile(srcFile, content, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Clean(srcFile), content, 0o600); err != nil {
 		t.Fatalf("write source file: %v", err)
 	}
 
