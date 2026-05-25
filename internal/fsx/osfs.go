@@ -20,12 +20,12 @@ func Default() OSFS {
 
 // Open delegates to os.Open.
 func (OSFS) Open(name string) (File, error) {
-	return os.Open(name)
+	return os.Open(name) // #nosec G304 -- intentional OS pass-through; caller is responsible for path safety
 }
 
 // OpenFile delegates to os.OpenFile.
 func (OSFS) OpenFile(name string, flag int, perm fs.FileMode) (File, error) {
-	return os.OpenFile(name, flag, perm)
+	return os.OpenFile(name, flag, perm) // #nosec G304 -- intentional OS pass-through; caller is responsible for path safety
 }
 
 // Stat delegates to os.Stat.
