@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"os"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/fsx"
 )
 
 const (
@@ -70,7 +71,7 @@ type Header struct {
 	CodecID     uint16
 }
 
-func writeNewContainerHeader(f *os.File, maxSize int64) error {
+func writeNewContainerHeader(f fsx.File, maxSize int64) error {
 	h := make([]byte, ContainerHdrLen)
 
 	// 0..7 magic
@@ -108,7 +109,7 @@ func writeNewContainerHeader(f *os.File, maxSize int64) error {
 	return err
 }
 
-func readAndValidateContainerHeader(f *os.File) (Header, error) {
+func readAndValidateContainerHeader(f fsx.File) (Header, error) {
 	h := make([]byte, ContainerHdrLen)
 	n, err := f.ReadAt(h, 0)
 	if err != nil && err != io.EOF {

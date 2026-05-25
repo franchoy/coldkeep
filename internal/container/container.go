@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/fsx"
 	"github.com/franchoy/coldkeep/internal/iodebug"
 	"github.com/franchoy/coldkeep/internal/pathsafe"
 	"github.com/franchoy/coldkeep/internal/utils_hash"
@@ -46,7 +47,7 @@ func (e *BrokenOpenContainerError) Unwrap() error {
 // --------------------------------------------------------------------------
 
 type FileContainer struct {
-	f             *os.File
+	f             fsx.File
 	offset        int64 // logical write position including buffered bytes
 	persistedSize int64 // physically flushed size on disk
 	maxSize       int64 // maximum allowed size for this container (including header)
@@ -87,20 +88,20 @@ func SafeContainerPath(containersDir, filename string) (string, error) {
 // --------------------------------------------------------------------------
 
 // openExistingContainer opens an existing container using the provided mode.
-func openExistingContainer(readonly bool, path string, maxSize int64) (*FileContainer, error) {
-	var f *os.File
+func openExistingContainer(readonly bool, path string, maxSize int64, fsys fsx.FS) (*FileContainer, error) {
+	var f fsx.File
 	var err error
 	if readonly {
-		f, err = os.OpenFile(path, os.O_RDONLY, 0644)
+		f, err = fsys.OpenFile(path, os.O_RDONLY, 0644)
 	} else {
-		f, err = os.OpenFile(path, os.O_RDWR, 0644)
+		f, err = fsys.OpenFile(path, os.O_RDWR, 0644)
 	}
 	if err != nil {
 		return nil, err
 	}
 	iodebug.IncContainerOpen()
 
-	stat, err := f.Stat()
+	stat, err := fsys.Stat(path)
 	if err != nil {
 		_ = f.Close()
 		return nil, err
@@ -132,7 +133,7 @@ func openExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 // This wrapper avoids ambiguous boolean call sites like
 // openExistingContainer(true, ...) and makes intent explicit.
 func OpenReadOnlyContainer(path string, maxSize int64) (*FileContainer, error) {
-	return openExistingContainer(true, path, maxSize)
+	return openExistingContainer(true, path, maxSize, fsx.Default())
 }
 
 // OpenWritableContainer opens an existing container in writable mode.
@@ -140,7 +141,7 @@ func OpenReadOnlyContainer(path string, maxSize int64) (*FileContainer, error) {
 // This wrapper avoids ambiguous boolean call sites like
 // openExistingContainer(false, ...) and makes intent explicit.
 func OpenWritableContainer(path string, maxSize int64) (*FileContainer, error) {
-	return openExistingContainer(false, path, maxSize)
+	return openExistingContainer(false, path, maxSize, fsx.Default())
 }
 
 func (c *FileContainer) Append(data []byte) (int64, error) {
@@ -381,7 +382,7 @@ func newContainerFilename() string {
 	return fmt.Sprintf("container_%d_%s.bin", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
 }
 
-func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containersDir string, excludeID int64) (ActiveContainer, error) {
+func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containersDir string, excludeID int64, fsys fsx.FS) (ActiveContainer, error) {
 	containersDir = containersDirOrDefault(containersDir)
 
 	var id int64
@@ -428,7 +429,7 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 			return ActiveContainer{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
 		}
 
-		container, err := OpenWritableContainer(fullPath, maxSize)
+		container, err := openExistingContainer(false, fullPath, maxSize, fsys)
 		if err != nil {
 			return ActiveContainer{}, &BrokenOpenContainerError{ContainerID: id, Err: err}
 		}
@@ -462,7 +463,7 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 
 	// 3 Create physical file
 
-	if err := os.MkdirAll(containersDir, 0755); err != nil {
+	if err := fsys.MkdirAll(containersDir, 0755); err != nil {
 		return ActiveContainer{}, err
 	}
 
@@ -471,8 +472,8 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 		return ActiveContainer{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
 	}
 	retireNewContainer := func(openErr error) error {
-		retireErr := QuarantineContainerInDir(dbconn, id, containersDir)
-		removeErr := os.Remove(fullPath)
+		retireErr := quarantineContainerInDirWithFS(dbconn, id, containersDir, fsys)
+		removeErr := fsys.Remove(fullPath)
 		var errs []error
 		errs = append(errs, openErr)
 		if retireErr != nil {
@@ -484,7 +485,7 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 		return errors.Join(errs...)
 	}
 
-	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	f, err := fsys.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
 		return ActiveContainer{}, retireNewContainer(err)
 	}
@@ -513,7 +514,7 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 	iodebug.IncContainerClose()
 	closeOnError = false
 
-	container, err := OpenWritableContainer(fullPath, containerMaxSize)
+	container, err := openExistingContainer(false, fullPath, containerMaxSize, fsys)
 	if err != nil {
 		return ActiveContainer{}, retireNewContainer(err)
 	}
@@ -527,7 +528,7 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 }
 
 func GetOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, excludeID int64) (ActiveContainer, error) {
-	return getOrCreateOpenContainerInDirExcluding(db, nil, containersDir, excludeID)
+	return getOrCreateOpenContainerInDirExcluding(db, nil, containersDir, excludeID, fsx.Default())
 }
 
 func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
@@ -544,6 +545,10 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 }
 
 func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containersDir string) error {
+	return sealContainerInDirWithFS(tx, containerID, filename, containersDir, fsx.Default())
+}
+
+func sealContainerInDirWithFS(tx db.DBTX, containerID int64, filename string, containersDir string, fsys fsx.FS) error {
 	containersDir = containersDirOrDefault(containersDir)
 
 	originalPath, err := SafeContainerPath(containersDir, filename)
@@ -551,7 +556,7 @@ func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containe
 		return fmt.Errorf("invalid container filename %q: %w", filename, err)
 	}
 
-	info, err := os.Stat(originalPath)
+	info, err := fsys.Stat(originalPath)
 	if err != nil {
 		return fmt.Errorf("stat container file before seal: %w", err)
 	}
@@ -596,6 +601,10 @@ func QuarantineContainer(dbconn *sql.DB, containerID int64) error {
 }
 
 func QuarantineContainerInDir(dbconn *sql.DB, containerID int64, containersDir string) error {
+	return quarantineContainerInDirWithFS(dbconn, containerID, containersDir, fsx.Default())
+}
+
+func quarantineContainerInDirWithFS(dbconn *sql.DB, containerID int64, containersDir string, fsys fsx.FS) error {
 	if dbconn == nil || containerID <= 0 {
 		return nil
 	}
@@ -629,7 +638,7 @@ func QuarantineContainerInDir(dbconn *sql.DB, containerID int64, containersDir s
 
 	var updateQuery string
 	var updateArgs []any
-	if info, statErr := os.Stat(containerPath); statErr == nil {
+	if info, statErr := fsys.Stat(containerPath); statErr == nil {
 		updateQuery = updateQuarantineWithSizeQuery
 		if backend == db.BackendSQLite {
 			updateArgs = []any{info.Size(), info.Size(), containerID}

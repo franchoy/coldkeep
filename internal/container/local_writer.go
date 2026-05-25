@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/fsx"
 	"github.com/franchoy/coldkeep/internal/utils_env"
 	"github.com/lib/pq"
 )
@@ -74,6 +75,10 @@ type LocalWriter struct {
 	pendingAppend  bool
 	prevAppendSize int64
 	prevAppendFile string
+
+	// fs is the filesystem abstraction used for directory and file operations.
+	// Defaults to fsx.Default() (OS-backed). Unexported for seam injection in tests.
+	fs fsx.FS
 }
 
 func NewLocalWriter(maxSize int64) *LocalWriter {
@@ -92,8 +97,9 @@ func NewLocalWriterWithDirAndDB(dir string, maxSize int64, dbconn *sql.DB) *Loca
 	if dir == "" {
 		dir = ContainersDir
 	}
+	fsys := fsx.Default()
 	// Best-effort: pre-create directory to reduce first-write surprises.
-	_ = os.MkdirAll(dir, 0755)
+	_ = fsys.MkdirAll(dir, 0755)
 	if maxSize <= ContainerHdrLen {
 		maxSize = GetContainerMaxSize()
 	}
@@ -102,6 +108,7 @@ func NewLocalWriterWithDirAndDB(dir string, maxSize int64, dbconn *sql.DB) *Loca
 		dir:     dir,
 		maxSize: maxSize,
 		dbconn:  dbconn,
+		fs:      fsys,
 	}
 }
 
@@ -353,16 +360,16 @@ func (w *LocalWriter) ensureActiveExcluding(tx db.DBTX, excludeID int64) error {
 	if w.hasActive {
 		return nil
 	}
-	if err := os.MkdirAll(w.dir, 0755); err != nil {
+	if err := w.fs.MkdirAll(w.dir, 0755); err != nil {
 		return fmt.Errorf("ensure container directory %s: %w", w.dir, err)
 	}
 
 	var ac ActiveContainer
 	var err error
 	if w.dbconn != nil {
-		ac, err = getOrCreateOpenContainerInDirExcluding(tx, w.dbconn, w.dir, excludeID)
+		ac, err = getOrCreateOpenContainerInDirExcluding(tx, w.dbconn, w.dir, excludeID, w.fs)
 	} else {
-		ac, err = GetOrCreateOpenContainerInDirExcluding(tx, w.dir, excludeID)
+		ac, err = getOrCreateOpenContainerInDirExcluding(tx, nil, w.dir, excludeID, w.fs)
 	}
 	if err != nil {
 		return fmt.Errorf("get or create open container in %s: %w", w.dir, err)
@@ -530,7 +537,7 @@ func (w *LocalWriter) RollbackLastAppend() error {
 			if err != nil {
 				return fmt.Errorf("rollback append: invalid container filename %q: %w", filename, err)
 			}
-			if info, statErr := os.Stat(fullPath); statErr == nil {
+			if info, statErr := w.fs.Stat(fullPath); statErr == nil {
 				if info.Size() != target {
 					return fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size())
 				}
@@ -548,7 +555,7 @@ func (w *LocalWriter) RollbackLastAppend() error {
 		if err := os.Truncate(fullPath, target); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("rollback append: truncate closed container %s to %d: %w", fullPath, target, err)
 		}
-		if info, statErr := os.Stat(fullPath); statErr == nil {
+		if info, statErr := w.fs.Stat(fullPath); statErr == nil {
 			if info.Size() != target {
 				return fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size())
 			}
@@ -589,7 +596,7 @@ func (w *LocalWriter) quarantineContainer(containerID int64) error {
 	w.prevAppendFile = ""
 	w.prevAppendSize = 0
 	w.clearActive()
-	if err := QuarantineContainerInDir(w.dbconn, containerID, w.dir); err != nil {
+	if err := quarantineContainerInDirWithFS(w.dbconn, containerID, w.dir, w.fs); err != nil {
 		if closeErr != nil {
 			return errors.Join(closeErr, err)
 		}

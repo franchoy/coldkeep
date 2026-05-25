@@ -24,10 +24,14 @@ type FS interface {
 // File is the minimal file handle abstraction required by FS.
 //
 // The methods mirror the behavior needed by current Coldkeep read, write,
-// close, and durability-sync paths.
+// close, durability-sync, random-read, seek, and truncate paths.
+// All methods are satisfied by *os.File.
 type File interface {
 	io.Reader
 	io.Writer
 	io.Closer
+	io.ReaderAt
+	io.Seeker
 	Sync() error
+	Truncate(size int64) error
 }
