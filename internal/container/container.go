@@ -385,14 +385,36 @@ func newContainerFilename() string {
 func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containersDir string, excludeID int64, fsys fsx.FS) (ActiveContainer, error) {
 	containersDir = containersDirOrDefault(containersDir)
 
-	var id int64
-	var filename string
-	var maxSize int64
+	id, filename, maxSize, err := selectOpenContainerExcluding(tx, dbconn, excludeID)
+	if err == nil {
+		fullPath, err := SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return ActiveContainer{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
+		}
 
-	// 1 Try to find an existing open container.
-	// During rotation we may need to skip the previously active container until
-	// the caller seals it in the same transaction.
-	var err error
+		container, err := openExistingContainer(false, fullPath, maxSize, fsys)
+		if err != nil {
+			return ActiveContainer{}, &BrokenOpenContainerError{ContainerID: id, Err: err}
+		}
+
+		return ActiveContainer{
+			ID:        id,
+			Filename:  filename,
+			Container: container,
+			MaxSize:   maxSize,
+		}, nil
+	}
+
+	if err != sql.ErrNoRows {
+		return ActiveContainer{}, err
+	}
+
+	return createNewContainerWithFS(tx, dbconn, containersDir, fsys)
+}
+
+// selectOpenContainerExcluding queries for an existing open container, skipping
+// excludeID when it is > 0. Returns sql.ErrNoRows when no open container exists.
+func selectOpenContainerExcluding(tx db.DBTX, dbconn *sql.DB, excludeID int64) (id int64, filename string, maxSize int64, err error) {
 	if excludeID > 0 {
 		query := `
 			SELECT id, filename, max_size
@@ -422,46 +444,63 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 		}
 		err = tx.QueryRow(query).Scan(&id, &filename, &maxSize)
 	}
-	if err == nil {
-		// Found existing open container
-		fullPath, err := SafeContainerPath(containersDir, filename)
-		if err != nil {
-			return ActiveContainer{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
-		}
+	return id, filename, maxSize, err
+}
 
-		container, err := openExistingContainer(false, fullPath, maxSize, fsys)
-		if err != nil {
-			return ActiveContainer{}, &BrokenOpenContainerError{ContainerID: id, Err: err}
-		}
-
-		return ActiveContainer{
-			ID:        id,
-			Filename:  filename,
-			Container: container,
-			MaxSize:   maxSize,
-		}, nil
+// retireNewContainerWithFS quarantines a container DB record and removes the
+// partial file, joining openErr with any cleanup errors.
+func retireNewContainerWithFS(dbconn *sql.DB, id int64, containersDir string, fsys fsx.FS, fullPath string, openErr error) error {
+	retireErr := quarantineContainerInDirWithFS(dbconn, id, containersDir, fsys)
+	removeErr := fsys.Remove(fullPath)
+	var errs []error
+	errs = append(errs, openErr)
+	if retireErr != nil {
+		errs = append(errs, fmt.Errorf("quarantine broken new container %d: %w", id, retireErr))
 	}
-
-	if err != sql.ErrNoRows {
-		return ActiveContainer{}, err
+	if removeErr != nil && !os.IsNotExist(removeErr) {
+		errs = append(errs, fmt.Errorf("remove partial container file %s: %w", fullPath, removeErr))
 	}
+	return errors.Join(errs...)
+}
 
-	// 2 No open container found → create new one
+// initializeNewContainerFile creates the container file, writes the header,
+// syncs, and closes it. The caller retires the DB record on non-nil error.
+func initializeNewContainerFile(fullPath string, fsys fsx.FS) error {
+	f, err := fsys.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		return err
+	}
+	iodebug.IncContainerOpen()
+	if err := writeNewContainerHeader(f, containerMaxSize); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	iodebug.IncFsync()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	iodebug.IncContainerClose()
+	return nil
+}
 
-	filename = newContainerFilename()
+// createNewContainerWithFS inserts the container DB record, initializes the
+// physical file, and returns an opened ActiveContainer.
+func createNewContainerWithFS(tx db.DBTX, dbconn *sql.DB, containersDir string, fsys fsx.FS) (ActiveContainer, error) {
+	filename := newContainerFilename()
 
-	// Insert DB row with current_size initialized to header size
-	err = tx.QueryRow(`
+	var id int64
+	err := tx.QueryRow(`
 		INSERT INTO container (filename, current_size, max_size, sealed)
 		VALUES ($1, $2, $3, FALSE)
 		RETURNING id
 	`, filename, ContainerHdrLen, containerMaxSize).Scan(&id)
-
 	if err != nil {
 		return ActiveContainer{}, err
 	}
-
-	// 3 Create physical file
 
 	if err := fsys.MkdirAll(containersDir, 0755); err != nil {
 		return ActiveContainer{}, err
@@ -471,52 +510,14 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 	if err != nil {
 		return ActiveContainer{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
 	}
-	retireNewContainer := func(openErr error) error {
-		retireErr := quarantineContainerInDirWithFS(dbconn, id, containersDir, fsys)
-		removeErr := fsys.Remove(fullPath)
-		var errs []error
-		errs = append(errs, openErr)
-		if retireErr != nil {
-			errs = append(errs, fmt.Errorf("quarantine broken new container %d: %w", id, retireErr))
-		}
-		if removeErr != nil && !os.IsNotExist(removeErr) {
-			errs = append(errs, fmt.Errorf("remove partial container file %s: %w", fullPath, removeErr))
-		}
-		return errors.Join(errs...)
-	}
 
-	f, err := fsys.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
-	if err != nil {
-		return ActiveContainer{}, retireNewContainer(err)
+	if err := initializeNewContainerFile(fullPath, fsys); err != nil {
+		return ActiveContainer{}, retireNewContainerWithFS(dbconn, id, containersDir, fsys, fullPath, err)
 	}
-	iodebug.IncContainerOpen()
-	closeOnError := true
-	defer func() {
-		if closeOnError {
-			_ = f.Close()
-		}
-	}()
-
-	// 4 Write container header
-	if err := writeNewContainerHeader(f, containerMaxSize); err != nil {
-		return ActiveContainer{}, retireNewContainer(err)
-	}
-
-	// Ensure header is flushed
-	if err := f.Sync(); err != nil {
-		return ActiveContainer{}, retireNewContainer(err)
-	}
-	iodebug.IncFsync()
-	//close file
-	if err = f.Close(); err != nil {
-		return ActiveContainer{}, retireNewContainer(err)
-	}
-	iodebug.IncContainerClose()
-	closeOnError = false
 
 	container, err := openExistingContainer(false, fullPath, containerMaxSize, fsys)
 	if err != nil {
-		return ActiveContainer{}, retireNewContainer(err)
+		return ActiveContainer{}, retireNewContainerWithFS(dbconn, id, containersDir, fsys, fullPath, err)
 	}
 
 	return ActiveContainer{
