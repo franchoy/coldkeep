@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,7 +43,7 @@ func TestRestoreSeamDefaultFSPreservesRestoredBytes(t *testing.T) {
 		t.Fatalf("restore with default fs: %v", err)
 	}
 
-	got, err := os.ReadFile(filepath.Clean(outPath))
+	got, err := fs.ReadFile(os.DirFS(outDir), "restored.txt")
 	if err != nil {
 		t.Fatalf("read restored file: %v", err)
 	}
@@ -69,7 +70,8 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 	storeResult, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, srcFile, blocks.CodecPlain)
 	mustNoErr(t, err, "store file")
 
-	outDefault := filepath.Join(t.TempDir(), "restored-default.txt")
+	outDefaultDir := t.TempDir()
+	outDefault := filepath.Join(outDefaultDir, "restored-default.txt")
 	defaultResult, err := RestoreFileWithStorageContextResultOptions(
 		repo.Storage,
 		storeResult.FileID,
@@ -78,7 +80,8 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 	)
 	mustNoErr(t, err, "restore with default fs")
 
-	outNoop := filepath.Join(t.TempDir(), "restored-noop.txt")
+	outNoopDir := t.TempDir()
+	outNoop := filepath.Join(outNoopDir, "restored-noop.txt")
 	noopResult, err := RestoreFileWithStorageContextResultOptions(
 		repo.Storage,
 		storeResult.FileID,
@@ -91,9 +94,9 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 		t.Fatalf("hash mismatch: noop=%s default=%s", noopResult.RestoredHash, defaultResult.RestoredHash)
 	}
 
-	defaultBytes, err := os.ReadFile(filepath.Clean(outDefault))
+	defaultBytes, err := fs.ReadFile(os.DirFS(outDefaultDir), "restored-default.txt")
 	mustNoErr(t, err, "read default restored file")
-	noopBytes, err := os.ReadFile(filepath.Clean(outNoop))
+	noopBytes, err := fs.ReadFile(os.DirFS(outNoopDir), "restored-noop.txt")
 	mustNoErr(t, err, "read noop restored file")
 	if !bytes.Equal(noopBytes, defaultBytes) {
 		t.Fatalf("content mismatch between default and noop restore: default=%d bytes noop=%d bytes", len(defaultBytes), len(noopBytes))
