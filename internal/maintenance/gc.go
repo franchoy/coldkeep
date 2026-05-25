@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/fsx"
 	"github.com/franchoy/coldkeep/internal/graph"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/retention"
@@ -96,6 +96,8 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	defer func() { _ = dbconn.Close() }()
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+
+	fsys := fsx.Default()
 
 	// Attempt to acquire advisory lock to ensure only one GC runs at a time
 	var locked bool
@@ -341,9 +343,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			return GCResult{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
 		}
 
-		if err := os.Remove(containerPath); err != nil {
-			log.Println("warning: failed to delete container file:", err)
-		}
+		removeContainerFileWithFS(fsys, containerPath)
 
 		affectedContainers++
 		result.ContainerFilenames = append(result.ContainerFilenames, filename)
@@ -361,7 +361,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	// they will be sealed and collected by the regular sealed-container path later.
 	// Dry-run skips this to avoid side effects.
 	if !dryRun {
-		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachableChunks, liveUnits); err != nil {
+		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachableChunks, liveUnits, fsys); err != nil {
 			return GCResult{}, fmt.Errorf("cleanup fully dead active containers: %w", err)
 		}
 	}
@@ -659,7 +659,16 @@ func deletePackedBlockMetadata(ctx context.Context, execer gcSweepExecer, blockI
 // offset invariant is preserved by removing the container entirely — no offsets shift.
 // Partially-dead containers (mixed live and dead chunks) are left intact;
 // they will be handled by the regular sealed-container GC path once sealed.
-func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits) error {
+// removeContainerFileWithFS deletes the physical container file through the
+// filesystem seam. Errors are logged only; container DB rows are already
+// committed as deleted at this point.
+func removeContainerFileWithFS(fsys fsx.FS, path string) {
+	if err := fsys.Remove(path); err != nil {
+		log.Println("warning: failed to delete container file:", err)
+	}
+}
+
+func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS) error {
 	// Identify active containers where no chunk is still live or pinned.
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT c.id, c.filename
@@ -783,9 +792,7 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 		if err != nil {
 			return fmt.Errorf("invalid container filename %q: %w", ac.filename, err)
 		}
-		if err := os.Remove(containerPath); err != nil {
-			log.Println("warning: failed to delete fully-dead active container file:", err)
-		}
+		removeContainerFileWithFS(fsys, containerPath)
 	}
 
 	return nil

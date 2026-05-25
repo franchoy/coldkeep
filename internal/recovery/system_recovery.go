@@ -10,6 +10,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/fsx"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_env"
 )
@@ -171,6 +172,10 @@ func abortProcessingChunks(dbconn *sql.DB, stats *recoveryStats) error {
 }
 
 func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return recoverSealingContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+}
+
+func recoverSealingContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -204,7 +209,7 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 		if err != nil {
 			return fmt.Errorf("invalid container filename %q: %w", filename, err)
 		}
-		fileInfo, statErr := os.Stat(path)
+		fileInfo, statErr := fsys.Stat(path)
 		if statErr == nil && fileInfo.Size() != currentSize {
 			if _, qErr := dbconn.ExecContext(ctx,
 				`UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`,
@@ -269,6 +274,10 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 }
 
 func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineMissingContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+}
+
+func quarantineMissingContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -294,7 +303,7 @@ func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *re
 			return fmt.Errorf("invalid container filename %q: %w", filename, err)
 		}
 
-		_, statErr := os.Stat(path)
+		_, statErr := fsys.Stat(path)
 
 		if os.IsNotExist(statErr) {
 
@@ -324,6 +333,10 @@ func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *re
 }
 
 func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineCorruptActiveContainerTailsWithFS(dbconn, containersDir, stats, fsx.Default())
+}
+
+func quarantineCorruptActiveContainerTailsWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -352,7 +365,7 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 		if err != nil {
 			return fmt.Errorf("invalid container filename %q: %w", filename, err)
 		}
-		fileInfo, err := os.Stat(path)
+		fileInfo, err := fsys.Stat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -443,6 +456,10 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 }
 
 func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineOrphanContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+}
+
+func quarantineOrphanContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 	backend := db.BackendFromDB(dbconn)
@@ -453,7 +470,7 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 
 	logRecoveryEvent("quarantine_orphan_containers_start")
 	// recover files in container folder
-	entries, err := os.ReadDir(containersDir)
+	entries, err := fsys.ReadDir(containersDir)
 	if os.IsNotExist(err) {
 		logRecoveryEvent("quarantine_orphan_containers_skipped", "reason=containers_dir_missing")
 		return nil
