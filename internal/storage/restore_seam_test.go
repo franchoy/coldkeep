@@ -42,7 +42,7 @@ func TestRestoreSeamDefaultFSPreservesRestoredBytes(t *testing.T) {
 		t.Fatalf("restore with default fs: %v", err)
 	}
 
-	got, err := os.ReadFile(filepath.Clean(restoreResult.OutputPath)) // nosemgrep: dynamic-file-access -- t.TempDir() path, not user input
+	got, err := os.ReadFile(filepath.Clean(outPath))
 	if err != nil {
 		t.Fatalf("read restored file: %v", err)
 	}
@@ -91,9 +91,9 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 		t.Fatalf("hash mismatch: noop=%s default=%s", noopResult.RestoredHash, defaultResult.RestoredHash)
 	}
 
-	defaultBytes, err := os.ReadFile(filepath.Clean(defaultResult.OutputPath)) // nosemgrep: dynamic-file-access -- t.TempDir() path, not user input
+	defaultBytes, err := os.ReadFile(filepath.Clean(outDefault))
 	mustNoErr(t, err, "read default restored file")
-	noopBytes, err := os.ReadFile(filepath.Clean(noopResult.OutputPath)) // nosemgrep: dynamic-file-access -- t.TempDir() path, not user input
+	noopBytes, err := os.ReadFile(filepath.Clean(outNoop))
 	mustNoErr(t, err, "read noop restored file")
 	if !bytes.Equal(noopBytes, defaultBytes) {
 		t.Fatalf("content mismatch between default and noop restore: default=%d bytes noop=%d bytes", len(defaultBytes), len(noopBytes))
