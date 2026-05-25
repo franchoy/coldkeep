@@ -380,29 +380,7 @@ func quarantineCorruptActiveContainerTailsWithFS(dbconn *sql.DB, containersDir s
 		if err := rows.Scan(&id, &filename, &currentSize); err != nil {
 			return fmt.Errorf("scan active container row: %w", err)
 		}
-
-		path, err := container.SafeContainerPath(containersDir, filename)
-		if err != nil {
-			return fmt.Errorf("invalid container filename %q: %w", filename, err)
-		}
-		fileInfo, err := fsys.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("stat active container file: %w", err)
-		}
-
-		physicalSize := fileInfo.Size()
-		reason, err := detectCorruptionReason(ctx, dbconn, id, currentSize, physicalSize)
-		if err != nil {
-			return err
-		}
-		if reason == "" {
-			continue
-		}
-
-		if err := quarantineOneActiveCorruptTail(ctx, dbconn, id, filename, currentSize, physicalSize, reason, stats); err != nil {
+		if err := inspectActiveContainerForCorruption(ctx, dbconn, containersDir, fsys, id, filename, currentSize, stats); err != nil {
 			return err
 		}
 	}
@@ -413,6 +391,33 @@ func quarantineCorruptActiveContainerTailsWithFS(dbconn *sql.DB, containersDir s
 
 	logRecoveryEvent("quarantine_corrupt_active_container_tails_done", fmt.Sprintf("quarantined_count=%d", stats.quarantinedCorruptTail))
 	return nil
+}
+
+// inspectActiveContainerForCorruption checks one active container row: stats the
+// file, calls detectCorruptionReason, and quarantines if warranted.
+// Returns nil to continue the caller's loop (including the "healthy" or
+// "file not found" cases).
+func inspectActiveContainerForCorruption(ctx context.Context, dbconn *sql.DB, containersDir string, fsys fsx.FS, id int64, filename string, currentSize int64, stats *recoveryStats) error {
+	path, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
+	fileInfo, err := fsys.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat active container file: %w", err)
+	}
+	physicalSize := fileInfo.Size()
+	reason, err := detectCorruptionReason(ctx, dbconn, id, currentSize, physicalSize)
+	if err != nil {
+		return err
+	}
+	if reason == "" {
+		return nil
+	}
+	return quarantineOneActiveCorruptTail(ctx, dbconn, id, filename, currentSize, physicalSize, reason, stats)
 }
 
 // detectCorruptionReason checks whether an active container has a corrupt tail.
