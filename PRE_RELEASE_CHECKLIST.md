@@ -280,6 +280,21 @@ unset COLDKEEP_CODEC COLDKEEP_COMPRESSION COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS
       COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS
 ```
 
+Important — local regression check interpretation:
+The v1.9 baselines were generated on dedicated GitHub Actions runners (`ubuntu-latest`).
+Dev container and developer hardware environments introduce scheduling variance,
+especially under workers=4 where the script thresholds are tight (3–5% for
+uncompressed mode). Workers=1 results are generally stable locally; workers=4
+results will often produce warnings or HARD FAILs on under-powered or virtualized
+hardware even when the code itself is correct.
+
+Triage rule:
+- `workers=1` failures: investigate as potential real regressions.
+- `workers=4` failures: compare against CI results. If CI passes, treat local
+  failure as environment variance (not a code defect) and proceed.
+- CI is the authoritative regression gate. A local w4 HARD FAIL is not a
+  release blocker on its own.
+
 Why `unset COLDKEEP_STORAGE_DIR` first: step 1 exports a manual-check storage path
 for later CLI validation. Leaving that variable set during integration/adversarial
 test runs can force unrelated tests onto a shared storage directory and produce
