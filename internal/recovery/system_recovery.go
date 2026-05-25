@@ -273,6 +273,30 @@ func recoverSealingContainersWithFS(dbconn *sql.DB, containersDir string, stats 
 	return nil
 }
 
+// quarantineMissingContainerIfNeeded handles the per-container stat result
+// during the missing-container scan. If the file is confirmed absent it marks
+// the container row quarantined. Any other stat error is returned as fatal.
+func quarantineMissingContainerIfNeeded(ctx context.Context, dbconn *sql.DB, id int64, filename string, statErr error, stats *recoveryStats) error {
+	if statErr == nil {
+		return nil // file exists, nothing to do
+	}
+	if !os.IsNotExist(statErr) {
+		return fmt.Errorf("stat container file: %w", statErr)
+	}
+	_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("query update container to quarantine due to missing file: %w", err)
+	}
+	stats.quarantinedMissing++
+	logRecoveryEvent(
+		"quarantine_missing_container",
+		fmt.Sprintf("container_id=%d", id),
+		"filename="+filename,
+		"reason=missing_file",
+	)
+	return nil
+}
+
 func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
 	return quarantineMissingContainersWithFS(dbconn, containersDir, stats, fsx.Default())
 }
@@ -305,22 +329,8 @@ func quarantineMissingContainersWithFS(dbconn *sql.DB, containersDir string, sta
 
 		_, statErr := fsys.Stat(path)
 
-		if os.IsNotExist(statErr) {
-
-			_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE WHERE id = $1`, id)
-			if err != nil {
-				return fmt.Errorf("query update container to quarantine due to missing file: %w", err)
-			}
-			stats.quarantinedMissing++
-			logRecoveryEvent(
-				"quarantine_missing_container",
-				fmt.Sprintf("container_id=%d", id),
-				"filename="+filename,
-				"reason=missing_file",
-			)
-
-		} else if statErr != nil {
-			return fmt.Errorf("stat container file: %w", statErr)
+		if err := quarantineMissingContainerIfNeeded(ctx, dbconn, id, filename, statErr, stats); err != nil {
+			return err
 		}
 
 	}
