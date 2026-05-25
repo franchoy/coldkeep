@@ -15,7 +15,7 @@ func TestGCDeleteSeamDefaultFSPreservesDeleteBehavior(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dead-default.bin")
-	if err := os.WriteFile(path, []byte("phase8-gc-seam-default"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Clean(path), []byte("phase8-gc-seam-default"), 0600); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
 
@@ -34,7 +34,7 @@ func TestGCDeleteSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dead-noop.bin")
-	if err := os.WriteFile(path, []byte("phase8-gc-seam-noop"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Clean(path), []byte("phase8-gc-seam-noop"), 0600); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
 
@@ -55,12 +55,12 @@ func TestGCFilesystemEquivalenceDefaultAndNoop(t *testing.T) {
 	dir := t.TempDir()
 
 	pathDefault := filepath.Join(dir, "dead-equiv-default.bin")
-	if err := os.WriteFile(pathDefault, []byte("phase9-gc-equivalence-default"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Clean(pathDefault), []byte("phase9-gc-equivalence-default"), 0600); err != nil {
 		t.Fatalf("write file (default): %v", err)
 	}
 
 	pathNoop := filepath.Join(dir, "dead-equiv-noop.bin")
-	if err := os.WriteFile(pathNoop, []byte("phase9-gc-equivalence-noop"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Clean(pathNoop), []byte("phase9-gc-equivalence-noop"), 0600); err != nil {
 		t.Fatalf("write file (noop): %v", err)
 	}
 
