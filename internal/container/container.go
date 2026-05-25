@@ -596,6 +596,36 @@ func sealContainerInDirWithFS(tx db.DBTX, containerID int64, filename string, co
 	return nil
 }
 
+// isQuarantineableContainer reports whether dbconn and containerID are valid
+// preconditions for a quarantine operation. A nil connection or non-positive ID
+// is treated as a no-op so callers can safely pass zero values.
+func isQuarantineableContainer(dbconn *sql.DB, containerID int64) bool {
+	return dbconn != nil && containerID > 0
+}
+
+// quarantineContainerUpdateQueryAndArgs selects the correct UPDATE query and
+// argument list based on whether the container file is currently readable.
+// If stat succeeded the file size is recorded; if the file is missing only the
+// quarantine flag is set; any other stat error is returned as fatal.
+func quarantineContainerUpdateQueryAndArgs(backend db.Backend, containerID int64, info os.FileInfo, statErr error) (string, []any, error) {
+	updateQ := `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`
+	updateWithSizeQ := `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`
+	if backend == db.BackendSQLite {
+		updateQ = `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = ?`
+		updateWithSizeQ = `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = ?, max_size = ? WHERE id = ?`
+	}
+	if statErr == nil {
+		if backend == db.BackendSQLite {
+			return updateWithSizeQ, []any{info.Size(), info.Size(), containerID}, nil
+		}
+		return updateWithSizeQ, []any{containerID, info.Size()}, nil
+	}
+	if os.IsNotExist(statErr) {
+		return updateQ, []any{containerID}, nil
+	}
+	return "", nil, fmt.Errorf("stat container %d before quarantine: %w", containerID, statErr)
+}
+
 func QuarantineContainer(dbconn *sql.DB, containerID int64) error {
 	return QuarantineContainerInDir(dbconn, containerID, ContainersDir)
 }
@@ -605,7 +635,7 @@ func QuarantineContainerInDir(dbconn *sql.DB, containerID int64, containersDir s
 }
 
 func quarantineContainerInDirWithFS(dbconn *sql.DB, containerID int64, containersDir string, fsys fsx.FS) error {
-	if dbconn == nil || containerID <= 0 {
+	if !isQuarantineableContainer(dbconn, containerID) {
 		return nil
 	}
 	containersDir = containersDirOrDefault(containersDir)
@@ -615,12 +645,8 @@ func quarantineContainerInDirWithFS(dbconn *sql.DB, containerID int64, container
 	backend := db.BackendFromDB(dbconn)
 
 	selectFilenameQuery := `SELECT filename FROM container WHERE id = $1`
-	updateQuarantineQuery := `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`
-	updateQuarantineWithSizeQuery := `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`
 	if backend == db.BackendSQLite {
 		selectFilenameQuery = `SELECT filename FROM container WHERE id = ?`
-		updateQuarantineQuery = `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = ?`
-		updateQuarantineWithSizeQuery = `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = ?, max_size = ? WHERE id = ?`
 	}
 
 	var filename string
@@ -636,32 +662,13 @@ func quarantineContainerInDirWithFS(dbconn *sql.DB, containerID int64, container
 		return fmt.Errorf("invalid container filename %q: %w", filename, err)
 	}
 
-	var updateQuery string
-	var updateArgs []any
-	if info, statErr := fsys.Stat(containerPath); statErr == nil {
-		updateQuery = updateQuarantineWithSizeQuery
-		if backend == db.BackendSQLite {
-			updateArgs = []any{info.Size(), info.Size(), containerID}
-		} else {
-			updateArgs = []any{containerID, info.Size()}
-		}
-	} else if os.IsNotExist(statErr) {
-		updateQuery = updateQuarantineQuery
-		updateArgs = []any{containerID}
-	} else {
-		return fmt.Errorf("stat container %d before quarantine: %w", containerID, statErr)
-	}
-
-	result, err := dbconn.ExecContext(ctx, updateQuery, updateArgs...)
+	info, statErr := fsys.Stat(containerPath)
+	updateQuery, updateArgs, err := quarantineContainerUpdateQueryAndArgs(backend, containerID, info, statErr)
 	if err != nil {
+		return err
+	}
+	if _, err := dbconn.ExecContext(ctx, updateQuery, updateArgs...); err != nil {
 		return fmt.Errorf("mark container %d quarantine: %w", containerID, err)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected while quarantining container %d: %w", containerID, err)
-	}
-	if rowsAffected == 0 {
-		return nil
 	}
 	return nil
 }
