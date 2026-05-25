@@ -181,3 +181,89 @@ func TestContainerSeamPreservesRetireRemoveBehavior(t *testing.T) {
 		t.Fatalf("expected container 1 to be quarantined in DB after quarantine path")
 	}
 }
+
+// TestContainerFilesystemEquivalenceDefaultAndNoop is a head-to-head
+// equivalence test: it writes the same payload with two independent
+// LocalWriter instances — one backed by fsx.Default() and one backed by
+// fsx.NewNoop(fsx.Default()) — then reads both back and asserts
+// bytes.Equal, proving the seam is byte-for-byte behavior-preserving.
+func TestContainerFilesystemEquivalenceDefaultAndNoop(t *testing.T) {
+	t.Parallel()
+
+	const maxSize = ContainerHdrLen + 512
+	payload := []byte("phase9-container-equivalence")
+
+	// --- default FS ---
+	dbDefault := openSeamTestDB(t)
+	dirDefault := t.TempDir()
+	wDefault := NewLocalWriterWithDirAndDB(dirDefault, maxSize, dbDefault)
+
+	txDefault, err := dbDefault.Begin()
+	if err != nil {
+		t.Fatalf("begin tx (default): %v", err)
+	}
+	defer func() { _ = txDefault.Rollback() }()
+
+	placementDefault, err := wDefault.AppendPayload(txDefault, payload)
+	if err != nil {
+		t.Fatalf("append payload (default): %v", err)
+	}
+	wDefault.AcknowledgeAppendCommitted()
+	if err := txDefault.Commit(); err != nil {
+		t.Fatalf("commit tx (default): %v", err)
+	}
+	if err := wDefault.FinalizeContainer(); err != nil {
+		t.Fatalf("finalize container (default): %v", err)
+	}
+
+	rcDefault, err := OpenReadOnlyContainer(filepath.Join(wDefault.Dir(), placementDefault.Filename), maxSize)
+	if err != nil {
+		t.Fatalf("open readonly container (default): %v", err)
+	}
+	defer func() { _ = rcDefault.Close() }()
+
+	defaultBytes, err := rcDefault.ReadAt(placementDefault.Offset, int64(len(payload)))
+	if err != nil {
+		t.Fatalf("read payload (default): %v", err)
+	}
+
+	// --- noop FS ---
+	dbNoop := openSeamTestDB(t)
+	dirNoop := t.TempDir()
+	wNoop := NewLocalWriterWithDirAndDB(dirNoop, maxSize, dbNoop)
+	wNoop.fs = fsx.NewNoop(fsx.Default())
+
+	txNoop, err := dbNoop.Begin()
+	if err != nil {
+		t.Fatalf("begin tx (noop): %v", err)
+	}
+	defer func() { _ = txNoop.Rollback() }()
+
+	placementNoop, err := wNoop.AppendPayload(txNoop, payload)
+	if err != nil {
+		t.Fatalf("append payload (noop): %v", err)
+	}
+	wNoop.AcknowledgeAppendCommitted()
+	if err := txNoop.Commit(); err != nil {
+		t.Fatalf("commit tx (noop): %v", err)
+	}
+	if err := wNoop.FinalizeContainer(); err != nil {
+		t.Fatalf("finalize container (noop): %v", err)
+	}
+
+	rcNoop, err := OpenReadOnlyContainer(filepath.Join(wNoop.Dir(), placementNoop.Filename), maxSize)
+	if err != nil {
+		t.Fatalf("open readonly container (noop): %v", err)
+	}
+	defer func() { _ = rcNoop.Close() }()
+
+	noopBytes, err := rcNoop.ReadAt(placementNoop.Offset, int64(len(payload)))
+	if err != nil {
+		t.Fatalf("read payload (noop): %v", err)
+	}
+
+	// --- head-to-head equivalence assertion ---
+	if !bytes.Equal(defaultBytes, noopBytes) {
+		t.Fatalf("filesystem equivalence failure: default produced %q, noop produced %q", defaultBytes, noopBytes)
+	}
+}
