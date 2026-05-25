@@ -158,13 +158,21 @@ fi
 bash -n scripts/*.sh
 bash scripts/check_smart_quotes.sh
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck scripts/*.sh
+  # CI excludes critical_coverage.sh (ignore_names: critical_coverage.sh in
+  # ludeeus/action-shellcheck). Match that exclusion here to avoid local
+  # failures that CI would not surface.
+  shellcheck $(ls scripts/*.sh | grep -v critical_coverage.sh)
 else
   echo "shellcheck not found. Install it to match CI parity (e.g., apt install shellcheck or brew install shellcheck)."
   exit 1
 fi
 scripts/validate_validation_matrix.sh
 bash scripts/check_versioned_row_writers.sh
+# CI pins golangci-lint at v2.6.2 (golangci/golangci-lint-action@v9 version: v2.6.2).
+# A newer local version may surface findings that CI would not flag, causing
+# false parity failures. For exact parity, install the pinned version:
+#   curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+#     | sh -s -- -b $(go env GOPATH)/bin v2.6.2
 golangci-lint run ./...
 go vet ./...
 
@@ -227,28 +235,49 @@ for codec in plain aes-gcm; do
 done
 
 # Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).
-# Reset it before manual CLI checks in later steps.
+# Reset it before the benchmark block and manual CLI checks in later steps.
 unset COLDKEEP_CODEC
 
-if [ -f benchmark-baseline.json ]; then
-  cp benchmark-baseline.json benchmark-baseline-committed.json
-fi
+# benchmark-matrix (CI-equivalent)
+# CI always sets COLDKEEP_CODEC=aes-gcm for benchmarks and applies tuned
+# lock-retry settings to reduce false-slow results under container contention.
+# Both compressions (none, zstd) and both worker counts (1, 4) are required
+# CI gates enforced by ci-required — do not skip any combination.
+export COLDKEEP_CODEC=aes-gcm
+export COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS=12
+export COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15
+export COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900
 
-./coldkeep benchmark run --dataset small --workers 1 --output json \
-  | jq -c 'select(type=="object" and .command=="benchmark" and .data!=null)' \
-  | head -n 1 \
-  | tee benchmark-baseline.json
+./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-none-w1.json
+./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-none-w4.json
 
-if [ -f benchmark-baseline-committed.json ]; then
-  ./coldkeep benchmark run --dataset small --workers 1 --output json --compare benchmark-baseline-committed.json --threshold 100
+COLDKEEP_COMPRESSION=zstd ./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-zstd-w1.json
+COLDKEEP_COMPRESSION=zstd ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-zstd-w4.json
 
-  # Optional parity with CI workers=4 profile/compare:
-  ./coldkeep benchmark run --dataset small --workers 4 --output json \
-    | jq -c 'select(type=="object" and .command=="benchmark" and .data!=null)' \
-    | head -n 1 \
-    | tee benchmark-baseline-w4.json
-  ./coldkeep benchmark run --dataset small --workers 4 --output json --compare benchmark-baseline-committed.json --threshold 100
-fi
+# Regression checks against versioned v1.9 baselines using validate_regression_thresholds.py.
+# This mirrors the exact CI gate — all four combinations are required.
+python3 scripts/validate_regression_thresholds.py check benchmark-none-w1.json \
+  --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json \
+  --mode uncompressed \
+  --json-report regression-report-none-w1.json
+
+python3 scripts/validate_regression_thresholds.py check benchmark-none-w4.json \
+  --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json \
+  --mode uncompressed \
+  --json-report regression-report-none-w4.json
+
+python3 scripts/validate_regression_thresholds.py check benchmark-zstd-w1.json \
+  --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json \
+  --mode compressed \
+  --json-report regression-report-zstd-w1.json
+
+python3 scripts/validate_regression_thresholds.py check benchmark-zstd-w4.json \
+  --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json \
+  --mode compressed \
+  --json-report regression-report-zstd-w4.json
+
+unset COLDKEEP_CODEC COLDKEEP_COMPRESSION COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS \
+      COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS
 ```
 
 Why `unset COLDKEEP_STORAGE_DIR` first: step 1 exports a manual-check storage path
@@ -261,6 +290,17 @@ Prerequisite for the smoke leg: `scripts/smoke.sh` shells out to `psql` when
 PostgreSQL client first if it is not already available.
 
 Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`, `benchmark`) across both codecs.
+
+Generate the critical coverage report (mirrors the CI `critical-coverage-report` job;
+informational, not enforced by `ci-required`, but the artifact is reviewed before
+tagging a release):
+
+```bash
+scripts/critical_coverage.sh --report --csv-output docs/release/v1.10/v1.10.8-ci-coverage-report.csv
+```
+
+Expected: report generates without error. Review the CSV for any Tier 1 packages
+with zero or near-zero coverage before proceeding to tag.
 
 For the snapshot contract gate, run the focused integration suite after the matrix loop:
 
@@ -281,12 +321,8 @@ Expected: gate fails immediately if `COLDKEEP_V17_BIN` is missing/non-executable
 and passes only when `TestPhase7BuildFixtureWithActualV17BinaryIntegration`
 executes successfully against the released v1.7 binary.
 
-After step 3, unset or override `COLDKEEP_CODEC` before manual CLI checks below.
-Otherwise the last loop iteration leaves `COLDKEEP_CODEC=aes-gcm`, which changes
-the behavior of later `store` commands.
-
-`--threshold 100` means fail only on disaster-class regression (more than 2x
-slower than baseline for a compared scenario).
+After step 3, confirm `COLDKEEP_CODEC` is unset before manual CLI checks below.
+The benchmark block above unsets it explicitly; verify with `echo $COLDKEEP_CODEC`.
 
 ## 4) Run integration umbrella suite (optional extra confidence, not a release gate)
 
