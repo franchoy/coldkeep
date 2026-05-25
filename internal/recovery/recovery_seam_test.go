@@ -32,7 +32,7 @@ func TestRecoverySeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	orphanFile := filepath.Join(dir, "orphan.bin")
-	if err := os.WriteFile(orphanFile, []byte("phase8-recovery-seam-noop"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Clean(orphanFile), []byte("phase8-recovery-seam-noop"), 0600); err != nil {
 		t.Fatalf("write orphan file: %v", err)
 	}
 
