@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"strings"
@@ -484,7 +485,6 @@ func quarantineOrphanContainersWithFS(dbconn *sql.DB, containersDir string, stat
 	var warningCount int64
 
 	logRecoveryEvent("quarantine_orphan_containers_start")
-	// recover files in container folder
 	entries, err := fsys.ReadDir(containersDir)
 	if os.IsNotExist(err) {
 		logRecoveryEvent("quarantine_orphan_containers_skipped", "reason=containers_dir_missing")
@@ -495,87 +495,15 @@ func quarantineOrphanContainersWithFS(dbconn *sql.DB, containersDir string, stat
 	}
 
 	for _, file := range entries {
-		if file.IsDir() {
-			stats.skippedDirEntries++
-			continue
-		}
-		fileinfo, err := file.Info()
+		reused, skipped, err := quarantineOneOrphanEntryWithFS(ctx, dbconn, backend, file, stats)
 		if err != nil {
-			return fmt.Errorf("get info for file %s: %w", file.Name(), err)
+			return err
 		}
-		name := file.Name()
-		fileSize := fileinfo.Size()
-		stats.totalDiskFilesChecked++
-
-		result, err := dbconn.ExecContext(ctx, `INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3) ON CONFLICT (filename) DO NOTHING`, name, fileSize, fileSize)
-		if err != nil {
-			return fmt.Errorf("insert orphan container record: %w", err)
-		}
-
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("rows affected for orphan container insert: %w", err)
-		}
-
-		if rowsAffected == 1 {
-			stats.quarantinedOrphan++
-			logRecoveryEvent(
-				"quarantine_orphan_container",
-				"filename="+name,
-				fmt.Sprintf("size_bytes=%d", fileSize),
-				"reason=orphan_file_on_disk",
-			)
-			continue
-		}
-
-		var existingQuarantine bool
-		var existingCurrentSize int64
-		var existingMaxSize int64
-		err = dbconn.QueryRowContext(
-			ctx,
-			`SELECT quarantine, current_size, max_size FROM container WHERE filename = $1`,
-			name,
-		).Scan(&existingQuarantine, &existingCurrentSize, &existingMaxSize)
-		if err == sql.ErrNoRows {
-			if !isStrictRecovery() {
-				logRecoveryEvent(
-					"quarantine_orphan_container_conflict_warning",
-					"filename="+name,
-					"reason=insert_conflict_but_row_missing",
-					"strict=false",
-				)
-				continue
-			}
-			return fmt.Errorf("suspicious orphan container conflict for filename=%s: insert reported conflict but row is missing", name)
-		}
-		if err != nil {
-			return fmt.Errorf("query existing container after orphan conflict: %w", err)
-		}
-
-		if existingQuarantine {
-			resyncQuery := `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
-			resyncArgs := []any{name, fileSize}
-			if backend == db.BackendSQLite {
-				resyncQuery = `UPDATE container SET current_size = ?, max_size = ? WHERE filename = ?`
-				resyncArgs = []any{fileSize, fileSize, name}
-			}
-			if _, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...); err != nil {
-				return fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
-			}
+		if reused {
 			reusedCount++
-			logRecoveryEvent(
-				"quarantine_orphan_container_resynced",
-				"filename="+name,
-				fmt.Sprintf("old_current_size=%d", existingCurrentSize),
-				fmt.Sprintf("old_max_size=%d", existingMaxSize),
-				fmt.Sprintf("new_size=%d", fileSize),
-			)
-			continue
 		}
-
-		if !existingQuarantine {
+		if skipped {
 			skippedExistingCount++
-			continue
 		}
 	}
 
@@ -588,6 +516,91 @@ func quarantineOrphanContainersWithFS(dbconn *sql.DB, containersDir string, stat
 	)
 
 	return nil
+}
+
+func quarantineOneOrphanEntryWithFS(ctx context.Context, dbconn *sql.DB, backend db.Backend, file fs.DirEntry, stats *recoveryStats) (reused bool, skipped bool, err error) {
+	if file.IsDir() {
+		stats.skippedDirEntries++
+		return false, false, nil
+	}
+	fileinfo, err := file.Info()
+	if err != nil {
+		return false, false, fmt.Errorf("get info for file %s: %w", file.Name(), err)
+	}
+	name := file.Name()
+	fileSize := fileinfo.Size()
+	stats.totalDiskFilesChecked++
+
+	result, err := dbconn.ExecContext(ctx, `INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3) ON CONFLICT (filename) DO NOTHING`, name, fileSize, fileSize)
+	if err != nil {
+		return false, false, fmt.Errorf("insert orphan container record: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, false, fmt.Errorf("rows affected for orphan container insert: %w", err)
+	}
+
+	if rowsAffected == 1 {
+		stats.quarantinedOrphan++
+		logRecoveryEvent(
+			"quarantine_orphan_container",
+			"filename="+name,
+			fmt.Sprintf("size_bytes=%d", fileSize),
+			"reason=orphan_file_on_disk",
+		)
+		return false, false, nil
+	}
+
+	return resolveOrphanConflictWithFS(ctx, dbconn, backend, name, fileSize)
+}
+
+func resolveOrphanConflictWithFS(ctx context.Context, dbconn *sql.DB, backend db.Backend, name string, fileSize int64) (reused bool, skipped bool, err error) {
+	var existingQuarantine bool
+	var existingCurrentSize int64
+	var existingMaxSize int64
+	err = dbconn.QueryRowContext(
+		ctx,
+		`SELECT quarantine, current_size, max_size FROM container WHERE filename = $1`,
+		name,
+	).Scan(&existingQuarantine, &existingCurrentSize, &existingMaxSize)
+	if err == sql.ErrNoRows {
+		if !isStrictRecovery() {
+			logRecoveryEvent(
+				"quarantine_orphan_container_conflict_warning",
+				"filename="+name,
+				"reason=insert_conflict_but_row_missing",
+				"strict=false",
+			)
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("suspicious orphan container conflict for filename=%s: insert reported conflict but row is missing", name)
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("query existing container after orphan conflict: %w", err)
+	}
+
+	if existingQuarantine {
+		resyncQuery := `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
+		resyncArgs := []any{name, fileSize}
+		if backend == db.BackendSQLite {
+			resyncQuery = `UPDATE container SET current_size = ?, max_size = ? WHERE filename = ?`
+			resyncArgs = []any{fileSize, fileSize, name}
+		}
+		if _, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...); err != nil {
+			return false, false, fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
+		}
+		logRecoveryEvent(
+			"quarantine_orphan_container_resynced",
+			"filename="+name,
+			fmt.Sprintf("old_current_size=%d", existingCurrentSize),
+			fmt.Sprintf("old_max_size=%d", existingMaxSize),
+			fmt.Sprintf("new_size=%d", fileSize),
+		)
+		return true, false, nil
+	}
+
+	return false, true, nil
 }
 
 // detectInteriorGaps checks that completed blocks in the given container are
