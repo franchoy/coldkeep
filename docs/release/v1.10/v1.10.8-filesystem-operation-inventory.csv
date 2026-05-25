@@ -1,0 +1,2 @@
+inventory_id,phase,package,file_path,operation,operation_category,criticality,seam_candidate,current_status,notes
+CK-1108-P0-PLACEHOLDER,Phase 0,TBD,TBD,TBD,TBD,TBD,TBD,pending,"Inventory initialized in Phase 0. Phase 1 will replace placeholder with discovered filesystem operations."
