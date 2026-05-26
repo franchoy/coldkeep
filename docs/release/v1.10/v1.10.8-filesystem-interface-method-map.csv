@@ -1,0 +1,13 @@
+method_id,seam_group,proposed_method,source_operations,phase_targets,required_for_v1108,design_status,notes
+CK-1108-P3-001,FileOpen,"Open(name string) (File, error)","os.Open",6,yes,designed,"Required for restore parent directory sync and store-side read paths."
+CK-1108-P3-002,FileOpen,"OpenFile(name string, flag int, perm fs.FileMode) (File, error)","os.OpenFile",7,yes,designed,"Required for container open/create/write paths."
+CK-1108-P3-003,FileStat,"Stat(name string) (fs.FileInfo, error)","os.Stat",6;7;8,yes,designed,"Required for restore safety checks, container metadata checks, recovery file-state checks."
+CK-1108-P3-004,FileSync,"File.Sync() error","File.Sync",6;7,yes,designed,"Required for restore and container durability behavior."
+CK-1108-P3-005,FileWrite,"File.Write(p []byte) (int, error)","File.Write",7,yes,designed,"Required for container header/payload writes."
+CK-1108-P3-006,FileRead,"File.Read(p []byte) (int, error)","File.Read",6;7,yes,designed,"Needed because opened files must support read behavior without leaking raw os.File requirements."
+CK-1108-P3-007,FileClose,"File.Close() error","File.Close",6;7;8,yes,designed,"Needed for lifecycle symmetry and behavior preservation."
+CK-1108-P3-008,FileRename,"Rename(oldpath string, newpath string) error","os.Rename",6,yes,designed,"Required for atomic restore commit."
+CK-1108-P3-009,FileRemove,"Remove(name string) error","os.Remove",6;7;8,yes,designed,"Required for restore cleanup, container retirement, and GC physical deletion."
+CK-1108-P3-010,DirCreate,"MkdirAll(path string, perm fs.FileMode) error","os.MkdirAll",6;7,yes,designed,"Required for restore parent directory creation and container directory preparation."
+CK-1108-P3-011,DirRead,"ReadDir(name string) ([]fs.DirEntry, error)","os.ReadDir",8,yes,designed,"Required for recovery orphan container scans."
+CK-1108-P3-012,DirWalk,"WalkDir(root string, fn fs.WalkDirFunc) error","filepath.WalkDir",6,yes,designed,"Required for restore traversal/path enumeration."

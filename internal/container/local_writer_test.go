@@ -1,6 +1,7 @@
 package container
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -66,6 +67,10 @@ func (s *stubTx) Exec(query string, args ...any) (sql.Result, error) {
 }
 
 func (s *stubTx) QueryRow(query string, args ...any) *sql.Row {
+	return nil
+}
+
+func (s *stubTx) QueryRowContext(_ context.Context, query string, args ...any) *sql.Row {
 	return nil
 }
 

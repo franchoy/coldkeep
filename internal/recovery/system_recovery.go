@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/fsx"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_env"
 )
@@ -171,6 +173,10 @@ func abortProcessingChunks(dbconn *sql.DB, stats *recoveryStats) error {
 }
 
 func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return recoverSealingContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+}
+
+func recoverSealingContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -199,61 +205,9 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 		if err := rows.Scan(&id, &filename, &currentSize); err != nil {
 			return fmt.Errorf("scan sealing container row: %w", err)
 		}
-
-		path, err := container.SafeContainerPath(containersDir, filename)
-		if err != nil {
-			return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		if err := recoverOneSealingContainer(ctx, dbconn, id, filename, currentSize, containersDir, fsys, stats); err != nil {
+			return err
 		}
-		fileInfo, statErr := os.Stat(path)
-		if statErr == nil && fileInfo.Size() != currentSize {
-			if _, qErr := dbconn.ExecContext(ctx,
-				`UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`,
-				id,
-				fileInfo.Size(),
-			); qErr != nil {
-				return fmt.Errorf("quarantine sealing container %d after size mismatch: %w", id, qErr)
-			}
-
-			stats.sealingQuarantined++
-			logRecoveryEvent(
-				"recover_sealing_container_quarantined",
-				fmt.Sprintf("container_id=%d", id),
-				"filename="+filename,
-				"reason=size_mismatch",
-				fmt.Sprintf("db_current_size=%d", currentSize),
-				fmt.Sprintf("physical_size=%d", fileInfo.Size()),
-			)
-			continue
-		}
-
-		sealErr := container.SealContainerInDir(dbconn, id, filename, containersDir)
-		if sealErr == nil {
-			stats.sealingCompleted++
-			logRecoveryEvent(
-				"recover_sealing_container_completed",
-				fmt.Sprintf("container_id=%d", id),
-				"filename="+filename,
-			)
-			continue
-		}
-
-		// Physical file missing/unreadable: execute quarantine path and
-		// clear sealing marker.
-		if _, qErr := dbconn.ExecContext(ctx,
-			`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
-			id,
-		); qErr != nil {
-			return fmt.Errorf("quarantine unresolved sealing container %d after seal error %v: %w", id, sealErr, qErr)
-		}
-
-		stats.sealingQuarantined++
-		logRecoveryEvent(
-			"recover_sealing_container_quarantined",
-			fmt.Sprintf("container_id=%d", id),
-			"filename="+filename,
-			"reason=seal_failed",
-			"error="+sealErr.Error(),
-		)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -268,7 +222,96 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 	return nil
 }
 
+// quarantineMissingContainerIfNeeded handles the per-container stat result
+// during the missing-container scan. If the file is confirmed absent it marks
+// the container row quarantined. Any other stat error is returned as fatal.
+
+// recoverOneSealingContainer processes a single container row from the sealing
+// recovery scan. It quarantines the container if the physical file size does not
+// match the DB record, completes the seal if possible, or quarantines on failure.
+func recoverOneSealingContainer(ctx context.Context, dbconn *sql.DB, id int64, filename string, currentSize int64, containersDir string, fsys fsx.FS, stats *recoveryStats) error {
+	path, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
+	fileInfo, statErr := fsys.Stat(path)
+	if statErr == nil && fileInfo.Size() != currentSize {
+		if _, qErr := dbconn.ExecContext(ctx,
+			`UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`,
+			id,
+			fileInfo.Size(),
+		); qErr != nil {
+			return fmt.Errorf("quarantine sealing container %d after size mismatch: %w", id, qErr)
+		}
+		stats.sealingQuarantined++
+		logRecoveryEvent(
+			"recover_sealing_container_quarantined",
+			fmt.Sprintf("container_id=%d", id),
+			"filename="+filename,
+			"reason=size_mismatch",
+			fmt.Sprintf("db_current_size=%d", currentSize),
+			fmt.Sprintf("physical_size=%d", fileInfo.Size()),
+		)
+		return nil
+	}
+	sealErr := container.SealContainerInDir(dbconn, id, filename, containersDir)
+	if sealErr == nil {
+		stats.sealingCompleted++
+		logRecoveryEvent(
+			"recover_sealing_container_completed",
+			fmt.Sprintf("container_id=%d", id),
+			"filename="+filename,
+		)
+		return nil
+	}
+	// Physical file missing/unreadable: quarantine and clear sealing marker.
+	return quarantineSealingContainerSealFailed(ctx, dbconn, id, filename, sealErr, stats)
+}
+
+func quarantineSealingContainerSealFailed(ctx context.Context, dbconn *sql.DB, id int64, filename string, sealErr error, stats *recoveryStats) error {
+	if _, qErr := dbconn.ExecContext(ctx,
+		`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
+		id,
+	); qErr != nil {
+		return fmt.Errorf("quarantine unresolved sealing container %d after seal error %v: %w", id, sealErr, qErr)
+	}
+	stats.sealingQuarantined++
+	logRecoveryEvent(
+		"recover_sealing_container_quarantined",
+		fmt.Sprintf("container_id=%d", id),
+		"filename="+filename,
+		"reason=seal_failed",
+		"error="+sealErr.Error(),
+	)
+	return nil
+}
+
+func quarantineMissingContainerIfNeeded(ctx context.Context, dbconn *sql.DB, id int64, filename string, statErr error, stats *recoveryStats) error {
+	if statErr == nil {
+		return nil // file exists, nothing to do
+	}
+	if !os.IsNotExist(statErr) {
+		return fmt.Errorf("stat container file: %w", statErr)
+	}
+	_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("query update container to quarantine due to missing file: %w", err)
+	}
+	stats.quarantinedMissing++
+	logRecoveryEvent(
+		"quarantine_missing_container",
+		fmt.Sprintf("container_id=%d", id),
+		"filename="+filename,
+		"reason=missing_file",
+	)
+	return nil
+}
+
 func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineMissingContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+}
+
+func quarantineMissingContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -294,24 +337,10 @@ func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *re
 			return fmt.Errorf("invalid container filename %q: %w", filename, err)
 		}
 
-		_, statErr := os.Stat(path)
+		_, statErr := fsys.Stat(path)
 
-		if os.IsNotExist(statErr) {
-
-			_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE WHERE id = $1`, id)
-			if err != nil {
-				return fmt.Errorf("query update container to quarantine due to missing file: %w", err)
-			}
-			stats.quarantinedMissing++
-			logRecoveryEvent(
-				"quarantine_missing_container",
-				fmt.Sprintf("container_id=%d", id),
-				"filename="+filename,
-				"reason=missing_file",
-			)
-
-		} else if statErr != nil {
-			return fmt.Errorf("stat container file: %w", statErr)
+		if err := quarantineMissingContainerIfNeeded(ctx, dbconn, id, filename, statErr, stats); err != nil {
+			return err
 		}
 
 	}
@@ -324,6 +353,10 @@ func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *re
 }
 
 func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineCorruptActiveContainerTailsWithFS(dbconn, containersDir, stats, fsx.Default())
+}
+
+func quarantineCorruptActiveContainerTailsWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -347,91 +380,9 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 		if err := rows.Scan(&id, &filename, &currentSize); err != nil {
 			return fmt.Errorf("scan active container row: %w", err)
 		}
-
-		path, err := container.SafeContainerPath(containersDir, filename)
-		if err != nil {
-			return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		if err := inspectActiveContainerForCorruption(ctx, dbconn, containersDir, fsys, id, filename, currentSize, stats); err != nil {
+			return err
 		}
-		fileInfo, err := os.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("stat active container file: %w", err)
-		}
-
-		physicalSize := fileInfo.Size()
-		reason := ""
-		switch {
-		case currentSize > physicalSize:
-			reason = "db_current_size_past_eof"
-		case physicalSize > currentSize:
-			// Ghost bytes on disk: payload write reached disk but DB tx rolled back.
-			// Any size mismatch is treated as suspicious for v1.0 strict recovery.
-			reason = "physical_size_past_db_current_size"
-		default:
-			// Sizes match; check completed-block bounds.
-			var hasOutOfBoundsBlock bool
-			err = dbconn.QueryRowContext(ctx, `
-				SELECT EXISTS (
-					SELECT 1
-					FROM blocks b
-					JOIN chunk c ON c.id = b.chunk_id
-					WHERE b.container_id = $1
-					  AND c.status = $2
-					  AND NOT EXISTS (
-						SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
-					  )
-					  AND (
-						b.block_offset < 0
-						OR b.stored_size <= 0
-						OR b.block_offset > ($3 - b.stored_size)
-					  )
-				)
-			`, id, filestate.ChunkCompleted, physicalSize).Scan(&hasOutOfBoundsBlock)
-			if err != nil {
-				return fmt.Errorf("query active container block bounds: %w", err)
-			}
-			if hasOutOfBoundsBlock {
-				reason = "completed_block_past_eof"
-			}
-
-			// Check for interior gaps: first block not at header or non-contiguous offsets.
-			if reason == "" {
-				reason, err = detectInteriorGaps(ctx, dbconn, id, filestate.ChunkCompleted)
-				if err != nil {
-					return fmt.Errorf("query active container block continuity for container %d: %w", id, err)
-				}
-			}
-
-			if reason == "" {
-				hasTrailingBytes, err := hasTrailingUnreferencedBytes(ctx, dbconn, id, currentSize, filestate.ChunkCompleted)
-				if err != nil {
-					return fmt.Errorf("query active container trailing bytes for container %d: %w", id, err)
-				}
-				if hasTrailingBytes {
-					reason = "trailing_unreferenced_bytes"
-				}
-			}
-		}
-		if reason == "" {
-			continue
-		}
-
-		_, err = dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`, id, physicalSize)
-		if err != nil {
-			return fmt.Errorf("query update active container to quarantine due to corrupt tail: %w", err)
-		}
-
-		stats.quarantinedCorruptTail++
-		logRecoveryEvent(
-			"quarantine_corrupt_active_container_tail",
-			fmt.Sprintf("container_id=%d", id),
-			"filename="+filename,
-			fmt.Sprintf("db_current_size=%d", currentSize),
-			fmt.Sprintf("physical_size=%d", physicalSize),
-			"reason="+reason,
-		)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -442,7 +393,117 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 	return nil
 }
 
+// inspectActiveContainerForCorruption checks one active container row: stats the
+// file, calls detectCorruptionReason, and quarantines if warranted.
+// Returns nil to continue the caller's loop (including the "healthy" or
+// "file not found" cases).
+func inspectActiveContainerForCorruption(ctx context.Context, dbconn *sql.DB, containersDir string, fsys fsx.FS, id int64, filename string, currentSize int64, stats *recoveryStats) error {
+	path, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
+	fileInfo, err := fsys.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat active container file: %w", err)
+	}
+	physicalSize := fileInfo.Size()
+	reason, err := detectCorruptionReason(ctx, dbconn, id, currentSize, physicalSize)
+	if err != nil {
+		return err
+	}
+	if reason == "" {
+		return nil
+	}
+	return quarantineOneActiveCorruptTail(ctx, dbconn, id, filename, currentSize, physicalSize, reason, stats)
+}
+
+// detectCorruptionReason checks whether an active container has a corrupt tail.
+// Returns a non-empty reason string if quarantine is warranted, "" if healthy.
+func detectCorruptionReason(ctx context.Context, dbconn *sql.DB, id int64, currentSize, physicalSize int64) (string, error) {
+	switch {
+	case currentSize > physicalSize:
+		return "db_current_size_past_eof", nil
+	case physicalSize > currentSize:
+		// Ghost bytes on disk: payload write reached disk but DB tx rolled back.
+		// Any size mismatch is treated as suspicious for v1.0 strict recovery.
+		return "physical_size_past_db_current_size", nil
+	default:
+		return checkActiveContainerIntegrity(ctx, dbconn, id, currentSize, physicalSize)
+	}
+}
+
+// checkActiveContainerIntegrity checks block bounds, interior gaps, and trailing
+// unreferenced bytes when db size == physical size (the default case of
+// detectCorruptionReason). CCN 7.
+func checkActiveContainerIntegrity(ctx context.Context, dbconn *sql.DB, id int64, currentSize, physicalSize int64) (string, error) {
+	var hasOutOfBoundsBlock bool
+	err := dbconn.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = $1
+			  AND c.status = $2
+			  AND NOT EXISTS (
+				SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+			  )
+			  AND (
+				b.block_offset < 0
+				OR b.stored_size <= 0
+				OR b.block_offset > ($3 - b.stored_size)
+			  )
+		)
+	`, id, filestate.ChunkCompleted, physicalSize).Scan(&hasOutOfBoundsBlock)
+	if err != nil {
+		return "", fmt.Errorf("query active container block bounds: %w", err)
+	}
+	if hasOutOfBoundsBlock {
+		return "completed_block_past_eof", nil
+	}
+	reason, err := detectInteriorGaps(ctx, dbconn, id, filestate.ChunkCompleted)
+	if err != nil {
+		return "", fmt.Errorf("query active container block continuity for container %d: %w", id, err)
+	}
+	if reason != "" {
+		return reason, nil
+	}
+	hasTrailingBytes, err := hasTrailingUnreferencedBytes(ctx, dbconn, id, currentSize, filestate.ChunkCompleted)
+	if err != nil {
+		return "", fmt.Errorf("query active container trailing bytes for container %d: %w", id, err)
+	}
+	if hasTrailingBytes {
+		return "trailing_unreferenced_bytes", nil
+	}
+	return "", nil
+}
+
+// quarantineOneActiveCorruptTail marks a container as quarantined in the DB
+// and logs the corrective-recovery event.
+func quarantineOneActiveCorruptTail(ctx context.Context, dbconn *sql.DB, id int64, filename string, currentSize, physicalSize int64, reason string, stats *recoveryStats) error {
+	_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`, id, physicalSize)
+	if err != nil {
+		return fmt.Errorf("query update active container to quarantine due to corrupt tail: %w", err)
+	}
+	stats.quarantinedCorruptTail++
+	logRecoveryEvent(
+		"quarantine_corrupt_active_container_tail",
+		fmt.Sprintf("container_id=%d", id),
+		"filename="+filename,
+		fmt.Sprintf("db_current_size=%d", currentSize),
+		fmt.Sprintf("physical_size=%d", physicalSize),
+		"reason="+reason,
+	)
+	return nil
+}
+
 func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineOrphanContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+}
+
+func quarantineOrphanContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 	backend := db.BackendFromDB(dbconn)
@@ -452,8 +513,7 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 	var warningCount int64
 
 	logRecoveryEvent("quarantine_orphan_containers_start")
-	// recover files in container folder
-	entries, err := os.ReadDir(containersDir)
+	entries, err := fsys.ReadDir(containersDir)
 	if os.IsNotExist(err) {
 		logRecoveryEvent("quarantine_orphan_containers_skipped", "reason=containers_dir_missing")
 		return nil
@@ -463,87 +523,15 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 	}
 
 	for _, file := range entries {
-		if file.IsDir() {
-			stats.skippedDirEntries++
-			continue
-		}
-		fileinfo, err := file.Info()
+		reused, skipped, err := quarantineOneOrphanEntryWithFS(ctx, dbconn, backend, file, stats)
 		if err != nil {
-			return fmt.Errorf("get info for file %s: %w", file.Name(), err)
+			return err
 		}
-		name := file.Name()
-		fileSize := fileinfo.Size()
-		stats.totalDiskFilesChecked++
-
-		result, err := dbconn.ExecContext(ctx, `INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3) ON CONFLICT (filename) DO NOTHING`, name, fileSize, fileSize)
-		if err != nil {
-			return fmt.Errorf("insert orphan container record: %w", err)
-		}
-
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("rows affected for orphan container insert: %w", err)
-		}
-
-		if rowsAffected == 1 {
-			stats.quarantinedOrphan++
-			logRecoveryEvent(
-				"quarantine_orphan_container",
-				"filename="+name,
-				fmt.Sprintf("size_bytes=%d", fileSize),
-				"reason=orphan_file_on_disk",
-			)
-			continue
-		}
-
-		var existingQuarantine bool
-		var existingCurrentSize int64
-		var existingMaxSize int64
-		err = dbconn.QueryRowContext(
-			ctx,
-			`SELECT quarantine, current_size, max_size FROM container WHERE filename = $1`,
-			name,
-		).Scan(&existingQuarantine, &existingCurrentSize, &existingMaxSize)
-		if err == sql.ErrNoRows {
-			if !isStrictRecovery() {
-				logRecoveryEvent(
-					"quarantine_orphan_container_conflict_warning",
-					"filename="+name,
-					"reason=insert_conflict_but_row_missing",
-					"strict=false",
-				)
-				continue
-			}
-			return fmt.Errorf("suspicious orphan container conflict for filename=%s: insert reported conflict but row is missing", name)
-		}
-		if err != nil {
-			return fmt.Errorf("query existing container after orphan conflict: %w", err)
-		}
-
-		if existingQuarantine {
-			resyncQuery := `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
-			resyncArgs := []any{name, fileSize}
-			if backend == db.BackendSQLite {
-				resyncQuery = `UPDATE container SET current_size = ?, max_size = ? WHERE filename = ?`
-				resyncArgs = []any{fileSize, fileSize, name}
-			}
-			if _, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...); err != nil {
-				return fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
-			}
+		if reused {
 			reusedCount++
-			logRecoveryEvent(
-				"quarantine_orphan_container_resynced",
-				"filename="+name,
-				fmt.Sprintf("old_current_size=%d", existingCurrentSize),
-				fmt.Sprintf("old_max_size=%d", existingMaxSize),
-				fmt.Sprintf("new_size=%d", fileSize),
-			)
-			continue
 		}
-
-		if !existingQuarantine {
+		if skipped {
 			skippedExistingCount++
-			continue
 		}
 	}
 
@@ -556,6 +544,91 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 	)
 
 	return nil
+}
+
+func quarantineOneOrphanEntryWithFS(ctx context.Context, dbconn *sql.DB, backend db.Backend, file fs.DirEntry, stats *recoveryStats) (reused bool, skipped bool, err error) {
+	if file.IsDir() {
+		stats.skippedDirEntries++
+		return false, false, nil
+	}
+	fileinfo, err := file.Info()
+	if err != nil {
+		return false, false, fmt.Errorf("get info for file %s: %w", file.Name(), err)
+	}
+	name := file.Name()
+	fileSize := fileinfo.Size()
+	stats.totalDiskFilesChecked++
+
+	result, err := dbconn.ExecContext(ctx, `INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3) ON CONFLICT (filename) DO NOTHING`, name, fileSize, fileSize)
+	if err != nil {
+		return false, false, fmt.Errorf("insert orphan container record: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, false, fmt.Errorf("rows affected for orphan container insert: %w", err)
+	}
+
+	if rowsAffected == 1 {
+		stats.quarantinedOrphan++
+		logRecoveryEvent(
+			"quarantine_orphan_container",
+			"filename="+name,
+			fmt.Sprintf("size_bytes=%d", fileSize),
+			"reason=orphan_file_on_disk",
+		)
+		return false, false, nil
+	}
+
+	return resolveOrphanConflictWithFS(ctx, dbconn, backend, name, fileSize)
+}
+
+func resolveOrphanConflictWithFS(ctx context.Context, dbconn *sql.DB, backend db.Backend, name string, fileSize int64) (reused bool, skipped bool, err error) {
+	var existingQuarantine bool
+	var existingCurrentSize int64
+	var existingMaxSize int64
+	err = dbconn.QueryRowContext(
+		ctx,
+		`SELECT quarantine, current_size, max_size FROM container WHERE filename = $1`,
+		name,
+	).Scan(&existingQuarantine, &existingCurrentSize, &existingMaxSize)
+	if err == sql.ErrNoRows {
+		if !isStrictRecovery() {
+			logRecoveryEvent(
+				"quarantine_orphan_container_conflict_warning",
+				"filename="+name,
+				"reason=insert_conflict_but_row_missing",
+				"strict=false",
+			)
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("suspicious orphan container conflict for filename=%s: insert reported conflict but row is missing", name)
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("query existing container after orphan conflict: %w", err)
+	}
+
+	if existingQuarantine {
+		resyncQuery := `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
+		resyncArgs := []any{name, fileSize}
+		if backend == db.BackendSQLite {
+			resyncQuery = `UPDATE container SET current_size = ?, max_size = ? WHERE filename = ?`
+			resyncArgs = []any{fileSize, fileSize, name}
+		}
+		if _, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...); err != nil {
+			return false, false, fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
+		}
+		logRecoveryEvent(
+			"quarantine_orphan_container_resynced",
+			"filename="+name,
+			fmt.Sprintf("old_current_size=%d", existingCurrentSize),
+			fmt.Sprintf("old_max_size=%d", existingMaxSize),
+			fmt.Sprintf("new_size=%d", fileSize),
+		)
+		return true, false, nil
+	}
+
+	return false, true, nil
 }
 
 // detectInteriorGaps checks that completed blocks in the given container are
