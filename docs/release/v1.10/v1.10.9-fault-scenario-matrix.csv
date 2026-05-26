@@ -1,0 +1,2 @@
+scenario_id,phase,surface,operation,fault_class,expected_safe_outcome,coverage_status,test_file,test_function,notes
+CK-1109-P0-PLACEHOLDER,Phase 0,TBD,TBD,TBD,"Scenario matrix initialized in Phase 0. Later phases replace or extend this placeholder with concrete deterministic fault scenarios.",pending,TBD,TBD,Phase 0 placeholder.
