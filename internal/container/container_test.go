@@ -363,7 +363,9 @@ func TestSafeContainerPathRejectsUnsafeNamesAndAcceptsGeneratedName(t *testing.T
 		}
 	}
 
-	name := newContainerFilename()
+	// Use a representative filename that matches the generated format:
+	// container_<decimal-timestamp>_<decimal-random>.bin
+	name := "container_1748296145123456789_4298172847123456.bin"
 	path, err := SafeContainerPath(root, name)
 	if err != nil {
 		t.Fatalf("expected generated filename %q to validate, got: %v", name, err)
