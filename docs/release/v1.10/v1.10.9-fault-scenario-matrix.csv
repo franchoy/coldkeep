@@ -1,2 +1,8 @@
 scenario_id,phase,surface,operation,fault_class,expected_safe_outcome,coverage_status,test_file,test_function,notes
-CK-1109-P0-PLACEHOLDER,Phase 0,TBD,TBD,TBD,"Scenario matrix initialized in Phase 0. Later phases replace or extend this placeholder with concrete deterministic fault scenarios.",pending,TBD,TBD,Phase 0 placeholder.
+CK-1109-P1-NO-SCRIPT,Phase 1,fsx/faultfs,all,no-script,"No script configured delegates to base filesystem without behavior change.",covered,internal/fsx/faultfs/faultfs_test.go,TestFaultFSNoScriptPreservesOSBehavior,
+CK-1109-P1-NIL-BASE,Phase 1,fsx/faultfs,all,nil-base,"Nil base filesystem falls back to fsx.Default().",covered,internal/fsx/faultfs/faultfs_test.go,TestFaultFSNilBaseFallsBackToDefault,
+CK-1109-P1-WRITE,Phase 1,fsx/faultfs,write,fail-write,"Scripted write failure occurs deterministically on configured call.",covered,internal/fsx/faultfs/faultfs_test.go,TestFaultFSWriteFaultIsDeterministic,
+CK-1109-P1-PARTIAL-WRITE,Phase 1,fsx/faultfs,write,partial-write,"Partial write accepts configured bytes and returns deterministic error.",covered,internal/fsx/faultfs/faultfs_test.go,TestFaultFSPartialWriteRecordsPartialBytes,
+CK-1109-P1-ENOSPC,Phase 1,fsx/faultfs,write,enospc-after-bytes,"ENOSPC-after-N-bytes fails deterministically after configured byte budget.",covered,internal/fsx/faultfs/faultfs_test.go,TestFaultFSENOSPCAfterBytesIsDeterministic,
+CK-1109-P1-SYNC,Phase 1,fsx/faultfs,sync,fail-fsync,"Scripted sync failure occurs deterministically on configured call.",covered,internal/fsx/faultfs/faultfs_test.go,TestFaultFSSyncFaultIsDeterministic,
+CK-1109-P1-PATH-OPS,Phase 1,fsx/faultfs,"stat; mkdir; rename; remove","fail-stat; fail-mkdir; fail-rename; fail-remove","Scripted path-operation failures occur deterministically on configured calls.",covered,internal/fsx/faultfs/faultfs_test.go,TestFaultFSPathOperationFaultsAreDeterministic,
