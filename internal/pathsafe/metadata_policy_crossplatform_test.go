@@ -30,16 +30,16 @@ func TestMetadataPolicyDoesNotAssumeGlobalCaseSensitivity(t *testing.T) {
 		return
 	}
 
-	lowerBytes, err := os.ReadFile(lower) // #nosec G304 -- nosemgrep: path built from t.TempDir() + hardcoded literal; no user input
+	lowerInfo, err := os.Stat(lower)
 	if err != nil {
-		t.Fatalf("read lower: %v", err)
+		t.Fatalf("stat lower: %v", err)
 	}
-	upperBytes, err := os.ReadFile(upper) // #nosec G304 -- nosemgrep: path built from t.TempDir() + hardcoded literal; no user input
+	upperInfo, err := os.Stat(upper)
 	if err != nil {
-		t.Fatalf("read upper: %v", err)
+		t.Fatalf("stat upper: %v", err)
 	}
 
-	if string(lowerBytes) == string(upperBytes) {
+	if os.SameFile(lowerInfo, upperInfo) {
 		t.Logf("host filesystem may not distinguish case as expected")
 	}
 }

@@ -250,7 +250,7 @@ func TestRestoreCrossPlatformBytesRemainDeterministic(t *testing.T) {
 			)
 			mustNoErr(t, err, "restore file")
 
-			got, err := os.ReadFile(outPath)
+			got, err := os.ReadFile(outPath) // #nosec G304 -- nosemgrep: outPath is filepath.Join(t.TempDir(), literal); no user input
 			mustNoErr(t, err, "read restored file")
 
 			if !bytes.Equal(got, p.content) {
