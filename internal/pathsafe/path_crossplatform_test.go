@@ -140,6 +140,19 @@ func TestValidateStoredRelativePathCrossplatformForms(t *testing.T) {
 	}
 }
 
+// safeJoinRejectedCases drives TestSafeJoinRejectsCrossplatformDangerousForms.
+var safeJoinRejectedCases = []struct {
+	name  string
+	input string
+	notes string
+}{
+	{"windows drive backslash", `C:\data\file.txt`, "Windows drive path must be rejected by SafeJoin"},
+	{"windows drive forward slash", "D:/data/file.txt", "Windows drive path with forward slash must be rejected"},
+	{"parent traversal", "../escape.txt", "traversal must be rejected"},
+	{"deep traversal", "a/../../escape.txt", "deep traversal must be rejected"},
+	{"unix absolute", "/etc/passwd", "absolute path must be rejected"},
+}
+
 // TestSafeJoinRejectsCrossplatformDangerousForms verifies SafeJoin refuses
 // paths that are dangerous on any platform.
 func TestSafeJoinRejectsCrossplatformDangerousForms(t *testing.T) {
@@ -147,39 +160,7 @@ func TestSafeJoinRejectsCrossplatformDangerousForms(t *testing.T) {
 
 	root := t.TempDir()
 
-	cases := []struct {
-		name  string
-		input string
-		notes string
-	}{
-		{
-			name:  "windows drive backslash",
-			input: `C:\data\file.txt`,
-			notes: "Windows drive path must be rejected by SafeJoin",
-		},
-		{
-			name:  "windows drive forward slash",
-			input: "D:/data/file.txt",
-			notes: "Windows drive path with forward slash must be rejected",
-		},
-		{
-			name:  "parent traversal",
-			input: "../escape.txt",
-			notes: "traversal must be rejected",
-		},
-		{
-			name:  "deep traversal",
-			input: "a/../../escape.txt",
-			notes: "deep traversal must be rejected",
-		},
-		{
-			name:  "unix absolute",
-			input: "/etc/passwd",
-			notes: "absolute path must be rejected",
-		},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range safeJoinRejectedCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
