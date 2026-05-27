@@ -6,6 +6,26 @@ import (
 	"testing"
 )
 
+// pathNormalizationCases drives TestPathNormalizationDocumentsHostSemantics.
+// All inputs must produce a non-empty result from filepath.Clean.
+var pathNormalizationCases = []struct {
+	name  string
+	input string
+	notes string
+}{
+	{"simple relative", "a/b/c.txt", "portable relative path"},
+	{"nested relative", "dir/sub/file.bin", "portable nested relative path"},
+	{"dot segment cleaned", "./a/../b/file.txt", "filepath.Clean resolves dot segments on host"},
+	{"repeated separators", "a//b//c.txt", "filepath.Clean collapses repeated slashes on host"},
+	{"trailing separator", "a/b/", "filepath.Clean strips trailing separator on host"},
+	{"absolute path", "/a/b/c.txt", "absolute path preserved by filepath.Clean on host"},
+	{"parent traversal one level", "../outside", "filepath.Clean keeps traversal; safety validation must reject this"},
+	{"parent traversal multi level", "../../escape", "filepath.Clean keeps traversal; safety validation must reject this"},
+	{"windows backslash path", `C:\coldkeep\data.bin`, "on Linux filepath.Clean treats backslash as literal; Windows CI required for true Windows semantics"},
+	{"windows drive with slash", "C:/coldkeep/data.bin", "on Linux filepath.Clean does not strip drive prefix; Windows CI required"},
+	{"mixed separators", `a\b/c.txt`, "on Linux filepath.Clean treats backslash as literal character"},
+}
+
 // TestPathNormalizationDocumentsHostSemantics exercises filepath.Clean against
 // platform-sensitive path forms and records host behavior.
 //
@@ -14,87 +34,12 @@ import (
 func TestPathNormalizationDocumentsHostSemantics(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name         string
-		input        string
-		wantNonEmpty bool
-		notes        string
-	}{
-		{
-			name:         "simple relative",
-			input:        "a/b/c.txt",
-			wantNonEmpty: true,
-			notes:        "portable relative path",
-		},
-		{
-			name:         "nested relative",
-			input:        "dir/sub/file.bin",
-			wantNonEmpty: true,
-			notes:        "portable nested relative path",
-		},
-		{
-			name:         "dot segment cleaned",
-			input:        "./a/../b/file.txt",
-			wantNonEmpty: true,
-			notes:        "filepath.Clean resolves dot segments on host",
-		},
-		{
-			name:         "repeated separators",
-			input:        "a//b//c.txt",
-			wantNonEmpty: true,
-			notes:        "filepath.Clean collapses repeated slashes on host",
-		},
-		{
-			name:         "trailing separator",
-			input:        "a/b/",
-			wantNonEmpty: true,
-			notes:        "filepath.Clean strips trailing separator on host",
-		},
-		{
-			name:         "absolute path",
-			input:        "/a/b/c.txt",
-			wantNonEmpty: true,
-			notes:        "absolute path preserved by filepath.Clean on host",
-		},
-		{
-			name:         "parent traversal one level",
-			input:        "../outside",
-			wantNonEmpty: true,
-			notes:        "filepath.Clean keeps traversal; safety validation must reject this",
-		},
-		{
-			name:         "parent traversal multi level",
-			input:        "../../escape",
-			wantNonEmpty: true,
-			notes:        "filepath.Clean keeps traversal; safety validation must reject this",
-		},
-		{
-			name:         "windows backslash path",
-			input:        `C:\coldkeep\data.bin`,
-			wantNonEmpty: true,
-			notes:        "on Linux filepath.Clean treats backslash as literal; Windows CI required for true Windows semantics",
-		},
-		{
-			name:         "windows drive with slash",
-			input:        "C:/coldkeep/data.bin",
-			wantNonEmpty: true,
-			notes:        "on Linux filepath.Clean does not strip drive prefix; Windows CI required",
-		},
-		{
-			name:         "mixed separators",
-			input:        `a\b/c.txt`,
-			wantNonEmpty: true,
-			notes:        "on Linux filepath.Clean treats backslash as literal character",
-		},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range pathNormalizationCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := filepath.Clean(tc.input)
-			if tc.wantNonEmpty && got == "" {
+			if got := filepath.Clean(tc.input); got == "" {
 				t.Fatalf("filepath.Clean(%q) returned empty; notes: %s", tc.input, tc.notes)
 			}
 		})
