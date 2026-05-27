@@ -9,3 +9,4 @@ CK-11010-R7,macOS,filesystem,"Default filesystem may be case-insensitive dependi
 CK-11010-R8,all,symlinks,"Symlink behavior differs by platform and permissions.","Document support policy and test feasible behavior.",open,""
 CK-11010-R9,all,timestamps,"Timestamp precision may vary by filesystem/platform.","Validate restore determinism without overclaiming metadata identity.",open,""
 CK-11010-R10,all,SQLite,"SQLite file locking behavior may vary across OS/filesystems.","Validate core test suite on OS matrix.",open,""
+CK-11010-R11,all,restore,"Restore byte determinism may be obscured by platform-specific path forms.","Validate byte-identical restore output for platform-sensitive destination paths.",covered,"Covered by Phase 3 restore determinism tests."
