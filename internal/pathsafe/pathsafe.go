@@ -259,6 +259,24 @@ func validateJoinedPathWithinRoot(rootAbs string, joinedAbs string, rel string) 
 	return nil
 }
 
+// ValidateWritePathUnderTrustedRoot checks that no existing path component
+// below root is a symlink in the target write path. The root itself is
+// trusted and not checked, so system-managed symlinks in the destination
+// directory prefix (e.g. /var -> /private/var on macOS) do not cause false
+// rejections. Use this instead of ValidatePathHasNoSymlinkComponents when
+// the caller controls the destination directory.
+func ValidateWritePathUnderTrustedRoot(root, path string) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolve root: %w", err)
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve path: %w", err)
+	}
+	return validateNoSymlinksUnderRoot(absRoot, absPath)
+}
+
 // ValidatePathHasNoSymlinkComponents rejects paths that traverse existing symlink
 // components. Missing suffix components are allowed.
 func ValidatePathHasNoSymlinkComponents(p string) error {
