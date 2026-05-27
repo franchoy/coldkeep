@@ -30,11 +30,11 @@ func TestMetadataPolicyDoesNotAssumeGlobalCaseSensitivity(t *testing.T) {
 		return
 	}
 
-	lowerBytes, err := os.ReadFile(lower)
+	lowerBytes, err := os.ReadFile(lower) // #nosec G304 — path built from t.TempDir() + hardcoded literal; no user input
 	if err != nil {
 		t.Fatalf("read lower: %v", err)
 	}
-	upperBytes, err := os.ReadFile(upper)
+	upperBytes, err := os.ReadFile(upper) // #nosec G304 — path built from t.TempDir() + hardcoded literal; no user input
 	if err != nil {
 		t.Fatalf("read upper: %v", err)
 	}
