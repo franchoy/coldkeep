@@ -1,0 +1,11 @@
+risk_id,platform,area,risk,expected_handling,status,notes
+CK-11010-R1,Windows,path handling,"Backslash separators and drive paths may behave differently from POSIX paths.","Add path normalization tests or document limitation.",open,""
+CK-11010-R2,Windows,rename,"Rename/overwrite semantics may differ from Linux/macOS.","Validate restore/container rename behavior on Windows CI where feasible.",open,""
+CK-11010-R3,Windows,file locking,"Open files may prevent remove/rename operations.","Validate GC/recovery cleanup behavior or document limitation.",open,""
+CK-11010-R4,Windows,permissions,"POSIX permission semantics do not map directly to Windows.","Avoid overclaiming permission preservation on Windows.",open,""
+CK-11010-R5,Windows,shell scripts,"Bash scripts may not run natively outside Git Bash/WSL.","Document script portability limits.",open,""
+CK-11010-R6,macOS,permissions,"Permission and timestamp behavior may differ from Linux.","Validate or document differences.",open,""
+CK-11010-R7,macOS,filesystem,"Default filesystem may be case-insensitive depending on setup.","Avoid assuming case sensitivity in platform claims.",open,""
+CK-11010-R8,all,symlinks,"Symlink behavior differs by platform and permissions.","Document support policy and test feasible behavior.",open,""
+CK-11010-R9,all,timestamps,"Timestamp precision may vary by filesystem/platform.","Validate restore determinism without overclaiming metadata identity.",open,""
+CK-11010-R10,all,SQLite,"SQLite file locking behavior may vary across OS/filesystems.","Validate core test suite on OS matrix.",open,""
