@@ -94,7 +94,7 @@ func TestRestoreCrossPlatformDestinationPathForms(t *testing.T) {
 				t.Fatalf("restore failed: %v; notes: %s", err, tc.notes)
 			}
 
-			got, err := os.ReadFile(outPath) // #nosec G304 -- nosemgrep: outPath built from t.TempDir(); no user input
+			got, err := os.ReadFile(outPath) // nosemgrep -- #nosec G304: outPath built from t.TempDir(); no user input
 			if err != nil {
 				t.Fatalf("read restored file %q: %v; notes: %s", outPath, err, tc.notes)
 			}
@@ -203,7 +203,7 @@ func TestRestoreCrossPlatformBytesRemainDeterministic(t *testing.T) {
 			)
 			mustNoErr(t, err, "restore file")
 
-			got, err := os.ReadFile(outPath) // #nosec G304 -- nosemgrep: outPath is filepath.Join(t.TempDir(), literal); no user input
+			got, err := os.ReadFile(outPath) // nosemgrep -- #nosec G304: outPath is filepath.Join(t.TempDir(), literal); no user input
 			mustNoErr(t, err, "read restored file")
 
 			if !bytes.Equal(got, p.content) {
