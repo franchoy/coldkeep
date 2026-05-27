@@ -1,0 +1,199 @@
+package pathsafe
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// pathNormalizationCases drives TestPathNormalizationDocumentsHostSemantics.
+// All inputs must produce a non-empty result from filepath.Clean.
+var pathNormalizationCases = []struct {
+	name  string
+	input string
+	notes string
+}{
+	{"simple relative", "a/b/c.txt", "portable relative path"},
+	{"nested relative", "dir/sub/file.bin", "portable nested relative path"},
+	{"dot segment cleaned", "./a/../b/file.txt", "filepath.Clean resolves dot segments on host"},
+	{"repeated separators", "a//b//c.txt", "filepath.Clean collapses repeated slashes on host"},
+	{"trailing separator", "a/b/", "filepath.Clean strips trailing separator on host"},
+	{"absolute path", "/a/b/c.txt", "absolute path preserved by filepath.Clean on host"},
+	{"parent traversal one level", "../outside", "filepath.Clean keeps traversal; safety validation must reject this"},
+	{"parent traversal multi level", "../../escape", "filepath.Clean keeps traversal; safety validation must reject this"},
+	{"windows backslash path", `C:\coldkeep\data.bin`, "on Linux filepath.Clean treats backslash as literal; Windows CI required for true Windows semantics"},
+	{"windows drive with slash", "C:/coldkeep/data.bin", "on Linux filepath.Clean does not strip drive prefix; Windows CI required"},
+	{"mixed separators", `a\b/c.txt`, "on Linux filepath.Clean treats backslash as literal character"},
+}
+
+// TestPathNormalizationDocumentsHostSemantics exercises filepath.Clean against
+// platform-sensitive path forms and records host behavior.
+//
+// These tests document current host semantics on Linux.  They do not assert
+// Windows behavior; true Windows semantics require Windows CI.
+func TestPathNormalizationDocumentsHostSemantics(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range pathNormalizationCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := filepath.Clean(tc.input); got == "" {
+				t.Fatalf("filepath.Clean(%q) returned empty; notes: %s", tc.input, tc.notes)
+			}
+		})
+	}
+}
+
+// isWindowsDrivePathCases drives TestIsWindowsDrivePathCrossplatformForms.
+var isWindowsDrivePathCases = []struct {
+	name  string
+	input string
+	want  bool
+	notes string
+}{
+	{"uppercase drive backslash", `C:\coldkeep\data.bin`, true, "Windows-style drive path detected cross-platform"},
+	{"uppercase drive forward slash", "D:/coldkeep/data.bin", true, "Windows-style drive path with forward slash"},
+	{"lowercase drive", "d:/data.bin", true, "lowercase drive letter is a valid Windows drive prefix"},
+	{"drive letter only", "E:", true, "bare drive letter without path"},
+	{"relative path not drive", "a/b/c.txt", false, "portable relative path must not be mistaken for drive path"},
+	{"colon not at position 1", "ab:c", false, "colon not in drive position"},
+	{"unix absolute", "/a/b", false, "POSIX absolute path is not a Windows drive path"},
+	{"empty string", "", false, "empty input"},
+}
+
+// TestIsWindowsDrivePathCrossplatformForms verifies IsWindowsDrivePath
+// correctly identifies Windows drive patterns on any host OS.
+func TestIsWindowsDrivePathCrossplatformForms(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range isWindowsDrivePathCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := IsWindowsDrivePath(tc.input); got != tc.want {
+				t.Fatalf("IsWindowsDrivePath(%q) = %v, want %v; notes: %s",
+					tc.input, got, tc.want, tc.notes)
+			}
+		})
+	}
+}
+
+// validateStoredPathRejectedCases drives the rejected-input loop in
+// TestValidateStoredRelativePathCrossplatformForms.
+var validateStoredPathRejectedCases = []struct {
+	name  string
+	input string
+	notes string
+}{
+	{"windows drive backslash", `C:\coldkeep\data.bin`, "must be rejected even on Linux to prevent cross-platform confusion"},
+	{"windows drive forward slash", "C:/coldkeep/data.bin", "Windows drive path with forward slash must be rejected"},
+	{"unc path double backslash", `\\server\share\file.txt`, "UNC paths must be rejected"},
+	{"parent traversal", "../escape.txt", "traversal must be rejected on all platforms"},
+	{"deeply nested traversal", "a/../../escape.txt", "deep traversal must be rejected on all platforms"},
+	{"absolute unix path", "/etc/passwd", "absolute path must be rejected"},
+	{"nul byte", "safe/\x00evil", "NUL byte injection must be rejected on all platforms"},
+}
+
+// validateStoredPathAcceptedCases drives the accepted-input loop in
+// TestValidateStoredRelativePathCrossplatformForms.
+var validateStoredPathAcceptedCases = []struct {
+	name  string
+	input string
+	notes string
+}{
+	{"simple relative", "file.txt", "plain filename is safe"},
+	{"nested relative", "dir/sub/file.bin", "portable nested relative path is safe"},
+	{"backslash relative no traversal", `dir\sub\file.bin`, "backslash-separated relative path without traversal accepted"},
+}
+
+// TestValidateStoredRelativePathCrossplatformForms asserts that
+// ValidateStoredRelativePath rejects platform-sensitive dangerous forms
+// regardless of the host OS.
+func TestValidateStoredRelativePathCrossplatformForms(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range validateStoredPathRejectedCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := ValidateStoredRelativePath(tc.input); err == nil {
+				t.Fatalf("ValidateStoredRelativePath(%q) should be rejected; notes: %s",
+					tc.input, tc.notes)
+			}
+		})
+	}
+
+	for _, tc := range validateStoredPathAcceptedCases {
+		tc := tc
+		t.Run("accept_"+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := ValidateStoredRelativePath(tc.input); err != nil {
+				t.Fatalf("ValidateStoredRelativePath(%q) should be accepted, got: %v; notes: %s",
+					tc.input, err, tc.notes)
+			}
+		})
+	}
+}
+
+// safeJoinRejectedCases drives TestSafeJoinRejectsCrossplatformDangerousForms.
+var safeJoinRejectedCases = []struct {
+	name  string
+	input string
+	notes string
+}{
+	{"windows drive backslash", `C:\data\file.txt`, "Windows drive path must be rejected by SafeJoin"},
+	{"windows drive forward slash", "D:/data/file.txt", "Windows drive path with forward slash must be rejected"},
+	{"parent traversal", "../escape.txt", "traversal must be rejected"},
+	{"deep traversal", "a/../../escape.txt", "deep traversal must be rejected"},
+	{"unix absolute", "/etc/passwd", "absolute path must be rejected"},
+}
+
+// TestSafeJoinRejectsCrossplatformDangerousForms verifies SafeJoin refuses
+// paths that are dangerous on any platform.
+func TestSafeJoinRejectsCrossplatformDangerousForms(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	for _, tc := range safeJoinRejectedCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := SafeJoin(root, tc.input); err == nil {
+				t.Fatalf("SafeJoin(%q) should be rejected; notes: %s", tc.input, tc.notes)
+			}
+		})
+	}
+}
+
+// TestMixedSeparatorPathsDoNotEscapeRoot confirms that mixed-separator
+// inputs, which may look safe but behave differently across platforms,
+// are handled deterministically by the pathsafe layer.
+func TestMixedSeparatorPathsDoNotEscapeRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	// Paths with only backslashes and no traversal segments should be
+	// accepted by ValidateStoredRelativePath (backslash is treated as
+	// a separator character in the validator's splitPathSegments).
+	safeBackslash := `subdir\file.bin`
+	if err := ValidateStoredRelativePath(safeBackslash); err != nil {
+		t.Fatalf("expected backslash-only relative path to be accepted: %v", err)
+	}
+
+	// The same path fed through SafeJoin must not escape root.
+	joined, err := SafeJoin(root, safeBackslash)
+	if err != nil {
+		t.Fatalf("SafeJoin rejected safe backslash-only relative path: %v", err)
+	}
+	if !strings.HasPrefix(joined, root) {
+		t.Fatalf("joined path escaped root: root=%q joined=%q", root, joined)
+	}
+}

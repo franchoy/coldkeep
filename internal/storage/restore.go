@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -847,10 +848,32 @@ func RestoreFileByStoredPathWithStorageContext(sgctx StorageContext, storedPath 
 }
 
 func validateRestoreWritePath(path string) error {
-	if err := pathsafe.ValidatePathHasNoSymlinkComponents(path); err != nil {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve restore write path: %w", err)
+	}
+	if err := pathsafe.ValidateWritePathUnderTrustedRoot(filepath.Dir(absPath), absPath); err != nil {
 		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
 	}
 	return nil
+}
+
+// syncRestoredFileDir fsyncs the output directory to make the preceding rename
+// durable on filesystems that require it. On Windows, directory sync is not
+// supported and the call is skipped without error.
+func syncRestoredFileDir(fsys fsx.FS, outputPath string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := fsys.Open(filepath.Dir(outputPath))
+	if err != nil {
+		return fmt.Errorf("open output directory for fsync: %w", err)
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return fmt.Errorf("fsync output directory: %w", err)
+	}
+	return dir.Close()
 }
 
 func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, error) {
@@ -873,6 +896,11 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 		absPrefix, err := filepath.Abs(prefix)
 		if err != nil {
 			return "", fmt.Errorf("resolve restore prefix destination: %w", err)
+		}
+		// Reject a destination root that is itself a symlink: following it could
+		// redirect all writes to an unexpected location.
+		if prefixInfo, lstatErr := os.Lstat(absPrefix); lstatErr == nil && prefixInfo.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("restore prefix destination is a symlink: %q", absPrefix)
 		}
 
 		relativePath := descriptor.Path
@@ -1363,16 +1391,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		return RestoreFileResult{}, fmt.Errorf("atomically replace output file %s: %w", outputPath, err)
 	}
 	// Flush directory metadata so the rename is durable across crashes on stricter filesystems.
-	dir, err := fsys.Open(filepath.Dir(outputPath))
-	if err != nil {
-		return RestoreFileResult{}, fmt.Errorf("open output directory for fsync: %w", err)
-	}
-	if err := dir.Sync(); err != nil {
-		_ = dir.Close()
-		return RestoreFileResult{}, fmt.Errorf("fsync output directory: %w", err)
-	}
-	if err := dir.Close(); err != nil {
-		return RestoreFileResult{}, fmt.Errorf("close output directory after fsync: %w", err)
+	// Skipped on Windows where directory sync is not supported.
+	if err := syncRestoredFileDir(fsys, outputPath); err != nil {
+		return RestoreFileResult{}, err
 	}
 	cleanupTemp = false
 

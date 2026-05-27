@@ -190,7 +190,12 @@ func TestValidatePathHasNoSymlinkComponentsRejectsSymlink(t *testing.T) {
 }
 
 func TestValidatePathHasNoSymlinkComponentsAllowsMissingSuffix(t *testing.T) {
-	root := t.TempDir()
+	// Use EvalSymlinks so the path does not traverse OS-managed symlinks
+	// (e.g. /var -> /private/var on macOS) before reaching the missing suffix.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	target := filepath.Join(root, "nested", "missing", "file.txt")
 
 	if err := ValidatePathHasNoSymlinkComponents(target); err != nil {

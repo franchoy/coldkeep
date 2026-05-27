@@ -1180,7 +1180,7 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 				return nil, fmt.Errorf("resolve override destination: %w", err)
 			}
 			outputPath = filepath.Clean(absOverride)
-			if err := pathsafe.ValidatePathHasNoSymlinkComponents(outputPath); err != nil {
+			if err := pathsafe.ValidateWritePathUnderTrustedRoot(filepath.Dir(outputPath), outputPath); err != nil {
 				return nil, fmt.Errorf("resolve override destination: %w", err)
 			}
 		default:

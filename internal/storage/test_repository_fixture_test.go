@@ -50,7 +50,6 @@ func NewTestRepository(t *testing.T, opts ...TestRepositoryOption) *TestReposito
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
-	t.Cleanup(func() { _ = dbconn.Close() })
 
 	if err := db.RunMigrations(dbconn); err != nil {
 		t.Fatalf("run migrations: %v", err)
@@ -81,11 +80,16 @@ func NewTestRepository(t *testing.T, opts ...TestRepositoryOption) *TestReposito
 		ContainerDir: containersDir,
 	}
 
-	return &TestRepository{
+	repo := &TestRepository{
 		DB:            dbconn,
 		Storage:       storageCtx,
 		ContainersDir: containersDir,
 	}
+	// Release the LocalWriter activeHandle before t.TempDir() removes
+	// containersDir. On Windows, open handles prevent directory removal.
+	// StorageContext.Close also closes the DB connection.
+	t.Cleanup(func() { _ = repo.Storage.Close() })
+	return repo
 }
 
 func RequireTestCompression(t *testing.T, codec string) {
