@@ -81,55 +81,41 @@ func TestIsWindowsDrivePathCrossplatformForms(t *testing.T) {
 	}
 }
 
+// validateStoredPathRejectedCases drives the rejected-input loop in
+// TestValidateStoredRelativePathCrossplatformForms.
+var validateStoredPathRejectedCases = []struct {
+	name  string
+	input string
+	notes string
+}{
+	{"windows drive backslash", `C:\coldkeep\data.bin`, "must be rejected even on Linux to prevent cross-platform confusion"},
+	{"windows drive forward slash", "C:/coldkeep/data.bin", "Windows drive path with forward slash must be rejected"},
+	{"unc path double backslash", `\\server\share\file.txt`, "UNC paths must be rejected"},
+	{"parent traversal", "../escape.txt", "traversal must be rejected on all platforms"},
+	{"deeply nested traversal", "a/../../escape.txt", "deep traversal must be rejected on all platforms"},
+	{"absolute unix path", "/etc/passwd", "absolute path must be rejected"},
+	{"nul byte", "safe/\x00evil", "NUL byte injection must be rejected on all platforms"},
+}
+
+// validateStoredPathAcceptedCases drives the accepted-input loop in
+// TestValidateStoredRelativePathCrossplatformForms.
+var validateStoredPathAcceptedCases = []struct {
+	name  string
+	input string
+	notes string
+}{
+	{"simple relative", "file.txt", "plain filename is safe"},
+	{"nested relative", "dir/sub/file.bin", "portable nested relative path is safe"},
+	{"backslash relative no traversal", `dir\sub\file.bin`, "backslash-separated relative path without traversal accepted"},
+}
+
 // TestValidateStoredRelativePathCrossplatformForms asserts that
 // ValidateStoredRelativePath rejects platform-sensitive dangerous forms
 // regardless of the host OS.
 func TestValidateStoredRelativePathCrossplatformForms(t *testing.T) {
 	t.Parallel()
 
-	rejected := []struct {
-		name  string
-		input string
-		notes string
-	}{
-		{
-			name:  "windows drive backslash",
-			input: `C:\coldkeep\data.bin`,
-			notes: "must be rejected even on Linux to prevent cross-platform confusion",
-		},
-		{
-			name:  "windows drive forward slash",
-			input: "C:/coldkeep/data.bin",
-			notes: "Windows drive path with forward slash must be rejected",
-		},
-		{
-			name:  "unc path double backslash",
-			input: `\\server\share\file.txt`,
-			notes: "UNC paths must be rejected",
-		},
-		{
-			name:  "parent traversal",
-			input: "../escape.txt",
-			notes: "traversal must be rejected on all platforms",
-		},
-		{
-			name:  "deeply nested traversal",
-			input: "a/../../escape.txt",
-			notes: "deep traversal must be rejected on all platforms",
-		},
-		{
-			name:  "absolute unix path",
-			input: "/etc/passwd",
-			notes: "absolute path must be rejected",
-		},
-		{
-			name:  "nul byte",
-			input: "safe/\x00evil",
-			notes: "NUL byte injection must be rejected on all platforms",
-		},
-	}
-
-	for _, tc := range rejected {
+	for _, tc := range validateStoredPathRejectedCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -141,29 +127,7 @@ func TestValidateStoredRelativePathCrossplatformForms(t *testing.T) {
 		})
 	}
 
-	accepted := []struct {
-		name  string
-		input string
-		notes string
-	}{
-		{
-			name:  "simple relative",
-			input: "file.txt",
-			notes: "plain filename is safe",
-		},
-		{
-			name:  "nested relative",
-			input: "dir/sub/file.bin",
-			notes: "portable nested relative path is safe",
-		},
-		{
-			name:  "backslash relative no traversal",
-			input: `dir\sub\file.bin`,
-			notes: "backslash-separated relative path without traversal accepted",
-		},
-	}
-
-	for _, tc := range accepted {
+	for _, tc := range validateStoredPathAcceptedCases {
 		tc := tc
 		t.Run("accept_"+tc.name, func(t *testing.T) {
 			t.Parallel()
