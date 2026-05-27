@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/franchoy/coldkeep/internal/db"
 )
@@ -94,9 +93,9 @@ func buildPhysicalFileMetadata(fileInfo os.FileInfo) physicalFileMetadata {
 	meta.Mode = sql.NullInt64{Int64: int64(fileInfo.Mode()), Valid: true}
 	meta.MTime = sql.NullTime{Time: fileInfo.ModTime().UTC(), Valid: true}
 
-	if stat, ok := fileInfo.Sys().(*syscall.Stat_t); ok {
-		meta.UID = sql.NullInt64{Int64: int64(stat.Uid), Valid: true}
-		meta.GID = sql.NullInt64{Int64: int64(stat.Gid), Valid: true}
+	if uid, gid, ok := extractUIDGID(fileInfo); ok {
+		meta.UID = sql.NullInt64{Int64: uid, Valid: true}
+		meta.GID = sql.NullInt64{Int64: gid, Valid: true}
 	}
 
 	meta.IsMetadataComplete = meta.Mode.Valid && meta.MTime.Valid && meta.UID.Valid && meta.GID.Valid

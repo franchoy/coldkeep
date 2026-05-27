@@ -207,7 +207,7 @@ func SafeJoin(root string, rel string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve joined path: %w", err)
 	}
-	if err := ValidatePathHasNoSymlinkComponents(joinedAbs); err != nil {
+	if err := validateNoSymlinksUnderRoot(rootAbs, joinedAbs); err != nil {
 		return "", err
 	}
 	if err := validateJoinedPathWithinRoot(rootAbs, joinedAbs, rel); err != nil {
@@ -215,6 +215,37 @@ func SafeJoin(root string, rel string) (string, error) {
 	}
 
 	return joinedAbs, nil
+}
+
+// validateNoSymlinksUnderRoot checks that no existing path component below rootAbs
+// in joinedAbs is a symlink. The root itself is trusted and not checked, so
+// system-managed symlinks (e.g. /var -> /private/var on macOS) do not cause
+// false rejections.
+func validateNoSymlinksUnderRoot(rootAbs, joinedAbs string) error {
+	rel, err := filepath.Rel(rootAbs, joinedAbs)
+	if err != nil {
+		return fmt.Errorf("compute relative path for symlink check: %w", err)
+	}
+	if rel == "." {
+		return nil
+	}
+	segments := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+	current := rootAbs
+	for _, seg := range segments {
+		if seg == "" || seg == "." {
+			continue
+		}
+		current = filepath.Join(current, seg)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			// Missing suffix components are allowed.
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component is a symlink: %q", current)
+		}
+	}
+	return nil
 }
 
 func validateJoinedPathWithinRoot(rootAbs string, joinedAbs string, rel string) error {
