@@ -46,74 +46,34 @@ func TestPathNormalizationDocumentsHostSemantics(t *testing.T) {
 	}
 }
 
+// isWindowsDrivePathCases drives TestIsWindowsDrivePathCrossplatformForms.
+var isWindowsDrivePathCases = []struct {
+	name  string
+	input string
+	want  bool
+	notes string
+}{
+	{"uppercase drive backslash", `C:\coldkeep\data.bin`, true, "Windows-style drive path detected cross-platform"},
+	{"uppercase drive forward slash", "D:/coldkeep/data.bin", true, "Windows-style drive path with forward slash"},
+	{"lowercase drive", "d:/data.bin", true, "lowercase drive letter is a valid Windows drive prefix"},
+	{"drive letter only", "E:", true, "bare drive letter without path"},
+	{"relative path not drive", "a/b/c.txt", false, "portable relative path must not be mistaken for drive path"},
+	{"colon not at position 1", "ab:c", false, "colon not in drive position"},
+	{"unix absolute", "/a/b", false, "POSIX absolute path is not a Windows drive path"},
+	{"empty string", "", false, "empty input"},
+}
+
 // TestIsWindowsDrivePathCrossplatformForms verifies IsWindowsDrivePath
 // correctly identifies Windows drive patterns on any host OS.
 func TestIsWindowsDrivePathCrossplatformForms(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name  string
-		input string
-		want  bool
-		notes string
-	}{
-		{
-			name:  "uppercase drive backslash",
-			input: `C:\coldkeep\data.bin`,
-			want:  true,
-			notes: "Windows-style drive path detected cross-platform",
-		},
-		{
-			name:  "uppercase drive forward slash",
-			input: "D:/coldkeep/data.bin",
-			want:  true,
-			notes: "Windows-style drive path with forward slash",
-		},
-		{
-			name:  "lowercase drive",
-			input: "d:/data.bin",
-			want:  true,
-			notes: "lowercase drive letter is a valid Windows drive prefix",
-		},
-		{
-			name:  "drive letter only",
-			input: "E:",
-			want:  true,
-			notes: "bare drive letter without path",
-		},
-		{
-			name:  "relative path not drive",
-			input: "a/b/c.txt",
-			want:  false,
-			notes: "portable relative path must not be mistaken for drive path",
-		},
-		{
-			name:  "colon not at position 1",
-			input: "ab:c",
-			want:  false,
-			notes: "colon not in drive position",
-		},
-		{
-			name:  "unix absolute",
-			input: "/a/b",
-			want:  false,
-			notes: "POSIX absolute path is not a Windows drive path",
-		},
-		{
-			name:  "empty string",
-			input: "",
-			want:  false,
-			notes: "empty input",
-		},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range isWindowsDrivePathCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := IsWindowsDrivePath(tc.input)
-			if got != tc.want {
+			if got := IsWindowsDrivePath(tc.input); got != tc.want {
 				t.Fatalf("IsWindowsDrivePath(%q) = %v, want %v; notes: %s",
 					tc.input, got, tc.want, tc.notes)
 			}
