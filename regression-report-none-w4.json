@@ -1,7 +1,98 @@
 {
   "mode": "uncompressed",
-  "passed": true,
-  "has_hard_fails": false,
-  "violations_count": 0,
-  "violations": []
+  "passed": false,
+  "has_hard_fails": true,
+  "violations_count": 10,
+  "violations": [
+    {
+      "case": "gc-after-churn",
+      "metric": "duration",
+      "baseline_value": 2304.0,
+      "result_value": 2749.0,
+      "delta_pct": 19.31423611111111,
+      "threshold_pct": 3,
+      "is_hard_fail": true
+    },
+    {
+      "case": "gc-after-churn",
+      "metric": "throughput",
+      "baseline_value": 0.04238552517361111,
+      "result_value": 0.03552428155692979,
+      "delta_pct": 16.18770461986177,
+      "threshold_pct": 3,
+      "is_hard_fail": true
+    },
+    {
+      "case": "snapshot-creation",
+      "metric": "duration",
+      "baseline_value": 364.0,
+      "result_value": 445.0,
+      "delta_pct": 22.252747252747252,
+      "threshold_pct": 3,
+      "is_hard_fail": true
+    },
+    {
+      "case": "snapshot-creation",
+      "metric": "throughput",
+      "baseline_value": 6.46500011066814,
+      "result_value": 5.288224809625175,
+      "delta_pct": 18.202247191011235,
+      "threshold_pct": 3,
+      "is_hard_fail": true
+    },
+    {
+      "case": "stats-inspect",
+      "metric": "duration",
+      "baseline_value": 716.0,
+      "result_value": 974.0,
+      "delta_pct": 36.03351955307262,
+      "threshold_pct": 3,
+      "is_hard_fail": true
+    },
+    {
+      "case": "stats-inspect",
+      "metric": "throughput",
+      "baseline_value": 3.632136563349037,
+      "result_value": 2.6700305742894357,
+      "delta_pct": 26.488706365503077,
+      "threshold_pct": 3,
+      "is_hard_fail": true
+    },
+    {
+      "case": "store-many-small-files",
+      "metric": "duration",
+      "baseline_value": 631.0,
+      "result_value": 1032.0,
+      "delta_pct": 63.54992076069731,
+      "threshold_pct": 5,
+      "is_hard_fail": true
+    },
+    {
+      "case": "store-many-small-files",
+      "metric": "throughput",
+      "baseline_value": 0.15476426307448493,
+      "result_value": 0.0946281492248062,
+      "delta_pct": 38.85658914728682,
+      "threshold_pct": 5,
+      "is_hard_fail": true
+    },
+    {
+      "case": "store-mixed-dataset",
+      "metric": "duration",
+      "baseline_value": 260.0,
+      "result_value": 296.0,
+      "delta_pct": 13.846153846153847,
+      "threshold_pct": 5,
+      "is_hard_fail": true
+    },
+    {
+      "case": "store-mixed-dataset",
+      "metric": "throughput",
+      "baseline_value": 9.511808248666616,
+      "result_value": 8.354966704909867,
+      "delta_pct": 12.162162162162154,
+      "threshold_pct": 5,
+      "is_hard_fail": true
+    }
+  ]
 }
