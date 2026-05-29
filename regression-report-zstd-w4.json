@@ -2,59 +2,14 @@
   "mode": "compressed",
   "passed": true,
   "has_hard_fails": false,
-  "violations_count": 7,
+  "violations_count": 2,
   "violations": [
-    {
-      "case": "gc-after-churn",
-      "metric": "duration",
-      "baseline_value": 2386.0,
-      "result_value": 4224.0,
-      "delta_pct": 77.03269069572507,
-      "threshold_pct": 15,
-      "is_hard_fail": false
-    },
-    {
-      "case": "gc-after-churn",
-      "metric": "throughput",
-      "baseline_value": 0.04092885582564962,
-      "result_value": 0.02311937736742424,
-      "delta_pct": 43.51325757575758,
-      "threshold_pct": 15,
-      "is_hard_fail": false
-    },
-    {
-      "case": "snapshot-creation",
-      "metric": "duration",
-      "baseline_value": 418.0,
-      "result_value": 604.0,
-      "delta_pct": 44.49760765550239,
-      "threshold_pct": 35,
-      "is_hard_fail": false
-    },
-    {
-      "case": "stats-inspect",
-      "metric": "duration",
-      "baseline_value": 761.0,
-      "result_value": 1179.0,
-      "delta_pct": 54.92772667542707,
-      "threshold_pct": 25,
-      "is_hard_fail": false
-    },
-    {
-      "case": "stats-inspect",
-      "metric": "throughput",
-      "baseline_value": 3.417358448564928,
-      "result_value": 2.205775894281518,
-      "delta_pct": 35.4537743850721,
-      "threshold_pct": 25,
-      "is_hard_fail": false
-    },
     {
       "case": "store-many-small-files",
       "metric": "duration",
       "baseline_value": 712.0,
-      "result_value": 1397.0,
-      "delta_pct": 96.20786516853933,
+      "result_value": 1117.0,
+      "delta_pct": 56.88202247191011,
       "threshold_pct": 20,
       "is_hard_fail": false
     },
@@ -62,8 +17,8 @@
       "case": "store-many-small-files",
       "metric": "throughput",
       "baseline_value": 0.13715765449438203,
-      "result_value": 0.06990425912670008,
-      "delta_pct": 49.033643521832495,
+      "result_value": 0.08742726051924798,
+      "delta_pct": 36.25783348254253,
       "threshold_pct": 20,
       "is_hard_fail": false
     }
