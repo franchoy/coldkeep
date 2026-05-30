@@ -2,25 +2,6 @@
   "mode": "compressed",
   "passed": true,
   "has_hard_fails": false,
-  "violations_count": 2,
-  "violations": [
-    {
-      "case": "store-many-small-files",
-      "metric": "duration",
-      "baseline_value": 712.0,
-      "result_value": 1117.0,
-      "delta_pct": 56.88202247191011,
-      "threshold_pct": 20,
-      "is_hard_fail": false
-    },
-    {
-      "case": "store-many-small-files",
-      "metric": "throughput",
-      "baseline_value": 0.13715765449438203,
-      "result_value": 0.08742726051924798,
-      "delta_pct": 36.25783348254253,
-      "threshold_pct": 20,
-      "is_hard_fail": false
-    }
-  ]
+  "violations_count": 0,
+  "violations": []
 }

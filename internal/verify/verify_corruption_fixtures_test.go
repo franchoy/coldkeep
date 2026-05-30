@@ -466,7 +466,11 @@ func TestCorruptionFixturePhysicalStageDBPhysicalHashMismatch(t *testing.T) {
 	assertPhysicalStageVerifyFailure(t, err, blockID)
 }
 
-func TestCorruptionFixtureDecryptStageLegacyNullPhysicalHashDetectsAEADFailure(t *testing.T) {
+func TestCorruptionFixtureDecryptStageAEADFailureDetectedAfterPhysicalHashMatch(t *testing.T) {
+	// V2 hardening: packed blocks require physical_hash. Previously this test cleared
+	// physical_hash to test that AES-GCM auth failures propagate even without a hash.
+	// After V2, the correct approach is to update physical_hash to match the corrupted
+	// bytes so that the physical stage passes and the AEAD failure fires at the decrypt stage.
 	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
 
 	dbconn := openVerifyTestDB(t)
@@ -475,8 +479,6 @@ func TestCorruptionFixtureDecryptStageLegacyNullPhysicalHashDetectsAEADFailure(t
 	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
 	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-decrypt-auth-failure")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
 
-	UpdateStorageBlockField(t, repo, blockID, "physical_hash", nil)
-
 	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, repo.containersDir)
 	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
 	if len(payload) <= packedStorageBlockAESGCMNonceSize {
@@ -484,6 +486,9 @@ func TestCorruptionFixtureDecryptStageLegacyNullPhysicalHashDetectsAEADFailure(t
 	}
 	payload[packedStorageBlockAESGCMNonceSize] ^= 0xFF
 	overwritePackedStoredBytesForTest(t, path, offset, payload)
+	// Update physical_hash to match the corrupted bytes so the physical stage
+	// passes and the AES-GCM AEAD failure is detected at the decrypt stage.
+	UpdateStorageBlockField(t, repo, blockID, "physical_hash", blocks.HashPhysical(payload))
 
 	err := verifyBlockPayloads(dbconn, repo.containersDir)
 	assertDecryptStageVerifyFailure(t, err, blockID)
@@ -765,6 +770,9 @@ func TestCorruptionFixtureTruncateContainerPayloadTargetsDecodeStage(t *testing.
 	truncated := readPackedStoredBytesForTest(t, path, offset, storedSize)
 	UpdateStorageBlockField(t, repo, blockID, "block_hash", blocks.HashLogical(truncated))
 	UpdateStorageBlockField(t, repo, blockID, "plaintext_size", int64(len(truncated)))
+	// V2: physical_hash must be updated to match the truncated bytes so that the
+	// physical stage passes and the decode-stage failure is the first error fired.
+	UpdateStorageBlockField(t, repo, blockID, "physical_hash", blocks.HashPhysical(truncated))
 
 	err := verifyBlockPayloads(dbconn, repo.containersDir)
 	if err == nil || !strings.HasPrefix(err.Error(), verifyErrUnsupportedBlock+":") || !strings.Contains(err.Error(), "decode logical block") {

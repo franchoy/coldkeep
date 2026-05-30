@@ -91,7 +91,9 @@ func VerifyStoredBlock(ctx context.Context, meta BlockStorageMetadata, reader Co
 
 	// 2) Verify physical_hash if present.
 	payloads := blockStagePayloads{
-		storedBytes: storedBytes,
+		storedBytes:      storedBytes,
+		isPackedBlock:    true,
+		compressionCodec: meta.CompressionCodec,
 		hashes: blocks.BlockHashes{
 			LogicalHash:    meta.LogicalHash,
 			CompressedHash: meta.CompressedHash,

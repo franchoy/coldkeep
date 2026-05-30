@@ -37,8 +37,9 @@ import (
 
 const (
 	// phase1SchemaVersion is the schema version expected after all Phase 1
-	// migrations (Steps 1.1–1.5) have been applied.
-	phase1SchemaVersion = 15
+	// migrations (Steps 1.1–1.5) have been applied. Updated to 16 with the
+	// addition of the UNIQUE(container_id, container_offset) index (V3).
+	phase1SchemaVersion = 16
 )
 
 // phase1Repo is an isolated repository with its own SQLite DB and container dir.

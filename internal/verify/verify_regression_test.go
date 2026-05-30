@@ -280,6 +280,100 @@ func TestVerifySystemFullDetectsMissingContainerFileForReferencedChunk(t *testin
 	}
 }
 
+// insertVerifyPackedMissingLogical inserts the logical_file and physical_file
+// rows for the packed-missing fixture and returns the logical file ID.
+func insertVerifyPackedMissingLogical(t *testing.T, dbconn *sql.DB) int64 {
+	t.Helper()
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"packed-missing.bin", int64(512), strings.Repeat("a", 64), filestate.LogicalFileCompleted, int64(1), "v1-simple-rolling",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`,
+		"/packed/missing.bin", logicalID,
+	); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
+	return logicalID
+}
+
+// insertVerifyPackedMissingBlockChain inserts the container, storage_blocks,
+// chunk, file_chunk, and chunk_block_refs rows for the packed-missing fixture.
+func insertVerifyPackedMissingBlockChain(t *testing.T, dbconn *sql.DB, logicalID int64) {
+	t.Helper()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"packed-missing-on-disk.bin", int64(4096), int64(4096), true, false,
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var blockID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO storage_blocks
+		 (format_version, codec, plaintext_size, compression_codec, stored_size, container_id, container_offset, block_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		1, "none", int64(512), "none", int64(512), containerID, int64(0),
+		[]byte(strings.Repeat("\xab", 32)),
+	).Scan(&blockID); err != nil {
+		t.Fatalf("insert storage_blocks row: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		strings.Repeat("ef", 32), int64(512), filestate.ChunkCompleted, int64(1), int64(0), int64(0), "v1-simple-rolling",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)`,
+		logicalID, chunkID, 0,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES ($1, $2, $3, $4)`,
+		chunkID, blockID, int64(0), int64(512),
+	); err != nil {
+		t.Fatalf("insert chunk_block_refs: %v", err)
+	}
+}
+
+// setupVerifyPackedMissingFixture inserts the full reference chain required by
+// TestVerifySystemFullDetectsMissingContainerFileForPackedBlock. The container
+// has no corresponding file on disk, so a full verify against an empty
+// containersDir must fail.
+func setupVerifyPackedMissingFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	logicalID := insertVerifyPackedMissingLogical(t, dbconn)
+	insertVerifyPackedMissingBlockChain(t, dbconn, logicalID)
+}
+
+func TestVerifySystemFullDetectsMissingContainerFileForPackedBlock(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	setupVerifyPackedMissingFixture(t, dbconn)
+
+	err := VerifySystemFullWithContainersDir(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "no such file or directory") {
+		t.Fatalf("expected full verify to fail for missing packed container file, got: %v", err)
+	}
+}
+
 func TestVerifySystemStandardRejectsBlankVersionMetadataAfterMigration(t *testing.T) {
 	containersDir := t.TempDir()
 	dbconn := openPreV15MigratedVerifyDB(t, containersDir)

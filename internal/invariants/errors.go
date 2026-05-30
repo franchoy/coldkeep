@@ -11,6 +11,7 @@ const (
 	CodeSnapshotGraphOrphanLogicalRef = "SNAPSHOT_GRAPH_ORPHAN_LOGICAL_REF"
 	CodeSnapshotGraphInvalidLifecycle = "SNAPSHOT_GRAPH_INVALID_LIFECYCLE"
 	CodeGCRefusedIntegrity            = "GC_REFUSED_INTEGRITY"
+	CodeGCFKViolation                 = "GC_FK_VIOLATION"
 	CodeRepairRefusedOrphanRows       = "REPAIR_REFUSED_ORPHAN_ROWS"
 	CodeSnapshotRetainedDeleteBlocked = "SNAPSHOT_RETAINED_DELETE_BLOCKED"
 )
@@ -65,6 +66,8 @@ func RecommendedActionForCode(code string) string {
 		CodePhysicalGraphNegativeRefCount,
 		CodeGCRefusedIntegrity:
 		return "coldkeep repair ref-counts; then rerun coldkeep verify"
+	case CodeGCFKViolation:
+		return "run coldkeep verify to diagnose live references; do not force-delete container metadata"
 	case CodeSnapshotGraphIntegrity,
 		CodeSnapshotGraphOrphanLogicalRef,
 		CodeSnapshotGraphInvalidLifecycle:

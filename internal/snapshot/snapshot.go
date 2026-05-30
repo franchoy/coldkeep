@@ -69,6 +69,7 @@ func snapshotSourceQuery(dbconn *sql.DB) string {
 		SELECT pf.path, pf.logical_file_id, lf.total_size, pf.mode, pf.mtime
 		FROM physical_file pf
 		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.status = 'COMPLETED'
 		ORDER BY pf.path, pf.logical_file_id
 	`
 	// On PostgreSQL, lock the rows that define the current-state snapshot view so
@@ -1386,6 +1387,11 @@ func CreateSnapshotWithOptions(
 		if trimmedParentID == snapshotID {
 			return fmt.Errorf("parent snapshot %q cannot reference itself", trimmedParentID)
 		}
+		if hasCycle, err := snapshotAncestorCycleExists(ctx, tx, trimmedParentID, snapshotID, 100); err != nil {
+			return fmt.Errorf("validate snapshot parent ancestry for %q: %w", trimmedParentID, err)
+		} else if hasCycle {
+			return fmt.Errorf("parent snapshot %q has a cyclic ancestry; cannot create snapshot with cyclic lineage", trimmedParentID)
+		}
 		if snapshotType != "full" {
 			return errors.New("--from is currently supported only for full snapshots")
 		}
@@ -1568,6 +1574,37 @@ func CreateSnapshotWithOptions(
 }
 
 // CreateSnapshot is a compatibility wrapper for callers that still use positional arguments.
+// snapshotAncestorCycleExists traverses the parent_id chain starting from
+// startID and returns true if a cycle is detected (a node repeats) or if
+// targetID appears in the chain. maxDepth bounds the traversal; exceeding it
+// is treated as a cycle (fail-closed).
+func snapshotAncestorCycleExists(ctx context.Context, tx *sql.Tx, startID string, targetID string, maxDepth int) (bool, error) {
+	seen := make(map[string]struct{})
+	current := startID
+	for depth := 0; depth < maxDepth; depth++ {
+		if _, ok := seen[current]; ok {
+			return true, nil
+		}
+		if current == targetID {
+			return true, nil
+		}
+		seen[current] = struct{}{}
+		var parentID sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT parent_id FROM snapshot WHERE id = $1`, current).Scan(&parentID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, nil
+			}
+			return false, fmt.Errorf("traverse snapshot ancestry: %w", err)
+		}
+		if !parentID.Valid {
+			return false, nil
+		}
+		current = parentID.String
+	}
+	return true, nil // exceeded maxDepth — fail-closed
+}
+
 func CreateSnapshot(
 	ctx context.Context,
 	db *sql.DB,

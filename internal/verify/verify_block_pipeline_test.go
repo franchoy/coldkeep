@@ -237,7 +237,11 @@ func TestVerifyStoredBlockNoneWithCompressionLevelFails(t *testing.T) {
 	}
 }
 
-func TestVerifyStoredBlockLegacyMissingPhysicalAndCompressedHashesPasses(t *testing.T) {
+func TestVerifyStoredBlockPackedBlockRequiresPhysicalHash(t *testing.T) {
+	// V2 hardening: packed (storage_blocks) rows must carry physical_hash.
+	// A NULL physical_hash on a packed block is a metadata integrity failure.
+	// Previously this test was named TestVerifyStoredBlockLegacyMissingPhysicalAndCompressedHashesPasses
+	// and expected the call to succeed. After V2, packed blocks must have physical_hash set.
 	logicalPayload := buildPipelineEncodedBytes(t, []byte("legacy-missing-hashes"))
 	meta := BlockStorageMetadata{
 		BlockID:          303,
@@ -251,17 +255,21 @@ func TestVerifyStoredBlockLegacyMissingPhysicalAndCompressedHashesPasses(t *test
 		StoredSize:       int64(len(logicalPayload)),
 		CompressionCodec: "none",
 		LogicalHash:      blocks.HashLogical(logicalPayload),
-		// Legacy row simulation: new hash columns absent.
+		// Simulate packed row without physical_hash (pre-V2 compatibility).
 		CompressedHash: nil,
 		PhysicalHash:   nil,
 	}
 
-	verified, err := VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: logicalPayload})
-	if err != nil {
-		t.Fatalf("VerifyStoredBlock(legacy missing hashes): %v", err)
+	_, err := VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: logicalPayload})
+	if err == nil {
+		t.Fatalf("expected VerifyStoredBlock to fail-closed for packed block with nil physical_hash")
 	}
-	if verified.DecodedBlock == nil {
-		t.Fatalf("decoded block should not be nil")
+	vf, ok := err.(*VerifyFailure)
+	if !ok {
+		t.Fatalf("expected *VerifyFailure, got: %T %v", err, err)
+	}
+	if vf.Category != verifyErrMetadataInvalid {
+		t.Fatalf("expected category=%q got=%q err=%v", verifyErrMetadataInvalid, vf.Category, err)
 	}
 }
 
@@ -280,7 +288,9 @@ func TestVerifyStoredBlockLogicalHashRequired(t *testing.T) {
 		CompressionCodec: "none",
 		LogicalHash:      nil,
 		CompressedHash:   nil,
-		PhysicalHash:     nil,
+		// V2: packed blocks require physical_hash; provide it so the physical
+		// stage passes and the test exercises the logical hash check.
+		PhysicalHash: blocks.HashPhysical(logicalPayload),
 	}
 
 	_, err := VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: logicalPayload})
@@ -460,8 +470,11 @@ func TestVerifyStoredBlockMixedRepositoryMetadataNegotiationStep78(t *testing.T)
 	}
 
 	cases := []mixedCase{
-		// A: none compression, none encryption, legacy-style hashes omitted.
-		buildCase(t, 1, []byte("mixed-a-legacy"), "none", "none", true),
+		// A: none compression, none encryption, all hashes present.
+		// V2 hardening: packed blocks require physical_hash; legacyHashes=false ensures
+		// all hashes are set. The original legacyHashes=true variant is now covered by
+		// TestVerifyStoredBlockPackedBlockRequiresPhysicalHash.
+		buildCase(t, 1, []byte("mixed-a-packed"), "none", "none", false),
 		// B: none compression, aes-gcm encryption, packed-style hashes present.
 		buildCase(t, 2, []byte("mixed-b-packed-encrypted"), "aes-gcm", "none", false),
 		// C: zstd compression, aes-gcm encryption, packed-style hashes present.

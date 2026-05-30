@@ -600,4 +600,25 @@ COMMENT ON COLUMN storage_blocks.payload_hash IS 'DEPRECATED: lowercase-hex mirr
 
 UPDATE schema_version SET version = 15 WHERE version < 15;
 
+-- Schema version 16: UNIQUE(container_id, container_offset) on storage_blocks.
+-- Preflight: fail fast if duplicate offset pairs exist (indicates a storage bug).
+DO $$
+DECLARE
+  dup_count BIGINT;
+BEGIN
+  SELECT COUNT(*) INTO dup_count FROM (
+    SELECT container_id, container_offset
+    FROM storage_blocks
+    GROUP BY container_id, container_offset
+    HAVING COUNT(*) > 1
+  ) AS dups;
+  IF dup_count > 0 THEN
+    RAISE EXCEPTION 'cannot add UNIQUE(container_id, container_offset) to storage_blocks: % duplicate offset pair(s) detected; run coldkeep verify to diagnose', dup_count;
+  END IF;
+END
+$$;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_blocks_container_id_offset ON storage_blocks(container_id, container_offset);
+
+UPDATE schema_version SET version = 16 WHERE version < 16;
+
 COMMIT;
