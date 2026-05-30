@@ -28,6 +28,20 @@ func openGCPhase3TestDB(t *testing.T) *sql.DB {
 	return dbconn
 }
 
+// insertGCPhase3Container inserts a container row with the given flags into the
+// in-memory test database and fatals on error. Extracted to keep
+// TestGCSealedContainerQueryExcludesSealingTrue within cyclomatic complexity limits.
+func insertGCPhase3Container(t *testing.T, dbconn *sql.DB, filename string, maxSize int64, sealed, sealing, quarantine bool) {
+	t.Helper()
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+		 VALUES (?, 1024, ?, ?, ?, ?)`,
+		filename, maxSize, sealed, sealing, quarantine,
+	); err != nil {
+		t.Fatalf("insert container %q: %v", filename, err)
+	}
+}
+
 // TestGCSealedContainerQueryExcludesSealingTrue verifies that the sealed
 // container scan query (G4) excludes containers where sealing=TRUE.
 // Containers being sealed are mid-write and must not be scanned for GC.
@@ -37,36 +51,13 @@ func TestGCSealedContainerQueryExcludesSealingTrue(t *testing.T) {
 	maxSize := int64(64 * 1024 * 1024)
 
 	// Container 1: sealed=TRUE, sealing=FALSE, quarantine=FALSE — eligible for GC scan
-	if _, err := dbconn.Exec(`
-		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
-		VALUES ('eligible.ck', 1024, $1, TRUE, FALSE, FALSE)
-	`, maxSize); err != nil {
-		t.Fatalf("insert eligible container: %v", err)
-	}
-
+	insertGCPhase3Container(t, dbconn, "eligible.ck", maxSize, true, false, false)
 	// Container 2: sealed=TRUE, sealing=TRUE, quarantine=FALSE — must be excluded (mid-seal)
-	if _, err := dbconn.Exec(`
-		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
-		VALUES ('mid-seal.ck', 1024, $1, TRUE, TRUE, FALSE)
-	`, maxSize); err != nil {
-		t.Fatalf("insert mid-seal container: %v", err)
-	}
-
-	// Container 3: sealed=FALSE, sealing=FALSE, quarantine=FALSE — not sealed, excluded by sealed=TRUE clause
-	if _, err := dbconn.Exec(`
-		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
-		VALUES ('active.ck', 512, $1, FALSE, FALSE, FALSE)
-	`, maxSize); err != nil {
-		t.Fatalf("insert active container: %v", err)
-	}
-
-	// Container 4: sealed=TRUE, sealing=FALSE, quarantine=TRUE — quarantined, excluded
-	if _, err := dbconn.Exec(`
-		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
-		VALUES ('quarantined.ck', 1024, $1, TRUE, FALSE, TRUE)
-	`, maxSize); err != nil {
-		t.Fatalf("insert quarantined container: %v", err)
-	}
+	insertGCPhase3Container(t, dbconn, "mid-seal.ck", maxSize, true, true, false)
+	// Container 3: sealed=FALSE — excluded by sealed=TRUE clause
+	insertGCPhase3Container(t, dbconn, "active.ck", maxSize, false, false, false)
+	// Container 4: quarantine=TRUE — excluded
+	insertGCPhase3Container(t, dbconn, "quarantined.ck", maxSize, true, false, true)
 
 	ctx, cancel := context.Background(), func() {}
 	_ = cancel
