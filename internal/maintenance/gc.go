@@ -547,78 +547,108 @@ type gcSweepExecer interface {
 // Any future block compaction/rewriting must be implemented as a separate
 // feature and is intentionally out of scope here.
 func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, containerID int64) error {
-	legacyChunkRows, err := execer.QueryContext(ctx, `
-		SELECT b.chunk_id
-		FROM blocks b
-		WHERE b.container_id = $1
-	`, containerID)
+	chunkIDsToDelete, err := collectLegacyChunkIDsForContainer(ctx, execer, containerID)
 	if err != nil {
 		return err
 	}
-	chunkIDsToDelete := make(map[int64]struct{})
-	for legacyChunkRows.Next() {
-		var chunkID int64
-		if err := legacyChunkRows.Scan(&chunkID); err != nil {
-			_ = legacyChunkRows.Close()
-			return err
-		}
-		chunkIDsToDelete[chunkID] = struct{}{}
-	}
-	if err := legacyChunkRows.Err(); err != nil {
-		_ = legacyChunkRows.Close()
-		return err
-	}
-	_ = legacyChunkRows.Close()
 
 	deletablePackedBlockIDs, err := deletablePackedBlockIDsForContainer(ctx, execer, containerID)
 	if err != nil {
 		return err
 	}
 
+	packedChunkIDs, err := collectPackedChunkIDsToDelete(ctx, execer, deletablePackedBlockIDs)
+	if err != nil {
+		return err
+	}
+	for chunkID := range packedChunkIDs {
+		chunkIDsToDelete[chunkID] = struct{}{}
+	}
+
+	// Metadata deletion order is intentional and must remain transactional:
+	// 1) delete chunk_block_refs for the dead packed block
+	// 2) delete storage_blocks row
+	// 3) physical bytes follow existing container lifecycle behavior
+	//    (whole-container metadata+file deletion after commit in current model)
+	//
+	// This preserves the crash-safety invariant that no committed
+	// chunk_block_ref can point to a deleted storage_block.
 	for _, blockID := range deletablePackedBlockIDs {
-		deletablePackedChunkRows, err := execer.QueryContext(ctx, `
+		if err := deletePackedBlockMetadata(ctx, execer, blockID); err != nil {
+			return err
+		}
+	}
+
+	if _, err := execer.ExecContext(ctx, `DELETE FROM blocks WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+
+	return deleteUnreachableChunkRows(ctx, execer, chunkIDsToDelete)
+}
+
+// collectLegacyChunkIDsForContainer returns the set of chunk IDs referenced by
+// legacy (non-packed) blocks rows for the given container.
+func collectLegacyChunkIDsForContainer(ctx context.Context, execer gcSweepExecer, containerID int64) (map[int64]struct{}, error) {
+	rows, err := execer.QueryContext(ctx, `
+		SELECT b.chunk_id
+		FROM blocks b
+		WHERE b.container_id = $1
+	`, containerID)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int64]struct{})
+	for rows.Next() {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		result[chunkID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	_ = rows.Close()
+	return result, nil
+}
+
+// collectPackedChunkIDsToDelete returns the set of chunk IDs referenced via
+// chunk_block_refs for the given deletable packed block IDs.
+func collectPackedChunkIDsToDelete(ctx context.Context, execer gcSweepExecer, deletablePackedBlockIDs []int64) (map[int64]struct{}, error) {
+	result := make(map[int64]struct{})
+	for _, blockID := range deletablePackedBlockIDs {
+		rows, err := execer.QueryContext(ctx, `
 			SELECT cbr.chunk_id
 			FROM chunk_block_refs cbr
 			WHERE cbr.block_id = $1
 		`, blockID)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		for deletablePackedChunkRows.Next() {
+		for rows.Next() {
 			var chunkID int64
-			if err := deletablePackedChunkRows.Scan(&chunkID); err != nil {
-				_ = deletablePackedChunkRows.Close()
-				return err
+			if err := rows.Scan(&chunkID); err != nil {
+				_ = rows.Close()
+				return nil, err
 			}
-			chunkIDsToDelete[chunkID] = struct{}{}
+			result[chunkID] = struct{}{}
 		}
-		if err := deletablePackedChunkRows.Err(); err != nil {
-			_ = deletablePackedChunkRows.Close()
-			return err
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
 		}
-		_ = deletablePackedChunkRows.Close()
+		_ = rows.Close()
 	}
+	return result, nil
+}
 
-	if len(deletablePackedBlockIDs) > 0 {
-		// Metadata deletion order is intentional and must remain transactional:
-		// 1) delete chunk_block_refs for the dead packed block
-		// 2) delete storage_blocks row
-		// 3) physical bytes follow existing container lifecycle behavior
-		//    (whole-container metadata+file deletion after commit in current model)
-		//
-		// This preserves the crash-safety invariant that no committed
-		// chunk_block_ref can point to a deleted storage_block.
-		for _, blockID := range deletablePackedBlockIDs {
-			if err := deletePackedBlockMetadata(ctx, execer, blockID); err != nil {
-				return err
-			}
-		}
-	}
-	if _, err := execer.ExecContext(ctx, `DELETE FROM blocks WHERE container_id = $1`, containerID); err != nil {
-		return err
-	}
-
-	for chunkID := range chunkIDsToDelete {
+// deleteUnreachableChunkRows deletes each chunk in chunkIDs only when its
+// live_ref_count and pin_count are both zero, preserving any chunk that gained
+// a new reference since the mark phase.
+func deleteUnreachableChunkRows(ctx context.Context, execer gcSweepExecer, chunkIDs map[int64]struct{}) error {
+	for chunkID := range chunkIDs {
 		if _, err := execer.ExecContext(ctx, `
 			DELETE FROM chunk
 			WHERE id = $1
@@ -628,7 +658,6 @@ func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, container
 			return err
 		}
 	}
-
 	return nil
 }
 
