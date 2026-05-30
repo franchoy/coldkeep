@@ -304,26 +304,41 @@ func processSealedContainerForGC(ctx context.Context, dbconn *sql.DB, containerI
 		return sealedContainerSkipped, err
 	}
 
-	var stillEmpty, skip bool
-	if dryRun {
-		stillEmpty, err = evaluateContainerEmptyDryRun(ctx, tx, containerID, state.liveUnits)
-		if err != nil {
-			_ = tx.Rollback()
-			return sealedContainerSkipped, err
-		}
-	} else {
-		stillEmpty, skip, err = evaluateContainerEmptyLive(ctx, tx, dbconn, containerID, state.liveUnits)
-		if err != nil {
-			_ = tx.Rollback()
-			return sealedContainerSkipped, err
-		}
+	stillEmpty, skip, err := evaluateSealedContainerEmpty(ctx, tx, dbconn, containerID, dryRun, state.liveUnits)
+	if err != nil {
+		_ = tx.Rollback()
+		return sealedContainerSkipped, err
 	}
 	if skip || !stillEmpty {
 		_ = tx.Rollback()
 		return sealedContainerSkipped, nil
 	}
 
-	hasRetained, err := containerHasReachableChunks(ctx, tx, containerID, state.reachableChunks)
+	return checkRetentionAndCommit(ctx, tx, containerID, filename, dryRun, state.reachableChunks, containersDir, fsys)
+}
+
+// evaluateSealedContainerEmpty dispatches to the appropriate emptiness check
+// based on whether the GC is running in dry-run mode.
+func evaluateSealedContainerEmpty(ctx context.Context, tx *sql.Tx, dbconn *sql.DB, containerID int64, dryRun bool, liveUnits livePhysicalUnits) (stillEmpty bool, skip bool, err error) {
+	if dryRun {
+		stillEmpty, err = evaluateContainerEmptyDryRun(ctx, tx, containerID, liveUnits)
+		if err != nil {
+			return false, false, err
+		}
+		return stillEmpty, false, nil
+	}
+	stillEmpty, skip, err = evaluateContainerEmptyLive(ctx, tx, dbconn, containerID, liveUnits)
+	if err != nil {
+		return false, false, err
+	}
+	return stillEmpty, skip, nil
+}
+
+// checkRetentionAndCommit runs the snapshot-retention safety check and, if
+// the container is not retained, either rolls back (dry-run) or commits the
+// deletion and removes the physical file.
+func checkRetentionAndCommit(ctx context.Context, tx *sql.Tx, containerID int64, filename string, dryRun bool, reachableChunks map[int64]struct{}, containersDir string, fsys fsx.FS) (sealedContainerGCResult, error) {
+	hasRetained, err := containerHasReachableChunks(ctx, tx, containerID, reachableChunks)
 	if err != nil {
 		_ = tx.Rollback()
 		return sealedContainerSkipped, fmt.Errorf("retention safety check for container %d: %w", containerID, err)
@@ -332,12 +347,10 @@ func processSealedContainerForGC(ctx context.Context, dbconn *sql.DB, containerI
 		_ = tx.Rollback()
 		return sealedContainerRetained, nil
 	}
-
 	if dryRun {
 		_ = tx.Rollback()
 		return sealedContainerAffected, nil
 	}
-
 	if err := commitGCContainerDeletion(ctx, tx, containerID, containersDir, filename, fsys); err != nil {
 		return sealedContainerSkipped, err
 	}
