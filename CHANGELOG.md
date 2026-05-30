@@ -53,6 +53,59 @@ Highlights:
 
 Regression tests added for each fix.
 
+Upgrade note: schema migration to version 16 runs automatically on first open and aborts if
+duplicate `(container_id, container_offset)` pairs exist in `storage_blocks`.
+
+------------------------------------------------------------------------
+
+## v1.10.12 — Engine Boundary Readiness
+
+- Documented CLI/business-logic coupling.
+- Documented direct DB, filesystem, and storage-context access.
+- Documented operation contract candidates.
+- Documented invariant ownership and no-behavior-change migration rules.
+- Prepared v1.11 transition checklist.
+
+------------------------------------------------------------------------
+
+## v1.10.11 — Stabilization & Regression Burn-down
+
+- Completed v1.10 stabilization and regression burn-down before behavior freeze.
+- Closed remaining S0/S1 issues; performed suppression, accepted-risk, and deferred-risk audit.
+- Validated long-run, adversarial, and regression suites.
+- Documented final v1.10 behavior freeze evidence and known issues after v1.10.
+
+------------------------------------------------------------------------
+
+## v1.10.10 — Cross-Platform Validation
+
+- Validated path normalization, restore determinism, and symlink policy across Linux, macOS, and Windows.
+- Captured cross-platform CI evidence in release documentation.
+
+------------------------------------------------------------------------
+
+## v1.10.9 — Filesystem Fault Injection Phase 1
+
+- Introduced deterministic scripted fault filesystem for test-only use.
+- Added fault injection for ENOSPC, write failure, partial write, fsync failure, rename, and remove.
+- Proved correctness-critical paths fail safely under deterministic fault injection without silent corruption.
+
+------------------------------------------------------------------------
+
+## v1.10.8 — Filesystem Abstraction Groundwork
+
+- Inventoried filesystem operations and classified critical seams.
+- Introduced behavior-preserving filesystem abstraction seams.
+- Added equivalence tests proving OS-backed behavior parity.
+
+------------------------------------------------------------------------
+
+## v1.10.7 — Critical-Path Coverage Gates
+
+- Established critical-path coverage visibility for correctness-critical packages.
+- Added invariant-to-coverage mapping and soft threshold policy.
+- Added coverage baseline capture and regression prevention gate design.
+
 ------------------------------------------------------------------------
 
 ## v1.10.6 - 2026-05-22 —  CI / Codacy / Copilot Workflow Hardening
