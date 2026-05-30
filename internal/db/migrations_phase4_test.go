@@ -87,18 +87,15 @@ func TestStorageBlocksUniqueContainerOffsetConstraintPreventsOverlap(t *testing.
 	}
 }
 
-// TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates verifies that
-// runSQLiteStorageBlocksUniqueOffsetConstraintMigration fails with a diagnostic
-// message when duplicate (container_id, container_offset) pairs exist.
-func TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates(t *testing.T) {
-	dbconn, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
+// setupDuplicateOffsetMigrationFixture creates a minimal schema (without the
+// unique-offset migration) and inserts two storage_blocks rows with the same
+// (container_id, container_offset), simulating a pre-existing duplicate that
+// the migration preflight must detect. Extracted to keep
+// TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates within the
+// cyclomatic complexity limit.
+func setupDuplicateOffsetMigrationFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
 
-	// Apply just the schema SQL tables without the migration (bypass the full RunMigrations).
-	// We'll apply a partial schema to simulate an old install with no index yet.
 	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatalf("disable fk: %v", err)
 	}
@@ -133,7 +130,6 @@ func TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates(t *testing.
 		t.Fatalf("create storage_blocks: %v", err)
 	}
 
-	// Insert container.
 	var containerID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO container (filename, current_size, max_size) VALUES ('dup-test.ck', 128, 67108864) RETURNING id`,
@@ -141,7 +137,6 @@ func TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates(t *testing.
 		t.Fatalf("insert container: %v", err)
 	}
 
-	// Insert two rows with the same (container_id, container_offset) — simulates a pre-existing bug.
 	for i := 0; i < 2; i++ {
 		if _, err := dbconn.Exec(
 			`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
@@ -151,6 +146,19 @@ func TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates(t *testing.
 			t.Fatalf("insert duplicate block %d: %v", i, err)
 		}
 	}
+}
+
+// TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates verifies that
+// runSQLiteStorageBlocksUniqueOffsetConstraintMigration fails with a diagnostic
+// message when duplicate (container_id, container_offset) pairs exist.
+func TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	setupDuplicateOffsetMigrationFixture(t, dbconn)
 
 	ctx := context.Background()
 	err = runSQLiteStorageBlocksUniqueOffsetConstraintMigration(dbconn, ctx)
