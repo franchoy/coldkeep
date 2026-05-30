@@ -11,11 +11,11 @@ package verify
 //     only valid under this assumption; running verify mid-write will produce
 //     false positives.
 //
-//  2. COMPLETED chunks are the unit of truth: only containers that hold at least
-//     one COMPLETED chunk are included in file-existence and size checks.
-//     Containers that were created but never had a chunk committed to them are
-//     intentionally excluded to avoid false positives during normal operation
-//     (e.g. an open container waiting for its first write).
+//  2. COMPLETED chunks are the unit of truth: containers are included in
+//     file-existence checks when they hold at least one COMPLETED legacy chunk
+//     (blocks table) or at least one packed block (storage_blocks table).
+//     Containers that were created but never had data committed are intentionally
+//     excluded to avoid false positives during normal operation.
 //
 //  3. Simulated containers: checkSealedContainersHash verifies the stored hash
 //     against the physical file bytes. For simulated (in-memory / test) backends
@@ -46,8 +46,9 @@ func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 	defer cancel()
 
 	// Check that container files exist and sizes match DB metadata for containers
-	// that currently have at least one COMPLETED legacy blocks mapping.
-	// Packed-path byte integrity is validated by deep verify over storage_blocks.
+	// that have at least one COMPLETED legacy chunk (blocks table) or at least one
+	// packed block (storage_blocks table). Both storage paths must have a physical
+	// file present; missing files are correctness failures regardless of path.
 	log.Printf("Checking container file existence and size consistency...")
 	var errorList []error
 	var errorCount int
@@ -55,12 +56,19 @@ func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 		SELECT ctr.id, ctr.filename, ctr.current_size
 		FROM container ctr
 		WHERE ctr.quarantine = FALSE
-		AND EXISTS (
-			SELECT 1
-			FROM blocks b
-			JOIN chunk c ON c.id = b.chunk_id
-			WHERE b.container_id = ctr.id
-			AND c.status = $1
+		AND (
+			EXISTS (
+				SELECT 1
+				FROM blocks b
+				JOIN chunk c ON c.id = b.chunk_id
+				WHERE b.container_id = ctr.id
+				AND c.status = $1
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM storage_blocks sb
+				WHERE sb.container_id = ctr.id
+			)
 		)
 	`, filestate.ChunkCompleted)
 	if err != nil {
