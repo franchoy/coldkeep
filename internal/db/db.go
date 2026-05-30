@@ -122,7 +122,7 @@ func ApplySQLiteSessionPragmas(db *sql.DB) error {
 	if busyTimeoutMillis <= 0 {
 		busyTimeoutMillis = 1
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout = " + strconv.Itoa(busyTimeoutMillis)); err != nil {
+	if _, err := db.Exec("PRAGMA busy_timeout = " + strconv.Itoa(busyTimeoutMillis)); err != nil { // nosemgrep: go.lang.security.audit.database.string-formatted-query,go.lang.security.audit.database.sql-injection
 		return err
 	}
 	// Enable foreign key enforcement for this connection. SQLite disables FK
