@@ -385,6 +385,19 @@ func evaluateContainerEmptyDryRun(ctx context.Context, tx *sql.Tx, containerID i
 	return stillEmpty, nil
 }
 
+// buildLockedChunkEmptinessQuery returns a SQL query (parameter $1 = container_id)
+// that evaluates to true when the container has no live or pinned chunks. On
+// PostgreSQL the inner chunk SELECT acquires FOR UPDATE row locks.
+func buildLockedChunkEmptinessQuery(dbconn *sql.DB) string {
+	inner := db.QueryWithOptionalForUpdate(dbconn, `
+		SELECT ch.live_ref_count, ch.pin_count
+		FROM blocks b
+		JOIN chunk ch ON ch.id = b.chunk_id
+		WHERE b.container_id = $1
+	`)
+	return "WITH locked_chunks AS (" + inner + ") SELECT NOT EXISTS (SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0)"
+}
+
 // evaluateContainerEmptyLive checks whether a container is empty under
 // row-level locks. Returns skip=true if the container no longer qualifies
 // (vanished or became unsealed/quarantined between the outer query and now).
@@ -405,21 +418,7 @@ func evaluateContainerEmptyLive(ctx context.Context, tx *sql.Tx, dbconn *sql.DB,
 	if !isSealed || isQuarantined {
 		return false, true, nil
 	}
-	chunkLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
-		SELECT ch.live_ref_count, ch.pin_count
-		FROM blocks b
-		JOIN chunk ch ON ch.id = b.chunk_id
-		WHERE b.container_id = $1
-	`)
-	emptyContainerQuery := fmt.Sprintf(`
-		WITH locked_chunks AS (
-			%s
-		)
-		SELECT NOT EXISTS (
-			SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0
-		)
-	`, chunkLockQuery)
-	err = tx.QueryRowContext(ctx, emptyContainerQuery, containerID).Scan(&stillEmpty)
+	err = tx.QueryRowContext(ctx, buildLockedChunkEmptinessQuery(dbconn), containerID).Scan(&stillEmpty)
 	if err != nil {
 		return false, false, err
 	}
@@ -920,19 +919,7 @@ func sweepDeadActiveContainer(ctx context.Context, dbconn *sql.DB, containersDir
 // physical units remain. Must be called inside an open transaction.
 func verifyActiveContainerFullyDead(ctx context.Context, tx *sql.Tx, dbconn *sql.DB, containerID int64, liveUnits livePhysicalUnits) (bool, error) {
 	var stillFullyDead bool
-	chunkLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
-		SELECT ch.live_ref_count, ch.pin_count
-		FROM blocks b
-		JOIN chunk ch ON ch.id = b.chunk_id
-		WHERE b.container_id = $1
-	`)
-	emptyQuery := fmt.Sprintf(`
-		WITH locked AS (%s)
-		SELECT NOT EXISTS (
-			SELECT 1 FROM locked WHERE live_ref_count > 0 OR pin_count > 0
-		)
-	`, chunkLockQuery)
-	if err := tx.QueryRowContext(ctx, emptyQuery, containerID).Scan(&stillFullyDead); err != nil {
+	if err := tx.QueryRowContext(ctx, buildLockedChunkEmptinessQuery(dbconn), containerID).Scan(&stillFullyDead); err != nil {
 		return false, err
 	}
 	hasLiveUnits, err := containerHasLivePhysicalUnits(ctx, tx, containerID, liveUnits)
