@@ -867,31 +867,10 @@ func sweepDeadActiveContainer(ctx context.Context, dbconn *sql.DB, containersDir
 		return err
 	}
 
-	// Lock and re-verify: no live or pinned chunks in this container.
-	var stillFullyDead bool
-	chunkLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
-		SELECT ch.live_ref_count, ch.pin_count
-		FROM blocks b
-		JOIN chunk ch ON ch.id = b.chunk_id
-		WHERE b.container_id = $1
-	`)
-	emptyQuery := fmt.Sprintf(`
-		WITH locked AS (%s)
-		SELECT NOT EXISTS (
-			SELECT 1 FROM locked WHERE live_ref_count > 0 OR pin_count > 0
-		)
-	`, chunkLockQuery)
-	if err := tx.QueryRowContext(ctx, emptyQuery, containerID).Scan(&stillFullyDead); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	hasLiveUnits, err := containerHasLivePhysicalUnits(ctx, tx, containerID, liveUnits)
+	stillFullyDead, err := verifyActiveContainerFullyDead(ctx, tx, dbconn, containerID, liveUnits)
 	if err != nil {
 		_ = tx.Rollback()
-		return fmt.Errorf("live physical unit check for active container %d: %w", containerID, err)
-	}
-	if hasLiveUnits {
-		stillFullyDead = false
+		return err
 	}
 	if !stillFullyDead {
 		_ = tx.Rollback()
@@ -921,6 +900,36 @@ func sweepDeadActiveContainer(ctx context.Context, dbconn *sql.DB, containersDir
 	}
 	removeContainerFileWithFS(fsys, containerPath)
 	return nil
+}
+
+// verifyActiveContainerFullyDead acquires FOR UPDATE locks on the container's
+// chunk rows and returns true only if none are live or pinned and no live
+// physical units remain. Must be called inside an open transaction.
+func verifyActiveContainerFullyDead(ctx context.Context, tx *sql.Tx, dbconn *sql.DB, containerID int64, liveUnits livePhysicalUnits) (bool, error) {
+	var stillFullyDead bool
+	chunkLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
+		SELECT ch.live_ref_count, ch.pin_count
+		FROM blocks b
+		JOIN chunk ch ON ch.id = b.chunk_id
+		WHERE b.container_id = $1
+	`)
+	emptyQuery := fmt.Sprintf(`
+		WITH locked AS (%s)
+		SELECT NOT EXISTS (
+			SELECT 1 FROM locked WHERE live_ref_count > 0 OR pin_count > 0
+		)
+	`, chunkLockQuery)
+	if err := tx.QueryRowContext(ctx, emptyQuery, containerID).Scan(&stillFullyDead); err != nil {
+		return false, err
+	}
+	hasLiveUnits, err := containerHasLivePhysicalUnits(ctx, tx, containerID, liveUnits)
+	if err != nil {
+		return false, fmt.Errorf("live physical unit check for active container %d: %w", containerID, err)
+	}
+	if hasLiveUnits {
+		stillFullyDead = false
+	}
+	return stillFullyDead, nil
 }
 
 func loadLiveChunkIDs(ctx context.Context, q gcChunkQuerier) (map[int64]struct{}, error) {
