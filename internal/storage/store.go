@@ -1226,7 +1226,13 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 }
 
 func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
-	result, err := dbconn.ExecContext(ctx,
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction while marking chunk %d for rebuild: %w", chunkID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx,
 		`UPDATE chunk SET status = $1 WHERE id = $2 AND status = $3`,
 		filestate.ChunkAborted,
 		chunkID,
@@ -1235,16 +1241,24 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 	if err != nil {
 		return fmt.Errorf("mark chunk %d for rebuild: %w", chunkID, err)
 	}
-	if _, err := result.RowsAffected(); err != nil {
+	n, err := result.RowsAffected()
+	if err != nil {
 		return fmt.Errorf("rows affected while marking chunk %d for rebuild: %w", chunkID, err)
 	}
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkID); err != nil {
+	if n == 0 {
+		// Another worker already demoted this chunk; nothing to clean up here.
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkID); err != nil {
 		return fmt.Errorf("delete stale chunk_block_refs while marking chunk %d for rebuild: %w", chunkID, err)
 	}
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while marking chunk %d for rebuild: %w", chunkID, err)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit while marking chunk %d for rebuild: %w", chunkID, err)
+	}
 	return nil
 }
 
@@ -2819,7 +2833,14 @@ func insertLegacyCompanionBlockRowWithContext(
 		ctx,
 		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
 		 VALUES ($1, $2, 1, $3, $4, $5, $6, $7)
-		 ON CONFLICT (chunk_id) DO NOTHING`,
+		 ON CONFLICT (chunk_id) DO UPDATE SET
+		   codec          = EXCLUDED.codec,
+		   format_version = EXCLUDED.format_version,
+		   plaintext_size = EXCLUDED.plaintext_size,
+		   stored_size    = EXCLUDED.stored_size,
+		   nonce          = EXCLUDED.nonce,
+		   container_id   = EXCLUDED.container_id,
+		   block_offset   = EXCLUDED.block_offset`,
 		chunkID,
 		codec,
 		plaintextSize,
