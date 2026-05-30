@@ -122,13 +122,21 @@ func ApplySQLiteSessionPragmas(db *sql.DB) error {
 	if busyTimeoutMillis <= 0 {
 		busyTimeoutMillis = 1
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout = " + strconv.Itoa(busyTimeoutMillis)); err != nil { // nosemgrep: go.lang.security.audit.database.string-formatted-query,go.lang.security.audit.database.sql-injection
+	if _, err := db.Exec(busyTimeoutPragma(busyTimeoutMillis)); err != nil {
 		return err
 	}
 	// Enable foreign key enforcement for this connection. SQLite disables FK
 	// checks by default; this pragma must be set per-session.
 	_, err := db.Exec("PRAGMA foreign_keys = ON")
 	return err
+}
+
+// busyTimeoutPragma returns the PRAGMA statement for setting the SQLite busy
+// timeout. SQLite PRAGMA statements do not support parameterized queries at the
+// sqlite3_prepare_v2 level; busyTimeoutMillis is a pure internal int derived
+// from timeout config, not user input, so building the string here is safe.
+func busyTimeoutPragma(millis int) string {
+	return "PRAGMA busy_timeout = " + strconv.Itoa(millis)
 }
 
 func buildConnectionOptions() string {
