@@ -385,17 +385,40 @@ func evaluateContainerEmptyDryRun(ctx context.Context, tx *sql.Tx, containerID i
 	return stillEmpty, nil
 }
 
-// buildLockedChunkEmptinessQuery returns a SQL query (parameter $1 = container_id)
-// that evaluates to true when the container has no live or pinned chunks. On
-// PostgreSQL the inner chunk SELECT acquires FOR UPDATE row locks.
+// gcChunkEmptinessQuerySQLite and gcChunkEmptinessQueryPostgres are
+// pre-computed constant SQL queries (parameter $1 = container_id) that
+// evaluate to true when a container has no live or pinned chunks.
+// The PostgreSQL variant acquires FOR UPDATE row locks on the inner SELECT.
+const gcChunkEmptinessQuerySQLite = `
+		WITH locked_chunks AS (
+			SELECT ch.live_ref_count, ch.pin_count
+			FROM blocks b
+			JOIN chunk ch ON ch.id = b.chunk_id
+			WHERE b.container_id = $1
+		)
+		SELECT NOT EXISTS (
+			SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0
+		)`
+
+const gcChunkEmptinessQueryPostgres = `
+		WITH locked_chunks AS (
+			SELECT ch.live_ref_count, ch.pin_count
+			FROM blocks b
+			JOIN chunk ch ON ch.id = b.chunk_id
+			WHERE b.container_id = $1
+			FOR UPDATE
+		)
+		SELECT NOT EXISTS (
+			SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0
+		)`
+
+// buildLockedChunkEmptinessQuery selects the appropriate pre-computed query
+// constant based on whether the backend supports SELECT FOR UPDATE.
 func buildLockedChunkEmptinessQuery(dbconn *sql.DB) string {
-	inner := db.QueryWithOptionalForUpdate(dbconn, `
-		SELECT ch.live_ref_count, ch.pin_count
-		FROM blocks b
-		JOIN chunk ch ON ch.id = b.chunk_id
-		WHERE b.container_id = $1
-	`)
-	return "WITH locked_chunks AS (" + inner + ") SELECT NOT EXISTS (SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0)"
+	if db.SupportsSelectForUpdate(dbconn) {
+		return gcChunkEmptinessQueryPostgres
+	}
+	return gcChunkEmptinessQuerySQLite
 }
 
 // evaluateContainerEmptyLive checks whether a container is empty under
@@ -418,7 +441,8 @@ func evaluateContainerEmptyLive(ctx context.Context, tx *sql.Tx, dbconn *sql.DB,
 	if !isSealed || isQuarantined {
 		return false, true, nil
 	}
-	err = tx.QueryRowContext(ctx, buildLockedChunkEmptinessQuery(dbconn), containerID).Scan(&stillEmpty)
+	chunkEmptinessQ := buildLockedChunkEmptinessQuery(dbconn)
+	err = tx.QueryRowContext(ctx, chunkEmptinessQ, containerID).Scan(&stillEmpty)
 	if err != nil {
 		return false, false, err
 	}
@@ -919,7 +943,8 @@ func sweepDeadActiveContainer(ctx context.Context, dbconn *sql.DB, containersDir
 // physical units remain. Must be called inside an open transaction.
 func verifyActiveContainerFullyDead(ctx context.Context, tx *sql.Tx, dbconn *sql.DB, containerID int64, liveUnits livePhysicalUnits) (bool, error) {
 	var stillFullyDead bool
-	if err := tx.QueryRowContext(ctx, buildLockedChunkEmptinessQuery(dbconn), containerID).Scan(&stillFullyDead); err != nil {
+	chunkEmptinessQ := buildLockedChunkEmptinessQuery(dbconn)
+	if err := tx.QueryRowContext(ctx, chunkEmptinessQ, containerID).Scan(&stillFullyDead); err != nil {
 		return false, err
 	}
 	hasLiveUnits, err := containerHasLivePhysicalUnits(ctx, tx, containerID, liveUnits)
