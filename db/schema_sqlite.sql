@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-DELETE FROM schema_version WHERE version < 15;
-INSERT OR IGNORE INTO schema_version(version) VALUES (15);
+DELETE FROM schema_version WHERE version < 16;
+INSERT OR IGNORE INTO schema_version(version) VALUES (16);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_storage_blocks_container_id ON storage_blocks(container_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_blocks_container_id_offset ON storage_blocks(container_id, container_offset);
 
 CREATE TABLE IF NOT EXISTS chunk_block_refs (
   chunk_id INTEGER NOT NULL PRIMARY KEY REFERENCES chunk(id) ON DELETE RESTRICT,

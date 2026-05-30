@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 15
+const requiredPostgresSchemaVersion = 16
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -856,6 +856,56 @@ func loadPostgresAutoBootstrapEnabled() (bool, error) {
 	}
 }
 
+// runSQLiteStorageBlocksUniqueOffsetConstraintMigration creates a unique index
+// on (container_id, container_offset) in storage_blocks if it does not exist.
+// Before creating the index, it checks for duplicate pairs; if any exist the
+// migration fails with a diagnostic message so the operator can run
+// `coldkeep verify` to investigate.
+func runSQLiteStorageBlocksUniqueOffsetConstraintMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	var indexExists int
+	if err := dbconn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_storage_blocks_container_id_offset'`,
+	).Scan(&indexExists); err != nil {
+		return fmt.Errorf("check unique offset index existence: %w", err)
+	}
+	if indexExists > 0 {
+		return nil
+	}
+
+	var dupCount int
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM (
+			SELECT container_id, container_offset
+			FROM storage_blocks
+			GROUP BY container_id, container_offset
+			HAVING COUNT(*) > 1
+		)
+	`).Scan(&dupCount); err != nil {
+		return fmt.Errorf("preflight check for duplicate storage_blocks offsets: %w", err)
+	}
+	if dupCount > 0 {
+		return fmt.Errorf(
+			"cannot add UNIQUE(container_id, container_offset) to storage_blocks: %d duplicate offset pair(s) detected; run coldkeep verify to diagnose",
+			dupCount,
+		)
+	}
+
+	if _, err := dbconn.ExecContext(ctx,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_blocks_container_id_offset ON storage_blocks(container_id, container_offset)`,
+	); err != nil {
+		return fmt.Errorf("create unique offset index on storage_blocks: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, "DELETE FROM schema_version WHERE version < 16"); err != nil {
+		return fmt.Errorf("clean schema_version before 16: %w", err)
+	}
+	if _, err := dbconn.ExecContext(ctx, "INSERT OR IGNORE INTO schema_version(version) VALUES (16)"); err != nil {
+		return fmt.Errorf("insert schema_version 16: %w", err)
+	}
+
+	return nil
+}
+
 func isSQLiteSchemaApplyCompatibilityError(err error) bool {
 	if err == nil {
 		return false
@@ -1034,6 +1084,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteStorageBlocksCompressionMetadataMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteStorageBlocksUniqueOffsetConstraintMigration(tx, ctx); err != nil {
 		return err
 	}
 
