@@ -20,6 +20,41 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.13 - 2026-05-30 — Post-Release Correctness Hardening
+
+Fixes-only release closing 10 correctness gaps found in the adversarial
+post-release audit of v1.10.12. No behavior, CLI, JSON, storage format,
+or repository format changes beyond the specific invariants hardened below.
+
+Highlights:
+
+- V1: checkContainersFileExistence extended to cover storage_blocks-referenced
+  containers (packed verify gap: missing container no longer silently skipped)
+- V2: verifyPhysicalPayloadStage and verifyCompressedPayloadStage fail-closed
+  on NULL hash for non-legacy packed blocks (NULL hash no longer bypasses
+  payload verification stages)
+- G4: GC sealed container scan adds sealing=FALSE guard (containers actively
+  being sealed are now correctly excluded from GC eligibility)
+- G2: FK violation on container delete returns actionable GC diagnostic instead
+  of raw DB error
+- V3: UNIQUE(container_id, container_offset) added to storage_blocks with
+  migration preflight duplicate check (schema version 16)
+- S1: snapshotSourceQuery adds lf.status=COMPLETED filter (incomplete logical
+  files are excluded from snapshot capture)
+- S2: snapshotAncestorCycleExists added; snapshot parent creation rejects
+  cyclic parent chains (A→B→A), not only self-references
+- X1: ApplySQLiteSessionPragmas now also sets PRAGMA foreign_keys=ON (FK
+  constraints enforced on all SQLite connections)
+- G1 (modified): SQLite live GC now fails-closed with a clear error; SQLite
+  dry-run GC is allowed (GC singleton invariant preserved on SQLite)
+- C2: runRemoveCommand passes perf spans to all emitBatchCommandReport("remove")
+  call sites; remove --output json now includes perf_spans array
+- C1 excluded: duplicate singleton flag guard already hard-rejects in v1.10.12
+
+Regression tests added for each fix.
+
+------------------------------------------------------------------------
+
 ## v1.10.6 - 2026-05-22 —  CI / Codacy / Copilot Workflow Hardening
 
 - Added CI-specific Copilot instructions.
