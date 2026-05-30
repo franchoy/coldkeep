@@ -28,6 +28,8 @@ func isContainerFKViolation(err error) bool {
 		strings.Contains(msg, "violates foreign key")
 }
 
+var gcConnectDB = db.ConnectDB
+
 var gcAdvisoryUnlock = func(ctx context.Context, dbconn *sql.DB) error {
 	_, err := dbconn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
 	return err
@@ -102,7 +104,7 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCResult, err error) {
 	result.DryRun = dryRun
 
-	dbconn, err := db.ConnectDB()
+	dbconn, err := gcConnectDB()
 	if err != nil {
 		return GCResult{}, fmt.Errorf("failed to connect to DB: %w", err)
 	}
@@ -112,26 +114,37 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 
 	fsys := fsx.Default()
 
-	// Attempt to acquire advisory lock to ensure only one GC runs at a time
-	var locked bool
-
-	err = dbconn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked)
-	if err != nil {
-		return GCResult{}, fmt.Errorf("failed to attempt advisory lock: %w", err)
-	}
-
-	if !locked {
-		return GCResult{}, fmt.Errorf("GC already running (advisory lock held)")
-	}
-
-	defer func() {
-		cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
-		defer cleanupCancel()
-		unlockErr := gcAdvisoryUnlock(cleanupCtx, dbconn)
-		if unlockErr != nil {
-			log.Printf("warning: failed to release advisory lock: %v\n", unlockErr)
+	// G1: SQLite does not support advisory locks or live GC (no transaction
+	// isolation guarantees during deletion). Live GC on SQLite is refused
+	// fail-closed. Dry-run GC on SQLite is allowed for inspection only.
+	backend := db.BackendFromDB(dbconn)
+	if backend == db.BackendSQLite {
+		if !dryRun {
+			return GCResult{}, fmt.Errorf("live GC is not supported on the SQLite backend; run with --dry-run to inspect GC candidates")
 		}
-	}()
+		log.Println("gc: SQLite backend detected — skipping advisory lock (dry-run only)")
+	} else {
+		// Attempt to acquire advisory lock to ensure only one GC runs at a time
+		var locked bool
+
+		err = dbconn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked)
+		if err != nil {
+			return GCResult{}, fmt.Errorf("failed to attempt advisory lock: %w", err)
+		}
+
+		if !locked {
+			return GCResult{}, fmt.Errorf("GC already running (advisory lock held)")
+		}
+
+		defer func() {
+			cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
+			defer cleanupCancel()
+			unlockErr := gcAdvisoryUnlock(cleanupCtx, dbconn)
+			if unlockErr != nil {
+				log.Printf("warning: failed to release advisory lock: %v\n", unlockErr)
+			}
+		}()
+	}
 
 	// Pre-flight: refuse GC if the physical_file graph has integrity issues.
 	// Proceeding on a drifted graph risks treating live blocks as unreferenced.
