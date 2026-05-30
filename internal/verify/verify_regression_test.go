@@ -280,13 +280,9 @@ func TestVerifySystemFullDetectsMissingContainerFileForReferencedChunk(t *testin
 	}
 }
 
-// setupVerifyPackedMissingFixture inserts the full reference chain required by
-// TestVerifySystemFullDetectsMissingContainerFileForPackedBlock: a logical file,
-// physical file, container, storage_blocks row, chunk, file_chunk, and
-// chunk_block_refs row. The container filename has no corresponding file on disk,
-// so a full verify against an empty containersDir must fail.
-// Extracted to keep the test function below the cyclomatic complexity threshold.
-func setupVerifyPackedMissingFixture(t *testing.T, dbconn *sql.DB) {
+// insertVerifyPackedMissingLogical inserts the logical_file and physical_file
+// rows for the packed-missing fixture and returns the logical file ID.
+func insertVerifyPackedMissingLogical(t *testing.T, dbconn *sql.DB) int64 {
 	t.Helper()
 
 	var logicalID int64
@@ -304,6 +300,14 @@ func setupVerifyPackedMissingFixture(t *testing.T, dbconn *sql.DB) {
 	); err != nil {
 		t.Fatalf("insert physical_file: %v", err)
 	}
+
+	return logicalID
+}
+
+// insertVerifyPackedMissingBlockChain inserts the container, storage_blocks,
+// chunk, file_chunk, and chunk_block_refs rows for the packed-missing fixture.
+func insertVerifyPackedMissingBlockChain(t *testing.T, dbconn *sql.DB, logicalID int64) {
+	t.Helper()
 
 	var containerID int64
 	if err := dbconn.QueryRow(
@@ -346,6 +350,16 @@ func setupVerifyPackedMissingFixture(t *testing.T, dbconn *sql.DB) {
 	); err != nil {
 		t.Fatalf("insert chunk_block_refs: %v", err)
 	}
+}
+
+// setupVerifyPackedMissingFixture inserts the full reference chain required by
+// TestVerifySystemFullDetectsMissingContainerFileForPackedBlock. The container
+// has no corresponding file on disk, so a full verify against an empty
+// containersDir must fail.
+func setupVerifyPackedMissingFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	logicalID := insertVerifyPackedMissingLogical(t, dbconn)
+	insertVerifyPackedMissingBlockChain(t, dbconn, logicalID)
 }
 
 func TestVerifySystemFullDetectsMissingContainerFileForPackedBlock(t *testing.T) {
