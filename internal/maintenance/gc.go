@@ -490,17 +490,8 @@ func containerHasReachableChunks(ctx context.Context, q gcChunkQuerier, containe
 	}
 	defer func() { _ = rows.Close() }()
 
-	for rows.Next() {
-		var chunkID int64
-		if err := rows.Scan(&chunkID); err != nil {
-			return false, err
-		}
-		if _, retained := reachableChunkIDs[chunkID]; retained {
-			return true, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, err
+	if retained, err := anyChunkInReachableSet(rows, reachableChunkIDs); err != nil || retained {
+		return retained, err
 	}
 
 	packedRows, err := q.QueryContext(ctx, `
@@ -514,17 +505,23 @@ func containerHasReachableChunks(ctx context.Context, q gcChunkQuerier, containe
 	}
 	defer func() { _ = packedRows.Close() }()
 
-	for packedRows.Next() {
+	return anyChunkInReachableSet(packedRows, reachableChunkIDs)
+}
+
+// anyChunkInReachableSet scans a single-column chunk_id result set and returns
+// true as soon as any ID is present in reachableChunkIDs. The caller retains
+// ownership of rows (including Close via defer).
+func anyChunkInReachableSet(rows *sql.Rows, reachableChunkIDs map[int64]struct{}) (bool, error) {
+	for rows.Next() {
 		var chunkID int64
-		if err := packedRows.Scan(&chunkID); err != nil {
+		if err := rows.Scan(&chunkID); err != nil {
 			return false, err
 		}
 		if _, retained := reachableChunkIDs[chunkID]; retained {
 			return true, nil
 		}
 	}
-
-	return false, packedRows.Err()
+	return false, rows.Err()
 }
 
 type gcSweepExecer interface {
