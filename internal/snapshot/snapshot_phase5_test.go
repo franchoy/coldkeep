@@ -17,14 +17,13 @@ func TestSnapshotSourceQueryFiltersCompletedLogicalFiles(t *testing.T) {
 	}
 }
 
-// TestCreateSnapshotExcludesIncompleteLogicalFiles verifies that a physical_file
-// linked to an incomplete (non-COMPLETED) logical_file is not included in the
-// snapshot (S1 behavior).
-func TestCreateSnapshotExcludesIncompleteLogicalFiles(t *testing.T) {
-	db := openTestDB(t)
-	ctx := context.Background()
+// setupS1IncompleteFilterFixture inserts a COMPLETED and a PROCESSING
+// logical_file, each linked to a physical_file, into the test database.
+// Extracted to keep TestCreateSnapshotExcludesIncompleteLogicalFiles within the
+// cyclomatic complexity limit.
+func setupS1IncompleteFilterFixture(t *testing.T, db *sql.DB) {
+	t.Helper()
 
-	// Insert a COMPLETED logical file linked to a physical file.
 	resCompleted, err := db.Exec(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		"complete.txt", int64(10), "hash-s1-completed", "COMPLETED",
@@ -40,7 +39,6 @@ func TestCreateSnapshotExcludesIncompleteLogicalFiles(t *testing.T) {
 		t.Fatalf("insert physical_file for completed: %v", err)
 	}
 
-	// Insert a PROCESSING logical file linked to a different physical file.
 	resProcessing, err := db.Exec(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		"processing.txt", int64(10), "hash-s1-processing", "PROCESSING",
@@ -55,14 +53,17 @@ func TestCreateSnapshotExcludesIncompleteLogicalFiles(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert physical_file for processing: %v", err)
 	}
+}
 
-	if err := CreateSnapshot(ctx, db, "snap-s1-filter", "full", nil, nil, nil); err != nil {
-		t.Fatalf("CreateSnapshot: %v", err)
-	}
+// querySnapshotPaths returns all paths recorded in the given snapshot.
+// Extracted to keep TestCreateSnapshotExcludesIncompleteLogicalFiles within the
+// cyclomatic complexity limit.
+func querySnapshotPaths(t *testing.T, db *sql.DB, snapshotID string) []string {
+	t.Helper()
 
 	rows, err := db.Query(
 		`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ?`,
-		"snap-s1-filter",
+		snapshotID,
 	)
 	if err != nil {
 		t.Fatalf("query snapshot_file paths: %v", err)
@@ -80,6 +81,23 @@ func TestCreateSnapshotExcludesIncompleteLogicalFiles(t *testing.T) {
 	if rows.Err() != nil {
 		t.Fatalf("rows iteration: %v", rows.Err())
 	}
+	return paths
+}
+
+// TestCreateSnapshotExcludesIncompleteLogicalFiles verifies that a physical_file
+// linked to an incomplete (non-COMPLETED) logical_file is not included in the
+// snapshot (S1 behavior).
+func TestCreateSnapshotExcludesIncompleteLogicalFiles(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	setupS1IncompleteFilterFixture(t, db)
+
+	if err := CreateSnapshot(ctx, db, "snap-s1-filter", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	paths := querySnapshotPaths(t, db, "snap-s1-filter")
 
 	for _, p := range paths {
 		if p == "processing.txt" {
