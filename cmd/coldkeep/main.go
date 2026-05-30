@@ -1603,6 +1603,8 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return err
 	}
 
+	removePerf := newPerfTimer()
+
 	storedPath, _ := parsed.lastFlagValue("stored-path")
 	hasStoredPath := strings.TrimSpace(storedPath) != ""
 	storedPathsMode := parsed.hasFlag("stored-paths")
@@ -1672,8 +1674,10 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return usageErrorf("no valid stored paths after parsing input")
 		}
 		if !hasExecutableRemoveStoredPathTarget(preparedTargets) {
+			removePerf.Mark("setup")
 			report := executeRemoveStoredPathPrepared(dryRun, failFast, preparedTargets, nil)
-			return emitBatchCommandReport("remove", report, outputMode)
+			removePerf.Mark("operation")
+			return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 		}
 
 		sgctx, err := storage.LoadDefaultStorageContext()
@@ -1681,9 +1685,11 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return fmt.Errorf("load storage context: %w", err)
 		}
 		defer func() { _ = sgctx.Close() }()
+		removePerf.Mark("setup")
 
 		report := executeRemoveStoredPathPrepared(dryRun, failFast, preparedTargets, &sgctx)
-		return emitBatchCommandReport("remove", report, outputMode)
+		removePerf.Mark("operation")
+		return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 	}
 
 	inputFile, _ := parsed.lastFlagValue("input")
@@ -1705,8 +1711,10 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("no valid file IDs after parsing input")
 	}
 	if !batch.HasExecutableTargets(preparedTargets) {
+		removePerf.Mark("setup")
 		report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, nil)
-		return emitBatchCommandReport("remove", report, outputMode)
+		removePerf.Mark("operation")
+		return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
@@ -1714,6 +1722,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
+	removePerf.Mark("setup")
 
 	execFunc := func(fileID int64) batch.ItemResult {
 		if dryRun {
@@ -1723,7 +1732,8 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 
 	report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, execFunc)
-	return emitBatchCommandReport("remove", report, outputMode)
+	removePerf.Mark("operation")
+	return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 }
 
 func ensureRestoreOutputDir(path string, createIfMissing bool) (string, error) {

@@ -9720,3 +9720,50 @@ func envSliceToMap(env []string) map[string]string {
 	}
 	return out
 }
+
+// TestRunRemoveCommandJSONIncludesPerfSpans verifies that the remove command
+// emits perf_spans in the JSON output (C2). Uses the no-executable-targets
+// path (non-numeric ID) to avoid needing a real DB connection.
+func TestRunRemoveCommandJSONIncludesPerfSpans(t *testing.T) {
+	output := captureStdout(t, func() {
+		err := runRemoveCommand(parsedCommandLine{
+			method:      "remove",
+			positionals: []string{"not-a-valid-number"},
+			flags:       map[string][]string{},
+		}, outputModeJSON)
+		// Expect a batch report (no error from the command itself).
+		_ = err
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse remove JSON payload: %v output=%q", err, output)
+	}
+
+	spans, ok := payload["perf_spans"].([]any)
+	if !ok || len(spans) < 2 {
+		t.Fatalf("expected perf_spans with at least setup+operation in remove JSON output, got=%v", payload["perf_spans"])
+	}
+	var names []string
+	for _, s := range spans {
+		span, ok := s.(map[string]any)
+		if !ok {
+			t.Fatalf("expected perf span objects, got=%T", s)
+		}
+		name, _ := span["name"].(string)
+		names = append(names, name)
+	}
+	hasSetup := false
+	hasOperation := false
+	for _, n := range names {
+		if n == "setup" {
+			hasSetup = true
+		}
+		if n == "operation" {
+			hasOperation = true
+		}
+	}
+	if !hasSetup || !hasOperation {
+		t.Fatalf("expected perf_spans to include setup and operation, got=%v", names)
+	}
+}
