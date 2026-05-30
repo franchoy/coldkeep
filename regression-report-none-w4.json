@@ -2,14 +2,14 @@
   "mode": "uncompressed",
   "passed": false,
   "has_hard_fails": true,
-  "violations_count": 10,
+  "violations_count": 12,
   "violations": [
     {
       "case": "gc-after-churn",
       "metric": "duration",
       "baseline_value": 2304.0,
-      "result_value": 2749.0,
-      "delta_pct": 19.31423611111111,
+      "result_value": 3090.0,
+      "delta_pct": 34.11458333333333,
       "threshold_pct": 3,
       "is_hard_fail": true
     },
@@ -17,8 +17,8 @@
       "case": "gc-after-churn",
       "metric": "throughput",
       "baseline_value": 0.04238552517361111,
-      "result_value": 0.03552428155692979,
-      "delta_pct": 16.18770461986177,
+      "result_value": 0.0316039644012945,
+      "delta_pct": 25.436893203883486,
       "threshold_pct": 3,
       "is_hard_fail": true
     },
@@ -26,8 +26,8 @@
       "case": "snapshot-creation",
       "metric": "duration",
       "baseline_value": 364.0,
-      "result_value": 445.0,
-      "delta_pct": 22.252747252747252,
+      "result_value": 397.0,
+      "delta_pct": 9.065934065934066,
       "threshold_pct": 3,
       "is_hard_fail": true
     },
@@ -35,8 +35,8 @@
       "case": "snapshot-creation",
       "metric": "throughput",
       "baseline_value": 6.46500011066814,
-      "result_value": 5.288224809625175,
-      "delta_pct": 18.202247191011235,
+      "result_value": 5.9276071543657505,
+      "delta_pct": 8.312342569269527,
       "threshold_pct": 3,
       "is_hard_fail": true
     },
@@ -44,8 +44,8 @@
       "case": "stats-inspect",
       "metric": "duration",
       "baseline_value": 716.0,
-      "result_value": 974.0,
-      "delta_pct": 36.03351955307262,
+      "result_value": 1217.0,
+      "delta_pct": 69.97206703910615,
       "threshold_pct": 3,
       "is_hard_fail": true
     },
@@ -53,8 +53,8 @@
       "case": "stats-inspect",
       "metric": "throughput",
       "baseline_value": 3.632136563349037,
-      "result_value": 2.6700305742894357,
-      "delta_pct": 26.488706365503077,
+      "result_value": 2.136902037270263,
+      "delta_pct": 41.166803615447826,
       "threshold_pct": 3,
       "is_hard_fail": true
     },
@@ -62,8 +62,8 @@
       "case": "store-many-small-files",
       "metric": "duration",
       "baseline_value": 631.0,
-      "result_value": 1032.0,
-      "delta_pct": 63.54992076069731,
+      "result_value": 1134.0,
+      "delta_pct": 79.7147385103011,
       "threshold_pct": 5,
       "is_hard_fail": true
     },
@@ -71,8 +71,8 @@
       "case": "store-many-small-files",
       "metric": "throughput",
       "baseline_value": 0.15476426307448493,
-      "result_value": 0.0946281492248062,
-      "delta_pct": 38.85658914728682,
+      "result_value": 0.08611662257495592,
+      "delta_pct": 44.356261022927676,
       "threshold_pct": 5,
       "is_hard_fail": true
     },
@@ -80,8 +80,8 @@
       "case": "store-mixed-dataset",
       "metric": "duration",
       "baseline_value": 260.0,
-      "result_value": 296.0,
-      "delta_pct": 13.846153846153847,
+      "result_value": 301.0,
+      "delta_pct": 15.769230769230768,
       "threshold_pct": 5,
       "is_hard_fail": true
     },
@@ -89,8 +89,26 @@
       "case": "store-mixed-dataset",
       "metric": "throughput",
       "baseline_value": 9.511808248666616,
-      "result_value": 8.354966704909867,
-      "delta_pct": 12.162162162162154,
+      "result_value": 8.21617988256917,
+      "delta_pct": 13.621262458471763,
+      "threshold_pct": 5,
+      "is_hard_fail": true
+    },
+    {
+      "case": "verify-system-deep",
+      "metric": "duration",
+      "baseline_value": 1766.0,
+      "result_value": 2329.0,
+      "delta_pct": 31.87995469988675,
+      "threshold_pct": 5,
+      "is_hard_fail": true
+    },
+    {
+      "case": "verify-system-deep",
+      "metric": "throughput",
+      "baseline_value": 1.2344682203143802,
+      "result_value": 0.9360544770610542,
+      "delta_pct": 24.17346500644054,
       "threshold_pct": 5,
       "is_hard_fail": true
     }

@@ -2818,7 +2818,8 @@ func insertLegacyCompanionBlockRowWithContext(
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
-		 VALUES ($1, $2, 1, $3, $4, $5, $6, $7)`,
+		 VALUES ($1, $2, 1, $3, $4, $5, $6, $7)
+		 ON CONFLICT (chunk_id) DO NOTHING`,
 		chunkID,
 		codec,
 		plaintextSize,
