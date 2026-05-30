@@ -87,15 +87,11 @@ func TestStorageBlocksUniqueContainerOffsetConstraintPreventsOverlap(t *testing.
 	}
 }
 
-// setupDuplicateOffsetMigrationFixture creates a minimal schema (without the
-// unique-offset migration) and inserts two storage_blocks rows with the same
-// (container_id, container_offset), simulating a pre-existing duplicate that
-// the migration preflight must detect. Extracted to keep
-// TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates within the
-// cyclomatic complexity limit.
-func setupDuplicateOffsetMigrationFixture(t *testing.T, dbconn *sql.DB) {
+// createDuplicateOffsetMigrationSchema builds the bare schema required by
+// setupDuplicateOffsetMigrationFixture: schema_version, container, and
+// storage_blocks without the unique-offset index applied.
+func createDuplicateOffsetMigrationSchema(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-
 	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatalf("disable fk: %v", err)
 	}
@@ -129,6 +125,17 @@ func setupDuplicateOffsetMigrationFixture(t *testing.T, dbconn *sql.DB) {
 		)`); err != nil {
 		t.Fatalf("create storage_blocks: %v", err)
 	}
+}
+
+// setupDuplicateOffsetMigrationFixture creates a minimal schema (without the
+// unique-offset migration) and inserts two storage_blocks rows with the same
+// (container_id, container_offset), simulating a pre-existing duplicate that
+// the migration preflight must detect. Extracted to keep
+// TestStorageBlocksUniqueOffsetMigrationPreflightBlocksDuplicates within the
+// cyclomatic complexity limit.
+func setupDuplicateOffsetMigrationFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	createDuplicateOffsetMigrationSchema(t, dbconn)
 
 	var containerID int64
 	if err := dbconn.QueryRow(
@@ -136,7 +143,6 @@ func setupDuplicateOffsetMigrationFixture(t *testing.T, dbconn *sql.DB) {
 	).Scan(&containerID); err != nil {
 		t.Fatalf("insert container: %v", err)
 	}
-
 	for i := 0; i < 2; i++ {
 		if _, err := dbconn.Exec(
 			`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
