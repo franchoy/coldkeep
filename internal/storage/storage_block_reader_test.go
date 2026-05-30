@@ -588,7 +588,10 @@ func TestStorageBlockReaderPhysicalHashMismatchBeforeAESGCMDecode(t *testing.T) 
 	}
 }
 
-func TestStorageBlockReaderLegacyNullPhysicalHashStillReads(t *testing.T) {
+// TestStorageBlockReaderPackedBlockNullPhysicalHashFailsClosed verifies that a
+// packed storage_blocks row with physical_hash=NULL is rejected at the
+// physical-payload stage (fail-closed behavior introduced in V2).
+func TestStorageBlockReaderPackedBlockNullPhysicalHashFailsClosed(t *testing.T) {
 	dbconn, workDir, blockID, _, _, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
 
 	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = NULL WHERE id = $1`, blockID); err != nil {
@@ -596,8 +599,12 @@ func TestStorageBlockReaderLegacyNullPhysicalHashStillReads(t *testing.T) {
 	}
 
 	r := NewStorageBlockReader(dbconn, workDir)
-	if _, err := r.ReadBlock(context.Background(), blockID); err != nil {
-		t.Fatalf("expected legacy NULL physical_hash row to read successfully, got: %v", err)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil {
+		t.Fatal("expected failure for packed block with NULL physical_hash, got nil")
+	}
+	if !strings.Contains(err.Error(), "physical_hash missing for packed block") {
+		t.Fatalf("expected 'physical_hash missing for packed block', got: %v", err)
 	}
 }
 
@@ -782,17 +789,23 @@ func TestStorageBlockReaderPhysicalHashDBMismatchFailsBeforeDecrypt(t *testing.T
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-physical-db-mismatch.restore", "physical payload hash mismatch")
 }
 
-func TestStorageBlockReaderLegacyNullPhysicalHashExposesAESAuthFailureOnCompressedBlock(t *testing.T) {
+// TestStorageBlockReaderAESAuthFailureDetectedAfterPhysicalMatch verifies that
+// AES-GCM authentication failure is still detected when the stored bytes are
+// corrupted. physical_hash is set to match the corrupted bytes so the
+// physical-payload stage passes and the AES stage fires as intended.
+func TestStorageBlockReaderAESAuthFailureDetectedAfterPhysicalMatch(t *testing.T) {
 	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
 	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
-
-	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = NULL WHERE id = $1`, blockID); err != nil {
-		t.Fatalf("set legacy null physical_hash: %v", err)
-	}
 
 	payload := readReaderCorruptionStoredBytes(t, workDir, filename, offset, storedSize)
 	payload[packedStorageBlockAESGCMNonceSize] ^= 0xFF
 	overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, payload)
+
+	// Update physical_hash to match the corrupted bytes so the physical stage
+	// passes and the AES authentication stage fires.
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = $1 WHERE id = $2`, blocks.HashPhysical(payload), blockID); err != nil {
+		t.Fatalf("update physical_hash for corrupted payload: %v", err)
+	}
 
 	r := NewStorageBlockReader(dbconn, workDir)
 	_, err := r.ReadBlock(context.Background(), blockID)
@@ -800,22 +813,28 @@ func TestStorageBlockReaderLegacyNullPhysicalHashExposesAESAuthFailureOnCompress
 		t.Fatalf("expected aes-gcm authentication failure, got: %v", err)
 	}
 	if errors.Is(err, ErrPhysicalPayloadHashMismatch) {
-		t.Fatalf("expected legacy null physical_hash to bypass physical stage, got: %v", err)
+		t.Fatalf("expected physical stage to pass, got physical mismatch: %v", err)
 	}
 
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-auth-failure.restore", "cipher: message authentication failed")
 }
 
-func TestStorageBlockReaderLegacyNullPhysicalHashPlainCodecSkipsDecryptStage(t *testing.T) {
+// TestStorageBlockReaderPlainCodecCompressedHashMismatchAfterPhysicalMatch verifies
+// that compressed payload hash mismatch is still detected for plain codec when
+// the stored bytes are corrupted. physical_hash is set to match the corrupted
+// bytes so the physical stage passes and the compressed-hash stage fires.
+func TestStorageBlockReaderPlainCodecCompressedHashMismatchAfterPhysicalMatch(t *testing.T) {
 	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionZstd)
-
-	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = NULL WHERE id = $1`, blockID); err != nil {
-		t.Fatalf("set legacy null physical_hash: %v", err)
-	}
 
 	payload := readReaderCorruptionStoredBytes(t, workDir, filename, offset, storedSize)
 	payload[len(payload)-1] ^= 0xFF
 	overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, payload)
+
+	// Update physical_hash to match the corrupted bytes so the physical stage
+	// passes and the compressed-hash stage fires.
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = $1 WHERE id = $2`, blocks.HashPhysical(payload), blockID); err != nil {
+		t.Fatalf("update physical_hash for corrupted payload: %v", err)
+	}
 
 	r := NewStorageBlockReader(dbconn, workDir)
 	_, err := r.ReadBlock(context.Background(), blockID)

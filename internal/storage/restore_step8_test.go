@@ -157,8 +157,8 @@ func insertPackedStorageBlock(t *testing.T, dbconn *sql.DB, containersDir, filen
 	var blockID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO storage_blocks (
-			format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash
-		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id`,
 		1,
 		"none",
@@ -167,6 +167,7 @@ func insertPackedStorageBlock(t *testing.T, dbconn *sql.DB, containersDir, filen
 		containerID,
 		int64(container.ContainerHdrLen),
 		encoded.BlockHash,
+		blocks.HashPhysical(encoded.Bytes),
 	).Scan(&blockID); err != nil {
 		t.Fatalf("insert storage_blocks row: %v", err)
 	}
@@ -411,8 +412,8 @@ func TestStep8RestoreCorruptedPackedBlockFailsCleanly(t *testing.T) {
 	var storageBlockID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO storage_blocks (
-			format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash
-		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id`,
 		1,
 		"none",
@@ -421,6 +422,7 @@ func TestStep8RestoreCorruptedPackedBlockFailsCleanly(t *testing.T) {
 		containerID,
 		int64(container.ContainerHdrLen),
 		blocks.ComputeBlockHash(corruptedBytes),
+		blocks.HashPhysical(corruptedBytes),
 	).Scan(&storageBlockID); err != nil {
 		t.Fatalf("insert corrupted storage block: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -14,6 +15,18 @@ import (
 	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
+
+// isContainerFKViolation returns true when err is a foreign-key constraint
+// failure from either PostgreSQL ("violates foreign key") or SQLite
+// ("FOREIGN KEY constraint failed").
+func isContainerFKViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "foreign key constraint") ||
+		strings.Contains(msg, "violates foreign key")
+}
 
 var gcAdvisoryUnlock = func(ctx context.Context, dbconn *sql.DB) error {
 	_, err := dbconn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
@@ -186,7 +199,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
-		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
+		FROM container WHERE quarantine = FALSE AND sealed = TRUE AND sealing = FALSE
 		ORDER BY id ASC
 	`)
 	if err != nil {
@@ -330,6 +343,13 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		_, err = tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
+			if isContainerFKViolation(err) {
+				return GCResult{}, invariants.New(
+					invariants.CodeGCFKViolation,
+					fmt.Sprintf("GC: FK violation deleting container id=%d — container still has live refs; run verify to diagnose", containerID),
+					err,
+				)
+			}
 			return GCResult{}, err
 		}
 
