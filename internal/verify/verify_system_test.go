@@ -629,7 +629,8 @@ func setPackedBlockHashForBytes(t testing.TB, dbconn *sql.DB, blockID int64, pay
 	t.Helper()
 
 	h := blocks.ComputeBlockHash(payload)
-	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = $1 WHERE id = $2`, h, blockID); err != nil {
+	physH := blocks.HashPhysical(payload)
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = $1, physical_hash = $2 WHERE id = $3`, h, physH, blockID); err != nil {
 		t.Fatalf("update block hash for mutated payload: %v", err)
 	}
 }
@@ -806,14 +807,15 @@ func seedVerifyPackedBlockFixture(t testing.TB, dbconn *sql.DB, containersDir st
 
 	var blockID int64
 	if err := tx.QueryRow(
-		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		 VALUES (1, 'none', $1, $2, $3, $4, $5)
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash)
+		 VALUES (1, 'none', $1, $2, $3, $4, $5, $6)
 		 RETURNING id`,
 		int64(len(encoded.Bytes)),
 		int64(len(encoded.Bytes)),
 		placement.ContainerID,
 		placement.Offset,
 		encoded.BlockHash,
+		blocks.HashPhysical(encoded.Bytes),
 	).Scan(&blockID); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("insert storage_blocks for fixture: %v", err)
@@ -1327,7 +1329,11 @@ func TestVerifyBlockPayloadsDetectsPhysicalHashMismatchStageOnCompressedBlock(t 
 	}
 }
 
-func TestVerifyBlockPayloadsDetectsDecryptFailureWithLegacyNullPhysicalHashOnCompressedAESBlock(t *testing.T) {
+func TestVerifyBlockPayloadsDetectsDecryptFailureOnCompressedAESBlock(t *testing.T) {
+	// V2 hardening: packed blocks require physical_hash. Previously this test cleared
+	// physical_hash (legacy-null scenario). After V2, physical_hash is updated to
+	// match the corrupted stored bytes so the physical stage passes and the AES-GCM
+	// AEAD authentication failure is detected at the decrypt stage.
 	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -1340,8 +1346,10 @@ func TestVerifyBlockPayloadsDetectsDecryptFailureWithLegacyNullPhysicalHashOnCom
 	payload[packedStorageBlockAESGCMNonceSize] ^= 0xFF
 	overwritePackedStoredBytesForTest(t, path, offset, payload)
 
-	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = NULL WHERE id = $1`, blockID); err != nil {
-		t.Fatalf("set physical_hash null: %v", err)
+	// Update physical_hash to match the corrupted stored bytes so the physical
+	// stage passes and the AEAD failure fires at the decrypt stage.
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = $1 WHERE id = $2`, blocks.HashPhysical(payload), blockID); err != nil {
+		t.Fatalf("update physical_hash to corrupted bytes: %v", err)
 	}
 
 	err := verifyBlockPayloads(dbconn, containersDir)

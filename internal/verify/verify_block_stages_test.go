@@ -22,14 +22,36 @@ func TestBlockVerifyStageConstants(t *testing.T) {
 }
 
 func TestVerifyPhysicalPayloadStageIsNoOp(t *testing.T) {
+	// Legacy (blocks table) rows have isPackedBlock=false (the zero value).
+	// NULL physical_hash on a legacy row must be silently skipped.
 	p := blockStagePayloads{
 		storedBytes:      []byte("any bytes"),
 		compressedBytes:  nil,
 		plaintextEncoded: []byte("plaintext"),
+		// isPackedBlock defaults to false — legacy path
 	}
 	loc := verifyBlockLocation{blockID: 42, containerID: 7, offset: 11}
 	if err := verifyPhysicalPayloadStage(context.Background(), loc, p); err != nil {
 		t.Fatalf("expected nil from physical stage legacy skip, got: %v", err)
+	}
+}
+
+func TestVerifyPhysicalPayloadStageFailsForPackedBlockWithNullHash(t *testing.T) {
+	// Packed (storage_blocks) rows must have physical_hash set.
+	// NULL physical_hash on a packed block is a metadata integrity failure.
+	p := blockStagePayloads{
+		storedBytes:      []byte("packed-block-bytes"),
+		isPackedBlock:    true,
+		compressionCodec: "none",
+		// PhysicalHash intentionally nil to simulate incomplete metadata
+	}
+	loc := verifyBlockLocation{blockID: 99, containerID: 8, offset: 0}
+	err := verifyPhysicalPayloadStage(context.Background(), loc, p)
+	if err == nil {
+		t.Fatal("expected physical stage to fail-closed for packed block with nil physical_hash")
+	}
+	if !strings.Contains(err.Error(), verifyErrMetadataInvalid) {
+		t.Fatalf("expected metadata_invalid category, got: %v", err)
 	}
 }
 
@@ -53,14 +75,51 @@ func TestVerifyPhysicalPayloadStageDetectsMismatch(t *testing.T) {
 }
 
 func TestVerifyCompressedPayloadStageSkipsLegacyNull(t *testing.T) {
+	// Legacy (blocks table) rows have isPackedBlock=false (the zero value).
+	// NULL compressed_hash on a legacy row must be silently skipped.
 	p := blockStagePayloads{
 		storedBytes:      []byte("any bytes"),
 		compressedBytes:  nil,
 		plaintextEncoded: []byte("plaintext"),
+		// isPackedBlock defaults to false — legacy path
 	}
 	loc := verifyBlockLocation{blockID: 42, containerID: 7, offset: 11}
 	if err := verifyCompressedPayloadStage(context.Background(), loc, p); err != nil {
 		t.Fatalf("expected nil from compressed stage legacy skip, got: %v", err)
+	}
+}
+
+func TestVerifyCompressedPayloadStageSkipsPackedNoneCodecNullHash(t *testing.T) {
+	// Packed blocks with compression_codec=none legitimately have no compressed_hash
+	// because there is no separate compressed representation to hash.
+	p := blockStagePayloads{
+		storedBytes:      []byte("packed-none-bytes"),
+		isPackedBlock:    true,
+		compressionCodec: "none",
+		// CompressedHash nil for none-codec block — valid
+	}
+	loc := verifyBlockLocation{blockID: 100, containerID: 8, offset: 0}
+	if err := verifyCompressedPayloadStage(context.Background(), loc, p); err != nil {
+		t.Fatalf("expected nil for packed none-codec block with nil compressed_hash, got: %v", err)
+	}
+}
+
+func TestVerifyCompressedPayloadStageFailsForCompressedPackedBlockWithNullHash(t *testing.T) {
+	// Packed compressed blocks (e.g. zstd) must have compressed_hash set.
+	// NULL compressed_hash on a compressed packed block is a metadata failure.
+	p := blockStagePayloads{
+		storedBytes:      []byte("compressed-packed-bytes"),
+		isPackedBlock:    true,
+		compressionCodec: "zstd",
+		// CompressedHash intentionally nil to simulate incomplete metadata
+	}
+	loc := verifyBlockLocation{blockID: 101, containerID: 9, offset: 0}
+	err := verifyCompressedPayloadStage(context.Background(), loc, p)
+	if err == nil {
+		t.Fatal("expected compressed stage to fail-closed for zstd packed block with nil compressed_hash")
+	}
+	if !strings.Contains(err.Error(), verifyErrMetadataInvalid) {
+		t.Fatalf("expected metadata_invalid category, got: %v", err)
 	}
 }
 
