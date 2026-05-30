@@ -280,11 +280,15 @@ func TestVerifySystemFullDetectsMissingContainerFileForReferencedChunk(t *testin
 	}
 }
 
-func TestVerifySystemFullDetectsMissingContainerFileForPackedBlock(t *testing.T) {
-	dbconn := openVerifyTestDB(t)
-	defer func() { _ = dbconn.Close() }()
+// setupVerifyPackedMissingFixture inserts the full reference chain required by
+// TestVerifySystemFullDetectsMissingContainerFileForPackedBlock: a logical file,
+// physical file, container, storage_blocks row, chunk, file_chunk, and
+// chunk_block_refs row. The container filename has no corresponding file on disk,
+// so a full verify against an empty containersDir must fail.
+// Extracted to keep the test function below the cyclomatic complexity threshold.
+func setupVerifyPackedMissingFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
 
-	// Insert a logical file and physical file to anchor the reference chain.
 	var logicalID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
@@ -301,7 +305,6 @@ func TestVerifySystemFullDetectsMissingContainerFileForPackedBlock(t *testing.T)
 		t.Fatalf("insert physical_file: %v", err)
 	}
 
-	// Container whose physical file will be absent from disk.
 	var containerID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
@@ -343,6 +346,13 @@ func TestVerifySystemFullDetectsMissingContainerFileForPackedBlock(t *testing.T)
 	); err != nil {
 		t.Fatalf("insert chunk_block_refs: %v", err)
 	}
+}
+
+func TestVerifySystemFullDetectsMissingContainerFileForPackedBlock(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	setupVerifyPackedMissingFixture(t, dbconn)
 
 	err := VerifySystemFullWithContainersDir(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "no such file or directory") {
