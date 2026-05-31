@@ -961,10 +961,10 @@ func TestRunGCSnapshotRetainsPackedBlockAndRestoreSucceedsWhenLiveNamespaceRemov
 
 	var storageBlockID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'none', $1, $2, $3, $4, $5)
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash)
+		VALUES (1, 'none', $1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), packedBlockHash).Scan(&storageBlockID); err != nil {
+	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), packedBlockHash, blocks.HashPhysical(encodedBlock)).Scan(&storageBlockID); err != nil {
 		t.Fatalf("insert packed storage block: %v", err)
 	}
 
