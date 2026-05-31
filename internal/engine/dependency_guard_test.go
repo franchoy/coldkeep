@@ -47,26 +47,38 @@ func TestEngineDependencyDirection(t *testing.T) {
 		if err := dec.Decode(&pkg); err != nil {
 			t.Fatalf("decode go list output: %v", err)
 		}
+		checkEngineNotDependsOnCLI(t, pkg, enginePkg, cliPkg)
+		checkDomainNotImportsEngine(t, pkg, module, enginePkg)
+	}
+}
 
-		// Rule 1: engine must not depend on CLI, even transitively.
-		if pkg.ImportPath == enginePkg {
-			for _, dep := range pkg.Deps {
-				if dep == cliPkg || strings.HasPrefix(dep, cliPkg+"/") {
-					t.Errorf("Rule 1 violation: engine must not depend on CLI:\n\t%s -> %s",
-						pkg.ImportPath, dep)
-				}
-			}
+// checkEngineNotDependsOnCLI enforces Rule 1: engine must not depend on CLI,
+// even transitively.
+func checkEngineNotDependsOnCLI(t *testing.T, pkg goListPackage, enginePkg, cliPkg string) {
+	t.Helper()
+	if pkg.ImportPath != enginePkg {
+		return
+	}
+	for _, dep := range pkg.Deps {
+		if dep == cliPkg || strings.HasPrefix(dep, cliPkg+"/") {
+			t.Errorf("Rule 1 violation: engine must not depend on CLI:\n\t%s -> %s",
+				pkg.ImportPath, dep)
 		}
+	}
+}
 
-		// Rule 2: non-engine internal packages must not directly import engine.
-		if strings.HasPrefix(pkg.ImportPath, module+"/internal/") &&
-			!strings.HasPrefix(pkg.ImportPath, enginePkg) {
-			for _, imp := range pkg.Imports {
-				if imp == enginePkg || strings.HasPrefix(imp, enginePkg+"/") {
-					t.Errorf("Rule 2 violation: domain/internal package must not import engine facade:\n\t%s -> %s",
-						pkg.ImportPath, imp)
-				}
-			}
+// checkDomainNotImportsEngine enforces Rule 2: non-engine internal/* packages
+// must not directly import internal/engine.
+func checkDomainNotImportsEngine(t *testing.T, pkg goListPackage, module, enginePkg string) {
+	t.Helper()
+	if !strings.HasPrefix(pkg.ImportPath, module+"/internal/") ||
+		strings.HasPrefix(pkg.ImportPath, enginePkg) {
+		return
+	}
+	for _, imp := range pkg.Imports {
+		if imp == enginePkg || strings.HasPrefix(imp, enginePkg+"/") {
+			t.Errorf("Rule 2 violation: domain/internal package must not import engine facade:\n\t%s -> %s",
+				pkg.ImportPath, imp)
 		}
 	}
 }
