@@ -1029,26 +1029,26 @@ metadata only (never as a command target).
 
 Confirm:
 
-- [ ] Snapshot create succeeds
-- [ ] Removing current mapping is refused while the logical file is snapshot-retained
-- [ ] GC dry-run reports snapshot-retained logical files before snapshot delete
-- [ ] Snapshot restore succeeds from retained snapshot data
-- [ ] Snapshot diff works and output is consistent with returned entries
-- [ ] Snapshot delete succeeds only with `--force`
-- [ ] GC eligibility changes only after all retaining snapshots are deleted
+- [x] Snapshot create succeeds
+- [x] Removing current mapping is refused while the logical file is snapshot-retained
+- [x] GC dry-run reports snapshot-retained logical files before snapshot delete
+- [x] Snapshot restore succeeds from retained snapshot data
+- [x] Snapshot diff works and output is consistent with returned entries
+- [x] Snapshot delete succeeds only with `--force`
+- [x] GC eligibility changes only after all retaining snapshots are deleted
 
 ## 18) Final global sign-off
 
-- [ ] Doctor checks passed
-- [ ] Validation matrix audit passed
-- [ ] Bootstrap on/off behavior verified
-- [ ] Clean install path verified
-- [ ] CLI contract stability verified
-- [ ] Batch CLI contract stability verified
-- [ ] v1.2 physical-file contract verified (G10–G13)
-- [ ] v1.6 observability / simulation contract verified
-- [ ] Snapshot phase checklist verified (Phases 1-7)
-- [ ] Snapshot C. test surface checklist verified
-- [ ] Snapshot D. documentation/release checklist verified
-- [ ] Snapshot/retention manual gate verified
+- [x] Doctor checks passed
+- [x] Validation matrix audit passed
+- [x] Bootstrap on/off behavior verified
+- [x] Clean install path verified
+- [x] CLI contract stability verified
+- [x] Batch CLI contract stability verified
+- [x] v1.2 physical-file contract verified (G10–G13)
+- [x] v1.6 observability / simulation contract verified (non-gating per historical template sections 12-14)
+- [x] Snapshot phase checklist verified (Phases 1-7)
+- [x] Snapshot C. test surface checklist verified
+- [x] Snapshot D. documentation/release checklist verified
+- [x] Snapshot/retention manual gate verified
 - [ ] Release PR description follows `.github/pull_request_template.md`

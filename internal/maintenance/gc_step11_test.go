@@ -174,10 +174,10 @@ func TestStep11PackedOnlyDeadBlockDeletionRunGCAndVerify(t *testing.T) {
 
 	var blockID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'none', $1, $2, $3, $4, $5)
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash)
+		VALUES (1, 'none', $1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, int64(len(deadEncoded)), int64(len(deadEncoded)), containerID, int64(container.ContainerHdrLen), deadBlockHash).Scan(&blockID); err != nil {
+	`, int64(len(deadEncoded)), int64(len(deadEncoded)), containerID, int64(container.ContainerHdrLen), deadBlockHash, blocks.HashPhysical(deadEncoded)).Scan(&blockID); err != nil {
 		t.Fatalf("insert storage_block: %v", err)
 	}
 
@@ -246,10 +246,10 @@ func TestStep11PackedBlockPartiallyLiveRetainedRestoreAndVerify(t *testing.T) {
 
 	var blockID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'none', $1, $2, $3, $4, $5)
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash)
+		VALUES (1, 'none', $1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), blockHash).Scan(&blockID); err != nil {
+	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), blockHash, blocks.HashPhysical(encodedBlock)).Scan(&blockID); err != nil {
 		t.Fatalf("insert storage_block: %v", err)
 	}
 
@@ -338,10 +338,10 @@ func TestStep11SnapshotRetainsPackedBlockAndRestoreSucceeds(t *testing.T) {
 
 	var blockID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'none', $1, $2, $3, $4, $5)
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash)
+		VALUES (1, 'none', $1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), blockHash).Scan(&blockID); err != nil {
+	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), blockHash, blocks.HashPhysical(encodedBlock)).Scan(&blockID); err != nil {
 		t.Fatalf("insert storage_block: %v", err)
 	}
 	if _, err := dbconn.Exec(`
@@ -454,10 +454,10 @@ func TestStep11MixedLegacyAndPackedRepoRestoreRemainingAndVerify(t *testing.T) {
 
 	var packedKeepBlockID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'none', $1, $2, $3, $4, $5)
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash)
+		VALUES (1, 'none', $1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, int64(len(packedKeepEncoded)), int64(len(packedKeepEncoded)), packedKeepContainerID, int64(container.ContainerHdrLen), keepBlockHash).Scan(&packedKeepBlockID); err != nil {
+	`, int64(len(packedKeepEncoded)), int64(len(packedKeepEncoded)), packedKeepContainerID, int64(container.ContainerHdrLen), keepBlockHash, blocks.HashPhysical(packedKeepEncoded)).Scan(&packedKeepBlockID); err != nil {
 		t.Fatalf("insert packed keep storage_block: %v", err)
 	}
 	if _, err := dbconn.Exec(`
@@ -470,10 +470,10 @@ func TestStep11MixedLegacyAndPackedRepoRestoreRemainingAndVerify(t *testing.T) {
 
 	var packedDropBlockID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'none', $1, $2, $3, $4, $5)
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash)
+		VALUES (1, 'none', $1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, int64(len(packedDropEncoded)), int64(len(packedDropEncoded)), packedDropContainerID, int64(container.ContainerHdrLen), dropBlockHash).Scan(&packedDropBlockID); err != nil {
+	`, int64(len(packedDropEncoded)), int64(len(packedDropEncoded)), packedDropContainerID, int64(container.ContainerHdrLen), dropBlockHash, blocks.HashPhysical(packedDropEncoded)).Scan(&packedDropBlockID); err != nil {
 		t.Fatalf("insert packed drop storage_block: %v", err)
 	}
 	if _, err := dbconn.Exec(`
@@ -573,10 +573,10 @@ func TestStep11ContainerWithMixedPhysicalUnitsRetainedWhileEitherKindLive(t *tes
 
 	var packedBlockID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'none', $1, $2, $3, $4, $5)
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, physical_hash)
+		VALUES (1, 'none', $1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, int64(len(packedEncoded)), int64(len(packedEncoded)), containerID, int64(container.ContainerHdrLen+len(legacyPayload)), packedBlockHash).Scan(&packedBlockID); err != nil {
+	`, int64(len(packedEncoded)), int64(len(packedEncoded)), containerID, int64(container.ContainerHdrLen+len(legacyPayload)), packedBlockHash, blocks.HashPhysical(packedEncoded)).Scan(&packedBlockID); err != nil {
 		t.Fatalf("insert packed block: %v", err)
 	}
 	if _, err := dbconn.Exec(`
