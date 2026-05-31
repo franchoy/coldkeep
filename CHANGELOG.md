@@ -20,6 +20,31 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.11.0 - 2026-05-31 — Behavior-Preserving Engine Facade Baseline
+
+Introduces the behavior-preserving engine facade baseline.
+
+No observable CLI, JSON, exit-code, storage, snapshot, GC, restore, verify,
+or schema behavior changed.
+
+Changes:
+
+- Added `internal/engine` package with `Engine` interface (`Stats`, `Inspect`,
+  `Verify`). `DefaultEngine` wraps existing domain packages; no business logic
+  was moved.
+- Added inactive mutating operation candidates for Phase 3 (v1.12+). Not wired.
+- `runObservabilityStatsPhase` in `cmd/coldkeep` now delegates through the
+  engine facade. Observable output is identical.
+- Dependency guard test enforces the engine/domain package direction contract.
+- Test: normalized `COLDKEEP_CODEC` per codec in G6 adversarial suite,
+  fixing subtest isolation when CI sets `COLDKEEP_CODEC`.
+- Updated version string to `1.11.0`.
+
+Explicit non-goals: does not route additional CLI commands through engine,
+does not lift business logic, does not change DB backend, no new product features.
+
+------------------------------------------------------------------------
+
 ## v1.10.16 - 2026-05-31 — Final v1.10.x Evidence Closure
 
 - Updated reported version metadata to `1.10.16`.
