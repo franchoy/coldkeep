@@ -31,6 +31,25 @@ func TestEnginePublicTypesDoNotExposeBackendSpecificFields(t *testing.T) {
 		{"StatsRequest", engine.StatsRequest{}},
 		{"InspectRequest", engine.InspectRequest{}},
 		{"VerifyRequest", engine.VerifyRequest{}},
+		// Mutating operation candidates (inactive in v1.11.0 Phase 7).
+		{"StoreRequest", engine.StoreRequest{}},
+		{"StoreResult", engine.StoreResult{}},
+		{"RestoreRequest", engine.RestoreRequest{}},
+		{"RestoreResult", engine.RestoreResult{}},
+		{"RemoveRequest", engine.RemoveRequest{}},
+		{"RemoveResult", engine.RemoveResult{}},
+		{"SnapshotCreateRequest", engine.SnapshotCreateRequest{}},
+		{"SnapshotCreateResult", engine.SnapshotCreateResult{}},
+		{"SnapshotRestoreRequest", engine.SnapshotRestoreRequest{}},
+		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
+		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
+		{"SnapshotDeleteResult", engine.SnapshotDeleteResult{}},
+		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
+		{"GarbageCollectResult", engine.GarbageCollectResult{}},
+		{"RepairRequest", engine.RepairRequest{}},
+		{"RepairResult", engine.RepairResult{}},
+		{"RecoverRequest", engine.RecoverRequest{}},
+		{"RecoverResult", engine.RecoverResult{}},
 	}
 
 	for _, tc := range typesToCheck {
