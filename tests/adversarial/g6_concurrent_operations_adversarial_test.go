@@ -39,6 +39,7 @@ func adversarialG6Codecs() []string {
 
 func configureAdversarialG6Codec(t *testing.T, codec string) {
 	t.Helper()
+	t.Setenv("COLDKEEP_CODEC", codec)
 	if codec == "aes-gcm" {
 		testutils.SetTestAESGCMKey(t)
 	}
