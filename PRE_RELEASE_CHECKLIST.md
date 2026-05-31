@@ -1051,4 +1051,4 @@ Confirm:
 - [x] Snapshot C. test surface checklist verified
 - [x] Snapshot D. documentation/release checklist verified
 - [x] Snapshot/retention manual gate verified
-- [ ] Release PR description follows `.github/pull_request_template.md`
+- [x] Release PR description follows `.github/pull_request_template.md`

@@ -20,6 +20,24 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.16 - 2026-05-31 — Final v1.10.x Evidence Closure
+
+- Updated reported version metadata to `1.10.16`.
+- Closed stale v1.10.15 post-publication release evidence.
+- Marked v1.10.15 Phase 6 as released / complete.
+- Recorded v1.10.15 PR, CI, merge, tag, and GitHub release evidence.
+- Declared v1.10.x complete after v1.10.16.
+
+No runtime behavior, storage behavior, restore behavior, verify behavior, GC
+behavior, snapshot behavior, schema behavior, migration behavior, JSON
+behavior, CI, scripts, dependencies, engine behavior, or catalog behavior
+changed.
+
+v1.11 may begin as behavior-preserving engine facade work under the existing
+v1.10.14 handoff rules.
+
+------------------------------------------------------------------------
+
 ## v1.10.15 - 2026-05-31 — Release Metadata Reconciliation
 
 Metadata-only corrective release. Reconciles repository metadata after
