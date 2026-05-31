@@ -847,6 +847,17 @@ coldkeep doctor --full
 coldkeep doctor --deep --output json
 ```
 
+### Recovery strict mode
+
+Startup recovery runs in strict mode by default.
+
+```bash
+COLDKEEP_STRICT_RECOVERY=true   # default; fail-closed on ambiguous state
+COLDKEEP_STRICT_RECOVERY=false  # operator escape hatch for recovery investigation
+```
+
+Strict mode is the recommended production setting. Disabling it should be treated as a temporary operator escape hatch only, not a normal operating mode.
+
 ## Verification
 
 Verification levels:

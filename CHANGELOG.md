@@ -20,6 +20,53 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.15 - 2026-05-31 — Release Metadata Reconciliation
+
+Metadata-only corrective release. Reconciles repository metadata after
+the v1.10.14 release and closes v1.10.x definitively before v1.11 starts.
+
+Changes:
+
+- Updated reported version to `1.10.15`.
+- Reconciled v1.10.14 Phase 7 release evidence (PR #74, merge commit
+  19e5471, CI run 26696932318, tag v1.10.14, published 2026-05-30T23:05:39Z)
+  into repository documents; Phase 7 was completed externally at publication
+  time but remained marked pending inside the repository.
+- Added CHANGELOG entries for v1.10.14 and v1.10.15.
+- Documented the v1.10 release-notes source-of-truth convention.
+- Documented `COLDKEEP_STRICT_RECOVERY` operator setting in README.
+
+No storage behavior, restore behavior, verify behavior, GC behavior,
+snapshot behavior, schema behavior, migration behavior, CLI behavior
+beyond the reported version output, JSON behavior, CI, scripts, or
+dependencies changed.
+
+------------------------------------------------------------------------
+
+## v1.10.14 - 2026-05-30 — Release Evidence Closure and v1.11 Handoff
+
+Documentation and release-control release only. No runtime behavior,
+source code, tests, CI, scripts, or dependencies changed.
+
+Changes:
+
+- Closed stale v1.10.12 release evidence.
+- Recorded v1.10.13 final release evidence.
+- Updated README roadmap state for v1.10.x closure.
+- Updated CHANGELOG through v1.10.13.
+- Clarified the v1.10 issue tracker source of truth.
+- Documented Codacy false-positive handling and the RAC_* SQL pattern
+  decision (non-applicable to Coldkeep).
+- Created the v1.11 handoff gate with wrapper-first and parity-before-
+  lifting rules.
+- Created the v1.10.14 final release gate.
+
+No runtime behavior, CLI behavior, JSON behavior, storage format,
+repository format, schema behavior, migration behavior, engine work,
+or catalog work changed.
+
+------------------------------------------------------------------------
+
 ## v1.10.13 - 2026-05-30 — Post-Release Correctness Hardening
 
 Fixes-only release closing 10 correctness gaps found in the adversarial
