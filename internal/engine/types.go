@@ -6,6 +6,8 @@ import "github.com/franchoy/coldkeep/internal/observability"
 type StatsRequest struct {
 	// IncludeContainers requests container-level statistics in the result.
 	IncludeContainers bool
+	// Trace controls optional trace-event emission during stats collection.
+	Trace observability.TraceOptions
 }
 
 // StatsResult carries the result of the Stats operation.

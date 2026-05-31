@@ -34,6 +34,7 @@ import (
 	clirender "github.com/franchoy/coldkeep/internal/cli/render"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/iodebug"
@@ -208,17 +209,23 @@ var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observa
 	}
 	defer func() { _ = sgctx.DB.Close() }()
 
-	svc, err := newObservabilityServicePhase(sgctx.DB)
+	eng, err := engine.New(engine.Config{
+		DB:           sgctx.DB,
+		ContainerDir: sgctx.EffectiveContainerDir(),
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	r, err := svc.Stats(context.Background(), opts)
+	result, err := eng.Stats(context.Background(), engine.StatsRequest{
+		IncludeContainers: opts.IncludeContainers,
+		Trace:             opts.Trace,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	return r, nil
+	return result.Raw, nil
 }
 var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
 	sgctx, err := loadDefaultStorageContextPhase()

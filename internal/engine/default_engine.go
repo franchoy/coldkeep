@@ -52,6 +52,7 @@ func New(cfg Config) (*DefaultEngine, error) {
 func (e *DefaultEngine) Stats(ctx context.Context, req StatsRequest) (StatsResult, error) {
 	r, err := e.obs.Stats(ctx, observability.StatsOptions{
 		IncludeContainers: req.IncludeContainers,
+		Trace:             req.Trace,
 	})
 	if err != nil {
 		return StatsResult{}, err
