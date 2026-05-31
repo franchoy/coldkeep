@@ -293,12 +293,16 @@ func ResetDB(t *testing.T, dbconn *sql.DB) {
 	// Keep schema_version; clear the data tables and reset sequences.
 	_, err := dbconn.Exec(`
 		TRUNCATE TABLE
+			snapshot_file,
+			snapshot_path,
+			snapshot,
 			file_chunk,
 			chunk_block_refs,
 			storage_blocks,
 			blocks,
 			chunk,
 			logical_file,
+			physical_file,
 			container
 		RESTART IDENTITY CASCADE
 	`)
