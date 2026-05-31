@@ -1,27 +1,44 @@
-package engine_test
+package engine
 
 import (
-	"context"
-	"errors"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
 // Compile-time check: DefaultEngine satisfies the Engine interface.
-var _ engine.Engine = (*engine.DefaultEngine)(nil)
+var _ Engine = (*DefaultEngine)(nil)
 
-func TestDefaultEngineReturnsErrNotImplemented(t *testing.T) {
-	e := engine.New(engine.Config{RepositoryRoot: "/tmp/test"})
-	ctx := context.Background()
+func TestNewRequiresDB(t *testing.T) {
+	_, err := New(Config{})
+	if err == nil {
+		t.Fatal("New with nil DB: want error, got nil")
+	}
+}
 
-	if _, err := e.Stats(ctx, engine.StatsRequest{}); !errors.Is(err, engine.ErrNotImplemented) {
-		t.Errorf("Stats: got %v, want ErrNotImplemented", err)
+func TestVerifyLevelFromString(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    verify.VerifyLevel
+		wantErr bool
+	}{
+		{"", verify.VerifyStandard, false},
+		{"standard", verify.VerifyStandard, false},
+		{"fast", verify.VerifyFast, false},
+		{"full", verify.VerifyFull, false},
+		{"deep", verify.VerifyDeep, false},
+		{"bad", 0, true},
+		{"STANDARD", 0, true},
 	}
-	if _, err := e.Inspect(ctx, engine.InspectRequest{FileID: 1}); !errors.Is(err, engine.ErrNotImplemented) {
-		t.Errorf("Inspect: got %v, want ErrNotImplemented", err)
-	}
-	if _, err := e.Verify(ctx, engine.VerifyRequest{Level: "standard"}); !errors.Is(err, engine.ErrNotImplemented) {
-		t.Errorf("Verify: got %v, want ErrNotImplemented", err)
+	for _, tc := range tests {
+		t.Run("input="+tc.input, func(t *testing.T) {
+			got, err := verifyLevelFromString(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("verifyLevelFromString(%q): err=%v, wantErr=%v", tc.input, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Errorf("verifyLevelFromString(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
 	}
 }
