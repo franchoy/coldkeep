@@ -35,6 +35,11 @@ Changes:
 - Added CHANGELOG entries for v1.10.14 and v1.10.15.
 - Documented the v1.10 release-notes source-of-truth convention.
 - Documented `COLDKEEP_STRICT_RECOVERY` operator setting in README.
+- Fixed pre-existing test infrastructure bugs found during pre-release
+  checklist execution: `gc_step11_test.go` and `gc_test.go` packed-block
+  fixtures missing `physical_hash` column; `tests/utils/common.go`
+  `ResetDB` TRUNCATE list missing `snapshot`, `snapshot_file`,
+  `snapshot_path`, and `physical_file` tables.
 
 No storage behavior, restore behavior, verify behavior, GC behavior,
 snapshot behavior, schema behavior, migration behavior, CLI behavior
