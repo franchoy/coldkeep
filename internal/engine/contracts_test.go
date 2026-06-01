@@ -63,8 +63,8 @@ func allCandidateTypes() []struct {
 // (database/sql, io, os, cobra, observability, storage, ...) would couple the
 // contracts to a backend, the filesystem, or a renderer.
 var allowedFieldPackages = map[string]bool{
-	"":                                              true, // built-in types (string, int, bool, []byte, ...)
-	"time":                                          true,
+	"":     true, // built-in types (string, int, bool, []byte, ...)
+	"time": true,
 	"github.com/franchoy/coldkeep/internal/engine": true,
 }
 
