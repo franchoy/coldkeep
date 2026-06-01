@@ -112,6 +112,34 @@ Scope intentionally deferred in Phase 8:
 - `Restore`
 - `Store`
 
+## v1.12 state (Phase 9 — Remove/Repair/Recovery Migration, complete scoped routing)
+
+Phase 9 adds `Remove` to the active `Engine` interface and routes remove-by-ID execution through
+engine orchestration while preserving existing CLI batch/human/JSON/exit behavior.
+
+Scope activated in Phase 9:
+
+- `Remove` file-ID mode (`RemoveModeFileIDs`) active on `DefaultEngine`.
+
+Scope intentionally deferred in Phase 9:
+
+- stored-path remove modes (`RemoveModeStoredPath`, `RemoveModeStoredPaths`) remain deferred.
+- repair remains on direct maintenance routing.
+- recovery remains on direct startup/doctor recovery routing.
+
+`Engine` interface methods as of v1.12 Phase 9:
+- `Stats`
+- `Inspect`
+- `Verify`
+- `SnapshotList`
+- `SnapshotShow`
+- `SnapshotStats`
+- `SnapshotDiff`
+- `GarbageCollect`
+- `Restore`
+- `Store`
+- `Remove`
+
 ## v1.12 Migration Rule
 
 v1.12 moves orchestration behind the engine and metadata planning behind catalog APIs.

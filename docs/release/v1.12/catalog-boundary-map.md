@@ -149,3 +149,29 @@ Deferral rationale:
 3. Store correctness is preserved by delegating to existing storage-context-aware store functions
   without rewriting chunking, packing, or placement logic.
 
+## Phase 9 status
+
+Remove-by-ID routing is complete at the engine boundary, while other destructive/corrective paths
+are intentionally deferred.
+
+- `Engine.Remove` is active for `RemoveModeFileIDs`.
+- remove-by-ID path now uses engine orchestration and preserves existing storage-layer invariants.
+- stored-path remove modes remain on CLI -> storage direct paths in this phase.
+- repair and recovery remain on direct maintenance/recovery paths in this phase.
+
+Current boundary shape for Phase 9 operations:
+
+- remove-by-ID: CLI batch orchestration -> engine.Remove -> storage remove pipeline.
+- remove stored-path modes: CLI -> storage direct path.
+- repair: CLI -> maintenance direct path.
+- recovery: startup/doctor -> recovery direct path.
+
+Deferral rationale:
+
+1. Stored-path remove modes have distinct target parsing/addressing flows and need dedicated parity
+  guards before safe engine activation.
+2. Repair and recovery are correctness-critical corrective paths; routing is deferred until wrappers
+  can be activated with tiny diffs and explicit equivalence tests for fail-safe semantics.
+3. This phase keeps destructive-operation migration narrow while preserving snapshot-retention and
+  reference-count safety behavior through existing storage invariants.
+

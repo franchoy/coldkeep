@@ -294,6 +294,8 @@ type RemoveItemResult struct {
 	FileID int64
 	// StoredPath is the stored path (stored-path modes).
 	StoredPath string
+	// RemovedMappings is the count of removed chunk mappings (file-ID mode).
+	RemovedMappings int
 	// RemainingRefCount is the logical-file ref count after removal.
 	RemainingRefCount int
 	// Removed indicates whether the logical file row was removed.
@@ -302,6 +304,10 @@ type RemoveItemResult struct {
 	Status BatchItemStatus
 	// Error is a non-empty message when Status is failed.
 	Error string
+	// InvariantCode is the machine-readable invariant identifier when available.
+	InvariantCode string
+	// RecommendedAction is operator guidance associated with InvariantCode.
+	RecommendedAction string
 }
 
 // RemoveResult is a candidate result for a future Remove operation.

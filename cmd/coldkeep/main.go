@@ -43,7 +43,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
-	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 	"github.com/franchoy/coldkeep/internal/version"
@@ -215,6 +214,47 @@ var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName strin
 		Path:          res.StoredPath,
 		AlreadyStored: res.AlreadyStored,
 	}, nil
+}
+var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun bool) batch.ItemResult {
+	if sgctx == nil || sgctx.DB == nil {
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: "remove: storage context DB is required"}
+	}
+
+	eng, err := engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
+	if err != nil {
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+	}
+
+	res, err := eng.Remove(context.Background(), engine.RemoveRequest{
+		Mode:     engine.RemoveModeFileIDs,
+		FileIDs:  []int64{fileID},
+		DryRun:   dryRun,
+		FailFast: true,
+	})
+	if err != nil {
+		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+		annotateBatchFailureFromError(err, &item)
+		return item
+	}
+	if len(res.Items) != 1 {
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("remove: expected one item result, got %d", len(res.Items))}
+	}
+
+	item := res.Items[0]
+	if item.Status == engine.BatchItemFailed {
+		return batch.ItemResult{
+			ID:                fileID,
+			Status:            batch.ResultFailed,
+			Message:           item.Error,
+			InvariantCode:     item.InvariantCode,
+			RecommendedAction: item.RecommendedAction,
+		}
+	}
+
+	if dryRun {
+		return batch.ItemResult{ID: fileID, Status: batch.ResultPlanned, Message: "would remove"}
+	}
+	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", item.RemovedMappings)}
 }
 var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
@@ -1860,7 +1900,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return usageErrorf("--dry-run and --fail-fast are not supported with --stored-path")
 		}
 
-		sgctx, err := storage.LoadDefaultStorageContext()
+		sgctx, err := loadDefaultStorageContextPhase()
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
 		}
@@ -1918,7 +1958,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 		}
 
-		sgctx, err := storage.LoadDefaultStorageContext()
+		sgctx, err := loadDefaultStorageContextPhase()
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
 		}
@@ -1955,7 +1995,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 	}
 
-	sgctx, err := storage.LoadDefaultStorageContext()
+	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
@@ -1963,10 +2003,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	removePerf.Mark("setup")
 
 	execFunc := func(fileID int64) batch.ItemResult {
-		if dryRun {
-			return executeRemoveDryRunItem(sgctx.DB, fileID)
-		}
-		return executeRemoveItem(&sgctx, fileID)
+		return removeByIDPhase(&sgctx, fileID, dryRun)
 	}
 
 	report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, execFunc)
@@ -2107,30 +2144,6 @@ func executeRestoreItem(sgctx *storage.StorageContext, fileID int64, outputDir s
 		OriginalName: result.OriginalName,
 		OutputPath:   result.OutputPath,
 	}
-}
-
-func executeRemoveDryRunItem(dbconn *sql.DB, fileID int64) batch.ItemResult {
-	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d not found", fileID)}
-		}
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
-	}
-	if info.Status == filestate.LogicalFileProcessing {
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d is still PROCESSING and cannot be removed", fileID)}
-	}
-	return batch.ItemResult{ID: fileID, Status: batch.ResultPlanned, Message: "would remove"}
-}
-
-func executeRemoveItem(sgctx *storage.StorageContext, fileID int64) batch.ItemResult {
-	result, err := storage.RemoveFileWithDBResult(sgctx.DB, fileID)
-	if err != nil {
-		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
-		annotateBatchFailureFromError(err, &item)
-		return item
-	}
-	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", result.RemovedMappings)}
 }
 
 func annotateBatchFailureFromError(err error, item *batch.ItemResult) {

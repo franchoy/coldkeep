@@ -126,6 +126,20 @@ numbers are indicative and must be re-confirmed at the start of each migration p
   parity through engine is fully proven.
 - `LoadChunkPlacements` remains `ErrNotImplemented` (catalog placement boundary deferred).
 
+## Phase 9 update (v1.12)
+
+- `remove` by logical file ID (live and dry-run execution paths) is routed through the engine.
+- `Engine` interface expanded from 10 to 11 active methods: `Remove` added.
+- `DefaultEngine.Remove` is active for `RemoveModeFileIDs`; stored-path modes
+  (`RemoveModeStoredPath`, `RemoveModeStoredPaths`) return `ErrNotImplemented`
+  (explicit deferral in this phase).
+- CLI remove-by-ID now uses an engine-backed seam (`removeByIDPhase`) while preserving existing
+  batch report shape, JSON envelope fields, human output, and exit-code behavior.
+- Stored-path remove (`--stored-path`) and stored-path batch remove (`--stored-paths`) remain
+  direct-wired to storage and are deferred until dedicated parity coverage is added.
+- Repair and recovery routing remain deferred in this phase to preserve current corrective and
+  startup fail-safe semantics without broad orchestration changes.
+
 ## Direct DB access patterns
 
 Search targets:

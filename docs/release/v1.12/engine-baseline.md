@@ -258,6 +258,32 @@ existing storage-context-aware store functions. Recursive folder store remains d
 CLI routing scope in Phase 8 is intentionally narrow: `store` (single-file) is engine-mediated;
 `store-folder` remains direct path.
 
+## Phase 9 update (v1.12) — Remove-by-ID routing
+
+The `Engine` interface now has 11 active methods:
+
+| Method | Status |
+|---|---|
+| `Stats(ctx, StatsRequest) (StatsResult, error)` | active since v1.11 |
+| `Inspect(ctx, InspectRequest) (InspectResult, error)` | active since v1.11 |
+| `Verify(ctx, VerifyRequest) (VerifyResult, error)` | active since v1.11; DB ownership fixed v1.12.1 |
+| `SnapshotList(ctx, SnapshotListRequest) (SnapshotListResult, error)` | added Phase 5 |
+| `SnapshotShow(ctx, SnapshotShowRequest) (SnapshotShowResult, error)` | added Phase 5 |
+| `SnapshotStats(ctx, SnapshotStatsRequest) (SnapshotStatsResult, error)` | added Phase 5 |
+| `SnapshotDiff(ctx, SnapshotDiffRequest) (SnapshotDiffResult, error)` | added Phase 5 |
+| `GarbageCollect(ctx, GarbageCollectRequest) (GarbageCollectResult, error)` | added Phase 6 |
+| `Restore(ctx, RestoreRequest) (RestoreResult, error)` | added Phase 7 |
+| `Store(ctx, StoreRequest) (StoreResult, error)` | added Phase 8 |
+| `Remove(ctx, RemoveRequest) (RemoveResult, error)` | added Phase 9 |
+
+`DefaultEngine.Remove` is active for `RemoveModeFileIDs` (live and dry-run). It preserves existing
+remove safety semantics by delegating to the storage remove path and carrying invariant metadata on
+item failures. Stored-path remove modes remain deferred in engine (`ErrNotImplemented`) pending
+explicit parity coverage for those addressing modes.
+
+CLI routing scope in Phase 9 is intentionally narrow: remove-by-ID is engine-mediated; stored-path
+remove modes, repair, and recovery remain direct paths.
+
 ## v1.12 implication
 
 Do not activate mutating commands through the engine until request/result contracts are expanded

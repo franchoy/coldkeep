@@ -13,6 +13,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/snapshot"
@@ -392,6 +393,83 @@ func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (StoreResul
 	}, nil
 }
 
+func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (RemoveResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RemoveResult{}, err
+	}
+
+	if req.Mode != RemoveModeFileIDs {
+		return RemoveResult{}, ErrNotImplemented
+	}
+	if len(req.FileIDs) == 0 {
+		return RemoveResult{}, fmt.Errorf("engine: remove requires at least one file ID")
+	}
+
+	result := RemoveResult{
+		DryRun:        req.DryRun,
+		ExecutionMode: ExecutionModeSequential,
+		Items:         make([]RemoveItemResult, 0, len(req.FileIDs)),
+	}
+
+	for _, fileID := range req.FileIDs {
+		item := RemoveItemResult{FileID: fileID, Status: BatchItemOK}
+
+		if fileID <= 0 {
+			item.Status = BatchItemFailed
+			item.Error = fmt.Sprintf("invalid file ID %d", fileID)
+			result.Items = append(result.Items, item)
+			result.Summary.Failed++
+			if req.FailFast {
+				break
+			}
+			continue
+		}
+
+		if req.DryRun {
+			if err := dryRunRemoveByID(e.config.DB, fileID); err != nil {
+				item.Status = BatchItemFailed
+				item.Error = err.Error()
+				result.Items = append(result.Items, item)
+				result.Summary.Failed++
+				if req.FailFast {
+					break
+				}
+				continue
+			}
+			result.Items = append(result.Items, item)
+			result.Summary.OK++
+			continue
+		}
+
+		removed, err := storage.RemoveFileWithDBResult(e.config.DB, fileID)
+		if err != nil {
+			item.Status = BatchItemFailed
+			item.Error = err.Error()
+			if code, ok := invariants.Code(err); ok {
+				item.InvariantCode = code
+				item.RecommendedAction = invariants.RecommendedActionForCode(code)
+			}
+			result.Items = append(result.Items, item)
+			result.Summary.Failed++
+			if req.FailFast {
+				break
+			}
+			continue
+		}
+
+		item.RemovedMappings = removed.RemovedMappings
+		item.Removed = true
+		result.Items = append(result.Items, item)
+		result.Summary.OK++
+	}
+
+	result.Summary.Skipped = len(req.FileIDs) - result.Summary.OK - result.Summary.Failed
+	if result.Summary.Skipped < 0 {
+		result.Summary.Skipped = 0
+	}
+	return result, nil
+}
+
 func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
 	if err := ctx.Err(); err != nil {
 		return RestoreResult{}, err
@@ -491,6 +569,20 @@ func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite
 		}
 	}
 	return item, nil
+}
+
+func dryRunRemoveByID(dbconn *sql.DB, fileID int64) error {
+	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("file ID %d not found", fileID)
+		}
+		return err
+	}
+	if info.Status == filestate.LogicalFileProcessing {
+		return fmt.Errorf("file ID %d is still PROCESSING and cannot be removed", fileID)
+	}
+	return nil
 }
 
 // engineQueryToSnapshotQuery maps an engine-level SnapshotQuery to the

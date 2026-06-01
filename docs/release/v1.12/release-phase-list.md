@@ -136,6 +136,15 @@ Route remove by ID/stored-path, repair, and recovery (where safe) through engine
 legitimize corrupt mappings; repair must not hide broken catalog/storage state. Preserve batch and
 dry-run semantics.
 
+**Status: complete (scoped).** Remove-by-ID is now engine-mediated via `Engine.Remove` and
+`DefaultEngine.Remove` (`RemoveModeFileIDs`). CLI remove-by-ID execution routes through an
+engine-backed seam while preserving existing batch/human/JSON/exit-code behavior, including
+invariant-code metadata on failures. Stored-path remove and stored-paths remove remain on direct
+paths and are explicitly deferred pending dedicated parity coverage for their distinct path-addressing
+flows. Repair and recovery routing are also explicitly deferred in this phase to keep corrective and
+startup fail-safe semantics unchanged unless wrapper activation is proven by small parity-guarded
+diffs.
+
 ## Phase 10 — CLI Thin Wrapper Burn-down
 
 Reduce `cmd/coldkeep` to: parse args, validate CLI syntax, build engine requests, call engine, render
