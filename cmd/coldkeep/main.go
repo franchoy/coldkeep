@@ -335,6 +335,7 @@ func snapshotMetaToSnapshot(m engine.SnapshotMeta) snapshot.Snapshot {
 	}
 	return s
 }
+
 var newObservabilityServicePhase = observability.NewService
 var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
 	sgctx, err := loadDefaultStorageContextPhase()
