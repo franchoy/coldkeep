@@ -53,6 +53,20 @@ Add backend-neutral catalog contract tests (SQLite + PostgreSQL where feasible) 
 dialect boundaries (placeholder syntax, `RETURNING`, transaction behavior, introspection, timestamp
 and path normalization).
 
+**Status: complete.** Dual-backend contract harness added in
+`internal/catalog/backend_contract_test.go`: SQLite runs unconditionally; PostgreSQL is gated by
+`COLDKEEP_TEST_DB` (CI provides a `postgres:16` service and sets it) and skips with an explicit reason
+locally. One backend-neutral fixture (`seedCatalogFixture`) seeds both backends via `$1` placeholders
+with Go-typed args (bool, `time.Time`). Cross-backend tests cover `FindLogicalFile`,
+`FindPhysicalFilesForLogicalFile` (ordering, nullable `mtime`, boolean `is_metadata_complete`),
+`FindSnapshot`, `ListSnapshots` (ordering, `Type`/`LabelSubstring`/`Since`/`Until`/`Limit`),
+`LoadReachabilityRoots` (set separation + de-dup), and the deferred `ErrNotImplemented` methods. The
+baseline uncovered a real timestamp-bind incompatibility in `ListSnapshots` (pre-formatted RFC3339
+string vs go-sqlite3 space-separated storage); fixed narrowly by binding `time.Time` directly. Dialect
+rules documented in `sqlite-postgres-baseline.md`; `CK-112-R003` fixed. Entry criteria for Phase 5:
+snapshot read-side orchestration (list/stats/files/diff) can be routed through the engine using
+catalog reads proven equivalent across backends.
+
 ## Phase 5 — Snapshot Orchestration Migration
 
 Route snapshot list/stats/files/diff through engine first, then create/delete/restore after tests.

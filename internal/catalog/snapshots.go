@@ -55,11 +55,17 @@ func (s *Service) ListSnapshots(ctx context.Context, filter SnapshotFilter) ([]S
 	}
 	if filter.Since != nil {
 		where = append(where, "created_at >= "+placeholder())
-		args = append(args, filter.Since.UTC().Format(time.RFC3339Nano))
+		// Bind the time.Time directly (do not pre-format to a string). Each
+		// driver serializes the bound value the same way it stores created_at
+		// (go-sqlite3 uses a space-separated layout; lib/pq uses native
+		// timestamptz), so a pre-formatted RFC3339 string with a 'T' separator
+		// would not compare correctly against SQLite-stored timestamps. See
+		// docs/release/v1.12/sqlite-postgres-baseline.md (timestamp rule).
+		args = append(args, filter.Since.UTC())
 	}
 	if filter.Until != nil {
 		where = append(where, "created_at <= "+placeholder())
-		args = append(args, filter.Until.UTC().Format(time.RFC3339Nano))
+		args = append(args, filter.Until.UTC())
 	}
 
 	q := "SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at FROM snapshot"

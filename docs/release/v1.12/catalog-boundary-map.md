@@ -76,3 +76,12 @@ Deferred boundaries (return `ErrNotImplemented`):
   (`storage_blocks`/`chunk_block_refs`) and legacy (`blocks`) roots.
 - **Restore-plan metadata** — `LoadRestorePlanMetadata` deferred to Phase 7.
 - **GC-plan metadata** — `LoadGCPlanMetadata` deferred to Phase 6.
+
+## Phase 4 status
+
+Implemented boundaries are now proven equivalent across SQLite and PostgreSQL by the dual-backend
+contract harness (`internal/catalog/backend_contract_test.go`). One backend-sensitive point was found
+and isolated: timestamp filter binds in `ListSnapshots` must pass `time.Time` (not a pre-formatted
+RFC3339 string) so go-sqlite3 and lib/pq compare consistently. This does not move the boundary; it
+confirms the catalog owns timestamp comparison semantics and must keep them backend-neutral. See
+`sqlite-postgres-baseline.md` for the full dialect rules.

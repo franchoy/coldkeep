@@ -57,3 +57,52 @@ does not assume a single placeholder style.
 toolchain cannot build or run the suite locally; in that case validation relies on CI. This is a
 build-environment fact, not a backend compatibility issue, but it is recorded here because it affects
 how compatibility evidence is gathered.
+
+## Phase 4 catalog compatibility baseline
+
+Implemented `internal/catalog` methods are now tested across SQLite and PostgreSQL through a
+dual-backend contract harness (`internal/catalog/backend_contract_test.go`). The SQLite backend runs
+unconditionally on an in-memory database. The PostgreSQL backend follows the existing project
+convention: it is gated by `COLDKEEP_TEST_DB` and skips with an explicit reason when unset, reads the
+DSN from the `DB_*` environment variables, provisions a uniquely named throwaway database, applies the
+schema via `db.EnsurePostgresSchema` with `COLDKEEP_DB_AUTO_BOOTSTRAP=true`, and drops the database on
+cleanup. CI provides a `postgres:16` service and sets `COLDKEEP_TEST_DB=1`, so the PostgreSQL path runs
+in CI.
+
+Methods covered across both backends:
+
+- `FindLogicalFile` (missing → `(nil, nil)`; exact field values);
+- `FindPhysicalFilesForLogicalFile` (empty for unknown id; path ordering; nullable `mtime`; boolean
+  `is_metadata_complete`);
+- `FindSnapshot` (missing → `(nil, nil)`; type/label/parent; timestamp parse);
+- `ListSnapshots` (newest-first ordering; `Type`, `LabelSubstring` (LIKE), `Since`/`Until`, `Limit`);
+- `LoadReachabilityRoots` (current vs snapshot set separation; set de-duplication);
+- deferred methods (`LoadSnapshotGraph`, `LoadChunkPlacements`, `LoadRestorePlanMetadata`,
+  `LoadGCPlanMetadata`) consistently return `ErrNotImplemented`.
+
+### Catalog SQL dialect rules
+
+- **Placeholders.** Catalog queries use `$1`-style positional placeholders, accepted by both lib/pq
+  (PostgreSQL) and go-sqlite3 (SQLite). Verified by the dual-backend tests, not assumed.
+- **Timestamps.** Timestamp fixtures use fixed UTC values (`time.Date(..., time.UTC)`), never
+  `time.Now()`, so comparisons are deterministic. Timestamp **bind parameters** (e.g. `ListSnapshots`
+  `Since`/`Until`) must bind `time.Time` directly and must **not** be pre-formatted to an RFC3339
+  string. go-sqlite3 stores timestamps with a space-separated layout, so a pre-formatted `T`-separated
+  string sorts before all stored values and silently returns no rows. Binding `time.Time` lets each
+  driver serialize the value consistently with how `created_at` is stored. This bug was found and
+  fixed in Phase 4 (`internal/catalog/snapshots.go`).
+- **Booleans.** `physical_file.is_metadata_complete` is `INTEGER` (0/1) on SQLite and `BOOLEAN` on
+  PostgreSQL. Bind and scan Go `bool`; never bind integer literals for the column.
+- **Nullable fields.** Nullable columns (`mode`, `mtime`) are scanned through nullable scan types
+  (`sql.NullInt64`, `sql.NullTime`) internally and exposed as neutral exported types (`int`,
+  `*time.Time`). A NULL `mtime` maps to a nil `*time.Time` on both backends.
+- **Ordering.** Every list method specifies an explicit `ORDER BY`; result order is never left to the
+  backend default.
+- **Text matching.** Label filtering uses `LIKE` with `%substring%`, tested on both backends.
+- **Reachability sets.** Reachability is returned as sets keyed by logical file id, so duplicate
+  source rows do not produce duplicate roots, identically on both backends.
+
+Any backend-specific behavior must be isolated behind a small documented helper rather than ad-hoc
+per-query SQL branching. As of Phase 4 the only dialect-sensitive point found is the timestamp bind
+rule above; it is handled by binding `time.Time` (no branching required).
+
