@@ -166,10 +166,36 @@ Regression coverage lives in `internal/engine/verify_db_ownership_test.go`. Trac
 `observability.Service`, which uses the injected `Config.DB` (`maintenance.RunStatsResultWithDB`,
 `maintenance.CollectBlockStats`). Neither reopens a global DB connection.
 
+## Phase 4 update (v1.12) — Dual-backend catalog baseline
+
+Dual-backend contract tests added in `internal/catalog/backend_contract_test.go`. SQLite runs
+unconditionally; PostgreSQL gated by `COLDKEEP_TEST_DB`. A timestamp-bind incompatibility in
+`ListSnapshots` was uncovered and fixed (bind `time.Time` directly). Dialect rules documented in
+`sqlite-postgres-baseline.md`. `CK-112-R003` fixed.
+
+## Phase 5 update (v1.12) — Snapshot read-side routing
+
+The `Engine` interface now has 7 active methods:
+
+| Method | Status |
+|---|---|
+| `Stats(ctx, StatsRequest) (StatsResult, error)` | active since v1.11 |
+| `Inspect(ctx, InspectRequest) (InspectResult, error)` | active since v1.11 |
+| `Verify(ctx, VerifyRequest) (VerifyResult, error)` | active since v1.11; DB ownership fixed v1.12.1 |
+| `SnapshotList(ctx, SnapshotListRequest) (SnapshotListResult, error)` | added Phase 5 |
+| `SnapshotShow(ctx, SnapshotShowRequest) (SnapshotShowResult, error)` | added Phase 5 |
+| `SnapshotStats(ctx, SnapshotStatsRequest) (SnapshotStatsResult, error)` | added Phase 5 |
+| `SnapshotDiff(ctx, SnapshotDiffRequest) (SnapshotDiffResult, error)` | added Phase 5 |
+
+All new methods use `e.config.DB` (no global reopen). CLI routing via engine-backed closures in
+`cmd/coldkeep/main.go`. Snapshot create/delete/restore deferred. `ParentSnapshotID` correctness
+bug fixed in `SnapshotStatsResult`.
+
 ## v1.12 implication
 
 Do not activate mutating commands through the engine until request/result contracts are expanded
 enough to preserve real command behavior. The inactive v1.11 candidates are placeholders, not final
 contracts. For example, `RestoreRequest` lacks stored-path mode, overwrite semantics, destination
-mode, worker/limit behavior, and safety validation; `GarbageCollectRequest` lacks richer plan/result
-semantics. v1.12 should expand contracts operation by operation.
+mode, worker/limit behavior, and safety validation; `GarbageCollectRequest` is ready for Phase 6
+routing (contract complete, DB-aware wrapper needed in maintenance layer). v1.12 expands contracts
+operation by operation.

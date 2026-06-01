@@ -74,6 +74,19 @@ numbers are indicative and must be re-confirmed at the start of each migration p
 - No command was routed. `engine.Config` unchanged. No CLI/JSON/exit-code/storage/schema/backend
   behavior changed.
 
+## Phase 5 update (v1.12)
+
+- `snapshot list`, `snapshot files`, `snapshot stats`, and `snapshot diff` (including summary
+  fast-path) routed through the engine. The `gc` command remains on the direct path pending Phase 6.
+- Four phase vars changed from direct `snapshot`/`retention` package calls to engine-backed closures:
+  `listSnapshotsPhase`, `getSnapshotPhase`, `snapshotStatsPhase`, `diffSnapshotsPhase`,
+  `diffSnapshotSummaryPhase`.
+- `Engine` interface expanded from 3 to 7 active methods: `SnapshotList`, `SnapshotShow`,
+  `SnapshotStats`, `SnapshotDiff` added.
+- Direct DB access for snapshot reads removed from the CLI path (engine owns the DB for these).
+- Snapshot create, delete, and restore remain CLI/snapshot package calls (deferred to Phase 9/7).
+- No CLI/JSON/exit-code/storage/schema/backend behavior changed.
+
 ## Direct DB access patterns
 
 Search targets:

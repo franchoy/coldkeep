@@ -73,6 +73,18 @@ Route snapshot list/stats/files/diff through engine first, then create/delete/re
 Keep snapshot graph/reachability access behind catalog where possible. Preserve immutability and
 retention semantics.
 
+**Status: complete.** `snapshot list`, `snapshot files`, `snapshot stats`, and `snapshot diff`
+(including the summary fast-path) are now routed through the engine. Four phase variables
+(`listSnapshotsPhase`, `getSnapshotPhase`, `snapshotStatsPhase`, `diffSnapshotsPhase`,
+`diffSnapshotSummaryPhase`) in `cmd/coldkeep/main.go` are now engine-backed closures; the previous
+direct calls to the snapshot package are replaced. `SnapshotList`, `SnapshotShow`, `SnapshotStats`,
+and `SnapshotDiff` added to the `Engine` interface and implemented on `DefaultEngine`. The
+`snapshotMetaToSnapshot` helper bridges `engine.SnapshotMeta` → `snapshot.Snapshot` for rendering.
+`ParentSnapshotID` correctness bug fixed: `SnapshotStatsResult` now carries the real parent snapshot
+ID. Snapshot create/delete/restore deferred to Phase 9/7 respectively. Parity proven by
+`internal/engine/snapshot_engine_test.go` and CLI routing tests. Entry criteria for Phase 6:
+GC dry-run and live GC can be routed through engine using a DB-aware wrapper.
+
 ## Phase 6 — GC Plan and Reachability Migration
 
 Move GC dry-run/live orchestration behind engine and reachability/deletion-plan inputs behind catalog
