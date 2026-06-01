@@ -144,3 +144,51 @@ func TestRestoreByIDDryRunEngineRoutingJSON(t *testing.T) {
 		t.Fatalf("expected output_path to include dry-run-routed.txt, got %v", got)
 	}
 }
+
+func TestRestoreByIDEngineRoutingText(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	origLoad := loadDefaultStorageContextPhase
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+	t.Cleanup(func() { loadDefaultStorageContextPhase = origLoad })
+
+	origPhase := restoreByIDPhase
+	called := false
+	restoreByIDPhase = func(_ *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
+		called = true
+		if fileID != 42 {
+			t.Fatalf("expected fileID 42, got %d", fileID)
+		}
+		if overwrite {
+			t.Fatalf("expected overwrite=false")
+		}
+		if dryRun {
+			t.Fatalf("expected dryRun=false in live routing test")
+		}
+		out := filepath.Join(outputDir, "routed.txt")
+		return storage.RestoreFileResult{FileID: fileID, OriginalName: "routed.txt", OutputPath: out, RestoredHash: "abc123"}, nil
+	}
+	t.Cleanup(func() { restoreByIDPhase = origPhase })
+
+	outputDir := t.TempDir()
+	output := captureStdout(t, func() {
+		err := runRestoreCommand(parsedCommandLine{
+			method:      "restore",
+			positionals: []string{"42", outputDir},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runRestoreCommand: %v", err)
+		}
+	})
+
+	if !called {
+		t.Fatalf("expected restoreByIDPhase to be called")
+	}
+	for _, want := range []string{"routed.txt", "Summary:", "Hint: " + doctorOperationalHint} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected restore text output to contain %q, got output:\n%s", want, output)
+		}
+	}
+}

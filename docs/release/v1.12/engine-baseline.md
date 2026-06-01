@@ -299,6 +299,35 @@ Phase 10 scope is a CLI-thinning step for an already-active operation:
 This phase intentionally avoids routing deferred high-risk operations and does not change restore,
 remove stored-path modes, repair, recovery, or folder-store activation state.
 
+## Phase 11 update (v1.12) — Invariant matrix proof closure
+
+No new active `Engine` methods were added in Phase 11. The active interface remains 11 methods.
+
+Phase 11 scope is correctness-proof consolidation for already-routed operations:
+
+- consolidated operation-to-invariant test mapping is documented in
+  `docs/release/v1.12/invariant-test-matrix.md`;
+- engine dependency ownership remains proven by existing tests (`verify_db_ownership_test.go`,
+  `store_engine_test.go`, `dependency_guard_test.go`);
+- routed CLI text parity evidence was strengthened for verify/store/restore/remove without changing
+  operation behavior or routing surface.
+
+`Engine` interface methods as of v1.12 Phase 11:
+
+| Method | Status |
+|---|---|
+| `Stats(ctx, StatsRequest) (StatsResult, error)` | active since v1.11 |
+| `Inspect(ctx, InspectRequest) (InspectResult, error)` | active since v1.11 |
+| `Verify(ctx, VerifyRequest) (VerifyResult, error)` | active since v1.11; routed CLI proof expanded Phase 11 |
+| `SnapshotList(ctx, SnapshotListRequest) (SnapshotListResult, error)` | added Phase 5 |
+| `SnapshotShow(ctx, SnapshotShowRequest) (SnapshotShowResult, error)` | added Phase 5 |
+| `SnapshotStats(ctx, SnapshotStatsRequest) (SnapshotStatsResult, error)` | added Phase 5 |
+| `SnapshotDiff(ctx, SnapshotDiffRequest) (SnapshotDiffResult, error)` | added Phase 5 |
+| `GarbageCollect(ctx, GarbageCollectRequest) (GarbageCollectResult, error)` | added Phase 6 |
+| `Restore(ctx, RestoreRequest) (RestoreResult, error)` | added Phase 7 |
+| `Store(ctx, StoreRequest) (StoreResult, error)` | added Phase 8 |
+| `Remove(ctx, RemoveRequest) (RemoveResult, error)` | added Phase 9 |
+
 ## v1.12 implication
 
 Do not activate mutating commands through the engine until request/result contracts are expanded

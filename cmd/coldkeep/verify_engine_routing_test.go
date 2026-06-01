@@ -92,6 +92,85 @@ func TestVerifySystemEngineRoutingJSON(t *testing.T) {
 	}
 }
 
+func TestVerifySystemEngineRoutingText(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+
+	origLoad := loadDefaultStorageContextPhase
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+	t.Cleanup(func() { loadDefaultStorageContextPhase = origLoad })
+
+	origVerify := verifyCommandPhase
+	verifyCalled := false
+	verifyCommandPhase = func(_ *sql.DB, target string, fileID int, level verify.VerifyLevel) error {
+		verifyCalled = true
+		if target != "system" {
+			t.Fatalf("expected target system, got %q", target)
+		}
+		if fileID != 0 {
+			t.Fatalf("expected fileID 0 for system verify, got %d", fileID)
+		}
+		if level != verify.VerifyStandard {
+			t.Fatalf("expected standard verify level, got %v", level)
+		}
+		return nil
+	}
+	t.Cleanup(func() { verifyCommandPhase = origVerify })
+
+	origSummary := verifySummaryPhase
+	summaryCalled := false
+	verifySummaryPhase = func(_ *sql.DB, target string, fileID int64) (verifyOutputSummary, error) {
+		summaryCalled = true
+		if target != "system" {
+			t.Fatalf("expected summary target system, got %q", target)
+		}
+		if fileID != 0 {
+			t.Fatalf("expected summary fileID 0 for system verify, got %d", fileID)
+		}
+		return verifyOutputSummary{
+			BlocksChecked:           12,
+			PhysicalHashChecked:     8,
+			CompressedHashChecked:   5,
+			LogicalHashChecked:      12,
+			CompressedBlocksChecked: 4,
+		}, nil
+	}
+	t.Cleanup(func() { verifySummaryPhase = origSummary })
+
+	output := captureStdout(t, func() {
+		err := runVerifyCommand(parsedCommandLine{
+			method:      "verify",
+			positionals: []string{"system"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runVerifyCommand: %v", err)
+		}
+	})
+
+	if !verifyCalled {
+		t.Fatalf("expected verifyCommandPhase to be called")
+	}
+	if !summaryCalled {
+		t.Fatalf("expected verifySummaryPhase to be called")
+	}
+
+	for _, want := range []string{
+		"verify ok",
+		"blocks_checked: 12",
+		"physical_hash_checked: 8",
+		"compressed_hash_checked: 5",
+		"logical_hash_checked: 12",
+		"compressed_blocks_checked: 4",
+		"Hint: " + doctorOperationalHint,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected verify text output to contain %q, got output:\n%s", want, output)
+		}
+	}
+}
+
 func TestVerifyFileEngineRoutingJSON(t *testing.T) {
 	dbconn := openSnapshotRoutingDB(t)
 

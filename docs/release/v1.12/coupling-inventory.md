@@ -152,6 +152,21 @@ numbers are indicative and must be re-confirmed at the start of each migration p
   `internal/catalog` directly by test.
 - Existing routed scopes remain unchanged; no new high-risk command migration was activated.
 
+## Phase 11 update (v1.12)
+
+- Phase 11 is proof-only: no new command routing and no broad coupling refactor.
+- Consolidated routed operation -> invariant -> test mapping added in
+  `docs/release/v1.12/invariant-test-matrix.md`.
+- Added routed text parity evidence for existing engine-mediated commands:
+  - verify: `TestVerifySystemEngineRoutingText`
+  - store single-file: `TestStoreByFileEngineRoutingText`
+  - restore by ID live: `TestRestoreByIDEngineRoutingText`
+  - remove by ID live: `TestRemoveByIDEngineRoutingText`
+- Existing dependency-direction coupling guards remain active:
+  - CLI must not import catalog directly (`internal/engine/dependency_guard_test.go`)
+  - catalog must not import engine/CLI (`internal/catalog/dependency_test.go`)
+- Existing routed scope and explicit deferrals remain unchanged.
+
 ## Direct DB access patterns
 
 Search targets:

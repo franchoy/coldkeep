@@ -164,6 +164,18 @@ retention, packed/legacy parity, and SQLite/PostgreSQL compatibility at the engi
 Add catalog contract tests (reachability, placement, restore-plan, GC-plan, snapshot graph) and
 dependency-direction checks for catalog.
 
+**Status: complete (proof phase).** Phase 11 adds a consolidated operation-to-invariant evidence map
+in `docs/release/v1.12/invariant-test-matrix.md` and validates routed-operation coverage for:
+Stats, Inspect, Verify, SnapshotList/Show/Stats/Diff, GC routed scope, Restore-by-ID (live/dry-run),
+Store single-file, and Remove-by-ID (live/dry-run). Missing routed text parity evidence was added for
+verify/store/restore/remove engine-routed paths in `cmd/coldkeep/*_engine_routing_test.go`.
+
+Phase 11 keeps all deferred high-risk operations deferred and introduces no new routing, no schema
+changes, no storage format changes, and no backend default changes.
+
+**Phase 12 entry criteria:** routed-operation safety is test-mapped, dependency direction is guarded,
+catalog backend-neutral evidence remains green, and full mandatory validation gate is clean.
+
 ## Phase 12 — Release Candidate Gate
 
 Run the full local suite, race suite, integration/adversarial suites, PostgreSQL compatibility suite,

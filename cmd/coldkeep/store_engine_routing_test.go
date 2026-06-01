@@ -68,3 +68,47 @@ func TestStoreByFileEngineRoutingJSON(t *testing.T) {
 		t.Fatalf("expected file_hash deadbeef, got %v", got)
 	}
 }
+
+func TestStoreByFileEngineRoutingText(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	origLoad := loadDefaultStorageContextPhase
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+	t.Cleanup(func() { loadDefaultStorageContextPhase = origLoad })
+
+	origPhase := storeByFilePhase
+	called := false
+	storeByFilePhase = func(_ *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
+		called = true
+		if !strings.HasSuffix(path, ".txt") {
+			t.Fatalf("expected .txt path, got %q", path)
+		}
+		if codecName != "" {
+			t.Fatalf("expected default codec name empty, got %q", codecName)
+		}
+		return storage.StoreFileResult{
+			FileID:        77,
+			FileHash:      "deadbeef",
+			Path:          path,
+			AlreadyStored: false,
+		}, nil
+	}
+	t.Cleanup(func() { storeByFilePhase = origPhase })
+
+	inPath := filepath.Join(t.TempDir(), "routed.txt")
+	output := captureStdout(t, func() {
+		err := runStoreCommand(parsedCommandLine{method: "store", positionals: []string{inPath}}, outputModeText)
+		if err != nil {
+			t.Fatalf("runStoreCommand: %v", err)
+		}
+	})
+	if !called {
+		t.Fatalf("expected storeByFilePhase to be called")
+	}
+	for _, want := range []string{"File stored successfully", "FileID: 77", "SHA256: deadbeef", "Hint: " + doctorOperationalHint} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected store text output to contain %q, got output:\n%s", want, output)
+		}
+	}
+}

@@ -172,6 +172,42 @@ Scope intentionally unchanged in Phase 10:
 - `Store`
 - `Remove`
 
+## v1.12 state (Phase 11 — Engine/Catalog Invariant Test Matrix, proof complete)
+
+Phase 11 is a proof phase: no new routing activation, no backend/schema/storage-format changes,
+and no broad refactor.
+
+Scope completed in Phase 11:
+
+- consolidated routed operation -> invariant -> test evidence in
+	`docs/release/v1.12/invariant-test-matrix.md`;
+- added routed text parity tests for verify/store/restore/remove paths to complement existing JSON
+	routing guards;
+- confirmed dependency-direction guardrails remain enforced:
+	- `cmd/coldkeep` must not import `internal/catalog` directly,
+	- `internal/catalog` must not import `internal/engine` or CLI packages;
+- confirmed catalog backend-neutral contract coverage remains in place for implemented methods and
+	deferred methods continue to return `ErrNotImplemented`.
+
+Scope intentionally unchanged in Phase 11:
+
+- no new `Engine` methods activated (active method count remains 11);
+- deferred high-risk routes remain deferred (stored-path restore/remove modes, snapshot restore,
+	folder store, repair, recovery).
+
+`Engine` interface methods as of v1.12 Phase 11:
+- `Stats`
+- `Inspect`
+- `Verify`
+- `SnapshotList`
+- `SnapshotShow`
+- `SnapshotStats`
+- `SnapshotDiff`
+- `GarbageCollect`
+- `Restore`
+- `Store`
+- `Remove`
+
 ## v1.12 Migration Rule
 
 v1.12 moves orchestration behind the engine and metadata planning behind catalog APIs.

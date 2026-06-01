@@ -199,3 +199,19 @@ Deferral rationale:
 3. High-risk deferred command routes (stored-path remove/restore, repair, recovery, folder store)
   stay deferred to preserve correctness-critical semantics.
 
+## Phase 11 status
+
+Phase 11 validates boundary correctness evidence across already-routed operations without expanding
+the routing surface.
+
+- routed-operation invariant/test mapping is consolidated in
+  `docs/release/v1.12/invariant-test-matrix.md`;
+- dependency direction is explicitly guarded (`internal/engine/dependency_guard_test.go`,
+  `internal/catalog/dependency_test.go`);
+- catalog implemented methods remain backend-neutral via SQLite/PostgreSQL contract tests
+  (`internal/catalog/backend_contract_test.go`);
+- deferred catalog methods remain explicit `ErrNotImplemented` boundaries and are not activated.
+
+Current boundary shape in Phase 11 remains unchanged from Phase 10 for routing topology; this phase
+adds proof depth rather than new orchestration paths.
+

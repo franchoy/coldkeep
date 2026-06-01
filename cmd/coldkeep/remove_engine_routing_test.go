@@ -129,3 +129,44 @@ func TestRemoveByIDDryRunEngineRoutingJSON(t *testing.T) {
 		t.Fatalf("expected message would remove, got %v", got)
 	}
 }
+
+func TestRemoveByIDEngineRoutingText(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	origLoad := loadDefaultStorageContextPhase
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+	t.Cleanup(func() { loadDefaultStorageContextPhase = origLoad })
+
+	origPhase := removeByIDPhase
+	called := false
+	removeByIDPhase = func(_ *storage.StorageContext, fileID int64, dryRun bool) batch.ItemResult {
+		called = true
+		if fileID != 42 {
+			t.Fatalf("expected fileID 42, got %d", fileID)
+		}
+		if dryRun {
+			t.Fatalf("expected dryRun=false in live remove routing test")
+		}
+		return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: "removed mappings=3"}
+	}
+	t.Cleanup(func() { removeByIDPhase = origPhase })
+
+	output := captureStdout(t, func() {
+		err := runRemoveCommand(parsedCommandLine{
+			method:      "remove",
+			positionals: []string{"42"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runRemoveCommand: %v", err)
+		}
+	})
+
+	if !called {
+		t.Fatalf("expected removeByIDPhase to be called")
+	}
+	if !strings.Contains(output, "removed mappings=3") {
+		t.Fatalf("expected remove text output to contain routed message, got output:\n%s", output)
+	}
+}
