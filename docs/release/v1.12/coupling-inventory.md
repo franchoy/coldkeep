@@ -103,12 +103,13 @@ numbers are indicative and must be re-confirmed at the start of each migration p
 
 ## Phase 7 update (v1.12)
 
-- `restore` by logical file ID (live execution path) is routed through the engine.
+- `restore` by logical file ID (live and dry-run execution paths) is routed through the engine.
 - `Engine` interface expanded from 8 to 9 active methods: `Restore` added.
 - `DefaultEngine.Restore` is active for `RestoreModeFileIDs`; `RestoreModeStoredPath` returns
   `ErrNotImplemented` (explicit deferral).
-- CLI now uses an engine-backed seam for restore-by-ID execution (`restoreByIDPhase`), while
-  preserving existing batch reporting, JSON envelope shape, and exit-code semantics.
+- CLI now uses an engine-backed seam for restore-by-ID execution (`restoreByIDPhase`) in both
+  live and dry-run modes, while preserving existing batch reporting, JSON envelope shape,
+  and exit-code semantics.
 - Stored-path restore (`--stored-path`) remains direct-wired to storage and is deferred until
   full destination-mode parity through engine is proven.
 - `LoadRestorePlanMetadata` remains `ErrNotImplemented` (catalog restore-plan boundary deferred).

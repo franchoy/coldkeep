@@ -62,7 +62,7 @@ Reachability catalogization is deferred: `LoadGCPlanMetadata` remains `ErrNotImp
 
 ## v1.12 state (Phase 7 — Restore Plan Migration, complete scoped routing)
 
-Phase 7 adds `Restore` to the active `Engine` interface and routes restore-by-ID live execution
+Phase 7 adds `Restore` to the active `Engine` interface and routes restore-by-ID live and dry-run execution
 through engine orchestration while preserving existing CLI batch reporting and output contracts.
 
 Scope activated in Phase 7:

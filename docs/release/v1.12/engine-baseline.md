@@ -231,8 +231,8 @@ injected `Config.DB` and engine-provided container directory (`Config.ContainerD
 preserved through `storage.StorageContext.EffectiveContainerDir`). Stored-path restore remains
 deferred in engine (`ErrNotImplemented`) pending full destination-mode parity validation.
 
-CLI routing scope in Phase 7 is intentionally narrow: restore-by-ID live execution is routed through
-an engine-backed seam; stored-path and snapshot restore remain direct paths.
+CLI routing scope in Phase 7 is intentionally narrow: restore-by-ID live and dry-run execution are
+routed through an engine-backed seam; stored-path and snapshot restore remain direct paths.
 
 ## v1.12 implication
 

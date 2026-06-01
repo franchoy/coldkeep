@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -48,6 +49,9 @@ func TestRestoreDryRunByIDThroughEngine(t *testing.T) {
 	}
 	if want := filepath.Join(outDir, "phase7.txt"); res.Items[0].OutputPath != want {
 		t.Fatalf("expected output path %q, got %q", want, res.Items[0].OutputPath)
+	}
+	if _, statErr := os.Stat(res.Items[0].OutputPath); !os.IsNotExist(statErr) {
+		t.Fatalf("dry-run should not create output file, stat err=%v", statErr)
 	}
 }
 

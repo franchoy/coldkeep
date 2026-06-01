@@ -108,10 +108,9 @@ prefix, override, and original destination modes, plus path traversal and symlin
 engine-level tests for "restore must not write outside destination."
 
 **Status: complete (scoped).** `Restore` added to the active `Engine` interface and implemented on
-`DefaultEngine` for `file_ids` mode. CLI restore-by-ID live execution now routes through an
-engine-backed seam (`restoreByIDPhase`), while preserving batch execution/reporting and existing
-human/JSON/exit-code behavior. Dry-run restore-by-ID remains behavior-preserving via existing CLI
-batch planning path. Stored-path restore and snapshot restore remain on direct paths and are
+`DefaultEngine` for `file_ids` mode. CLI restore-by-ID live and dry-run execution now route through
+an engine-backed seam (`restoreByIDPhase`), while preserving batch execution/reporting and existing
+human/JSON/exit-code behavior. Stored-path restore and snapshot restore remain on direct paths and are
 explicitly deferred pending full destination-mode parity coverage through engine. `LoadRestorePlanMetadata`
 remains `ErrNotImplemented` (catalog restore-plan API deferred). Parity evidence: engine tests in
 `internal/engine/restore_engine_test.go` and CLI routing test in

@@ -188,7 +188,7 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
-var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) (storage.RestoreFileResult, error) {
+var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
 		return storage.RestoreFileResult{}, fmt.Errorf("restore: storage context DB is required")
 	}
@@ -207,6 +207,7 @@ var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputD
 		FileIDs:   []int64{fileID},
 		OutputDir: outputDir,
 		Overwrite: overwrite,
+		DryRun:    dryRun,
 		FailFast:  true,
 	})
 	if err != nil {
@@ -1780,7 +1781,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 
 	execFunc := func(fileID int64) batch.ItemResult {
 		if dryRun {
-			return executeRestoreDryRunItem(sgctx.DB, fileID, outputPath, overwrite)
+			return executeRestoreDryRunItem(&sgctx, fileID, outputPath, overwrite)
 		}
 		return executeRestoreItem(&sgctx, fileID, outputPath, overwrite)
 	}
@@ -2046,8 +2047,8 @@ func printBatchHumanReport(label string, report batch.Report) {
 	}
 }
 
-func executeRestoreDryRunItem(dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
-	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+func executeRestoreDryRunItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
+	result, err := restoreByIDPhase(sgctx, fileID, outputDir, overwrite, true)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d not found", fileID)}
@@ -2055,30 +2056,17 @@ func executeRestoreDryRunItem(dbconn *sql.DB, fileID int64, outputDir string, ov
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
 	}
 
-	if info.Status != filestate.LogicalFileCompleted {
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d is not COMPLETED", fileID)}
-	}
-
-	out := filepath.Join(outputDir, info.OriginalName)
-	if !overwrite {
-		if _, statErr := os.Stat(out); statErr == nil {
-			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("output file already exists: %s (use --overwrite)", out), OutputPath: out, OriginalName: info.OriginalName}
-		} else if !os.IsNotExist(statErr) {
-			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("check output path %s: %v", out, statErr), OutputPath: out, OriginalName: info.OriginalName}
-		}
-	}
-
 	return batch.ItemResult{
 		ID:           fileID,
 		Status:       batch.ResultPlanned,
-		Message:      fmt.Sprintf("would restore -> %s", out),
-		OriginalName: info.OriginalName,
-		OutputPath:   out,
+		Message:      fmt.Sprintf("would restore -> %s", result.OutputPath),
+		OriginalName: result.OriginalName,
+		OutputPath:   result.OutputPath,
 	}
 }
 
 func executeRestoreItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
-	result, err := restoreByIDPhase(sgctx, fileID, outputDir, overwrite)
+	result, err := restoreByIDPhase(sgctx, fileID, outputDir, overwrite, false)
 	if err != nil {
 		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
 		annotateBatchFailureFromError(err, &item)

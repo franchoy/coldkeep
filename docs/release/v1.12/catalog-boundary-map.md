@@ -115,8 +115,7 @@ intentionally deferred.
 
 Current boundary shape for restore in Phase 7:
 
-- restore-by-ID (live): CLI batch orchestration -> engine.Restore -> storage restore pipeline.
-- restore-by-ID (dry-run): CLI batch planning path remains unchanged.
+- restore-by-ID (live and dry-run): CLI batch orchestration -> engine.Restore -> storage restore pipeline.
 - stored-path restore: CLI -> storage direct path (destination-mode safety unchanged).
 
 Deferral rationale:
