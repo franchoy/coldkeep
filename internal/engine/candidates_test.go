@@ -12,7 +12,8 @@ import (
 // interface contains exactly the methods approved for v1.12:
 // Stats, Inspect, Verify (original), the 4 read-side snapshot methods
 // added in v1.12 Phase 5 (SnapshotList, SnapshotShow, SnapshotStats, SnapshotDiff),
-// GarbageCollect added in v1.12 Phase 6, and Restore added in v1.12 Phase 7.
+// GarbageCollect added in v1.12 Phase 6, Restore added in v1.12 Phase 7,
+// and Store added in v1.12 Phase 8 (single-file mode).
 //
 // This test is a guardrail: it must fail if a candidate method is
 // accidentally added to the interface without explicit phase approval.
@@ -24,7 +25,7 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "GarbageCollect", "Restore"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "GarbageCollect", "Store", "Restore"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -33,6 +34,9 @@ type Config struct {
 	// ContainerDir is the path to the coldkeep containers directory.
 	// Defaults to container.ContainersDir if empty.
 	ContainerDir string
+	// StoreContext provides writer+chunker-aware dependencies for store wrappers.
+	// Phase 8: required for Store until store orchestration is fully engine-owned.
+	StoreContext *storage.StorageContext
 }
 
 // DefaultEngine is the canonical Engine implementation.
@@ -344,6 +348,47 @@ func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRe
 		SnapshotOnlyRetainedLogicalFiles: gcRes.RetainedSnapshotOnlyLogical,
 		SharedRetainedLogicalFiles:       gcRes.RetainedSharedLogical,
 		BytesReclaimed:                   0, // not computed by current maintenance layer
+	}, nil
+}
+
+func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (StoreResult, error) {
+	if err := ctx.Err(); err != nil {
+		return StoreResult{}, err
+	}
+	if req.Recursive {
+		return StoreResult{}, ErrNotImplemented
+	}
+	if strings.TrimSpace(req.SourcePath) == "" {
+		return StoreResult{}, fmt.Errorf("engine: store source path is required")
+	}
+	if e.config.StoreContext == nil {
+		return StoreResult{}, fmt.Errorf("engine: store requires injected StoreContext")
+	}
+
+	var (
+		stored storage.StoreFileResult
+		err    error
+	)
+	if strings.TrimSpace(req.Codec) == "" {
+		stored, err = storage.StoreFileWithStorageContextResult(*e.config.StoreContext, req.SourcePath)
+	} else {
+		codec, parseErr := blocks.ParseCodec(req.Codec)
+		if parseErr != nil {
+			return StoreResult{}, parseErr
+		}
+		stored, err = storage.StoreFileWithStorageContextAndCodecResult(*e.config.StoreContext, req.SourcePath, codec)
+	}
+	if err != nil {
+		return StoreResult{}, err
+	}
+
+	return StoreResult{
+		SourcePath:     req.SourcePath,
+		StoredPath:     stored.Path,
+		LogicalFileID:  stored.FileID,
+		FileHash:       stored.FileHash,
+		AlreadyStored:  stored.AlreadyStored,
+		PhysicalFileID: 0,
 	}, nil
 }
 

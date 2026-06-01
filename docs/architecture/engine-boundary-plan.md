@@ -86,6 +86,32 @@ Scope intentionally deferred in Phase 7:
 - `GarbageCollect`
 - `Restore`
 
+## v1.12 state (Phase 8 — Store/CDC/Placement Coordination, complete scoped routing)
+
+Phase 8 adds `Store` to the active `Engine` interface and routes single-file store execution through
+engine orchestration while preserving existing CLI output and JSON contracts.
+
+Scope activated in Phase 8:
+
+- `Store` single-file mode (`Recursive=false`) active on `DefaultEngine`.
+
+Scope intentionally deferred in Phase 8:
+
+- `store-folder` routing through engine remains deferred.
+- catalog placement API (`LoadChunkPlacements`) remains `ErrNotImplemented`.
+
+`Engine` interface methods as of v1.12 Phase 8:
+- `Stats`
+- `Inspect`
+- `Verify`
+- `SnapshotList`
+- `SnapshotShow`
+- `SnapshotStats`
+- `SnapshotDiff`
+- `GarbageCollect`
+- `Restore`
+- `Store`
+
 ## v1.12 Migration Rule
 
 v1.12 moves orchestration behind the engine and metadata planning behind catalog APIs.

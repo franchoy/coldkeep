@@ -122,6 +122,14 @@ Route `store` and `store-folder` through engine. Keep CDC/chunker selection, com
 encryption behavior identical. Move placement lookup/recording behind catalog APIs where feasible.
 Preserve cross-version chunk reuse.
 
+**Status: complete (scoped).** Single-file `store` is now engine-mediated via `Engine.Store` and
+`DefaultEngine.Store` (`StoreRequest.Recursive=false`). CLI `store` routes through an engine-backed
+seam while preserving existing text/JSON output and exit-code behavior. `store-folder` remains on
+the direct path and is explicitly deferred pending full parity coverage for workers/folder
+orchestration. `LoadChunkPlacements` remains `ErrNotImplemented` (placement catalog API deferred).
+CDC/chunker selection, compression/encryption, container writes, dedup/reuse, and packed/legacy
+storage behavior are unchanged.
+
 ## Phase 9 — Remove/Repair/Recovery Migration
 
 Route remove by ID/stored-path, repair, and recovery (where safe) through engine. Recovery must not

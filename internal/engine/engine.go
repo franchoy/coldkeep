@@ -69,6 +69,11 @@ type Engine interface {
 	// on both backends.
 	GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error)
 
+	// Store stores a file into the repository.
+	// Safety invariant: Store must not create inconsistent catalog/storage state.
+	// Phase 8: single-file mode is active; folder mode remains deferred.
+	Store(ctx context.Context, req StoreRequest) (StoreResult, error)
+
 	// Restore restores logical files by ID or by stored path.
 	// Safety invariant: Restore must never write outside the intended destination.
 	// Phase 7: file-ID mode is active; stored-path mode remains deferred.

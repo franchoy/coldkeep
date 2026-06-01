@@ -114,6 +114,18 @@ numbers are indicative and must be re-confirmed at the start of each migration p
   full destination-mode parity through engine is proven.
 - `LoadRestorePlanMetadata` remains `ErrNotImplemented` (catalog restore-plan boundary deferred).
 
+## Phase 8 update (v1.12)
+
+- `store` single-file mode is routed through the engine.
+- `Engine` interface expanded from 9 to 10 active methods: `Store` added.
+- `DefaultEngine.Store` is active for non-recursive single-file requests; recursive folder mode
+  returns `ErrNotImplemented` (explicit deferral in this phase).
+- CLI `store` now uses an engine-backed seam (`storeByFilePhase`) while preserving text/JSON output
+  shape and exit-code behavior.
+- `store-folder` remains direct-wired to storage and is deferred until worker/folder orchestration
+  parity through engine is fully proven.
+- `LoadChunkPlacements` remains `ErrNotImplemented` (catalog placement boundary deferred).
+
 ## Direct DB access patterns
 
 Search targets:

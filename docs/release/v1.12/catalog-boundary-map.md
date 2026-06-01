@@ -127,3 +127,25 @@ Deferral rationale:
 3. This keeps the Phase 7 diff narrow while moving restore orchestration onto the engine for the
   highest-volume path (file-ID restore).
 
+## Phase 8 status
+
+Single-file store routing is complete at the engine boundary, but placement catalog boundaries are
+intentionally deferred.
+
+- `Engine.Store` is active for non-recursive single-file mode.
+- `store-folder` is not routed through engine store orchestration in this phase.
+- `LoadChunkPlacements` remains `ErrNotImplemented`.
+
+Current boundary shape for store in Phase 8:
+
+- single-file store: CLI -> engine.Store -> storage store pipeline.
+- folder store: CLI -> storage direct path.
+
+Deferral rationale:
+
+1. Folder worker/orchestration parity requires dedicated route-equivalence tests before activation.
+2. Placement catalogization (`LoadChunkPlacements`) shares packed/legacy unification concerns with
+  other deferred metadata boundaries; this phase keeps orchestration migration narrow.
+3. Store correctness is preserved by delegating to existing storage-context-aware store functions
+  without rewriting chunking, packing, or placement logic.
+

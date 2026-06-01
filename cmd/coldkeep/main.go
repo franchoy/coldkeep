@@ -188,6 +188,34 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
+var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
+	if sgctx == nil || sgctx.DB == nil {
+		return storage.StoreFileResult{}, fmt.Errorf("store: storage context DB is required")
+	}
+	eng, err := engine.New(engine.Config{
+		DB:           sgctx.DB,
+		ContainerDir: sgctx.EffectiveContainerDir(),
+		StoreContext: sgctx,
+	})
+	if err != nil {
+		return storage.StoreFileResult{}, err
+	}
+
+	res, err := eng.Store(context.Background(), engine.StoreRequest{
+		SourcePath: path,
+		Codec:      strings.TrimSpace(codecName),
+	})
+	if err != nil {
+		return storage.StoreFileResult{}, err
+	}
+
+	return storage.StoreFileResult{
+		FileID:        res.LogicalFileID,
+		FileHash:      res.FileHash,
+		Path:          res.StoredPath,
+		AlreadyStored: res.AlreadyStored,
+	}, nil
+}
 var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
 		return storage.RestoreFileResult{}, fmt.Errorf("restore: storage context DB is required")
@@ -1530,7 +1558,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 
 	var result storage.StoreFileResult
 	if codecName == "" {
-		result, err = storage.StoreFileWithStorageContextResult(sgctx, path)
+		result, err = storeByFilePhase(&sgctx, path, "")
 	} else {
 		if codecName == "plain" {
 			_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
@@ -1540,8 +1568,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		if parseErr != nil {
 			return parseErr
 		}
-
-		result, err = storage.StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+		result, err = storeByFilePhase(&sgctx, path, string(codec))
 	}
 	perf.Mark("operation")
 	if sgctx.Writer != nil {

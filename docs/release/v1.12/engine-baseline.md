@@ -234,6 +234,30 @@ deferred in engine (`ErrNotImplemented`) pending full destination-mode parity va
 CLI routing scope in Phase 7 is intentionally narrow: restore-by-ID live and dry-run execution are
 routed through an engine-backed seam; stored-path and snapshot restore remain direct paths.
 
+## Phase 8 update (v1.12) — Store single-file routing
+
+The `Engine` interface now has 10 active methods:
+
+| Method | Status |
+|---|---|
+| `Stats(ctx, StatsRequest) (StatsResult, error)` | active since v1.11 |
+| `Inspect(ctx, InspectRequest) (InspectResult, error)` | active since v1.11 |
+| `Verify(ctx, VerifyRequest) (VerifyResult, error)` | active since v1.11; DB ownership fixed v1.12.1 |
+| `SnapshotList(ctx, SnapshotListRequest) (SnapshotListResult, error)` | added Phase 5 |
+| `SnapshotShow(ctx, SnapshotShowRequest) (SnapshotShowResult, error)` | added Phase 5 |
+| `SnapshotStats(ctx, SnapshotStatsRequest) (SnapshotStatsResult, error)` | added Phase 5 |
+| `SnapshotDiff(ctx, SnapshotDiffRequest) (SnapshotDiffResult, error)` | added Phase 5 |
+| `GarbageCollect(ctx, GarbageCollectRequest) (GarbageCollectResult, error)` | added Phase 6 |
+| `Restore(ctx, RestoreRequest) (RestoreResult, error)` | added Phase 7 |
+| `Store(ctx, StoreRequest) (StoreResult, error)` | added Phase 8 |
+
+`DefaultEngine.Store` is active for single-file store only (`Recursive=false`) and delegates to the
+existing storage-context-aware store functions. Recursive folder store remains deferred in engine
+(`ErrNotImplemented`) pending parity coverage for worker/folder orchestration.
+
+CLI routing scope in Phase 8 is intentionally narrow: `store` (single-file) is engine-mediated;
+`store-folder` remains direct path.
+
 ## v1.12 implication
 
 Do not activate mutating commands through the engine until request/result contracts are expanded
