@@ -492,6 +492,10 @@ type SnapshotStatsResult struct {
 	New      int
 	// ReuseRatio is a percentage in [0,100].
 	ReuseRatio float64
+	// LineageStatus explains why HasReuse is false, when applicable.
+	// Mirrors snapshot.SnapshotLineageStatus string values.
+	// Empty when HasReuse is true or when SnapshotID is empty (aggregate call).
+	LineageStatus string
 }
 
 // SnapshotDiffFilter narrows a diff to a single change class.

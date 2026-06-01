@@ -20,6 +20,24 @@ v1.11 introduced the behavior-preserving engine facade. `Engine` exposes `Stats`
 `Verify`. Only `stats` is routed through the engine from `cmd/coldkeep`. Mutating operations exist
 only as inactive candidate contracts. No business logic was moved.
 
+## v1.12 state (Phase 5 — Snapshot Orchestration Migration, complete)
+
+Phase 5 added 4 read-side snapshot methods to the `Engine` interface:
+`SnapshotList`, `SnapshotShow`, `SnapshotStats`, `SnapshotDiff`.
+
+All 4 are implemented on `DefaultEngine` and routed from `cmd/coldkeep` via the phase var seam.
+Mutating snapshot operations (`create`, `delete`, `restore`) remain direct-wired and are deferred
+to a later phase.
+
+`Engine` interface methods as of v1.12 Phase 5:
+- `Stats`
+- `Inspect`
+- `Verify`
+- `SnapshotList`
+- `SnapshotShow`
+- `SnapshotStats`
+- `SnapshotDiff`
+
 ## v1.12 Migration Rule
 
 v1.12 moves orchestration behind the engine and metadata planning behind catalog APIs.

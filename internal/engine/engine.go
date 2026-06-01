@@ -50,4 +50,16 @@ type Engine interface {
 
 	// Verify runs repository verification.
 	Verify(ctx context.Context, req VerifyRequest) (VerifyResult, error)
+
+	// SnapshotList returns snapshots matching the request filters.
+	SnapshotList(ctx context.Context, req SnapshotListRequest) (SnapshotListResult, error)
+
+	// SnapshotShow returns metadata and filtered files for a single snapshot.
+	SnapshotShow(ctx context.Context, req SnapshotShowRequest) (SnapshotShowResult, error)
+
+	// SnapshotStats returns aggregate or per-snapshot statistics.
+	SnapshotStats(ctx context.Context, req SnapshotStatsRequest) (SnapshotStatsResult, error)
+
+	// SnapshotDiff compares two snapshots and returns change entries.
+	SnapshotDiff(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error)
 }

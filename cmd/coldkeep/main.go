@@ -193,14 +193,148 @@ var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
-var listSnapshotsPhase = snapshot.ListSnapshots
-var getSnapshotPhase = snapshot.GetSnapshot
+var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+	eng, err := engine.New(engine.Config{DB: db})
+	if err != nil {
+		return nil, err
+	}
+	req := engine.SnapshotListRequest{
+		Since: filter.Since,
+		Until: filter.Until,
+		Limit: filter.Limit,
+	}
+	if filter.Type != nil {
+		req.Type = engine.SnapshotType(*filter.Type)
+	}
+	if filter.Label != nil {
+		req.Label = *filter.Label
+	}
+	result, err := eng.SnapshotList(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]snapshot.Snapshot, len(result.Snapshots))
+	for i, m := range result.Snapshots {
+		items[i] = snapshotMetaToSnapshot(m)
+	}
+	return items, nil
+}
+var getSnapshotPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.Snapshot, error) {
+	eng, err := engine.New(engine.Config{DB: db})
+	if err != nil {
+		return nil, err
+	}
+	result, err := eng.SnapshotShow(ctx, engine.SnapshotShowRequest{SnapshotID: id})
+	if err != nil {
+		return nil, err
+	}
+	s := snapshotMetaToSnapshot(result.Snapshot)
+	return &s, nil
+}
 var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
-var snapshotStatsPhase = snapshot.GetSnapshotStats
+var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.SnapshotStats, error) {
+	eng, err := engine.New(engine.Config{DB: db})
+	if err != nil {
+		return nil, err
+	}
+	result, err := eng.SnapshotStats(ctx, engine.SnapshotStatsRequest{SnapshotID: id})
+	if err != nil {
+		return nil, err
+	}
+	stats := &snapshot.SnapshotStats{
+		SnapshotCount:     int64(result.SnapshotCount),
+		SnapshotFileCount: int64(result.SnapshotFileCount),
+		TotalSizeBytes:    result.TotalSizeBytes,
+		LineageStatus:     snapshot.SnapshotLineageStatus(result.LineageStatus),
+	}
+	if result.HasReuse {
+		stats.ParentSnapshotID = sql.NullString{Valid: true, String: ""}
+		stats.ReusedFileCount = sql.NullInt64{Valid: true, Int64: int64(result.Reused)}
+		stats.NewFileCount = sql.NullInt64{Valid: true, Int64: int64(result.New)}
+		stats.ReuseRatioPct = sql.NullFloat64{Valid: true, Float64: result.ReuseRatio}
+	}
+	return stats, nil
+}
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
-var diffSnapshotsPhase = snapshot.DiffSnapshots
-var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
+var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+	eng, err := engine.New(engine.Config{DB: db})
+	if err != nil {
+		return nil, err
+	}
+	req := engine.SnapshotDiffRequest{BaseID: baseID, TargetID: targetID}
+	if query != nil {
+		eq := engine.SnapshotQuery{
+			Pattern:        query.Pattern,
+			MinSize:        query.MinSize,
+			MaxSize:        query.MaxSize,
+			ModifiedAfter:  query.ModifiedAfter,
+			ModifiedBefore: query.ModifiedBefore,
+		}
+		for p := range query.ExactPaths {
+			eq.Path = p
+			break // engine.SnapshotQuery.Path is a single exact path
+		}
+		if len(query.Prefixes) > 0 {
+			eq.Prefix = query.Prefixes[0]
+		}
+		if query.Regex != nil {
+			eq.Regex = query.Regex.String()
+		}
+		req.Query = eq
+	}
+	result, err := eng.SnapshotDiff(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]snapshot.SnapshotDiffEntry, len(result.Entries))
+	for i, e := range result.Entries {
+		entries[i] = snapshot.SnapshotDiffEntry{
+			Path: e.StoredPath,
+			Type: snapshot.DiffType(e.Change),
+		}
+	}
+	return &snapshot.SnapshotDiffResult{
+		BaseSnapshotID:   result.BaseID,
+		TargetSnapshotID: result.TargetID,
+		Entries:          entries,
+		Summary: snapshot.SnapshotDiffSummary{
+			Added:    int64(result.Summary.Added),
+			Removed:  int64(result.Summary.Removed),
+			Modified: int64(result.Summary.Modified),
+		},
+	}, nil
+}
+var diffSnapshotSummaryPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string) (*snapshot.SnapshotDiffSummary, error) {
+	eng, err := engine.New(engine.Config{DB: db})
+	if err != nil {
+		return nil, err
+	}
+	result, err := eng.SnapshotDiff(ctx, engine.SnapshotDiffRequest{
+		BaseID: baseID, TargetID: targetID, Summary: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &snapshot.SnapshotDiffSummary{
+		Added:    int64(result.Summary.Added),
+		Removed:  int64(result.Summary.Removed),
+		Modified: int64(result.Summary.Modified),
+	}, nil
+}
+
+// snapshotMetaToSnapshot maps an engine.SnapshotMeta to a snapshot.Snapshot for
+// CLI renderers that expect the snapshot package's type with sql.NullString fields.
+func snapshotMetaToSnapshot(m engine.SnapshotMeta) snapshot.Snapshot {
+	s := snapshot.Snapshot{ID: m.ID, CreatedAt: m.CreatedAt, Type: string(m.Type)}
+	if m.Label != "" {
+		s.Label = sql.NullString{Valid: true, String: m.Label}
+	}
+	if m.ParentID != "" {
+		s.ParentID = sql.NullString{Valid: true, String: m.ParentID}
+	}
+	return s
+}
 var newObservabilityServicePhase = observability.NewService
 var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
 	sgctx, err := loadDefaultStorageContextPhase()
