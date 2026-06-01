@@ -52,6 +52,16 @@ numbers are indicative and must be re-confirmed at the start of each migration p
 - CLI routing of `inspect` and `verify system` through the engine is **deferred** to keep the Phase 1
   diff minimal and risk-free. No CLI behavior, JSON shape, or exit code changed in Phase 1.
 
+## Phase 2 update (v1.12)
+
+- Engine operation contracts were expanded (`CK-112-R002` fixed). The thin v1.11 placeholders in
+  `internal/engine/candidates.go` now represent real command behavior for store, restore, remove, gc,
+  snapshot (create/list/show/stats/diff/delete/restore), repair, and recovery, plus shared
+  renderer-/backend-neutral types. See `engine-baseline.md` for the full contract table and deferrals.
+- This is contract/design work only: the active `Engine` interface is unchanged, no command was
+  routed, and no CLI/JSON/exit-code/storage/schema/backend behavior changed. The command map above is
+  therefore unchanged; phase targets per command still apply.
+
 ## Direct DB access patterns
 
 Search targets:

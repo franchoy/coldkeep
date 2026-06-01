@@ -70,6 +70,81 @@ interface"): `StoreRequest`/`StoreResult`, `RestoreRequest`/`RestoreResult`,
 `GarbageCollectRequest`/`GarbageCollectResult`, `RepairRequest`/`RepairResult`,
 `RecoverRequest`/`RecoverResult`.
 
+## Phase 2 update (v1.12) — Engine contract expansion
+
+Phase 2 expanded the thin v1.11 placeholders in `candidates.go` into realistic, renderer-neutral,
+backend-neutral contracts that can represent the existing CLI behavior before any routing happens.
+The active `Engine` interface is unchanged (still `Stats`, `Inspect`, `Verify`); no method was added
+and no command was routed. This is type/contract + test + doc work only.
+
+### Engine contract rules
+
+- Engine requests represent operation intent, not CLI syntax.
+- Engine results represent operation outcomes, not human or JSON rendering.
+- CLI owns argument parsing and rendering only.
+- Engine owns operation validation that protects correctness.
+- Catalog/storage-specific details must be represented without leaking SQL dialects.
+- Contracts must be rich enough to preserve existing CLI behavior before routing.
+- Contracts must remain backend-neutral (no `database/sql`, driver, or dialect fields) and
+  renderer-neutral (no `io.Writer`, `cobra`, stdout/stderr, or interface fields).
+
+### Shared operation-neutral types (new)
+
+- `OperationWarning{Code, Message, Detail}` — structured warnings instead of stderr text.
+- `ExecutionMode` (`sequential`/`parallel`), `BatchItemStatus` (`ok`/`failed`/`skipped`),
+  `BatchSummary{OK, Failed, Skipped}` — batch outcome representation.
+- `SnapshotQuery{Path, Prefix, Pattern, Regex, MinSize, MaxSize, ModifiedAfter, ModifiedBefore,
+  Limit}` — shared snapshot file-selection filters.
+
+### Expanded operation contracts
+
+| Operation | Modes now representable | Notes |
+| --- | --- | --- |
+| Store / store-folder | single file, recursive folder, codec, workers | `StoreResult` carries hash, stored path, already-stored, chunk created/reused, byte sizes, warnings. |
+| Restore | file-ID batch; stored-path with original/prefix/override destination; overwrite/strict/no-metadata; dry-run/fail-fast/workers/limit | Per-item `RestoreItemResult` + `BatchSummary`; `RestoreMode` and `RestoreDestinationMode` enums. |
+| Remove | file-ID batch, single stored-path, stored-paths batch; dry-run/fail-fast | Per-item `RemoveItemResult` with `RemainingRefCount`/`Removed`; `RemoveMode` enum. |
+| GC | dry-run/live, workers | Result carries affected containers, container filenames, snapshot/current/shared retention breakdown (packed + legacy neutral), bytes reclaimed. |
+| Snapshot create | full vs partial, `--id`/`--label`/`--from` | `SnapshotType` enum; result carries type/paths/files-inserted/parent. |
+| Snapshot list | type/label/since/until/limit/tree | `SnapshotListResult` with `SnapshotMeta` rows and tree lines. |
+| Snapshot show (files) | query filters, limit | `SnapshotShowResult` with `SnapshotFile` entries + matched/total counts. |
+| Snapshot stats | all-snapshots or per-snapshot; reuse metrics | `HasReuse` gates reuse/new/ratio. |
+| Snapshot diff | summary fast-path, added/removed/modified filter, query | `SnapshotDiffSummary` + optional `SnapshotDiffEntry` list. |
+| Snapshot delete | force vs dry-run; lineage/impact | Result carries parent, children, total/unique/shared files, warnings. |
+| Snapshot restore | partial paths, destination modes, overwrite/strict/no-metadata, query | Shares `RestoreDestinationMode`. |
+| Repair | single `ref-counts`/`chunk-live-ref-counts`, batch, fail-fast | `RepairTarget` enum; per-target scanned/updated/orphan rows. |
+| Recovery | corrective dry-run; quarantine/abort/sealing report | Re-modeled from the previous (incorrect) restore-like placeholder. |
+
+### Intentionally deferred
+
+- `RestoreRequest.InputPath` and `RemoveRequest.InputPath` / `RepairRequest.InputPath`: whether batch
+  input-file parsing remains a CLI-level concern or moves into the engine is decided in the relevant
+  migration phase (Restore Phase 7, Remove/Repair Phase 9). The field is retained so the contract can
+  represent the existing command; it does not commit to engine-side file parsing.
+- No `OperationError` taxonomy was introduced; engine `error` returns remain the error channel.
+  A structured error taxonomy is out of scope for v1.12 Phase 2.
+- No interface methods or implementations were added (contract preparation only). Activation/routing
+  happens in later phases per `release-phase-list.md`.
+
+### Contract tests added
+
+- `internal/engine/contracts_test.go`:
+  - `TestCandidateContractFieldTypesAreNeutral` — recursive field-type walk rejecting any field whose
+    type comes from a package other than the engine package, `time`, or built-ins (catches `io.Writer`,
+    `*sql.DB`, `*cobra.Command`, interfaces, channels, funcs even if named innocuously).
+  - Per-operation representability tests proving restore (all modes), remove (all modes), GC
+    (dry-run/live + retention), snapshot create/list/show/stats/diff/delete/restore, repair
+    (targets + batch), recovery (corrective report), and store (file + folder) are expressible.
+- `internal/engine/candidates_test.go` and `backend_compat_test.go` neutrality lists extended to cover
+  all new types.
+- `TestEngineActiveInterfaceRemainsReadOriented` still passes (interface unchanged).
+
+### Risk
+
+- `CK-112-R002` (thin mutating candidate contracts) is marked **fixed** with evidence: the major
+  operation modes are now representable, deferrals are documented above, and construction/neutrality
+  tests pass. Activation remains gated by later phases.
+
+
 ## Dependency guard
 
 `internal/engine/dependency_guard_test.go` (`TestEngineDependencyDirection`) enforces:

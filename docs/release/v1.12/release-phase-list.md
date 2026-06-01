@@ -21,6 +21,13 @@ command behavior (store, store-folder, restore by ID, restore by stored path, re
 create/list/files/stats/diff/restore/delete, GC dry-run/live, repair, recovery, config). Results
 stay renderer-neutral.
 
+**Status: complete.** `internal/engine/candidates.go` contracts expanded with shared neutral types
+(`OperationWarning`, `BatchSummary`, `ExecutionMode`, `SnapshotQuery`) and mode/destination enums;
+recovery re-modeled from an incorrect restore-like placeholder to a corrective report. No interface
+methods added and no command routed (contract preparation only). Neutrality and representability
+proven by `internal/engine/contracts_test.go`. `CK-112-R002` fixed. Entry criteria for Phase 3: the
+catalog facade skeleton can assume these contracts as the engine-side shape it must eventually feed.
+
 ## Phase 3 — Catalog Facade Skeleton
 
 Introduce `internal/catalog` interfaces with wrapper-only adapters over existing DB/query code. No
