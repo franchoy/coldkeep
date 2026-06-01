@@ -191,11 +191,28 @@ All new methods use `e.config.DB` (no global reopen). CLI routing via engine-bac
 `cmd/coldkeep/main.go`. Snapshot create/delete/restore deferred. `ParentSnapshotID` correctness
 bug fixed in `SnapshotStatsResult`.
 
+## Phase 6 update (v1.12) — GC routing
+
+The `Engine` interface now has 8 active methods:
+
+| Method | Status |
+|---|---|
+| `Stats(ctx, StatsRequest) (StatsResult, error)` | active since v1.11 |
+| `Inspect(ctx, InspectRequest) (InspectResult, error)` | active since v1.11 |
+| `Verify(ctx, VerifyRequest) (VerifyResult, error)` | active since v1.11; DB ownership fixed v1.12.1 |
+| `SnapshotList(ctx, SnapshotListRequest) (SnapshotListResult, error)` | added Phase 5 |
+| `SnapshotShow(ctx, SnapshotShowRequest) (SnapshotShowResult, error)` | added Phase 5 |
+| `SnapshotStats(ctx, SnapshotStatsRequest) (SnapshotStatsResult, error)` | added Phase 5 |
+| `SnapshotDiff(ctx, SnapshotDiffRequest) (SnapshotDiffResult, error)` | added Phase 5 |
+| `GarbageCollect(ctx, GarbageCollectRequest) (GarbageCollectResult, error)` | added Phase 6 |
+
+`DefaultEngine.GarbageCollect` delegates to `maintenance.RunGCWithDB` (new DB-aware entry point).
+Live GC is refused on SQLite; dry-run is supported on both. `LoadGCPlanMetadata` remains
+`ErrNotImplemented` (reachability catalog API deferred).
+
 ## v1.12 implication
 
 Do not activate mutating commands through the engine until request/result contracts are expanded
 enough to preserve real command behavior. The inactive v1.11 candidates are placeholders, not final
 contracts. For example, `RestoreRequest` lacks stored-path mode, overwrite semantics, destination
-mode, worker/limit behavior, and safety validation; `GarbageCollectRequest` is ready for Phase 6
-routing (contract complete, DB-aware wrapper needed in maintenance layer). v1.12 expands contracts
-operation by operation.
+mode, worker/limit behavior, and safety validation. v1.12 expands contracts operation by operation.

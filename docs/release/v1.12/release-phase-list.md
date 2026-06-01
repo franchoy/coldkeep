@@ -90,6 +90,17 @@ GC dry-run and live GC can be routed through engine using a DB-aware wrapper.
 Move GC dry-run/live orchestration behind engine and reachability/deletion-plan inputs behind catalog
 APIs. Represent packed and legacy roots consistently. Preserve: GC must never delete reachable data.
 
+**Status: complete.** `RunGCWithDB(ctx, dbconn, dryRun, containersDir)` added to
+`internal/maintenance/gc.go`; `RunGCWithContainersDirResult` refactored to a thin wrapper that opens
+the DB and delegates. `GarbageCollect` added to the `Engine` interface and implemented on
+`DefaultEngine` — maps `GarbageCollectRequest.DryRun` through `RunGCWithDB`. `runGCPhase` in
+`cmd/coldkeep/main.go` replaced with an engine-backed closure (same signature preserved). Live GC
+continues to be refused on the SQLite backend; dry-run is supported on both. `LoadGCPlanMetadata`
+remains `ErrNotImplemented` (reachability catalog API deferred). Parity proven by
+`internal/engine/gc_engine_test.go` (3 SQLite tests) and `cmd/coldkeep/gc_engine_routing_test.go`
+(2 CLI routing tests). Entry criteria for Phase 7: restore plan catalog API allows engine-routed
+restore by ID and by stored path.
+
 ## Phase 7 — Restore Plan Migration
 
 Introduce a restore-plan catalog API. Support ID restore and stored-path restore. Preserve overwrite,

@@ -188,7 +188,36 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
-var runGCPhase = maintenance.RunGCWithContainersDirResult
+var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, error) {
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return maintenance.GCResult{}, err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	eng, err := engine.New(engine.Config{
+		DB:           sgctx.DB,
+		ContainerDir: containersDir,
+	})
+	if err != nil {
+		return maintenance.GCResult{}, err
+	}
+
+	result, err := eng.GarbageCollect(context.Background(), engine.GarbageCollectRequest{DryRun: dryRun})
+	if err != nil {
+		return maintenance.GCResult{}, err
+	}
+	return maintenance.GCResult{
+		DryRun:                       result.DryRun,
+		AffectedContainers:           result.AffectedContainers,
+		ContainerFilenames:           result.ContainerFilenames,
+		SnapshotRetainedContainers:   result.SnapshotRetainedContainers,
+		SnapshotRetainedLogicalFiles: result.SnapshotRetainedLogicalFiles,
+		RetainedCurrentOnlyLogical:   result.CurrentOnlyRetainedLogicalFiles,
+		RetainedSnapshotOnlyLogical:  result.SnapshotOnlyRetainedLogicalFiles,
+		RetainedSharedLogical:        result.SharedRetainedLogicalFiles,
+	}, nil
+}
 var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions

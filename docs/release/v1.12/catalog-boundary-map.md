@@ -85,3 +85,21 @@ and isolated: timestamp filter binds in `ListSnapshots` must pass `time.Time` (n
 RFC3339 string) so go-sqlite3 and lib/pq compare consistently. This does not move the boundary; it
 confirms the catalog owns timestamp comparison semantics and must keep them backend-neutral. See
 `sqlite-postgres-baseline.md` for the full dialect rules.
+
+## Phase 6 status
+
+GC routing is complete, but reachability/deletion-plan catalog boundaries are intentionally deferred.
+The current GC orchestration (`maintenance.RunGCWithDB`) computes reachability and deletion
+eligibility directly via SQL — it is not routed through `LoadGCPlanMetadata`. The engine
+(`DefaultEngine.GarbageCollect`) wraps this DB-aware function. The catalog boundary for GC is
+therefore: engine → maintenance.RunGCWithDB (not yet: engine → catalog.GCPlanCatalog → maintenance).
+
+`LoadGCPlanMetadata` remains `ErrNotImplemented`. Activating the reachability catalog API for GC
+is deferred to a future phase because:
+
+1. GC correctness is preserved (the reachability query inside `RunGCWithDB` is unchanged).
+2. The packed/legacy root unification required for `LoadGCPlanMetadata` shares work with
+   `LoadChunkPlacements` (Phase 7/8); doing it separately now adds duplicate complexity.
+3. The safety invariant "GC must never delete reachable data" is tested at the engine level
+   (`TestGCDryRunThroughEngineEmptyDB`, `TestGCLiveRefusedOnSQLite`).
+

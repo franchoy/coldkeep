@@ -79,8 +79,24 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 	return err
 }
 
-// RunGCWithContainersDirResult implements GC under the v1.2 audited-root model
-// (Option A — conservative path):
+// RunGCWithContainersDirResult implements GC under the v1.2 audited-root model.
+// It opens the global DB connection via gcConnectDB and delegates to RunGCWithDB.
+// Both real and dry-run GC are subject to the same pre-flight gate.
+func RunGCWithContainersDirResult(dryRun bool, containersDir string) (GCResult, error) {
+	dbconn, err := gcConnectDB()
+	if err != nil {
+		return GCResult{}, fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	return RunGCWithDB(ctx, dbconn, dryRun, containersDir)
+}
+
+// RunGCWithDB implements GC under the v1.2 audited-root model using a
+// caller-provided DB connection and context. This is the DB-aware entry point
+// used by the engine facade.
 //
 //  1. Acquire advisory lock (singleton enforcement).
 //
@@ -101,16 +117,8 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 // If integrity issues are found at step 2, the error message directs operators
 // to run 'repair ref-counts' before retrying GC.
 // Both real and dry-run GC are subject to the same pre-flight gate.
-func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCResult, err error) {
+func RunGCWithDB(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir string) (result GCResult, err error) {
 	result.DryRun = dryRun
-
-	dbconn, err := gcConnectDB()
-	if err != nil {
-		return GCResult{}, fmt.Errorf("failed to connect to DB: %w", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
 
 	fsys := fsx.Default()
 

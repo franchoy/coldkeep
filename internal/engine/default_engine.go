@@ -321,6 +321,28 @@ func (e *DefaultEngine) SnapshotDiff(ctx context.Context, req SnapshotDiffReques
 	return res, nil
 }
 
+func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error) {
+	containerDir := e.config.ContainerDir
+	if containerDir == "" {
+		containerDir = container.ContainersDir
+	}
+	gcRes, err := maintenance.RunGCWithDB(ctx, e.config.DB, req.DryRun, containerDir)
+	if err != nil {
+		return GarbageCollectResult{}, err
+	}
+	return GarbageCollectResult{
+		DryRun:                           gcRes.DryRun,
+		AffectedContainers:               gcRes.AffectedContainers,
+		ContainerFilenames:               gcRes.ContainerFilenames,
+		SnapshotRetainedContainers:       gcRes.SnapshotRetainedContainers,
+		SnapshotRetainedLogicalFiles:     gcRes.SnapshotRetainedLogicalFiles,
+		CurrentOnlyRetainedLogicalFiles:  gcRes.RetainedCurrentOnlyLogical,
+		SnapshotOnlyRetainedLogicalFiles: gcRes.RetainedSnapshotOnlyLogical,
+		SharedRetainedLogicalFiles:       gcRes.RetainedSharedLogical,
+		BytesReclaimed:                   0, // not computed by current maintenance layer
+	}, nil
+}
+
 // engineQueryToSnapshotQuery maps an engine-level SnapshotQuery to the
 // snapshot package's equivalent type.
 func engineQueryToSnapshotQuery(q SnapshotQuery) *snapshot.SnapshotQuery {

@@ -9,11 +9,12 @@ import (
 )
 
 // TestEngineActiveInterfaceRemainsReadOriented asserts that the active Engine
-// interface contains exactly the read-oriented methods approved for v1.12:
-// Stats, Inspect, Verify (original), and the 4 read-side snapshot methods
-// added in v1.12 Phase 5 (SnapshotList, SnapshotShow, SnapshotStats, SnapshotDiff).
+// interface contains exactly the methods approved for v1.12:
+// Stats, Inspect, Verify (original), the 4 read-side snapshot methods
+// added in v1.12 Phase 5 (SnapshotList, SnapshotShow, SnapshotStats, SnapshotDiff),
+// and GarbageCollect added in v1.12 Phase 6.
 //
-// This test is a guardrail: it must fail if a mutating candidate method is
+// This test is a guardrail: it must fail if a candidate method is
 // accidentally added to the interface without explicit phase approval.
 func TestEngineActiveInterfaceRemainsReadOriented(t *testing.T) {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
@@ -23,7 +24,7 @@ func TestEngineActiveInterfaceRemainsReadOriented(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "GarbageCollect"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)

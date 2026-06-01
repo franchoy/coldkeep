@@ -62,4 +62,10 @@ type Engine interface {
 
 	// SnapshotDiff compares two snapshots and returns change entries.
 	SnapshotDiff(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error)
+
+	// GarbageCollect runs dry-run or live GC against the repository.
+	// Safety invariant: GC must never delete reachable data.
+	// Live GC is only supported on the PostgreSQL backend; dry-run is supported
+	// on both backends.
+	GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error)
 }

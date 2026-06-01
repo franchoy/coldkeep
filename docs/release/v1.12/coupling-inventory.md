@@ -87,6 +87,20 @@ numbers are indicative and must be re-confirmed at the start of each migration p
 - Snapshot create, delete, and restore remain CLI/snapshot package calls (deferred to Phase 9/7).
 - No CLI/JSON/exit-code/storage/schema/backend behavior changed.
 
+## Phase 6 update (v1.12)
+
+- `gc` (dry-run and live) routed through the engine. `runGCPhase` in `cmd/coldkeep/main.go` changed
+  from a direct `maintenance.RunGCWithContainersDirResult` reference to an engine-backed closure.
+- `RunGCWithDB(ctx, dbconn, dryRun, containersDir)` added to `internal/maintenance/gc.go`;
+  `RunGCWithContainersDirResult` refactored to open DB and delegate (thin wrapper preserved for
+  backward compatibility in tests requiring `COLDKEEP_TEST_DB`).
+- `Engine` interface expanded from 7 to 8 active methods: `GarbageCollect` added.
+- `DefaultEngine.GarbageCollect` maps `GarbageCollectRequest.DryRun` → `RunGCWithDB` and translates
+  `GCResult` fields to `GarbageCollectResult`.
+- Live GC continues to be refused on the SQLite backend. Dry-run is supported on both.
+- `LoadGCPlanMetadata` remains `ErrNotImplemented` (reachability catalog API deferred to Phase 11+).
+- No CLI/JSON/exit-code/storage/schema/backend behavior changed.
+
 ## Direct DB access patterns
 
 Search targets:
