@@ -89,7 +89,7 @@ func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyRe
 	if containerDir == "" {
 		containerDir = container.ContainersDir
 	}
-	if err := maintenance.VerifyCommandWithContainersDir(containerDir, target, req.FileID, level); err != nil {
+	if err := maintenance.VerifyCommandWithDBAndContainersDir(e.config.DB, containerDir, target, req.FileID, level); err != nil {
 		return VerifyResult{}, err
 	}
 	return VerifyResult{}, nil

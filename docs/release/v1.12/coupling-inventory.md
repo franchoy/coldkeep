@@ -9,8 +9,8 @@ section below records what Phase 0 inventory already confirmed.
 | Command | Current orchestration owner | Direct DB access | Direct storage-context access | Direct filesystem access | Rendering mixed with behavior | Target owner | v1.12 phase |
 |---|---|---|---|---|---|---|---|
 | stats | engine (routed) | No (via engine) | Yes (loads context for engine) | TBD | TBD | engine | Phase 1 |
-| inspect | CLI → observability.Service | TBD | TBD | TBD | TBD | engine | Phase 1 |
-| verify | CLI → maintenance | Yes (maintenance reopens DB) | Yes | TBD | TBD | engine | Phase 1 |
+| inspect | CLI → observability.Service | No (engine path uses Config.DB) | TBD | TBD | TBD | engine | Phase 1 (routing deferred) |
+| verify | CLI → maintenance (global DB) | Engine path now uses Config.DB; CLI path still global | Yes | TBD | TBD | engine | Phase 1 (DB ownership fixed; routing deferred) |
 | snapshot create | CLI/snapshot | TBD | TBD | TBD | TBD | engine + catalog | Phase 5 |
 | snapshot list | CLI/snapshot | TBD | TBD | TBD | TBD | engine + catalog | Phase 5 |
 | snapshot files | CLI/snapshot | TBD | TBD | TBD | TBD | engine + catalog | Phase 5 |
@@ -40,6 +40,17 @@ numbers are indicative and must be re-confirmed at the start of each migration p
   which wraps `storage.LoadDefaultStorageContext`; numerous commands call it directly.
 - No direct `QueryContext`/`QueryRowContext`/`ExecContext`/`BeginTx`/`sql.Tx` calls were found in
   `main.go` production paths (these appear in test files only).
+
+## Phase 1 update (v1.12.1)
+
+- Engine `Verify` DB ownership fixed (CK-112-R001). `DefaultEngine.Verify` delegates to the new
+  `maintenance.VerifyCommandWithDBAndContainersDir`, which accepts a caller-provided `*sql.DB`. The
+  legacy `maintenance.VerifyCommandWithContainersDir` remains as a thin wrapper that opens the global
+  DB and delegates to the DB-aware path, so the existing CLI `verify` command is unchanged.
+- `Stats` and `Inspect` reviewed and confirmed to already use the injected `Config.DB` via
+  `observability.Service`; no global reopen.
+- CLI routing of `inspect` and `verify system` through the engine is **deferred** to keep the Phase 1
+  diff minimal and risk-free. No CLI behavior, JSON shape, or exit code changed in Phase 1.
 
 ## Direct DB access patterns
 

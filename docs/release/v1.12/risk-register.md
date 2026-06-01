@@ -9,7 +9,7 @@ Severity logic (consistent with the prior stabilization train):
 
 | ID | Risk | Severity | Area | Phase target | Status | Notes |
 |---|---|---|---|---|---|---|
-| CK-112-R001 | Engine `Verify` does not honor engine-owned DB | S1 | engine/verify | Phase 1 | open | Confirmed: `DefaultEngine.Verify` delegates to `maintenance.VerifyCommandWithContainersDir`, which calls `db.ConnectDB()` and ignores `Config.DB`. Must fix before verify CLI routing. |
+| CK-112-R001 | Engine `Verify` does not honor engine-owned DB | S1 | engine/verify | Phase 1 | fixed | Fixed in v1.12.1: `DefaultEngine.Verify` now delegates to `maintenance.VerifyCommandWithDBAndContainersDir(Config.DB, ...)` instead of the global path that called `db.ConnectDB()`. Regression tests: `internal/engine/verify_db_ownership_test.go`. |
 | CK-112-R002 | Existing candidate mutating request/result structs are too thin | S1 | engine contracts | Phase 2 | open | Do not activate mutating routes before expansion. e.g. `RestoreRequest` lacks stored-path/overwrite/destination/limit/safety fields. |
 | CK-112-R003 | Catalog facade may accidentally become SQLite-specific | S1 | catalog/db | Phase 4 | open | Add backend contract tests; isolate dialect differences behind adapters. |
 | CK-112-R004 | CLI behavior drift during routing | S1 | CLI/engine | all migration phases | open | Require parity tests (human output, exit codes, errors). |

@@ -78,12 +78,18 @@ interface"): `StoreRequest`/`StoreResult`, `RestoreRequest`/`RestoreResult`,
 2. Non-engine `internal/*` packages must not import `internal/engine`.
 3. `cmd/coldkeep` may import `internal/engine` (allowed).
 
-## Baseline concern (deferred to Phase 1)
+## Baseline concern (resolved in Phase 1 / v1.12.1)
 
-`DefaultEngine.Verify` passes `Config.ContainerDir` to
-`maintenance.VerifyCommandWithContainersDir`, which opens its own DB connection via `db.ConnectDB()`
-and ignores `Config.DB`. The active `Verify` method must use the engine-provided DB before `verify`
-is routed through the engine. Tracked as `CK-112-R001`.
+`DefaultEngine.Verify` previously passed `Config.ContainerDir` to
+`maintenance.VerifyCommandWithContainersDir`, which opened its own DB connection via `db.ConnectDB()`
+and ignored `Config.DB`. The active `Verify` method now delegates to
+`maintenance.VerifyCommandWithDBAndContainersDir(Config.DB, ...)`, honoring the engine-owned DB.
+Regression coverage lives in `internal/engine/verify_db_ownership_test.go`. Tracked as `CK-112-R001`
+(fixed).
+
+`Stats` and `Inspect` were reviewed for the same risk and are clean: both delegate through
+`observability.Service`, which uses the injected `Config.DB` (`maintenance.RunStatsResultWithDB`,
+`maintenance.CollectBlockStats`). Neither reopens a global DB connection.
 
 ## v1.12 implication
 
