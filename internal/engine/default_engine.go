@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,6 +15,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/snapshot"
+	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -341,6 +345,107 @@ func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRe
 		SharedRetainedLogicalFiles:       gcRes.RetainedSharedLogical,
 		BytesReclaimed:                   0, // not computed by current maintenance layer
 	}, nil
+}
+
+func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RestoreResult{}, err
+	}
+
+	if req.Mode != RestoreModeFileIDs {
+		return RestoreResult{}, ErrNotImplemented
+	}
+
+	if len(req.FileIDs) == 0 {
+		return RestoreResult{}, fmt.Errorf("engine: restore requires at least one file ID")
+	}
+	if strings.TrimSpace(req.OutputDir) == "" {
+		return RestoreResult{}, fmt.Errorf("engine: restore output directory is required")
+	}
+
+	result := RestoreResult{
+		DryRun:        req.DryRun,
+		ExecutionMode: ExecutionModeSequential,
+		Items:         make([]RestoreItemResult, 0, len(req.FileIDs)),
+	}
+
+	sgctx := storage.StorageContext{DB: e.config.DB, ContainerDir: e.config.ContainerDir}
+	for _, fileID := range req.FileIDs {
+		item := RestoreItemResult{FileID: fileID, Status: BatchItemOK}
+
+		if fileID <= 0 {
+			item.Status = BatchItemFailed
+			item.Error = fmt.Sprintf("invalid file ID %d", fileID)
+			result.Items = append(result.Items, item)
+			result.Summary.Failed++
+			if req.FailFast {
+				break
+			}
+			continue
+		}
+
+		if req.DryRun {
+			dry, err := dryRunRestoreByID(e.config.DB, fileID, req.OutputDir, req.Overwrite)
+			item = dry
+			if err != nil {
+				item.Status = BatchItemFailed
+				item.Error = err.Error()
+				result.Summary.Failed++
+				result.Items = append(result.Items, item)
+				if req.FailFast {
+					break
+				}
+				continue
+			}
+			result.Summary.OK++
+			result.Items = append(result.Items, item)
+			continue
+		}
+
+		r, err := storage.RestoreFileWithStorageContextResultOptions(sgctx, fileID, req.OutputDir, storage.RestoreOptions{Overwrite: req.Overwrite})
+		if err != nil {
+			item.Status = BatchItemFailed
+			item.Error = err.Error()
+			result.Summary.Failed++
+			result.Items = append(result.Items, item)
+			if req.FailFast {
+				break
+			}
+			continue
+		}
+
+		item.OutputPath = r.OutputPath
+		item.RestoredHash = r.RestoredHash
+		result.Summary.OK++
+		result.Items = append(result.Items, item)
+	}
+
+	result.Summary.Skipped = len(req.FileIDs) - result.Summary.OK - result.Summary.Failed
+	if result.Summary.Skipped < 0 {
+		result.Summary.Skipped = 0
+	}
+	return result, nil
+}
+
+func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) (RestoreItemResult, error) {
+	item := RestoreItemResult{FileID: fileID, Status: BatchItemOK}
+	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+	if err != nil {
+		return item, err
+	}
+	if info.Status != filestate.LogicalFileCompleted {
+		return item, fmt.Errorf("file ID %d is not COMPLETED", fileID)
+	}
+	out := filepath.Join(outputDir, info.OriginalName)
+	item.OutputPath = out
+	if !overwrite {
+		if _, statErr := os.Stat(out); statErr == nil {
+			return item, fmt.Errorf("output file already exists: %s (use --overwrite)", out)
+		} else if !os.IsNotExist(statErr) {
+			return item, fmt.Errorf("check output path %s: %w", out, statErr)
+		}
+	}
+	return item, nil
 }
 
 // engineQueryToSnapshotQuery maps an engine-level SnapshotQuery to the

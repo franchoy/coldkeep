@@ -188,6 +188,45 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
+var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) (storage.RestoreFileResult, error) {
+	if sgctx == nil || sgctx.DB == nil {
+		return storage.RestoreFileResult{}, fmt.Errorf("restore: storage context DB is required")
+	}
+	eng, err := engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
+	if err != nil {
+		return storage.RestoreFileResult{}, err
+	}
+
+	info, err := storage.GetLogicalFileInfoWithDB(sgctx.DB, fileID)
+	if err != nil {
+		return storage.RestoreFileResult{}, err
+	}
+
+	res, err := eng.Restore(context.Background(), engine.RestoreRequest{
+		Mode:      engine.RestoreModeFileIDs,
+		FileIDs:   []int64{fileID},
+		OutputDir: outputDir,
+		Overwrite: overwrite,
+		FailFast:  true,
+	})
+	if err != nil {
+		return storage.RestoreFileResult{}, err
+	}
+	if len(res.Items) != 1 {
+		return storage.RestoreFileResult{}, fmt.Errorf("restore: expected one item result, got %d", len(res.Items))
+	}
+	item := res.Items[0]
+	if item.Status == engine.BatchItemFailed {
+		return storage.RestoreFileResult{}, errors.New(item.Error)
+	}
+
+	return storage.RestoreFileResult{
+		FileID:       fileID,
+		OriginalName: info.OriginalName,
+		OutputPath:   item.OutputPath,
+		RestoredHash: item.RestoredHash,
+	}, nil
+}
 var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, error) {
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
@@ -1643,7 +1682,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		}
 
 		perf := newPerfTimer()
-		sgctx, err := storage.LoadDefaultStorageContext()
+		sgctx, err := loadDefaultStorageContextPhase()
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
 		}
@@ -1732,7 +1771,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 
 	restorePerf := newPerfTimer()
-	sgctx, err := storage.LoadDefaultStorageContext()
+	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
@@ -2039,7 +2078,7 @@ func executeRestoreDryRunItem(dbconn *sql.DB, fileID int64, outputDir string, ov
 }
 
 func executeRestoreItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
-	result, err := storage.RestoreFileWithStorageContextResultOptions(*sgctx, fileID, outputDir, storage.RestoreOptions{Overwrite: overwrite})
+	result, err := restoreByIDPhase(sgctx, fileID, outputDir, overwrite)
 	if err != nil {
 		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
 		annotateBatchFailureFromError(err, &item)

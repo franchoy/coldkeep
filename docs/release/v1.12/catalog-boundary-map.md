@@ -103,3 +103,28 @@ is deferred to a future phase because:
 3. The safety invariant "GC must never delete reachable data" is tested at the engine level
    (`TestGCDryRunThroughEngineEmptyDB`, `TestGCLiveRefusedOnSQLite`).
 
+## Phase 7 status
+
+Restore-by-ID routing is complete at the engine boundary, but restore-plan catalog boundaries are
+intentionally deferred.
+
+- `Engine.Restore` is active for `RestoreModeFileIDs`.
+- Stored-path restore and snapshot restore are not routed through engine restore planning in this
+  phase.
+- `LoadRestorePlanMetadata` remains `ErrNotImplemented`.
+
+Current boundary shape for restore in Phase 7:
+
+- restore-by-ID (live): CLI batch orchestration -> engine.Restore -> storage restore pipeline.
+- restore-by-ID (dry-run): CLI batch planning path remains unchanged.
+- stored-path restore: CLI -> storage direct path (destination-mode safety unchanged).
+
+Deferral rationale:
+
+1. Destination-mode parity (`original`/`prefix`/`override`) and strict/no-metadata semantics for
+  stored-path restore require full route-equivalence tests before safe activation behind engine.
+2. Existing traversal/symlink safeguards are already enforced in `pathsafe` + storage/snapshot
+  planning paths; deferral avoids a broad refactor in a correctness-critical phase.
+3. This keeps the Phase 7 diff narrow while moving restore orchestration onto the engine for the
+  highest-volume path (file-ID restore).
+

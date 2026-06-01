@@ -38,6 +38,54 @@ to a later phase.
 - `SnapshotStats`
 - `SnapshotDiff`
 
+## v1.12 state (Phase 6 — GC Plan and Reachability Migration, complete)
+
+Phase 6 added `GarbageCollect` to the `Engine` interface and routed both dry-run and live GC
+through `DefaultEngine.GarbageCollect` -> `maintenance.RunGCWithDB`.
+
+Execution parity is preserved across backends with an intentional backend rule:
+
+- PostgreSQL: dry-run and live supported.
+- SQLite: dry-run supported; live refused by design.
+
+Reachability catalogization is deferred: `LoadGCPlanMetadata` remains `ErrNotImplemented`.
+
+`Engine` interface methods as of v1.12 Phase 6:
+- `Stats`
+- `Inspect`
+- `Verify`
+- `SnapshotList`
+- `SnapshotShow`
+- `SnapshotStats`
+- `SnapshotDiff`
+- `GarbageCollect`
+
+## v1.12 state (Phase 7 — Restore Plan Migration, complete scoped routing)
+
+Phase 7 adds `Restore` to the active `Engine` interface and routes restore-by-ID live execution
+through engine orchestration while preserving existing CLI batch reporting and output contracts.
+
+Scope activated in Phase 7:
+
+- `Restore` file-ID mode (`RestoreModeFileIDs`) active on `DefaultEngine`.
+
+Scope intentionally deferred in Phase 7:
+
+- stored-path restore routing through engine (`RestoreModeStoredPath`) remains deferred.
+- snapshot restore routing through engine remains deferred.
+- catalog restore-plan API (`LoadRestorePlanMetadata`) remains `ErrNotImplemented`.
+
+`Engine` interface methods as of v1.12 Phase 7:
+- `Stats`
+- `Inspect`
+- `Verify`
+- `SnapshotList`
+- `SnapshotShow`
+- `SnapshotStats`
+- `SnapshotDiff`
+- `GarbageCollect`
+- `Restore`
+
 ## v1.12 Migration Rule
 
 v1.12 moves orchestration behind the engine and metadata planning behind catalog APIs.

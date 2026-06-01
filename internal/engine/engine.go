@@ -68,4 +68,9 @@ type Engine interface {
 	// Live GC is only supported on the PostgreSQL backend; dry-run is supported
 	// on both backends.
 	GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error)
+
+	// Restore restores logical files by ID or by stored path.
+	// Safety invariant: Restore must never write outside the intended destination.
+	// Phase 7: file-ID mode is active; stored-path mode remains deferred.
+	Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error)
 }

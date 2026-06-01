@@ -101,6 +101,18 @@ numbers are indicative and must be re-confirmed at the start of each migration p
 - `LoadGCPlanMetadata` remains `ErrNotImplemented` (reachability catalog API deferred to Phase 11+).
 - No CLI/JSON/exit-code/storage/schema/backend behavior changed.
 
+## Phase 7 update (v1.12)
+
+- `restore` by logical file ID (live execution path) is routed through the engine.
+- `Engine` interface expanded from 8 to 9 active methods: `Restore` added.
+- `DefaultEngine.Restore` is active for `RestoreModeFileIDs`; `RestoreModeStoredPath` returns
+  `ErrNotImplemented` (explicit deferral).
+- CLI now uses an engine-backed seam for restore-by-ID execution (`restoreByIDPhase`), while
+  preserving existing batch reporting, JSON envelope shape, and exit-code semantics.
+- Stored-path restore (`--stored-path`) remains direct-wired to storage and is deferred until
+  full destination-mode parity through engine is proven.
+- `LoadRestorePlanMetadata` remains `ErrNotImplemented` (catalog restore-plan boundary deferred).
+
 ## Direct DB access patterns
 
 Search targets:
