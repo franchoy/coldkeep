@@ -175,3 +175,27 @@ Deferral rationale:
 3. This phase keeps destructive-operation migration narrow while preserving snapshot-retention and
   reference-count safety behavior through existing storage invariants.
 
+## Phase 10 status
+
+Verify routing at the engine boundary is now complete for the CLI verify execution path, while
+catalog planning boundaries remain intentionally unchanged.
+
+- `verify` command execution: CLI -> engine verify seam -> `Engine.Verify`.
+- verify summary rendering remains CLI-side, but summary queries now use the injected DB from the
+  loaded storage context instead of opening a second global DB connection.
+- direct `cmd/coldkeep` -> `internal/catalog` imports are explicitly prohibited by dependency guard
+  tests in this phase.
+
+Current boundary shape for verify in Phase 10:
+
+- verify execution: CLI parse/validation -> engine.Verify orchestration.
+- verify summary: CLI rendering + DB summary queries on injected DB handle.
+
+Deferral rationale:
+
+1. Phase 10 is a thin-wrapper reduction step, not a new operation activation phase.
+2. Catalog deferred APIs (`Load*` metadata planning methods) remain unchanged to avoid broad
+  boundary churn during CLI de-coupling work.
+3. High-risk deferred command routes (stored-path remove/restore, repair, recovery, folder store)
+  stay deferred to preserve correctness-critical semantics.
+

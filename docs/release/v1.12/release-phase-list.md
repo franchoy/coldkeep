@@ -151,6 +151,12 @@ Reduce `cmd/coldkeep` to: parse args, validate CLI syntax, build engine requests
 output. Remove duplicated orchestration. Keep CLI validation as user-facing protection while
 duplicating core safety validation in engine/catalog.
 
+**Status: complete (scoped).** Verify command execution now routes through an engine-backed seam
+using the existing active `Engine.Verify` method, and verify summary collection no longer reopens a
+second global DB connection from the CLI path. CLI output contracts are unchanged (human/JSON/exit).
+Dependency guardrails were also tightened so `cmd/coldkeep` must not import `internal/catalog`
+directly. No new high-risk operation migration was introduced; deferred operations remain deferred.
+
 ## Phase 11 — Engine/Catalog Invariant Test Matrix
 
 Prove no-data-loss, deterministic restore, GC safety, verification failure-closed behavior, snapshot

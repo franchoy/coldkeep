@@ -140,6 +140,18 @@ numbers are indicative and must be re-confirmed at the start of each migration p
 - Repair and recovery routing remain deferred in this phase to preserve current corrective and
   startup fail-safe semantics without broad orchestration changes.
 
+## Phase 10 update (v1.12)
+
+- `verify` execution now routes through an engine-backed seam (`verifyCommandPhase`) that invokes
+  `Engine.Verify` using injected DB ownership from `loadDefaultStorageContextPhase`.
+- verify summary collection remains CLI-rendered but no longer opens a second global DB connection;
+  summary queries now run against the same injected DB handle used for verify execution.
+- Human output, JSON envelope/fields, usage validation, and exit-code behavior for `verify`
+  remain unchanged.
+- Dependency guardrail strengthened: `cmd/coldkeep` is now explicitly blocked from importing
+  `internal/catalog` directly by test.
+- Existing routed scopes remain unchanged; no new high-risk command migration was activated.
+
 ## Direct DB access patterns
 
 Search targets:

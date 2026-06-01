@@ -518,6 +518,21 @@ var runObservabilityInspectPhase = func(entity observability.EntityType, id stri
 
 	return r, nil
 }
+var verifyCommandPhase = func(dbconn *sql.DB, target string, fileID int, level verify.VerifyLevel) error {
+	eng, err := engine.New(engine.Config{DB: dbconn, ContainerDir: container.ContainersDir})
+	if err != nil {
+		return err
+	}
+	_, err = eng.Verify(context.Background(), engine.VerifyRequest{
+		Level:  verifyLevelToString(level),
+		Target: target,
+		FileID: fileID,
+	})
+	return err
+}
+var verifySummaryPhase = func(dbconn *sql.DB, target string, fileID int64) (verifyOutputSummary, error) {
+	return collectVerifyOutputSummary(dbconn, target, fileID)
+}
 var runChunkerBenchmarkPhase = runChunkerBenchmark
 var runCoreBenchmarkPhase = runCoreBenchmark
 var runBenchmarkDeterminismPhase = validateBenchmarkDeterminism
@@ -1109,12 +1124,10 @@ func countVerifySummaryForFile(dbconn *sql.DB, fileID int64) (verifyOutputSummar
 	return s, nil
 }
 
-func collectVerifyOutputSummary(target string, fileID int64) (verifyOutputSummary, error) {
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		return verifyOutputSummary{}, err
+func collectVerifyOutputSummary(dbconn *sql.DB, target string, fileID int64) (verifyOutputSummary, error) {
+	if dbconn == nil {
+		return verifyOutputSummary{}, fmt.Errorf("verify summary DB connection is nil")
 	}
-	defer func() { _ = dbconn.Close() }()
 
 	switch target {
 	case "system":
@@ -2933,11 +2946,17 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		if len(parsed.positionals) > 2 {
 			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
 		}
-		verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel)
+		sgctx, err := loadDefaultStorageContextPhase()
+		if err != nil {
+			return fmt.Errorf("load storage context: %w", err)
+		}
+		defer func() { _ = sgctx.Close() }()
+
+		verifyErr := verifyCommandPhase(sgctx.DB, target, 0, verifyLevel)
 		if verifyErr != nil {
 			return verifyError(verifyErr)
 		}
-		summary, err := collectVerifyOutputSummary(target, 0)
+		summary, err := verifySummaryPhase(sgctx.DB, target, 0)
 		if err != nil {
 			return fmt.Errorf("collect verify summary: %w", err)
 		}
@@ -2978,11 +2997,17 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return usageErrorf("Invalid fileID: %v", err)
 		}
 
-		verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel)
+		sgctx, err := loadDefaultStorageContextPhase()
+		if err != nil {
+			return fmt.Errorf("load storage context: %w", err)
+		}
+		defer func() { _ = sgctx.Close() }()
+
+		verifyErr := verifyCommandPhase(sgctx.DB, target, int(fileID), verifyLevel)
 		if verifyErr != nil {
 			return verifyError(verifyErr)
 		}
-		summary, err := collectVerifyOutputSummary(target, fileID)
+		summary, err := verifySummaryPhase(sgctx.DB, target, fileID)
 		if err != nil {
 			return fmt.Errorf("collect verify summary: %w", err)
 		}

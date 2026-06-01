@@ -284,6 +284,21 @@ explicit parity coverage for those addressing modes.
 CLI routing scope in Phase 9 is intentionally narrow: remove-by-ID is engine-mediated; stored-path
 remove modes, repair, and recovery remain direct paths.
 
+## Phase 10 update (v1.12) — Verify thin-wrapper burn-down (scoped)
+
+No new active `Engine` methods were added in Phase 10. The active interface remains 11 methods
+through this phase.
+
+Phase 10 scope is a CLI-thinning step for an already-active operation:
+
+- `runVerifyCommand` now routes verify execution through the engine seam (`verifyCommandPhase`).
+- `collectVerifyOutputSummary` now accepts an injected `*sql.DB` and does not call global DB open
+  paths from inside CLI summary rendering.
+- verify text/JSON/exit behavior is preserved, with parity guarded by dedicated CLI routing tests.
+
+This phase intentionally avoids routing deferred high-risk operations and does not change restore,
+remove stored-path modes, repair, recovery, or folder-store activation state.
+
 ## v1.12 implication
 
 Do not activate mutating commands through the engine until request/result contracts are expanded

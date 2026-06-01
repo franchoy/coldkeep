@@ -25,6 +25,7 @@ type goListPackage struct {
 func TestEngineDependencyDirection(t *testing.T) {
 	const module = "github.com/franchoy/coldkeep"
 	const enginePkg = module + "/internal/engine"
+	const catalogPkg = module + "/internal/catalog"
 	const cliPkg = module + "/cmd/coldkeep"
 
 	// Locate the module root so ./... covers all packages, not just internal/engine.
@@ -49,6 +50,7 @@ func TestEngineDependencyDirection(t *testing.T) {
 		}
 		checkEngineNotDependsOnCLI(t, pkg, enginePkg, cliPkg)
 		checkDomainNotImportsEngine(t, pkg, module, enginePkg)
+		checkCLINotImportsCatalog(t, pkg, cliPkg, catalogPkg)
 	}
 }
 
@@ -78,6 +80,21 @@ func checkDomainNotImportsEngine(t *testing.T, pkg goListPackage, module, engine
 	for _, imp := range pkg.Imports {
 		if imp == enginePkg || strings.HasPrefix(imp, enginePkg+"/") {
 			t.Errorf("Rule 2 violation: domain/internal package must not import engine facade:\n\t%s -> %s",
+				pkg.ImportPath, imp)
+		}
+	}
+}
+
+// checkCLINotImportsCatalog enforces the CLI-side coupling rule for phased
+// migration: cmd/coldkeep must not import internal/catalog directly.
+func checkCLINotImportsCatalog(t *testing.T, pkg goListPackage, cliPkg, catalogPkg string) {
+	t.Helper()
+	if pkg.ImportPath != cliPkg {
+		return
+	}
+	for _, imp := range pkg.Imports {
+		if imp == catalogPkg || strings.HasPrefix(imp, catalogPkg+"/") {
+			t.Errorf("Rule 4 violation: CLI must not import catalog directly:\n\t%s -> %s",
 				pkg.ImportPath, imp)
 		}
 	}

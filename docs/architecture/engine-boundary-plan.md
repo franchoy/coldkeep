@@ -140,6 +140,38 @@ Scope intentionally deferred in Phase 9:
 - `Store`
 - `Remove`
 
+## v1.12 state (Phase 10 — CLI Thin Wrapper Burn-down, complete scoped routing)
+
+Phase 10 performs a conservative thin-wrapper reduction for verify command orchestration without
+activating any deferred high-risk command routes.
+
+Scope activated in Phase 10:
+
+- CLI verify execution is routed via an engine-backed seam (`verifyCommandPhase`) that delegates to
+	`Engine.Verify`.
+- verify summary collection in CLI now consumes an injected DB handle from storage context instead
+	of opening a separate global DB connection path.
+- dependency-direction guard adds explicit prohibition of direct `cmd/coldkeep` -> `internal/catalog`
+	imports.
+
+Scope intentionally unchanged in Phase 10:
+
+- no new `Engine` methods are activated (active method count remains 11).
+- stored-path remove/restore, repair, recovery, and folder-store routing remain deferred.
+
+`Engine` interface methods as of v1.12 Phase 10:
+- `Stats`
+- `Inspect`
+- `Verify`
+- `SnapshotList`
+- `SnapshotShow`
+- `SnapshotStats`
+- `SnapshotDiff`
+- `GarbageCollect`
+- `Restore`
+- `Store`
+- `Remove`
+
 ## v1.12 Migration Rule
 
 v1.12 moves orchestration behind the engine and metadata planning behind catalog APIs.
