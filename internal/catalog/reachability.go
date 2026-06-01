@@ -28,7 +28,7 @@ func (s *Service) loadCurrentRoots(ctx context.Context) (map[int64]struct{}, err
 	if err != nil {
 		return nil, fmt.Errorf("catalog: load current reachability roots: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanIDSet(rows)
 }
 
@@ -38,7 +38,7 @@ func (s *Service) loadSnapshotRoots(ctx context.Context) (map[int64]struct{}, er
 	if err != nil {
 		return nil, fmt.Errorf("catalog: load snapshot reachability roots: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanIDSet(rows)
 }
 

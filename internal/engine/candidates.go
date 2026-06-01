@@ -496,6 +496,8 @@ type SnapshotStatsResult struct {
 	// Mirrors snapshot.SnapshotLineageStatus string values.
 	// Empty when HasReuse is true or when SnapshotID is empty (aggregate call).
 	LineageStatus string
+	// ParentSnapshotID is the parent snapshot's ID when HasReuse is true.
+	ParentSnapshotID string
 }
 
 // SnapshotDiffFilter narrows a diff to a single change class.

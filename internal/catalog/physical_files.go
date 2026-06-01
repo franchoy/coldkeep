@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 )
 
 // FindPhysicalFilesForLogicalFile implements PhysicalFileCatalog.
@@ -21,7 +20,7 @@ ORDER BY path`
 	if err != nil {
 		return nil, fmt.Errorf("catalog: find physical files for logical file %d: %w", logicalFileID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var refs []PhysicalFileRef
 	for rows.Next() {
@@ -48,15 +47,4 @@ ORDER BY path`
 		return nil, fmt.Errorf("catalog: iterate physical file rows: %w", err)
 	}
 	return refs, nil
-}
-
-// nullTimeToPtr converts sql.NullTime to *time.Time for use in exported types.
-// This helper is local to the physical files wrapper; similar wrappers may use
-// the same pattern.
-func nullTimeToPtr(nt sql.NullTime) *time.Time {
-	if !nt.Valid {
-		return nil
-	}
-	t := nt.Time.UTC()
-	return &t
 }

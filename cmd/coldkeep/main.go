@@ -248,7 +248,7 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 		LineageStatus:     snapshot.SnapshotLineageStatus(result.LineageStatus),
 	}
 	if result.HasReuse {
-		stats.ParentSnapshotID = sql.NullString{Valid: true, String: ""}
+		stats.ParentSnapshotID = sql.NullString{Valid: true, String: result.ParentSnapshotID}
 		stats.ReusedFileCount = sql.NullInt64{Valid: true, Int64: int64(result.Reused)}
 		stats.NewFileCount = sql.NullInt64{Valid: true, Int64: int64(result.New)}
 		stats.ReuseRatioPct = sql.NullFloat64{Valid: true, Float64: result.ReuseRatio}

@@ -81,7 +81,7 @@ func (s *Service) ListSnapshots(ctx context.Context, filter SnapshotFilter) ([]S
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list snapshots: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var refs []SnapshotRef
 	for rows.Next() {

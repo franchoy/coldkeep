@@ -13,15 +13,15 @@ type Service struct {
 
 // compile-time interface assertions — all sub-interfaces must remain satisfied.
 var (
-	_ Catalog               = (*Service)(nil)
-	_ LogicalFileCatalog    = (*Service)(nil)
-	_ PhysicalFileCatalog   = (*Service)(nil)
-	_ SnapshotCatalog       = (*Service)(nil)
-	_ SnapshotGraphCatalog  = (*Service)(nil)
-	_ ReachabilityCatalog   = (*Service)(nil)
-	_ PlacementCatalog      = (*Service)(nil)
-	_ RestorePlanCatalog    = (*Service)(nil)
-	_ GCPlanCatalog         = (*Service)(nil)
+	_ Catalog              = (*Service)(nil)
+	_ LogicalFileCatalog   = (*Service)(nil)
+	_ PhysicalFileCatalog  = (*Service)(nil)
+	_ SnapshotCatalog      = (*Service)(nil)
+	_ SnapshotGraphCatalog = (*Service)(nil)
+	_ ReachabilityCatalog  = (*Service)(nil)
+	_ PlacementCatalog     = (*Service)(nil)
+	_ RestorePlanCatalog   = (*Service)(nil)
+	_ GCPlanCatalog        = (*Service)(nil)
 )
 
 // NewService constructs a Service backed by the given DB. Both *sql.DB and

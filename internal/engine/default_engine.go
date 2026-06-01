@@ -248,6 +248,7 @@ func (e *DefaultEngine) SnapshotStats(ctx context.Context, req SnapshotStatsRequ
 	}
 	if stats.ParentSnapshotID.Valid && stats.ReusedFileCount.Valid {
 		result.HasReuse = true
+		result.ParentSnapshotID = stats.ParentSnapshotID.String
 		result.Reused = int(stats.ReusedFileCount.Int64)
 		result.New = int(stats.NewFileCount.Int64)
 		result.ReuseRatio = stats.ReuseRatioPct.Float64
