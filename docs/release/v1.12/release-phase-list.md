@@ -34,6 +34,19 @@ Introduce `internal/catalog` interfaces with wrapper-only adapters over existing
 behavior change, no SQL dialect change. Dependency rule: engine may import catalog; catalog must not
 import engine; CLI must not import catalog directly once migration begins.
 
+**Status: complete.** `internal/catalog` package created with the `Catalog` aggregate interface
+composed of eight per-responsibility sub-interfaces (`LogicalFileCatalog`, `PhysicalFileCatalog`,
+`SnapshotCatalog`, `SnapshotGraphCatalog`, `ReachabilityCatalog`, `PlacementCatalog`,
+`RestorePlanCatalog`, `GCPlanCatalog`). Four interfaces have real wrappers backed by live SQL
+(`FindLogicalFile`, `FindPhysicalFilesForLogicalFile`, `FindSnapshot`, `ListSnapshots`,
+`LoadReachabilityRoots`). Four interfaces are deferred skeletons returning `ErrNotImplemented`
+(`LoadSnapshotGraph` → Phase 5/6, `LoadChunkPlacements` → Phase 7/8, `LoadRestorePlanMetadata` →
+Phase 7, `LoadGCPlanMetadata` → Phase 6). Dependency direction enforced by
+`TestCatalogDependencyDirection`; contract neutrality enforced by `TestCatalogExportedTypesAreNeutral`;
+behavioral correctness proven by 9 SQLite-backed tests in `service_test.go`. `engine.Config`
+unchanged. Entry criteria for Phase 4: backend-neutral catalog contract tests cover SQLite and
+PostgreSQL behavioral differences.
+
 ## Phase 4 — SQLite/PostgreSQL Catalog Compatibility Baseline
 
 Add backend-neutral catalog contract tests (SQLite + PostgreSQL where feasible) and document SQL

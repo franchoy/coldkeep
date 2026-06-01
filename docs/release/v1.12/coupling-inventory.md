@@ -62,6 +62,18 @@ numbers are indicative and must be re-confirmed at the start of each migration p
   routed, and no CLI/JSON/exit-code/storage/schema/backend behavior changed. The command map above is
   therefore unchanged; phase targets per command still apply.
 
+## Phase 3 update (v1.12)
+
+- `internal/catalog` package created. The `Catalog` aggregate interface composes eight
+  per-responsibility sub-interfaces. `Service` satisfies all of them.
+- Real SQL wrappers: `FindLogicalFile`, `FindPhysicalFilesForLogicalFile`, `FindSnapshot`,
+  `ListSnapshots`, `LoadReachabilityRoots`. Queries use `$1` positional placeholders (backend-neutral).
+- Deferred skeletons returning `ErrNotImplemented`: `LoadSnapshotGraph` (Phase 5/6),
+  `LoadChunkPlacements` (Phase 7/8), `LoadRestorePlanMetadata` (Phase 7), `LoadGCPlanMetadata`
+  (Phase 6).
+- No command was routed. `engine.Config` unchanged. No CLI/JSON/exit-code/storage/schema/backend
+  behavior changed.
+
 ## Direct DB access patterns
 
 Search targets:
