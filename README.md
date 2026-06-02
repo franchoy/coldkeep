@@ -19,9 +19,9 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ## Project Status
 
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
-![Go Version](https://img.shields.io/badge/go-1.23+-blue)
+![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.10.x%20correctness%20hardening%20complete-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.12%20planning%20%2F%20engine--catalog%20migration-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -29,13 +29,19 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 ## Current release state
 
-Coldkeep v1.10.x completed the reliability freeze and correctness-hardening train.
+Coldkeep v1.11 introduced the behavior-preserving engine facade.
 
-The next development focus is v1.11: behavior-preserving engine facade work.
+The current development focus is v1.12:
 
-The first v1.11 work must preserve existing CLI behavior, JSON output compatibility, exit codes, storage format, repository format, restore semantics, verify semantics, GC safety, snapshot semantics, and SQLite/PostgreSQL compatibility.
+- migrate business orchestration into engine entry points;
+- introduce catalog/metadata facade boundaries;
+- prepare the SQLite-first local catalog direction;
+- preserve PostgreSQL compatibility;
+- keep CLI behavior, JSON output, exit codes, and repository/storage formats stable.
 
-Engine facade work must wrap current behavior first and prove parity before lifting logic.
+The v1.12 migration must preserve existing behavior first and prove parity before lifting logic. No
+command is routed through the engine unless its request/result contract can represent the existing
+command behavior.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.

@@ -50,4 +50,37 @@ type Engine interface {
 
 	// Verify runs repository verification.
 	Verify(ctx context.Context, req VerifyRequest) (VerifyResult, error)
+
+	// SnapshotList returns snapshots matching the request filters.
+	SnapshotList(ctx context.Context, req SnapshotListRequest) (SnapshotListResult, error)
+
+	// SnapshotShow returns metadata and filtered files for a single snapshot.
+	SnapshotShow(ctx context.Context, req SnapshotShowRequest) (SnapshotShowResult, error)
+
+	// SnapshotStats returns aggregate or per-snapshot statistics.
+	SnapshotStats(ctx context.Context, req SnapshotStatsRequest) (SnapshotStatsResult, error)
+
+	// SnapshotDiff compares two snapshots and returns change entries.
+	SnapshotDiff(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error)
+
+	// GarbageCollect runs dry-run or live GC against the repository.
+	// Safety invariant: GC must never delete reachable data.
+	// Live GC is only supported on the PostgreSQL backend; dry-run is supported
+	// on both backends.
+	GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error)
+
+	// Store stores a file into the repository.
+	// Safety invariant: Store must not create inconsistent catalog/storage state.
+	// Phase 8: single-file mode is active; folder mode remains deferred.
+	Store(ctx context.Context, req StoreRequest) (StoreResult, error)
+
+	// Remove removes logical files from the repository.
+	// Safety invariant: Remove must never make valid data unrecoverable.
+	// Phase 9: file-ID mode is active; stored-path modes remain deferred.
+	Remove(ctx context.Context, req RemoveRequest) (RemoveResult, error)
+
+	// Restore restores logical files by ID or by stored path.
+	// Safety invariant: Restore must never write outside the intended destination.
+	// Phase 7: file-ID mode is active; stored-path mode remains deferred.
+	Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error)
 }

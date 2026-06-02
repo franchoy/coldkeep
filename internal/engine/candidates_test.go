@@ -8,13 +8,17 @@ import (
 	"github.com/franchoy/coldkeep/internal/engine"
 )
 
-// TestEngineActiveInterfaceRemainsReadOriented asserts that the active Engine
-// interface in v1.11.0 contains exactly the read-oriented methods: Stats,
-// Inspect, Verify.
+// TestEngineActiveInterfaceApprovedMethods asserts that the active Engine
+// interface contains exactly the methods approved for v1.12:
+// Stats, Inspect, Verify (original), the 4 read-side snapshot methods
+// added in v1.12 Phase 5 (SnapshotList, SnapshotShow, SnapshotStats, SnapshotDiff),
+// GarbageCollect added in v1.12 Phase 6, Restore added in v1.12 Phase 7,
+// and Store added in v1.12 Phase 8 (single-file mode), plus Remove added in
+// v1.12 Phase 9 (file-ID mode).
 //
-// This test is a guardrail: it must fail if a mutating candidate method is
+// This test is a guardrail: it must fail if a candidate method is
 // accidentally added to the interface without explicit phase approval.
-func TestEngineActiveInterfaceRemainsReadOriented(t *testing.T) {
+func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
 
 	got := make(map[string]bool, typ.NumMethod())
@@ -22,7 +26,7 @@ func TestEngineActiveInterfaceRemainsReadOriented(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "GarbageCollect", "Store", "Remove", "Restore"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)
@@ -50,21 +54,39 @@ func TestCandidateContractsAreRendererNeutral(t *testing.T) {
 		name string
 		val  any
 	}{
+		{"OperationWarning", engine.OperationWarning{}},
+		{"BatchSummary", engine.BatchSummary{}},
+		{"SnapshotQuery", engine.SnapshotQuery{}},
 		{"StoreRequest", engine.StoreRequest{}},
 		{"StoreResult", engine.StoreResult{}},
 		{"RestoreRequest", engine.RestoreRequest{}},
+		{"RestoreItemResult", engine.RestoreItemResult{}},
 		{"RestoreResult", engine.RestoreResult{}},
 		{"RemoveRequest", engine.RemoveRequest{}},
+		{"RemoveItemResult", engine.RemoveItemResult{}},
 		{"RemoveResult", engine.RemoveResult{}},
+		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
+		{"GarbageCollectResult", engine.GarbageCollectResult{}},
+		{"SnapshotMeta", engine.SnapshotMeta{}},
 		{"SnapshotCreateRequest", engine.SnapshotCreateRequest{}},
 		{"SnapshotCreateResult", engine.SnapshotCreateResult{}},
+		{"SnapshotListRequest", engine.SnapshotListRequest{}},
+		{"SnapshotListResult", engine.SnapshotListResult{}},
+		{"SnapshotFile", engine.SnapshotFile{}},
+		{"SnapshotShowRequest", engine.SnapshotShowRequest{}},
+		{"SnapshotShowResult", engine.SnapshotShowResult{}},
+		{"SnapshotStatsRequest", engine.SnapshotStatsRequest{}},
+		{"SnapshotStatsResult", engine.SnapshotStatsResult{}},
+		{"SnapshotDiffEntry", engine.SnapshotDiffEntry{}},
+		{"SnapshotDiffRequest", engine.SnapshotDiffRequest{}},
+		{"SnapshotDiffSummary", engine.SnapshotDiffSummary{}},
+		{"SnapshotDiffResult", engine.SnapshotDiffResult{}},
 		{"SnapshotRestoreRequest", engine.SnapshotRestoreRequest{}},
 		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
 		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
 		{"SnapshotDeleteResult", engine.SnapshotDeleteResult{}},
-		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
-		{"GarbageCollectResult", engine.GarbageCollectResult{}},
 		{"RepairRequest", engine.RepairRequest{}},
+		{"RepairTargetResult", engine.RepairTargetResult{}},
 		{"RepairResult", engine.RepairResult{}},
 		{"RecoverRequest", engine.RecoverRequest{}},
 		{"RecoverResult", engine.RecoverResult{}},

@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
+	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -26,6 +30,9 @@ type Config struct {
 	// ContainerDir is the path to the coldkeep containers directory.
 	// Defaults to container.ContainersDir if empty.
 	ContainerDir string
+	// StoreContext provides writer+chunker-aware dependencies for store wrappers.
+	// Phase 8: required for Store until store orchestration is fully engine-owned.
+	StoreContext *storage.StorageContext
 }
 
 // DefaultEngine is the canonical Engine implementation.
@@ -89,7 +96,7 @@ func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyRe
 	if containerDir == "" {
 		containerDir = container.ContainersDir
 	}
-	if err := maintenance.VerifyCommandWithContainersDir(containerDir, target, req.FileID, level); err != nil {
+	if err := maintenance.VerifyCommandWithDBAndContainersDir(e.config.DB, containerDir, target, req.FileID, level); err != nil {
 		return VerifyResult{}, err
 	}
 	return VerifyResult{}, nil
@@ -155,4 +162,153 @@ func verifyLevelFromString(s string) (verify.VerifyLevel, error) {
 	default:
 		return 0, fmt.Errorf("unknown verify level %q: must be fast, standard, full, or deep", s)
 	}
+}
+
+func (e *DefaultEngine) SnapshotList(ctx context.Context, req SnapshotListRequest) (SnapshotListResult, error) {
+	svc := catalog.NewServiceFromSQL(e.config.DB)
+	filter := catalog.SnapshotFilter{
+		Type:           string(req.Type),
+		LabelSubstring: req.Label,
+		Since:          req.Since,
+		Until:          req.Until,
+		Limit:          req.Limit,
+	}
+	refs, err := svc.ListSnapshots(ctx, filter)
+	if err != nil {
+		return SnapshotListResult{}, err
+	}
+	metas := make([]SnapshotMeta, len(refs))
+	for i, ref := range refs {
+		metas[i] = SnapshotMeta{
+			ID:        ref.ID,
+			Type:      SnapshotType(ref.Type),
+			Label:     ref.Label,
+			ParentID:  ref.ParentID,
+			CreatedAt: ref.CreatedAt,
+		}
+	}
+	return SnapshotListResult{
+		Snapshots: metas,
+		Count:     len(metas),
+		TreeMode:  req.Tree,
+	}, nil
+}
+
+func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowRequest) (SnapshotShowResult, error) {
+	svc := catalog.NewServiceFromSQL(e.config.DB)
+	ref, err := svc.FindSnapshot(ctx, req.SnapshotID)
+	if err != nil {
+		return SnapshotShowResult{}, err
+	}
+	if ref == nil {
+		return SnapshotShowResult{}, fmt.Errorf("snapshot %q not found", req.SnapshotID)
+	}
+	meta := SnapshotMeta{
+		ID:        ref.ID,
+		Type:      SnapshotType(ref.Type),
+		Label:     ref.Label,
+		ParentID:  ref.ParentID,
+		CreatedAt: ref.CreatedAt,
+	}
+	var snapshotQ *snapshot.SnapshotQuery
+	if req.Query != (SnapshotQuery{}) {
+		snapshotQ = engineQueryToSnapshotQuery(req.Query)
+	}
+	entries, err := snapshot.ListSnapshotFiles(ctx, e.config.DB, req.SnapshotID, req.Query.Limit, snapshotQ)
+	if err != nil {
+		return SnapshotShowResult{}, err
+	}
+	stats, err := snapshot.GetSnapshotStats(ctx, e.config.DB, req.SnapshotID)
+	if err != nil {
+		return SnapshotShowResult{}, err
+	}
+	files := make([]SnapshotFile, len(entries))
+	for i, entry := range entries {
+		files[i] = SnapshotFile{
+			StoredPath:    entry.Path,
+			LogicalFileID: entry.LogicalFileID,
+			Size:          entry.Size.Int64,
+			Mode:          uint32(entry.Mode.Int64),
+			ModTime:       entry.MTime.Time,
+		}
+	}
+	return SnapshotShowResult{
+		Snapshot:         meta,
+		Files:            files,
+		MatchedFileCount: len(files),
+		TotalFileCount:   int(stats.SnapshotFileCount),
+	}, nil
+}
+
+func (e *DefaultEngine) SnapshotStats(ctx context.Context, req SnapshotStatsRequest) (SnapshotStatsResult, error) {
+	stats, err := snapshot.GetSnapshotStats(ctx, e.config.DB, req.SnapshotID)
+	if err != nil {
+		return SnapshotStatsResult{}, err
+	}
+	result := SnapshotStatsResult{
+		SnapshotCount:     int(stats.SnapshotCount),
+		SnapshotFileCount: int(stats.SnapshotFileCount),
+		TotalSizeBytes:    stats.TotalSizeBytes,
+	}
+	if stats.ParentSnapshotID.Valid && stats.ReusedFileCount.Valid {
+		result.HasReuse = true
+		result.ParentSnapshotID = stats.ParentSnapshotID.String
+		result.Reused = int(stats.ReusedFileCount.Int64)
+		result.New = int(stats.NewFileCount.Int64)
+		result.ReuseRatio = stats.ReuseRatioPct.Float64
+	} else {
+		result.LineageStatus = string(stats.LineageStatus)
+	}
+	return result, nil
+}
+
+func (e *DefaultEngine) SnapshotDiff(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error) {
+	if isSnapshotDiffSummaryFastPath(req) {
+		return e.snapshotDiffSummaryFastPath(ctx, req)
+	}
+	return e.snapshotDiffDetailed(ctx, req)
+}
+
+func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (RemoveResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RemoveResult{}, err
+	}
+	if err := validateRemoveRequest(req); err != nil {
+		return RemoveResult{}, err
+	}
+	return e.removeFileIDs(req), nil
+}
+
+func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RestoreResult{}, err
+	}
+	if err := validateRestoreRequest(req); err != nil {
+		return RestoreResult{}, err
+	}
+	return e.restoreFileIDs(req), nil
+}
+
+// engineQueryToSnapshotQuery maps an engine-level SnapshotQuery to the
+// snapshot package's equivalent type.
+func engineQueryToSnapshotQuery(q SnapshotQuery) *snapshot.SnapshotQuery {
+	sq := &snapshot.SnapshotQuery{
+		Pattern:        q.Pattern,
+		MinSize:        q.MinSize,
+		MaxSize:        q.MaxSize,
+		ModifiedAfter:  q.ModifiedAfter,
+		ModifiedBefore: q.ModifiedBefore,
+	}
+	if q.Path != "" {
+		sq.ExactPaths = map[string]struct{}{q.Path: {}}
+	}
+	if q.Prefix != "" {
+		sq.Prefixes = []string{q.Prefix}
+	}
+	if q.Regex != "" {
+		if compiled, err := regexp.Compile(q.Regex); err == nil {
+			sq.Regex = compiled
+		}
+	}
+	return sq
 }

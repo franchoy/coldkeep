@@ -49,6 +49,17 @@ func VerifyCommandWithContainersDir(containersDir string, target string, fileID 
 	}
 	defer func() { _ = dbconn.Close() }()
 
+	return VerifyCommandWithDBAndContainersDir(dbconn, containersDir, target, fileID, verifyLevel)
+}
+
+// VerifyCommandWithDBAndContainersDir runs verification using the provided
+// database connection instead of opening a new one. The caller owns the
+// connection lifetime.
+//
+// This is the database-aware entry point used by the engine facade so that
+// engine-owned dependencies are honored. VerifyCommandWithContainersDir wraps
+// this function for callers that rely on the global database connection.
+func VerifyCommandWithDBAndContainersDir(dbconn *sql.DB, containersDir string, target string, fileID int, verifyLevel verify.VerifyLevel) error {
 	switch target {
 	case "system":
 		return verifySystem(dbconn, containersDir, verifyLevel)
