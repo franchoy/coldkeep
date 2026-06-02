@@ -70,44 +70,39 @@ func openPostgresCatalogTestDBOrSkip(t *testing.T) *sql.DB {
 	}
 
 	cfg := loadPostgresCatalogTestConfig()
-	adminDB := openPostgresCatalogTestConnection(t, cfg, cfg.MaintenanceDB, "admin")
-	testDBName := newPostgresCatalogTestDBName()
-	createPostgresCatalogTestDB(t, adminDB, testDBName)
-	dbconn := openPostgresCatalogTestConnection(t, cfg, testDBName, "test database")
+	dbconn := openPostgresCatalogTestConnection(t, cfg, cfg.Database, "test database")
 
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
 	if err := db.EnsurePostgresSchema(dbconn); err != nil {
 		_ = dbconn.Close()
-		dropPostgresCatalogTestDB(adminDB, testDBName)
-		_ = adminDB.Close()
-		t.Fatalf("apply postgres schema to %s: %v", testDBName, err)
+		t.Fatalf("apply postgres schema to %s: %v", cfg.Database, err)
 	}
+	resetCatalogContractTables(t, dbconn)
 
 	t.Cleanup(func() {
+		resetCatalogContractTables(t, dbconn)
 		_ = dbconn.Close()
-		dropPostgresCatalogTestDB(adminDB, testDBName)
-		_ = adminDB.Close()
 	})
 	return dbconn
 }
 
 type postgresCatalogTestConfig struct {
-	Host          string
-	Port          string
-	User          string
-	Password      string
-	SSLMode       string
-	MaintenanceDB string
+	Host     string
+	Port     string
+	User     string
+	Password string
+	SSLMode  string
+	Database string
 }
 
 func loadPostgresCatalogTestConfig() postgresCatalogTestConfig {
 	return postgresCatalogTestConfig{
-		Host:          getenvOrDefaultCatalogTest("DB_HOST", "127.0.0.1"),
-		Port:          getenvOrDefaultCatalogTest("DB_PORT", "5432"),
-		User:          getenvOrDefaultCatalogTest("DB_USER", "coldkeep"),
-		Password:      getenvOrDefaultCatalogTest("DB_PASSWORD", "coldkeep"),
-		SSLMode:       getenvOrDefaultCatalogTest("DB_SSLMODE", "disable"),
-		MaintenanceDB: getenvOrDefaultCatalogTest("COLDKEEP_TEST_DB_MAINTENANCE", "postgres"),
+		Host:     getenvOrDefaultCatalogTest("DB_HOST", "127.0.0.1"),
+		Port:     getenvOrDefaultCatalogTest("DB_PORT", "5432"),
+		User:     getenvOrDefaultCatalogTest("DB_USER", "coldkeep"),
+		Password: getenvOrDefaultCatalogTest("DB_PASSWORD", "coldkeep"),
+		SSLMode:  getenvOrDefaultCatalogTest("DB_SSLMODE", "disable"),
+		Database: getenvOrDefaultCatalogTest("DB_NAME", "coldkeep"),
 	}
 }
 
@@ -131,38 +126,22 @@ func postgresCatalogTestConnString(cfg postgresCatalogTestConfig, databaseName s
 	)
 }
 
-const postgresCatalogTestDBName = "coldkeep_catalog_contract_test"
-
-func newPostgresCatalogTestDBName() string {
-	return postgresCatalogTestDBName
-}
-
-func createPostgresCatalogTestDB(t *testing.T, adminDB *sql.DB, name string) {
+func resetCatalogContractTables(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	requirePostgresCatalogStaticTestDBName(name)
-	dropPostgresCatalogTestDB(adminDB, name)
-
-	if _, err := adminDB.Exec(`CREATE DATABASE coldkeep_catalog_contract_test`); err != nil {
-		_ = adminDB.Close()
-		t.Fatalf("create temporary postgres database %s: %v", name, err)
+	for _, query := range catalogContractResetQueries() {
+		if _, err := dbconn.Exec(query); err != nil {
+			t.Fatalf("reset catalog contract table: %v", err)
+		}
 	}
 }
 
-// dropPostgresCatalogTestDB terminates active backends on the temporary database
-// and drops it. Errors are ignored: this is best-effort cleanup.
-func dropPostgresCatalogTestDB(adminDB *sql.DB, name string) {
-	requirePostgresCatalogStaticTestDBName(name)
-	_, _ = adminDB.Exec(`
-		SELECT pg_terminate_backend(pid)
-		FROM pg_stat_activity
-		WHERE datname = $1 AND pid <> pg_backend_pid()
-	`, name)
-	_, _ = adminDB.Exec(`DROP DATABASE IF EXISTS coldkeep_catalog_contract_test`)
-}
-
-func requirePostgresCatalogStaticTestDBName(name string) {
-	if name != postgresCatalogTestDBName {
-		panic("invalid PostgreSQL catalog test database name")
+func catalogContractResetQueries() []string {
+	return []string{
+		`DELETE FROM snapshot_file`,
+		`DELETE FROM snapshot_path`,
+		`DELETE FROM snapshot`,
+		`DELETE FROM physical_file`,
+		`DELETE FROM logical_file`,
 	}
 }
 
@@ -408,45 +387,63 @@ func TestCatalogContractFindSnapshotAcrossBackends(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			dbconn := backend.Open(t)
 			seedCatalogFixture(t, dbconn)
-			svc := catalog.NewServiceFromSQL(dbconn)
-			ctx := context.Background()
-
-			missing, err := svc.FindSnapshot(ctx, "does-not-exist")
-			if err != nil {
-				t.Fatalf("FindSnapshot(missing): %v", err)
-			}
-			if missing != nil {
-				t.Fatalf("FindSnapshot(missing): want nil, got %+v", missing)
-			}
-
-			root, err := svc.FindSnapshot(ctx, "snap-full")
-			if err != nil {
-				t.Fatalf("FindSnapshot(snap-full): %v", err)
-			}
-			if root == nil {
-				t.Fatal("FindSnapshot(snap-full): want ref, got nil")
-			}
-			if root.ID != "snap-full" || root.Type != "full" || root.Label != "alpha" {
-				t.Fatalf("FindSnapshot(snap-full): unexpected ref %+v", root)
-			}
-			if root.ParentID != "" {
-				t.Errorf("FindSnapshot(snap-full): ParentID = %q, want empty", root.ParentID)
-			}
-			if !root.CreatedAt.Equal(catalogFixtureBase) {
-				t.Errorf("FindSnapshot(snap-full): CreatedAt = %v, want %v", root.CreatedAt, catalogFixtureBase)
-			}
-
-			child, err := svc.FindSnapshot(ctx, "snap-child")
-			if err != nil {
-				t.Fatalf("FindSnapshot(snap-child): %v", err)
-			}
-			if child == nil {
-				t.Fatal("FindSnapshot(snap-child): want ref, got nil")
-			}
-			if child.Type != "partial" || child.Label != "beta" || child.ParentID != "snap-full" {
-				t.Fatalf("FindSnapshot(snap-child): unexpected ref %+v", child)
-			}
+			assertCatalogFindSnapshot(t, catalog.NewServiceFromSQL(dbconn))
 		})
+	}
+}
+
+type snapshotFinder interface {
+	FindSnapshot(context.Context, string) (*catalog.SnapshotRef, error)
+}
+
+func assertCatalogFindSnapshot(t *testing.T, svc snapshotFinder) {
+	t.Helper()
+	ctx := context.Background()
+	assertMissingCatalogSnapshot(t, svc, ctx, "does-not-exist")
+	assertRootCatalogSnapshot(t, requireCatalogSnapshot(t, svc, ctx, "snap-full"))
+	assertChildCatalogSnapshot(t, requireCatalogSnapshot(t, svc, ctx, "snap-child"))
+}
+
+func assertMissingCatalogSnapshot(t *testing.T, svc snapshotFinder, ctx context.Context, id string) {
+	t.Helper()
+	missing, err := svc.FindSnapshot(ctx, id)
+	if err != nil {
+		t.Fatalf("FindSnapshot(missing): %v", err)
+	}
+	if missing != nil {
+		t.Fatalf("FindSnapshot(missing): want nil, got %+v", missing)
+	}
+}
+
+func requireCatalogSnapshot(t *testing.T, svc snapshotFinder, ctx context.Context, id string) *catalog.SnapshotRef {
+	t.Helper()
+	ref, err := svc.FindSnapshot(ctx, id)
+	if err != nil {
+		t.Fatalf("FindSnapshot(%s): %v", id, err)
+	}
+	if ref == nil {
+		t.Fatalf("FindSnapshot(%s): want ref, got nil", id)
+	}
+	return ref
+}
+
+func assertRootCatalogSnapshot(t *testing.T, ref *catalog.SnapshotRef) {
+	t.Helper()
+	if ref.ID != "snap-full" || ref.Type != "full" || ref.Label != "alpha" {
+		t.Fatalf("FindSnapshot(snap-full): unexpected ref %+v", ref)
+	}
+	if ref.ParentID != "" {
+		t.Errorf("FindSnapshot(snap-full): ParentID = %q, want empty", ref.ParentID)
+	}
+	if !ref.CreatedAt.Equal(catalogFixtureBase) {
+		t.Errorf("FindSnapshot(snap-full): CreatedAt = %v, want %v", ref.CreatedAt, catalogFixtureBase)
+	}
+}
+
+func assertChildCatalogSnapshot(t *testing.T, ref *catalog.SnapshotRef) {
+	t.Helper()
+	if ref.Type != "partial" || ref.Label != "beta" || ref.ParentID != "snap-full" {
+		t.Fatalf("FindSnapshot(snap-child): unexpected ref %+v", ref)
 	}
 }
 
