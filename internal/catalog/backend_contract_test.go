@@ -128,19 +128,69 @@ func postgresCatalogTestConnString(cfg postgresCatalogTestConfig, databaseName s
 
 func resetCatalogContractTables(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	if _, err := dbconn.Exec(`DELETE FROM snapshot_file`); err != nil {
+	resetCatalogContractSnapshotFiles(t, dbconn)
+	resetCatalogContractSnapshotPaths(t, dbconn)
+	resetCatalogContractSnapshots(t, dbconn)
+	resetCatalogContractPhysicalFiles(t, dbconn)
+	resetCatalogContractLogicalFiles(t, dbconn)
+}
+
+func resetCatalogContractSnapshotFiles(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	stmt, err := dbconn.PrepareContext(context.Background(), `DELETE FROM snapshot_file`)
+	if err != nil {
+		t.Fatalf("prepare snapshot_file reset: %v", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	if _, err := stmt.Exec(); err != nil {
 		t.Fatalf("reset snapshot_file table: %v", err)
 	}
-	if _, err := dbconn.Exec(`DELETE FROM snapshot_path`); err != nil {
+}
+
+func resetCatalogContractSnapshotPaths(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	stmt, err := dbconn.PrepareContext(context.Background(), `DELETE FROM snapshot_path`)
+	if err != nil {
+		t.Fatalf("prepare snapshot_path reset: %v", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	if _, err := stmt.Exec(); err != nil {
 		t.Fatalf("reset snapshot_path table: %v", err)
 	}
-	if _, err := dbconn.Exec(`DELETE FROM snapshot`); err != nil {
+}
+
+func resetCatalogContractSnapshots(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	stmt, err := dbconn.PrepareContext(context.Background(), `DELETE FROM snapshot`)
+	if err != nil {
+		t.Fatalf("prepare snapshot reset: %v", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	if _, err := stmt.Exec(); err != nil {
 		t.Fatalf("reset snapshot table: %v", err)
 	}
-	if _, err := dbconn.Exec(`DELETE FROM physical_file`); err != nil {
+}
+
+func resetCatalogContractPhysicalFiles(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	stmt, err := dbconn.PrepareContext(context.Background(), `DELETE FROM physical_file`)
+	if err != nil {
+		t.Fatalf("prepare physical_file reset: %v", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	if _, err := stmt.Exec(); err != nil {
 		t.Fatalf("reset physical_file table: %v", err)
 	}
-	if _, err := dbconn.Exec(`DELETE FROM logical_file`); err != nil {
+}
+
+func resetCatalogContractLogicalFiles(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	stmt, err := dbconn.PrepareContext(context.Background(), `DELETE FROM logical_file`)
+	if err != nil {
+		t.Fatalf("prepare logical_file reset: %v", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	if _, err := stmt.Exec(); err != nil {
 		t.Fatalf("reset logical_file table: %v", err)
 	}
 }
