@@ -128,17 +128,20 @@ func postgresCatalogTestConnString(cfg postgresCatalogTestConfig, databaseName s
 
 func resetCatalogContractTables(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	execCatalogContractReset(t, dbconn, `DELETE FROM snapshot_file`)
-	execCatalogContractReset(t, dbconn, `DELETE FROM snapshot_path`)
-	execCatalogContractReset(t, dbconn, `DELETE FROM snapshot`)
-	execCatalogContractReset(t, dbconn, `DELETE FROM physical_file`)
-	execCatalogContractReset(t, dbconn, `DELETE FROM logical_file`)
-}
-
-func execCatalogContractReset(t *testing.T, dbconn *sql.DB, query string) {
-	t.Helper()
-	if _, err := dbconn.Exec(query); err != nil {
-		t.Fatalf("reset catalog contract table: %v", err)
+	if _, err := dbconn.Exec(`DELETE FROM snapshot_file`); err != nil {
+		t.Fatalf("reset snapshot_file table: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM snapshot_path`); err != nil {
+		t.Fatalf("reset snapshot_path table: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM snapshot`); err != nil {
+		t.Fatalf("reset snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM physical_file`); err != nil {
+		t.Fatalf("reset physical_file table: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM logical_file`); err != nil {
+		t.Fatalf("reset logical_file table: %v", err)
 	}
 }
 
