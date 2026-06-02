@@ -35,15 +35,27 @@ var catalogFixtureBase = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 //	  snap-full -> path -> lf 2
 func seedCatalogFixture(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	ctx := context.Background()
+	exec := newCatalogFixtureExec(t, dbconn)
+	seedCatalogLogicalFiles(exec)
+	seedCatalogPhysicalFiles(exec)
+	seedCatalogSnapshots(exec)
+	seedCatalogSnapshotFiles(exec)
+}
 
-	exec := func(query string, args ...any) {
+type catalogFixtureExec func(string, ...any)
+
+func newCatalogFixtureExec(t *testing.T, dbconn *sql.DB) catalogFixtureExec {
+	t.Helper()
+	ctx := context.Background()
+	return func(query string, args ...any) {
 		t.Helper()
 		if _, err := dbconn.ExecContext(ctx, query, args...); err != nil {
 			t.Fatalf("seed exec failed: %v\nquery: %s", err, query)
 		}
 	}
+}
 
+func seedCatalogLogicalFiles(exec catalogFixtureExec) {
 	exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
 	      VALUES ($1, $2, $3, $4, $5, $6)
 	      ON CONFLICT (id) DO UPDATE SET
@@ -62,7 +74,9 @@ func seedCatalogFixture(t *testing.T, dbconn *sql.DB) {
 	        ref_count = EXCLUDED.ref_count,
 	        status = EXCLUDED.status`,
 		2, "snapshot-only-file.txt", 22, "h2", 1, "COMPLETED")
+}
 
+func seedCatalogPhysicalFiles(exec catalogFixtureExec) {
 	// Physical file with full metadata (non-null mtime, is_metadata_complete=true).
 	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
 	      VALUES ($1, $2, $3, $4, $5)
@@ -81,7 +95,9 @@ func seedCatalogFixture(t *testing.T, dbconn *sql.DB) {
 	        mtime = EXCLUDED.mtime,
 	        is_metadata_complete = EXCLUDED.is_metadata_complete`,
 		"/current/b.txt", 1, nil, nil, false)
+}
 
+func seedCatalogSnapshots(exec catalogFixtureExec) {
 	exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)
 	      ON CONFLICT (id) DO UPDATE SET
 	        created_at = EXCLUDED.created_at,
@@ -96,7 +112,9 @@ func seedCatalogFixture(t *testing.T, dbconn *sql.DB) {
 	        label = EXCLUDED.label,
 	        parent_id = EXCLUDED.parent_id`,
 		"snap-child", catalogFixtureBase.Add(time.Hour), "partial", "beta", "snap-full")
+}
 
+func seedCatalogSnapshotFiles(exec catalogFixtureExec) {
 	exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)
 	      ON CONFLICT (id) DO UPDATE SET path = EXCLUDED.path`,
 		1, "/snapshot/file.txt")
