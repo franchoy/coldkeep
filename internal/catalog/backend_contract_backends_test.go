@@ -1,7 +1,6 @@
 package catalog_test
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -50,8 +49,8 @@ func openSQLiteCatalogTestDB(t *testing.T) *sql.DB {
 }
 
 // openPostgresCatalogTestDBOrSkip opens the configured PostgreSQL test database
-// and applies the coldkeep schema to it. PostgreSQL coverage runs only when
-// COLDKEEP_TEST_DB is set; local development without PostgreSQL skips cleanly.
+// and applies the coldkeep schema to it. The fixture seeding is idempotent, so
+// this helper does not run destructive cleanup SQL.
 func openPostgresCatalogTestDBOrSkip(t *testing.T) *sql.DB {
 	t.Helper()
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
@@ -66,12 +65,8 @@ func openPostgresCatalogTestDBOrSkip(t *testing.T) *sql.DB {
 		_ = dbconn.Close()
 		t.Fatalf("apply postgres schema to %s: %v", cfg.Database, err)
 	}
-	resetCatalogContractTables(t, dbconn)
 
-	t.Cleanup(func() {
-		resetCatalogContractTables(t, dbconn)
-		_ = dbconn.Close()
-	})
+	t.Cleanup(func() { _ = dbconn.Close() })
 	return dbconn
 }
 
@@ -113,26 +108,6 @@ func postgresCatalogTestConnString(cfg postgresCatalogTestConfig, databaseName s
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, databaseName, cfg.SSLMode,
 	)
-}
-
-func resetCatalogContractTables(t *testing.T, dbconn *sql.DB) {
-	t.Helper()
-	ctx := context.Background()
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM snapshot_file WHERE $1 = $2`, true, true); err != nil {
-		t.Fatalf("reset snapshot_file table: %v", err)
-	}
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM snapshot_path WHERE $1 = $2`, true, true); err != nil {
-		t.Fatalf("reset snapshot_path table: %v", err)
-	}
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM snapshot WHERE $1 = $2`, true, true); err != nil {
-		t.Fatalf("reset snapshot table: %v", err)
-	}
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM physical_file WHERE $1 = $2`, true, true); err != nil {
-		t.Fatalf("reset physical_file table: %v", err)
-	}
-	if _, err := dbconn.ExecContext(ctx, `DELETE FROM logical_file WHERE $1 = $2`, true, true); err != nil {
-		t.Fatalf("reset logical_file table: %v", err)
-	}
 }
 
 func getenvOrDefaultCatalogTest(key, fallback string) string {

@@ -45,28 +45,63 @@ func seedCatalogFixture(t *testing.T, dbconn *sql.DB) {
 	}
 
 	exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
-	      VALUES ($1, $2, $3, $4, $5, $6)`,
+	      VALUES ($1, $2, $3, $4, $5, $6)
+	      ON CONFLICT (id) DO UPDATE SET
+	        original_name = EXCLUDED.original_name,
+	        total_size = EXCLUDED.total_size,
+	        file_hash = EXCLUDED.file_hash,
+	        ref_count = EXCLUDED.ref_count,
+	        status = EXCLUDED.status`,
 		1, "current-file.txt", 11, "h1", 1, "COMPLETED")
 	exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
-	      VALUES ($1, $2, $3, $4, $5, $6)`,
+	      VALUES ($1, $2, $3, $4, $5, $6)
+	      ON CONFLICT (id) DO UPDATE SET
+	        original_name = EXCLUDED.original_name,
+	        total_size = EXCLUDED.total_size,
+	        file_hash = EXCLUDED.file_hash,
+	        ref_count = EXCLUDED.ref_count,
+	        status = EXCLUDED.status`,
 		2, "snapshot-only-file.txt", 22, "h2", 1, "COMPLETED")
 
 	// Physical file with full metadata (non-null mtime, is_metadata_complete=true).
 	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
-	      VALUES ($1, $2, $3, $4, $5)`,
+	      VALUES ($1, $2, $3, $4, $5)
+	      ON CONFLICT (path) DO UPDATE SET
+	        logical_file_id = EXCLUDED.logical_file_id,
+	        mode = EXCLUDED.mode,
+	        mtime = EXCLUDED.mtime,
+	        is_metadata_complete = EXCLUDED.is_metadata_complete`,
 		"/current/a.txt", 1, 0o644, catalogFixtureBase, true)
 	// Physical file with NULL mtime and is_metadata_complete=false (nullable case).
 	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
-	      VALUES ($1, $2, $3, $4, $5)`,
+	      VALUES ($1, $2, $3, $4, $5)
+	      ON CONFLICT (path) DO UPDATE SET
+	        logical_file_id = EXCLUDED.logical_file_id,
+	        mode = EXCLUDED.mode,
+	        mtime = EXCLUDED.mtime,
+	        is_metadata_complete = EXCLUDED.is_metadata_complete`,
 		"/current/b.txt", 1, nil, nil, false)
 
-	exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
+	exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)
+	      ON CONFLICT (id) DO UPDATE SET
+	        created_at = EXCLUDED.created_at,
+	        type = EXCLUDED.type,
+	        label = EXCLUDED.label,
+	        parent_id = NULL`,
 		"snap-full", catalogFixtureBase, "full", "alpha")
-	exec(`INSERT INTO snapshot (id, created_at, type, label, parent_id) VALUES ($1, $2, $3, $4, $5)`,
+	exec(`INSERT INTO snapshot (id, created_at, type, label, parent_id) VALUES ($1, $2, $3, $4, $5)
+	      ON CONFLICT (id) DO UPDATE SET
+	        created_at = EXCLUDED.created_at,
+	        type = EXCLUDED.type,
+	        label = EXCLUDED.label,
+	        parent_id = EXCLUDED.parent_id`,
 		"snap-child", catalogFixtureBase.Add(time.Hour), "partial", "beta", "snap-full")
 
-	exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, 1, "/snapshot/file.txt")
-	exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)`,
+	exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)
+	      ON CONFLICT (id) DO UPDATE SET path = EXCLUDED.path`,
+		1, "/snapshot/file.txt")
+	exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)
+	      ON CONFLICT (snapshot_id, path_id) DO UPDATE SET logical_file_id = EXCLUDED.logical_file_id`,
 		"snap-full", 1, 2)
 }
 
