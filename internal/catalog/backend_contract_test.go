@@ -128,20 +128,17 @@ func postgresCatalogTestConnString(cfg postgresCatalogTestConfig, databaseName s
 
 func resetCatalogContractTables(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	for _, query := range catalogContractResetQueries() {
-		if _, err := dbconn.Exec(query); err != nil {
-			t.Fatalf("reset catalog contract table: %v", err)
-		}
-	}
+	execCatalogContractReset(t, dbconn, `DELETE FROM snapshot_file`)
+	execCatalogContractReset(t, dbconn, `DELETE FROM snapshot_path`)
+	execCatalogContractReset(t, dbconn, `DELETE FROM snapshot`)
+	execCatalogContractReset(t, dbconn, `DELETE FROM physical_file`)
+	execCatalogContractReset(t, dbconn, `DELETE FROM logical_file`)
 }
 
-func catalogContractResetQueries() []string {
-	return []string{
-		`DELETE FROM snapshot_file`,
-		`DELETE FROM snapshot_path`,
-		`DELETE FROM snapshot`,
-		`DELETE FROM physical_file`,
-		`DELETE FROM logical_file`,
+func execCatalogContractReset(t *testing.T, dbconn *sql.DB, query string) {
+	t.Helper()
+	if _, err := dbconn.Exec(query); err != nil {
+		t.Fatalf("reset catalog contract table: %v", err)
 	}
 }
 
@@ -532,39 +529,66 @@ func TestCatalogContractLoadReachabilityRootsAcrossBackends(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			dbconn := backend.Open(t)
 			seedCatalogFixture(t, dbconn)
-			svc := catalog.NewServiceFromSQL(dbconn)
-			ctx := context.Background()
-
-			roots, err := svc.LoadReachabilityRoots(ctx)
-			if err != nil {
-				t.Fatalf("LoadReachabilityRoots: %v", err)
-			}
-			if roots == nil {
-				t.Fatal("LoadReachabilityRoots: want non-nil")
-			}
-
-			// Current roots come from physical_file: logical file 1 (twice, but a set).
-			if _, ok := roots.Current[1]; !ok {
-				t.Error("Current should contain logical file 1")
-			}
-			if _, ok := roots.Current[2]; ok {
-				t.Error("Current should NOT contain logical file 2 (snapshot-only)")
-			}
-			if len(roots.Current) != 1 {
-				t.Errorf("Current should hold exactly 1 unique id, got %d", len(roots.Current))
-			}
-
-			// Snapshot roots come from snapshot_file: logical file 2.
-			if _, ok := roots.Snapshot[2]; !ok {
-				t.Error("Snapshot should contain logical file 2")
-			}
-			if _, ok := roots.Snapshot[1]; ok {
-				t.Error("Snapshot should NOT contain logical file 1 (current-only)")
-			}
-			if len(roots.Snapshot) != 1 {
-				t.Errorf("Snapshot should hold exactly 1 unique id, got %d", len(roots.Snapshot))
-			}
+			assertCatalogReachabilityRoots(t, catalog.NewServiceFromSQL(dbconn))
 		})
+	}
+}
+
+type reachabilityRootLoader interface {
+	LoadReachabilityRoots(context.Context) (*catalog.ReachabilityRoots, error)
+}
+
+func assertCatalogReachabilityRoots(t *testing.T, svc reachabilityRootLoader) {
+	t.Helper()
+	roots := requireCatalogReachabilityRoots(t, svc)
+	assertCatalogCurrentReachabilityRoots(t, roots.Current)
+	assertCatalogSnapshotReachabilityRoots(t, roots.Snapshot)
+}
+
+func requireCatalogReachabilityRoots(t *testing.T, svc reachabilityRootLoader) *catalog.ReachabilityRoots {
+	t.Helper()
+	roots, err := svc.LoadReachabilityRoots(context.Background())
+	if err != nil {
+		t.Fatalf("LoadReachabilityRoots: %v", err)
+	}
+	if roots == nil {
+		t.Fatal("LoadReachabilityRoots: want non-nil")
+	}
+	return roots
+}
+
+func assertCatalogCurrentReachabilityRoots(t *testing.T, current map[int64]struct{}) {
+	t.Helper()
+	assertCatalogReachabilityContains(t, current, 1, "Current should contain logical file 1")
+	assertCatalogReachabilityMissing(t, current, 2, "Current should NOT contain logical file 2 (snapshot-only)")
+	assertCatalogReachabilitySize(t, current, 1, "Current")
+}
+
+func assertCatalogSnapshotReachabilityRoots(t *testing.T, snapshot map[int64]struct{}) {
+	t.Helper()
+	assertCatalogReachabilityContains(t, snapshot, 2, "Snapshot should contain logical file 2")
+	assertCatalogReachabilityMissing(t, snapshot, 1, "Snapshot should NOT contain logical file 1 (current-only)")
+	assertCatalogReachabilitySize(t, snapshot, 1, "Snapshot")
+}
+
+func assertCatalogReachabilityContains(t *testing.T, set map[int64]struct{}, id int64, message string) {
+	t.Helper()
+	if _, ok := set[id]; !ok {
+		t.Error(message)
+	}
+}
+
+func assertCatalogReachabilityMissing(t *testing.T, set map[int64]struct{}, id int64, message string) {
+	t.Helper()
+	if _, ok := set[id]; ok {
+		t.Error(message)
+	}
+}
+
+func assertCatalogReachabilitySize(t *testing.T, set map[int64]struct{}, want int, label string) {
+	t.Helper()
+	if len(set) != want {
+		t.Errorf("%s should hold exactly %d unique id, got %d", label, want, len(set))
 	}
 }
 
