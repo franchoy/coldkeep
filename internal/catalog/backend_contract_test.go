@@ -5,11 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
@@ -133,15 +131,18 @@ func postgresCatalogTestConnString(cfg postgresCatalogTestConfig, databaseName s
 	)
 }
 
+const postgresCatalogTestDBName = "coldkeep_catalog_contract_test"
+
 func newPostgresCatalogTestDBName() string {
-	return fmt.Sprintf("coldkeep_catalog_contract_%d", time.Now().UnixNano())
+	return postgresCatalogTestDBName
 }
 
 func createPostgresCatalogTestDB(t *testing.T, adminDB *sql.DB, name string) {
 	t.Helper()
-	query := postgresCatalogTestDBDDL("CREATE DATABASE", name)
-	// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query
-	if _, err := adminDB.Exec(query); err != nil {
+	requirePostgresCatalogStaticTestDBName(name)
+	dropPostgresCatalogTestDB(adminDB, name)
+
+	if _, err := adminDB.Exec(`CREATE DATABASE coldkeep_catalog_contract_test`); err != nil {
 		_ = adminDB.Close()
 		t.Fatalf("create temporary postgres database %s: %v", name, err)
 	}
@@ -150,36 +151,19 @@ func createPostgresCatalogTestDB(t *testing.T, adminDB *sql.DB, name string) {
 // dropPostgresCatalogTestDB terminates active backends on the temporary database
 // and drops it. Errors are ignored: this is best-effort cleanup.
 func dropPostgresCatalogTestDB(adminDB *sql.DB, name string) {
+	requirePostgresCatalogStaticTestDBName(name)
 	_, _ = adminDB.Exec(`
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity
 		WHERE datname = $1 AND pid <> pg_backend_pid()
 	`, name)
-	query := postgresCatalogTestDBDDL("DROP DATABASE IF EXISTS", name)
-	// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query
-	_, _ = adminDB.Exec(query)
+	_, _ = adminDB.Exec(`DROP DATABASE IF EXISTS coldkeep_catalog_contract_test`)
 }
 
-func postgresCatalogTestDBDDL(action, name string) string {
-	return action + " " + pq.QuoteIdentifier(requirePostgresCatalogTestDBName(name))
-}
-
-func requirePostgresCatalogTestDBName(name string) string {
-	const prefix = "coldkeep_catalog_contract_"
-	suffix := strings.TrimPrefix(name, prefix)
-	if suffix == name || suffix == "" || !isASCIIDigits(suffix) {
-		panic("invalid generated PostgreSQL catalog test database name")
+func requirePostgresCatalogStaticTestDBName(name string) {
+	if name != postgresCatalogTestDBName {
+		panic("invalid PostgreSQL catalog test database name")
 	}
-	return name
-}
-
-func isASCIIDigits(value string) bool {
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func getenvOrDefaultCatalogTest(key, fallback string) string {
@@ -286,6 +270,12 @@ func assertMissingLogicalFile(t *testing.T, svc logicalFileFinder, ctx context.C
 
 func assertLogicalFileRef(t *testing.T, svc logicalFileFinder, ctx context.Context, id int64) {
 	t.Helper()
+	got := requireLogicalFileRef(t, svc, ctx, id)
+	assertLogicalFileFields(t, got, expectedLogicalFileRef())
+}
+
+func requireLogicalFileRef(t *testing.T, svc logicalFileFinder, ctx context.Context, id int64) *catalog.LogicalFileRef {
+	t.Helper()
 	got, err := svc.FindLogicalFile(ctx, id)
 	if err != nil {
 		t.Fatalf("FindLogicalFile(%d): %v", id, err)
@@ -293,9 +283,39 @@ func assertLogicalFileRef(t *testing.T, svc logicalFileFinder, ctx context.Conte
 	if got == nil {
 		t.Fatalf("FindLogicalFile(%d): want ref, got nil", id)
 	}
-	if got.ID != 1 || got.OriginalName != "current-file.txt" || got.TotalSize != 11 ||
-		got.FileHash != "h1" || got.RefCount != 1 || got.Status != "COMPLETED" {
-		t.Fatalf("FindLogicalFile(%d): unexpected ref %+v", id, got)
+	return got
+}
+
+func expectedLogicalFileRef() catalog.LogicalFileRef {
+	return catalog.LogicalFileRef{
+		ID:           1,
+		OriginalName: "current-file.txt",
+		TotalSize:    11,
+		FileHash:     "h1",
+		RefCount:     1,
+		Status:       "COMPLETED",
+	}
+}
+
+func assertLogicalFileFields(t *testing.T, got *catalog.LogicalFileRef, want catalog.LogicalFileRef) {
+	t.Helper()
+	if got.ID != want.ID {
+		t.Errorf("ID: got %d, want %d", got.ID, want.ID)
+	}
+	if got.OriginalName != want.OriginalName {
+		t.Errorf("OriginalName: got %q, want %q", got.OriginalName, want.OriginalName)
+	}
+	if got.TotalSize != want.TotalSize {
+		t.Errorf("TotalSize: got %d, want %d", got.TotalSize, want.TotalSize)
+	}
+	if got.FileHash != want.FileHash {
+		t.Errorf("FileHash: got %q, want %q", got.FileHash, want.FileHash)
+	}
+	if got.RefCount != want.RefCount {
+		t.Errorf("RefCount: got %d, want %d", got.RefCount, want.RefCount)
+	}
+	if got.Status != want.Status {
+		t.Errorf("Status: got %q, want %q", got.Status, want.Status)
 	}
 }
 
@@ -307,48 +327,77 @@ func TestCatalogContractFindPhysicalFilesAcrossBackends(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			dbconn := backend.Open(t)
 			seedCatalogFixture(t, dbconn)
-			svc := catalog.NewServiceFromSQL(dbconn)
-			ctx := context.Background()
-
-			empty, err := svc.FindPhysicalFilesForLogicalFile(ctx, 9999)
-			if err != nil {
-				t.Fatalf("FindPhysicalFilesForLogicalFile(missing): %v", err)
-			}
-			if len(empty) != 0 {
-				t.Fatalf("FindPhysicalFilesForLogicalFile(missing): want empty, got %d", len(empty))
-			}
-
-			refs, err := svc.FindPhysicalFilesForLogicalFile(ctx, 1)
-			if err != nil {
-				t.Fatalf("FindPhysicalFilesForLogicalFile(1): %v", err)
-			}
-			if len(refs) != 2 {
-				t.Fatalf("FindPhysicalFilesForLogicalFile(1): want 2 rows, got %d", len(refs))
-			}
-
-			// Ordered by path: /current/a.txt before /current/b.txt.
-			if refs[0].Path != "/current/a.txt" || refs[1].Path != "/current/b.txt" {
-				t.Fatalf("ordering: got %q then %q", refs[0].Path, refs[1].Path)
-			}
-
-			// Row a: full metadata, non-null mtime, IsMetadataComplete true.
-			if refs[0].MTime == nil {
-				t.Errorf("row a: expected non-nil MTime")
-			} else if !refs[0].MTime.Equal(catalogFixtureBase) {
-				t.Errorf("row a: MTime = %v, want %v", refs[0].MTime, catalogFixtureBase)
-			}
-			if !refs[0].IsMetadataComplete {
-				t.Errorf("row a: IsMetadataComplete = false, want true")
-			}
-
-			// Row b: NULL mtime -> nil pointer, IsMetadataComplete false.
-			if refs[1].MTime != nil {
-				t.Errorf("row b: expected nil MTime for NULL, got %v", refs[1].MTime)
-			}
-			if refs[1].IsMetadataComplete {
-				t.Errorf("row b: IsMetadataComplete = true, want false")
-			}
+			assertCatalogFindPhysicalFiles(t, catalog.NewServiceFromSQL(dbconn))
 		})
+	}
+}
+
+type physicalFileFinder interface {
+	FindPhysicalFilesForLogicalFile(context.Context, int64) ([]catalog.PhysicalFileRef, error)
+}
+
+func assertCatalogFindPhysicalFiles(t *testing.T, svc physicalFileFinder) {
+	t.Helper()
+	ctx := context.Background()
+	assertMissingPhysicalFiles(t, svc, ctx, 9999)
+	refs := requirePhysicalFiles(t, svc, ctx, 1, 2)
+	assertPhysicalFileOrdering(t, refs)
+	assertCompletePhysicalFile(t, refs[0])
+	assertIncompletePhysicalFile(t, refs[1])
+}
+
+func assertMissingPhysicalFiles(t *testing.T, svc physicalFileFinder, ctx context.Context, id int64) {
+	t.Helper()
+	refs := requirePhysicalFiles(t, svc, ctx, id, 0)
+	if len(refs) != 0 {
+		t.Fatalf("FindPhysicalFilesForLogicalFile(missing): want empty, got %d", len(refs))
+	}
+}
+
+func requirePhysicalFiles(
+	t *testing.T,
+	svc physicalFileFinder,
+	ctx context.Context,
+	id int64,
+	wantRows int,
+) []catalog.PhysicalFileRef {
+	t.Helper()
+	refs, err := svc.FindPhysicalFilesForLogicalFile(ctx, id)
+	if err != nil {
+		t.Fatalf("FindPhysicalFilesForLogicalFile(%d): %v", id, err)
+	}
+	if len(refs) != wantRows {
+		t.Fatalf("FindPhysicalFilesForLogicalFile(%d): want %d rows, got %d", id, wantRows, len(refs))
+	}
+	return refs
+}
+
+func assertPhysicalFileOrdering(t *testing.T, refs []catalog.PhysicalFileRef) {
+	t.Helper()
+	if refs[0].Path != "/current/a.txt" || refs[1].Path != "/current/b.txt" {
+		t.Fatalf("ordering: got %q then %q", refs[0].Path, refs[1].Path)
+	}
+}
+
+func assertCompletePhysicalFile(t *testing.T, ref catalog.PhysicalFileRef) {
+	t.Helper()
+	if ref.MTime == nil {
+		t.Errorf("row a: expected non-nil MTime")
+	} else if !ref.MTime.Equal(catalogFixtureBase) {
+		t.Errorf("row a: MTime = %v, want %v", ref.MTime, catalogFixtureBase)
+	}
+	if !ref.IsMetadataComplete {
+		t.Errorf("row a: IsMetadataComplete = false, want true")
+	}
+}
+
+func assertIncompletePhysicalFile(t *testing.T, ref catalog.PhysicalFileRef) {
+	t.Helper()
+	if ref.MTime != nil {
+		t.Errorf("row b: expected nil MTime for NULL, got %v", ref.MTime)
+	}
+	if ref.IsMetadataComplete {
+		t.Errorf("row b: IsMetadataComplete = true, want false")
 	}
 }
 
