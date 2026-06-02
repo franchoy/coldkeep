@@ -60,21 +60,14 @@ func insertTestSnapshotFile(t *testing.T, db *sql.DB, snapshotID, path string, s
 	if err != nil {
 		t.Fatalf("insert logical_file for %s: %v", path, err)
 	}
-	var lfID int64
-	if err := db.QueryRowContext(ctx,
-		`SELECT id FROM logical_file WHERE file_hash = $1 AND total_size = $2`, hash, size).Scan(&lfID); err != nil {
-		t.Fatalf("lookup logical_file for %s: %v", path, err)
-	}
+	lfID := lookupTestLogicalFileID(t, db, ctx, hash, size, path)
 
 	// Insert snapshot_path.
 	_, err = db.ExecContext(ctx, `INSERT OR IGNORE INTO snapshot_path (path) VALUES ($1)`, path)
 	if err != nil {
 		t.Fatalf("insert snapshot_path for %s: %v", path, err)
 	}
-	var pathID int64
-	if err := db.QueryRowContext(ctx, `SELECT id FROM snapshot_path WHERE path = $1`, path).Scan(&pathID); err != nil {
-		t.Fatalf("lookup snapshot_path for %s: %v", path, err)
-	}
+	pathID := lookupTestSnapshotPathID(t, db, ctx, path)
 
 	// Insert snapshot_file.
 	_, err = db.ExecContext(ctx,
@@ -84,6 +77,38 @@ func insertTestSnapshotFile(t *testing.T, db *sql.DB, snapshotID, path string, s
 		t.Fatalf("insert snapshot_file for %s/%s: %v", snapshotID, path, err)
 	}
 	return lfID
+}
+
+func lookupTestLogicalFileID(t *testing.T, db *sql.DB, ctx context.Context, hash string, size int64, path string) int64 {
+	t.Helper()
+
+	stmt, err := db.PrepareContext(ctx, `SELECT id FROM logical_file WHERE file_hash = ? AND total_size = ?`)
+	if err != nil {
+		t.Fatalf("prepare logical_file lookup for %s: %v", path, err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	var lfID int64
+	if err := stmt.QueryRowContext(ctx, hash, size).Scan(&lfID); err != nil {
+		t.Fatalf("lookup logical_file for %s: %v", path, err)
+	}
+	return lfID
+}
+
+func lookupTestSnapshotPathID(t *testing.T, db *sql.DB, ctx context.Context, path string) int64 {
+	t.Helper()
+
+	stmt, err := db.PrepareContext(ctx, `SELECT id FROM snapshot_path WHERE path = ?`)
+	if err != nil {
+		t.Fatalf("prepare snapshot_path lookup for %s: %v", path, err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	var pathID int64
+	if err := stmt.QueryRowContext(ctx, path).Scan(&pathID); err != nil {
+		t.Fatalf("lookup snapshot_path for %s: %v", path, err)
+	}
+	return pathID
 }
 
 // TestSnapshotListRoutesThroughEngine verifies that SnapshotList returns a
@@ -290,14 +315,7 @@ func TestSnapshotDiffSummaryFastPath(t *testing.T) {
 // returns all change entries with the correct change type.
 func TestSnapshotDiffFullReturnsEntries(t *testing.T) {
 	db := openSnapshotTestDB(t)
-	now := time.Now().UTC().Truncate(time.Second)
-	insertTestSnapshot(t, db, "snap-df-base", "full", "", "", now)
-	insertTestSnapshot(t, db, "snap-df-target", "full", "", "", now.Add(time.Second))
-
-	insertTestSnapshotFile(t, db, "snap-df-base", "kept.txt", 100)
-	insertTestSnapshotFile(t, db, "snap-df-base", "gone.txt", 200)
-	insertTestSnapshotFile(t, db, "snap-df-target", "kept.txt", 100)
-	insertTestSnapshotFile(t, db, "snap-df-target", "new.txt", 400)
+	seedSnapshotDiffFullFixture(t, db)
 
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
@@ -311,27 +329,56 @@ func TestSnapshotDiffFullReturnsEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SnapshotDiff full: %v", err)
 	}
+
+	assertSnapshotDiffFullResult(t, result)
+}
+
+func seedSnapshotDiffFullFixture(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	insertTestSnapshot(t, db, "snap-df-base", "full", "", "", now)
+	insertTestSnapshot(t, db, "snap-df-target", "full", "", "", now.Add(time.Second))
+	insertTestSnapshotFile(t, db, "snap-df-base", "kept.txt", 100)
+	insertTestSnapshotFile(t, db, "snap-df-base", "gone.txt", 200)
+	insertTestSnapshotFile(t, db, "snap-df-target", "kept.txt", 100)
+	insertTestSnapshotFile(t, db, "snap-df-target", "new.txt", 400)
+}
+
+func assertSnapshotDiffFullResult(t *testing.T, result engine.SnapshotDiffResult) {
+	t.Helper()
+
 	if result.SummaryMode {
 		t.Error("SummaryMode: expected false")
 	}
 	if result.BaseID != "snap-df-base" || result.TargetID != "snap-df-target" {
 		t.Errorf("IDs: got base=%q target=%q", result.BaseID, result.TargetID)
 	}
+	assertSnapshotDiffChangeCounts(t, result, 1, 1)
+}
 
+func assertSnapshotDiffChangeCounts(t *testing.T, result engine.SnapshotDiffResult, wantAdded, wantRemoved int) {
+	t.Helper()
+
+	added, removed := countSnapshotDiffChanges(result.Entries)
+	if added != wantAdded {
+		t.Errorf("added entries: got %d, want %d", added, wantAdded)
+	}
+	if removed != wantRemoved {
+		t.Errorf("removed entries: got %d, want %d", removed, wantRemoved)
+	}
+}
+
+func countSnapshotDiffChanges(entries []engine.SnapshotDiffEntry) (int, int) {
 	added := 0
 	removed := 0
-	for _, e := range result.Entries {
-		switch e.Change {
+	for _, entry := range entries {
+		switch entry.Change {
 		case "added":
 			added++
 		case "removed":
 			removed++
 		}
 	}
-	if added != 1 {
-		t.Errorf("added entries: got %d, want 1", added)
-	}
-	if removed != 1 {
-		t.Errorf("removed entries: got %d, want 1", removed)
-	}
+	return added, removed
 }

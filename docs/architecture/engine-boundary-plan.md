@@ -30,6 +30,7 @@ Mutating snapshot operations (`create`, `delete`, `restore`) remain direct-wired
 to a later phase.
 
 `Engine` interface methods as of v1.12 Phase 5:
+
 - `Stats`
 - `Inspect`
 - `Verify`
@@ -51,6 +52,7 @@ Execution parity is preserved across backends with an intentional backend rule:
 Reachability catalogization is deferred: `LoadGCPlanMetadata` remains `ErrNotImplemented`.
 
 `Engine` interface methods as of v1.12 Phase 6:
+
 - `Stats`
 - `Inspect`
 - `Verify`
@@ -76,6 +78,7 @@ Scope intentionally deferred in Phase 7:
 - catalog restore-plan API (`LoadRestorePlanMetadata`) remains `ErrNotImplemented`.
 
 `Engine` interface methods as of v1.12 Phase 7:
+
 - `Stats`
 - `Inspect`
 - `Verify`
@@ -101,6 +104,7 @@ Scope intentionally deferred in Phase 8:
 - catalog placement API (`LoadChunkPlacements`) remains `ErrNotImplemented`.
 
 `Engine` interface methods as of v1.12 Phase 8:
+
 - `Stats`
 - `Inspect`
 - `Verify`
@@ -128,6 +132,7 @@ Scope intentionally deferred in Phase 9:
 - recovery remains on direct startup/doctor recovery routing.
 
 `Engine` interface methods as of v1.12 Phase 9:
+
 - `Stats`
 - `Inspect`
 - `Verify`
@@ -148,11 +153,11 @@ activating any deferred high-risk command routes.
 Scope activated in Phase 10:
 
 - CLI verify execution is routed via an engine-backed seam (`verifyCommandPhase`) that delegates to
-	`Engine.Verify`.
+  `Engine.Verify`.
 - verify summary collection in CLI now consumes an injected DB handle from storage context instead
-	of opening a separate global DB connection path.
+  of opening a separate global DB connection path.
 - dependency-direction guard adds explicit prohibition of direct `cmd/coldkeep` -> `internal/catalog`
-	imports.
+  imports.
 
 Scope intentionally unchanged in Phase 10:
 
@@ -160,6 +165,7 @@ Scope intentionally unchanged in Phase 10:
 - stored-path remove/restore, repair, recovery, and folder-store routing remain deferred.
 
 `Engine` interface methods as of v1.12 Phase 10:
+
 - `Stats`
 - `Inspect`
 - `Verify`
@@ -180,22 +186,23 @@ and no broad refactor.
 Scope completed in Phase 11:
 
 - consolidated routed operation -> invariant -> test evidence in
-	`docs/release/v1.12/invariant-test-matrix.md`;
+  `docs/release/v1.12/invariant-test-matrix.md`;
 - added routed text parity tests for verify/store/restore/remove paths to complement existing JSON
-	routing guards;
+  routing guards;
 - confirmed dependency-direction guardrails remain enforced:
-	- `cmd/coldkeep` must not import `internal/catalog` directly,
-	- `internal/catalog` must not import `internal/engine` or CLI packages;
+  - `cmd/coldkeep` must not import `internal/catalog` directly,
+  - `internal/catalog` must not import `internal/engine` or CLI packages;
 - confirmed catalog backend-neutral contract coverage remains in place for implemented methods and
-	deferred methods continue to return `ErrNotImplemented`.
+  deferred methods continue to return `ErrNotImplemented`.
 
 Scope intentionally unchanged in Phase 11:
 
 - no new `Engine` methods activated (active method count remains 11);
 - deferred high-risk routes remain deferred (stored-path restore/remove modes, snapshot restore,
-	folder store, repair, recovery).
+  folder store, repair, recovery).
 
 `Engine` interface methods as of v1.12 Phase 11:
+
 - `Stats`
 - `Inspect`
 - `Verify`

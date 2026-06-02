@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
@@ -70,51 +71,12 @@ func openPostgresCatalogTestDBOrSkip(t *testing.T) *sql.DB {
 		t.Skip("Set COLDKEEP_TEST_DB=1 (with DB_* DSN env) to run PostgreSQL catalog contract tests")
 	}
 
-	host := getenvOrDefaultCatalogTest("DB_HOST", "127.0.0.1")
-	port := getenvOrDefaultCatalogTest("DB_PORT", "5432")
-	user := getenvOrDefaultCatalogTest("DB_USER", "coldkeep")
-	password := getenvOrDefaultCatalogTest("DB_PASSWORD", "coldkeep")
-	sslMode := getenvOrDefaultCatalogTest("DB_SSLMODE", "disable")
-	maintenanceDB := getenvOrDefaultCatalogTest("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
+	cfg := loadPostgresCatalogTestConfig()
+	adminDB := openPostgresCatalogTestConnection(t, cfg, cfg.MaintenanceDB, "admin")
+	testDBName := newPostgresCatalogTestDBName()
+	createPostgresCatalogTestDB(t, adminDB, testDBName)
+	dbconn := openPostgresCatalogTestConnection(t, cfg, testDBName, "test database")
 
-	adminConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host, port, user, password, maintenanceDB, sslMode,
-	)
-	adminDB, err := sql.Open("postgres", adminConnStr)
-	if err != nil {
-		t.Fatalf("open postgres admin connection: %v", err)
-	}
-	if err := adminDB.Ping(); err != nil {
-		_ = adminDB.Close()
-		t.Fatalf("ping postgres admin connection: %v", err)
-	}
-
-	testDBName := fmt.Sprintf("coldkeep_catalog_contract_%d", time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
-		_ = adminDB.Close()
-		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
-	}
-
-	testConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host, port, user, password, testDBName, sslMode,
-	)
-	dbconn, err := sql.Open("postgres", testConnStr)
-	if err != nil {
-		dropPostgresCatalogTestDB(adminDB, testDBName)
-		_ = adminDB.Close()
-		t.Fatalf("open postgres test database connection: %v", err)
-	}
-	if err := dbconn.Ping(); err != nil {
-		_ = dbconn.Close()
-		dropPostgresCatalogTestDB(adminDB, testDBName)
-		_ = adminDB.Close()
-		t.Fatalf("ping postgres test database connection: %v", err)
-	}
-
-	// Apply the schema via the backend-neutral bootstrap path. Auto-bootstrap is
-	// scoped to this test process via t.Setenv.
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
 	if err := db.EnsurePostgresSchema(dbconn); err != nil {
 		_ = dbconn.Close()
@@ -128,8 +90,61 @@ func openPostgresCatalogTestDBOrSkip(t *testing.T) *sql.DB {
 		dropPostgresCatalogTestDB(adminDB, testDBName)
 		_ = adminDB.Close()
 	})
-
 	return dbconn
+}
+
+type postgresCatalogTestConfig struct {
+	Host          string
+	Port          string
+	User          string
+	Password      string
+	SSLMode       string
+	MaintenanceDB string
+}
+
+func loadPostgresCatalogTestConfig() postgresCatalogTestConfig {
+	return postgresCatalogTestConfig{
+		Host:          getenvOrDefaultCatalogTest("DB_HOST", "127.0.0.1"),
+		Port:          getenvOrDefaultCatalogTest("DB_PORT", "5432"),
+		User:          getenvOrDefaultCatalogTest("DB_USER", "coldkeep"),
+		Password:      getenvOrDefaultCatalogTest("DB_PASSWORD", "coldkeep"),
+		SSLMode:       getenvOrDefaultCatalogTest("DB_SSLMODE", "disable"),
+		MaintenanceDB: getenvOrDefaultCatalogTest("COLDKEEP_TEST_DB_MAINTENANCE", "postgres"),
+	}
+}
+
+func openPostgresCatalogTestConnection(t *testing.T, cfg postgresCatalogTestConfig, databaseName, purpose string) *sql.DB {
+	t.Helper()
+	dbconn, err := sql.Open("postgres", postgresCatalogTestConnString(cfg, databaseName))
+	if err != nil {
+		t.Fatalf("open postgres %s connection: %v", purpose, err)
+	}
+	if err := dbconn.Ping(); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("ping postgres %s connection: %v", purpose, err)
+	}
+	return dbconn
+}
+
+func postgresCatalogTestConnString(cfg postgresCatalogTestConfig, databaseName string) string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, databaseName, cfg.SSLMode,
+	)
+}
+
+func newPostgresCatalogTestDBName() string {
+	return fmt.Sprintf("coldkeep_catalog_contract_%d", time.Now().UnixNano())
+}
+
+func createPostgresCatalogTestDB(t *testing.T, adminDB *sql.DB, name string) {
+	t.Helper()
+	query := postgresCatalogTestDBDDL("CREATE DATABASE", name)
+	// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query
+	if _, err := adminDB.Exec(query); err != nil {
+		_ = adminDB.Close()
+		t.Fatalf("create temporary postgres database %s: %v", name, err)
+	}
 }
 
 // dropPostgresCatalogTestDB terminates active backends on the temporary database
@@ -140,7 +155,31 @@ func dropPostgresCatalogTestDB(adminDB *sql.DB, name string) {
 		FROM pg_stat_activity
 		WHERE datname = $1 AND pid <> pg_backend_pid()
 	`, name)
-	_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", name))
+	query := postgresCatalogTestDBDDL("DROP DATABASE IF EXISTS", name)
+	// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query
+	_, _ = adminDB.Exec(query)
+}
+
+func postgresCatalogTestDBDDL(action, name string) string {
+	return action + " " + pq.QuoteIdentifier(requirePostgresCatalogTestDBName(name))
+}
+
+func requirePostgresCatalogTestDBName(name string) string {
+	const prefix = "coldkeep_catalog_contract_"
+	suffix := strings.TrimPrefix(name, prefix)
+	if suffix == name || suffix == "" || !isASCIIDigits(suffix) {
+		panic("invalid generated PostgreSQL catalog test database name")
+	}
+	return name
+}
+
+func isASCIIDigits(value string) bool {
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func getenvOrDefaultCatalogTest(key, fallback string) string {
@@ -211,6 +250,10 @@ func seedCatalogFixture(t *testing.T, dbconn *sql.DB) {
 		"snap-full", 1, 2)
 }
 
+type logicalFileFinder interface {
+	FindLogicalFile(context.Context, int64) (*catalog.LogicalFileRef, error)
+}
+
 // TestCatalogContractFindLogicalFileAcrossBackends verifies FindLogicalFile
 // returns identical results on every backend.
 func TestCatalogContractFindLogicalFileAcrossBackends(t *testing.T) {
@@ -218,30 +261,41 @@ func TestCatalogContractFindLogicalFileAcrossBackends(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			dbconn := backend.Open(t)
 			seedCatalogFixture(t, dbconn)
-			svc := catalog.NewServiceFromSQL(dbconn)
-			ctx := context.Background()
-
-			missing, err := svc.FindLogicalFile(ctx, 9999)
-			if err != nil {
-				t.Fatalf("FindLogicalFile(missing): %v", err)
-			}
-			if missing != nil {
-				t.Fatalf("FindLogicalFile(missing): want nil, got %+v", missing)
-			}
-
-			got, err := svc.FindLogicalFile(ctx, 1)
-			if err != nil {
-				t.Fatalf("FindLogicalFile(1): %v", err)
-			}
-			if got == nil {
-				t.Fatal("FindLogicalFile(1): want ref, got nil")
-			}
-			if got.ID != 1 || got.OriginalName != "current-file.txt" ||
-				got.TotalSize != 11 || got.FileHash != "h1" ||
-				got.RefCount != 1 || got.Status != "COMPLETED" {
-				t.Fatalf("FindLogicalFile(1): unexpected ref %+v", got)
-			}
+			assertCatalogFindLogicalFile(t, catalog.NewServiceFromSQL(dbconn))
 		})
+	}
+}
+
+func assertCatalogFindLogicalFile(t *testing.T, svc logicalFileFinder) {
+	t.Helper()
+	ctx := context.Background()
+	assertMissingLogicalFile(t, svc, ctx, 9999)
+	assertLogicalFileRef(t, svc, ctx, 1)
+}
+
+func assertMissingLogicalFile(t *testing.T, svc logicalFileFinder, ctx context.Context, id int64) {
+	t.Helper()
+	missing, err := svc.FindLogicalFile(ctx, id)
+	if err != nil {
+		t.Fatalf("FindLogicalFile(missing): %v", err)
+	}
+	if missing != nil {
+		t.Fatalf("FindLogicalFile(missing): want nil, got %+v", missing)
+	}
+}
+
+func assertLogicalFileRef(t *testing.T, svc logicalFileFinder, ctx context.Context, id int64) {
+	t.Helper()
+	got, err := svc.FindLogicalFile(ctx, id)
+	if err != nil {
+		t.Fatalf("FindLogicalFile(%d): %v", id, err)
+	}
+	if got == nil {
+		t.Fatalf("FindLogicalFile(%d): want ref, got nil", id)
+	}
+	if got.ID != 1 || got.OriginalName != "current-file.txt" || got.TotalSize != 11 ||
+		got.FileHash != "h1" || got.RefCount != 1 || got.Status != "COMPLETED" {
+		t.Fatalf("FindLogicalFile(%d): unexpected ref %+v", id, got)
 	}
 }
 
@@ -347,6 +401,10 @@ func TestCatalogContractFindSnapshotAcrossBackends(t *testing.T) {
 	}
 }
 
+type snapshotLister interface {
+	ListSnapshots(context.Context, catalog.SnapshotFilter) ([]catalog.SnapshotRef, error)
+}
+
 // TestCatalogContractListSnapshotsAcrossBackends verifies ordering (newest
 // first), type filtering, label substring matching (LIKE), Since/Until bounds,
 // and Limit are consistent across backends.
@@ -355,64 +413,69 @@ func TestCatalogContractListSnapshotsAcrossBackends(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			dbconn := backend.Open(t)
 			seedCatalogFixture(t, dbconn)
-			svc := catalog.NewServiceFromSQL(dbconn)
-			ctx := context.Background()
-
-			all, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{})
-			if err != nil {
-				t.Fatalf("ListSnapshots(all): %v", err)
-			}
-			if len(all) != 2 {
-				t.Fatalf("ListSnapshots(all): want 2, got %d", len(all))
-			}
-			// Newest first: snap-child (base+1h) before snap-full (base).
-			if all[0].ID != "snap-child" || all[1].ID != "snap-full" {
-				t.Fatalf("ListSnapshots(all): ordering got %q then %q", all[0].ID, all[1].ID)
-			}
-
-			full, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{Type: "full"})
-			if err != nil {
-				t.Fatalf("ListSnapshots(type=full): %v", err)
-			}
-			if len(full) != 1 || full[0].ID != "snap-full" {
-				t.Fatalf("ListSnapshots(type=full): got %+v", full)
-			}
-
-			labeled, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{LabelSubstring: "alph"})
-			if err != nil {
-				t.Fatalf("ListSnapshots(label~alph): %v", err)
-			}
-			if len(labeled) != 1 || labeled[0].ID != "snap-full" {
-				t.Fatalf("ListSnapshots(label~alph): got %+v", labeled)
-			}
-
-			since := catalogFixtureBase.Add(30 * time.Minute)
-			recent, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{Since: &since})
-			if err != nil {
-				t.Fatalf("ListSnapshots(since): %v", err)
-			}
-			if len(recent) != 1 || recent[0].ID != "snap-child" {
-				t.Fatalf("ListSnapshots(since): got %+v", recent)
-			}
-
-			until := catalogFixtureBase.Add(30 * time.Minute)
-			older, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{Until: &until})
-			if err != nil {
-				t.Fatalf("ListSnapshots(until): %v", err)
-			}
-			if len(older) != 1 || older[0].ID != "snap-full" {
-				t.Fatalf("ListSnapshots(until): got %+v", older)
-			}
-
-			limited, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{Limit: 1})
-			if err != nil {
-				t.Fatalf("ListSnapshots(limit=1): %v", err)
-			}
-			if len(limited) != 1 || limited[0].ID != "snap-child" {
-				t.Fatalf("ListSnapshots(limit=1): got %+v", limited)
-			}
+			assertCatalogListSnapshots(t, catalog.NewServiceFromSQL(dbconn))
 		})
 	}
+}
+
+func assertCatalogListSnapshots(t *testing.T, svc snapshotLister) {
+	t.Helper()
+	ctx := context.Background()
+	assertAllSnapshots(t, svc, ctx)
+	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{Type: "full"}, "type=full", "snap-full")
+	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{LabelSubstring: "alph"}, "label~alph", "snap-full")
+	assertSnapshotTimeBounds(t, svc, ctx)
+	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{Limit: 1}, "limit=1", "snap-child")
+}
+
+func assertAllSnapshots(t *testing.T, svc snapshotLister, ctx context.Context) {
+	t.Helper()
+	all := requireSnapshots(t, svc, ctx, catalog.SnapshotFilter{}, "all")
+	if len(all) != 2 {
+		t.Fatalf("ListSnapshots(all): want 2, got %d", len(all))
+	}
+	if all[0].ID != "snap-child" || all[1].ID != "snap-full" {
+		t.Fatalf("ListSnapshots(all): ordering got %q then %q", all[0].ID, all[1].ID)
+	}
+}
+
+func assertSnapshotTimeBounds(t *testing.T, svc snapshotLister, ctx context.Context) {
+	t.Helper()
+	since := catalogFixtureBase.Add(30 * time.Minute)
+	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{Since: &since}, "since", "snap-child")
+
+	until := catalogFixtureBase.Add(30 * time.Minute)
+	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{Until: &until}, "until", "snap-full")
+}
+
+func assertFilteredSnapshot(
+	t *testing.T,
+	svc snapshotLister,
+	ctx context.Context,
+	filter catalog.SnapshotFilter,
+	label string,
+	wantID string,
+) {
+	t.Helper()
+	refs := requireSnapshots(t, svc, ctx, filter, label)
+	if len(refs) != 1 || refs[0].ID != wantID {
+		t.Fatalf("ListSnapshots(%s): got %+v", label, refs)
+	}
+}
+
+func requireSnapshots(
+	t *testing.T,
+	svc snapshotLister,
+	ctx context.Context,
+	filter catalog.SnapshotFilter,
+	label string,
+) []catalog.SnapshotRef {
+	t.Helper()
+	refs, err := svc.ListSnapshots(ctx, filter)
+	if err != nil {
+		t.Fatalf("ListSnapshots(%s): %v", label, err)
+	}
+	return refs
 }
 
 // TestCatalogContractLoadReachabilityRootsAcrossBackends verifies the current

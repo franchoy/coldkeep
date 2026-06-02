@@ -4,20 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/snapshot"
-	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
@@ -268,321 +263,30 @@ func (e *DefaultEngine) SnapshotStats(ctx context.Context, req SnapshotStatsRequ
 }
 
 func (e *DefaultEngine) SnapshotDiff(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error) {
-	// Summary fast path: no filter, no query.
-	if req.Summary && req.Filter == "" {
-		zeroQ := SnapshotQuery{}
-		if req.Query == zeroQ {
-			summary, err := snapshot.DiffSnapshotsSummarySQL(ctx, e.config.DB, req.BaseID, req.TargetID)
-			if err != nil {
-				return SnapshotDiffResult{}, err
-			}
-			total := int(summary.Added + summary.Removed + summary.Modified)
-			return SnapshotDiffResult{
-				BaseID:      req.BaseID,
-				TargetID:    req.TargetID,
-				SummaryMode: true,
-				Summary: SnapshotDiffSummary{
-					Added:    int(summary.Added),
-					Removed:  int(summary.Removed),
-					Modified: int(summary.Modified),
-				},
-				MatchedEntryCount: total,
-				TotalEntryCount:   total,
-			}, nil
-		}
+	if isSnapshotDiffSummaryFastPath(req) {
+		return e.snapshotDiffSummaryFastPath(ctx, req)
 	}
-	var snapshotQ *snapshot.SnapshotQuery
-	if req.Query != (SnapshotQuery{}) {
-		snapshotQ = engineQueryToSnapshotQuery(req.Query)
-	}
-	raw, err := snapshot.DiffSnapshots(ctx, e.config.DB, req.BaseID, req.TargetID, snapshotQ)
-	if err != nil {
-		return SnapshotDiffResult{}, err
-	}
-	entries := make([]SnapshotDiffEntry, 0, len(raw.Entries))
-	summary := SnapshotDiffSummary{}
-	for _, entry := range raw.Entries {
-		change := SnapshotDiffChange(entry.Type)
-		if req.Filter != "" && SnapshotDiffFilter(entry.Type) != req.Filter {
-			continue
-		}
-		entries = append(entries, SnapshotDiffEntry{StoredPath: entry.Path, Change: change})
-		switch entry.Type {
-		case snapshot.DiffAdded:
-			summary.Added++
-		case snapshot.DiffRemoved:
-			summary.Removed++
-		case snapshot.DiffModified:
-			summary.Modified++
-		}
-	}
-	res := SnapshotDiffResult{
-		BaseID:            req.BaseID,
-		TargetID:          req.TargetID,
-		SummaryMode:       req.Summary,
-		Summary:           summary,
-		MatchedEntryCount: len(entries),
-		TotalEntryCount:   len(raw.Entries),
-	}
-	if !req.Summary {
-		res.Entries = entries
-	}
-	return res, nil
-}
-
-func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error) {
-	containerDir := e.config.ContainerDir
-	if containerDir == "" {
-		containerDir = container.ContainersDir
-	}
-	gcRes, err := maintenance.RunGCWithDB(ctx, e.config.DB, req.DryRun, containerDir)
-	if err != nil {
-		return GarbageCollectResult{}, err
-	}
-	return GarbageCollectResult{
-		DryRun:                           gcRes.DryRun,
-		AffectedContainers:               gcRes.AffectedContainers,
-		ContainerFilenames:               gcRes.ContainerFilenames,
-		SnapshotRetainedContainers:       gcRes.SnapshotRetainedContainers,
-		SnapshotRetainedLogicalFiles:     gcRes.SnapshotRetainedLogicalFiles,
-		CurrentOnlyRetainedLogicalFiles:  gcRes.RetainedCurrentOnlyLogical,
-		SnapshotOnlyRetainedLogicalFiles: gcRes.RetainedSnapshotOnlyLogical,
-		SharedRetainedLogicalFiles:       gcRes.RetainedSharedLogical,
-		BytesReclaimed:                   0, // not computed by current maintenance layer
-	}, nil
-}
-
-func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (StoreResult, error) {
-	if err := ctx.Err(); err != nil {
-		return StoreResult{}, err
-	}
-	if req.Recursive {
-		return StoreResult{}, ErrNotImplemented
-	}
-	if strings.TrimSpace(req.SourcePath) == "" {
-		return StoreResult{}, fmt.Errorf("engine: store source path is required")
-	}
-	if e.config.StoreContext == nil {
-		return StoreResult{}, fmt.Errorf("engine: store requires injected StoreContext")
-	}
-
-	var (
-		stored storage.StoreFileResult
-		err    error
-	)
-	if strings.TrimSpace(req.Codec) == "" {
-		stored, err = storage.StoreFileWithStorageContextResult(*e.config.StoreContext, req.SourcePath)
-	} else {
-		codec, parseErr := blocks.ParseCodec(req.Codec)
-		if parseErr != nil {
-			return StoreResult{}, parseErr
-		}
-		stored, err = storage.StoreFileWithStorageContextAndCodecResult(*e.config.StoreContext, req.SourcePath, codec)
-	}
-	if err != nil {
-		return StoreResult{}, err
-	}
-
-	return StoreResult{
-		SourcePath:     req.SourcePath,
-		StoredPath:     stored.Path,
-		LogicalFileID:  stored.FileID,
-		FileHash:       stored.FileHash,
-		AlreadyStored:  stored.AlreadyStored,
-		PhysicalFileID: 0,
-	}, nil
+	return e.snapshotDiffDetailed(ctx, req)
 }
 
 func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (RemoveResult, error) {
 	if err := ctx.Err(); err != nil {
 		return RemoveResult{}, err
 	}
-
-	if req.Mode != RemoveModeFileIDs {
-		return RemoveResult{}, ErrNotImplemented
+	if err := validateRemoveRequest(req); err != nil {
+		return RemoveResult{}, err
 	}
-	if len(req.FileIDs) == 0 {
-		return RemoveResult{}, fmt.Errorf("engine: remove requires at least one file ID")
-	}
-
-	result := RemoveResult{
-		DryRun:        req.DryRun,
-		ExecutionMode: ExecutionModeSequential,
-		Items:         make([]RemoveItemResult, 0, len(req.FileIDs)),
-	}
-
-	for _, fileID := range req.FileIDs {
-		item := RemoveItemResult{FileID: fileID, Status: BatchItemOK}
-
-		if fileID <= 0 {
-			item.Status = BatchItemFailed
-			item.Error = fmt.Sprintf("invalid file ID %d", fileID)
-			result.Items = append(result.Items, item)
-			result.Summary.Failed++
-			if req.FailFast {
-				break
-			}
-			continue
-		}
-
-		if req.DryRun {
-			if err := dryRunRemoveByID(e.config.DB, fileID); err != nil {
-				item.Status = BatchItemFailed
-				item.Error = err.Error()
-				result.Items = append(result.Items, item)
-				result.Summary.Failed++
-				if req.FailFast {
-					break
-				}
-				continue
-			}
-			result.Items = append(result.Items, item)
-			result.Summary.OK++
-			continue
-		}
-
-		removed, err := storage.RemoveFileWithDBResult(e.config.DB, fileID)
-		if err != nil {
-			item.Status = BatchItemFailed
-			item.Error = err.Error()
-			if code, ok := invariants.Code(err); ok {
-				item.InvariantCode = code
-				item.RecommendedAction = invariants.RecommendedActionForCode(code)
-			}
-			result.Items = append(result.Items, item)
-			result.Summary.Failed++
-			if req.FailFast {
-				break
-			}
-			continue
-		}
-
-		item.RemovedMappings = removed.RemovedMappings
-		item.Removed = true
-		result.Items = append(result.Items, item)
-		result.Summary.OK++
-	}
-
-	result.Summary.Skipped = len(req.FileIDs) - result.Summary.OK - result.Summary.Failed
-	if result.Summary.Skipped < 0 {
-		result.Summary.Skipped = 0
-	}
-	return result, nil
+	return e.removeFileIDs(req), nil
 }
 
 func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
 	if err := ctx.Err(); err != nil {
 		return RestoreResult{}, err
 	}
-
-	if req.Mode != RestoreModeFileIDs {
-		return RestoreResult{}, ErrNotImplemented
+	if err := validateRestoreRequest(req); err != nil {
+		return RestoreResult{}, err
 	}
-
-	if len(req.FileIDs) == 0 {
-		return RestoreResult{}, fmt.Errorf("engine: restore requires at least one file ID")
-	}
-	if strings.TrimSpace(req.OutputDir) == "" {
-		return RestoreResult{}, fmt.Errorf("engine: restore output directory is required")
-	}
-
-	result := RestoreResult{
-		DryRun:        req.DryRun,
-		ExecutionMode: ExecutionModeSequential,
-		Items:         make([]RestoreItemResult, 0, len(req.FileIDs)),
-	}
-
-	sgctx := storage.StorageContext{DB: e.config.DB, ContainerDir: e.config.ContainerDir}
-	for _, fileID := range req.FileIDs {
-		item := RestoreItemResult{FileID: fileID, Status: BatchItemOK}
-
-		if fileID <= 0 {
-			item.Status = BatchItemFailed
-			item.Error = fmt.Sprintf("invalid file ID %d", fileID)
-			result.Items = append(result.Items, item)
-			result.Summary.Failed++
-			if req.FailFast {
-				break
-			}
-			continue
-		}
-
-		if req.DryRun {
-			dry, err := dryRunRestoreByID(e.config.DB, fileID, req.OutputDir, req.Overwrite)
-			item = dry
-			if err != nil {
-				item.Status = BatchItemFailed
-				item.Error = err.Error()
-				result.Summary.Failed++
-				result.Items = append(result.Items, item)
-				if req.FailFast {
-					break
-				}
-				continue
-			}
-			result.Summary.OK++
-			result.Items = append(result.Items, item)
-			continue
-		}
-
-		r, err := storage.RestoreFileWithStorageContextResultOptions(sgctx, fileID, req.OutputDir, storage.RestoreOptions{Overwrite: req.Overwrite})
-		if err != nil {
-			item.Status = BatchItemFailed
-			item.Error = err.Error()
-			result.Summary.Failed++
-			result.Items = append(result.Items, item)
-			if req.FailFast {
-				break
-			}
-			continue
-		}
-
-		item.OutputPath = r.OutputPath
-		item.RestoredHash = r.RestoredHash
-		result.Summary.OK++
-		result.Items = append(result.Items, item)
-	}
-
-	result.Summary.Skipped = len(req.FileIDs) - result.Summary.OK - result.Summary.Failed
-	if result.Summary.Skipped < 0 {
-		result.Summary.Skipped = 0
-	}
-	return result, nil
-}
-
-func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) (RestoreItemResult, error) {
-	item := RestoreItemResult{FileID: fileID, Status: BatchItemOK}
-	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
-	if err != nil {
-		return item, err
-	}
-	if info.Status != filestate.LogicalFileCompleted {
-		return item, fmt.Errorf("file ID %d is not COMPLETED", fileID)
-	}
-	out := filepath.Join(outputDir, info.OriginalName)
-	item.OutputPath = out
-	if !overwrite {
-		if _, statErr := os.Stat(out); statErr == nil {
-			return item, fmt.Errorf("output file already exists: %s (use --overwrite)", out)
-		} else if !os.IsNotExist(statErr) {
-			return item, fmt.Errorf("check output path %s: %w", out, statErr)
-		}
-	}
-	return item, nil
-}
-
-func dryRunRemoveByID(dbconn *sql.DB, fileID int64) error {
-	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("file ID %d not found", fileID)
-		}
-		return err
-	}
-	if info.Status == filestate.LogicalFileProcessing {
-		return fmt.Errorf("file ID %d is still PROCESSING and cannot be removed", fileID)
-	}
-	return nil
+	return e.restoreFileIDs(req), nil
 }
 
 // engineQueryToSnapshotQuery maps an engine-level SnapshotQuery to the

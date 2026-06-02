@@ -63,32 +63,62 @@ func insertRoutingSnapshotFile(t *testing.T, dbconn *sql.DB, snapshotID, path st
 	hash := snapshotID + ":" + path + ":hash"
 
 	_, err := dbconn.ExecContext(ctx,
-		`INSERT OR IGNORE INTO logical_file (original_name, total_size, file_hash, ref_count, status) VALUES ($1, $2, $3, 1, 'COMPLETED')`,
+		`INSERT OR IGNORE INTO logical_file (original_name, total_size, file_hash, ref_count, status) VALUES (?, ?, ?, 1, 'COMPLETED')`,
 		path, size, hash)
 	if err != nil {
 		t.Fatalf("insert logical_file %s/%s: %v", snapshotID, path, err)
 	}
-	var lfID int64
-	if err := dbconn.QueryRowContext(ctx,
-		`SELECT id FROM logical_file WHERE file_hash = $1`, hash).Scan(&lfID); err != nil {
-		t.Fatalf("lookup logical_file %s/%s: %v", snapshotID, path, err)
-	}
+	lfID := lookupRoutingLogicalFileID(t, dbconn, ctx, snapshotID, path, hash)
 
-	_, err = dbconn.ExecContext(ctx, `INSERT OR IGNORE INTO snapshot_path (path) VALUES ($1)`, path)
+	_, err = dbconn.ExecContext(ctx, `INSERT OR IGNORE INTO snapshot_path (path) VALUES (?)`, path)
 	if err != nil {
 		t.Fatalf("insert snapshot_path %s: %v", path, err)
 	}
-	var pathID int64
-	if err := dbconn.QueryRowContext(ctx, `SELECT id FROM snapshot_path WHERE path = $1`, path).Scan(&pathID); err != nil {
-		t.Fatalf("lookup snapshot_path %s: %v", path, err)
-	}
+	pathID := lookupRoutingSnapshotPathID(t, dbconn, ctx, path)
 
 	_, err = dbconn.ExecContext(ctx,
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES (?, ?, ?, ?)`,
 		snapshotID, pathID, lfID, size)
 	if err != nil {
 		t.Fatalf("insert snapshot_file %s/%s: %v", snapshotID, path, err)
 	}
+}
+
+func lookupRoutingLogicalFileID(
+	t *testing.T,
+	dbconn *sql.DB,
+	ctx context.Context,
+	snapshotID string,
+	path string,
+	hash string,
+) int64 {
+	t.Helper()
+	stmt, err := dbconn.PrepareContext(ctx, `SELECT id FROM logical_file WHERE file_hash = ?`)
+	if err != nil {
+		t.Fatalf("prepare logical_file lookup %s/%s: %v", snapshotID, path, err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	var lfID int64
+	if err := stmt.QueryRowContext(ctx, hash).Scan(&lfID); err != nil {
+		t.Fatalf("lookup logical_file %s/%s: %v", snapshotID, path, err)
+	}
+	return lfID
+}
+
+func lookupRoutingSnapshotPathID(t *testing.T, dbconn *sql.DB, ctx context.Context, path string) int64 {
+	t.Helper()
+	stmt, err := dbconn.PrepareContext(ctx, `SELECT id FROM snapshot_path WHERE path = ?`)
+	if err != nil {
+		t.Fatalf("prepare snapshot_path lookup %s: %v", path, err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	var pathID int64
+	if err := stmt.QueryRowContext(ctx, path).Scan(&pathID); err != nil {
+		t.Fatalf("lookup snapshot_path %s: %v", path, err)
+	}
+	return pathID
 }
 
 // TestSnapshotListEngineRoutingJSON verifies that snapshot list uses the

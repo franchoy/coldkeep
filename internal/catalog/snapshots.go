@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -33,70 +32,114 @@ WHERE id = $1`
 // ListSnapshots implements SnapshotCatalog.
 // Returns snapshots matching the filter, ordered newest first.
 func (s *Service) ListSnapshots(ctx context.Context, filter SnapshotFilter) ([]SnapshotRef, error) {
-	var (
-		args  []any
-		where []string
-		n     = 1
-	)
-
-	placeholder := func() string {
-		p := fmt.Sprintf("$%d", n)
-		n++
-		return p
+	args := snapshotListArgs(filter)
+	if filter.Limit > 0 {
+		return s.listSnapshotsWithLimit(ctx, args, filter.Limit)
 	}
+	return s.listSnapshotsWithoutLimit(ctx, args)
+}
 
-	if filter.Type != "" {
-		where = append(where, "type = "+placeholder())
-		args = append(args, filter.Type)
-	}
-	if filter.LabelSubstring != "" {
-		where = append(where, "label LIKE "+placeholder())
-		args = append(args, "%"+filter.LabelSubstring+"%")
+type snapshotListQueryArgs struct {
+	snapType     string
+	labelPattern string
+	hasSince     int
+	since        time.Time
+	hasUntil     int
+	until        time.Time
+}
+
+func snapshotListArgs(filter SnapshotFilter) snapshotListQueryArgs {
+	args := snapshotListQueryArgs{
+		snapType:     filter.Type,
+		labelPattern: labelPattern(filter.LabelSubstring),
 	}
 	if filter.Since != nil {
-		where = append(where, "created_at >= "+placeholder())
-		// Bind the time.Time directly (do not pre-format to a string). Each
-		// driver serializes the bound value the same way it stores created_at
-		// (go-sqlite3 uses a space-separated layout; lib/pq uses native
-		// timestamptz), so a pre-formatted RFC3339 string with a 'T' separator
-		// would not compare correctly against SQLite-stored timestamps. See
-		// docs/release/v1.12/sqlite-postgres-baseline.md (timestamp rule).
-		args = append(args, filter.Since.UTC())
+		args.hasSince = 1
+		args.since = filter.Since.UTC()
 	}
 	if filter.Until != nil {
-		where = append(where, "created_at <= "+placeholder())
-		args = append(args, filter.Until.UTC())
+		args.hasUntil = 1
+		args.until = filter.Until.UTC()
 	}
+	return args
+}
 
-	q := "SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at FROM snapshot"
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
+func labelPattern(labelSubstring string) string {
+	if labelSubstring == "" {
+		return ""
 	}
-	q += " ORDER BY created_at DESC"
-	if filter.Limit > 0 {
-		q += fmt.Sprintf(" LIMIT %d", filter.Limit)
-	}
+	return "%" + labelSubstring + "%"
+}
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+func (s *Service) listSnapshotsWithoutLimit(ctx context.Context, args snapshotListQueryArgs) ([]SnapshotRef, error) {
+	values := snapshotListQueryValues(args)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
+FROM snapshot
+WHERE ($1 = '' OR type = $1)
+  AND ($2 = '' OR label LIKE $2)
+  AND ($3 = 0 OR created_at >= $4)
+  AND ($5 = 0 OR created_at <= $6)
+ORDER BY created_at DESC`, values...)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list snapshots: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	return scanSnapshotRows(rows)
+}
 
+func (s *Service) listSnapshotsWithLimit(ctx context.Context, args snapshotListQueryArgs, limit int) ([]SnapshotRef, error) {
+	values := append(snapshotListQueryValues(args), limit)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
+FROM snapshot
+WHERE ($1 = '' OR type = $1)
+  AND ($2 = '' OR label LIKE $2)
+  AND ($3 = 0 OR created_at >= $4)
+  AND ($5 = 0 OR created_at <= $6)
+ORDER BY created_at DESC
+LIMIT $7`, values...)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list snapshots: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanSnapshotRows(rows)
+}
+
+func snapshotListQueryValues(args snapshotListQueryArgs) []any {
+	return []any{
+		args.snapType,
+		args.labelPattern,
+		args.hasSince,
+		args.since,
+		args.hasUntil,
+		args.until,
+	}
+}
+
+func scanSnapshotRows(rows *sql.Rows) ([]SnapshotRef, error) {
 	var refs []SnapshotRef
 	for rows.Next() {
-		var ref SnapshotRef
-		var createdAt string
-		if err := rows.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt); err != nil {
-			return nil, fmt.Errorf("catalog: scan snapshot row: %w", err)
+		ref, err := scanSnapshotRow(rows)
+		if err != nil {
+			return nil, err
 		}
-		ref.CreatedAt = parseTimestamp(createdAt)
 		refs = append(refs, ref)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("catalog: iterate snapshot rows: %w", err)
 	}
 	return refs, nil
+}
+
+func scanSnapshotRow(rows *sql.Rows) (SnapshotRef, error) {
+	var ref SnapshotRef
+	var createdAt string
+	if err := rows.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt); err != nil {
+		return SnapshotRef{}, fmt.Errorf("catalog: scan snapshot row: %w", err)
+	}
+	ref.CreatedAt = parseTimestamp(createdAt)
+	return ref, nil
 }
 
 // parseTimestamp parses a DB timestamp string into time.Time.

@@ -48,24 +48,26 @@ func TestGCDryRunEchoesFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GarbageCollect: %v", err)
 	}
+	assertGCNonNegativeFields(t, result)
+}
+
+func assertGCNonNegativeFields(t *testing.T, result engine.GarbageCollectResult) {
+	t.Helper()
 	// All retention counts must be non-negative (invariant: never delete reachable data).
-	if result.SnapshotRetainedContainers < 0 {
-		t.Errorf("SnapshotRetainedContainers < 0: %d", result.SnapshotRetainedContainers)
-	}
-	if result.SnapshotRetainedLogicalFiles < 0 {
-		t.Errorf("SnapshotRetainedLogicalFiles < 0: %d", result.SnapshotRetainedLogicalFiles)
-	}
-	if result.CurrentOnlyRetainedLogicalFiles < 0 {
-		t.Errorf("CurrentOnlyRetainedLogicalFiles < 0: %d", result.CurrentOnlyRetainedLogicalFiles)
-	}
-	if result.SnapshotOnlyRetainedLogicalFiles < 0 {
-		t.Errorf("SnapshotOnlyRetainedLogicalFiles < 0: %d", result.SnapshotOnlyRetainedLogicalFiles)
-	}
-	if result.SharedRetainedLogicalFiles < 0 {
-		t.Errorf("SharedRetainedLogicalFiles < 0: %d", result.SharedRetainedLogicalFiles)
-	}
-	if result.BytesReclaimed < 0 {
-		t.Errorf("BytesReclaimed < 0: %d", result.BytesReclaimed)
+	for _, field := range []struct {
+		name  string
+		value int64
+	}{
+		{"SnapshotRetainedContainers", int64(result.SnapshotRetainedContainers)},
+		{"SnapshotRetainedLogicalFiles", int64(result.SnapshotRetainedLogicalFiles)},
+		{"CurrentOnlyRetainedLogicalFiles", int64(result.CurrentOnlyRetainedLogicalFiles)},
+		{"SnapshotOnlyRetainedLogicalFiles", int64(result.SnapshotOnlyRetainedLogicalFiles)},
+		{"SharedRetainedLogicalFiles", int64(result.SharedRetainedLogicalFiles)},
+		{"BytesReclaimed", result.BytesReclaimed},
+	} {
+		if field.value < 0 {
+			t.Errorf("%s < 0: %d", field.name, field.value)
+		}
 	}
 }
 

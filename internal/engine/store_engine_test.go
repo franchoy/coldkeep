@@ -26,7 +26,7 @@ func TestStoreByFileThroughEngine(t *testing.T) {
 	}
 
 	inPath := filepath.Join(t.TempDir(), "store.txt")
-	if err := os.WriteFile(inPath, []byte("phase8-store"), 0644); err != nil {
+	if err := os.WriteFile(inPath, []byte("phase8-store"), 0600); err != nil {
 		t.Fatalf("write input: %v", err)
 	}
 

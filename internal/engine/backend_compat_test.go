@@ -19,14 +19,26 @@ import (
 // engine.Config.DB (*sql.DB) is intentionally backend-neutral; the field
 // name "DB" does not match any forbidden term.
 func TestEnginePublicTypesDoNotExposeBackendSpecificFields(t *testing.T) {
-	forbidden := []string{
+	for _, tc := range enginePublicTypesForBackendCompatibility() {
+		t.Run(tc.name, func(t *testing.T) {
+			assertEngineTypeHasNoBackendSpecificFields(t, tc.name, reflect.TypeOf(tc.val))
+		})
+	}
+}
+
+type enginePublicTypeCase struct {
+	name string
+	val  any
+}
+
+func backendSpecificFieldTerms() []string {
+	return []string{
 		"sqlite", "postgres", "dsn", "driver", "wal", "sslmode", "backend", "dialect",
 	}
+}
 
-	typesToCheck := []struct {
-		name string
-		val  any
-	}{
+func enginePublicTypesForBackendCompatibility() []enginePublicTypeCase {
+	return []enginePublicTypeCase{
 		{"Config", engine.Config{}},
 		{"StatsRequest", engine.StatsRequest{}},
 		{"InspectRequest", engine.InspectRequest{}},
@@ -69,24 +81,26 @@ func TestEnginePublicTypesDoNotExposeBackendSpecificFields(t *testing.T) {
 		{"RecoverRequest", engine.RecoverRequest{}},
 		{"RecoverResult", engine.RecoverResult{}},
 	}
+}
 
-	for _, tc := range typesToCheck {
-		t.Run(tc.name, func(t *testing.T) {
-			rt := reflect.TypeOf(tc.val)
-			for i := 0; i < rt.NumField(); i++ {
-				field := rt.Field(i)
-				if !field.IsExported() {
-					continue
-				}
-				lower := strings.ToLower(field.Name)
-				for _, term := range forbidden {
-					if strings.Contains(lower, term) {
-						t.Errorf("engine.%s has backend-specific field %q (contains %q)",
-							tc.name, field.Name, term)
-					}
-				}
-			}
-		})
+func assertEngineTypeHasNoBackendSpecificFields(t *testing.T, typeName string, rt reflect.Type) {
+	t.Helper()
+	for i := 0; i < rt.NumField(); i++ {
+		assertEngineFieldNameIsBackendNeutral(t, typeName, rt.Field(i))
+	}
+}
+
+func assertEngineFieldNameIsBackendNeutral(t *testing.T, typeName string, field reflect.StructField) {
+	t.Helper()
+	if !field.IsExported() {
+		return
+	}
+	lower := strings.ToLower(field.Name)
+	for _, term := range backendSpecificFieldTerms() {
+		if strings.Contains(lower, term) {
+			t.Errorf("engine.%s has backend-specific field %q (contains %q)",
+				typeName, field.Name, term)
+		}
 	}
 }
 

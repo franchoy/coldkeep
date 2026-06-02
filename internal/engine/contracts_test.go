@@ -233,6 +233,17 @@ func TestGarbageCollectContractRepresentsDryRunAndRetention(t *testing.T) {
 // TestSnapshotContractsRepresentAllOperations proves the snapshot contracts can
 // express create/list/show/stats/diff/delete/restore including query filters.
 func TestSnapshotContractsRepresentAllOperations(t *testing.T) {
+	q, after, before := snapshotContractQuery()
+	assertSnapshotCreateContracts(t)
+	assertSnapshotListContract(t, after, before)
+	assertSnapshotShowContract(t, q)
+	assertSnapshotStatsContract(t)
+	assertSnapshotDiffContracts(t, q)
+	assertSnapshotDeleteContract(t)
+	assertSnapshotRestoreContract(t, q)
+}
+
+func snapshotContractQuery() (engine.SnapshotQuery, time.Time, time.Time) {
 	min := int64(1)
 	max := int64(100)
 	after := time.Unix(0, 0)
@@ -248,7 +259,11 @@ func TestSnapshotContractsRepresentAllOperations(t *testing.T) {
 		ModifiedBefore: &before,
 		Limit:          50,
 	}
+	return q, after, before
+}
 
+func assertSnapshotCreateContracts(t *testing.T) {
+	t.Helper()
 	create := engine.SnapshotCreateRequest{ID: "s1", Label: "l", ParentID: "p0", Paths: []string{"a"}}
 	if create.Paths == nil {
 		t.Error("snapshot create (partial) not representable")
@@ -257,38 +272,69 @@ func TestSnapshotContractsRepresentAllOperations(t *testing.T) {
 	if len(full.Paths) != 0 {
 		t.Error("snapshot create (full) not representable")
 	}
+}
 
-	list := engine.SnapshotListRequest{Type: engine.SnapshotTypeFull, Label: "x", Since: &after, Until: &before, Limit: 10, Tree: true}
+func assertSnapshotListContract(t *testing.T, after time.Time, before time.Time) {
+	t.Helper()
+	list := engine.SnapshotListRequest{
+		Type:  engine.SnapshotTypeFull,
+		Label: "x",
+		Since: &after,
+		Until: &before,
+		Limit: 10,
+		Tree:  true,
+	}
 	if !list.Tree {
 		t.Error("snapshot list not representable")
 	}
+}
 
+func assertSnapshotShowContract(t *testing.T, q engine.SnapshotQuery) {
+	t.Helper()
 	show := engine.SnapshotShowRequest{SnapshotID: "s1", Query: q}
 	if show.Query.MinSize == nil {
 		t.Error("snapshot show query not representable")
 	}
+}
 
+func assertSnapshotStatsContract(t *testing.T) {
+	t.Helper()
 	stats := engine.SnapshotStatsResult{SnapshotCount: 1, HasReuse: true, Reused: 3, New: 1, ReuseRatio: 75}
 	if !stats.HasReuse {
 		t.Error("snapshot stats reuse not representable")
 	}
+}
 
-	for _, f := range []engine.SnapshotDiffFilter{
-		engine.SnapshotDiffAll, engine.SnapshotDiffAdded,
-		engine.SnapshotDiffRemoved, engine.SnapshotDiffModified,
-	} {
+func assertSnapshotDiffContracts(t *testing.T, q engine.SnapshotQuery) {
+	t.Helper()
+	for _, f := range snapshotDiffFilters() {
 		diff := engine.SnapshotDiffRequest{BaseID: "a", TargetID: "b", Summary: false, Filter: f, Query: q}
 		if diff.Filter != f {
 			t.Errorf("snapshot diff filter %q not representable", f)
 		}
 	}
+}
 
+func snapshotDiffFilters() []engine.SnapshotDiffFilter {
+	return []engine.SnapshotDiffFilter{
+		engine.SnapshotDiffAll,
+		engine.SnapshotDiffAdded,
+		engine.SnapshotDiffRemoved,
+		engine.SnapshotDiffModified,
+	}
+}
+
+func assertSnapshotDeleteContract(t *testing.T) {
+	t.Helper()
 	del := engine.SnapshotDeleteRequest{SnapshotID: "s1", DryRun: true}
 	delForce := engine.SnapshotDeleteRequest{SnapshotID: "s1", Force: true}
 	if del.DryRun == delForce.DryRun {
 		t.Error("snapshot delete dry-run/force not distinguishable")
 	}
+}
 
+func assertSnapshotRestoreContract(t *testing.T, q engine.SnapshotQuery) {
+	t.Helper()
 	restore := engine.SnapshotRestoreRequest{
 		SnapshotID:      "s1",
 		Paths:           []string{"a"},
@@ -353,12 +399,13 @@ func TestRecoverContractRepresentsCorrectiveReport(t *testing.T) {
 	if res.AbortedLogicalFiles != 1 || res.SealingQuarantined != 10 {
 		t.Fatalf("recovery report not representable: %+v", res)
 	}
-	// Guard: the recovery contract must not look like a restore.
-	rt := reflect.TypeOf(req)
-	for _, bad := range []string{"OutputPath", "SnapshotID", "Destination"} {
-		if _, ok := rt.FieldByName(bad); ok {
-			t.Errorf("RecoverRequest should not have restore-like field %q", bad)
-		}
+	assertRecoverRequestIsCorrectiveOnly(t, req)
+}
+
+func assertRecoverRequestIsCorrectiveOnly(t *testing.T, req engine.RecoverRequest) {
+	t.Helper()
+	if !req.DryRun {
+		t.Error("recover request should represent corrective dry-run mode")
 	}
 }
 

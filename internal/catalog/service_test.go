@@ -12,6 +12,10 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
+const insertLogicalFileSQL = `
+INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
+VALUES (?, ?, ?, ?, ?, ?)`
+
 // openTestDB opens an in-memory SQLite database with the coldkeep schema applied.
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -24,6 +28,218 @@ func openTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("RunMigrations: %v", err)
 	}
 	return dbconn
+}
+
+type logicalFileFixture struct {
+	ID           int64
+	OriginalName string
+	TotalSize    int64
+	FileHash     string
+	RefCount     int
+	Status       string
+}
+
+func insertLogicalFileFixture(t *testing.T, dbconn *sql.DB, file logicalFileFixture) {
+	t.Helper()
+	_, err := dbconn.ExecContext(context.Background(), insertLogicalFileSQL,
+		file.ID, file.OriginalName, file.TotalSize, file.FileHash, file.RefCount, file.Status)
+	if err != nil {
+		t.Fatalf("insert logical_file %d: %v", file.ID, err)
+	}
+}
+
+func assertServiceLogicalFileRef(t *testing.T, got *catalog.LogicalFileRef, want logicalFileFixture) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("expected ref, got nil")
+	}
+	if got.ID != want.ID {
+		t.Errorf("ID: got %d, want %d", got.ID, want.ID)
+	}
+	if got.OriginalName != want.OriginalName {
+		t.Errorf("OriginalName: got %q, want %s", got.OriginalName, want.OriginalName)
+	}
+	if got.TotalSize != want.TotalSize {
+		t.Errorf("TotalSize: got %d, want %d", got.TotalSize, want.TotalSize)
+	}
+	if got.FileHash != want.FileHash {
+		t.Errorf("FileHash: got %q, want %s", got.FileHash, want.FileHash)
+	}
+	if got.RefCount != want.RefCount {
+		t.Errorf("RefCount: got %d, want %d", got.RefCount, want.RefCount)
+	}
+	if got.Status != want.Status {
+		t.Errorf("Status: got %q, want %s", got.Status, want.Status)
+	}
+}
+
+type snapshotFixture struct {
+	ID       string
+	SnapType string
+	Label    string
+	Created  time.Time
+}
+
+func insertSnapshotFixture(t *testing.T, dbconn *sql.DB, snapshot snapshotFixture) {
+	t.Helper()
+	_, err := dbconn.ExecContext(context.Background(),
+		`INSERT INTO snapshot (id, created_at, type, label) VALUES (?, ?, ?, ?)`,
+		snapshot.ID, snapshot.Created.Format(time.RFC3339), snapshot.SnapType, snapshot.Label,
+	)
+	if err != nil {
+		t.Fatalf("insert snapshot %s: %v", snapshot.ID, err)
+	}
+}
+
+func assertSnapshotRef(t *testing.T, got *catalog.SnapshotRef, want snapshotFixture) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("expected ref, got nil")
+	}
+	if got.ID != want.ID {
+		t.Errorf("ID: got %q, want %s", got.ID, want.ID)
+	}
+	if got.Type != want.SnapType {
+		t.Errorf("Type: got %q, want %s", got.Type, want.SnapType)
+	}
+	if got.Label != want.Label {
+		t.Errorf("Label: got %q, want %s", got.Label, want.Label)
+	}
+	if got.ParentID != "" {
+		t.Errorf("ParentID: got %q, want empty", got.ParentID)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Error("CreatedAt: expected non-zero")
+	}
+}
+
+func assertMissingSnapshot(t *testing.T, svc catalog.Catalog, id string) {
+	t.Helper()
+	ref, err := svc.FindSnapshot(context.Background(), id)
+	if err != nil {
+		t.Fatalf("FindSnapshot unexpected error: %v", err)
+	}
+	if ref != nil {
+		t.Fatalf("expected nil for missing snapshot, got %+v", ref)
+	}
+}
+
+func seedListSnapshotFixtures(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	t1 := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	t2 := time.Now().UTC().Add(-1 * time.Hour).Truncate(time.Second)
+	for _, snapshot := range []snapshotFixture{
+		{ID: "snap-A", SnapType: "full", Label: "a", Created: t1},
+		{ID: "snap-B", SnapType: "partial", Label: "b", Created: t2},
+	} {
+		insertSnapshotFixture(t, dbconn, snapshot)
+	}
+}
+
+func assertListSnapshotsAll(t *testing.T, svc catalog.Catalog, ctx context.Context) {
+	t.Helper()
+	all, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{})
+	if err != nil {
+		t.Fatalf("ListSnapshots all: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 snapshots, got %d", len(all))
+	}
+	// Ordered newest first — snap-B should be first.
+	if all[0].ID != "snap-B" {
+		t.Errorf("first snapshot: got %q, want snap-B", all[0].ID)
+	}
+}
+
+func assertListSnapshotsTypeFilter(t *testing.T, svc catalog.Catalog, ctx context.Context) {
+	t.Helper()
+	full, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{Type: "full"})
+	if err != nil {
+		t.Fatalf("ListSnapshots type=full: %v", err)
+	}
+	if len(full) != 1 || full[0].ID != "snap-A" {
+		t.Errorf("filtered type=full: got %v", full)
+	}
+}
+
+func assertListSnapshotsLimit(t *testing.T, svc catalog.Catalog, ctx context.Context) {
+	t.Helper()
+	limited, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{Limit: 1})
+	if err != nil {
+		t.Fatalf("ListSnapshots limit=1: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Errorf("limit=1: expected 1, got %d", len(limited))
+	}
+}
+
+func seedReachabilityRootsFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	seedReachabilityLogicalFiles(t, dbconn)
+	seedReachabilityPhysicalFile(t, dbconn)
+	seedReachabilitySnapshotFile(t, dbconn)
+}
+
+func seedReachabilityLogicalFiles(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	for _, file := range []logicalFileFixture{
+		{ID: 1, OriginalName: "file1.txt", FileHash: "hash-file1", Status: "COMPLETED", RefCount: 1},
+		{ID: 2, OriginalName: "file2.txt", FileHash: "hash-file2", Status: "COMPLETED", RefCount: 1},
+	} {
+		insertLogicalFileFixture(t, dbconn, file)
+	}
+}
+
+func seedReachabilityPhysicalFile(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	_, err := dbconn.ExecContext(context.Background(), `
+INSERT INTO physical_file (path, logical_file_id, is_metadata_complete)
+VALUES ('/p/file1.txt', 1, 0)`)
+	if err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+}
+
+func seedReachabilitySnapshotFile(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := dbconn.ExecContext(ctx,
+		`INSERT INTO snapshot (id, created_at, type) VALUES ('s1', '2024-01-01T00:00:00Z', 'full')`); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.ExecContext(ctx,
+		`INSERT INTO snapshot_path (id, path) VALUES (1, '/p/file2.txt')`); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.ExecContext(ctx,
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('s1', 1, 2)`); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+}
+
+func assertReachabilityRoots(t *testing.T, roots *catalog.ReachabilityRoots) {
+	t.Helper()
+	if roots == nil {
+		t.Fatal("expected non-nil roots")
+	}
+	assertReachabilitySetContains(t, roots.Current, 1, "Current should contain logical file 1")
+	assertReachabilitySetMissing(t, roots.Current, 2, "Current should NOT contain logical file 2 (only in snapshot_file)")
+	assertReachabilitySetContains(t, roots.Snapshot, 2, "Snapshot should contain logical file 2")
+	assertReachabilitySetMissing(t, roots.Snapshot, 1, "Snapshot should NOT contain logical file 1 (only in physical_file)")
+}
+
+func assertReachabilitySetContains(t *testing.T, set map[int64]struct{}, id int64, message string) {
+	t.Helper()
+	if _, ok := set[id]; !ok {
+		t.Error(message)
+	}
+}
+
+func assertReachabilitySetMissing(t *testing.T, set map[int64]struct{}, id int64, message string) {
+	t.Helper()
+	if _, ok := set[id]; ok {
+		t.Error(message)
+	}
 }
 
 // TestNewServiceAcceptsSQLDB verifies that *sql.DB satisfies the catalog.DB
@@ -58,41 +274,17 @@ func TestServiceFindLogicalFileNotFound(t *testing.T) {
 func TestServiceFindLogicalFile(t *testing.T) {
 	dbconn := openTestDB(t)
 	svc := catalog.NewServiceFromSQL(dbconn)
-	ctx := context.Background()
-
-	// Insert a minimal logical_file row.
-	_, err := dbconn.ExecContext(ctx, `
-INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
-VALUES (1, 'hello.txt', 5, 'abc123', 1, 'COMPLETED')`)
-	if err != nil {
-		t.Fatalf("insert logical_file: %v", err)
+	want := logicalFileFixture{
+		ID: 1, OriginalName: "hello.txt", TotalSize: 5,
+		FileHash: "abc123", RefCount: 1, Status: "COMPLETED",
 	}
 
-	ref, err := svc.FindLogicalFile(ctx, 1)
+	insertLogicalFileFixture(t, dbconn, want)
+	ref, err := svc.FindLogicalFile(context.Background(), want.ID)
 	if err != nil {
 		t.Fatalf("FindLogicalFile: %v", err)
 	}
-	if ref == nil {
-		t.Fatal("expected ref, got nil")
-	}
-	if ref.ID != 1 {
-		t.Errorf("ID: got %d, want 1", ref.ID)
-	}
-	if ref.OriginalName != "hello.txt" {
-		t.Errorf("OriginalName: got %q, want hello.txt", ref.OriginalName)
-	}
-	if ref.TotalSize != 5 {
-		t.Errorf("TotalSize: got %d, want 5", ref.TotalSize)
-	}
-	if ref.FileHash != "abc123" {
-		t.Errorf("FileHash: got %q, want abc123", ref.FileHash)
-	}
-	if ref.RefCount != 1 {
-		t.Errorf("RefCount: got %d, want 1", ref.RefCount)
-	}
-	if ref.Status != "COMPLETED" {
-		t.Errorf("Status: got %q, want COMPLETED", ref.Status)
-	}
+	assertServiceLogicalFileRef(t, ref, want)
 }
 
 // TestServiceFindPhysicalFiles verifies FindPhysicalFilesForLogicalFile returns
@@ -102,9 +294,10 @@ func TestServiceFindPhysicalFiles(t *testing.T) {
 	svc := catalog.NewServiceFromSQL(dbconn)
 	ctx := context.Background()
 
-	_, _ = dbconn.ExecContext(ctx, `
-INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
-VALUES (1, 'a.txt', 3, 'aaa', 1, 'COMPLETED')`)
+	insertLogicalFileFixture(t, dbconn, logicalFileFixture{
+		ID: 1, OriginalName: "a.txt", TotalSize: 3,
+		FileHash: "aaa", RefCount: 1, Status: "COMPLETED",
+	})
 
 	_, err := dbconn.ExecContext(ctx, `
 INSERT INTO physical_file (path, logical_file_id, is_metadata_complete)
@@ -153,49 +346,18 @@ func TestServiceFindPhysicalFilesEmpty(t *testing.T) {
 func TestServiceFindSnapshot(t *testing.T) {
 	dbconn := openTestDB(t)
 	svc := catalog.NewServiceFromSQL(dbconn)
-	ctx := context.Background()
-
-	// Missing snapshot.
-	ref, err := svc.FindSnapshot(ctx, "nonexistent-id")
-	if err != nil {
-		t.Fatalf("FindSnapshot unexpected error: %v", err)
-	}
-	if ref != nil {
-		t.Fatalf("expected nil for missing snapshot, got %+v", ref)
+	want := snapshotFixture{
+		ID: "snap-001", Created: time.Now().UTC().Truncate(time.Second),
+		SnapType: "full", Label: "test-label",
 	}
 
-	// Insert a snapshot row.
-	now := time.Now().UTC().Truncate(time.Second)
-	_, err = dbconn.ExecContext(ctx,
-		`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
-		"snap-001", now.Format(time.RFC3339), "full", "test-label",
-	)
-	if err != nil {
-		t.Fatalf("insert snapshot: %v", err)
-	}
-
-	ref, err = svc.FindSnapshot(ctx, "snap-001")
+	assertMissingSnapshot(t, svc, "nonexistent-id")
+	insertSnapshotFixture(t, dbconn, want)
+	ref, err := svc.FindSnapshot(context.Background(), want.ID)
 	if err != nil {
 		t.Fatalf("FindSnapshot: %v", err)
 	}
-	if ref == nil {
-		t.Fatal("expected ref, got nil")
-	}
-	if ref.ID != "snap-001" {
-		t.Errorf("ID: got %q, want snap-001", ref.ID)
-	}
-	if ref.Type != "full" {
-		t.Errorf("Type: got %q, want full", ref.Type)
-	}
-	if ref.Label != "test-label" {
-		t.Errorf("Label: got %q, want test-label", ref.Label)
-	}
-	if ref.ParentID != "" {
-		t.Errorf("ParentID: got %q, want empty", ref.ParentID)
-	}
-	if ref.CreatedAt.IsZero() {
-		t.Error("CreatedAt: expected non-zero")
-	}
+	assertSnapshotRef(t, ref, want)
 }
 
 // TestServiceListSnapshots verifies ListSnapshots returns all rows and respects
@@ -205,54 +367,10 @@ func TestServiceListSnapshots(t *testing.T) {
 	svc := catalog.NewServiceFromSQL(dbconn)
 	ctx := context.Background()
 
-	t1 := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
-	t2 := time.Now().UTC().Add(-1 * time.Hour).Truncate(time.Second)
-
-	for _, row := range []struct {
-		id, snapType, label string
-		ts                  time.Time
-	}{
-		{"snap-A", "full", "a", t1},
-		{"snap-B", "partial", "b", t2},
-	} {
-		_, err := dbconn.ExecContext(ctx,
-			`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
-			row.id, row.ts.Format(time.RFC3339), row.snapType, row.label,
-		)
-		if err != nil {
-			t.Fatalf("insert snapshot %s: %v", row.id, err)
-		}
-	}
-
-	all, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{})
-	if err != nil {
-		t.Fatalf("ListSnapshots all: %v", err)
-	}
-	if len(all) != 2 {
-		t.Fatalf("expected 2 snapshots, got %d", len(all))
-	}
-	// Ordered newest first — snap-B (t2 > t1) should be first.
-	if all[0].ID != "snap-B" {
-		t.Errorf("first snapshot: got %q, want snap-B", all[0].ID)
-	}
-
-	// Filter by type=full.
-	full, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{Type: "full"})
-	if err != nil {
-		t.Fatalf("ListSnapshots type=full: %v", err)
-	}
-	if len(full) != 1 || full[0].ID != "snap-A" {
-		t.Errorf("filtered type=full: got %v", full)
-	}
-
-	// Limit=1 returns only one row.
-	limited, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{Limit: 1})
-	if err != nil {
-		t.Fatalf("ListSnapshots limit=1: %v", err)
-	}
-	if len(limited) != 1 {
-		t.Errorf("limit=1: expected 1, got %d", len(limited))
-	}
+	seedListSnapshotFixtures(t, dbconn)
+	assertListSnapshotsAll(t, svc, ctx)
+	assertListSnapshotsTypeFilter(t, svc, ctx)
+	assertListSnapshotsLimit(t, svc, ctx)
 }
 
 // TestServiceLoadReachabilityRoots verifies that reachability roots are
@@ -262,66 +380,12 @@ func TestServiceLoadReachabilityRoots(t *testing.T) {
 	svc := catalog.NewServiceFromSQL(dbconn)
 	ctx := context.Background()
 
-	// Two logical files.
-	for _, row := range []struct {
-		id   int
-		name string
-	}{
-		{1, "file1.txt"}, {2, "file2.txt"},
-	} {
-		_, err := dbconn.ExecContext(ctx, `
-INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
-VALUES ($1, $2, 0, $3, 1, 'COMPLETED')`,
-			row.id, row.name, "hash"+row.name)
-		if err != nil {
-			t.Fatalf("insert logical_file %d: %v", row.id, err)
-		}
-	}
-
-	// physical_file references logical file 1 only.
-	_, err := dbconn.ExecContext(ctx, `
-INSERT INTO physical_file (path, logical_file_id, is_metadata_complete)
-VALUES ('/p/file1.txt', 1, 0)`)
-	if err != nil {
-		t.Fatalf("insert physical_file: %v", err)
-	}
-
-	// snapshot_file references logical file 2 only.
-	_, err = dbconn.ExecContext(ctx,
-		`INSERT INTO snapshot (id, created_at, type) VALUES ('s1', '2024-01-01T00:00:00Z', 'full')`)
-	if err != nil {
-		t.Fatalf("insert snapshot: %v", err)
-	}
-	_, err = dbconn.ExecContext(ctx,
-		`INSERT INTO snapshot_path (id, path) VALUES (1, '/p/file2.txt')`)
-	if err != nil {
-		t.Fatalf("insert snapshot_path: %v", err)
-	}
-	_, err = dbconn.ExecContext(ctx,
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('s1', 1, 2)`)
-	if err != nil {
-		t.Fatalf("insert snapshot_file: %v", err)
-	}
-
+	seedReachabilityRootsFixture(t, dbconn)
 	roots, err := svc.LoadReachabilityRoots(ctx)
 	if err != nil {
 		t.Fatalf("LoadReachabilityRoots: %v", err)
 	}
-	if roots == nil {
-		t.Fatal("expected non-nil roots")
-	}
-	if _, ok := roots.Current[1]; !ok {
-		t.Error("Current should contain logical file 1")
-	}
-	if _, ok := roots.Current[2]; ok {
-		t.Error("Current should NOT contain logical file 2 (only in snapshot_file)")
-	}
-	if _, ok := roots.Snapshot[2]; !ok {
-		t.Error("Snapshot should contain logical file 2")
-	}
-	if _, ok := roots.Snapshot[1]; ok {
-		t.Error("Snapshot should NOT contain logical file 1 (only in physical_file)")
-	}
+	assertReachabilityRoots(t, roots)
 }
 
 // TestServiceDeferredMethodsReturnErrNotImplemented verifies all skeleton

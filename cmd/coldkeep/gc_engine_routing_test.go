@@ -48,29 +48,54 @@ func TestGCDryRunEngineRoutingJSON(t *testing.T) {
 		}
 	})
 
+	payload := parseGCRoutingJSONPayload(t, output)
+	assertGCRoutingJSONEnvelope(t, payload)
+	assertGCRoutingJSONData(t, payload)
+}
+
+func parseGCRoutingJSONPayload(t *testing.T, output string) map[string]any {
+	t.Helper()
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
 		t.Fatalf("parse JSON: %v output=%q", err, output)
 	}
+	return payload
+}
 
+func assertGCRoutingJSONEnvelope(t *testing.T, payload map[string]any) {
+	t.Helper()
 	if got := payload["command"]; got != "gc" {
 		t.Errorf("expected command=gc, got %v", got)
 	}
 	if got := payload["status"]; got != "ok" {
 		t.Errorf("expected status=ok, got %v", got)
 	}
+}
+
+func assertGCRoutingJSONData(t *testing.T, payload map[string]any) {
+	t.Helper()
 	data, ok := payload["data"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected data object, got %T: %v", payload["data"], payload["data"])
 	}
-	if got, ok := data["dry_run"].(bool); !ok || !got {
+	assertGCRoutingDryRunFlag(t, data)
+	assertGCRoutingDataFields(t, data)
+}
+
+func assertGCRoutingDryRunFlag(t *testing.T, data map[string]any) {
+	t.Helper()
+	got, ok := data["dry_run"].(bool)
+	if !ok || !got {
 		t.Errorf("expected data.dry_run=true, got %v", data["dry_run"])
 	}
-	if _, hasAffected := data["affected_containers"]; !hasAffected {
-		t.Errorf("expected data.affected_containers field in JSON output")
-	}
-	if _, hasFilenames := data["container_filenames"]; !hasFilenames {
-		t.Errorf("expected data.container_filenames field in JSON output")
+}
+
+func assertGCRoutingDataFields(t *testing.T, data map[string]any) {
+	t.Helper()
+	for _, field := range []string{"affected_containers", "container_filenames"} {
+		if _, exists := data[field]; !exists {
+			t.Errorf("expected data.%s field in JSON output", field)
+		}
 	}
 }
 
