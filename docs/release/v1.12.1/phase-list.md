@@ -34,13 +34,19 @@ Acceptance criteria:
 
 ## Phase 1 - Extra Positional Argument Rejection
 
+Status: Complete
+
 Objective: reject positional arguments that are currently ignored by user-facing commands.
 
 Included scope:
 
-- Identify commands that silently ignore unexpected positional arguments.
-- Add focused validation for extra arguments at CLI boundaries.
-- Add small tests covering accepted and rejected argument forms.
+- Reject extra positional arguments for the selected Phase 1 command batch:
+  `init extra`, `version extra`, `help extra`, `verify system extra`,
+  `snapshot stats <snapshotID> extra`, and `repair ref-counts extra`.
+- Preserve the existing valid `snapshot stats <snapshotID>` contract.
+- Preserve the existing valid `verify system <fast|standard|full|deep>` compatibility form while
+  rejecting non-level extra tokens.
+- Add focused validation tests covering accepted and rejected argument forms.
 
 Excluded scope:
 
@@ -60,6 +66,7 @@ Acceptance criteria:
 - Extra positional arguments fail with a clear error.
 - Existing valid invocations continue to pass.
 - No out-of-scope architecture changes are introduced.
+- Phase 1 does not expand into search, simulate, benchmark, snapshot create, or snapshot delete.
 
 ## Phase 2 - Empty Filter / Empty Flag Rejection
 

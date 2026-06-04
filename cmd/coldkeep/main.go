@@ -2935,6 +2935,15 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--fast|--standard|--full|--deep]\nDid you mean: coldkeep verify system --fast")
 	}
 
+	if parsed.positionals[0] == "system" {
+		if len(parsed.positionals) == 2 && !isVerifyLevelName(parsed.positionals[1]) {
+			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
+		}
+		if len(parsed.positionals) > 2 {
+			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
+		}
+	}
+
 	verifyLevel, err := parseVerifyLevel(parsed)
 	if err != nil {
 		return err
@@ -2943,9 +2952,6 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	target := parsed.positionals[0]
 	switch target {
 	case "system":
-		if len(parsed.positionals) > 2 {
-			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
-		}
 		sgctx, err := loadDefaultStorageContextPhase()
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
@@ -6018,4 +6024,13 @@ func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 	}
 
 	return verify.VerifyStandard, nil
+}
+
+func isVerifyLevelName(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "fast", "standard", "full", "deep":
+		return true
+	default:
+		return false
+	}
 }

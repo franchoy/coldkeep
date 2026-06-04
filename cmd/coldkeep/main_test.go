@@ -2684,6 +2684,63 @@ func TestRunCLIInitRejectsUnexpectedPositionalArgs(t *testing.T) {
 	}
 }
 
+func TestPhase1SelectedCommandsRejectExtraPositionals(t *testing.T) {
+	tests := []struct {
+		name      string
+		run       func() error
+		wantUsage string
+	}{
+		{
+			name: "verify system extra",
+			run: func() error {
+				return runVerifyCommand(parsedCommandLine{
+					method:      "verify",
+					positionals: []string{"system", "extra"},
+					flags:       map[string][]string{},
+				}, outputModeText)
+			},
+			wantUsage: "Usage: coldkeep verify system",
+		},
+		{
+			name: "snapshot stats extra trailing",
+			run: func() error {
+				return runSnapshotCommand(parsedCommandLine{
+					method:      "snapshot",
+					positionals: []string{"stats", "snap-123", "extra"},
+					flags:       map[string][]string{},
+				}, outputModeText)
+			},
+			wantUsage: "Usage: coldkeep snapshot stats",
+		},
+		{
+			name: "repair ref-counts extra",
+			run: func() error {
+				return runRepairCommand(parsedCommandLine{
+					method:      "repair",
+					positionals: []string{"ref-counts", "extra"},
+					flags:       map[string][]string{},
+				}, outputModeText)
+			},
+			wantUsage: "Usage: coldkeep repair <ref-counts|chunk-live-ref-counts>",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if err == nil {
+				t.Fatal("expected usage error")
+			}
+			if got := classifyExitCode(err); got != exitUsage {
+				t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+			}
+			if !strings.Contains(err.Error(), tc.wantUsage) {
+				t.Fatalf("expected usage %q in error, got: %v", tc.wantUsage, err)
+			}
+		})
+	}
+}
+
 func TestInferOutputModeFromArgsSupportsDoctorJSON(t *testing.T) {
 	mode := inferOutputModeFromArgs([]string{"doctor", "--output", "json"})
 	if mode != outputModeJSON {
@@ -2861,6 +2918,52 @@ func TestRunVerifyCommandNoTargetIncludesDidYouMeanHint(t *testing.T) {
 	}
 	if !strings.Contains(msg, "Did you mean: coldkeep verify system --fast") {
 		t.Fatalf("expected did-you-mean hint in error message, got: %q", msg)
+	}
+}
+
+func TestRunVerifyCommandSystemPreservesPositionalVerifyLevel(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalVerify := verifyCommandPhase
+	originalSummary := verifySummaryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		verifyCommandPhase = originalVerify
+		verifySummaryPhase = originalSummary
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotLevel verify.VerifyLevel
+	verifyCommandPhase = func(_ *sql.DB, target string, fileID int, level verify.VerifyLevel) error {
+		if target != "system" || fileID != 0 {
+			t.Fatalf("unexpected verify target/fileID: %q/%d", target, fileID)
+		}
+		gotLevel = level
+		return nil
+	}
+	verifySummaryPhase = func(_ *sql.DB, target string, fileID int64) (verifyOutputSummary, error) {
+		if target != "system" || fileID != 0 {
+			t.Fatalf("unexpected summary target/fileID: %q/%d", target, fileID)
+		}
+		return verifyOutputSummary{}, nil
+	}
+
+	err := runVerifyCommand(parsedCommandLine{
+		method:      "verify",
+		positionals: []string{"system", "fast"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("expected verify system fast to remain valid, got: %v", err)
+	}
+	if gotLevel != verify.VerifyFast {
+		t.Fatalf("expected verify fast level, got %v", gotLevel)
 	}
 }
 

@@ -16,6 +16,17 @@ For every implementation phase:
 - Run the standard test suite before closing the phase.
 - Update the risk register when a phase changes user-facing behavior.
 
+Phase 1 selected command checks:
+
+- `coldkeep init extra` is rejected.
+- `coldkeep version extra` is rejected.
+- `coldkeep help extra` is rejected.
+- `coldkeep verify system extra` is rejected.
+- `coldkeep snapshot stats <snapshotID> extra` is rejected while `snapshot stats <snapshotID>`
+  remains valid.
+- `coldkeep repair ref-counts extra` is rejected.
+- Search, simulate, benchmark, snapshot create, and snapshot delete are not changed in Phase 1.
+
 Phase 0 validation:
 
 - `git diff --check`

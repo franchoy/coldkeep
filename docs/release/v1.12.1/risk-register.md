@@ -8,7 +8,7 @@ Status values: Open, Monitoring, Mitigated, Closed.
 
 Severity: High
 
-Status: Open
+Status: Monitoring
 
 Mitigation: keep validation changes narrow, test both valid and invalid command forms, and compare
 routed-command behavior where routing is involved.
@@ -18,6 +18,13 @@ Evidence required for closure:
 - Focused tests show valid existing invocations still pass.
 - New invalid invocations fail with clear errors.
 - Full release gate passes.
+
+Phase 1 evidence:
+
+- Extra positional rejection is limited to the selected Phase 1 command batch.
+- `snapshot stats <snapshotID>` remains valid; only a true trailing token after the optional
+  snapshot ID is rejected.
+- `verify system <fast|standard|full|deep>` remains valid; non-level extra tokens are rejected.
 
 ## CK-1121-R002 - JSON shorthand fixes alter automation output
 
@@ -83,7 +90,7 @@ Evidence required for closure:
 
 Severity: High
 
-Status: Open
+Status: Monitoring
 
 Mitigation: enforce the non-goals list during every phase, keep all work on `release/v1.12.1`, and
 reject changes involving new migrations, storage formats, schema changes, backend defaults, daemon,
@@ -95,3 +102,8 @@ Evidence required for closure:
 - Final release review confirms schema, repository format, storage format, and default backend are
 unchanged.
 - Risk register is reviewed before tagging.
+
+Phase 1 evidence:
+
+- Phase 1 scope excludes search, simulate, benchmark, snapshot create/delete, architecture
+  migration, schema changes, storage format changes, default backend changes, and Codacy cleanup.
