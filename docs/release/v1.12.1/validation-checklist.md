@@ -56,6 +56,20 @@ Phase 3 selected boolean checks:
 - `--dry-run=true` still performs snapshot delete preview.
 - Unrelated boolean flags are not changed in Phase 3.
 
+Phase 4 selected JSON shorthand checks:
+
+- `coldkeep list --json` resolves JSON mode like `coldkeep list --output json`.
+- `coldkeep search --json` resolves JSON mode like `coldkeep search --output json`.
+- `coldkeep remove --json` resolves JSON mode like `coldkeep remove --output json`.
+- `coldkeep gc --json` resolves JSON mode like `coldkeep gc --output json`.
+- `coldkeep config get <key> --json` resolves JSON mode like
+  `coldkeep config get <key> --output json`.
+- `coldkeep snapshot stats <snapshotID> --json` resolves JSON mode like
+  `coldkeep snapshot stats <snapshotID> --output json`.
+- JSON envelope shape remains unchanged for selected command payloads.
+- Unsupported `benchmark --json` remains rejected.
+- Store, restore, simulate, and benchmark JSON side-channel cleanup is not changed in Phase 4.
+
 Phase 0 validation:
 
 - `git diff --check`

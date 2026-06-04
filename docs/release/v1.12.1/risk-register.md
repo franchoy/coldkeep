@@ -30,7 +30,7 @@ Phase 1 evidence:
 
 Severity: High
 
-Status: Open
+Status: Monitoring
 
 Mitigation: limit JSON work to shorthand consistency, avoid unrelated JSON schema or field changes,
 and add output contract tests for touched commands.
@@ -40,6 +40,15 @@ Evidence required for closure:
 - `--json` shorthand tests pass for touched commands.
 - Existing valid JSON output remains stable.
 - Any intentional output-contract change is documented before release.
+
+Phase 4 evidence:
+
+- Selected commands already accept `--json`; Phase 4 adds parity regression coverage rather than
+  changing JSON envelope shape.
+- Tests cover `--json` and `--output json` output-mode parity for list, search, remove, gc, config
+  get, and snapshot stats.
+- Command-level JSON payload tests cover remove, gc, config get, and snapshot stats.
+- `benchmark --json` remains rejected and is deferred outside Phase 4 scope.
 
 ## CK-1121-R003 - Boolean parser changes affect existing scripts
 
@@ -136,3 +145,9 @@ Phase 3 evidence:
 
 - Phase 3 scope excludes parser rewrites, unrelated boolean flags, schema changes, storage format
   changes, default backend changes, and architecture migration.
+
+Phase 4 evidence:
+
+- Phase 4 scope excludes JSON schema redesign, store/restore/simulate side-channel cleanup,
+  benchmark JSON work, broad output-mode rewrites, schema changes, storage format changes, default
+  backend changes, and architecture migration.

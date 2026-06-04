@@ -149,19 +149,27 @@ Acceptance criteria:
 
 ## Phase 4 - JSON Shorthand Consistency
 
+Status: Complete
+
 Objective: make `--json` shorthand behavior consistent across user-facing commands.
 
 Included scope:
 
-- Audit `--json` handling in routed and non-routed commands.
-- Fix inconsistencies where shorthand behavior differs without reason.
-- Add tests verifying JSON output mode selection and rejected malformed forms.
+- Lock selected Phase 4 shorthand cases:
+  `list --json`, `search --json`, `remove --json`, `gc --json`,
+  `config get <key> --json`, and `snapshot stats <snapshotID> --json`.
+- Preserve existing `--output json` behavior and JSON envelope shapes.
+- Add selected parity tests proving `--json` resolves to the same JSON mode as `--output json`.
+- Keep unsupported `benchmark --json` rejected.
 
 Excluded scope:
 
 - JSON schema redesign.
 - Output field additions unrelated to shorthand behavior.
 - API, daemon, or UI output work.
+- Store, restore, simulate, or benchmark JSON side-channel cleanup.
+- Adding JSON support to commands that do not already support it.
+- Broad output-mode rewrite.
 
 Expected tests:
 
@@ -174,6 +182,8 @@ Acceptance criteria:
 - `--json` shorthand selects JSON output consistently.
 - Existing valid JSON automation output remains stable.
 - Any output-contract risk has mitigation or closure evidence.
+- Phase 4 does not change JSON envelope shape, human output, schema, storage format, or backend
+  defaults.
 
 ## Phase 5 - Safe Codacy / Static Analysis Cleanup
 

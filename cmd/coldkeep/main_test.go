@@ -1190,6 +1190,43 @@ func TestRunRemoveCommandStoredPathRejectsDryRunAndFailFast(t *testing.T) {
 	}
 }
 
+func TestRunRemoveCommandJSONShorthandMatchesOutputJSONEnvelope(t *testing.T) {
+	run := func(flags map[string][]string) (map[string]any, error) {
+		var runErr error
+		output := captureStdout(t, func() {
+			runErr = runRemoveCommand(parsedCommandLine{
+				method:      "remove",
+				positionals: []string{"not-a-number"},
+				flags:       flags,
+			}, outputModeJSON)
+		})
+
+		payload := assertSingleJSONObjectLine(t, output)
+		return payload, runErr
+	}
+
+	shorthand, shorthandErr := run(map[string][]string{"json": {""}})
+	outputFlag, outputErr := run(map[string][]string{"output": {"json"}})
+
+	if classifyExitCode(shorthandErr) != classifyExitCode(outputErr) {
+		t.Fatalf("exit class mismatch: --json=%v --output=%v", shorthandErr, outputErr)
+	}
+	for _, payload := range []map[string]any{shorthand, outputFlag} {
+		if got, _ := payload["status"].(string); got != "error" {
+			t.Fatalf("expected error status in remove JSON payload, got=%v", payload)
+		}
+		if got, _ := payload["command"].(string); got != "remove" {
+			t.Fatalf("expected command=remove, got=%v", payload)
+		}
+		if _, ok := payload["summary"].(map[string]any); !ok {
+			t.Fatalf("expected summary object, got=%v", payload)
+		}
+		if _, ok := payload["results"].([]any); !ok {
+			t.Fatalf("expected results array, got=%v", payload)
+		}
+	}
+}
+
 func TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 	err := error(nil)
 	output := captureStdout(t, func() {
@@ -1630,6 +1667,91 @@ func TestResolveOutputModeSupportsJSONShorthand(t *testing.T) {
 	}
 	if mode != outputModeJSON {
 		t.Fatalf("expected json output mode for --json shorthand, got %q", mode)
+	}
+}
+
+func TestPhase4SelectedJSONShorthandOutputModeParity(t *testing.T) {
+	tests := []struct {
+		name       string
+		jsonArgs   []string
+		outputArgs []string
+	}{
+		{
+			name:       "list",
+			jsonArgs:   []string{"list", "--json"},
+			outputArgs: []string{"list", "--output", "json"},
+		},
+		{
+			name:       "search",
+			jsonArgs:   []string{"search", "--name", "report", "--json"},
+			outputArgs: []string{"search", "--name", "report", "--output", "json"},
+		},
+		{
+			name:       "remove",
+			jsonArgs:   []string{"remove", "123", "--json"},
+			outputArgs: []string{"remove", "123", "--output", "json"},
+		},
+		{
+			name:       "gc",
+			jsonArgs:   []string{"gc", "--json"},
+			outputArgs: []string{"gc", "--output", "json"},
+		},
+		{
+			name:       "config get",
+			jsonArgs:   []string{"config", "get", "default-chunker", "--json"},
+			outputArgs: []string{"config", "get", "default-chunker", "--output", "json"},
+		},
+		{
+			name:       "snapshot stats",
+			jsonArgs:   []string{"snapshot", "stats", "snap-1", "--json"},
+			outputArgs: []string{"snapshot", "stats", "snap-1", "--output", "json"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parsedJSON, err := parseCommandLine(tc.jsonArgs, flagsWithValues)
+			if err != nil {
+				t.Fatalf("parse --json args: %v", err)
+			}
+			parsedOutput, err := parseCommandLine(tc.outputArgs, flagsWithValues)
+			if err != nil {
+				t.Fatalf("parse --output json args: %v", err)
+			}
+
+			jsonMode, err := resolveOutputMode(parsedJSON)
+			if err != nil {
+				t.Fatalf("resolve --json mode: %v", err)
+			}
+			outputMode, err := resolveOutputMode(parsedOutput)
+			if err != nil {
+				t.Fatalf("resolve --output json mode: %v", err)
+			}
+			if jsonMode != outputModeJSON || outputMode != outputModeJSON {
+				t.Fatalf("expected both forms to resolve JSON mode, got --json=%q --output=%q", jsonMode, outputMode)
+			}
+			if inferred := inferOutputModeFromArgs(tc.jsonArgs); inferred != outputModeJSON {
+				t.Fatalf("expected startup inference to detect --json, got %q", inferred)
+			}
+			if inferred := inferOutputModeFromArgs(tc.outputArgs); inferred != outputModeJSON {
+				t.Fatalf("expected startup inference to detect --output json, got %q", inferred)
+			}
+		})
+	}
+}
+
+func TestPhase4BenchmarkStillRejectsJSONShorthand(t *testing.T) {
+	parsed, err := parseCommandLine([]string{"benchmark", "chunkers", "--json"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parse benchmark --json: %v", err)
+	}
+
+	err = runBenchmarkCommand(parsed, outputModeJSON)
+	if err == nil || !strings.Contains(err.Error(), "unknown flag(s) for benchmark") || !strings.Contains(err.Error(), "json") {
+		t.Fatalf("expected benchmark --json to remain unsupported, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 
@@ -4091,6 +4213,59 @@ func TestRunConfigCommandGetJSON(t *testing.T) {
 	}
 }
 
+func TestRunConfigCommandGetJSONShorthandMatchesOutputJSON(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_get_json_shorthand.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	run := func(flags map[string][]string) map[string]any {
+		output := captureStdout(t, func() {
+			err := runConfigCommand(parsedCommandLine{
+				method:      "config",
+				positionals: []string{"get", "default-chunker"},
+				flags:       flags,
+			}, outputModeJSON)
+			if err != nil {
+				t.Fatalf("runConfigCommand get returned error: %v", err)
+			}
+		})
+		return assertSingleJSONObjectLine(t, output)
+	}
+
+	shorthand := run(map[string][]string{"json": {""}})
+	outputFlag := run(map[string][]string{"output": {"json"}})
+
+	for _, payload := range []map[string]any{shorthand, outputFlag} {
+		if got, _ := payload["status"].(string); got != "ok" {
+			t.Fatalf("expected status=ok, got=%v", payload)
+		}
+		if got, _ := payload["command"].(string); got != "config get" {
+			t.Fatalf("expected command=config get, got=%v", payload)
+		}
+		data, ok := payload["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected data object, got=%v", payload)
+		}
+		if got, _ := data["key"].(string); got != "default-chunker" {
+			t.Fatalf("expected key=default-chunker, got=%v", payload)
+		}
+	}
+}
+
 func TestRunConfigCommandSetWarnsOnlyOnActualSwitch(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	t.Cleanup(func() {
@@ -6258,6 +6433,68 @@ func TestRunSnapshotCommandStatsJSONOmitsLineageFieldsWhenNoParent(t *testing.T)
 	}
 }
 
+func TestRunSnapshotCommandStatsJSONShorthandMatchesOutputJSON(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 6,
+			TotalSizeBytes:    2048,
+		}, nil
+	}
+
+	run := func(flags map[string][]string) map[string]any {
+		output := captureStdout(t, func() {
+			err := runSnapshotCommand(parsedCommandLine{
+				method:      "snapshot",
+				positionals: []string{"stats", "snap-json-short"},
+				flags:       flags,
+			}, outputModeJSON)
+			if err != nil {
+				t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+			}
+		})
+		return assertSingleJSONObjectLine(t, output)
+	}
+
+	shorthand := run(map[string][]string{"json": {""}})
+	outputFlag := run(map[string][]string{"output": {"json"}})
+
+	for _, payload := range []map[string]any{shorthand, outputFlag} {
+		if got, _ := payload["status"].(string); got != "ok" {
+			t.Fatalf("expected status=ok, got=%v", payload)
+		}
+		if got, _ := payload["command"].(string); got != "snapshot" {
+			t.Fatalf("expected command=snapshot, got=%v", payload)
+		}
+		data, ok := payload["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected data object, got=%v", payload)
+		}
+		if got, _ := data["action"].(string); got != "stats" {
+			t.Fatalf("expected action=stats, got=%v", payload)
+		}
+		if got, _ := data["snapshot_id"].(string); got != "snap-json-short" {
+			t.Fatalf("expected snapshot_id=snap-json-short, got=%v", payload)
+		}
+	}
+}
+
 func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
@@ -7477,6 +7714,51 @@ func TestRunGCCommandJSONIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
 	assertJSONNumber(t, data, "affected_containers", 2)
 }
 
+func TestRunGCCommandJSONShorthandMatchesOutputJSON(t *testing.T) {
+	originalRunGC := runGCPhase
+	t.Cleanup(func() { runGCPhase = originalRunGC })
+
+	runGCPhase = func(dryRun bool, _ string) (maintenance.GCResult, error) {
+		if dryRun {
+			t.Fatal("did not expect dryRun for plain GC JSON shorthand test")
+		}
+		return maintenance.GCResult{
+			DryRun:             dryRun,
+			AffectedContainers: 3,
+			ContainerFilenames: []string{"a.bin", "b.bin", "c.bin"},
+		}, nil
+	}
+
+	run := func(flags map[string][]string) map[string]any {
+		output := captureStdout(t, func() {
+			if err := runGCCommand(parsedCommandLine{method: "gc", flags: flags}, outputModeJSON); err != nil {
+				t.Fatalf("runGCCommand returned error: %v", err)
+			}
+		})
+		return assertSingleJSONObjectLine(t, output)
+	}
+
+	shorthand := run(map[string][]string{"json": {""}})
+	outputFlag := run(map[string][]string{"output": {"json"}})
+
+	for _, payload := range []map[string]any{shorthand, outputFlag} {
+		if got, _ := payload["status"].(string); got != "ok" {
+			t.Fatalf("expected status=ok, got=%v", payload)
+		}
+		if got, _ := payload["command"].(string); got != "gc" {
+			t.Fatalf("expected command=gc, got=%v", payload)
+		}
+		data, ok := payload["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected data object, got=%v", payload)
+		}
+		assertJSONNumber(t, data, "affected_containers", 3)
+		if _, ok := payload["perf_spans"].([]any); !ok {
+			t.Fatalf("expected perf_spans array, got=%v", payload)
+		}
+	}
+}
+
 func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
 	originalRunGC := runGCPhase
 	t.Cleanup(func() { runGCPhase = originalRunGC })
@@ -7961,6 +8243,23 @@ func TestRunListCommandJSONShorthandAccepted(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "unknown flag(s) for list: json") {
 		t.Fatalf("expected --json shorthand to be accepted for list, got: %v", err)
+	}
+}
+
+func TestRunSearchCommandJSONShorthandAccepted(t *testing.T) {
+	err := runSearchCommand(parsedCommandLine{
+		method:      "search",
+		positionals: []string{"extra"},
+		flags:       map[string][]string{"json": {""}},
+	}, outputModeJSON)
+	if err == nil {
+		t.Fatal("expected usage error for search positional argument")
+	}
+	if strings.Contains(err.Error(), "unknown flag(s) for search: json") {
+		t.Fatalf("expected --json shorthand to be accepted for search, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Usage: coldkeep search") {
+		t.Fatalf("expected search usage error after accepting --json, got: %v", err)
 	}
 }
 
