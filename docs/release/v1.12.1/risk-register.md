@@ -103,7 +103,7 @@ Phase 2 evidence:
 
 Severity: Medium
 
-Status: Open
+Status: Monitoring
 
 Mitigation: accept only localized, behavior-preserving cleanup in v1.12.1, add tests for
 logic-adjacent changes, and defer style-only or refactor-heavy findings.
@@ -113,6 +113,13 @@ Evidence required for closure:
 - Cleanup diff is small and behavior-preserving.
 - Relevant focused tests pass.
 - Full release gate passes after cleanup.
+
+Phase 5 evidence:
+
+- `golangci-lint run ./...` reports zero issues locally.
+- `go vet ./...` passes locally.
+- No production code cleanup is required for Phase 5.
+- Phase 5 is docs-only to avoid correctness risk from unnecessary cleanup.
 
 ## CK-1121-R006 - Patch release drifts into v1.13/v2 architecture work
 
@@ -151,3 +158,9 @@ Phase 4 evidence:
 - Phase 4 scope excludes JSON schema redesign, store/restore/simulate side-channel cleanup,
   benchmark JSON work, broad output-mode rewrites, schema changes, storage format changes, default
   backend changes, and architecture migration.
+
+Phase 5 evidence:
+
+- Phase 5 is docs-only because local static analysis is green.
+- Phase 5 scope excludes production refactors, architecture cleanup, parser rewrites, schema
+  changes, storage format changes, default backend changes, and deferred operation migrations.

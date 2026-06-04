@@ -187,14 +187,19 @@ Acceptance criteria:
 
 ## Phase 5 - Safe Codacy / Static Analysis Cleanup
 
+Status: Complete
+
 Objective: address only behavior-preserving static-analysis findings that are safe inside a patch
 release.
 
 Included scope:
 
-- Fix small, localized Codacy or lint findings when the behavior is unchanged.
-- Add tests when cleanup touches logic or control flow.
-- Defer findings that require style churn, refactors, or architecture movement.
+- Review current static-analysis state after Phases 1-4.
+- Confirm `golangci-lint run ./...` reports zero issues locally.
+- Confirm `go vet ./...` passes locally.
+- Record that no production code cleanup was required for Phase 5.
+- Defer any future Codacy or maintainability cleanup unless it is behavior-preserving and
+  release-blocking.
 
 Excluded scope:
 
@@ -202,18 +207,23 @@ Excluded scope:
 - Broad rewrites.
 - Architecture refactors.
 - Risky cleanup without behavior evidence.
+- Production code changes when static analysis is already green.
+- Parser, storage, restore, GC, verify, or engine refactors.
 
 Expected tests:
 
-- Focused tests for any logic-adjacent cleanup.
 - `golangci-lint run ./...`
+- `go vet ./...`
 - Full standard test suite before phase closure.
+- Race test for `./cmd/coldkeep/...`.
 
 Acceptance criteria:
 
-- Cleanup is small, behavior-preserving, and justified.
+- Phase 5 remains docs-only when static analysis is already green.
+- No production code cleanup is performed without a tiny, behavior-preserving, release-blocking
+  finding.
 - No correctness regression is introduced.
-- Deferred findings are documented rather than forced into the patch release.
+- Deferred cleanup is documented rather than forced into the patch release.
 
 ## Phase 6 - Final Patch Release Gate
 

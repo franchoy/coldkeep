@@ -70,6 +70,16 @@ Phase 4 selected JSON shorthand checks:
 - Unsupported `benchmark --json` remains rejected.
 - Store, restore, simulate, and benchmark JSON side-channel cleanup is not changed in Phase 4.
 
+Phase 5 static-analysis closure checks:
+
+- `golangci-lint run ./...` reports zero issues.
+- `go vet ./...` passes.
+- If both are green, Phase 5 remains docs-only.
+- Do not perform production cleanup for style-only or speculative Codacy findings.
+- Do not perform parser, storage, restore, GC, verify, engine, schema, storage-format, or
+  default-backend refactors in Phase 5.
+- Defer any non-blocking cleanup to a later release or a dedicated cleanup phase.
+
 Phase 0 validation:
 
 - `git diff --check`
