@@ -70,14 +70,19 @@ Acceptance criteria:
 
 ## Phase 2 - Empty Filter / Empty Flag Rejection
 
+Status: Complete
+
 Objective: reject empty filter and empty flag values when the value would be ambiguous, unsafe, or
 previously accepted only by accident.
 
 Included scope:
 
-- Identify flags and filters where `""` has no valid semantic meaning.
-- Reject empty values with focused validation messages.
-- Add tests for empty, missing, and valid values.
+- Reject empty and whitespace-only values for the selected Phase 2 command batch:
+  `search --name`, `search --path`, `search --extension`, `snapshot list --path`,
+  `remove --stored-path`, `restore --stored-path`, and `snapshot create --id`.
+- Prevent empty `--stored-path` from falling through to ID-based remove or restore modes.
+- Prevent explicit empty `snapshot create --id` from silently generating an implicit snapshot ID.
+- Add tests for empty, blank, and valid values where needed.
 
 Excluded scope:
 
@@ -85,6 +90,9 @@ Excluded scope:
 - Schema or storage changes.
 - Behavior changes for valid non-empty values.
 - Broad CLI option redesign.
+- Snapshot tag normalization.
+- Benchmark JSON or NaN behavior.
+- New non-empty `search --path`, `search --extension`, or `snapshot list --path` behavior.
 
 Expected tests:
 
@@ -97,6 +105,8 @@ Acceptance criteria:
 - Empty values are rejected consistently where documented by the phase.
 - Valid values retain previous behavior.
 - Any intentional compatibility impact is recorded in the risk register.
+- Phase 2 does not expand into snapshot tag normalization, benchmark behavior, schema work, storage
+  format work, or parser rewrites.
 
 ## Phase 3 - Boolean Flag Value Semantics
 

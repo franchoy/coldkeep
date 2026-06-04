@@ -60,7 +60,7 @@ Evidence required for closure:
 
 Severity: Medium
 
-Status: Open
+Status: Monitoring
 
 Mitigation: reject empty values only where they have no safe semantic meaning, document the command
 contract, and verify valid non-empty values are unchanged.
@@ -70,6 +70,14 @@ Evidence required for closure:
 - Empty-value tests fail with clear validation errors.
 - Non-empty value tests preserve previous behavior.
 - Risk notes identify any intentional compatibility impact.
+
+Phase 2 evidence:
+
+- Empty and whitespace-only values are rejected for the selected Phase 2 flags only.
+- Empty `--stored-path` is rejected before ID-based remove or restore handling can proceed.
+- Explicit empty `snapshot create --id` is rejected instead of generating an implicit ID.
+- Non-empty unsupported flags remain unsupported; Phase 2 does not add new search or snapshot-list
+  filter behavior.
 
 ## CK-1121-R005 - Codacy cleanup creates correctness regression
 
@@ -107,3 +115,8 @@ Phase 1 evidence:
 
 - Phase 1 scope excludes search, simulate, benchmark, snapshot create/delete, architecture
   migration, schema changes, storage format changes, default backend changes, and Codacy cleanup.
+
+Phase 2 evidence:
+
+- Phase 2 scope excludes snapshot tag normalization, benchmark behavior, broad parser rewrites,
+  architecture migration, schema changes, storage format changes, and default backend changes.

@@ -27,6 +27,21 @@ Phase 1 selected command checks:
 - `coldkeep repair ref-counts extra` is rejected.
 - Search, simulate, benchmark, snapshot create, and snapshot delete are not changed in Phase 1.
 
+Phase 2 selected empty-value checks:
+
+- `coldkeep search --name ""` and `coldkeep search --name "   "` are rejected.
+- `coldkeep search --path ""` and `coldkeep search --path "   "` are rejected.
+- `coldkeep search --extension ""` and `coldkeep search --extension "   "` are rejected.
+- `coldkeep snapshot list --path ""` and `coldkeep snapshot list --path "   "` are rejected.
+- `coldkeep remove --stored-path ""` and `coldkeep remove --stored-path "   "` are rejected
+  before ID remove handling.
+- `coldkeep restore --stored-path ""` and `coldkeep restore --stored-path "   "` are rejected
+  before ID restore handling.
+- `coldkeep snapshot create --id ""` and `coldkeep snapshot create --id "   "` are rejected
+  instead of generating an implicit snapshot ID.
+- Valid non-empty command forms remain unchanged.
+- Snapshot tag normalization and benchmark behavior are not changed in Phase 2.
+
 Phase 0 validation:
 
 - `git diff --check`

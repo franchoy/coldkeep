@@ -2574,6 +2574,178 @@ func TestRunSearchCommandRejectsUnexpectedPositionalArgsClassifiesAsUsage(t *tes
 	}
 }
 
+func TestPhase2SelectedCommandsRejectBlankFlagValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		run       func() error
+		wantUsage string
+	}{
+		{
+			name: "search name empty",
+			run: func() error {
+				return runSearchCommand(parsedCommandLine{
+					method: "search",
+					flags:  map[string][]string{"name": {""}},
+				}, outputModeText)
+			},
+			wantUsage: "--name cannot be empty",
+		},
+		{
+			name: "search name blank",
+			run: func() error {
+				return runSearchCommand(parsedCommandLine{
+					method: "search",
+					flags:  map[string][]string{"name": {"   "}},
+				}, outputModeText)
+			},
+			wantUsage: "--name cannot be empty",
+		},
+		{
+			name: "search path empty",
+			run: func() error {
+				return runSearchCommand(parsedCommandLine{
+					method: "search",
+					flags:  map[string][]string{"path": {""}},
+				}, outputModeText)
+			},
+			wantUsage: "--path cannot be empty",
+		},
+		{
+			name: "search path blank",
+			run: func() error {
+				return runSearchCommand(parsedCommandLine{
+					method: "search",
+					flags:  map[string][]string{"path": {"   "}},
+				}, outputModeText)
+			},
+			wantUsage: "--path cannot be empty",
+		},
+		{
+			name: "search extension empty",
+			run: func() error {
+				return runSearchCommand(parsedCommandLine{
+					method: "search",
+					flags:  map[string][]string{"extension": {""}},
+				}, outputModeText)
+			},
+			wantUsage: "--extension cannot be empty",
+		},
+		{
+			name: "search extension blank",
+			run: func() error {
+				return runSearchCommand(parsedCommandLine{
+					method: "search",
+					flags:  map[string][]string{"extension": {"   "}},
+				}, outputModeText)
+			},
+			wantUsage: "--extension cannot be empty",
+		},
+		{
+			name: "snapshot list path empty",
+			run: func() error {
+				return runSnapshotCommand(parsedCommandLine{
+					method:      "snapshot",
+					positionals: []string{"list"},
+					flags:       map[string][]string{"path": {""}},
+				}, outputModeText)
+			},
+			wantUsage: "--path cannot be empty",
+		},
+		{
+			name: "snapshot list path blank",
+			run: func() error {
+				return runSnapshotCommand(parsedCommandLine{
+					method:      "snapshot",
+					positionals: []string{"list"},
+					flags:       map[string][]string{"path": {"   "}},
+				}, outputModeText)
+			},
+			wantUsage: "--path cannot be empty",
+		},
+		{
+			name: "remove stored-path empty",
+			run: func() error {
+				return runRemoveCommand(parsedCommandLine{
+					method:      "remove",
+					positionals: []string{"1"},
+					flags:       map[string][]string{"stored-path": {""}},
+				}, outputModeText)
+			},
+			wantUsage: "--stored-path cannot be empty",
+		},
+		{
+			name: "remove stored-path blank",
+			run: func() error {
+				return runRemoveCommand(parsedCommandLine{
+					method:      "remove",
+					positionals: []string{"1"},
+					flags:       map[string][]string{"stored-path": {"   "}},
+				}, outputModeText)
+			},
+			wantUsage: "--stored-path cannot be empty",
+		},
+		{
+			name: "restore stored-path empty",
+			run: func() error {
+				return runRestoreCommand(parsedCommandLine{
+					method:      "restore",
+					positionals: []string{"1", t.TempDir()},
+					flags:       map[string][]string{"stored-path": {""}},
+				}, outputModeText)
+			},
+			wantUsage: "--stored-path cannot be empty",
+		},
+		{
+			name: "restore stored-path blank",
+			run: func() error {
+				return runRestoreCommand(parsedCommandLine{
+					method:      "restore",
+					positionals: []string{"1", t.TempDir()},
+					flags:       map[string][]string{"stored-path": {"   "}},
+				}, outputModeText)
+			},
+			wantUsage: "--stored-path cannot be empty",
+		},
+		{
+			name: "snapshot create id empty",
+			run: func() error {
+				return runSnapshotCommand(parsedCommandLine{
+					method:      "snapshot",
+					positionals: []string{"create"},
+					flags:       map[string][]string{"id": {""}},
+				}, outputModeText)
+			},
+			wantUsage: "--id cannot be empty",
+		},
+		{
+			name: "snapshot create id blank",
+			run: func() error {
+				return runSnapshotCommand(parsedCommandLine{
+					method:      "snapshot",
+					positionals: []string{"create"},
+					flags:       map[string][]string{"id": {"   "}},
+				}, outputModeText)
+			},
+			wantUsage: "--id cannot be empty",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if err == nil {
+				t.Fatal("expected usage error")
+			}
+			if got := classifyExitCode(err); got != exitUsage {
+				t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+			}
+			if !strings.Contains(err.Error(), tc.wantUsage) {
+				t.Fatalf("expected usage %q in error, got: %v", tc.wantUsage, err)
+			}
+		})
+	}
+}
+
 func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
 	args := searchArgs(parsedCommandLine{
 		method: "search",
@@ -2594,6 +2766,18 @@ func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
 	}
 	if !strings.Contains(encoded, "--offset 100") {
 		t.Fatalf("expected offset value to be forwarded, got %q", encoded)
+	}
+}
+
+func TestSearchArgsPreservesValidNameValue(t *testing.T) {
+	args := searchArgs(parsedCommandLine{
+		method: "search",
+		flags:  map[string][]string{"name": {"report"}},
+	})
+
+	encoded := strings.Join(args, " ")
+	if encoded != "--name report" {
+		t.Fatalf("expected valid search name to be forwarded unchanged, got %q", encoded)
 	}
 }
 

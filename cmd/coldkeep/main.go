@@ -1727,6 +1727,9 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata"); err != nil {
 		return err
 	}
+	if err := rejectBlankFlagValues(parsed, "stored-path"); err != nil {
+		return err
+	}
 
 	storedPath, _ := parsed.lastFlagValue("stored-path")
 	hasStoredPath := strings.TrimSpace(storedPath) != ""
@@ -1891,6 +1894,9 @@ func parseRestoreDestinationMode(parsed parsedCommandLine) (storage.RestoreDesti
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "stored-path", "stored-paths"); err != nil {
+		return err
+	}
+	if err := rejectBlankFlagValues(parsed, "stored-path"); err != nil {
 		return err
 	}
 
@@ -2862,6 +2868,9 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := rejectBlankFlagValues(parsed, "name", "path", "extension"); err != nil {
+		return err
+	}
 	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size", "limit", "offset", "output", "json"); err != nil {
 		return err
 	}
@@ -4642,6 +4651,9 @@ func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
 func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
+	if err := rejectBlankFlagValues(parsed, "path"); err != nil {
+		return err
+	}
 	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "tree", "output", "json"); err != nil {
 		return err
 	}
@@ -5244,7 +5256,10 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 
 	snapshotID, hasSnapshotID := parsed.lastFlagValue("id")
 	snapshotID = strings.TrimSpace(snapshotID)
-	if !hasSnapshotID || snapshotID == "" {
+	if hasSnapshotID && snapshotID == "" {
+		return usageErrorf("--id cannot be empty")
+	}
+	if !hasSnapshotID {
 		generatedID, err := generateSnapshotID()
 		if err != nil {
 			return err
@@ -5917,6 +5932,17 @@ func ensureAllowedFlags(parsed parsedCommandLine, allowed ...string) error {
 
 	sort.Strings(unknown)
 	return usageErrorf("unknown flag(s) for %s: %s", parsed.method, strings.Join(unknown, ", "))
+}
+
+func rejectBlankFlagValues(parsed parsedCommandLine, names ...string) error {
+	for _, name := range names {
+		for _, value := range parsed.flagValues(name) {
+			if strings.TrimSpace(value) == "" {
+				return usageErrorf("--%s cannot be empty", name)
+			}
+		}
+	}
+	return nil
 }
 
 func validateNonNegativeIntegerFlag(parsed parsedCommandLine, name string) error {
