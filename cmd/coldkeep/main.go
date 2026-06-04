@@ -1727,6 +1727,9 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata"); err != nil {
 		return err
 	}
+	if err := rejectBlankFlagValues(parsed, "stored-path"); err != nil {
+		return err
+	}
 
 	storedPath, _ := parsed.lastFlagValue("stored-path")
 	hasStoredPath := strings.TrimSpace(storedPath) != ""
@@ -1891,6 +1894,9 @@ func parseRestoreDestinationMode(parsed parsedCommandLine) (storage.RestoreDesti
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "stored-path", "stored-paths"); err != nil {
+		return err
+	}
+	if err := rejectBlankFlagValues(parsed, "stored-path"); err != nil {
 		return err
 	}
 
@@ -2862,6 +2868,9 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := rejectBlankFlagValues(parsed, "name", "path", "extension"); err != nil {
+		return err
+	}
 	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size", "limit", "offset", "output", "json"); err != nil {
 		return err
 	}
@@ -2935,6 +2944,15 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--fast|--standard|--full|--deep]\nDid you mean: coldkeep verify system --fast")
 	}
 
+	if parsed.positionals[0] == "system" {
+		if len(parsed.positionals) == 2 && !isVerifyLevelName(parsed.positionals[1]) {
+			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
+		}
+		if len(parsed.positionals) > 2 {
+			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
+		}
+	}
+
 	verifyLevel, err := parseVerifyLevel(parsed)
 	if err != nil {
 		return err
@@ -2943,9 +2961,6 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	target := parsed.positionals[0]
 	switch target {
 	case "system":
-		if len(parsed.positionals) > 2 {
-			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
-		}
 		sgctx, err := loadDefaultStorageContextPhase()
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
@@ -4636,6 +4651,9 @@ func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
 func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
+	if err := rejectBlankFlagValues(parsed, "path"); err != nil {
+		return err
+	}
 	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "tree", "output", "json"); err != nil {
 		return err
 	}
@@ -5238,7 +5256,10 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 
 	snapshotID, hasSnapshotID := parsed.lastFlagValue("id")
 	snapshotID = strings.TrimSpace(snapshotID)
-	if !hasSnapshotID || snapshotID == "" {
+	if hasSnapshotID && snapshotID == "" {
+		return usageErrorf("--id cannot be empty")
+	}
+	if !hasSnapshotID {
 		generatedID, err := generateSnapshotID()
 		if err != nil {
 			return err
@@ -5913,6 +5934,17 @@ func ensureAllowedFlags(parsed parsedCommandLine, allowed ...string) error {
 	return usageErrorf("unknown flag(s) for %s: %s", parsed.method, strings.Join(unknown, ", "))
 }
 
+func rejectBlankFlagValues(parsed parsedCommandLine, names ...string) error {
+	for _, name := range names {
+		for _, value := range parsed.flagValues(name) {
+			if strings.TrimSpace(value) == "" {
+				return usageErrorf("--%s cannot be empty", name)
+			}
+		}
+	}
+	return nil
+}
+
 func validateNonNegativeIntegerFlag(parsed parsedCommandLine, name string) error {
 	value, ok := parsed.lastFlagValue(name)
 	if !ok {
@@ -6018,4 +6050,13 @@ func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 	}
 
 	return verify.VerifyStandard, nil
+}
+
+func isVerifyLevelName(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "fast", "standard", "full", "deep":
+		return true
+	default:
+		return false
+	}
 }
