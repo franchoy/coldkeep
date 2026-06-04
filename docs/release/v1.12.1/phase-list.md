@@ -227,6 +227,8 @@ Acceptance criteria:
 
 ## Phase 6 - Final Patch Release Gate
 
+Status: Complete
+
 Objective: confirm v1.12.1 is ready for final release review, tagging, and merge.
 
 Included scope:
@@ -234,7 +236,8 @@ Included scope:
 - Run the full release gate.
 - Confirm the risk register has required closure evidence.
 - Confirm no out-of-scope architecture, storage, schema, or backend changes are present.
-- Prepare final release notes and tag only after the gate is green.
+- Create `release-gate.md` with final validation evidence.
+- Prepare final release notes and tag recommendation only after the gate is green.
 
 Excluded scope:
 
@@ -260,3 +263,4 @@ Acceptance criteria:
 - No Go formatting drift remains.
 - Risk register closure evidence is complete.
 - v1.12.1 readiness is claimed only after the final gate passes.
+- Phase 6 introduces no production code changes.

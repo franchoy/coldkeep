@@ -80,6 +80,20 @@ Phase 5 static-analysis closure checks:
   default-backend refactors in Phase 5.
 - Defer any non-blocking cleanup to a later release or a dedicated cleanup phase.
 
+Phase 6 final release gate status:
+
+- `git status -sb` passed and was clean at gate start.
+- `git log --oneline main..release/v1.12.1` listed the six phase commits.
+- `gofmt -w $(git ls-files '*.go')` completed with no resulting changes.
+- `gofmt -l $(git ls-files '*.go')` was empty.
+- `golangci-lint run ./...` passed with `0 issues`.
+- `go vet ./...` passed.
+- `go test -count=1 ./...` passed.
+- `go test -race -count=1 ./...` passed.
+- `git diff --check` passed.
+- `git status -sb` passed and was clean after validation.
+- `docs/release/v1.12.1/release-gate.md` records the final gate evidence.
+
 Phase 0 validation:
 
 - `git diff --check`

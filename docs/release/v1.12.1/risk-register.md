@@ -8,7 +8,7 @@ Status values: Open, Monitoring, Mitigated, Closed.
 
 Severity: High
 
-Status: Monitoring
+Status: Mitigated
 
 Mitigation: keep validation changes narrow, test both valid and invalid command forms, and compare
 routed-command behavior where routing is involved.
@@ -26,11 +26,16 @@ Phase 1 evidence:
   snapshot ID is rejected.
 - `verify system <fast|standard|full|deep>` remains valid; non-level extra tokens are rejected.
 
+Final gate evidence:
+
+- Full final validation passed.
+- Residual CLI validation scope is documented in `release-gate.md`.
+
 ## CK-1121-R002 - JSON shorthand fixes alter automation output
 
 Severity: High
 
-Status: Monitoring
+Status: Mitigated
 
 Mitigation: limit JSON work to shorthand consistency, avoid unrelated JSON schema or field changes,
 and add output contract tests for touched commands.
@@ -50,11 +55,16 @@ Phase 4 evidence:
 - Command-level JSON payload tests cover remove, gc, config get, and snapshot stats.
 - `benchmark --json` remains rejected and is deferred outside Phase 4 scope.
 
+Final gate evidence:
+
+- Full final validation passed.
+- JSON side-channel cleanup remains deferred and documented in `release-gate.md`.
+
 ## CK-1121-R003 - Boolean parser changes affect existing scripts
 
 Severity: Medium
 
-Status: Monitoring
+Status: Mitigated
 
 Mitigation: preserve known valid boolean forms, reject only invalid or inconsistent forms, and test
 implicit true plus explicit true/false behavior.
@@ -76,11 +86,16 @@ Phase 3 evidence:
 - `list --reverse=false` and `snapshot list --reverse=false` remain unsupported and do not introduce
   new reverse behavior.
 
+Final gate evidence:
+
+- Full final validation passed.
+- No parser rewrite was performed.
+
 ## CK-1121-R004 - Empty filter rejection changes previously accepted commands
 
 Severity: Medium
 
-Status: Monitoring
+Status: Mitigated
 
 Mitigation: reject empty values only where they have no safe semantic meaning, document the command
 contract, and verify valid non-empty values are unchanged.
@@ -99,11 +114,16 @@ Phase 2 evidence:
 - Non-empty unsupported flags remain unsupported; Phase 2 does not add new search or snapshot-list
   filter behavior.
 
+Final gate evidence:
+
+- Full final validation passed.
+- Residual validation scope is documented in `release-gate.md`.
+
 ## CK-1121-R005 - Codacy cleanup creates correctness regression
 
 Severity: Medium
 
-Status: Monitoring
+Status: Mitigated
 
 Mitigation: accept only localized, behavior-preserving cleanup in v1.12.1, add tests for
 logic-adjacent changes, and defer style-only or refactor-heavy findings.
@@ -121,11 +141,17 @@ Phase 5 evidence:
 - No production code cleanup is required for Phase 5.
 - Phase 5 is docs-only to avoid correctness risk from unnecessary cleanup.
 
+Final gate evidence:
+
+- Final `golangci-lint run ./...` passed with `0 issues`.
+- Final `go vet ./...` passed.
+- No production cleanup was introduced in Phase 5 or Phase 6.
+
 ## CK-1121-R006 - Patch release drifts into v1.13/v2 architecture work
 
 Severity: High
 
-Status: Monitoring
+Status: Mitigated
 
 Mitigation: enforce the non-goals list during every phase, keep all work on `release/v1.12.1`, and
 reject changes involving new migrations, storage formats, schema changes, backend defaults, daemon,
@@ -164,3 +190,10 @@ Phase 5 evidence:
 - Phase 5 is docs-only because local static analysis is green.
 - Phase 5 scope excludes production refactors, architecture cleanup, parser rewrites, schema
   changes, storage format changes, default backend changes, and deferred operation migrations.
+
+Final gate evidence:
+
+- Phase 6 introduced docs-only release-gate evidence.
+- Final validation passed.
+- No schema, repository format, storage format, default backend, architecture migration, or deferred
+  operation migration work was introduced.
