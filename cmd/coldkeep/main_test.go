@@ -2541,6 +2541,22 @@ func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestRunListCommandReverseExplicitFalseRemainsUnsupported(t *testing.T) {
+	err := runListCommand(parsedCommandLine{
+		method: "list",
+		flags: map[string][]string{
+			"reverse": {"false"},
+		},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "unknown flag(s) for list") || !strings.Contains(err.Error(), "reverse") {
+		t.Fatalf("expected unsupported reverse usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunSearchCommandInvalidOffsetClassifiesAsUsage(t *testing.T) {
 	err := runSearchCommand(parsedCommandLine{
 		method: "search",
@@ -5122,6 +5138,22 @@ func TestRunSnapshotCommandListRejectsUnsupportedFilterFlag(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandListReverseExplicitFalseRemainsUnsupported(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"list"},
+		flags: map[string][]string{
+			"reverse": {"false"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown flag(s) for snapshot") || !strings.Contains(err.Error(), "reverse") {
+		t.Fatalf("expected unsupported reverse usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunSnapshotCommandListTreeFlagSwitchesTextOutputMode(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalList := listSnapshotsPhase
@@ -7276,6 +7308,86 @@ func TestRunSnapshotCommandDeleteWithForceExecutesImmediately(t *testing.T) {
 	// VERIFY: dry_run must be false
 	if dryRun, _ := data["dry_run"].(bool); dryRun {
 		t.Fatalf("expected dry_run=false for --force, got true")
+	}
+}
+
+func TestRunSnapshotCommandDeleteForceExplicitTrueExecutes(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledWith := ""
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
+		calledWith = snapshotID
+		return nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-force-true"},
+		flags: map[string][]string{
+			"force": {"true"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("expected --force=true to execute delete, got: %v", err)
+	}
+	if calledWith != "snap-force-true" {
+		t.Fatalf("expected delete called with snap-force-true, got %q", calledWith)
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunExplicitTruePreviews(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called for --dry-run=true")
+		return nil
+	}
+	previewed := false
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		previewed = true
+		return &snapshotDeleteLineagePreview{SnapshotID: snapshotID}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-dry-run-true"},
+		flags: map[string][]string{
+			"dry-run": {"true"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("expected --dry-run=true to preview delete, got: %v", err)
+	}
+	if !previewed {
+		t.Fatal("expected dry-run preview to be loaded")
 	}
 }
 

@@ -42,6 +42,20 @@ Phase 2 selected empty-value checks:
 - Valid non-empty command forms remain unchanged.
 - Snapshot tag normalization and benchmark behavior are not changed in Phase 2.
 
+Phase 3 selected boolean checks:
+
+- `coldkeep list --reverse=false` does not enable reverse behavior; `--reverse` remains unsupported
+  for `list`.
+- `coldkeep snapshot list --reverse=false` does not enable reverse behavior; `--reverse` remains
+  unsupported for `snapshot list`.
+- `coldkeep snapshot delete <id> --force=false` is rejected and does not perform forced delete.
+- `coldkeep snapshot delete <id> --dry-run=false` is rejected and does not perform dry-run preview.
+- Bare `--force` still performs snapshot delete.
+- Bare `--dry-run` still performs snapshot delete preview.
+- `--force=true` still performs snapshot delete.
+- `--dry-run=true` still performs snapshot delete preview.
+- Unrelated boolean flags are not changed in Phase 3.
+
 Phase 0 validation:
 
 - `git diff --check`

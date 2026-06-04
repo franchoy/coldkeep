@@ -45,7 +45,7 @@ Evidence required for closure:
 
 Severity: Medium
 
-Status: Open
+Status: Monitoring
 
 Mitigation: preserve known valid boolean forms, reject only invalid or inconsistent forms, and test
 implicit true plus explicit true/false behavior.
@@ -55,6 +55,17 @@ Evidence required for closure:
 - Boolean flag tests cover accepted and rejected forms.
 - Compatibility checks confirm common script forms still work.
 - Full release gate passes.
+
+Phase 3 evidence:
+
+- Parser-level boolean handling already honors explicit false; Phase 3 adds command-level regression
+  coverage for the selected cases rather than rewriting parser semantics.
+- `snapshot delete --force=false` and `snapshot delete --dry-run=false` remain usage failures instead
+  of performing forced delete or dry-run preview.
+- Bare `--force`, bare `--dry-run`, `--force=true`, and `--dry-run=true` remain valid for snapshot
+  delete.
+- `list --reverse=false` and `snapshot list --reverse=false` remain unsupported and do not introduce
+  new reverse behavior.
 
 ## CK-1121-R004 - Empty filter rejection changes previously accepted commands
 
@@ -120,3 +131,8 @@ Phase 2 evidence:
 
 - Phase 2 scope excludes snapshot tag normalization, benchmark behavior, broad parser rewrites,
   architecture migration, schema changes, storage format changes, and default backend changes.
+
+Phase 3 evidence:
+
+- Phase 3 scope excludes parser rewrites, unrelated boolean flags, schema changes, storage format
+  changes, default backend changes, and architecture migration.

@@ -110,20 +110,28 @@ Acceptance criteria:
 
 ## Phase 3 - Boolean Flag Value Semantics
 
+Status: Complete
+
 Objective: make boolean flag handling consistent for explicit values, implicit values, and invalid
 values.
 
 Included scope:
 
-- Audit boolean flags for inconsistent value acceptance.
-- Normalize rejection of invalid boolean values.
-- Add tests for implicit true, explicit true/false, and invalid values.
+- Lock the selected Phase 3 boolean cases:
+  `list --reverse=false`, `snapshot list --reverse=false`,
+  `snapshot delete <id> --force=false`, and `snapshot delete <id> --dry-run=false`.
+- Preserve existing bare and explicit-true behavior for selected supported snapshot delete flags.
+- Preserve existing unsupported behavior for `list --reverse` and `snapshot list --reverse`; Phase 3
+  does not add a reverse option to those commands.
+- Add targeted regression tests for selected explicit-false and compatibility forms.
 
 Excluded scope:
 
 - Renaming flags.
 - Removing existing valid boolean forms without evidence and risk review.
 - Parser replacement or broad command rewrite.
+- New reverse behavior for `list` or `snapshot list`.
+- Changes to unrelated boolean flags.
 
 Expected tests:
 
@@ -136,6 +144,8 @@ Acceptance criteria:
 - Boolean flags have predictable semantics across touched commands.
 - Invalid boolean values fail clearly.
 - Existing accepted automation forms remain compatible unless explicitly documented.
+- Explicit false is not interpreted as true for the selected Phase 3 cases.
+- Phase 3 does not expand into a broad parser rewrite or unrelated boolean cleanup.
 
 ## Phase 4 - JSON Shorthand Consistency
 
