@@ -1,4 +1,4 @@
-# Coldkeep v1.12.2 Final Patch Release Gate
+# Coldkeep v1.12.2 Pre-modernization Gate Evidence
 
 Release name: v1.12.2 - CLI Validation Follow-up
 Recommended tag: `v1.12.2`
@@ -23,7 +23,15 @@ a1665ee v1.12.2 phase 0: add CLI validation follow-up baseline
 - Phase 1 - v1.12.1 Release Documentation Status Cleanup.
 - Phase 2 - `search --extension` Parser Alignment.
 - Phase 3 - Empty-Value Parser-Path Regression Coverage.
-- Phase 4 - Final Patch Release Gate.
+- Former Phase 4 - Final Patch Release Gate.
+
+## Supersession Note
+
+This document records the green gate that was run before inserting Phase 4 -
+Pre-release Checklist Modernization. It is retained as historical evidence, but
+it is no longer the current final release gate. The current final gate is Phase
+5 and must be re-run after checklist modernization before v1.12.2 readiness is
+claimed.
 
 ## Behavior Changes
 
@@ -97,11 +105,11 @@ git status -sb
 
 ## Merge Readiness Decision
 
-Decision: ready to open a PR for final review and merge.
+Decision: superseded by the inserted Phase 4 checklist-modernization phase.
 
-This decision is based on a green final patch release gate, no production code changes in Phase 4,
-explicit compatibility documentation, and closure evidence for all v1.12.2 risks.
+This gate remains useful evidence that the Phase 0-3 code and docs were green at the time it ran.
+It must not be used as the final v1.12.2 release-readiness decision after Phase 4 changes.
 
 ## Release Tag Recommendation
 
-Recommended tag after merge: `v1.12.2`
+Recommended tag after the Phase 5 final gate passes and the release branch merges: `v1.12.2`

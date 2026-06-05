@@ -127,9 +127,41 @@ Acceptance criteria:
   search `--name`, search `--path`, snapshot list `--path`, remove `--stored-path`, restore
   `--stored-path`, and snapshot create `--id`; no production code changed.
 
-## Phase 4 - Final Patch Release Gate
+## Phase 4 - Pre-release Checklist Modernization
 
 Status: Complete
+
+Objective: modernize `PRE_RELEASE_CHECKLIST.md` so it is safe and clear as a local pre-PR CI-parity path while preserving deeper release-tag/manual gates.
+
+Included scope:
+
+- Add validation profiles for pre-PR CI parity, full release-tag/manual validation, and historical/special-release templates.
+- Align local checklist commands with current `.github/workflows/ci.yml`, including legacy compatibility and local cross-platform approximation.
+- Clarify smoke, critical coverage, benchmark interpretation, required tools, expected runtime, and reusable sign-off behavior.
+- Keep historical and manual release gates available without making them normal pre-PR blockers.
+
+Excluded scope:
+
+- Go code changes.
+- Test changes.
+- Script changes.
+- CI behavior changes.
+- v1.13 implementation work.
+
+Expected tests:
+
+- `git diff --check`
+- Optional markdown lint if available.
+
+Acceptance criteria:
+
+- `PRE_RELEASE_CHECKLIST.md` has clear Profile A / B / C validation paths.
+- Current CI legacy-compatibility has a local mirror command.
+- Current CI cross-platform has a documented local approximation and does not overclaim macOS/Windows proof.
+- Final sign-off boxes are reusable and unchecked.
+- No Go, test, script, or CI behavior changes are made.
+
+## Phase 5 - Final Patch Release Gate
 
 Objective: verify and record v1.12.2 patch-release readiness.
 
@@ -161,5 +193,5 @@ Acceptance criteria:
 - Mandatory final gate is green or every failure is explicitly documented and resolved before readiness is claimed.
 - Scope risks are closed or explicitly accepted.
 - v1.12.2 readiness is only claimed after the gate is green and recorded.
-- Closure evidence: `docs/release/v1.12.2/release-gate.md` records the green final gate,
-  compatibility statement, residual risks, merge readiness decision, and tag recommendation.
+- Closure evidence: `docs/release/v1.12.2/release-gate.md` records the green post-Phase 4 final
+  gate, compatibility statement, residual risks, merge readiness decision, and tag recommendation.

@@ -4,7 +4,7 @@
 
 Severity: High
 
-Status: Closed
+Status: Open
 
 Mitigation: Keep scope limited to stale v1.12.1 docs, `search --extension` parser alignment, selected empty-value parser-path regression tests, and final gate documentation.
 
@@ -20,7 +20,11 @@ No new CLI validation family or search feature was added.
 Phase 3 evidence: added regression tests for existing v1.12.1 empty-value validation claims only;
 no production code or new validation family was added.
 
-Final evidence: final diff and release gate stayed within the approved v1.12.2 hygiene scope.
+Pre-modernization gate evidence: final diff and release gate stayed within the approved v1.12.2
+hygiene scope before Phase 4 was inserted.
+
+Phase 4 evidence: checklist modernization was documentation-only and did not add a new CLI
+validation family. Final closure moves to the Phase 5 gate.
 
 ## CK-1122-R002 - `search --extension` parser alignment changes unsupported-flag semantics unexpectedly
 
@@ -62,7 +66,7 @@ regression coverage.
 
 Severity: Medium
 
-Status: Closed
+Status: Open
 
 Mitigation: Use factual status wording. Do not claim v1.12.2 readiness until the final patch release gate is green and recorded.
 
@@ -72,14 +76,15 @@ Phase 1 evidence: `docs/release/v1.12.1/README.md` now says `Status: Complete / 
 records tag `v1.12.1`, and limits the completion note to the completed v1.12.1 patch release.
 The v1.12.2 docs still require the final v1.12.2 gate before readiness is claimed.
 
-Final evidence: readiness is claimed only in the final release gate after the full validation
-sequence passed.
+Pre-modernization gate evidence: readiness was claimed only after the prior full validation
+sequence passed. Phase 4 inserted checklist modernization afterward, so current readiness must be
+re-established in Phase 5.
 
 ## CK-1122-R005 - Patch release drifts into v1.13 architecture work
 
 Severity: High
 
-Status: Closed
+Status: Open
 
 Mitigation: Keep engine, catalog, storage, schema, repository format, backend, daemon, API, UI, NAS, cloud, and migration work explicitly out of scope.
 
@@ -94,6 +99,71 @@ v1.12.2 release-tracking docs; no v1.13 architecture or migration files changed.
 Phase 3 evidence: changes were limited to CLI tests and v1.12.2 release-tracking docs; no
 production, architecture, migration, schema, repository-format, storage, or backend files changed.
 
-Final evidence: final release gate and Phase 4 changes were docs-only; no v1.13 architecture,
-migration, schema, repository-format, storage, backend, daemon, API, UI, NAS, or cloud work entered
-the release.
+Pre-modernization gate evidence: the earlier release gate and former Phase 4 changes were
+docs-only; no v1.13 architecture, migration, schema, repository-format, storage, backend, daemon,
+API, UI, NAS, or cloud work entered the release.
+
+Phase 4 evidence: checklist modernization was documentation-only. Final drift closure moves to
+the Phase 5 gate.
+
+## CK-1122-R006 - Pre-release checklist remains stale or misleading
+
+Severity: High
+
+Status: Closed
+
+Mitigation: Align `PRE_RELEASE_CHECKLIST.md` with current `.github/workflows/ci.yml`, distinguish
+pre-PR CI parity from release-tag/manual gates, and remove reusable completed sign-off state.
+
+Evidence required for closure: Checklist includes Profile A / B / C, current legacy-compatibility
+and cross-platform local entries, clarified smoke and critical coverage status, and unchecked final
+sign-off boxes.
+
+Phase 4 evidence: `PRE_RELEASE_CHECKLIST.md` now includes Profile A / B / C, current CI local
+entries, clarified smoke and critical coverage status, and unchecked reusable sign-off boxes.
+
+## CK-1122-R007 - Local checklist overclaims GitHub CI parity
+
+Severity: High
+
+Status: Closed
+
+Mitigation: Clearly state that local Linux validation does not replace GitHub macOS/Windows
+cross-platform jobs and that benchmark interpretation still depends on CI for workers=4 variance.
+
+Evidence required for closure: Checklist documents local cross-platform approximation limits,
+benchmark variance policy, and that missing local tools prevent claiming CI parity.
+
+Phase 4 evidence: the checklist states that local Linux validation does not replace GitHub
+macOS/Windows cross-platform jobs, documents workers=4 benchmark variance, and requires missing
+tools to be fixed before claiming CI parity.
+
+## CK-1122-R008 - Checklist becomes too heavy for normal pre-PR use
+
+Severity: Medium
+
+Status: Closed
+
+Mitigation: Split the checklist into Profile A pre-PR CI parity, Profile B full release-tag/manual
+validation, and Profile C historical/special-release templates.
+
+Evidence required for closure: Checklist explicitly identifies Profile A as the standard pre-PR
+path and marks snapshot/manual/historical gates as release-tag, optional, or manager-promoted.
+
+Phase 4 evidence: Profile A is identified as the standard pre-PR path; Profile B and Profile C
+carry full release-tag/manual and historical/special-release gates separately.
+
+## CK-1122-R009 - Historical release sections are mistaken for current blockers
+
+Severity: Medium
+
+Status: Closed
+
+Mitigation: Preserve historical sections while labeling them as archived/reference-only unless a
+release manager promotes them for a special release.
+
+Evidence required for closure: Historical v1.5/v1.6 templates and v1.9 wording are clearly
+separated from current Profile A/Profile B validation requirements.
+
+Phase 4 evidence: historical v1.5/v1.6 templates remain archived/reference-only, and v1.9
+wording is labeled as historical context rather than current v1.12/v1.13 policy.

@@ -11,7 +11,10 @@
 - Phase 3: run the new selected empty-value parser-path regression tests and existing relevant CLI/parser tests.
   Closure requires confirming selected empty-value cases parse through `parseCommandLine` before
   command validation rejects them.
-- Phase 4: run the full release gate. Closure evidence is recorded in
+- Phase 4: run `git diff --check`; run markdown lint if available. Closure requires confirming
+  `PRE_RELEASE_CHECKLIST.md` has Profile A / B / C, current CI local mirrors, reusable unchecked
+  sign-off boxes, and no code/test/script/CI behavior changes.
+- Phase 5: run the full release gate. Closure evidence is recorded in
   `docs/release/v1.12.2/release-gate.md`.
 
 ## Full Release Gate
@@ -29,7 +32,7 @@ git diff --check
 git status -sb
 ```
 
-The release is ready for PR review after this gate is green and the result is recorded.
+The release is ready for PR review after the Phase 5 gate is green and the result is recorded.
 
 ## No-Go Checks
 
