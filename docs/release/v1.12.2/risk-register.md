@@ -17,6 +17,9 @@ Phase 2 evidence: the only parser-scope behavior change was registering `extensi
 value-taking flag so existing empty-value validation can run through the real parser path.
 No new CLI validation family or search feature was added.
 
+Phase 3 evidence: added regression tests for existing v1.12.1 empty-value validation claims only;
+no production code or new validation family was added.
+
 ## CK-1122-R002 - `search --extension` parser alignment changes unsupported-flag semantics unexpectedly
 
 Severity: Medium
@@ -43,6 +46,10 @@ Evidence required for closure: New tests remain behavior-level and would survive
 Phase 2 evidence: tests invoke `parseCommandLine` with user-facing `coldkeep search` arguments
 before dispatching to `runSearchCommand`, and assert public usage errors rather than private helper
 details.
+
+Phase 3 evidence: parser-path tests invoke `parseCommandLine` with user-facing command arguments
+before command dispatch and assert usage-class errors plus stable error substrings, not full
+private formatting or helper internals.
 
 ## CK-1122-R004 - Docs cleanup overclaims release readiness
 
@@ -73,3 +80,6 @@ repository format, backend, daemon, API, UI, NAS, cloud, or migration files.
 
 Phase 2 evidence: implementation touched only CLI parser registration, parser-path CLI tests, and
 v1.12.2 release-tracking docs; no v1.13 architecture or migration files changed.
+
+Phase 3 evidence: changes were limited to CLI tests and v1.12.2 release-tracking docs; no
+production, architecture, migration, schema, repository-format, storage, or backend files changed.

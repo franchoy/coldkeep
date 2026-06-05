@@ -9,6 +9,8 @@
   Closure requires confirming `search --extension .txt` remains unsupported and
   `search --extension` without a value is rejected as a missing value.
 - Phase 3: run the new selected empty-value parser-path regression tests and existing relevant CLI/parser tests.
+  Closure requires confirming selected empty-value cases parse through `parseCommandLine` before
+  command validation rejects them.
 - Phase 4: run the full release gate.
 
 ## Full Release Gate

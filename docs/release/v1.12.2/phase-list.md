@@ -97,6 +97,8 @@ Acceptance criteria:
 
 ## Phase 3 - Empty-Value Parser-Path Regression Coverage
 
+Status: Complete
+
 Objective: add parser-path regression coverage for selected v1.12.1 empty-value validation cases.
 
 Included scope:
@@ -121,6 +123,9 @@ Acceptance criteria:
 - Selected v1.12.1 empty-value validation cases are covered through the parser path users actually invoke.
 - Tests remain stable if internal helper names or minor parser implementation details change.
 - Coverage does not introduce new validation scope outside the release plan.
+- Closure evidence: added parser-path regression coverage for selected empty and blank values on
+  search `--name`, search `--path`, snapshot list `--path`, remove `--stored-path`, restore
+  `--stored-path`, and snapshot create `--id`; no production code changed.
 
 ## Phase 4 - Final Patch Release Gate
 
