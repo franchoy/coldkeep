@@ -14,8 +14,8 @@
 - Phase 4: run `git diff --check`; run markdown lint if available. Closure requires confirming
   `PRE_RELEASE_CHECKLIST.md` has Profile A / B / C, current CI local mirrors, reusable unchecked
   sign-off boxes, and no code/test/script/CI behavior changes.
-- Phase 5: run the full release gate. Closure evidence is recorded in
-  `docs/release/v1.12.2/release-gate.md`.
+- Phase 5: run Profile A from `PRE_RELEASE_CHECKLIST.md`, then run the direct full release gate.
+  Closure evidence is recorded in `docs/release/v1.12.2/release-gate.md`.
 
 ## Full Release Gate
 

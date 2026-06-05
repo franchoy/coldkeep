@@ -163,6 +163,8 @@ Acceptance criteria:
 
 ## Phase 5 - Final Patch Release Gate
 
+Status: Complete
+
 Objective: verify and record v1.12.2 patch-release readiness.
 
 Included scope:

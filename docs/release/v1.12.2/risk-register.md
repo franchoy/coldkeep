@@ -4,7 +4,7 @@
 
 Severity: High
 
-Status: Open
+Status: Closed
 
 Mitigation: Keep scope limited to stale v1.12.1 docs, `search --extension` parser alignment, selected empty-value parser-path regression tests, and final gate documentation.
 
@@ -25,6 +25,9 @@ hygiene scope before Phase 4 was inserted.
 
 Phase 4 evidence: checklist modernization was documentation-only and did not add a new CLI
 validation family. Final closure moves to the Phase 5 gate.
+
+Phase 5 evidence: Profile A and direct final release-gate validation completed without adding new
+CLI validation families beyond the approved parser alignment and parser-path tests.
 
 ## CK-1122-R002 - `search --extension` parser alignment changes unsupported-flag semantics unexpectedly
 
@@ -66,7 +69,7 @@ regression coverage.
 
 Severity: Medium
 
-Status: Open
+Status: Closed
 
 Mitigation: Use factual status wording. Do not claim v1.12.2 readiness until the final patch release gate is green and recorded.
 
@@ -80,11 +83,14 @@ Pre-modernization gate evidence: readiness was claimed only after the prior full
 sequence passed. Phase 4 inserted checklist modernization afterward, so current readiness must be
 re-established in Phase 5.
 
+Phase 5 evidence: release readiness is claimed only after Profile A and direct final release-gate
+validation completed and this final evidence document was updated.
+
 ## CK-1122-R005 - Patch release drifts into v1.13 architecture work
 
 Severity: High
 
-Status: Open
+Status: Closed
 
 Mitigation: Keep engine, catalog, storage, schema, repository format, backend, daemon, API, UI, NAS, cloud, and migration work explicitly out of scope.
 
@@ -105,6 +111,10 @@ API, UI, NAS, or cloud work entered the release.
 
 Phase 4 evidence: checklist modernization was documentation-only. Final drift closure moves to
 the Phase 5 gate.
+
+Phase 5 evidence: final gate changes are docs-only release evidence; no v1.13 architecture,
+migration, schema, repository-format, storage, backend, daemon, API, UI, NAS, or cloud work entered
+the release.
 
 ## CK-1122-R006 - Pre-release checklist remains stale or misleading
 
