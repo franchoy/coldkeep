@@ -2884,6 +2884,58 @@ func TestPhase2SelectedCommandsRejectBlankFlagValues(t *testing.T) {
 	}
 }
 
+func TestPhase2SearchExtensionParserPathValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "empty value",
+			args:    []string{"search", "--extension", ""},
+			wantErr: "--extension cannot be empty",
+		},
+		{
+			name:    "blank value",
+			args:    []string{"search", "--extension", "   "},
+			wantErr: "--extension cannot be empty",
+		},
+		{
+			name:    "non-empty value remains unsupported",
+			args:    []string{"search", "--extension", ".txt"},
+			wantErr: "unknown flag(s) for search: extension",
+		},
+		{
+			name:    "missing value",
+			args:    []string{"search", "--extension"},
+			wantErr: "missing value for --extension",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, parseErr := parseCommandLine(tc.args, flagsWithValues)
+			if parseErr != nil {
+				if !strings.Contains(parseErr.Error(), tc.wantErr) {
+					t.Fatalf("expected %q parse error, got: %v", tc.wantErr, parseErr)
+				}
+				if got := classifyExitCode(parseErr); got != exitUsage {
+					t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+				}
+				return
+			}
+
+			err := runSearchCommand(parsed, outputModeText)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected %q search error, got: %v", tc.wantErr, err)
+			}
+			if got := classifyExitCode(err); got != exitUsage {
+				t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+			}
+		})
+	}
+}
+
 func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
 	args := searchArgs(parsedCommandLine{
 		method: "search",

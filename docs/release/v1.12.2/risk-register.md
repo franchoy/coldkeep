@@ -13,6 +13,10 @@ Evidence required for closure: Final diff shows no new validation family work be
 Phase 1 evidence: docs-only cleanup changed v1.12.1 release status wording and v1.12.2 tracking
 docs only; no CLI validation family was added.
 
+Phase 2 evidence: the only parser-scope behavior change was registering `extension` as a
+value-taking flag so existing empty-value validation can run through the real parser path.
+No new CLI validation family or search feature was added.
+
 ## CK-1122-R002 - `search --extension` parser alignment changes unsupported-flag semantics unexpectedly
 
 Severity: Medium
@@ -23,6 +27,9 @@ Mitigation: Inspect and test the real parser path before changing behavior. Keep
 
 Evidence required for closure: Focused parser-path tests and review evidence show empty-value behavior is aligned without unintended unsupported-flag changes.
 
+Phase 2 evidence: parser-path coverage asserts `search --extension .txt` still fails with
+`unknown flag(s) for search: extension`; non-empty extension search was not made supported.
+
 ## CK-1122-R003 - Parser-path tests accidentally encode implementation details too tightly
 
 Severity: Medium
@@ -32,6 +39,10 @@ Status: Open
 Mitigation: Assert user-visible parser behavior and error outcomes rather than helper names, internal call order, or private implementation structure.
 
 Evidence required for closure: New tests remain behavior-level and would survive internal parser refactoring that preserves CLI behavior.
+
+Phase 2 evidence: tests invoke `parseCommandLine` with user-facing `coldkeep search` arguments
+before dispatching to `runSearchCommand`, and assert public usage errors rather than private helper
+details.
 
 ## CK-1122-R004 - Docs cleanup overclaims release readiness
 
@@ -59,3 +70,6 @@ Evidence required for closure: Final diff contains no v1.13 architecture, migrat
 
 Phase 1 evidence: docs-only status cleanup did not touch engine, catalog, storage, schema,
 repository format, backend, daemon, API, UI, NAS, cloud, or migration files.
+
+Phase 2 evidence: implementation touched only CLI parser registration, parser-path CLI tests, and
+v1.12.2 release-tracking docs; no v1.13 architecture or migration files changed.

@@ -91,6 +91,7 @@ var flagsWithValues = map[string]bool{
 	"compare":           true,
 	"threshold":         true,
 	"workers":           true,
+	"extension":         true,
 }
 
 var flagsWithoutValues = map[string]bool{

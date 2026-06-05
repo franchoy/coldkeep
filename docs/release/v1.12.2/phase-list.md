@@ -64,6 +64,8 @@ Acceptance criteria:
 
 ## Phase 2 - `search --extension` Parser Alignment
 
+Status: Complete
+
 Objective: align `search --extension` behavior with the real parser path and v1.12.1 empty-value validation claims.
 
 Included scope:
@@ -89,6 +91,9 @@ Acceptance criteria:
 - `search --extension` rejects empty values through the real parser path as claimed by v1.12.1 validation docs.
 - Unsupported-flag behavior is unchanged or explicitly documented as compatible.
 - No engine, catalog, storage, schema, or backend changes are made.
+- Closure evidence: `extension` is now a parser value flag, real parser-path tests cover empty,
+  blank, non-empty unsupported, and missing-value forms, and search still does not allow
+  `--extension` as a supported filter.
 
 ## Phase 3 - Empty-Value Parser-Path Regression Coverage
 

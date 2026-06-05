@@ -6,6 +6,8 @@
 - Phase 1: run `git diff --check`; run markdown lint if available. Closure requires confirming
   no Go files, root README, version files, CLI behavior, parser behavior, or tests changed.
 - Phase 2: run focused parser-path tests covering `search --extension` empty values and any existing relevant CLI/parser tests.
+  Closure requires confirming `search --extension .txt` remains unsupported and
+  `search --extension` without a value is rejected as a missing value.
 - Phase 3: run the new selected empty-value parser-path regression tests and existing relevant CLI/parser tests.
 - Phase 4: run the full release gate.
 
