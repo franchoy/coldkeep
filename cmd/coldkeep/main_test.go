@@ -2884,6 +2884,159 @@ func TestPhase2SelectedCommandsRejectBlankFlagValues(t *testing.T) {
 	}
 }
 
+func TestPhase2SearchExtensionParserPathValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "empty value",
+			args:    []string{"search", "--extension", ""},
+			wantErr: "--extension cannot be empty",
+		},
+		{
+			name:    "blank value",
+			args:    []string{"search", "--extension", "   "},
+			wantErr: "--extension cannot be empty",
+		},
+		{
+			name:    "non-empty value remains unsupported",
+			args:    []string{"search", "--extension", ".txt"},
+			wantErr: "unknown flag(s) for search: extension",
+		},
+		{
+			name:    "missing value",
+			args:    []string{"search", "--extension"},
+			wantErr: "missing value for --extension",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, parseErr := parseCommandLine(tc.args, flagsWithValues)
+			if parseErr != nil {
+				if !strings.Contains(parseErr.Error(), tc.wantErr) {
+					t.Fatalf("expected %q parse error, got: %v", tc.wantErr, parseErr)
+				}
+				if got := classifyExitCode(parseErr); got != exitUsage {
+					t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+				}
+				return
+			}
+
+			err := runSearchCommand(parsed, outputModeText)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected %q search error, got: %v", tc.wantErr, err)
+			}
+			if got := classifyExitCode(err); got != exitUsage {
+				t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+			}
+		})
+	}
+}
+
+func TestPhase3SelectedEmptyValueParserPathValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "search name empty",
+			args:    []string{"search", "--name", ""},
+			wantErr: "--name cannot be empty",
+		},
+		{
+			name:    "search name blank",
+			args:    []string{"search", "--name", "   "},
+			wantErr: "--name cannot be empty",
+		},
+		{
+			name:    "search path empty",
+			args:    []string{"search", "--path", ""},
+			wantErr: "--path cannot be empty",
+		},
+		{
+			name:    "search path blank",
+			args:    []string{"search", "--path", "   "},
+			wantErr: "--path cannot be empty",
+		},
+		{
+			name:    "snapshot list path empty",
+			args:    []string{"snapshot", "list", "--path", ""},
+			wantErr: "--path cannot be empty",
+		},
+		{
+			name:    "snapshot list path blank",
+			args:    []string{"snapshot", "list", "--path", "   "},
+			wantErr: "--path cannot be empty",
+		},
+		{
+			name:    "remove stored-path empty",
+			args:    []string{"remove", "--stored-path", ""},
+			wantErr: "--stored-path cannot be empty",
+		},
+		{
+			name:    "remove stored-path blank",
+			args:    []string{"remove", "--stored-path", "   "},
+			wantErr: "--stored-path cannot be empty",
+		},
+		{
+			name:    "restore stored-path empty",
+			args:    []string{"restore", "--stored-path", ""},
+			wantErr: "--stored-path cannot be empty",
+		},
+		{
+			name:    "restore stored-path blank",
+			args:    []string{"restore", "--stored-path", "   "},
+			wantErr: "--stored-path cannot be empty",
+		},
+		{
+			name:    "snapshot create id empty",
+			args:    []string{"snapshot", "create", "--id", ""},
+			wantErr: "--id cannot be empty",
+		},
+		{
+			name:    "snapshot create id blank",
+			args:    []string{"snapshot", "create", "--id", "   "},
+			wantErr: "--id cannot be empty",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := parseCommandLine(tc.args, flagsWithValues)
+			if err != nil {
+				t.Fatalf("parseCommandLine returned error before command validation: %v", err)
+			}
+
+			err = runParsedCommandForParserPathValidation(parsed)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected %q usage error, got: %v", tc.wantErr, err)
+			}
+			if got := classifyExitCode(err); got != exitUsage {
+				t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+			}
+		})
+	}
+}
+
+func runParsedCommandForParserPathValidation(parsed parsedCommandLine) error {
+	switch parsed.method {
+	case "remove":
+		return runRemoveCommand(parsed, outputModeText)
+	case "restore":
+		return runRestoreCommand(parsed, outputModeText)
+	case "search":
+		return runSearchCommand(parsed, outputModeText)
+	case "snapshot":
+		return runSnapshotCommand(parsed, outputModeText)
+	default:
+		return fmt.Errorf("unsupported parser-path test command: %s", parsed.method)
+	}
+}
+
 func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
 	args := searchArgs(parsedCommandLine{
 		method: "search",

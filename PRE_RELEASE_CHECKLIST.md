@@ -1,6 +1,6 @@
 # Pre-release Checklist
 
-Use this checklist before cutting a release tag.
+Use this checklist before opening a correctness-sensitive PR or cutting a release tag.
 
 Audience:
 
@@ -20,21 +20,113 @@ Execution model (step-by-step):
 - If a step fails, fix the issue and re-run that step before moving forward.
 - For releases that include snapshot/retention scope, treat sections 15-17 as required release gates after sections 1-13.
 
-Checklist status interpretation for v1.9:
+## Validation profile decision guide
+
+Choose the lightest profile that honestly matches the work being validated.
+
+### Profile A - Pre-PR CI-parity gate
+
+Use this before opening a PR. It is the standard local "full-system green"
+path intended to minimize GitHub CI failures before review.
+
+Run:
+
+- Section 1: local PostgreSQL and CI-compatible environment setup.
+- Section 2: quality-equivalent checks.
+- Section 3: required CI matrix local equivalents, including smoke, benchmark,
+  legacy compatibility, and local cross-platform approximation.
+- Final local checks: `git diff --check` and `git status -sb`.
+
+Profile A is green only when:
+
+- quality checks pass;
+- required CI matrix local equivalents pass;
+- smoke passes;
+- the benchmark matrix is run and interpreted according to the documented local
+  variance policy;
+- `git diff --check` passes;
+- the working tree is clean or only intentional committed changes remain.
+
+Profile A is a strong local Linux validation path, but it does not replace
+GitHub Actions. In particular, local Linux cannot fully prove the macOS and
+Windows legs of the cross-platform job.
+
+### Profile B - Full release-tag/manual gate
+
+Use this before final release tagging, or when the release manager asks for
+manual release evidence. It includes Profile A plus the release-tag/manual
+sections:
+
+- Section 4 when extra integration confidence is useful.
+- Sections 5-11 for manual CLI/operator contract checks.
+- Sections 15-17 for snapshot/retention release validation when the release
+  includes snapshot/retention scope or the release manager promotes the gate.
+- Section 18 for final sign-off evidence.
+
+Record completed release evidence in a release-specific document. Do not mark
+the reusable checklist template as completed.
+
+### Profile C - Historical/special-release templates
+
+Sections 12-14 are archived templates for historical v1.5/v1.6 release tracks.
+Use them as reference material only unless the release manager explicitly
+promotes a section into the active gate for a special release.
+
+## Required local tools
+
+Install these before claiming CI parity locally:
+
+- Go 1.25.x, or the version required by `go.mod` / `toolchain`.
+- `docker compose`.
+- PostgreSQL client tools, including `psql`.
+- `jq`.
+- `shellcheck`.
+- `golangci-lint` v2.6.2 for exact CI parity. Newer local versions may report
+  findings that GitHub CI does not yet enforce.
+- Python 3.
+- A bash-compatible shell.
+
+Missing local tools should be fixed before claiming Profile A CI parity. If a
+tool is unavailable, record the gap and do not treat the profile as green.
+
+## Runtime guidance
+
+These estimates are broad and environment-dependent:
+
+- Quality gate: often several minutes; longer on cold caches or slower CPUs.
+- Full CI-parity matrix: often tens of minutes because it includes race tests,
+  integration suites, smoke, adversarial tests, and benchmarks.
+- Benchmark matrix: sensitive to local CPU scheduling and virtualization,
+  especially workers=4.
+- Full release-tag/manual gate: can take substantially longer because it adds
+  manual CLI/operator checks and optional release-specific gates.
+
+## Checklist status interpretation
+
+Current release-gate sections:
+
+- Profile A pre-PR CI parity: sections 1-3 plus final local checks.
+- Profile B release-tag/manual gate: Profile A plus the release-manager-selected
+  manual sections.
+- Profile C historical templates: sections 12-14 only when explicitly promoted.
+
+Historical v1.9 note:
 
 - Active v1.9 blockers are the current release-gate sections (1-11, 15-18).
 - Historical template sections (12-14) are archived reference material only.
 - Unchecked boxes in sections 12-14 are intentional historical state and are not v1.9 blockers unless a release manager explicitly promotes one into the active v1.9 gate.
 
-## Release Freeze Policy (v1.9 Phase 9 Step 1)
+## Release freeze policy
 
 Before running the technical release checks below, freeze implementation scope.
 
-Phase 9 goal: make v1.9 boring in production: no surprises, no hidden dev
-paths, and every operator-facing behavior documented while preserving
-deterministic restore, GC safety, snapshot correctness, and stable CLI behavior.
+Current goal: make the release boring in production: no surprises, no hidden
+development paths, and every operator-facing behavior documented while
+preserving deterministic restore, GC safety, snapshot correctness, and stable
+CLI behavior.
 
-Release-positioning note:
+Historical v1.9 positioning note, retained as context for older release
+evidence:
 
 - v1.9 keeps packed-block storage metadata for new writes.
 - v1.9 adds block-level compression with store-if-smaller semantics.
@@ -227,7 +319,6 @@ for codec in plain aes-gcm; do
 
   # smoke
   COLDKEEP_SMOKE_RESET_DB=1 \
-  COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql \
   COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/${codec}" \
   COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE=1 \
   PATH="$PWD:$PATH" \
@@ -280,6 +371,36 @@ unset COLDKEEP_CODEC COLDKEEP_COMPRESSION COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS
       COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS
 ```
 
+Run the current `legacy-compatibility` job locally. This mirrors the CI job's
+plain-codec PostgreSQL assumptions:
+
+```bash
+export COLDKEEP_TEST_DB=1
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+export COLDKEEP_CODEC=plain
+export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
+
+go test -race -count=1 ./tests/integration/... -run 'TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration'
+```
+
+Run the local approximation for the current `cross-platform` job:
+
+```bash
+go test ./internal/pathsafe/... -count=1
+go test ./internal/storage -run "RestoreCrossPlatform|RestoreSeam" -count=1
+```
+
+This catches the same package and test families locally. A local failure is a
+blocker for the local gate, but a successful Linux run does not replace the
+GitHub Actions macOS and Windows jobs. Full OS-specific path behavior is only
+proved by the GitHub `cross-platform` matrix.
+
 Important — local regression check interpretation:
 The v1.9 baselines were generated on dedicated GitHub Actions runners (`ubuntu-latest`).
 Dev container and developer hardware environments introduce scheduling variance,
@@ -295,24 +416,46 @@ Triage rule:
   failure as environment variance (not a code defect) and proceed.
 - CI is the authoritative regression gate. A local w4 HARD FAIL is not a
   release blocker on its own.
+- Cross-platform local approximation failures are blockers locally, but a
+  successful local Linux run does not replace GitHub macOS/Windows validation.
 
 Why `unset COLDKEEP_STORAGE_DIR` first: step 1 exports a manual-check storage path
 for later CLI validation. Leaving that variable set during integration/adversarial
 test runs can force unrelated tests onto a shared storage directory and produce
 false failures that do not reflect CI behavior.
 
-Prerequisite for the smoke leg: `scripts/smoke.sh` shells out to `psql` when
-`COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql` is used. Install a local
-PostgreSQL client first if it is not already available.
+Smoke parity note: the smoke block above mirrors CI as closely as practical. It
+does not set `COLDKEEP_SCHEMA_PATH`, because the current CI smoke job relies on
+the default schema path plus `COLDKEEP_SMOKE_RESET_DB=1`,
+`COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE=1`, and a per-codec storage directory.
 
-Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`, `benchmark`) across both codecs.
-
-Generate the critical coverage report (mirrors the CI `critical-coverage-report` job;
-informational, not enforced by `ci-required`, but the artifact is reviewed before
-tagging a release):
+Stronger manual schema-path smoke remains useful for release-tag/manual
+validation when you specifically want to exercise explicit schema-path
+operator setup:
 
 ```bash
-scripts/critical_coverage.sh --report --csv-output docs/release/v1.10/v1.10.8-ci-coverage-report.csv
+COLDKEEP_SMOKE_RESET_DB=1 \
+COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql \
+COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/manual-schema-smoke" \
+COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE=1 \
+PATH="$PWD:$PATH" \
+scripts/smoke.sh
+```
+
+Expected: this mirrors the current `ci-required` upstream jobs (`quality`,
+`correctness-matrix`, `integration-stress`, `integration-long-run`,
+`adversarial`, `smoke`, `legacy-compatibility`, and `benchmark-matrix`) across
+their documented codec matrices. It also runs a local approximation of the
+separate `cross-platform` job, which GitHub Actions must still prove on macOS
+and Windows.
+
+Generate the critical coverage report (mirrors the CI `critical-coverage-report` job;
+informational, not enforced by `ci-required` in the current workflow, but useful
+for release review):
+
+```bash
+mkdir -p artifacts
+scripts/critical_coverage.sh --report --csv-output artifacts/critical-coverage-report.csv
 ```
 
 Expected: report generates without error. Review the CSV for any Tier 1 packages
@@ -324,9 +467,10 @@ For the snapshot contract gate, run the focused integration suite after the matr
 scripts/run_snapshot_release_gate.sh --count 1
 ```
 
-For the Phase 7 released-v1.7 compatibility proof, run the strict gate below.
-This is a required gate for Phase 7 completion and must use a real released
-v1.7 coldkeep binary (not a local rebuild).
+For the Phase 7 released-v1.7 compatibility proof, run the strict gate below
+only when the release manager marks legacy binary compatibility as relevant for
+the release-tag gate. It must use a real released v1.7 coldkeep binary, not a
+local rebuild.
 
 ```bash
 COLDKEEP_V17_BIN=/absolute/path/to/released/coldkeep-v1.7 \
@@ -807,6 +951,10 @@ For this historical v1.6 template, prefer the CI-parity gate flow already define
 
 Use this as the final snapshot gate before tagging a release.
 
+This is a Profile B release-tag/manual gate. It is required for releases or
+changes that affect snapshot/retention behavior, and optional for ordinary
+pre-PR Profile A validation unless the release manager promotes it.
+
 ### Phase 1 - schema / invariants
 
 - [ ] `snapshot` and `snapshot_file` tables exist in both SQLite and PostgreSQL paths
@@ -995,6 +1143,9 @@ Additional CLI validation and policy checks:
 
 Run this manual lifecycle gate after core CI/test gates pass.
 
+This is a Profile B manual gate. It is required for release-tag validation or
+snapshot/retention-impacting changes, not for every small PR.
+
 Naming note for this gate: `pre-gc-gate` is the `snapshot_id` system identifier.
 Create it with `--id`, then pass it positionally to `snapshot restore`,
 `snapshot diff`, and `snapshot delete`. If you also set `--label`, treat it as
@@ -1029,26 +1180,26 @@ metadata only (never as a command target).
 
 Confirm:
 
-- [x] Snapshot create succeeds
-- [x] Removing current mapping is refused while the logical file is snapshot-retained
-- [x] GC dry-run reports snapshot-retained logical files before snapshot delete
-- [x] Snapshot restore succeeds from retained snapshot data
-- [x] Snapshot diff works and output is consistent with returned entries
-- [x] Snapshot delete succeeds only with `--force`
-- [x] GC eligibility changes only after all retaining snapshots are deleted
+- [ ] Snapshot create succeeds
+- [ ] Removing current mapping is refused while the logical file is snapshot-retained
+- [ ] GC dry-run reports snapshot-retained logical files before snapshot delete
+- [ ] Snapshot restore succeeds from retained snapshot data
+- [ ] Snapshot diff works and output is consistent with returned entries
+- [ ] Snapshot delete succeeds only with `--force`
+- [ ] GC eligibility changes only after all retaining snapshots are deleted
 
 ## 18) Final global sign-off
 
-- [x] Doctor checks passed
-- [x] Validation matrix audit passed
-- [x] Bootstrap on/off behavior verified
-- [x] Clean install path verified
-- [x] CLI contract stability verified
-- [x] Batch CLI contract stability verified
-- [x] v1.2 physical-file contract verified (G10–G13)
-- [x] v1.6 observability / simulation contract verified (non-gating per historical template sections 12-14)
-- [x] Snapshot phase checklist verified (Phases 1-7)
-- [x] Snapshot C. test surface checklist verified
-- [x] Snapshot D. documentation/release checklist verified
-- [x] Snapshot/retention manual gate verified
-- [x] Release PR description follows `.github/pull_request_template.md`
+- [ ] Doctor checks passed
+- [ ] Validation matrix audit passed
+- [ ] Bootstrap on/off behavior verified
+- [ ] Clean install path verified
+- [ ] CLI contract stability verified
+- [ ] Batch CLI contract stability verified
+- [ ] v1.2 physical-file contract verified (G10–G13)
+- [ ] v1.6 observability / simulation contract verified (non-gating per historical template sections 12-14)
+- [ ] Snapshot phase checklist verified (Phases 1-7)
+- [ ] Snapshot C. test surface checklist verified
+- [ ] Snapshot D. documentation/release checklist verified
+- [ ] Snapshot/retention manual gate verified
+- [ ] Release PR description follows `.github/pull_request_template.md`
