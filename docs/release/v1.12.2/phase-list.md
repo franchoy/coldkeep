@@ -129,6 +129,8 @@ Acceptance criteria:
 
 ## Phase 4 - Final Patch Release Gate
 
+Status: Complete
+
 Objective: verify and record v1.12.2 patch-release readiness.
 
 Included scope:
@@ -159,3 +161,5 @@ Acceptance criteria:
 - Mandatory final gate is green or every failure is explicitly documented and resolved before readiness is claimed.
 - Scope risks are closed or explicitly accepted.
 - v1.12.2 readiness is only claimed after the gate is green and recorded.
+- Closure evidence: `docs/release/v1.12.2/release-gate.md` records the green final gate,
+  compatibility statement, residual risks, merge readiness decision, and tag recommendation.

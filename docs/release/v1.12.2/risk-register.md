@@ -4,7 +4,7 @@
 
 Severity: High
 
-Status: Open
+Status: Closed
 
 Mitigation: Keep scope limited to stale v1.12.1 docs, `search --extension` parser alignment, selected empty-value parser-path regression tests, and final gate documentation.
 
@@ -20,11 +20,13 @@ No new CLI validation family or search feature was added.
 Phase 3 evidence: added regression tests for existing v1.12.1 empty-value validation claims only;
 no production code or new validation family was added.
 
+Final evidence: final diff and release gate stayed within the approved v1.12.2 hygiene scope.
+
 ## CK-1122-R002 - `search --extension` parser alignment changes unsupported-flag semantics unexpectedly
 
 Severity: Medium
 
-Status: Open
+Status: Closed
 
 Mitigation: Inspect and test the real parser path before changing behavior. Keep unsupported-flag handling unchanged unless the phase documents a compatibility-safe reason.
 
@@ -33,11 +35,13 @@ Evidence required for closure: Focused parser-path tests and review evidence sho
 Phase 2 evidence: parser-path coverage asserts `search --extension .txt` still fails with
 `unknown flag(s) for search: extension`; non-empty extension search was not made supported.
 
+Final evidence: final release gate passed with `search --extension` still unsupported by search.
+
 ## CK-1122-R003 - Parser-path tests accidentally encode implementation details too tightly
 
 Severity: Medium
 
-Status: Open
+Status: Closed
 
 Mitigation: Assert user-visible parser behavior and error outcomes rather than helper names, internal call order, or private implementation structure.
 
@@ -51,11 +55,14 @@ Phase 3 evidence: parser-path tests invoke `parseCommandLine` with user-facing c
 before command dispatch and assert usage-class errors plus stable error substrings, not full
 private formatting or helper internals.
 
+Final evidence: final release gate passed with parser-path tests retained as behavior-level
+regression coverage.
+
 ## CK-1122-R004 - Docs cleanup overclaims release readiness
 
 Severity: Medium
 
-Status: Open
+Status: Closed
 
 Mitigation: Use factual status wording. Do not claim v1.12.2 readiness until the final patch release gate is green and recorded.
 
@@ -65,11 +72,14 @@ Phase 1 evidence: `docs/release/v1.12.1/README.md` now says `Status: Complete / 
 records tag `v1.12.1`, and limits the completion note to the completed v1.12.1 patch release.
 The v1.12.2 docs still require the final v1.12.2 gate before readiness is claimed.
 
+Final evidence: readiness is claimed only in the final release gate after the full validation
+sequence passed.
+
 ## CK-1122-R005 - Patch release drifts into v1.13 architecture work
 
 Severity: High
 
-Status: Open
+Status: Closed
 
 Mitigation: Keep engine, catalog, storage, schema, repository format, backend, daemon, API, UI, NAS, cloud, and migration work explicitly out of scope.
 
@@ -83,3 +93,7 @@ v1.12.2 release-tracking docs; no v1.13 architecture or migration files changed.
 
 Phase 3 evidence: changes were limited to CLI tests and v1.12.2 release-tracking docs; no
 production, architecture, migration, schema, repository-format, storage, or backend files changed.
+
+Final evidence: final release gate and Phase 4 changes were docs-only; no v1.13 architecture,
+migration, schema, repository-format, storage, backend, daemon, API, UI, NAS, or cloud work entered
+the release.
