@@ -33,6 +33,8 @@ Acceptance criteria:
 
 ## Phase 1 - v1.12.1 Release Documentation Status Cleanup
 
+Status: Complete
+
 Objective: correct stale v1.12.1 documentation status wording.
 
 Included scope:
@@ -57,6 +59,8 @@ Acceptance criteria:
 - Stale v1.12.1 status wording is corrected.
 - Documentation does not overclaim v1.12.2 readiness.
 - No source-code behavior changes are introduced.
+- Closure evidence: `docs/release/v1.12.1/README.md` now says `Status: Complete / Released`,
+  records release tag `v1.12.1`, and notes that the final release gate passed before merge.
 
 ## Phase 2 - `search --extension` Parser Alignment
 

@@ -2,10 +2,15 @@
 
 Release name: v1.12.1 - Post-Migration CLI Contract Hardening
 
-Status: Planning / Phase 0
+Status: Complete / Released
 Base release: v1.12.0
 Release type: Patch-level hardening release
 Branch: `release/v1.12.1`
+Release tag: `v1.12.1`
+
+Completion note: v1.12.1 was completed as a patch release for post-migration CLI contract
+hardening. The full final release gate passed before merge, and the release was tagged as
+`v1.12.1`.
 
 ## Purpose
 

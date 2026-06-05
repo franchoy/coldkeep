@@ -10,6 +10,9 @@ Mitigation: Keep scope limited to stale v1.12.1 docs, `search --extension` parse
 
 Evidence required for closure: Final diff shows no new validation family work beyond the approved parser-alignment and selected empty-value test scope.
 
+Phase 1 evidence: docs-only cleanup changed v1.12.1 release status wording and v1.12.2 tracking
+docs only; no CLI validation family was added.
+
 ## CK-1122-R002 - `search --extension` parser alignment changes unsupported-flag semantics unexpectedly
 
 Severity: Medium
@@ -40,6 +43,10 @@ Mitigation: Use factual status wording. Do not claim v1.12.2 readiness until the
 
 Evidence required for closure: Updated docs distinguish planning, completed v1.12.1 cleanup, and v1.12.2 readiness conditions clearly.
 
+Phase 1 evidence: `docs/release/v1.12.1/README.md` now says `Status: Complete / Released`,
+records tag `v1.12.1`, and limits the completion note to the completed v1.12.1 patch release.
+The v1.12.2 docs still require the final v1.12.2 gate before readiness is claimed.
+
 ## CK-1122-R005 - Patch release drifts into v1.13 architecture work
 
 Severity: High
@@ -49,3 +56,6 @@ Status: Open
 Mitigation: Keep engine, catalog, storage, schema, repository format, backend, daemon, API, UI, NAS, cloud, and migration work explicitly out of scope.
 
 Evidence required for closure: Final diff contains no v1.13 architecture, migration, schema, repository-format, or backend changes.
+
+Phase 1 evidence: docs-only status cleanup did not touch engine, catalog, storage, schema,
+repository format, backend, daemon, API, UI, NAS, cloud, or migration files.
