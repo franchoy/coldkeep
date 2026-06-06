@@ -11,6 +11,7 @@
   only approved generated outputs are removed or ignored and no intentional benchmark baselines are
   removed.
 - Phase 3: run the final hygiene release gate and record the outcome before claiming readiness.
+  Closure evidence is recorded in `docs/release/v1.12.3/release-gate.md`.
 
 ## Final Hygiene Release Gate
 
@@ -30,6 +31,8 @@ git status -sb
 
 The release is ready for PR review only after the Phase 3 gate is green and the result is
 recorded.
+
+Final gate status: green, recorded in `docs/release/v1.12.3/release-gate.md`.
 
 ## No-Go Checks
 

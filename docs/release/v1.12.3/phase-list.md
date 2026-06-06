@@ -105,6 +105,8 @@ Acceptance criteria:
 
 ## Phase 3 - Final Hygiene Release Gate
 
+Status: Complete
+
 Objective: verify and record v1.12.3 hygiene-release readiness.
 
 Included scope:
@@ -139,3 +141,6 @@ Acceptance criteria:
 - Scope risks are closed or explicitly accepted.
 - v1.12.3 readiness is only claimed after the gate is green and recorded.
 - Final confirmation shows the release stayed hygiene-only and on `release/v1.12.3`.
+- Closure evidence: `docs/release/v1.12.3/release-gate.md` records the green final hygiene gate,
+  confirms generated artifacts are no longer tracked, confirms benchmark baselines remain tracked,
+  and records PR readiness plus the v1.12.x closure decision.
