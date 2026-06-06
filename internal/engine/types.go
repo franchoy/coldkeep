@@ -49,4 +49,9 @@ type VerifyRequest struct {
 // Verify is pass-or-fail; a nil error from Engine.Verify means the repository
 // passed at the requested level. Non-nil errors preserve the underlying
 // verify.VerifyFailure chain.
+//
+// v1.13.1 intentionally keeps this result empty: it is a minimal success-only
+// placeholder, not a stable rich verification payload. Error taxonomy cleanup
+// belongs to v1.13.2, and deeper verification/invariant ownership work belongs
+// to v1.13.5.
 type VerifyResult struct{}
