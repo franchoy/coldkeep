@@ -182,11 +182,23 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
+// Transitional CLI ownership in v1.13.1: doctor still owns corrective
+// recovery orchestration directly through recovery hooks. v1.13.9 owns any
+// later repair/recovery boundary decisions, and v1.13.11 owns remaining
+// thin-wrapper proof around this seam.
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
+
+// Transitional CLI ownership in v1.13.1: repair remains direct maintenance
+// execution rather than active engine ownership. v1.13.9 owns broader
+// repair/recovery boundary decisions.
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
+
+// Transitional CLI ownership in v1.13.1: chunk live-ref-count repair remains
+// a direct maintenance phase hook, not an engine-routed workflow. v1.13.9 owns
+// later cleanup if this boundary changes.
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
@@ -335,7 +347,15 @@ var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, 
 }
 var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
+
+// Transitional CLI ownership in v1.13.1: snapshot create remains a direct
+// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// the snapshot mutation boundary cleanup.
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
+
+// Transitional CLI ownership in v1.13.1: snapshot restore remains a direct
+// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// later snapshot mutation boundary cleanup.
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
 var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
 	eng, err := engine.New(engine.Config{DB: db})
@@ -408,6 +428,10 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 	}
 	return stats, nil
 }
+
+// Transitional CLI ownership in v1.13.1: snapshot delete remains a direct
+// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// later snapshot mutation boundary cleanup.
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
