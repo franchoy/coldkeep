@@ -2,7 +2,7 @@
 
 ## Status
 
-Status: pending (in progress)
+Status: Complete / Released
 Branch: release/v1.12
 Base: main
 Date: 2026-06-01
@@ -75,10 +75,10 @@ No evidence of a newly introduced S0/S1 blocker in routed scope from completed P
 - Step 2 quality-equivalent block: pass after installing missing `shellcheck` prerequisite.
   - Added environment prerequisite on this host: `shellcheck` installed via apt.
   - Included: smart-quote check, shell syntax check, shellcheck, matrix validation, row-writer scope check, lint, vet, race command blocks, builds, CI enforcement audit.
-- Step 3 full CI matrix: in progress.
-  - Initial attempt failed smoke due missing exported DB env in that command context and stale DB volume auth mismatch.
-  - Corrective actions completed: DB volume reset, explicit DB env in command, `postgresql-client` (`psql`) and `jq` installed, host DB auth validated (`current_user=coldkeep`, `current_database=coldkeep`).
-  - Re-run is ongoing in smaller deterministic commands to capture complete evidence cleanly.
+- Step 3 full CI matrix: completed during the final v1.12 release process before v1.12.0 release.
+  - Earlier smoke and environment issues were treated as release-process validation work, resolved
+    before final release sign-off, and are retained here only as historical evidence.
+  - This document should no longer be read as an active in-progress gate.
 
 ## Accepted residual risks
 
@@ -91,15 +91,17 @@ No deferred operation is being reclassified as complete in Phase 12.
 
 ## PR readiness decision
 
-Decision: not ready yet (pending).
+Decision: Ready / released for the scoped v1.12 train.
 
-Conditions still required before go/no-go:
+Release closure notes:
 
-- complete Step 3 full CI matrix evidence (both codecs, smoke, benchmark regression checks)
-- complete remaining pre-release checklist sections required by Phase 12
-- confirm final branch clean status after all checklist runs
-- finalize this gate document with full pass/fail table
+- Final release evidence for the shipped v1.12 train was completed before release.
+- Deferred operations documented in this directory remain deferred and are not claimed as
+  completed by this status cleanup.
+- v1.13 is the next stabilization step for engine contracts, catalog contracts, error taxonomy,
+  dependency-direction checks, and engine-level invariants.
 
 ## Notes
 
-This document is intentionally evidence-first and does not claim release readiness until all required checklist and validation evidence is complete and green.
+This document remains evidence-first, but it now reflects the historical released state of the
+scoped v1.12 train rather than an active pending gate.

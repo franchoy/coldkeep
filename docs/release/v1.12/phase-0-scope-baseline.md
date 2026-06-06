@@ -1,7 +1,7 @@
 # v1.12 Phase 0 — Scope Lock, Baseline, and Risk Inventory
 
 Release: v1.12 — Orchestration Migration and Catalog Facade Preparation
-Status: In progress
+Status: Complete
 
 ## Objective
 
@@ -91,3 +91,9 @@ Phase 0 is complete when:
 - This Phase 0 baseline is merged.
 - Risk `CK-112-R001` (engine `Verify` DB ownership) is the first code target.
 - Read-side routing parity for `inspect` and `verify system` requires parity tests before routing.
+
+## Closure note
+
+This Phase 0 baseline was completed as the release-train scope lock for the shipped v1.12 work.
+Its documented deferred risks and entry criteria remain part of the historical release record and
+do not imply that every deferred operation was completed inside v1.12.

@@ -1,6 +1,6 @@
 # Coldkeep v1.12 Release Train
 
-Status: Planning / Phase 0
+Status: Complete / Released
 Base release: v1.11.0
 Target: Full logic migration, catalog facade, and SQLite/PostgreSQL compatibility preparation
 
@@ -31,11 +31,12 @@ clean API.
 
 ## Completion principle
 
-v1.12 is not considered complete because packages exist.
+v1.12 was not considered complete merely because packages existed.
 
-It is complete only when operation orchestration is routed through engine/catalog APIs without
-behavior drift. v1.12 is explicitly about moving orchestration into the engine and centralizing
-metadata access, not just creating empty architecture packages.
+It was considered complete only when the scoped operation orchestration was routed through
+engine/catalog APIs without behavior drift. The released v1.12 train completed that scoped
+orchestration migration and centralized metadata access for the approved operations; intentionally
+deferred operations remained outside the routed scope and were not reclassified as complete.
 
 ## Documents in this directory
 
@@ -55,8 +56,17 @@ metadata access, not just creating empty architecture packages.
 
 ```
 v1.11.0  — Behavior-preserving engine facade (complete)
-v1.12    — Orchestration migration and catalog facade (this train)
-v1.13    — Engine contract stabilization and SQLite/PostgreSQL compatibility gates
+v1.12    — Orchestration migration and catalog facade (complete / released)
+v1.13    — Engine contract stabilization, catalog contract stabilization, error taxonomy,
+           dependency-direction checks, and engine-level invariants
 v2.x     — Local-first productization: daemon, API, CLI thin client, UI, scheduling
 v3.x     — Network, NAS, cloud, multi-user
 ```
+
+## Handoff
+
+The v1.12 release train is complete and released through v1.12.0, v1.12.1, and v1.12.2.
+Deferred operations remain documented in the v1.12 release evidence and are not being rewritten as
+completed here. The next architecture-stabilization step is v1.13, which should focus on engine
+contracts, catalog contracts, error taxonomy, dependency-direction checks, and engine-level
+invariants.
