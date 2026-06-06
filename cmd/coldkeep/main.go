@@ -217,6 +217,9 @@ var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName strin
 	}, nil
 }
 var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun bool) batch.ItemResult {
+	// Partial route in v1.13.1: by-ID remove uses engine item execution, but
+	// stored-path and stored-paths remove remain direct CLI/storage paths until
+	// the explicit split cleanup in v1.13.7.
 	if sgctx == nil || sgctx.DB == nil {
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: "remove: storage context DB is required"}
 	}
@@ -258,6 +261,9 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", item.RemovedMappings)}
 }
 var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
+	// Partial route in v1.13.1: by-ID restore uses engine item execution, but
+	// stored-path restore remains a direct CLI/storage path until the explicit
+	// split cleanup in v1.13.7.
 	if sgctx == nil || sgctx.DB == nil {
 		return storage.RestoreFileResult{}, fmt.Errorf("restore: storage context DB is required")
 	}
@@ -358,6 +364,9 @@ var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.S
 	return items, nil
 }
 var getSnapshotPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.Snapshot, error) {
+	// Mixed route in v1.13.1: snapshot show still assembles metadata, file
+	// listing, and counts across multiple seams. Engine ownership is not yet a
+	// complete read workflow; v1.13.3 owns that cleanup.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -369,8 +378,14 @@ var getSnapshotPhase = func(ctx context.Context, db *sql.DB, id string) (*snapsh
 	s := snapshotMetaToSnapshot(result.Snapshot)
 	return &s, nil
 }
+
+// Mixed route in v1.13.1: snapshot show file listing remains direct snapshot
+// package work even when snapshot metadata comes from engine-backed lookup.
 var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
 var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.SnapshotStats, error) {
+	// Mixed route in v1.13.1: snapshot show and snapshot stats still depend on
+	// direct snapshot stats helpers even when adjacent metadata comes from
+	// engine-backed seams. v1.13.3 owns full read-side cleanup.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -396,6 +411,10 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+	// Partial route in v1.13.1: snapshot diff adapts richer CLI/query semantics
+	// into the narrower engine request surface. Only one exact path and one
+	// prefix can cross this seam today; v1.13.3 owns the broader read-side
+	// contract cleanup.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -501,6 +520,9 @@ var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observa
 	return result.Raw, nil
 }
 var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+	// Direct CLI bypass in v1.13.1: inspect production calls still use the
+	// observability service directly even though engine.Inspect exists. v1.13.3
+	// owns any future read-side routing cleanup.
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return nil, err
