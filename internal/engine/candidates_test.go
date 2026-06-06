@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,6 +41,112 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 		t.Errorf("Engine interface has %d methods, want exactly %d %v; got %v",
 			len(got), len(want), want, names)
 	}
+}
+
+// TestEngineActiveInterfaceExcludesCandidateOnlyOperations proves the active
+// Engine interface still excludes future-only snapshot mutation and corrective
+// integrity operations. Their request/result types are intentionally present as
+// candidate contracts, but v1.13.1 must not imply they are active engine-owned
+// methods.
+func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
+	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
+
+	got := make([]string, 0, typ.NumMethod())
+	for i := 0; i < typ.NumMethod(); i++ {
+		got = append(got, typ.Method(i).Name)
+	}
+
+	for _, forbidden := range []string{
+		"SnapshotCreate",
+		"SnapshotDelete",
+		"SnapshotRestore",
+		"Repair",
+		"Recover",
+	} {
+		if slices.Contains(got, forbidden) {
+			t.Fatalf("Engine interface unexpectedly exposes candidate-only method %q; active methods=%v", forbidden, got)
+		}
+	}
+}
+
+// TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership
+// documents which request/result pairs are intentionally future-only in
+// v1.13.1 and ties them to the approved active engine method set.
+func TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership(t *testing.T) {
+	activeMethods := activeEngineMethodSet()
+
+	cases := []struct {
+		name              string
+		requestType       any
+		resultType        any
+		forbiddenMethod   string
+		laterOwnerRelease string
+	}{
+		{
+			name:              "snapshot create",
+			requestType:       engine.SnapshotCreateRequest{},
+			resultType:        engine.SnapshotCreateResult{},
+			forbiddenMethod:   "SnapshotCreate",
+			laterOwnerRelease: "v1.13.8",
+		},
+		{
+			name:              "snapshot delete",
+			requestType:       engine.SnapshotDeleteRequest{},
+			resultType:        engine.SnapshotDeleteResult{},
+			forbiddenMethod:   "SnapshotDelete",
+			laterOwnerRelease: "v1.13.8",
+		},
+		{
+			name:              "snapshot restore",
+			requestType:       engine.SnapshotRestoreRequest{},
+			resultType:        engine.SnapshotRestoreResult{},
+			forbiddenMethod:   "SnapshotRestore",
+			laterOwnerRelease: "v1.13.8",
+		},
+		{
+			name:              "repair",
+			requestType:       engine.RepairRequest{},
+			resultType:        engine.RepairResult{},
+			forbiddenMethod:   "Repair",
+			laterOwnerRelease: "v1.13.9",
+		},
+		{
+			name:              "recover",
+			requestType:       engine.RecoverRequest{},
+			resultType:        engine.RecoverResult{},
+			forbiddenMethod:   "Recover",
+			laterOwnerRelease: "v1.13.9",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if activeMethods[tc.forbiddenMethod] {
+				t.Fatalf("candidate-only contract %q unexpectedly has active engine method %q", tc.name, tc.forbiddenMethod)
+			}
+
+			reqType := reflect.TypeOf(tc.requestType)
+			resType := reflect.TypeOf(tc.resultType)
+			if reqType.Name() == "" || resType.Name() == "" {
+				t.Fatalf("candidate-only contract %q must remain a named request/result type", tc.name)
+			}
+			if reqType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" || resType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" {
+				t.Fatalf("candidate-only contract %q moved outside engine package unexpectedly", tc.name)
+			}
+			if tc.laterOwnerRelease == "" {
+				t.Fatalf("candidate-only contract %q must record a later owner release", tc.name)
+			}
+		})
+	}
+}
+
+func activeEngineMethodSet() map[string]bool {
+	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
+	methods := make(map[string]bool, typ.NumMethod())
+	for i := 0; i < typ.NumMethod(); i++ {
+		methods[typ.Method(i).Name] = true
+	}
+	return methods
 }
 
 // TestCandidateContractsAreRendererNeutral verifies that mutating operation

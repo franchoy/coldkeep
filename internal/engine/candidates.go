@@ -77,10 +77,18 @@ type BatchSummary struct {
 // snapshot show, diff, and restore. All fields are optional; zero values mean
 // "no filter on this dimension". Size and time fields use pointers so that a
 // zero value can be distinguished from "unset".
+//
+// Support limitation in v1.13.1: only one exact Path and one Prefix can cross
+// the current engine seam, even though CLI parsing may accept richer repeated
+// path/prefix inputs before narrowing. Query-shape cleanup belongs to v1.13.3.
 type SnapshotQuery struct {
 	// Path matches an exact stored path.
+	// Support limitation in v1.13.1: only one exact path is preserved at the
+	// current engine seam.
 	Path string
 	// Prefix matches stored paths by prefix.
+	// Support limitation in v1.13.1: only one prefix is preserved at the
+	// current engine seam.
 	Prefix string
 	// Pattern is a glob-style match against stored paths.
 	Pattern string
@@ -105,8 +113,10 @@ type SnapshotQuery struct {
 // StoreRequest is a candidate request for a future Store / store-folder
 // operation. Not part of the active v1.12 Engine interface.
 //
-// Recursive distinguishes single-file store from folder store. Workers applies
-// to folder store only.
+// Support limitation in v1.13.1: the active Engine.Store path owns only
+// single-file store. Recursive/folder semantics remain deferred, and
+// Engine.Store returns ErrNotImplemented when Recursive is true. Full folder
+// store cleanup remains outside engine scope in v2.x.
 type StoreRequest struct {
 	// SourcePath is the file or folder to store.
 	SourcePath string
@@ -114,8 +124,12 @@ type StoreRequest struct {
 	// the repository default.
 	Codec string
 	// Recursive requests folder store semantics (store-folder).
+	// Support limitation in v1.13.1: active Engine.Store callers must leave
+	// this false; true returns ErrNotImplemented.
 	Recursive bool
 	// Workers is the parallelism for folder store; zero means the default.
+	// Support limitation in v1.13.1: this is candidate-only until recursive
+	// folder store is activated outside the current engine route.
 	Workers int
 	// Tags carries optional caller-supplied tags.
 	Tags []string
@@ -180,8 +194,15 @@ const (
 // Safety invariant: Restore must never write outside the intended destination.
 // The destination/mode fields exist precisely so this invariant can be enforced
 // in the engine/catalog rather than only in the CLI.
+//
+// Support limitation in v1.13.1: the active engine route owns only file-ID
+// restore. Stored-path restore and its destination semantics remain outside the
+// active engine path; non-file-ID engine calls return ErrNotImplemented and are
+// covered by Phase 2 tests. Contract split cleanup belongs to v1.13.7.
 type RestoreRequest struct {
 	// Mode selects file-ID or stored-path addressing.
+	// Support limitation in v1.13.1: only RestoreModeFileIDs is active through
+	// Engine.Restore.
 	Mode RestoreMode
 
 	// FileIDs is the set of logical file IDs to restore (Mode == file_ids).
@@ -190,12 +211,18 @@ type RestoreRequest struct {
 	OutputDir string
 
 	// StoredPath is the single stored path to restore (Mode == stored_path).
+	// Support limitation in v1.13.1: this remains a direct CLI/storage concern,
+	// not an active Engine.Restore field.
 	StoredPath string
 	// DestinationMode controls output location derivation for stored-path
 	// restore.
+	// Support limitation in v1.13.1: destination-mode handling applies only to
+	// deferred stored-path restore, not the active file-ID engine route.
 	DestinationMode RestoreDestinationMode
 	// Destination is the prefix or override target, required by prefix/override
 	// destination modes.
+	// Support limitation in v1.13.1: this is meaningful only for deferred
+	// stored-path restore.
 	Destination string
 	// Strict enforces strict metadata application.
 	Strict bool
@@ -212,11 +239,16 @@ type RestoreRequest struct {
 	//
 	// Deferred: whether batch input parsing remains a CLI-level concern or moves
 	// into the engine is decided in Phase 7. Retained here so the contract can
-	// represent the existing command.
+	// represent the existing command, but current engine support still covers
+	// only the file-ID execution subset.
 	InputPath string
 	// Workers is the batch parallelism; zero means the default.
+	// Support limitation in v1.13.1: execution remains sequential today; this
+	// field is provisional rather than proof of active worker support.
 	Workers int
 	// Limit caps the number of restored items when greater than zero.
+	// Support limitation in v1.13.1: this remains a provisional batch-shaping
+	// field on a contract that is not yet split cleanly by ownership.
 	Limit int
 }
 
@@ -269,14 +301,25 @@ const (
 
 // RemoveRequest is a candidate request for a future Remove operation.
 // Not part of the active v1.12 Engine interface.
+//
+// Support limitation in v1.13.1: the active engine route owns only file-ID
+// remove. Stored-path and stored-paths modes remain outside the active engine
+// path; non-file-ID engine calls return ErrNotImplemented and are covered by
+// Phase 2 tests. Contract split cleanup belongs to v1.13.7.
 type RemoveRequest struct {
 	// Mode selects file-ID, single stored-path, or stored-paths addressing.
+	// Support limitation in v1.13.1: only RemoveModeFileIDs is active through
+	// Engine.Remove.
 	Mode RemoveMode
 	// FileIDs is the set of logical file IDs to remove (Mode == file_ids).
 	FileIDs []int64
 	// StoredPath is the single stored path to remove (Mode == stored_path).
+	// Support limitation in v1.13.1: this remains a direct CLI/storage concern,
+	// not an active Engine.Remove field.
 	StoredPath string
 	// StoredPaths is the batch of stored paths (Mode == stored_paths).
+	// Support limitation in v1.13.1: this remains a direct CLI/batch concern,
+	// not an active Engine.Remove field.
 	StoredPaths []string
 	// DryRun simulates without mutating.
 	DryRun bool
@@ -284,7 +327,8 @@ type RemoveRequest struct {
 	FailFast bool
 	// InputPath is an optional batch-input source.
 	//
-	// Deferred: batch input parsing ownership is decided in Phase 9.
+	// Deferred: batch input parsing ownership is decided in Phase 9. The field
+	// remains provisional and does not imply active stored-path engine support.
 	InputPath string
 }
 
@@ -396,6 +440,10 @@ type SnapshotMeta struct {
 // SnapshotCreateRequest is a candidate request for a future SnapshotCreate
 // operation. Not part of the active v1.12 Engine interface.
 //
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Snapshot create/delete/restore remain CLI/domain
+// owned until the explicit snapshot-mutation follow-up in v1.13.8.
+//
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics.
 type SnapshotCreateRequest struct {
@@ -434,11 +482,18 @@ type SnapshotListRequest struct {
 	// Limit caps the number of results when greater than zero.
 	Limit int
 	// Tree requests lineage-tree ordering/visualization data.
+	// Support limitation in v1.13.1: this is a provisional view-shaping flag
+	// and does not prove engine ownership of lineage presentation semantics.
+	// Read-side cleanup belongs to v1.13.3 / v1.13.11.
 	Tree bool
 }
 
 // SnapshotListResult is a candidate result for a future SnapshotList operation.
 // Not part of the active v1.12 Engine interface.
+//
+// Support limitation in v1.13.1: TreeMode and TreeLines are provisional
+// view-shaping fields. They do not prove engine ownership of lineage
+// presentation semantics; read-side cleanup belongs to v1.13.3 / v1.13.11.
 type SnapshotListResult struct {
 	Snapshots []SnapshotMeta
 	Count     int
@@ -467,6 +522,11 @@ type SnapshotShowRequest struct {
 
 // SnapshotShowResult is a candidate result for a future SnapshotShow operation.
 // Not part of the active v1.12 Engine interface.
+//
+// Support limitation in v1.13.1: this coherent result shape is still
+// provisional and does not prove fully unified engine ownership. Metadata,
+// listing, and counts still come from mixed seams; read-side cleanup belongs
+// to v1.13.3.
 type SnapshotShowResult struct {
 	Snapshot SnapshotMeta
 	Files    []SnapshotFile
@@ -537,12 +597,21 @@ type SnapshotDiffEntry struct {
 
 // SnapshotDiffRequest is a candidate request for a future SnapshotDiff
 // operation. Not part of the active v1.12 Engine interface.
+//
+// Support limitation in v1.13.1: summary fast-path behavior and query/filter
+// semantics remain provisional. The CLI can parse richer repeated path/prefix
+// inputs than the current engine seam preserves, and full read-side cleanup
+// belongs to v1.13.3.
 type SnapshotDiffRequest struct {
 	BaseID   string
 	TargetID string
 	// Summary requests the summary-only fast path (no per-entry list).
+	// Support limitation in v1.13.1: when this fast path is used, the current
+	// engine result reports summary-only semantics rather than a full entry list.
 	Summary bool
 	// Filter narrows the diff to a single change class.
+	// Support limitation in v1.13.1: filter behavior is layered on top of a
+	// provisional diff seam and is not yet a frozen contract.
 	Filter SnapshotDiffFilter
 	// Query filters which entries are considered.
 	Query SnapshotQuery
@@ -557,6 +626,11 @@ type SnapshotDiffSummary struct {
 
 // SnapshotDiffResult is a candidate result for a future SnapshotDiff operation.
 // Not part of the active v1.12 Engine interface.
+//
+// Support limitation in v1.13.1: SummaryMode, MatchedEntryCount, and
+// TotalEntryCount are provisional read-side semantics. They reflect the
+// current summary-versus-detailed seam and filtering behavior, not a frozen
+// daemon/API-ready diff contract. Read-side cleanup belongs to v1.13.3.
 type SnapshotDiffResult struct {
 	BaseID   string
 	TargetID string
@@ -572,6 +646,10 @@ type SnapshotDiffResult struct {
 
 // SnapshotRestoreRequest is a candidate request for a future SnapshotRestore
 // operation. Not part of the active v1.12 Engine interface.
+//
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Snapshot create/delete/restore remain CLI/domain
+// owned until the explicit snapshot-mutation follow-up in v1.13.8.
 //
 // Safety invariant: Restore must never write outside the intended destination.
 type SnapshotRestoreRequest struct {
@@ -606,6 +684,10 @@ type SnapshotRestoreResult struct {
 
 // SnapshotDeleteRequest is a candidate request for a future SnapshotDelete
 // operation. Not part of the active v1.12 Engine interface.
+//
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Snapshot create/delete/restore remain CLI/domain
+// owned until the explicit snapshot-mutation follow-up in v1.13.8.
 //
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics. Deleting a snapshot removes only its metadata; content
@@ -651,6 +733,10 @@ const (
 
 // RepairRequest is a candidate request for a future Repair operation.
 // Not part of the active v1.12 Engine interface.
+//
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Repair and recover remain CLI/domain owned until
+// the explicit corrective-integrity follow-up in v1.13.9.
 type RepairRequest struct {
 	// Target selects the single-target repair (when Batch is false).
 	Target RepairTarget
@@ -700,6 +786,10 @@ type RepairResult struct {
 
 // RecoverRequest is a candidate request for a future corrective Recover
 // operation. Not part of the active v1.12 Engine interface.
+//
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Repair and recover remain CLI/domain owned until
+// the explicit corrective-integrity follow-up in v1.13.9.
 //
 // Safety invariant: Recovery must not legitimize corrupt mappings. Recovery is
 // a corrective integrity pass (abort dangling writes, clear stale sealing
