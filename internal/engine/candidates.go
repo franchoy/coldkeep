@@ -396,6 +396,10 @@ type SnapshotMeta struct {
 // SnapshotCreateRequest is a candidate request for a future SnapshotCreate
 // operation. Not part of the active v1.12 Engine interface.
 //
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Snapshot create/delete/restore remain CLI/domain
+// owned until the explicit snapshot-mutation follow-up in v1.13.8.
+//
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics.
 type SnapshotCreateRequest struct {
@@ -573,6 +577,10 @@ type SnapshotDiffResult struct {
 // SnapshotRestoreRequest is a candidate request for a future SnapshotRestore
 // operation. Not part of the active v1.12 Engine interface.
 //
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Snapshot create/delete/restore remain CLI/domain
+// owned until the explicit snapshot-mutation follow-up in v1.13.8.
+//
 // Safety invariant: Restore must never write outside the intended destination.
 type SnapshotRestoreRequest struct {
 	SnapshotID string
@@ -606,6 +614,10 @@ type SnapshotRestoreResult struct {
 
 // SnapshotDeleteRequest is a candidate request for a future SnapshotDelete
 // operation. Not part of the active v1.12 Engine interface.
+//
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Snapshot create/delete/restore remain CLI/domain
+// owned until the explicit snapshot-mutation follow-up in v1.13.8.
 //
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics. Deleting a snapshot removes only its metadata; content
@@ -651,6 +663,10 @@ const (
 
 // RepairRequest is a candidate request for a future Repair operation.
 // Not part of the active v1.12 Engine interface.
+//
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Repair and recover remain CLI/domain owned until
+// the explicit corrective-integrity follow-up in v1.13.9.
 type RepairRequest struct {
 	// Target selects the single-target repair (when Batch is false).
 	Target RepairTarget
@@ -700,6 +716,10 @@ type RepairResult struct {
 
 // RecoverRequest is a candidate request for a future corrective Recover
 // operation. Not part of the active v1.12 Engine interface.
+//
+// Candidate-only in v1.13.1: request/result presence must not be mistaken for
+// active engine ownership. Repair and recover remain CLI/domain owned until
+// the explicit corrective-integrity follow-up in v1.13.9.
 //
 // Safety invariant: Recovery must not legitimize corrupt mappings. Recovery is
 // a corrective integrity pass (abort dangling writes, clear stale sealing
