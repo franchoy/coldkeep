@@ -71,4 +71,7 @@ git ls-files benchmark-none-w1.json benchmark-none-w4.json benchmark-zstd-w1.jso
   baseline.
 - Remove only approved generated outputs that are tracked.
 - Add ignore rules only if they prevent the same generated local outputs from being retracked.
+- Confirm ignore rules cover generated root `benchmark-none-*`, `benchmark-zstd-*`,
+  `regression-report-*`, and optional local `artifacts/` outputs without matching committed
+  benchmark baseline files.
 - Confirm benchmark baselines and meaningful release evidence remain visible after cleanup.

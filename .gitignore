@@ -98,6 +98,10 @@ out/
 # benchmark output
 # =========================
 .bench_*
+benchmark-none-*.json
+benchmark-zstd-*.json
+regression-report-*.json
+artifacts/
 
 # =========================
 # phase output

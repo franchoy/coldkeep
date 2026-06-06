@@ -71,6 +71,8 @@ Acceptance criteria:
 
 ## Phase 2 - Generated Validation Artifact Cleanup
 
+Status: Complete
+
 Objective: remove misleading generated root validation outputs and prevent them from reappearing as
 tracked release evidence.
 
@@ -97,6 +99,9 @@ Acceptance criteria:
 - Intentional committed benchmark baselines remain intact.
 - Ignore rules do not hide meaningful committed release evidence.
 - No product behavior or test changes are introduced.
+- Closure evidence: the eight tracked root `benchmark-none-*`, `benchmark-zstd-*`, and
+  `regression-report-*` generated outputs were removed, `.gitignore` now blocks those generated
+  validation outputs plus `artifacts/`, and the committed benchmark baseline files were preserved.
 
 ## Phase 3 - Final Hygiene Release Gate
 

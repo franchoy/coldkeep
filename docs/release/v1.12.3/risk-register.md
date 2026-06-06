@@ -48,6 +48,13 @@ safe and reviewed later.
 Evidence required for closure: Cleanup evidence shows only approved generated outputs were removed
 and benchmark baseline files were left intact unless explicitly proven generated and obsolete.
 
+Phase 2 evidence: the tracked generated root files `benchmark-none-w1.json`,
+`benchmark-none-w4.json`, `benchmark-zstd-w1.json`, `benchmark-zstd-w4.json`,
+`regression-report-none-w1.json`, `regression-report-none-w4.json`,
+`regression-report-zstd-w1.json`, and `regression-report-zstd-w4.json` were removed. The tracked
+baseline files `benchmark-baseline.json`, `benchmark-baseline-w4.json`, and
+`benchmark-baseline-committed.json` were preserved.
+
 ## CK-1123-R004 - Ignore rules hide meaningful committed release evidence
 
 Severity: Medium
@@ -60,6 +67,10 @@ before merging.
 
 Evidence required for closure: Ignore-rule diff is narrowly scoped and does not match meaningful
 committed release evidence, benchmark baselines, or archival docs.
+
+Phase 2 evidence: `.gitignore` now ignores `benchmark-none-*.json`, `benchmark-zstd-*.json`,
+`regression-report-*.json`, and `artifacts/` only. The new patterns do not match
+`benchmark-baseline.json`, `benchmark-baseline-w4.json`, or `benchmark-baseline-committed.json`.
 
 ## CK-1123-R005 - v1.12.3 drifts into v1.13 implementation work
 
