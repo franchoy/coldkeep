@@ -13,6 +13,11 @@ parser, CLI, JSON, exit-code, schema, storage, backend, or engine change from th
 Evidence required for closure: Final diff shows no product behavior changes and no Go files or
 tests changed.
 
+Phase 1 evidence: changes were limited to `docs/release/v1.12/*` release-state wording and
+`docs/release/v1.12.3/*` tracking docs. No Go files, tests, parser behavior, CLI behavior, JSON
+behavior, exit-code behavior, schema behavior, storage behavior, backend behavior, or engine
+behavior changed.
+
 ## CK-1123-R002 - v1.12 status cleanup overclaims completion or hides deferred work
 
 Severity: Medium
@@ -24,6 +29,11 @@ matter, and distinguish completed v1.12 release-train work from planned v1.13 st
 
 Evidence required for closure: Updated v1.12 docs clearly mark release-train completion without
 claiming v1.12.3 readiness early or erasing deferred items that still belong to later work.
+
+Phase 1 evidence: `docs/release/v1.12/README.md` now says `Status: Complete / Released`,
+`phase-0-scope-baseline.md` now says `Status: Complete`, and `release-candidate-gate.md` now says
+`Decision: Ready / released for the scoped v1.12 train`. Deferred operations remain explicitly
+documented and v1.13 is identified as the next stabilization step.
 
 ## CK-1123-R003 - Generated artifact cleanup removes intentional benchmark baselines
 
@@ -64,3 +74,7 @@ implementation instead of handoff hygiene.
 Evidence required for closure: Final diff contains only approved v1.12.3 hygiene changes and no
 v1.13 implementation, migration, schema, repository-format, storage, backend, engine, parser, or
 CLI work.
+
+Phase 1 evidence: the update adds a v1.13 handoff note only as release-state documentation. No
+v1.13 implementation, migration, schema, repository-format, storage, backend, engine, parser, or
+CLI work was started.

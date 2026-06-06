@@ -36,6 +36,8 @@ Acceptance criteria:
 
 ## Phase 1 - v1.12 Release Train Status Cleanup
 
+Status: Complete
+
 Objective: correct stale v1.12 release-train status wording and clarify handoff state.
 
 Included scope:
@@ -63,6 +65,9 @@ Acceptance criteria:
 - Documentation does not overclaim v1.12.3 readiness or hide deferred work.
 - v1.13 is described as the next step without starting implementation work.
 - No source-code or test changes are introduced.
+- Closure evidence: `docs/release/v1.12/README.md`, `phase-0-scope-baseline.md`, and
+  `release-candidate-gate.md` now reflect the released v1.12 state, preserve deferred-operation
+  language, and point to v1.13 as the next stabilization step.
 
 ## Phase 2 - Generated Validation Artifact Cleanup
 
