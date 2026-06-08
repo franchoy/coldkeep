@@ -36,6 +36,9 @@ func TestStoreRecursiveReturnsErrNotImplementedWithoutMutation(t *testing.T) {
 	if !errors.Is(err, engine.ErrNotImplemented) {
 		t.Fatalf("expected ErrNotImplemented for recursive store, got %v", err)
 	}
+	if !engine.IsUnsupported(err) {
+		t.Fatalf("expected recursive store error to classify as unsupported, got %v", err)
+	}
 	after := countLogicalFiles(t, db)
 	if after != before {
 		t.Fatalf("recursive unsupported mode should not mutate logical_file rows: before=%d after=%d", before, after)
@@ -57,6 +60,9 @@ func TestRestoreStoredPathReturnsErrNotImplementedWithoutMutation(t *testing.T) 
 	if !errors.Is(err, engine.ErrNotImplemented) {
 		t.Fatalf("expected ErrNotImplemented for stored-path restore, got %v", err)
 	}
+	if !engine.IsUnsupported(err) {
+		t.Fatalf("expected stored-path restore error to classify as unsupported, got %v", err)
+	}
 	after := countLogicalFiles(t, db)
 	if after != before {
 		t.Fatalf("stored-path unsupported mode should not mutate logical_file rows: before=%d after=%d", before, after)
@@ -75,6 +81,9 @@ func TestRemoveStoredPathReturnsErrNotImplementedWithoutMutation(t *testing.T) {
 	})
 	if !errors.Is(err, engine.ErrNotImplemented) {
 		t.Fatalf("expected ErrNotImplemented for stored-path remove, got %v", err)
+	}
+	if !engine.IsUnsupported(err) {
+		t.Fatalf("expected stored-path remove error to classify as unsupported, got %v", err)
 	}
 	after := countLogicalFiles(t, db)
 	if after != before {
@@ -102,6 +111,9 @@ func TestRemoveStoredPathsReturnsErrNotImplementedWithoutMutation(t *testing.T) 
 	})
 	if !errors.Is(err, engine.ErrNotImplemented) {
 		t.Fatalf("expected ErrNotImplemented for stored-paths remove, got %v", err)
+	}
+	if !engine.IsUnsupported(err) {
+		t.Fatalf("expected stored-paths remove error to classify as unsupported, got %v", err)
 	}
 	after := countLogicalFiles(t, db)
 	if after != before {
@@ -131,4 +143,14 @@ func assertDirectoryEmpty(t *testing.T, dir string) {
 	if len(entries) != 0 {
 		t.Fatalf("expected directory %q to remain empty, found %d entries", dir, len(entries))
 	}
+}
+
+func storeRemoveFixtureSecondPath(t *testing.T, sgctx storage.StorageContext) (storage.StoreFileResult, error) {
+	t.Helper()
+
+	secondPath := filepath.Join(t.TempDir(), "remove-unsupported-isunsupported-batch-2.txt")
+	if err := os.WriteFile(secondPath, []byte("phase3-remove-unsupported-batch-2"), 0600); err != nil {
+		return storage.StoreFileResult{}, err
+	}
+	return storage.StoreFileWithStorageContextAndCodecResult(sgctx, secondPath, blocks.CodecPlain)
 }
