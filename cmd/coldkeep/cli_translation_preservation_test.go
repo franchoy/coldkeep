@@ -46,6 +46,26 @@ func TestCLIValidationErrorTranslationRemainsStable(t *testing.T) {
 }
 
 func TestCLIDomainErrorTranslationRemainsStable(t *testing.T) {
+	installSnapshotDeletePreviewFailure(t)
+
+	err := runSnapshotDeleteDryRunJSON(t, "missing-snap")
+	assertCLIErrorExitCode(t, err, exitGeneral)
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitGeneral {
+			t.Fatalf("expected general exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	payload := assertSingleJSONObjectLine(t, output)
+	message := assertDomainErrorEnvelope(t, payload, `snapshot "missing-snap" not found`)
+	assertNoTaxonomyLeak(t, payload, message)
+}
+
+func installSnapshotDeletePreviewFailure(t *testing.T) {
+	t.Helper()
+
 	originalLoad := loadDefaultStorageContextPhase
 	originalDelete := deleteSnapshotPhase
 	originalPreview := snapshotDeleteLineagePreviewPhase
@@ -69,55 +89,83 @@ func TestCLIDomainErrorTranslationRemainsStable(t *testing.T) {
 	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
 		return nil, fmt.Errorf("snapshot %q not found", snapshotID)
 	}
+}
 
-	err := runSnapshotCommand(parsedCommandLine{
+func runSnapshotDeleteDryRunJSON(t *testing.T, snapshotID string) error {
+	t.Helper()
+
+	return runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
-		positionals: []string{"delete", "missing-snap"},
+		positionals: []string{"delete", snapshotID},
 		flags: map[string][]string{
 			"dry-run": {""},
 			"output":  {"json"},
 		},
 	}, outputModeJSON)
+}
+
+func assertCLIErrorExitCode(t *testing.T, err error, want int) {
+	t.Helper()
+
 	if err == nil {
-		t.Fatal("expected missing snapshot error")
+		t.Fatal("expected CLI error")
 	}
-	if got := classifyExitCode(err); got != exitGeneral {
-		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	if got := classifyExitCode(err); got != want {
+		t.Fatalf("expected exit code %d, got %d", want, got)
 	}
+}
 
-	output := captureStderr(t, func() {
-		code := printCLIError(err, outputModeJSON)
-		if code != exitGeneral {
-			t.Fatalf("expected general exit code %d, got %d", exitGeneral, code)
-		}
-	})
+func assertDomainErrorEnvelope(t *testing.T, payload map[string]any, wantMessage string) string {
+	t.Helper()
 
-	payload := assertSingleJSONObjectLine(t, output)
-	if got, _ := payload["status"].(string); got != "error" {
-		t.Fatalf("expected status=error, got payload=%v", payload)
+	assertPayloadString(t, payload, "status", "error")
+	assertPayloadString(t, payload, "error_class", "GENERAL")
+	assertPayloadExitCode(t, payload, exitGeneral)
+
+	message := assertPayloadString(t, payload, "message", wantMessage)
+	errorNode := assertPayloadErrorNode(t, payload)
+	assertNestedErrorString(t, payload, errorNode, "code", "INTERNAL")
+	assertNestedErrorString(t, payload, errorNode, "message", message)
+
+	return message
+}
+
+func assertPayloadString(t *testing.T, payload map[string]any, key string, want string) string {
+	t.Helper()
+
+	got, _ := payload[key].(string)
+	if got != want {
+		t.Fatalf("expected %s=%q, got payload=%v", key, want, payload)
 	}
-	if got, _ := payload["error_class"].(string); got != "GENERAL" {
-		t.Fatalf("expected error_class=GENERAL, got payload=%v", payload)
+	return got
+}
+
+func assertPayloadExitCode(t *testing.T, payload map[string]any, want int) {
+	t.Helper()
+
+	got, _ := payload["exit_code"].(float64)
+	if int(got) != want {
+		t.Fatalf("expected exit_code=%d, got payload=%v", want, payload)
 	}
-	if got, _ := payload["exit_code"].(float64); int(got) != exitGeneral {
-		t.Fatalf("expected exit_code=%d, got payload=%v", exitGeneral, payload)
-	}
-	message, _ := payload["message"].(string)
-	if got := message; got != `snapshot "missing-snap" not found` {
-		t.Fatalf("expected exact snapshot not found message, got %q", got)
-	}
+}
+
+func assertPayloadErrorNode(t *testing.T, payload map[string]any) map[string]any {
+	t.Helper()
+
 	errorNode, ok := payload["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected structured error object, got payload=%v", payload)
 	}
-	if got, _ := errorNode["code"].(string); got != "INTERNAL" {
-		t.Fatalf("expected public error code INTERNAL for generic domain error path, got payload=%v", payload)
-	}
-	if got, _ := errorNode["message"].(string); got != message {
-		t.Fatalf("expected nested error.message to match top-level message, got payload=%v", payload)
-	}
+	return errorNode
+}
 
-	assertNoTaxonomyLeak(t, payload, message)
+func assertNestedErrorString(t *testing.T, payload map[string]any, errorNode map[string]any, key string, want string) {
+	t.Helper()
+
+	got, _ := errorNode[key].(string)
+	if got != want {
+		t.Fatalf("expected nested error.%s=%q, got payload=%v", key, want, payload)
+	}
 }
 
 func TestCLIInvariantVerifyErrorTranslationRemainsStable(t *testing.T) {
@@ -183,6 +231,14 @@ func TestCLIJSONErrorEnvelopeDoesNotExposeInternalTaxonomy(t *testing.T) {
 func assertNoTaxonomyLeak(t *testing.T, payload map[string]any, message string) {
 	t.Helper()
 
+	assertNoTaxonomyLeakKeys(t, payload)
+	assertNoTaxonomyLeakMessage(t, message)
+	assertNoTaxonomyLeakEncodedPayload(t, payload)
+}
+
+func assertNoTaxonomyLeakKeys(t *testing.T, payload map[string]any) {
+	t.Helper()
+
 	for _, forbiddenKey := range []string{
 		"taxonomy",
 		"category",
@@ -194,29 +250,28 @@ func assertNoTaxonomyLeak(t *testing.T, payload map[string]any, message string) 
 			t.Fatalf("unexpected taxonomy leak key %q in payload=%v", forbiddenKey, payload)
 		}
 	}
+}
 
-	for _, forbiddenSnippet := range []string{
+func assertNoTaxonomyLeakMessage(t *testing.T, message string) {
+	t.Helper()
+
+	assertNoStringContainsAny(t, message, []string{
 		"engine.IsUnsupported",
 		"catalog.IsDeferred",
 		"IsUnsupported",
 		"IsDeferred",
-	} {
-		if strings.Contains(message, forbiddenSnippet) {
-			t.Fatalf("unexpected helper name leak %q in message %q", forbiddenSnippet, message)
-		}
-	}
+	}, "message")
+	assertNoStringContainsAny(t, message, []string{"Unsupported", "Deferred"}, "message")
+}
 
-	for _, forbiddenWord := range []string{"Unsupported", "Deferred"} {
-		if strings.Contains(message, forbiddenWord) {
-			t.Fatalf("unexpected taxonomy wording leak %q in message %q", forbiddenWord, message)
-		}
-	}
+func assertNoTaxonomyLeakEncodedPayload(t *testing.T, payload map[string]any) {
+	t.Helper()
 
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("marshal payload for taxonomy leak assertion: %v", err)
 	}
-	for _, forbiddenSnippet := range []string{
+	assertNoStringContainsAny(t, string(encoded), []string{
 		"engine.IsUnsupported",
 		"catalog.IsDeferred",
 		"IsUnsupported",
@@ -225,9 +280,15 @@ func assertNoTaxonomyLeak(t *testing.T, payload map[string]any, message string) 
 		"\"classification\"",
 		"\"is_unsupported\"",
 		"\"is_deferred\"",
-	} {
-		if strings.Contains(string(encoded), forbiddenSnippet) {
-			t.Fatalf("unexpected taxonomy leak %q in encoded payload %s", forbiddenSnippet, string(encoded))
+	}, "encoded payload")
+}
+
+func assertNoStringContainsAny(t *testing.T, value string, forbiddenSnippets []string, label string) {
+	t.Helper()
+
+	for _, forbiddenSnippet := range forbiddenSnippets {
+		if strings.Contains(value, forbiddenSnippet) {
+			t.Fatalf("unexpected taxonomy leak %q in %s %q", forbiddenSnippet, label, value)
 		}
 	}
 }

@@ -139,12 +139,25 @@ func TestPerItemExecutionFailuresRemainOutsideUnsupportedClassification(t *testi
 		Mode:    engine.RemoveModeFileIDs,
 		FileIDs: []int64{-1},
 	})
+	assertRemoveReturnedNonUnsupportedTopLevelSuccess(t, err)
+	assertInvalidFileIDFailureItem(t, res)
+	assertInvalidFileIDFailureSummary(t, res.Summary)
+}
+
+func assertRemoveReturnedNonUnsupportedTopLevelSuccess(t *testing.T, err error) {
+	t.Helper()
+
 	if err != nil {
 		t.Fatalf("Remove invalid file ID: %v", err)
 	}
 	if engine.IsUnsupported(err) {
 		t.Fatalf("expected top-level nil error to remain non-unsupported")
 	}
+}
+
+func assertInvalidFileIDFailureItem(t *testing.T, res engine.RemoveResult) {
+	t.Helper()
+
 	if len(res.Items) != 1 {
 		t.Fatalf("expected one item result, got %d", len(res.Items))
 	}
@@ -158,8 +171,19 @@ func TestPerItemExecutionFailuresRemainOutsideUnsupportedClassification(t *testi
 	if item.InvariantCode != "" {
 		t.Fatalf("expected no invariant code for invalid file ID, got %q", item.InvariantCode)
 	}
-	if res.Summary.Failed != 1 || res.Summary.OK != 0 || res.Summary.Skipped != 0 {
-		t.Fatalf("unexpected invalid file ID summary: %+v", res.Summary)
+}
+
+func assertInvalidFileIDFailureSummary(t *testing.T, summary engine.BatchSummary) {
+	t.Helper()
+
+	if summary.Failed != 1 {
+		t.Fatalf("expected one failed item, got summary: %+v", summary)
+	}
+	if summary.OK != 0 {
+		t.Fatalf("expected zero OK items, got summary: %+v", summary)
+	}
+	if summary.Skipped != 0 {
+		t.Fatalf("expected zero skipped items, got summary: %+v", summary)
 	}
 }
 
