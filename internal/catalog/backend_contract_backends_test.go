@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -50,7 +51,8 @@ func openSQLiteCatalogTestDB(t *testing.T) *sql.DB {
 
 // openPostgresCatalogTestDBOrSkip opens the configured PostgreSQL test database
 // and applies the coldkeep schema to it. The fixture seeding is idempotent, so
-// this helper does not run destructive cleanup SQL.
+// this helper provisions a fresh temporary database per test so idempotent
+// fixture inserts cannot leak state between PostgreSQL subtests.
 func openPostgresCatalogTestDBOrSkip(t *testing.T) *sql.DB {
 	t.Helper()
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
@@ -58,7 +60,22 @@ func openPostgresCatalogTestDBOrSkip(t *testing.T) *sql.DB {
 	}
 
 	cfg := loadPostgresCatalogTestConfig()
-	dbconn := openPostgresCatalogTestConnection(t, cfg, cfg.Database, "test database")
+	adminDB := openPostgresCatalogAdminConnection(t, cfg)
+	testDBName := fmt.Sprintf("coldkeep_catalog_contract_%d", time.Now().UnixNano())
+	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
+		t.Fatalf("create temporary postgres catalog database %s: %v", testDBName, err)
+	}
+	t.Cleanup(func() {
+		_, _ = adminDB.Exec(`
+			SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity
+			WHERE datname = $1 AND pid <> pg_backend_pid()
+		`, testDBName)
+		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
+		_ = adminDB.Close()
+	})
+
+	dbconn := openPostgresCatalogTestConnection(t, cfg, testDBName, "test database")
 
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
 	if err := db.EnsurePostgresSchema(dbconn); err != nil {
@@ -68,6 +85,12 @@ func openPostgresCatalogTestDBOrSkip(t *testing.T) *sql.DB {
 
 	t.Cleanup(func() { _ = dbconn.Close() })
 	return dbconn
+}
+
+func openPostgresCatalogAdminConnection(t *testing.T, cfg postgresCatalogTestConfig) *sql.DB {
+	t.Helper()
+	maintenanceDB := getenvOrDefaultCatalogTest("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
+	return openPostgresCatalogTestConnection(t, cfg, maintenanceDB, "admin")
 }
 
 type postgresCatalogTestConfig struct {

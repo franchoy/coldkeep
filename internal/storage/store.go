@@ -1146,6 +1146,15 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	if summary.blockRows != 1 || (summary.packedRows != 0 && summary.packedRows != 1) {
 		return fmt.Errorf("chunk %d has invalid physical metadata rows: blocks=%d packed=%d", chunkID, summary.blockRows, summary.packedRows)
 	}
+	if summary.packedRows == 1 {
+		validCompanion, err := validateReusableChunkCompanionMappingWithContext(ctx, dbconn, chunkID)
+		if err != nil {
+			return fmt.Errorf("validate reusable completed chunk %d companion mapping: %w", chunkID, err)
+		}
+		if !validCompanion {
+			return fmt.Errorf("chunk %d has invalid packed/legacy companion mapping", chunkID)
+		}
+	}
 	if summary.existingContainerRows != 1 {
 		return fmt.Errorf("chunk %d has missing container metadata", chunkID)
 	}
@@ -1223,6 +1232,95 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	}
 
 	return nil
+}
+
+func validateReusableChunkCompanionMappingWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) (bool, error) {
+	var chunkSize int64
+	var codec string
+	var formatVersion int64
+	var plaintextSize int64
+	var storedSize int64
+	var nonce []byte
+	var legacyContainerID int64
+	var legacyOffset int64
+	var blockID int64
+	var offsetInBlock int64
+	var sizeInBlock int64
+	var packedContainerID int64
+	var packedContainerOffset int64
+	var packedPlaintextSize int64
+	var totalReferencedBytes int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			c.size,
+			b.codec,
+			b.format_version,
+			b.plaintext_size,
+			b.stored_size,
+			b.nonce,
+			b.container_id,
+			b.block_offset,
+			r.block_id,
+			r.offset_in_block,
+			r.size_in_block,
+			sb.container_id,
+			sb.container_offset,
+			sb.plaintext_size,
+			(
+				SELECT COALESCE(SUM(size_in_block), 0)
+				FROM chunk_block_refs
+				WHERE block_id = r.block_id
+			)
+		FROM chunk c
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN chunk_block_refs r ON r.chunk_id = c.id
+		JOIN storage_blocks sb ON sb.id = r.block_id
+		WHERE c.id = $1
+	`, chunkID).Scan(
+		&chunkSize,
+		&codec,
+		&formatVersion,
+		&plaintextSize,
+		&storedSize,
+		&nonce,
+		&legacyContainerID,
+		&legacyOffset,
+		&blockID,
+		&offsetInBlock,
+		&sizeInBlock,
+		&packedContainerID,
+		&packedContainerOffset,
+		&packedPlaintextSize,
+		&totalReferencedBytes,
+	); err != nil {
+		return false, err
+	}
+
+	_ = blockID
+	if formatVersion != 1 {
+		return false, nil
+	}
+
+	payloadPrefixBytes := packedPlaintextSize - totalReferencedBytes
+	if payloadPrefixBytes < 0 {
+		return false, nil
+	}
+
+	switch codec {
+	case "plain":
+		if plaintextSize != chunkSize || storedSize != chunkSize || sizeInBlock != chunkSize {
+			return false, nil
+		}
+		expectedLegacyOffset := packedContainerOffset + payloadPrefixBytes + offsetInBlock
+		return legacyContainerID == packedContainerID && legacyOffset == expectedLegacyOffset, nil
+	case "aes-gcm":
+		if plaintextSize != chunkSize || storedSize <= 0 || len(nonce) != 12 {
+			return false, nil
+		}
+		return legacyContainerID == packedContainerID && legacyOffset == packedContainerOffset, nil
+	default:
+		return false, nil
+	}
 }
 
 func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {

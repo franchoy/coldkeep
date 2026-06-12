@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	dbschema "github.com/franchoy/coldkeep/db"
 	"github.com/franchoy/coldkeep/internal/container"
@@ -55,6 +56,14 @@ func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, st
 	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
+	cfg := loadAdversarialG6PostgresTestConfig()
+	adminDB := openAdversarialG6PostgresConnection(t, cfg, getenvOrDefaultAdversarialG6("COLDKEEP_TEST_DB_MAINTENANCE", "postgres"), "admin")
+	testDBName := fmt.Sprintf("coldkeep_adversarial_g6_%d", time.Now().UnixNano())
+	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
+		t.Fatalf("create temporary postgres adversarial g6 database %s: %v", testDBName, err)
+	}
+	t.Setenv("DB_NAME", testDBName)
+
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
 	for k, v := range env {
 		t.Setenv(k, v)
@@ -64,6 +73,16 @@ func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, st
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = dbconn.Close()
+		_, _ = adminDB.Exec(`
+			SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity
+			WHERE datname = $1 AND pid <> pg_backend_pid()
+		`, testDBName)
+		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
+		_ = adminDB.Close()
+	})
 
 	testutils.ApplySchema(t, dbconn)
 	testutils.ResetDB(t, dbconn)
@@ -72,6 +91,51 @@ func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, st
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 
 	return dbconn, env, repoRoot, binPath, tmp
+}
+
+type adversarialG6PostgresTestConfig struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	SSLMode  string
+}
+
+func loadAdversarialG6PostgresTestConfig() adversarialG6PostgresTestConfig {
+	return adversarialG6PostgresTestConfig{
+		Host:     getenvOrDefaultAdversarialG6("DB_HOST", "127.0.0.1"),
+		Port:     getenvOrDefaultAdversarialG6("DB_PORT", "5432"),
+		User:     getenvOrDefaultAdversarialG6("DB_USER", "coldkeep"),
+		Password: getenvOrDefaultAdversarialG6("DB_PASSWORD", "coldkeep"),
+		SSLMode:  getenvOrDefaultAdversarialG6("DB_SSLMODE", "disable"),
+	}
+}
+
+func openAdversarialG6PostgresConnection(t *testing.T, cfg adversarialG6PostgresTestConfig, databaseName, purpose string) *sql.DB {
+	t.Helper()
+	dbconn, err := sql.Open("postgres", adversarialG6PostgresConnString(cfg, databaseName))
+	if err != nil {
+		t.Fatalf("open postgres %s connection: %v", purpose, err)
+	}
+	if err := dbconn.Ping(); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("ping postgres %s connection: %v", purpose, err)
+	}
+	return dbconn
+}
+
+func adversarialG6PostgresConnString(cfg adversarialG6PostgresTestConfig, databaseName string) string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, databaseName, cfg.SSLMode,
+	)
+}
+
+func getenvOrDefaultAdversarialG6(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return fallback
 }
 
 func storeFileWithCodecCLIG6(t *testing.T, repoRoot, binPath string, env map[string]string, codec, path string) int64 {
