@@ -814,6 +814,11 @@ func TestStoreMixedExistingAndNewChunksPacksOnlyNewAndPreservesRecipeOrder(t *te
 		_ = txC.Rollback()
 		t.Fatalf("seed packed chunk C: %v", err)
 	}
+	segmentC, ok := persistedC.Segments[chunkCID]
+	if !ok {
+		_ = txC.Rollback()
+		t.Fatalf("missing packed segment metadata for seeded chunk C")
+	}
 	if _, err := txC.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, chunkCID); err != nil {
 		_ = txC.Rollback()
 		t.Fatalf("mark chunk C completed: %v", err)
@@ -825,7 +830,7 @@ func TestStoreMixedExistingAndNewChunksPacksOnlyNewAndPreservesRecipeOrder(t *te
 		"plain",
 		[]byte{},
 		persistedC.Placement.ContainerID,
-		persistedC.Placement.Offset,
+		persistedC.Placement.Offset+segmentC.Offset,
 		int64(len(payloadC)),
 		int64(len(payloadC)),
 	); err != nil {
@@ -2249,6 +2254,84 @@ func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T
 	}
 	if claimedStatus != filestate.ChunkProcessing {
 		t.Fatalf("expected quarantined completed chunk to be reclaimed as PROCESSING, got %s", claimedStatus)
+	}
+}
+
+func TestClaimChunkDoesNotReuseCompletedChunkWithInvalidCompanionMapping(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	containerID := insertReusableTestContainer(t, dbconn, "invalid-companion.bin", false)
+	containerPath := filepath.Join(containersDir, "invalid-companion.bin")
+	if err := writeReusableTestContainerFileWithPayload(containerPath, bytes.Repeat([]byte("x"), 256)); err != nil {
+		t.Fatalf("write reusable container file: %v", err)
+	}
+
+	chunkID := insertReusableTestChunk(t, dbconn, "invalid-companion-chunk", filestate.ChunkCompleted)
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, 64, 64, $2, 65)`,
+		chunkID,
+		containerID,
+	); err != nil {
+		t.Fatalf("insert invalid legacy companion row: %v", err)
+	}
+
+	var packedBlockID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES (1, 'none', 64, 64, $1, 64, x'')
+		 RETURNING id`,
+		containerID,
+	).Scan(&packedBlockID); err != nil {
+		t.Fatalf("insert packed block row: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, 0, 64)`,
+		chunkID,
+		packedBlockID,
+	); err != nil {
+		t.Fatalf("insert packed chunk ref: %v", err)
+	}
+
+	ctx := context.Background()
+	claimedID, claimedStatus, isNew, err := claimChunkWithContext(ctx, dbconn, "invalid-companion-chunk", 64, string(chunk.DefaultChunkerVersion), containersDir)
+	if err != nil {
+		t.Fatalf("claim chunk with invalid companion mapping: %v", err)
+	}
+	if claimedID != chunkID {
+		t.Fatalf("expected same chunk id, got %d vs %d", claimedID, chunkID)
+	}
+	if isNew {
+		t.Fatalf("expected existing chunk to be reclaimed, not inserted as new")
+	}
+	if claimedStatus != filestate.ChunkProcessing {
+		t.Fatalf("expected invalid companion chunk to be reclaimed as PROCESSING, got %s", claimedStatus)
+	}
+
+	var legacyRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE chunk_id = $1`, chunkID).Scan(&legacyRows); err != nil {
+		t.Fatalf("count legacy rows after reclaim: %v", err)
+	}
+	if legacyRows != 0 {
+		t.Fatalf("expected invalid companion reclaim to clear legacy rows, got %d", legacyRows)
+	}
+
+	var packedRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs WHERE chunk_id = $1`, chunkID).Scan(&packedRows); err != nil {
+		t.Fatalf("count packed rows after reclaim: %v", err)
+	}
+	if packedRows != 0 {
+		t.Fatalf("expected invalid companion reclaim to clear packed rows, got %d", packedRows)
 	}
 }
 
