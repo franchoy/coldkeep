@@ -333,10 +333,10 @@ func installSnapshotShowCLISuccessStubs(t *testing.T) {
 	}
 	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
 		return &snapshot.SnapshotStats{
-			SnapshotID:       snapshotID,
-			SnapshotCount:    1,
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
 			SnapshotFileCount: 3,
-			TotalSizeBytes:   123,
+			TotalSizeBytes:    123,
 		}, nil
 	}
 }
