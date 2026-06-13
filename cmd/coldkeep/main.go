@@ -3054,13 +3054,16 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return usageErrorf("Usage: coldkeep verify file <fileID> [--fast|--standard|--full|--deep]")
 		}
 
-		fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
+		fileIDText := parsed.positionals[1]
+		fileID, err := strconv.Atoi(fileIDText)
 		if err != nil {
+			if errors.Is(err, strconv.ErrRange) {
+				return usageErrorf("Invalid fileID: value %s exceeds platform int range", fileIDText)
+			}
 			return usageErrorf("Invalid fileID: %v", err)
 		}
-		verifyFileID, err := verifyFileIDInt(fileID)
-		if err != nil {
-			return err
+		if fileID <= 0 {
+			return usageErrorf("Invalid fileID: must be a positive integer")
 		}
 
 		sgctx, err := loadDefaultStorageContextPhase()
@@ -3069,11 +3072,11 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 		defer func() { _ = sgctx.Close() }()
 
-		verifyErr := verifyCommandPhase(sgctx.DB, target, verifyFileID, verifyLevel)
+		verifyErr := verifyCommandPhase(sgctx.DB, target, fileID, verifyLevel)
 		if verifyErr != nil {
 			return verifyError(verifyErr)
 		}
-		summary, err := verifySummaryPhase(sgctx.DB, target, fileID)
+		summary, err := verifySummaryPhase(sgctx.DB, target, int64(fileID))
 		if err != nil {
 			return fmt.Errorf("collect verify summary: %w", err)
 		}
@@ -3108,16 +3111,6 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	default:
 		return usageErrorf("Unknown target for verify: %s (expected 'system' or 'file <fileID>')", target)
 	}
-}
-
-func verifyFileIDInt(fileID int64) (int, error) {
-	if fileID <= 0 {
-		return 0, usageErrorf("Invalid fileID: must be a positive integer")
-	}
-	if strconv.IntSize == 32 && fileID > math.MaxInt32 {
-		return 0, usageErrorf("Invalid fileID: value %d exceeds platform int range", fileID)
-	}
-	return int(fileID), nil
 }
 
 // runDoctorCommand implements the doctor corrective recovery command.

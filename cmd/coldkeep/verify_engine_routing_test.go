@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -243,66 +242,30 @@ func TestVerifyFileEngineRoutingJSON(t *testing.T) {
 	}
 }
 
-func TestVerifyFileIDInt(t *testing.T) {
-	maxInt := int64(math.MaxInt64)
-	wantMax := math.MaxInt
-	if strconv.IntSize == 32 {
-		maxInt = math.MaxInt32
-		wantMax = math.MaxInt32
-	}
+func TestRunVerifyCommandRejectsOversizedFileIDBeforeRouting(t *testing.T) {
+	assertVerifyFileIDRejectedBeforeRouting(t, platformIntOverflowText(), "exceeds platform int range")
+}
 
+func TestRunVerifyCommandRejectsInvalidFileIDBeforeRouting(t *testing.T) {
 	tests := []struct {
 		name    string
-		fileID  int64
-		want    int
-		wantErr string
+		fileID  string
+		message string
 	}{
-		{name: "positive in range", fileID: 42, want: 42},
-		{name: "zero rejected", fileID: 0, wantErr: "Invalid fileID"},
-		{name: "negative rejected", fileID: -1, wantErr: "Invalid fileID"},
-		{name: "max int allowed", fileID: maxInt, want: wantMax},
-	}
-
-	if maxInt < math.MaxInt64 {
-		tests = append(tests, struct {
-			name    string
-			fileID  int64
-			want    int
-			wantErr string
-		}{
-			name:    "overflow rejected",
-			fileID:  maxInt + 1,
-			wantErr: "exceeds platform int range",
-		})
+		{name: "malformed", fileID: "not-a-number", message: "Invalid fileID"},
+		{name: "zero", fileID: "0", message: "must be a positive integer"},
+		{name: "negative", fileID: "-1", message: "must be a positive integer"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := verifyFileIDInt(tc.fileID)
-			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("verifyFileIDInt(%d) error = %v, want substring %q", tc.fileID, err, tc.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("verifyFileIDInt(%d) returned error: %v", tc.fileID, err)
-			}
-			if got != tc.want {
-				t.Fatalf("verifyFileIDInt(%d) = %d, want %d", tc.fileID, got, tc.want)
-			}
+			assertVerifyFileIDRejectedBeforeRouting(t, tc.fileID, tc.message)
 		})
 	}
 }
 
-func TestRunVerifyCommandRejectsOversizedFileIDBeforeRouting(t *testing.T) {
-	maxInt := int64(math.MaxInt64)
-	if strconv.IntSize == 32 {
-		maxInt = math.MaxInt32
-	}
-	if maxInt == math.MaxInt64 {
-		t.Skip("current platform int is 64-bit; no larger signed int64 fileID exists")
-	}
+func assertVerifyFileIDRejectedBeforeRouting(t *testing.T, fileID string, wantMessage string) {
+	t.Helper()
 
 	origVerify := verifyCommandPhase
 	verifyCalled := false
@@ -314,19 +277,26 @@ func TestRunVerifyCommandRejectsOversizedFileIDBeforeRouting(t *testing.T) {
 
 	err := runVerifyCommand(parsedCommandLine{
 		method:      "verify",
-		positionals: []string{"file", strconv.FormatInt(maxInt+1, 10)},
+		positionals: []string{"file", fileID},
 		flags:       map[string][]string{},
 	}, outputModeText)
 	if err == nil {
-		t.Fatal("expected usage error for oversized verify fileID")
+		t.Fatal("expected usage error for invalid verify fileID")
 	}
 	if verifyCalled {
-		t.Fatal("verifyCommandPhase should not be called for oversized fileID")
+		t.Fatal("verifyCommandPhase should not be called for invalid fileID")
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
-	if !strings.Contains(err.Error(), "exceeds platform int range") {
-		t.Fatalf("expected oversized fileID message, got: %v", err)
+	if !strings.Contains(err.Error(), wantMessage) {
+		t.Fatalf("expected fileID error containing %q, got: %v", wantMessage, err)
 	}
+}
+
+func platformIntOverflowText() string {
+	if strconv.IntSize == 32 {
+		return "2147483648"
+	}
+	return "9223372036854775808"
 }

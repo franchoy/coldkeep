@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -59,20 +58,20 @@ func loadIdleInTransactionTimeout() time.Duration {
 
 func loadMaxOpenConns() int {
 	const defaultMaxOpenConns = 25
-	value := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_MAX_OPEN_CONNS", defaultMaxOpenConns)
+	value := loadIntEnvOrFallback("COLDKEEP_DB_MAX_OPEN_CONNS", defaultMaxOpenConns)
 	if value <= 0 {
 		return defaultMaxOpenConns
 	}
-	return int64ToIntOrFallback(value, defaultMaxOpenConns)
+	return value
 }
 
 func loadMaxIdleConns() int {
 	const defaultMaxIdleConns = 5
-	value := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_MAX_IDLE_CONNS", defaultMaxIdleConns)
+	value := loadIntEnvOrFallback("COLDKEEP_DB_MAX_IDLE_CONNS", defaultMaxIdleConns)
 	if value < 0 {
 		return defaultMaxIdleConns
 	}
-	return int64ToIntOrFallback(value, defaultMaxIdleConns)
+	return value
 }
 
 func loadConnMaxLifetime() time.Duration {
@@ -101,14 +100,12 @@ func loadSessionTimeout(envVar string, defaultTimeout time.Duration) time.Durati
 	return time.Duration(valueMs) * time.Millisecond
 }
 
-func int64ToIntOrFallback(value int64, fallback int) int {
-	if value < 0 {
+func loadIntEnvOrFallback(envVar string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(utils_env.GetenvOrDefault(envVar, strconv.Itoa(fallback))))
+	if err != nil {
 		return fallback
 	}
-	if strconv.IntSize == 32 && value > math.MaxInt32 {
-		return fallback
-	}
-	return int(value)
+	return value
 }
 
 func DefaultOperationTimeout() time.Duration {
