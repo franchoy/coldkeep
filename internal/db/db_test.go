@@ -66,8 +66,10 @@ func TestLoadMaxIdleConnsAllowsZeroButNotNegative(t *testing.T) {
 
 func TestInt64ToIntOrFallback(t *testing.T) {
 	maxInt := int64(math.MaxInt64)
+	wantMax := math.MaxInt
 	if strconv.IntSize == 32 {
 		maxInt = math.MaxInt32
+		wantMax = math.MaxInt32
 	}
 
 	tests := []struct {
@@ -79,7 +81,7 @@ func TestInt64ToIntOrFallback(t *testing.T) {
 		{name: "negative falls back", value: -1, fallback: 25, want: 25},
 		{name: "zero allowed", value: 0, fallback: 5, want: 0},
 		{name: "positive in range converts", value: 33, fallback: 25, want: 33},
-		{name: "max int converts", value: maxInt, fallback: 25, want: math.MaxInt},
+		{name: "max int converts", value: maxInt, fallback: 25, want: wantMax},
 	}
 
 	if maxInt < math.MaxInt64 {

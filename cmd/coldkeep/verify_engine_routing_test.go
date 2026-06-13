@@ -245,8 +245,10 @@ func TestVerifyFileEngineRoutingJSON(t *testing.T) {
 
 func TestVerifyFileIDInt(t *testing.T) {
 	maxInt := int64(math.MaxInt64)
+	wantMax := math.MaxInt
 	if strconv.IntSize == 32 {
 		maxInt = math.MaxInt32
+		wantMax = math.MaxInt32
 	}
 
 	tests := []struct {
@@ -258,7 +260,7 @@ func TestVerifyFileIDInt(t *testing.T) {
 		{name: "positive in range", fileID: 42, want: 42},
 		{name: "zero rejected", fileID: 0, wantErr: "Invalid fileID"},
 		{name: "negative rejected", fileID: -1, wantErr: "Invalid fileID"},
-		{name: "max int allowed", fileID: maxInt, want: math.MaxInt},
+		{name: "max int allowed", fileID: maxInt, want: wantMax},
 	}
 
 	if maxInt < math.MaxInt64 {
