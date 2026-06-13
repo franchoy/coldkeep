@@ -62,7 +62,7 @@ func loadMaxOpenConns() int {
 	if value <= 0 {
 		return defaultMaxOpenConns
 	}
-	return int(value)
+	return int64ToIntOrFallback(value, defaultMaxOpenConns)
 }
 
 func loadMaxIdleConns() int {
@@ -71,7 +71,7 @@ func loadMaxIdleConns() int {
 	if value < 0 {
 		return defaultMaxIdleConns
 	}
-	return int(value)
+	return int64ToIntOrFallback(value, defaultMaxIdleConns)
 }
 
 func loadConnMaxLifetime() time.Duration {
@@ -98,6 +98,14 @@ func loadSessionTimeout(envVar string, defaultTimeout time.Duration) time.Durati
 		return defaultTimeout
 	}
 	return time.Duration(valueMs) * time.Millisecond
+}
+
+func int64ToIntOrFallback(value int64, fallback int) int {
+	maxInt := int64(int(^uint(0) >> 1))
+	if value < 0 || value > maxInt {
+		return fallback
+	}
+	return int(value)
 }
 
 func DefaultOperationTimeout() time.Duration {

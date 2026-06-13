@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +61,68 @@ func TestLoadMaxIdleConnsAllowsZeroButNotNegative(t *testing.T) {
 	t.Setenv("COLDKEEP_DB_MAX_IDLE_CONNS", "-1")
 	if got := loadMaxIdleConns(); got != 5 {
 		t.Fatalf("expected default max idle conns 5 for negative, got %d", got)
+	}
+}
+
+func TestInt64ToIntOrFallback(t *testing.T) {
+	maxInt := int64(int(^uint(0) >> 1))
+
+	tests := []struct {
+		name     string
+		value    int64
+		fallback int
+		want     int
+	}{
+		{name: "negative falls back", value: -1, fallback: 25, want: 25},
+		{name: "zero allowed", value: 0, fallback: 5, want: 0},
+		{name: "positive in range converts", value: 33, fallback: 25, want: 33},
+		{name: "max int converts", value: maxInt, fallback: 25, want: int(maxInt)},
+	}
+
+	if maxInt < math.MaxInt64 {
+		tests = append(tests, struct {
+			name     string
+			value    int64
+			fallback int
+			want     int
+		}{
+			name:     "overflow falls back",
+			value:    maxInt + 1,
+			fallback: 25,
+			want:     25,
+		})
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := int64ToIntOrFallback(tc.value, tc.fallback); got != tc.want {
+				t.Fatalf("int64ToIntOrFallback(%d, %d) = %d, want %d", tc.value, tc.fallback, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadMaxOpenConnsFallsBackOnOversizedValue(t *testing.T) {
+	maxInt := int64(int(^uint(0) >> 1))
+	if maxInt == math.MaxInt64 {
+		t.Skip("current platform int is 64-bit; no larger int64 test value exists")
+	}
+
+	t.Setenv("COLDKEEP_DB_MAX_OPEN_CONNS", strconv.FormatInt(maxInt+1, 10))
+	if got := loadMaxOpenConns(); got != 25 {
+		t.Fatalf("expected default max open conns 25 for oversized value, got %d", got)
+	}
+}
+
+func TestLoadMaxIdleConnsFallsBackOnOversizedValue(t *testing.T) {
+	maxInt := int64(int(^uint(0) >> 1))
+	if maxInt == math.MaxInt64 {
+		t.Skip("current platform int is 64-bit; no larger int64 test value exists")
+	}
+
+	t.Setenv("COLDKEEP_DB_MAX_IDLE_CONNS", strconv.FormatInt(maxInt+1, 10))
+	if got := loadMaxIdleConns(); got != 5 {
+		t.Fatalf("expected default max idle conns 5 for oversized value, got %d", got)
 	}
 }
 
