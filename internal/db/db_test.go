@@ -65,7 +65,10 @@ func TestLoadMaxIdleConnsAllowsZeroButNotNegative(t *testing.T) {
 }
 
 func TestInt64ToIntOrFallback(t *testing.T) {
-	maxInt := int64(math.MaxInt)
+	maxInt := int64(math.MaxInt64)
+	if strconv.IntSize == 32 {
+		maxInt = math.MaxInt32
+	}
 
 	tests := []struct {
 		name     string
@@ -103,7 +106,10 @@ func TestInt64ToIntOrFallback(t *testing.T) {
 }
 
 func TestLoadMaxOpenConnsFallsBackOnOversizedValue(t *testing.T) {
-	maxInt := int64(math.MaxInt)
+	maxInt := int64(math.MaxInt64)
+	if strconv.IntSize == 32 {
+		maxInt = math.MaxInt32
+	}
 	if maxInt == math.MaxInt64 {
 		t.Skip("current platform int is 64-bit; no larger int64 test value exists")
 	}
@@ -115,7 +121,10 @@ func TestLoadMaxOpenConnsFallsBackOnOversizedValue(t *testing.T) {
 }
 
 func TestLoadMaxIdleConnsFallsBackOnOversizedValue(t *testing.T) {
-	maxInt := int64(math.MaxInt)
+	maxInt := int64(math.MaxInt64)
+	if strconv.IntSize == 32 {
+		maxInt = math.MaxInt32
+	}
 	if maxInt == math.MaxInt64 {
 		t.Skip("current platform int is 64-bit; no larger int64 test value exists")
 	}

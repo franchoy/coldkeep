@@ -3111,10 +3111,17 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 }
 
 func verifyFileIDInt(fileID int64) (int, error) {
+	var intMax int64
+
 	if fileID <= 0 {
 		return 0, usageErrorf("Invalid fileID: must be a positive integer")
 	}
-	if fileID > int64(math.MaxInt) {
+	if strconv.IntSize == 32 {
+		intMax = math.MaxInt32
+	} else {
+		intMax = math.MaxInt64
+	}
+	if fileID > intMax {
 		return 0, usageErrorf("Invalid fileID: value %d exceeds platform int range", fileID)
 	}
 	return int(fileID), nil

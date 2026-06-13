@@ -102,10 +102,17 @@ func loadSessionTimeout(envVar string, defaultTimeout time.Duration) time.Durati
 }
 
 func int64ToIntOrFallback(value int64, fallback int) int {
+	var intMax int64
+
 	if value < 0 {
 		return fallback
 	}
-	if value > int64(math.MaxInt) {
+	if strconv.IntSize == 32 {
+		intMax = math.MaxInt32
+	} else {
+		intMax = math.MaxInt64
+	}
+	if value > intMax {
 		return fallback
 	}
 	return int(value)

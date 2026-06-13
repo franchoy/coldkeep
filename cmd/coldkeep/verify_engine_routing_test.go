@@ -244,7 +244,10 @@ func TestVerifyFileEngineRoutingJSON(t *testing.T) {
 }
 
 func TestVerifyFileIDInt(t *testing.T) {
-	maxInt := int64(math.MaxInt)
+	maxInt := int64(math.MaxInt64)
+	if strconv.IntSize == 32 {
+		maxInt = math.MaxInt32
+	}
 
 	tests := []struct {
 		name    string
@@ -291,7 +294,10 @@ func TestVerifyFileIDInt(t *testing.T) {
 }
 
 func TestRunVerifyCommandRejectsOversizedFileIDBeforeRouting(t *testing.T) {
-	maxInt := int64(math.MaxInt)
+	maxInt := int64(math.MaxInt64)
+	if strconv.IntSize == 32 {
+		maxInt = math.MaxInt32
+	}
 	if maxInt == math.MaxInt64 {
 		t.Skip("current platform int is 64-bit; no larger signed int64 fileID exists")
 	}
