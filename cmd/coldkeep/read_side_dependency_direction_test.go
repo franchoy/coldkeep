@@ -157,53 +157,63 @@ func TestInspectPublicTargetsRemainDocumentedSet(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			called := false
-			runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
-				called = true
-				if entity != tc.wantEntity {
-					t.Fatalf("expected entity %q, got %q", tc.wantEntity, entity)
-				}
-				if id != tc.wantID {
-					t.Fatalf("expected id %q, got %q", tc.wantID, id)
-				}
-				return &observability.InspectResult{
-					EntityType: entity,
-					EntityID:   id,
-				}, nil
-			}
-
-			stdout, stderr, code := runCLIWithCapturedIO(t, tc.args)
-			if code != exitSuccess {
-				t.Fatalf("expected exitSuccess, got %d stdout=%q stderr=%q", code, stdout, stderr)
-			}
-			if !called {
-				t.Fatalf("expected inspect route to call observability phase for args=%v", tc.args)
-			}
+			assertInspectTargetRoutes(t, tc.args, tc.wantEntity, tc.wantID)
 		})
 	}
+}
 
-	t.Run("physical-file remains internal only", func(t *testing.T) {
-		runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
-			t.Fatalf("unexpected observability inspect call for unsupported public target: entity=%q id=%q", entity, id)
-			return nil, nil
-		}
+func TestInspectPhysicalFileRemainsInternalOnly(t *testing.T) {
+	installNoopStartupRecovery(t)
 
-		stdout, stderr, code := runCLIWithCapturedIO(t, []string{"inspect", "physical-file", "1", "--json"})
-		if code != exitUsage {
-			t.Fatalf("expected exitUsage, got %d stdout=%q stderr=%q", code, stdout, stderr)
+	originalInspect := runObservabilityInspectPhase
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		t.Fatalf("unexpected observability inspect call for unsupported public target: entity=%q id=%q", entity, id)
+		return nil, nil
+	}
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"inspect", "physical-file", "1", "--json"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage, got %d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	payload := lastJSONStderrPayload(t, stderr)
+	assertPayloadString(t, payload, "status", "error")
+	assertPayloadString(t, payload, "error_class", "USAGE")
+	assertPayloadExitCode(t, payload, exitUsage)
+	message, _ := payload["message"].(string)
+	if !strings.Contains(message, `unsupported inspect entity "physical-file"`) {
+		t.Fatalf("expected unsupported physical-file message, got payload=%v", payload)
+	}
+	errorNode := assertPayloadErrorNode(t, payload)
+	assertNestedErrorString(t, payload, errorNode, "code", "INVALID_ARGUMENT")
+	assertNoTaxonomyLeak(t, payload, message)
+}
+
+func assertInspectTargetRoutes(t *testing.T, args []string, wantEntity observability.EntityType, wantID string) {
+	t.Helper()
+
+	called := false
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		called = true
+		if entity != wantEntity {
+			t.Fatalf("expected entity %q, got %q", wantEntity, entity)
 		}
-		payload := lastJSONStderrPayload(t, stderr)
-		assertPayloadString(t, payload, "status", "error")
-		assertPayloadString(t, payload, "error_class", "USAGE")
-		assertPayloadExitCode(t, payload, exitUsage)
-		message, _ := payload["message"].(string)
-		if !strings.Contains(message, `unsupported inspect entity "physical-file"`) {
-			t.Fatalf("expected unsupported physical-file message, got payload=%v", payload)
+		if id != wantID {
+			t.Fatalf("expected id %q, got %q", wantID, id)
 		}
-		errorNode := assertPayloadErrorNode(t, payload)
-		assertNestedErrorString(t, payload, errorNode, "code", "INVALID_ARGUMENT")
-		assertNoTaxonomyLeak(t, payload, message)
-	})
+		return &observability.InspectResult{
+			EntityType: entity,
+			EntityID:   id,
+		}, nil
+	}
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, args)
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !called {
+		t.Fatalf("expected inspect route to call observability phase for args=%v", args)
+	}
 }
 
 func TestReadSideOutputDoesNotLeakTaxonomyHelperNames(t *testing.T) {
