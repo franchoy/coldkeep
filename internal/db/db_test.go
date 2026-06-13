@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,27 @@ func TestLoadMaxIdleConnsAllowsZeroButNotNegative(t *testing.T) {
 	if got := loadMaxIdleConns(); got != 5 {
 		t.Fatalf("expected default max idle conns 5 for negative, got %d", got)
 	}
+}
+
+func TestLoadMaxOpenConnsFallsBackOnOversizedValue(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_MAX_OPEN_CONNS", platformIntOverflowText())
+	if got := loadMaxOpenConns(); got != 25 {
+		t.Fatalf("expected default max open conns 25 for oversized value, got %d", got)
+	}
+}
+
+func TestLoadMaxIdleConnsFallsBackOnOversizedValue(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_MAX_IDLE_CONNS", platformIntOverflowText())
+	if got := loadMaxIdleConns(); got != 5 {
+		t.Fatalf("expected default max idle conns 5 for oversized value, got %d", got)
+	}
+}
+
+func platformIntOverflowText() string {
+	if strconv.IntSize == 32 {
+		return "2147483648"
+	}
+	return "9223372036854775808"
 }
 
 func TestLoadConnMaxLifetimeFallsBackOnNegative(t *testing.T) {

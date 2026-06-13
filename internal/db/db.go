@@ -58,20 +58,20 @@ func loadIdleInTransactionTimeout() time.Duration {
 
 func loadMaxOpenConns() int {
 	const defaultMaxOpenConns = 25
-	value := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_MAX_OPEN_CONNS", defaultMaxOpenConns)
+	value := loadIntEnvOrFallback("COLDKEEP_DB_MAX_OPEN_CONNS", defaultMaxOpenConns)
 	if value <= 0 {
 		return defaultMaxOpenConns
 	}
-	return int(value)
+	return value
 }
 
 func loadMaxIdleConns() int {
 	const defaultMaxIdleConns = 5
-	value := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_MAX_IDLE_CONNS", defaultMaxIdleConns)
+	value := loadIntEnvOrFallback("COLDKEEP_DB_MAX_IDLE_CONNS", defaultMaxIdleConns)
 	if value < 0 {
 		return defaultMaxIdleConns
 	}
-	return int(value)
+	return value
 }
 
 func loadConnMaxLifetime() time.Duration {
@@ -98,6 +98,14 @@ func loadSessionTimeout(envVar string, defaultTimeout time.Duration) time.Durati
 		return defaultTimeout
 	}
 	return time.Duration(valueMs) * time.Millisecond
+}
+
+func loadIntEnvOrFallback(envVar string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(utils_env.GetenvOrDefault(envVar, strconv.Itoa(fallback))))
+	if err != nil {
+		return fallback
+	}
+	return value
 }
 
 func DefaultOperationTimeout() time.Duration {

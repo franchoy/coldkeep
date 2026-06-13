@@ -3054,9 +3054,16 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return usageErrorf("Usage: coldkeep verify file <fileID> [--fast|--standard|--full|--deep]")
 		}
 
-		fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
+		fileIDText := parsed.positionals[1]
+		fileID, err := strconv.Atoi(fileIDText)
 		if err != nil {
+			if errors.Is(err, strconv.ErrRange) {
+				return usageErrorf("Invalid fileID: value %s exceeds platform int range", fileIDText)
+			}
 			return usageErrorf("Invalid fileID: %v", err)
+		}
+		if fileID <= 0 {
+			return usageErrorf("Invalid fileID: must be a positive integer")
 		}
 
 		sgctx, err := loadDefaultStorageContextPhase()
@@ -3065,11 +3072,11 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 		defer func() { _ = sgctx.Close() }()
 
-		verifyErr := verifyCommandPhase(sgctx.DB, target, int(fileID), verifyLevel)
+		verifyErr := verifyCommandPhase(sgctx.DB, target, fileID, verifyLevel)
 		if verifyErr != nil {
 			return verifyError(verifyErr)
 		}
-		summary, err := verifySummaryPhase(sgctx.DB, target, fileID)
+		summary, err := verifySummaryPhase(sgctx.DB, target, int64(fileID))
 		if err != nil {
 			return fmt.Errorf("collect verify summary: %w", err)
 		}

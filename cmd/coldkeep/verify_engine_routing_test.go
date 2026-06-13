@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -239,4 +240,63 @@ func TestVerifyFileEngineRoutingJSON(t *testing.T) {
 	if got := int(payload["file_id"].(float64)); got != 42 {
 		t.Fatalf("expected file_id 42, got %d", got)
 	}
+}
+
+func TestRunVerifyCommandRejectsOversizedFileIDBeforeRouting(t *testing.T) {
+	assertVerifyFileIDRejectedBeforeRouting(t, platformIntOverflowText(), "exceeds platform int range")
+}
+
+func TestRunVerifyCommandRejectsInvalidFileIDBeforeRouting(t *testing.T) {
+	tests := []struct {
+		name    string
+		fileID  string
+		message string
+	}{
+		{name: "malformed", fileID: "not-a-number", message: "Invalid fileID"},
+		{name: "zero", fileID: "0", message: "must be a positive integer"},
+		{name: "negative", fileID: "-1", message: "must be a positive integer"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertVerifyFileIDRejectedBeforeRouting(t, tc.fileID, tc.message)
+		})
+	}
+}
+
+func assertVerifyFileIDRejectedBeforeRouting(t *testing.T, fileID string, wantMessage string) {
+	t.Helper()
+
+	origVerify := verifyCommandPhase
+	verifyCalled := false
+	verifyCommandPhase = func(_ *sql.DB, target string, fileID int, level verify.VerifyLevel) error {
+		verifyCalled = true
+		return nil
+	}
+	t.Cleanup(func() { verifyCommandPhase = origVerify })
+
+	err := runVerifyCommand(parsedCommandLine{
+		method:      "verify",
+		positionals: []string{"file", fileID},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected usage error for invalid verify fileID")
+	}
+	if verifyCalled {
+		t.Fatal("verifyCommandPhase should not be called for invalid fileID")
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if !strings.Contains(err.Error(), wantMessage) {
+		t.Fatalf("expected fileID error containing %q, got: %v", wantMessage, err)
+	}
+}
+
+func platformIntOverflowText() string {
+	if strconv.IntSize == 32 {
+		return "2147483648"
+	}
+	return "9223372036854775808"
 }
