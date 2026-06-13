@@ -65,6 +65,8 @@ func TestLoadMaxIdleConnsAllowsZeroButNotNegative(t *testing.T) {
 }
 
 func TestInt64ToIntOrFallback(t *testing.T) {
+	maxInt := int64(math.MaxInt)
+
 	tests := []struct {
 		name     string
 		value    int64
@@ -74,27 +76,18 @@ func TestInt64ToIntOrFallback(t *testing.T) {
 		{name: "negative falls back", value: -1, fallback: 25, want: 25},
 		{name: "zero allowed", value: 0, fallback: 5, want: 0},
 		{name: "positive in range converts", value: 33, fallback: 25, want: 33},
+		{name: "max int converts", value: maxInt, fallback: 25, want: math.MaxInt},
 	}
 
-	if strconv.IntSize == 32 {
+	if maxInt < math.MaxInt64 {
 		tests = append(tests, struct {
 			name     string
 			value    int64
 			fallback int
 			want     int
 		}{
-			name:     "max int32 converts",
-			value:    math.MaxInt32,
-			fallback: 25,
-			want:     math.MaxInt32,
-		}, struct {
-			name     string
-			value    int64
-			fallback int
-			want     int
-		}{
 			name:     "overflow falls back",
-			value:    int64(math.MaxInt32) + 1,
+			value:    maxInt + 1,
 			fallback: 25,
 			want:     25,
 		})
@@ -107,32 +100,27 @@ func TestInt64ToIntOrFallback(t *testing.T) {
 			}
 		})
 	}
-
-	if strconv.IntSize == 64 {
-		got := int64ToIntOrFallback(math.MaxInt64, 25)
-		if int64(got) != math.MaxInt64 {
-			t.Fatalf("int64ToIntOrFallback(%d, 25) = %d, want %d", int64(math.MaxInt64), got, int64(math.MaxInt64))
-		}
-	}
 }
 
 func TestLoadMaxOpenConnsFallsBackOnOversizedValue(t *testing.T) {
-	if strconv.IntSize != 32 {
+	maxInt := int64(math.MaxInt)
+	if maxInt == math.MaxInt64 {
 		t.Skip("current platform int is 64-bit; no larger int64 test value exists")
 	}
 
-	t.Setenv("COLDKEEP_DB_MAX_OPEN_CONNS", strconv.FormatInt(int64(math.MaxInt32)+1, 10))
+	t.Setenv("COLDKEEP_DB_MAX_OPEN_CONNS", strconv.FormatInt(maxInt+1, 10))
 	if got := loadMaxOpenConns(); got != 25 {
 		t.Fatalf("expected default max open conns 25 for oversized value, got %d", got)
 	}
 }
 
 func TestLoadMaxIdleConnsFallsBackOnOversizedValue(t *testing.T) {
-	if strconv.IntSize != 32 {
+	maxInt := int64(math.MaxInt)
+	if maxInt == math.MaxInt64 {
 		t.Skip("current platform int is 64-bit; no larger int64 test value exists")
 	}
 
-	t.Setenv("COLDKEEP_DB_MAX_IDLE_CONNS", strconv.FormatInt(int64(math.MaxInt32)+1, 10))
+	t.Setenv("COLDKEEP_DB_MAX_IDLE_CONNS", strconv.FormatInt(maxInt+1, 10))
 	if got := loadMaxIdleConns(); got != 5 {
 		t.Fatalf("expected default max idle conns 5 for oversized value, got %d", got)
 	}

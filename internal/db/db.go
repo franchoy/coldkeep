@@ -105,7 +105,7 @@ func int64ToIntOrFallback(value int64, fallback int) int {
 	if value < 0 {
 		return fallback
 	}
-	if strconv.IntSize == 32 && value > math.MaxInt32 {
+	if value > int64(math.MaxInt) {
 		return fallback
 	}
 	return int(value)

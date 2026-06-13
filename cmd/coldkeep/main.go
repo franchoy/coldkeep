@@ -3114,7 +3114,7 @@ func verifyFileIDInt(fileID int64) (int, error) {
 	if fileID <= 0 {
 		return 0, usageErrorf("Invalid fileID: must be a positive integer")
 	}
-	if strconv.IntSize == 32 && fileID > math.MaxInt32 {
+	if fileID > int64(math.MaxInt) {
 		return 0, usageErrorf("Invalid fileID: value %d exceeds platform int range", fileID)
 	}
 	return int(fileID), nil

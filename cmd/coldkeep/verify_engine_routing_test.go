@@ -244,6 +244,8 @@ func TestVerifyFileEngineRoutingJSON(t *testing.T) {
 }
 
 func TestVerifyFileIDInt(t *testing.T) {
+	maxInt := int64(math.MaxInt)
+
 	tests := []struct {
 		name    string
 		fileID  int64
@@ -253,26 +255,18 @@ func TestVerifyFileIDInt(t *testing.T) {
 		{name: "positive in range", fileID: 42, want: 42},
 		{name: "zero rejected", fileID: 0, wantErr: "Invalid fileID"},
 		{name: "negative rejected", fileID: -1, wantErr: "Invalid fileID"},
+		{name: "max int allowed", fileID: maxInt, want: math.MaxInt},
 	}
 
-	if strconv.IntSize == 32 {
+	if maxInt < math.MaxInt64 {
 		tests = append(tests, struct {
 			name    string
 			fileID  int64
 			want    int
 			wantErr string
 		}{
-			name:   "max int32 allowed",
-			fileID: math.MaxInt32,
-			want:   math.MaxInt32,
-		}, struct {
-			name    string
-			fileID  int64
-			want    int
-			wantErr string
-		}{
 			name:    "overflow rejected",
-			fileID:  int64(math.MaxInt32) + 1,
+			fileID:  maxInt + 1,
 			wantErr: "exceeds platform int range",
 		})
 	}
@@ -294,20 +288,11 @@ func TestVerifyFileIDInt(t *testing.T) {
 			}
 		})
 	}
-
-	if strconv.IntSize == 64 {
-		got, err := verifyFileIDInt(math.MaxInt64)
-		if err != nil {
-			t.Fatalf("verifyFileIDInt(%d) returned error: %v", int64(math.MaxInt64), err)
-		}
-		if int64(got) != math.MaxInt64 {
-			t.Fatalf("verifyFileIDInt(%d) = %d, want %d", int64(math.MaxInt64), got, int64(math.MaxInt64))
-		}
-	}
 }
 
 func TestRunVerifyCommandRejectsOversizedFileIDBeforeRouting(t *testing.T) {
-	if strconv.IntSize != 32 {
+	maxInt := int64(math.MaxInt)
+	if maxInt == math.MaxInt64 {
 		t.Skip("current platform int is 64-bit; no larger signed int64 fileID exists")
 	}
 
@@ -321,7 +306,7 @@ func TestRunVerifyCommandRejectsOversizedFileIDBeforeRouting(t *testing.T) {
 
 	err := runVerifyCommand(parsedCommandLine{
 		method:      "verify",
-		positionals: []string{"file", strconv.FormatInt(int64(math.MaxInt32)+1, 10)},
+		positionals: []string{"file", strconv.FormatInt(maxInt+1, 10)},
 		flags:       map[string][]string{},
 	}, outputModeText)
 	if err == nil {
