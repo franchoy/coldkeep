@@ -3058,6 +3058,10 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		if err != nil {
 			return usageErrorf("Invalid fileID: %v", err)
 		}
+		verifyFileID, err := verifyFileIDInt(fileID)
+		if err != nil {
+			return err
+		}
 
 		sgctx, err := loadDefaultStorageContextPhase()
 		if err != nil {
@@ -3065,7 +3069,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 		defer func() { _ = sgctx.Close() }()
 
-		verifyErr := verifyCommandPhase(sgctx.DB, target, int(fileID), verifyLevel)
+		verifyErr := verifyCommandPhase(sgctx.DB, target, verifyFileID, verifyLevel)
 		if verifyErr != nil {
 			return verifyError(verifyErr)
 		}
@@ -3104,6 +3108,17 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	default:
 		return usageErrorf("Unknown target for verify: %s (expected 'system' or 'file <fileID>')", target)
 	}
+}
+
+func verifyFileIDInt(fileID int64) (int, error) {
+	if fileID <= 0 {
+		return 0, usageErrorf("Invalid fileID: must be a positive integer")
+	}
+	maxInt := int64(int(^uint(0) >> 1))
+	if fileID > maxInt {
+		return 0, usageErrorf("Invalid fileID: value %d exceeds platform int range", fileID)
+	}
+	return int(fileID), nil
 }
 
 // runDoctorCommand implements the doctor corrective recovery command.

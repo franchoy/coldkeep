@@ -3,6 +3,8 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -238,5 +240,85 @@ func TestVerifyFileEngineRoutingJSON(t *testing.T) {
 	}
 	if got := int(payload["file_id"].(float64)); got != 42 {
 		t.Fatalf("expected file_id 42, got %d", got)
+	}
+}
+
+func TestVerifyFileIDInt(t *testing.T) {
+	maxInt := int64(int(^uint(0) >> 1))
+
+	tests := []struct {
+		name    string
+		fileID  int64
+		want    int
+		wantErr string
+	}{
+		{name: "positive in range", fileID: 42, want: 42},
+		{name: "zero rejected", fileID: 0, wantErr: "Invalid fileID"},
+		{name: "negative rejected", fileID: -1, wantErr: "Invalid fileID"},
+		{name: "max int allowed", fileID: maxInt, want: int(maxInt)},
+	}
+
+	if maxInt < math.MaxInt64 {
+		tests = append(tests, struct {
+			name    string
+			fileID  int64
+			want    int
+			wantErr string
+		}{
+			name:    "overflow rejected",
+			fileID:  maxInt + 1,
+			wantErr: "exceeds platform int range",
+		})
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := verifyFileIDInt(tc.fileID)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("verifyFileIDInt(%d) error = %v, want substring %q", tc.fileID, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("verifyFileIDInt(%d) returned error: %v", tc.fileID, err)
+			}
+			if got != tc.want {
+				t.Fatalf("verifyFileIDInt(%d) = %d, want %d", tc.fileID, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunVerifyCommandRejectsOversizedFileIDBeforeRouting(t *testing.T) {
+	maxInt := int64(int(^uint(0) >> 1))
+	if maxInt == math.MaxInt64 {
+		t.Skip("current platform int is 64-bit; no larger signed int64 fileID exists")
+	}
+
+	origVerify := verifyCommandPhase
+	verifyCalled := false
+	verifyCommandPhase = func(_ *sql.DB, target string, fileID int, level verify.VerifyLevel) error {
+		verifyCalled = true
+		return nil
+	}
+	t.Cleanup(func() { verifyCommandPhase = origVerify })
+
+	err := runVerifyCommand(parsedCommandLine{
+		method:      "verify",
+		positionals: []string{"file", strconv.FormatInt(maxInt+1, 10)},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected usage error for oversized verify fileID")
+	}
+	if verifyCalled {
+		t.Fatal("verifyCommandPhase should not be called for oversized fileID")
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if !strings.Contains(err.Error(), "exceeds platform int range") {
+		t.Fatalf("expected oversized fileID message, got: %v", err)
 	}
 }
