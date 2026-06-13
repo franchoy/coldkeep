@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -101,8 +102,10 @@ func loadSessionTimeout(envVar string, defaultTimeout time.Duration) time.Durati
 }
 
 func int64ToIntOrFallback(value int64, fallback int) int {
-	maxInt := int64(int(^uint(0) >> 1))
-	if value < 0 || value > maxInt {
+	if value < 0 {
+		return fallback
+	}
+	if strconv.IntSize == 32 && value > math.MaxInt32 {
 		return fallback
 	}
 	return int(value)
