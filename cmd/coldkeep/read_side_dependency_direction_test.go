@@ -7,6 +7,50 @@ import (
 	"github.com/franchoy/coldkeep/internal/observability"
 )
 
+var inspectPublicTargetCases = []struct {
+	name       string
+	args       []string
+	wantEntity observability.EntityType
+	wantID     string
+}{
+	{
+		name:       "repository",
+		args:       []string{"inspect", "repository", "--output", "json"},
+		wantEntity: observability.EntityRepository,
+		wantID:     "",
+	},
+	{
+		name:       "file",
+		args:       []string{"inspect", "file", "42", "--output", "json"},
+		wantEntity: observability.EntityFile,
+		wantID:     "42",
+	},
+	{
+		name:       "logical-file alias",
+		args:       []string{"inspect", "logical-file", "42", "--output", "json"},
+		wantEntity: observability.EntityFile,
+		wantID:     "42",
+	},
+	{
+		name:       "snapshot",
+		args:       []string{"inspect", "snapshot", "snap-42", "--output", "json"},
+		wantEntity: observability.EntitySnapshot,
+		wantID:     "snap-42",
+	},
+	{
+		name:       "chunk",
+		args:       []string{"inspect", "chunk", "7", "--output", "json"},
+		wantEntity: observability.EntityChunk,
+		wantID:     "7",
+	},
+	{
+		name:       "container",
+		args:       []string{"inspect", "container", "9", "--output", "json"},
+		wantEntity: observability.EntityContainer,
+		wantID:     "9",
+	},
+}
+
 func TestReadSideJSONOwnershipFamiliesRemainDistinct(t *testing.T) {
 	t.Run("stats uses renderer envelope family", func(t *testing.T) {
 		installStep9CLIStubs(t)
@@ -111,51 +155,7 @@ func TestInspectPublicTargetsRemainDocumentedSet(t *testing.T) {
 	originalInspect := runObservabilityInspectPhase
 	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
 
-	tests := []struct {
-		name       string
-		args       []string
-		wantEntity observability.EntityType
-		wantID     string
-	}{
-		{
-			name:       "repository",
-			args:       []string{"inspect", "repository", "--output", "json"},
-			wantEntity: observability.EntityRepository,
-			wantID:     "",
-		},
-		{
-			name:       "file",
-			args:       []string{"inspect", "file", "42", "--output", "json"},
-			wantEntity: observability.EntityFile,
-			wantID:     "42",
-		},
-		{
-			name:       "logical-file alias",
-			args:       []string{"inspect", "logical-file", "42", "--output", "json"},
-			wantEntity: observability.EntityFile,
-			wantID:     "42",
-		},
-		{
-			name:       "snapshot",
-			args:       []string{"inspect", "snapshot", "snap-42", "--output", "json"},
-			wantEntity: observability.EntitySnapshot,
-			wantID:     "snap-42",
-		},
-		{
-			name:       "chunk",
-			args:       []string{"inspect", "chunk", "7", "--output", "json"},
-			wantEntity: observability.EntityChunk,
-			wantID:     "7",
-		},
-		{
-			name:       "container",
-			args:       []string{"inspect", "container", "9", "--output", "json"},
-			wantEntity: observability.EntityContainer,
-			wantID:     "9",
-		},
-	}
-
-	for _, tc := range tests {
+	for _, tc := range inspectPublicTargetCases {
 		t.Run(tc.name, func(t *testing.T) {
 			assertInspectTargetRoutes(t, tc.args, tc.wantEntity, tc.wantID)
 		})
