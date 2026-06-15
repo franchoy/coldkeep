@@ -25,10 +25,15 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
+const testAESGCMKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
 func RequireDB(t *testing.T) {
 	t.Helper()
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run integration tests")
+	}
+	if strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")) == "aes-gcm" && strings.TrimSpace(os.Getenv("COLDKEEP_KEY")) == "" {
+		t.Setenv("COLDKEEP_KEY", testAESGCMKeyHex)
 	}
 }
 
@@ -557,7 +562,7 @@ func MustRead(t *testing.T, p string) []byte {
 
 func SetTestAESGCMKey(t *testing.T) {
 	t.Helper()
-	t.Setenv("COLDKEEP_KEY", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+	t.Setenv("COLDKEEP_KEY", testAESGCMKeyHex)
 }
 
 func AssertDeepVerifyAggregateError(t *testing.T, err error, context string) {

@@ -1487,6 +1487,7 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 	storePayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 	storeData := testutils.JSONMap(t, storePayload, "data")
+	fileID := testutils.JSONInt64(t, storeData, "file_id")
 	storedPath, ok := storeData["stored_path"].(string)
 	if !ok || strings.TrimSpace(storedPath) == "" {
 		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
@@ -1498,8 +1499,6 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 		t.Fatalf("reconnect DB: %v", err)
 	}
 	defer dbconn.Close()
-
-	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
 	var configuredDefaultChunker string
 	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
