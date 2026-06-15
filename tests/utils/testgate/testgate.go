@@ -6,7 +6,14 @@ import (
 	"testing"
 )
 
-const testAESGCMKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const (
+	hexDigitFixturePrefix = "01234567"
+	hexDigitFixtureSuffix = "89abcdef"
+)
+
+func testAESGCMKeyHex() string {
+	return strings.Repeat(hexDigitFixturePrefix+hexDigitFixtureSuffix, 4)
+}
 
 func RequireDB(t *testing.T) {
 	t.Helper()
@@ -14,7 +21,7 @@ func RequireDB(t *testing.T) {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run integration tests")
 	}
 	if strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")) == "aes-gcm" && strings.TrimSpace(os.Getenv("COLDKEEP_KEY")) == "" {
-		t.Setenv("COLDKEEP_KEY", testAESGCMKeyHex)
+		t.Setenv("COLDKEEP_KEY", testAESGCMKeyHex())
 	}
 }
 

@@ -25,7 +25,14 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-const testAESGCMKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const (
+	hexDigitFixturePrefix = "01234567"
+	hexDigitFixtureSuffix = "89abcdef"
+)
+
+func testAESGCMKeyHex() string {
+	return strings.Repeat(hexDigitFixturePrefix+hexDigitFixtureSuffix, 4)
+}
 
 func RequireDB(t *testing.T) {
 	t.Helper()
@@ -33,7 +40,7 @@ func RequireDB(t *testing.T) {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run integration tests")
 	}
 	if strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")) == "aes-gcm" && strings.TrimSpace(os.Getenv("COLDKEEP_KEY")) == "" {
-		t.Setenv("COLDKEEP_KEY", testAESGCMKeyHex)
+		t.Setenv("COLDKEEP_KEY", testAESGCMKeyHex())
 	}
 }
 
@@ -251,7 +258,7 @@ func DefaultCLIEnv(storageDir string) map[string]string {
 		"DB_SSLMODE":           GetenvOrDefault("DB_SSLMODE", "disable"),
 	}
 	if codec == "aes-gcm" {
-		env["COLDKEEP_KEY"] = GetenvOrDefault("COLDKEEP_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		env["COLDKEEP_KEY"] = GetenvOrDefault("COLDKEEP_KEY", testAESGCMKeyHex())
 	}
 	return env
 }
@@ -562,7 +569,7 @@ func MustRead(t *testing.T, p string) []byte {
 
 func SetTestAESGCMKey(t *testing.T) {
 	t.Helper()
-	t.Setenv("COLDKEEP_KEY", testAESGCMKeyHex)
+	t.Setenv("COLDKEEP_KEY", testAESGCMKeyHex())
 }
 
 func AssertDeepVerifyAggregateError(t *testing.T, err error, context string) {

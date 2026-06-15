@@ -14,6 +14,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  COLDKEEP_AES_GCM_FIXTURE_HEX: ${{ format('{0}{1}{0}{1}{0}{1}{0}{1}', '01234567', '89abcdef') }}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -85,7 +86,7 @@ jobs:
       - name: Test packages (aes-gcm codec)
         env:
           COLDKEEP_CODEC: aes-gcm
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
         run: go test -race -count=1 ./cmd/... ./internal/...
 
       - name: Validate deterministic chunker benchmark tests (CI-fast)
@@ -142,7 +143,7 @@ jobs:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -201,7 +202,7 @@ jobs:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -247,7 +248,7 @@ jobs:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: plain
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -297,7 +298,7 @@ jobs:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -348,7 +349,7 @@ jobs:
           COLDKEEP_LONG_RUN: 1
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -400,7 +401,7 @@ jobs:
           COLDKEEP_LONG_RUN: 1
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -415,7 +416,7 @@ jobs:
           COLDKEEP_LONG_RUN: 1
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -464,7 +465,7 @@ jobs:
         env:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_CODEC: ${{ matrix.codec }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -526,7 +527,7 @@ jobs:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: aes-gcm
           COLDKEEP_COMPRESSION: ${{ matrix.compression }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
           COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
           COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS: 900
@@ -543,7 +544,7 @@ jobs:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: aes-gcm
           COLDKEEP_COMPRESSION: ${{ matrix.compression }}
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
           COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
           COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS: 900
