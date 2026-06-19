@@ -2145,86 +2145,98 @@ func TestRunMigrationsPreservesExistingPhysicalFileMappings(t *testing.T) {
 		t.Fatalf("run migrations: %v", err)
 	}
 
-	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version, ref_count) VALUES (?, ?, ?, ?, ?, ?)`,
-		"portable.txt",
-		int64(128),
-		"hash-portable",
-		"COMPLETED",
-		"v1-simple-rolling",
-		1,
-	)
-	if err != nil {
-		t.Fatalf("insert logical_file row: %v", err)
-	}
-
-	logicalID, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("read inserted logical_file id: %v", err)
-	}
-
-	if _, err := dbconn.Exec(
-		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, ?)`,
-		"/user/docs/portable.txt",
-		logicalID,
-		1,
-	); err != nil {
-		t.Fatalf("insert physical_file row: %v", err)
-	}
-
-	var mappingCountBefore int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?`, logicalID).Scan(&mappingCountBefore); err != nil {
-		t.Fatalf("count physical_file rows before rerun: %v", err)
-	}
-
-	var refCountBefore int
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = ?`, logicalID).Scan(&refCountBefore); err != nil {
-		t.Fatalf("read logical_file.ref_count before rerun: %v", err)
-	}
-
-	var migratedCountBefore int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE '/migrated/%' AND logical_file_id = ?`, logicalID).Scan(&migratedCountBefore); err != nil {
-		t.Fatalf("count migrated paths before rerun: %v", err)
-	}
+	logicalID := insertMigrationLogicalFile(t, dbconn, "portable.txt", 128, "hash-portable", 1)
+	insertMigrationPhysicalFile(t, dbconn, logicalID, "/user/docs/portable.txt")
+	before := readMigrationPhysicalFileState(t, dbconn, logicalID)
 
 	if err := RunMigrations(dbconn); err != nil {
 		t.Fatalf("rerun migrations: %v", err)
 	}
 
-	var mappingCountAfter int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?`, logicalID).Scan(&mappingCountAfter); err != nil {
-		t.Fatalf("count physical_file rows after rerun: %v", err)
-	}
-	if mappingCountAfter != 1 {
-		t.Fatalf("expected one physical_file row after rerun, got %d", mappingCountAfter)
-	}
-	if mappingCountBefore != mappingCountAfter {
-		t.Fatalf("expected physical_file row count to remain stable, got %d then %d", mappingCountBefore, mappingCountAfter)
-	}
+	after := readMigrationPhysicalFileState(t, dbconn, logicalID)
+	requireMigrationPhysicalFileStateStable(t, before, after, 1)
+}
 
-	var migratedCountAfter int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE '/migrated/%' AND logical_file_id = ?`, logicalID).Scan(&migratedCountAfter); err != nil {
-		t.Fatalf("count migrated paths after rerun: %v", err)
-	}
-	if migratedCountAfter != 0 {
-		t.Fatalf("expected no synthetic migrated path for mapped logical file, got %d", migratedCountAfter)
-	}
-	if migratedCountBefore != migratedCountAfter {
-		t.Fatalf("expected migrated path count to remain stable, got %d then %d", migratedCountBefore, migratedCountAfter)
-	}
+type migrationPhysicalFileState struct {
+	mappingCount  int
+	refCount      int
+	migratedCount int
+}
 
-	var refCountAfter int
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = ?`, logicalID).Scan(&refCountAfter); err != nil {
-		t.Fatalf("read logical_file.ref_count after rerun: %v", err)
+func insertMigrationLogicalFile(t *testing.T, dbconn *sql.DB, name string, totalSize int64, fileHash string, refCount int) int64 {
+	t.Helper()
+
+	res, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version, ref_count) VALUES (?, ?, ?, ?, ?, ?)`,
+		name,
+		totalSize,
+		fileHash,
+		"COMPLETED",
+		"v1-simple-rolling",
+		refCount,
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file row: %v", err)
 	}
-	if refCountAfter != 1 {
-		t.Fatalf("expected logical_file.ref_count=1 after rerun, got %d", refCountAfter)
+	logicalID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("read inserted logical_file id: %v", err)
 	}
-	if refCountBefore != refCountAfter {
-		t.Fatalf("expected logical_file.ref_count to remain stable, got %d then %d", refCountBefore, refCountAfter)
+	return logicalID
+}
+
+func insertMigrationPhysicalFile(t *testing.T, dbconn *sql.DB, logicalID int64, path string) {
+	t.Helper()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, ?)`,
+		path,
+		logicalID,
+		1,
+	); err != nil {
+		t.Fatalf("insert physical_file row: %v", err)
 	}
-	if mappingCountAfter != refCountAfter {
-		t.Fatalf("expected physical_file count to match ref_count, got mappings=%d ref_count=%d", mappingCountAfter, refCountAfter)
+}
+
+func readMigrationPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int64) migrationPhysicalFileState {
+	t.Helper()
+
+	state := migrationPhysicalFileState{}
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?`, logicalID).Scan(&state.mappingCount); err != nil {
+		t.Fatalf("count physical_file rows: %v", err)
+	}
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = ?`, logicalID).Scan(&state.refCount); err != nil {
+		t.Fatalf("read logical_file.ref_count: %v", err)
+	}
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE '/migrated/%' AND logical_file_id = ?`, logicalID).Scan(&state.migratedCount); err != nil {
+		t.Fatalf("count migrated paths: %v", err)
+	}
+	return state
+}
+
+func requireMigrationPhysicalFileStateStable(t *testing.T, before, after migrationPhysicalFileState, wantMappingCount int) {
+	t.Helper()
+
+	if after.mappingCount != wantMappingCount {
+		t.Fatalf("expected %d physical_file rows after rerun, got %d", wantMappingCount, after.mappingCount)
+	}
+	if before.mappingCount != after.mappingCount {
+		t.Fatalf("expected physical_file row count to remain stable, got %d then %d", before.mappingCount, after.mappingCount)
+	}
+	if after.migratedCount != 0 {
+		t.Fatalf("expected no synthetic migrated path for mapped logical file, got %d", after.migratedCount)
+	}
+	if before.migratedCount != after.migratedCount {
+		t.Fatalf("expected migrated path count to remain stable, got %d then %d", before.migratedCount, after.migratedCount)
+	}
+	if after.refCount != wantMappingCount {
+		t.Fatalf("expected logical_file.ref_count=%d after rerun, got %d", wantMappingCount, after.refCount)
+	}
+	if before.refCount != after.refCount {
+		t.Fatalf("expected logical_file.ref_count to remain stable, got %d then %d", before.refCount, after.refCount)
+	}
+	if after.mappingCount != after.refCount {
+		t.Fatalf("expected physical_file count to match ref_count, got mappings=%d ref_count=%d", after.mappingCount, after.refCount)
 	}
 }
 
@@ -2239,77 +2251,20 @@ func TestRunMigrationsAllowsMultiplePhysicalFilesPerLogicalFile(t *testing.T) {
 		t.Fatalf("run migrations: %v", err)
 	}
 
-	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version, ref_count) VALUES (?, ?, ?, ?, ?, ?)`,
-		"data.bin",
-		int64(64),
-		"hash-shared",
-		"COMPLETED",
-		"v1-simple-rolling",
-		2,
-	)
-	if err != nil {
-		t.Fatalf("insert logical_file row: %v", err)
-	}
-
-	logicalID, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("read inserted logical_file id: %v", err)
-	}
-
-	if _, err := dbconn.Exec(
-		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, ?)`,
-		"/user/a/data.bin",
-		logicalID,
-		1,
-	); err != nil {
-		t.Fatalf("insert first physical_file row: %v", err)
-	}
-
-	if _, err := dbconn.Exec(
-		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, ?)`,
-		"/user/b/data.bin",
-		logicalID,
-		1,
-	); err != nil {
-		t.Fatalf("insert second physical_file row for same logical_file: %v", err)
-	}
-
-	var mappedCount int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?`, logicalID).Scan(&mappedCount); err != nil {
-		t.Fatalf("count physical_file rows for logical_file: %v", err)
-	}
-	if mappedCount != 2 {
-		t.Fatalf("expected 2 physical_file rows for the same logical_file, got %d", mappedCount)
+	logicalID := insertMigrationLogicalFile(t, dbconn, "data.bin", 64, "hash-shared", 2)
+	insertMigrationPhysicalFile(t, dbconn, logicalID, "/user/a/data.bin")
+	insertMigrationPhysicalFile(t, dbconn, logicalID, "/user/b/data.bin")
+	before := readMigrationPhysicalFileState(t, dbconn, logicalID)
+	if before.mappingCount != 2 {
+		t.Fatalf("expected 2 physical_file rows for the same logical_file, got %d", before.mappingCount)
 	}
 
 	if err := RunMigrations(dbconn); err != nil {
 		t.Fatalf("rerun migrations: %v", err)
 	}
 
-	var mappedCountAfter int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?`, logicalID).Scan(&mappedCountAfter); err != nil {
-		t.Fatalf("count physical_file rows for logical_file after rerun: %v", err)
-	}
-	if mappedCountAfter != 2 {
-		t.Fatalf("expected 2 physical_file rows for the same logical_file after rerun, got %d", mappedCountAfter)
-	}
-
-	var migratedCount int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE '/migrated/%' AND logical_file_id = ?`, logicalID).Scan(&migratedCount); err != nil {
-		t.Fatalf("count migrated physical_file rows: %v", err)
-	}
-	if migratedCount != 0 {
-		t.Fatalf("expected no synthetic migrated physical_file rows for mapped logical_file, got %d", migratedCount)
-	}
-
-	var refCount int
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = ?`, logicalID).Scan(&refCount); err != nil {
-		t.Fatalf("read logical_file.ref_count after rerun: %v", err)
-	}
-	if refCount != 2 {
-		t.Fatalf("expected logical_file.ref_count=2 after rerun, got %d", refCount)
-	}
+	after := readMigrationPhysicalFileState(t, dbconn, logicalID)
+	requireMigrationPhysicalFileStateStable(t, before, after, 2)
 }
 
 func TestRunMigrationsRejectsEmptyPhysicalFilePath(t *testing.T) {

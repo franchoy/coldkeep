@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/container"
@@ -15,12 +16,81 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+type portabilityFixture struct {
+	sourceRoot               string
+	destinationRoot          string
+	sourceCatalogPath        string
+	sourceContainersDir      string
+	destinationCatalogPath   string
+	destinationContainersDir string
+	inputPath                string
+	restoreDir               string
+	inputBytes               []byte
+}
+
+type portabilitySourceState struct {
+	dbconn       *sql.DB
+	storeContext storage.StorageContext
+	engine       *engine.DefaultEngine
+	storeResult  engine.StoreResult
+	closed       bool
+}
+
+func createPortabilityDir(t *testing.T, path string) {
+	t.Helper()
+
+	if _, err := os.Stat(path); err == nil {
+		return
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat dir %q: %v", path, err)
+	}
+
+	parent := filepath.Dir(path)
+	tempDir, err := os.MkdirTemp(parent, filepath.Base(path)+"-")
+	if err != nil {
+		t.Fatalf("mkdtemp %q: %v", path, err)
+	}
+	if err := os.Rename(tempDir, path); err != nil {
+		_ = os.RemoveAll(tempDir)
+		t.Fatalf("rename temp dir to %q: %v", path, err)
+	}
+}
+
+func newPortabilityFixture(t *testing.T) portabilityFixture {
+	t.Helper()
+
+	parentDir := t.TempDir()
+	sourceRoot := filepath.Join(parentDir, "source-repo")
+	inputDir := filepath.Join(parentDir, "input")
+	restoreDir := filepath.Join(parentDir, "restore")
+	createPortabilityDir(t, sourceRoot)
+	createPortabilityDir(t, inputDir)
+	createPortabilityDir(t, restoreDir)
+
+	inputBytes := []byte("coldkeep-v1.13.7-portability-smoke")
+	inputPath := filepath.Join(inputDir, "portable.txt")
+	if err := os.WriteFile(inputPath, inputBytes, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	destinationRoot := filepath.Join(parentDir, "moved-repo")
+	return portabilityFixture{
+		sourceRoot:               sourceRoot,
+		destinationRoot:          destinationRoot,
+		sourceCatalogPath:        filepath.Join(sourceRoot, ".coldkeep", "catalog.sqlite"),
+		sourceContainersDir:      filepath.Join(sourceRoot, "containers"),
+		destinationCatalogPath:   filepath.Join(destinationRoot, ".coldkeep", "catalog.sqlite"),
+		destinationContainersDir: filepath.Join(destinationRoot, "containers"),
+		inputPath:                inputPath,
+		restoreDir:               restoreDir,
+		inputBytes:               inputBytes,
+	}
+}
+
 func openPortabilitySQLiteDB(t *testing.T, catalogPath string) *sql.DB {
 	t.Helper()
 
-	if err := os.MkdirAll(filepath.Dir(catalogPath), 0o700); err != nil {
-		t.Fatalf("mkdir catalog dir: %v", err)
-	}
+	createPortabilityDir(t, filepath.Dir(catalogPath))
 
 	dbconn, err := sql.Open("sqlite3", catalogPath)
 	if err != nil {
@@ -51,9 +121,7 @@ func openPortabilitySQLiteDB(t *testing.T, catalogPath string) *sql.DB {
 func newPortabilityStoreContext(t *testing.T, dbconn *sql.DB, containersDir string) storage.StorageContext {
 	t.Helper()
 
-	if err := os.MkdirAll(containersDir, 0o700); err != nil {
-		t.Fatalf("mkdir containers dir: %v", err)
-	}
+	createPortabilityDir(t, containersDir)
 	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
 	if writer == nil {
 		t.Fatal("NewLocalWriterWithDirAndDB returned nil")
@@ -157,42 +225,31 @@ func requireSuccessfulPortabilityRestore(t *testing.T, result engine.RestoreResu
 	return result.Items[0].OutputPath
 }
 
-func TestSQLiteRepositoryRelocationReopenVerifyRestoreIntegration(t *testing.T) {
-	parentDir := t.TempDir()
-	sourceRoot := filepath.Join(parentDir, "source-repo")
-	destinationRoot := filepath.Join(parentDir, "moved-repo")
-	sourceCatalogPath := filepath.Join(sourceRoot, ".coldkeep", "catalog.sqlite")
-	sourceContainersDir := filepath.Join(sourceRoot, "containers")
-	inputDir := filepath.Join(parentDir, "input")
-	restoreDir := filepath.Join(parentDir, "restore")
+func newPortabilitySourceState(t *testing.T, fixture portabilityFixture) *portabilitySourceState {
+	t.Helper()
 
-	if err := os.MkdirAll(inputDir, 0o700); err != nil {
-		t.Fatalf("mkdir input dir: %v", err)
+	dbconn := openPortabilitySQLiteDB(t, fixture.sourceCatalogPath)
+	storeContext := newPortabilityStoreContext(t, dbconn, fixture.sourceContainersDir)
+	state := &portabilitySourceState{
+		dbconn:       dbconn,
+		storeContext: storeContext,
 	}
-	if err := os.MkdirAll(restoreDir, 0o700); err != nil {
-		t.Fatalf("mkdir restore dir: %v", err)
-	}
-
-	inputBytes := []byte("coldkeep-v1.13.7-portability-smoke")
-	inputPath := filepath.Join(inputDir, "portable.txt")
-	if err := os.WriteFile(inputPath, inputBytes, 0o600); err != nil {
-		t.Fatalf("write input file: %v", err)
-	}
-
-	sourceDB := openPortabilitySQLiteDB(t, sourceCatalogPath)
-	sourceStoreContext := newPortabilityStoreContext(t, sourceDB, sourceContainersDir)
-	sourceClosed := false
-	defer func() {
-		if !sourceClosed {
-			if err := sourceStoreContext.Close(); err != nil {
+	state.engine = newPortabilityEngine(t, dbconn, fixture.sourceContainersDir, &state.storeContext)
+	t.Cleanup(func() {
+		if !state.closed {
+			if err := state.storeContext.Close(); err != nil {
 				t.Fatalf("close source storage context during cleanup: %v", err)
 			}
 		}
-	}()
-	sourceEngine := newPortabilityEngine(t, sourceDB, sourceContainersDir, &sourceStoreContext)
+	})
+	return state
+}
 
-	storeResult, err := sourceEngine.Store(context.Background(), engine.StoreRequest{
-		SourcePath: inputPath,
+func runPortabilitySourceFlow(t *testing.T, fixture portabilityFixture, state *portabilitySourceState) {
+	t.Helper()
+
+	storeResult, err := state.engine.Store(context.Background(), engine.StoreRequest{
+		SourcePath: fixture.inputPath,
 		Codec:      "plain",
 	})
 	if err != nil {
@@ -204,67 +261,90 @@ func TestSQLiteRepositoryRelocationReopenVerifyRestoreIntegration(t *testing.T) 
 	if storeResult.SourcePath == "" {
 		t.Fatal("expected non-empty source path in store result")
 	}
+	state.storeResult = storeResult
 
-	requirePortabilityPathExists(t, sourceCatalogPath)
-	requirePortabilityPathExists(t, sourceContainersDir)
-
-	containerEntries, err := os.ReadDir(sourceContainersDir)
+	requirePortabilityPathExists(t, fixture.sourceCatalogPath)
+	requirePortabilityPathExists(t, fixture.sourceContainersDir)
+	entries, err := os.ReadDir(fixture.sourceContainersDir)
 	if err != nil {
 		t.Fatalf("read source containers dir: %v", err)
 	}
-	if len(containerEntries) == 0 {
+	if len(entries) == 0 {
 		t.Fatal("expected payload artifacts under source containers dir")
 	}
-
-	if _, err := sourceEngine.Verify(context.Background(), engine.VerifyRequest{
+	if _, err := state.engine.Verify(context.Background(), engine.VerifyRequest{
 		Target: "system",
 		Level:  "standard",
 	}); err != nil {
 		t.Fatalf("source Verify: %v", err)
 	}
+}
 
-	requirePortabilityPathExists(t, sourceRoot)
-	requirePortabilityPathExists(t, sourceCatalogPath)
-	requirePortabilityPathExists(t, sourceContainersDir)
-	requirePortabilityPathAbsent(t, destinationRoot)
+func relocatePortabilityRepository(t *testing.T, fixture portabilityFixture, state *portabilitySourceState) {
+	t.Helper()
 
-	if err := sourceStoreContext.Close(); err != nil {
+	requirePortabilityPathExists(t, fixture.sourceRoot)
+	requirePortabilityPathExists(t, fixture.sourceCatalogPath)
+	requirePortabilityPathExists(t, fixture.sourceContainersDir)
+	requirePortabilityPathAbsent(t, fixture.destinationRoot)
+
+	if err := state.storeContext.Close(); err != nil {
 		t.Fatalf("close source storage context before rename: %v", err)
 	}
-	sourceClosed = true
-	sourceEngine = nil
+	state.closed = true
+	state.dbconn = nil
+	state.engine = nil
 
-	if err := os.Rename(sourceRoot, destinationRoot); err != nil {
+	if err := os.Rename(fixture.sourceRoot, fixture.destinationRoot); err != nil {
 		t.Fatalf("rename repository root: %v", err)
 	}
 
-	requirePortabilityPathAbsent(t, sourceRoot)
-	requirePortabilityPathAbsent(t, sourceCatalogPath)
-	requirePortabilityPathAbsent(t, sourceContainersDir)
-	requirePortabilityPathExists(t, destinationRoot)
-
-	destinationCatalogPath := filepath.Join(destinationRoot, ".coldkeep", "catalog.sqlite")
-	destinationContainersDir := filepath.Join(destinationRoot, "containers")
-	if destinationCatalogPath == sourceCatalogPath {
+	requirePortabilityPathAbsent(t, fixture.sourceRoot)
+	requirePortabilityPathAbsent(t, fixture.sourceCatalogPath)
+	requirePortabilityPathAbsent(t, fixture.sourceContainersDir)
+	requirePortabilityPathExists(t, fixture.destinationRoot)
+	requirePortabilityPathExists(t, fixture.destinationCatalogPath)
+	requirePortabilityPathExists(t, fixture.destinationContainersDir)
+	if fixture.destinationCatalogPath == fixture.sourceCatalogPath {
 		t.Fatal("expected destination catalog path to differ from source catalog path")
 	}
-	if destinationContainersDir == sourceContainersDir {
+	if fixture.destinationContainersDir == fixture.sourceContainersDir {
 		t.Fatal("expected destination containers dir to differ from source containers dir")
 	}
+}
 
-	requirePortabilityPathExists(t, destinationCatalogPath)
-	requirePortabilityPathExists(t, destinationContainersDir)
+func readSingleRestoredPortabilityFile(t *testing.T, restoreDir string) []byte {
+	t.Helper()
 
-	destinationDB := openPortabilitySQLiteDB(t, destinationCatalogPath)
+	entries, err := os.ReadDir(restoreDir)
+	if err != nil {
+		t.Fatalf("read restore dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 restored filesystem entry, got %d", len(entries))
+	}
+	if entries[0].IsDir() {
+		t.Fatalf("expected restored entry %q to be a file", entries[0].Name())
+	}
+	data, err := os.ReadFile(filepath.Join(restoreDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read restored output: %v", err)
+	}
+	return data
+}
+
+func runPortabilityDestinationFlow(t *testing.T, fixture portabilityFixture, fileID int64) []byte {
+	t.Helper()
+
+	destinationDB := openPortabilitySQLiteDB(t, fixture.destinationCatalogPath)
 	defer func() {
 		if err := destinationDB.Close(); err != nil {
 			t.Fatalf("close destination db: %v", err)
 		}
 	}()
-	destinationEngine := newPortabilityEngine(t, destinationDB, destinationContainersDir, nil)
+	destinationEngine := newPortabilityEngine(t, destinationDB, fixture.destinationContainersDir, nil)
 
-	requireRelocatedPhysicalMappingInvariant(t, destinationDB, storeResult.LogicalFileID)
-
+	requireRelocatedPhysicalMappingInvariant(t, destinationDB, fileID)
 	if _, err := destinationEngine.Verify(context.Background(), engine.VerifyRequest{
 		Target: "system",
 		Level:  "standard",
@@ -274,8 +354,8 @@ func TestSQLiteRepositoryRelocationReopenVerifyRestoreIntegration(t *testing.T) 
 
 	restoreResult, err := destinationEngine.Restore(context.Background(), engine.RestoreRequest{
 		Mode:      engine.RestoreModeFileIDs,
-		FileIDs:   []int64{storeResult.LogicalFileID},
-		OutputDir: restoreDir,
+		FileIDs:   []int64{fileID},
+		OutputDir: fixture.restoreDir,
 		Overwrite: true,
 	})
 	if err != nil {
@@ -283,15 +363,34 @@ func TestSQLiteRepositoryRelocationReopenVerifyRestoreIntegration(t *testing.T) 
 	}
 
 	restoreOutputPath := requireSuccessfulPortabilityRestore(t, restoreResult)
-	restoredBytes, err := os.ReadFile(restoreOutputPath)
+	absRestoreDir, err := filepath.Abs(fixture.restoreDir)
 	if err != nil {
-		t.Fatalf("read restored output: %v", err)
+		t.Fatalf("abs restore dir: %v", err)
 	}
-	if !bytes.Equal(restoredBytes, inputBytes) {
+	absRestoreOutputPath, err := filepath.Abs(restoreOutputPath)
+	if err != nil {
+		t.Fatalf("abs restore output path: %v", err)
+	}
+	if !strings.HasPrefix(absRestoreOutputPath, absRestoreDir+string(os.PathSeparator)) {
+		t.Fatalf("expected restore output path %q to remain under %q", absRestoreOutputPath, absRestoreDir)
+	}
+
+	return readSingleRestoredPortabilityFile(t, fixture.restoreDir)
+}
+
+func TestSQLiteRepositoryRelocationReopenVerifyRestoreIntegration(t *testing.T) {
+	fixture := newPortabilityFixture(t)
+	sourceState := newPortabilitySourceState(t, fixture)
+
+	runPortabilitySourceFlow(t, fixture, sourceState)
+	relocatePortabilityRepository(t, fixture, sourceState)
+	restoredBytes := runPortabilityDestinationFlow(t, fixture, sourceState.storeResult.LogicalFileID)
+
+	if !bytes.Equal(restoredBytes, fixture.inputBytes) {
 		t.Fatal("restored bytes differ from original input bytes")
 	}
 
-	requirePortabilityPathAbsent(t, sourceRoot)
-	requirePortabilityPathAbsent(t, sourceCatalogPath)
-	requirePortabilityPathAbsent(t, sourceContainersDir)
+	requirePortabilityPathAbsent(t, fixture.sourceRoot)
+	requirePortabilityPathAbsent(t, fixture.sourceCatalogPath)
+	requirePortabilityPathAbsent(t, fixture.sourceContainersDir)
 }
