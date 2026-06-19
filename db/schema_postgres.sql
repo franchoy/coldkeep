@@ -238,25 +238,20 @@ INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_meta
 SELECT
   '/migrated/' ||
   CASE
-    WHEN BTRIM(COALESCE(logical_file.original_name, '')) = '' THEN 'file'
-    ELSE BTRIM(logical_file.original_name)
-  END || '-' || logical_file.id::TEXT,
-  logical_file.id,
+    WHEN BTRIM(COALESCE(lf.original_name, '')) = '' THEN 'file'
+    ELSE BTRIM(lf.original_name)
+  END || '-' || lf.id::TEXT,
+  lf.id,
   NULL,
   NULL,
   NULL,
   NULL,
   FALSE
-FROM logical_file
+FROM logical_file AS lf
 WHERE NOT EXISTS (
   SELECT 1
-  FROM physical_file
-  WHERE physical_file.path =
-    '/migrated/' ||
-    CASE
-      WHEN BTRIM(COALESCE(logical_file.original_name, '')) = '' THEN 'file'
-      ELSE BTRIM(logical_file.original_name)
-    END || '-' || logical_file.id::TEXT
+  FROM physical_file AS pf
+  WHERE pf.logical_file_id = lf.id
 );
 
 UPDATE schema_version SET version = 6 WHERE version < 6;

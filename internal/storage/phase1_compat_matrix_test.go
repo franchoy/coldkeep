@@ -267,7 +267,17 @@ func TestPhase1CompatMigrationIsIdempotent(t *testing.T) {
 
 	blocksBefore := countRows(`SELECT COUNT(*) FROM storage_blocks`)
 	chunksBefore := countRows(`SELECT COUNT(*) FROM chunk`)
+	physicalBefore := countRows(`SELECT COUNT(*) FROM physical_file`)
 	versionBefore := countRows(`SELECT MAX(version) FROM schema_version`)
+	refCountMismatchesBefore := countRows(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		WHERE lf.ref_count != (
+			SELECT COUNT(*)
+			FROM physical_file pf
+			WHERE pf.logical_file_id = lf.id
+		)
+	`)
 
 	// Re-run migrations (idempotency check).
 	if err := db.RunMigrations(repo.dbconn); err != nil {
@@ -276,7 +286,17 @@ func TestPhase1CompatMigrationIsIdempotent(t *testing.T) {
 
 	blocksAfter := countRows(`SELECT COUNT(*) FROM storage_blocks`)
 	chunksAfter := countRows(`SELECT COUNT(*) FROM chunk`)
+	physicalAfter := countRows(`SELECT COUNT(*) FROM physical_file`)
 	versionAfter := countRows(`SELECT MAX(version) FROM schema_version`)
+	refCountMismatchesAfter := countRows(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		WHERE lf.ref_count != (
+			SELECT COUNT(*)
+			FROM physical_file pf
+			WHERE pf.logical_file_id = lf.id
+		)
+	`)
 
 	if blocksBefore != blocksAfter {
 		t.Fatalf("storage_blocks count changed: before=%d after=%d", blocksBefore, blocksAfter)
@@ -284,8 +304,17 @@ func TestPhase1CompatMigrationIsIdempotent(t *testing.T) {
 	if chunksBefore != chunksAfter {
 		t.Fatalf("chunk count changed: before=%d after=%d", chunksBefore, chunksAfter)
 	}
+	if physicalBefore != physicalAfter {
+		t.Fatalf("physical_file count changed: before=%d after=%d", physicalBefore, physicalAfter)
+	}
 	if versionBefore != versionAfter {
 		t.Fatalf("schema_version changed: before=%d after=%d", versionBefore, versionAfter)
+	}
+	if refCountMismatchesBefore != 0 {
+		t.Fatalf("expected zero ref_count mismatches before rerun, got %d", refCountMismatchesBefore)
+	}
+	if refCountMismatchesAfter != 0 {
+		t.Fatalf("expected zero ref_count mismatches after rerun, got %d", refCountMismatchesAfter)
 	}
 }
 
