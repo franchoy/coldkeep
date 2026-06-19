@@ -326,7 +326,13 @@ func readSingleRestoredPortabilityFile(t *testing.T, restoreDir string) []byte {
 	if entries[0].IsDir() {
 		t.Fatalf("expected restored entry %q to be a file", entries[0].Name())
 	}
-	data, err := os.ReadFile(filepath.Join(restoreDir, entries[0].Name()))
+	entryName := entries[0].Name()
+	safeEntryName := filepath.Base(entryName)
+	if safeEntryName != entryName {
+		t.Fatalf("expected restored entry name to be a base filename, got %q", entryName)
+	}
+
+	data, err := os.ReadFile(filepath.Join(restoreDir, safeEntryName))
 	if err != nil {
 		t.Fatalf("read restored output: %v", err)
 	}
