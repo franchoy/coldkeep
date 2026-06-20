@@ -26,6 +26,8 @@ func allCandidateTypes() []struct {
 		{"RestoreRequest", engine.RestoreRequest{}},
 		{"RestoreItemResult", engine.RestoreItemResult{}},
 		{"RestoreResult", engine.RestoreResult{}},
+		{"RestoreStoredPathRequest", engine.RestoreStoredPathRequest{}},
+		{"RestoreStoredPathResult", engine.RestoreStoredPathResult{}},
 		{"RemoveRequest", engine.RemoveRequest{}},
 		{"RemoveItemResult", engine.RemoveItemResult{}},
 		{"RemoveResult", engine.RemoveResult{}},
@@ -154,6 +156,64 @@ func TestRestoreContractRepresentsByIDOnlySurface(t *testing.T) {
 	}
 }
 
+func TestRestoreStoredPathRequestHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RestoreStoredPathRequest{}), []string{
+		"StoredPath",
+		"DestinationMode",
+		"DestinationRoot",
+		"DestinationPath",
+		"Overwrite",
+		"StrictMetadata",
+		"NoMetadata",
+	})
+}
+
+func TestRestoreStoredPathResultHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RestoreStoredPathResult{}), []string{
+		"StoredPath",
+		"FileID",
+		"DestinationMode",
+		"DestinationPath",
+		"RestoredHash",
+	})
+}
+
+func TestRestoreStoredPathContractRepresentsSingleStoredMappingRestore(t *testing.T) {
+	cases := []engine.RestoreStoredPathRequest{
+		{
+			StoredPath: "/docs/original.txt",
+			Overwrite:  true,
+		},
+		{
+			StoredPath:      "/docs/prefix.txt",
+			DestinationMode: engine.RestoreDestinationPrefix,
+			DestinationRoot: "/tmp/out",
+		},
+		{
+			StoredPath:      "/docs/override.txt",
+			DestinationMode: engine.RestoreDestinationOverride,
+			DestinationPath: "/tmp/out.txt",
+			StrictMetadata:  true,
+		},
+	}
+	for _, req := range cases {
+		if req.StoredPath == "" {
+			t.Fatalf("stored-path restore request not representable: %+v", req)
+		}
+	}
+
+	res := engine.RestoreStoredPathResult{
+		StoredPath:      "/docs/original.txt",
+		FileID:          42,
+		DestinationMode: engine.RestoreDestinationOriginal,
+		DestinationPath: "/docs/original.txt",
+		RestoredHash:    "hash",
+	}
+	if res.StoredPath == "" || res.FileID <= 0 || res.DestinationPath == "" {
+		t.Fatalf("stored-path restore result not representable: %+v", res)
+	}
+}
+
 // TestRemoveContractRepresentsByIDOnlySurface proves the active remove
 // contract now represents only by-ID remove semantics.
 func TestRemoveContractRepresentsByIDOnlySurface(t *testing.T) {
@@ -171,6 +231,21 @@ func TestRemoveContractRepresentsByIDOnlySurface(t *testing.T) {
 	}
 	if len(res.Items) != 2 || res.Summary.OK != 1 || res.Summary.Failed != 1 {
 		t.Fatalf("remove result not representable: %+v", res)
+	}
+}
+
+func assertStructFields(t *testing.T, rt reflect.Type, want []string) {
+	t.Helper()
+
+	got := make([]string, 0, rt.NumField())
+	for i := 0; i < rt.NumField(); i++ {
+		field := rt.Field(i)
+		if field.IsExported() {
+			got = append(got, field.Name)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s fields mismatch: got %v want %v", rt.Name(), got, want)
 	}
 }
 

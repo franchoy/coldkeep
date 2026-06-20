@@ -83,4 +83,11 @@ type Engine interface {
 	// Safety invariant: Restore must never write outside the intended destination.
 	// Active semantics are limited to by-ID restore.
 	Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error)
+
+	// RestoreStoredPath restores one current stored physical-path mapping.
+	//
+	// Safety invariant: the operation must preserve logical identity,
+	// physical mappings, snapshot state, and ref-count ownership. Storage may
+	// temporarily pin chunks while reconstructing payloads.
+	RestoreStoredPath(ctx context.Context, req RestoreStoredPathRequest) (RestoreStoredPathResult, error)
 }

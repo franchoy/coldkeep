@@ -88,6 +88,26 @@ func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 		})
 		assertValidationBoundary(t, err, "engine: restore output directory is required")
 	})
+
+	t.Run("restore stored path requires stored path", func(t *testing.T) {
+		db, sgctx, _ := storeRemoveFixture(t, "restore-stored-path-validation.txt", "restore-stored-path-validation")
+		eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
+
+		_, err := eng.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{})
+		assertValidationBoundary(t, err, "engine: restore stored path is required")
+	})
+
+	t.Run("restore stored path rejects conflicting metadata modes", func(t *testing.T) {
+		db, sgctx, stored := storeRemoveFixture(t, "restore-stored-path-metadata.txt", "restore-stored-path-metadata")
+		eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
+
+		_, err := eng.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+			StoredPath:     stored.Path,
+			StrictMetadata: true,
+			NoMetadata:     true,
+		})
+		assertValidationBoundary(t, err, "engine: restore stored path strict metadata and no metadata are mutually exclusive")
+	})
 }
 
 func TestPerItemExecutionFailuresRemainOutsideUnsupportedClassification(t *testing.T) {

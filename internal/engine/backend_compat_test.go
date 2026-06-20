@@ -52,6 +52,8 @@ func enginePublicTypesForBackendCompatibility() []enginePublicTypeCase {
 		{"RestoreRequest", engine.RestoreRequest{}},
 		{"RestoreItemResult", engine.RestoreItemResult{}},
 		{"RestoreResult", engine.RestoreResult{}},
+		{"RestoreStoredPathRequest", engine.RestoreStoredPathRequest{}},
+		{"RestoreStoredPathResult", engine.RestoreStoredPathResult{}},
 		{"RemoveRequest", engine.RemoveRequest{}},
 		{"RemoveItemResult", engine.RemoveItemResult{}},
 		{"RemoveResult", engine.RemoveResult{}},

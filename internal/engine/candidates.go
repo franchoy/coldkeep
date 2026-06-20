@@ -224,6 +224,44 @@ type RestoreResult struct {
 	Warnings []OperationWarning
 }
 
+// RestoreStoredPathRequest is the active stored-path restore request contract.
+//
+// It restores exactly one current persisted physical_file.path mapping using
+// destination semantics that remain distinct from by-ID restore.
+type RestoreStoredPathRequest struct {
+	// StoredPath identifies exactly one persisted physical_file.path.
+	StoredPath string
+	// DestinationMode controls how the output location is derived.
+	DestinationMode RestoreDestinationMode
+	// DestinationRoot is used only by prefix mode.
+	DestinationRoot string
+	// DestinationPath is used only by override mode.
+	DestinationPath string
+	// Overwrite permits overwriting existing files.
+	Overwrite bool
+	// StrictMetadata enforces strict metadata application.
+	StrictMetadata bool
+	// NoMetadata disables metadata application.
+	NoMetadata bool
+}
+
+// RestoreStoredPathResult is the active stored-path restore success contract.
+//
+// It is a single-operation result shape; execution failures are returned as
+// errors rather than embedded item status fields.
+type RestoreStoredPathResult struct {
+	// StoredPath is the trimmed stored path used for the catalog lookup.
+	StoredPath string
+	// FileID identifies the owning logical file.
+	FileID int64
+	// DestinationMode is the normalized destination mode that executed.
+	DestinationMode RestoreDestinationMode
+	// DestinationPath is the exact resolved output path.
+	DestinationPath string
+	// RestoredHash is the successful restored content hash.
+	RestoredHash string
+}
+
 // ---------------------------------------------------------------------------
 // Remove
 // ---------------------------------------------------------------------------
