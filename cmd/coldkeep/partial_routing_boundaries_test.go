@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
@@ -143,14 +145,33 @@ func TestDiffSnapshotsPhaseNarrowsPrefixesBeforeEngineSeam(t *testing.T) {
 
 func TestRestoreStoredPathPreservesDirectCLIStoragePath(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
+	originalNewEngine := newCommandEngine
 	originalRestoreByID := restoreByIDPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
+		newCommandEngine = originalNewEngine
 		restoreByIDPhase = originalRestoreByID
 	})
 
+	dbconn := openSnapshotRoutingDB(t)
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		return storage.StorageContext{}, sql.ErrConnDone
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledStoredPath := false
+	newCommandEngine = func(dbconn *sql.DB, containerDir string) (engine.Engine, error) {
+		return stubCommandEngine{
+			restoreStoredPathFunc: func(_ context.Context, req engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error) {
+				calledStoredPath = true
+				if req.StoredPath != "/docs/a.txt" {
+					t.Fatalf("expected stored path /docs/a.txt, got %q", req.StoredPath)
+				}
+				if req.DestinationMode != engine.RestoreDestinationOverride || req.DestinationPath != "/tmp/out.txt" {
+					t.Fatalf("unexpected stored-path restore request: %+v", req)
+				}
+				return engine.RestoreStoredPathResult{}, errors.New("stored-path restore routed through engine")
+			},
+		}, nil
 	}
 
 	calledByID := false
@@ -168,24 +189,43 @@ func TestRestoreStoredPathPreservesDirectCLIStoragePath(t *testing.T) {
 			"destination": {"/tmp/out.txt"},
 		},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "load storage context") {
-		t.Fatalf("expected direct stored-path restore branch to load storage context, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "stored-path restore routed through engine") {
+		t.Fatalf("expected stored-path restore branch to route through engine, got %v", err)
 	}
 	if calledByID {
 		t.Fatal("stored-path restore should not route through restoreByIDPhase")
+	}
+	if !calledStoredPath {
+		t.Fatal("stored-path restore should route through Engine.RestoreStoredPath")
 	}
 }
 
 func TestRemoveStoredPathPreservesDirectCLIStoragePath(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
+	originalNewEngine := newCommandEngine
 	originalRemoveByID := removeByIDPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
+		newCommandEngine = originalNewEngine
 		removeByIDPhase = originalRemoveByID
 	})
 
+	dbconn := openSnapshotRoutingDB(t)
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		return storage.StorageContext{}, sql.ErrConnDone
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledStoredPath := false
+	newCommandEngine = func(dbconn *sql.DB, containerDir string) (engine.Engine, error) {
+		return stubCommandEngine{
+			removeStoredPathsFunc: func(_ context.Context, req engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error) {
+				calledStoredPath = true
+				if len(req.StoredPaths) != 1 || req.StoredPaths[0] != "/docs/a.txt" {
+					t.Fatalf("unexpected single stored-path remove request: %+v", req)
+				}
+				return engine.RemoveStoredPathsResult{}, errors.New("stored-path remove routed through engine")
+			},
+		}, nil
 	}
 
 	calledByID := false
@@ -201,24 +241,44 @@ func TestRemoveStoredPathPreservesDirectCLIStoragePath(t *testing.T) {
 			"stored-path": {"/docs/a.txt"},
 		},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "load storage context") {
-		t.Fatalf("expected direct stored-path remove branch to load storage context, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "stored-path remove routed through engine") {
+		t.Fatalf("expected stored-path remove branch to route through engine, got %v", err)
 	}
 	if calledByID {
 		t.Fatal("stored-path remove should not route through removeByIDPhase")
+	}
+	if !calledStoredPath {
+		t.Fatal("stored-path remove should route through Engine.RemoveStoredPaths")
 	}
 }
 
 func TestRemoveStoredPathsPreservesDirectCLIStoredPathBatchPath(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
+	originalNewEngine := newCommandEngine
 	originalRemoveByID := removeByIDPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
+		newCommandEngine = originalNewEngine
 		removeByIDPhase = originalRemoveByID
 	})
 
+	dbconn := openSnapshotRoutingDB(t)
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		return storage.StorageContext{}, sql.ErrConnDone
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledStoredPaths := false
+	newCommandEngine = func(dbconn *sql.DB, containerDir string) (engine.Engine, error) {
+		return stubCommandEngine{
+			removeStoredPathsFunc: func(_ context.Context, req engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error) {
+				calledStoredPaths = true
+				want := []string{"/docs/a.txt", "/docs/b.txt"}
+				if strings.Join(req.StoredPaths, ",") != strings.Join(want, ",") {
+					t.Fatalf("unexpected stored-path batch request: got=%v want=%v", req.StoredPaths, want)
+				}
+				return engine.RemoveStoredPathsResult{}, errors.New("stored-path batch remove routed through engine")
+			},
+		}, nil
 	}
 
 	calledByID := false
@@ -234,11 +294,14 @@ func TestRemoveStoredPathsPreservesDirectCLIStoredPathBatchPath(t *testing.T) {
 			"stored-paths": {""},
 		},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "load storage context") {
-		t.Fatalf("expected direct stored-paths remove branch to load storage context, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "stored-path batch remove routed through engine") {
+		t.Fatalf("expected stored-paths remove branch to route through engine, got %v", err)
 	}
 	if calledByID {
 		t.Fatal("stored-paths remove should not route through removeByIDPhase")
+	}
+	if !calledStoredPaths {
+		t.Fatal("stored-paths remove should route through Engine.RemoveStoredPaths")
 	}
 }
 

@@ -229,9 +229,7 @@ var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName strin
 	}, nil
 }
 var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun bool) batch.ItemResult {
-	// Partial route in v1.13.1: by-ID remove uses engine item execution, but
-	// stored-path and stored-paths remove remain direct CLI/storage paths until
-	// the explicit split cleanup in v1.13.8.
+	// By-ID remove remains the active engine-owned path.
 	if sgctx == nil || sgctx.DB == nil {
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: "remove: storage context DB is required"}
 	}
@@ -272,9 +270,7 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", item.RemovedChunkAssociations)}
 }
 var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
-	// Partial route in v1.13.1: by-ID restore uses engine item execution, but
-	// stored-path restore remains a direct CLI/storage path until the explicit
-	// split cleanup in v1.13.8.
+	// By-ID restore remains the active engine-owned path.
 	if sgctx == nil || sgctx.DB == nil {
 		return storage.RestoreFileResult{}, fmt.Errorf("restore: storage context DB is required")
 	}
@@ -1818,13 +1814,20 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		defer func() { _ = sgctx.Close() }()
 		perf.Mark("setup")
 
-		result, err := storage.RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, storage.RestoreOptions{
-			Overwrite:       overwrite,
-			DestinationMode: destinationMode,
-			Destination:     destination,
-			StrictMetadata:  strictMetadata,
-			NoMetadata:      noMetadata,
-		})
+		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+		if err != nil {
+			return err
+		}
+		result, normalizedMode, err := restoreStoredPathWithEngine(
+			context.Background(),
+			eng,
+			storedPath,
+			destinationMode,
+			destination,
+			overwrite,
+			strictMetadata,
+			noMetadata,
+		)
 		if err != nil {
 			return err
 		}
@@ -1839,7 +1842,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 					"output_path":   result.OutputPath,
 					"file_id":       result.FileID,
 					"restored_hash": result.RestoredHash,
-					"mode":          destinationMode,
+					"mode":          normalizedMode,
 					"perf_spans":    perf.Spans(),
 				},
 			}
@@ -1970,7 +1973,11 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 		defer func() { _ = sgctx.Close() }()
 
-		result, err := storage.RemoveFileByStoredPathWithStorageContextResult(sgctx, storedPath)
+		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+		if err != nil {
+			return err
+		}
+		result, err := removeStoredPathWithEngine(context.Background(), eng, storedPath)
 		if err != nil {
 			return err
 		}
@@ -2011,15 +2018,8 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		if err != nil {
 			return usageErrorf("failed to open/read input file: %v", err)
 		}
-		preparedTargets := prepareRemoveStoredPathTargets(rawTargets)
-		if len(preparedTargets) == 0 {
+		if len(rawTargets) == 0 {
 			return usageErrorf("no valid stored paths after parsing input")
-		}
-		if !hasExecutableRemoveStoredPathTarget(preparedTargets) {
-			removePerf.Mark("setup")
-			report := executeRemoveStoredPathPrepared(dryRun, failFast, preparedTargets, nil)
-			removePerf.Mark("operation")
-			return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 		}
 
 		sgctx, err := loadDefaultStorageContextPhase()
@@ -2029,7 +2029,23 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		defer func() { _ = sgctx.Close() }()
 		removePerf.Mark("setup")
 
-		report := executeRemoveStoredPathPrepared(dryRun, failFast, preparedTargets, &sgctx)
+		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+		if err != nil {
+			return err
+		}
+		orderedTargets := make([]string, 0, len(rawTargets))
+		for _, target := range rawTargets {
+			orderedTargets = append(orderedTargets, target.Value)
+		}
+		result, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+			StoredPaths: orderedTargets,
+			DryRun:      dryRun,
+			FailFast:    failFast,
+		})
+		if err != nil {
+			return err
+		}
+		report := removeStoredPathsResultToBatchReport(result, failFast)
 		removePerf.Mark("operation")
 		return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 	}
@@ -2222,130 +2238,6 @@ func annotateBatchFailureFromError(err error, item *batch.ItemResult) {
 
 	item.InvariantCode = code
 	item.RecommendedAction = invariants.RecommendedActionForCode(code)
-}
-
-type preparedRemoveStoredPathTarget struct {
-	StoredPath string
-	Executable bool
-	Result     batch.ItemResult
-}
-
-func prepareRemoveStoredPathTargets(raw []batch.RawTarget) []preparedRemoveStoredPathTarget {
-	prepared := make([]preparedRemoveStoredPathTarget, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-
-	for _, item := range raw {
-		path := strings.TrimSpace(item.Value)
-		if path == "" {
-			prepared = append(prepared, preparedRemoveStoredPathTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					RawValue: item.Value,
-					Status:   batch.ResultFailed,
-					Message:  fmt.Sprintf("invalid stored path %q", item.Value),
-				},
-			})
-			continue
-		}
-
-		if _, exists := seen[path]; exists {
-			prepared = append(prepared, preparedRemoveStoredPathTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					RawValue: path,
-					Status:   batch.ResultSkipped,
-					Message:  "duplicate target",
-				},
-			})
-			continue
-		}
-
-		seen[path] = struct{}{}
-		prepared = append(prepared, preparedRemoveStoredPathTarget{StoredPath: path, Executable: true})
-	}
-
-	return prepared
-}
-
-func hasExecutableRemoveStoredPathTarget(targets []preparedRemoveStoredPathTarget) bool {
-	for _, target := range targets {
-		if target.Executable {
-			return true
-		}
-	}
-	return false
-}
-
-func executeRemoveStoredPathPrepared(dryRun bool, failFast bool, targets []preparedRemoveStoredPathTarget, sgctx *storage.StorageContext) batch.Report {
-	results := make([]batch.ItemResult, 0, len(targets))
-
-	for _, target := range targets {
-		if !target.Executable {
-			results = append(results, target.Result)
-			continue
-		}
-
-		var item batch.ItemResult
-		if dryRun {
-			if sgctx == nil || sgctx.DB == nil {
-				item = batch.ItemResult{RawValue: target.StoredPath, Status: batch.ResultFailed, Message: "internal error: storage context unavailable"}
-			} else {
-				item = executeRemoveStoredPathDryRunItem(sgctx.DB, target.StoredPath)
-			}
-		} else {
-			if sgctx == nil {
-				item = batch.ItemResult{RawValue: target.StoredPath, Status: batch.ResultFailed, Message: "internal error: storage context unavailable"}
-			} else {
-				item = executeRemoveStoredPathItem(sgctx, target.StoredPath)
-			}
-		}
-
-		results = append(results, item)
-		if failFast && item.Status == batch.ResultFailed {
-			break
-		}
-	}
-
-	report := batch.NewReport(batch.OperationRemove, dryRun, results)
-	report.ExecutionMode = batch.ExecutionModeContinueOnError
-	if failFast {
-		report.ExecutionMode = batch.ExecutionModeFailFast
-	}
-	return report
-}
-
-func executeRemoveStoredPathDryRunItem(dbconn *sql.DB, storedPath string) batch.ItemResult {
-	normalized := strings.TrimSpace(storedPath)
-	if normalized == "" {
-		return batch.ItemResult{RawValue: storedPath, Status: batch.ResultFailed, Message: fmt.Sprintf("invalid stored path %q", storedPath)}
-	}
-
-	var logicalID int64
-	err := dbconn.QueryRow(`SELECT logical_file_id FROM physical_file WHERE path = $1`, normalized).Scan(&logicalID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return batch.ItemResult{RawValue: normalized, Status: batch.ResultFailed, Message: fmt.Sprintf("physical_file[%q]: not found (never stored)", normalized)}
-		}
-		return batch.ItemResult{RawValue: normalized, Status: batch.ResultFailed, Message: err.Error()}
-	}
-
-	return batch.ItemResult{ID: logicalID, RawValue: normalized, Status: batch.ResultPlanned, Message: "would remove stored-path mapping"}
-}
-
-func executeRemoveStoredPathItem(sgctx *storage.StorageContext, storedPath string) batch.ItemResult {
-	result, err := storage.RemoveFileByStoredPathWithStorageContextResult(*sgctx, storedPath)
-	if err != nil {
-		item := batch.ItemResult{RawValue: strings.TrimSpace(storedPath), Status: batch.ResultFailed, Message: err.Error()}
-		annotateBatchFailureFromError(err, &item)
-		return item
-	}
-
-	return batch.ItemResult{
-		ID:       result.LogicalFileID,
-		RawValue: result.StoredPath,
-		Status:   batch.ResultSuccess,
-		Message:  fmt.Sprintf("removed stored_path remaining_ref_count=%d", result.RemainingRefCount),
-	}
 }
 
 func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode, spans ...[]perfSpan) error {
