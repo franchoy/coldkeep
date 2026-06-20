@@ -120,6 +120,15 @@ func openPreV15MigratedVerifyDB(t *testing.T, containersDir string) *sql.DB {
 		t.Fatalf("insert legacy logical_file: %v", err)
 	}
 
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 1)`,
+		"/legacy/verify-legacy-file.bin",
+		logicalFileID,
+	); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("insert legacy physical_file mapping: %v", err)
+	}
+
 	chunkPayload := []byte("legacy-data")
 	chunkSum := sha256.Sum256(chunkPayload)
 	chunkHash := hex.EncodeToString(chunkSum[:])

@@ -22,6 +22,8 @@ type sqliteContextExecutor interface {
 type sqlitePreSchemaState struct {
 	freshInstall                  bool
 	hadDefaultChunkerBeforeSchema bool
+	hadSchemaVersionBeforeSchema  bool
+	schemaVersionBeforeSchema     int
 }
 
 const (
@@ -57,6 +59,15 @@ func inspectSQLitePreSchemaState(dbconn *sql.DB, ctx context.Context) (sqlitePre
 	if err != nil {
 		return state, fmt.Errorf("inspect sqlite schema_version table: %w", err)
 	}
+	state.hadSchemaVersionBeforeSchema = hasSchemaVersion
+	if hasSchemaVersion {
+		if err := dbconn.QueryRowContext(
+			ctx,
+			`SELECT COALESCE(MAX(version), 0) FROM schema_version`,
+		).Scan(&state.schemaVersionBeforeSchema); err != nil {
+			return state, fmt.Errorf("inspect sqlite schema_version value: %w", err)
+		}
+	}
 
 	// Fresh install signal: empty sqlite file with no app tables and no version table.
 	state.freshInstall = !hasSchemaVersion && userTableCount == 0
@@ -78,6 +89,16 @@ func inspectSQLitePreSchemaState(dbconn *sql.DB, ctx context.Context) (sqlitePre
 	}
 
 	return state, nil
+}
+
+func (s sqlitePreSchemaState) requiresLegacyPhysicalFileBackfill() bool {
+	if s.freshInstall {
+		return false
+	}
+	if !s.hadSchemaVersionBeforeSchema {
+		return true
+	}
+	return s.schemaVersionBeforeSchema < 6
 }
 
 func sqliteTableHasColumn(dbconn sqliteContextExecutor, ctx context.Context, tableName, columnName string) (bool, error) {
@@ -191,7 +212,7 @@ func rebuildSQLitePhysicalFileTable(dbconn sqliteContextExecutor, ctx context.Co
 	return nil
 }
 
-func runSQLitePhysicalFileMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+func runSQLitePhysicalFileMigration(dbconn sqliteContextExecutor, ctx context.Context, applyLegacyDataBackfill bool) error {
 	hasRefCount, err := sqliteTableHasColumn(dbconn, ctx, "logical_file", "ref_count")
 	if err != nil {
 		return fmt.Errorf("inspect logical_file.ref_count: %w", err)
@@ -227,36 +248,38 @@ func runSQLitePhysicalFileMigration(dbconn sqliteContextExecutor, ctx context.Co
 		}
 	}
 
-	if _, err := dbconn.ExecContext(ctx, `
-		UPDATE logical_file
-		SET ref_count = 1
-		WHERE ref_count IS NULL OR ref_count < 1
-	`); err != nil {
-		return fmt.Errorf("backfill logical_file.ref_count: %w", err)
-	}
+	if applyLegacyDataBackfill {
+		if _, err := dbconn.ExecContext(ctx, `
+			UPDATE logical_file
+			SET ref_count = 1
+			WHERE ref_count IS NULL OR ref_count < 1
+		`); err != nil {
+			return fmt.Errorf("backfill logical_file.ref_count: %w", err)
+		}
 
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
-		SELECT
-			'/migrated/' ||
-			CASE
-				WHEN TRIM(COALESCE(lf.original_name, '')) = '' THEN 'file'
-				ELSE TRIM(lf.original_name)
-			END || '-' || CAST(lf.id AS TEXT),
-			lf.id,
-			NULL,
-			NULL,
-			NULL,
-			NULL,
-			0
-		FROM logical_file AS lf
-		WHERE NOT EXISTS (
-			SELECT 1
-			FROM physical_file AS pf
-			WHERE pf.logical_file_id = lf.id
-		)
-	`); err != nil {
-		return fmt.Errorf("backfill physical_file: %w", err)
+		if _, err := dbconn.ExecContext(ctx, `
+			INSERT OR IGNORE INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+			SELECT
+				'/migrated/' ||
+				CASE
+					WHEN TRIM(COALESCE(lf.original_name, '')) = '' THEN 'file'
+					ELSE TRIM(lf.original_name)
+				END || '-' || CAST(lf.id AS TEXT),
+				lf.id,
+				NULL,
+				NULL,
+				NULL,
+				NULL,
+				0
+			FROM logical_file AS lf
+			WHERE NOT EXISTS (
+				SELECT 1
+				FROM physical_file AS pf
+				WHERE pf.logical_file_id = lf.id
+			)
+		`); err != nil {
+			return fmt.Errorf("backfill physical_file: %w", err)
+		}
 	}
 
 	if _, err := dbconn.ExecContext(ctx, `
@@ -1051,7 +1074,7 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := runSQLitePhysicalFileMigration(tx, ctx); err != nil {
+	if err := runSQLitePhysicalFileMigration(tx, ctx, preSchemaState.requiresLegacyPhysicalFileBackfill()); err != nil {
 		return err
 	}
 
