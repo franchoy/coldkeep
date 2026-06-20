@@ -12,6 +12,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 	"github.com/franchoy/coldkeep/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -327,12 +328,14 @@ func readSingleRestoredPortabilityFile(t *testing.T, restoreDir string) []byte {
 		t.Fatalf("expected restored entry %q to be a file", entries[0].Name())
 	}
 	entryName := entries[0].Name()
-	safeEntryName := filepath.Base(entryName)
-	if safeEntryName != entryName {
-		t.Fatalf("expected restored entry name to be a base filename, got %q", entryName)
+	if err := pathsafe.ValidateSafeFileName(entryName); err != nil {
+		t.Fatalf("expected restored entry name to be safe, got %q: %v", entryName, err)
 	}
-
-	data, err := os.ReadFile(filepath.Join(restoreDir, safeEntryName))
+	restoredPath, err := pathsafe.SafeJoin(restoreDir, entryName)
+	if err != nil {
+		t.Fatalf("resolve restored output path for %q: %v", entryName, err)
+	}
+	data, err := os.ReadFile(restoredPath)
 	if err != nil {
 		t.Fatalf("read restored output: %v", err)
 	}
