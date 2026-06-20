@@ -183,8 +183,8 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
 // Transitional CLI ownership in v1.13.1: doctor still owns corrective
-// recovery orchestration directly through recovery hooks. v1.13.9 owns any
-// later repair/recovery boundary decisions, and v1.13.11 owns remaining
+// recovery orchestration directly through recovery hooks. v1.13.10 owns any
+// later repair/recovery boundary decisions, and v1.13.12 owns remaining
 // thin-wrapper proof around this seam.
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
@@ -192,12 +192,12 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 
 // Transitional CLI ownership in v1.13.1: repair remains direct maintenance
-// execution rather than active engine ownership. v1.13.9 owns broader
+// execution rather than active engine ownership. v1.13.10 owns broader
 // repair/recovery boundary decisions.
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 
 // Transitional CLI ownership in v1.13.1: chunk live-ref-count repair remains
-// a direct maintenance phase hook, not an engine-routed workflow. v1.13.9 owns
+// a direct maintenance phase hook, not an engine-routed workflow. v1.13.10 owns
 // later cleanup if this boundary changes.
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
@@ -231,7 +231,7 @@ var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName strin
 var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun bool) batch.ItemResult {
 	// Partial route in v1.13.1: by-ID remove uses engine item execution, but
 	// stored-path and stored-paths remove remain direct CLI/storage paths until
-	// the explicit split cleanup in v1.13.7.
+	// the explicit split cleanup in v1.13.8.
 	if sgctx == nil || sgctx.DB == nil {
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: "remove: storage context DB is required"}
 	}
@@ -275,7 +275,7 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
 	// Partial route in v1.13.1: by-ID restore uses engine item execution, but
 	// stored-path restore remains a direct CLI/storage path until the explicit
-	// split cleanup in v1.13.7.
+	// split cleanup in v1.13.8.
 	if sgctx == nil || sgctx.DB == nil {
 		return storage.RestoreFileResult{}, fmt.Errorf("restore: storage context DB is required")
 	}
@@ -349,12 +349,12 @@ var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 
 // Transitional CLI ownership in v1.13.1: snapshot create remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// snapshot package workflow rather than an active engine method. v1.13.9 owns
 // the snapshot mutation boundary cleanup.
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 
 // Transitional CLI ownership in v1.13.1: snapshot restore remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// snapshot package workflow rather than an active engine method. v1.13.9 owns
 // later snapshot mutation boundary cleanup.
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
 var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
@@ -430,7 +430,7 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 }
 
 // Transitional CLI ownership in v1.13.1: snapshot delete remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// snapshot package workflow rather than an active engine method. v1.13.9 owns
 // later snapshot mutation boundary cleanup.
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview

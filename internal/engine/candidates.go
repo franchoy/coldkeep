@@ -198,7 +198,7 @@ const (
 // Support limitation in v1.13.1: the active engine route owns only file-ID
 // restore. Stored-path restore and its destination semantics remain outside the
 // active engine path; non-file-ID engine calls return ErrNotImplemented and are
-// covered by Phase 2 tests. Contract split cleanup belongs to v1.13.7.
+// covered by Phase 2 tests. Contract split cleanup belongs to v1.13.8.
 type RestoreRequest struct {
 	// Mode selects file-ID or stored-path addressing.
 	// Support limitation in v1.13.1: only RestoreModeFileIDs is active through
@@ -305,7 +305,7 @@ const (
 // Support limitation in v1.13.1: the active engine route owns only file-ID
 // remove. Stored-path and stored-paths modes remain outside the active engine
 // path; non-file-ID engine calls return ErrNotImplemented and are covered by
-// Phase 2 tests. Contract split cleanup belongs to v1.13.7.
+// Phase 2 tests. Contract split cleanup belongs to v1.13.8.
 type RemoveRequest struct {
 	// Mode selects file-ID, single stored-path, or stored-paths addressing.
 	// Support limitation in v1.13.1: only RemoveModeFileIDs is active through
@@ -442,7 +442,7 @@ type SnapshotMeta struct {
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
 // active engine ownership. Snapshot create/delete/restore remain CLI/domain
-// owned until the explicit snapshot-mutation follow-up in v1.13.8.
+// owned until the explicit snapshot-mutation follow-up in v1.13.9.
 //
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics.
@@ -484,7 +484,7 @@ type SnapshotListRequest struct {
 	// Tree requests lineage-tree ordering/visualization data.
 	// Support limitation in v1.13.1: this is a provisional view-shaping flag
 	// and does not prove engine ownership of lineage presentation semantics.
-	// Read-side cleanup belongs to v1.13.3 / v1.13.11.
+	// Read-side cleanup belongs to v1.13.3 / v1.13.12.
 	Tree bool
 }
 
@@ -493,7 +493,7 @@ type SnapshotListRequest struct {
 //
 // Support limitation in v1.13.1: TreeMode and TreeLines are provisional
 // view-shaping fields. They do not prove engine ownership of lineage
-// presentation semantics; read-side cleanup belongs to v1.13.3 / v1.13.11.
+// presentation semantics; read-side cleanup belongs to v1.13.3 / v1.13.12.
 type SnapshotListResult struct {
 	Snapshots []SnapshotMeta
 	Count     int
@@ -649,7 +649,7 @@ type SnapshotDiffResult struct {
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
 // active engine ownership. Snapshot create/delete/restore remain CLI/domain
-// owned until the explicit snapshot-mutation follow-up in v1.13.8.
+// owned until the explicit snapshot-mutation follow-up in v1.13.9.
 //
 // Safety invariant: Restore must never write outside the intended destination.
 type SnapshotRestoreRequest struct {
@@ -687,7 +687,7 @@ type SnapshotRestoreResult struct {
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
 // active engine ownership. Snapshot create/delete/restore remain CLI/domain
-// owned until the explicit snapshot-mutation follow-up in v1.13.8.
+// owned until the explicit snapshot-mutation follow-up in v1.13.9.
 //
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics. Deleting a snapshot removes only its metadata; content
@@ -736,7 +736,7 @@ const (
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
 // active engine ownership. Repair and recover remain CLI/domain owned until
-// the explicit corrective-integrity follow-up in v1.13.9.
+// the explicit corrective-integrity follow-up in v1.13.10.
 type RepairRequest struct {
 	// Target selects the single-target repair (when Batch is false).
 	Target RepairTarget
@@ -789,7 +789,7 @@ type RepairResult struct {
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
 // active engine ownership. Repair and recover remain CLI/domain owned until
-// the explicit corrective-integrity follow-up in v1.13.9.
+// the explicit corrective-integrity follow-up in v1.13.10.
 //
 // Safety invariant: Recovery must not legitimize corrupt mappings. Recovery is
 // a corrective integrity pass (abort dangling writes, clear stale sealing

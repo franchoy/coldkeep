@@ -20,6 +20,177 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.8 - Unreleased — Restore / Remove Contract Split and Stored-Path Boundary
+
+In progress.
+
+Planned work includes release-metadata reconciliation, preservation of valid
+zero-reference logical-file state across migration, and restore/remove
+stored-path boundary cleanup.
+
+------------------------------------------------------------------------
+
+## v1.13.7 - 2026-06-20 — SQLite-First Repository Portability Baseline
+
+- Established the future SQLite-first repository portability baseline without
+  switching the normal runtime backend.
+- Defined the future repository-root SQLite catalog placement contract and
+  added direct catalog-plus-payload relocation evidence.
+- Corrected physical-file migration backfill behavior for already-mapped
+  logical files while preserving PostgreSQL compatibility.
+- Kept PostgreSQL as the normal local runtime backend and did not add a normal
+  SQLite local runtime mode.
+- Preserved CLI behavior, JSON output, exit codes, storage format, and
+  repository format behavior.
+- Identified a later zero-reference migration edge case post-release and
+  assigned it to `v1.13.8`.
+
+------------------------------------------------------------------------
+
+## v1.13.6 - 2026-06-15 — Catalog Contract Expansion and Backend Parity Review
+
+- Expanded the active catalog-contract inventory and classified the backend
+  parity surface across SQLite and PostgreSQL.
+- Reviewed snapshot membership, logical/physical mapping, placement,
+  restore-plan, reachability, and GC eligibility contracts.
+- Kept the release documentation-led: no new runtime behavior, schema, or
+  storage-format changes were introduced.
+- Preserved PostgreSQL compatibility while keeping SQLite-first direction in a
+  preparatory state.
+- Recorded that existing evidence was sufficient without adding a new Phase 8
+  guard suite.
+
+------------------------------------------------------------------------
+
+## v1.13.5 - 2026-06-14 — Release Record Closure and Engine-Level Invariant Ownership
+
+- Closed the remaining release-record gaps from the prior release before
+  continuing engine-boundary stabilization.
+- Reviewed which critical invariants were still CLI-owned versus protected in
+  lower layers.
+- Added narrow engine-level invariant ownership evidence without widening the
+  active command surface.
+- Preserved observable CLI behavior, JSON behavior, backend behavior, and
+  repository/storage formats.
+- Kept snapshot mutation and repair/recovery routing decisions out of scope.
+
+------------------------------------------------------------------------
+
+## v1.13.4 - 2026-06-13 — Read-Side Dependency Direction and Result Ownership Review
+
+- Reviewed read-side ownership across engine, observability, snapshot, renderer,
+  and CLI seams.
+- Clarified result ownership and dependency direction for active read-side
+  surfaces without claiming broader routing completion.
+- Preserved current human output, JSON output, exit behavior, and backend
+  semantics.
+- Refreshed compatibility evidence while keeping snapshot mutation and broader
+  routing changes out of scope.
+- Recorded remaining provisional seams honestly instead of overclaiming unified
+  ownership.
+
+------------------------------------------------------------------------
+
+## v1.13.3 - 2026-06-12 — Read-Side Contract Cleanup
+
+- Cleaned up the active read-side contract surface around stats, inspect,
+  snapshot show, and snapshot diff.
+- Reduced misleading wrapper-shaped seams while keeping public behavior stable.
+- Preserved current query behavior, renderer expectations, and backend
+  compatibility posture.
+- Kept mutating operations and snapshot mutation routing out of scope.
+- Established a clearer base for later read-side ownership review work.
+
+------------------------------------------------------------------------
+
+## v1.13.2 - 2026-06-08 — Engine Error Taxonomy Baseline
+
+- Established the initial engine error taxonomy baseline for active and
+  near-active engine operations.
+- Clarified unsupported-operation versus invariant-failure versus passthrough
+  error meaning.
+- Preserved active routing, JSON behavior, exit codes, and backend behavior.
+- Avoided broad routing expansion while preparing later contract cleanup.
+- Improved the precision needed for future daemon/API-safe contract shaping.
+
+------------------------------------------------------------------------
+
+## v1.13.1 - 2026-06-07 — Explicit Deferred-Contract Boundaries
+
+- Converted implicit deferred seams into explicit unsupported or
+  candidate-only boundaries.
+- Clarified which engine/catalog paths were active versus intentionally
+  incomplete.
+- Preserved runtime behavior while preventing partial routes from overclaiming
+  completeness.
+- Kept new engine operations, new catalog implementations, and snapshot
+  mutation routing out of scope.
+- Established the explicit deferral baseline for the rest of the `v1.13.x`
+  stabilization train.
+
+------------------------------------------------------------------------
+
+## v1.13.0 - 2026-06-06 — Engine Stabilization Baseline & Contract Inventory
+
+- Established the `v1.13.x` engine-stabilization baseline as an inventory-only
+  release.
+- Recorded the active engine, catalog, dependency-direction, and invariant
+  ownership seams without changing runtime behavior.
+- Defined the release-train proposal that drives the subsequent `v1.13.x`
+  sequence.
+- Preserved backend behavior, storage format, repository format, JSON behavior,
+  and exit-code behavior.
+- Kept daemon, API, UI, and implementation work out of scope.
+
+------------------------------------------------------------------------
+
+## v1.12.3 - 2026-06-06 — Release Train Closure Hygiene
+
+- Closed the `v1.12.x` release train with documentation and release-control
+  hygiene updates.
+- Reconciled the final release-state records and preserved the single-branch,
+  single-PR release workflow.
+- Prepared the transition into `v1.13.0` without changing product behavior.
+- Preserved backend behavior, engine routing, storage/repository formats, and
+  schema behavior.
+
+------------------------------------------------------------------------
+
+## v1.12.2 - 2026-06-05 — CLI Validation Follow-up
+
+- Followed up on CLI validation seams after the main migration work landed.
+- Tightened validation ownership and parity expectations without changing the
+  active command set.
+- Preserved CLI behavior, JSON output, exit codes, backend behavior, and
+  storage/repository formats.
+- Kept broad engine-boundary expansion and schema/storage changes out of scope.
+
+------------------------------------------------------------------------
+
+## v1.12.1 - 2026-06-04 — Post-Migration CLI Contract Hardening
+
+- Hardened CLI contracts after the main engine/catalog migration baseline.
+- Clarified post-migration validation and contract-preservation behavior.
+- Preserved runtime semantics, backend behavior, and repository/storage
+  formats.
+- Kept broader architectural expansion out of scope while stabilizing the
+  migrated surfaces.
+
+------------------------------------------------------------------------
+
+## v1.12.0 - 2026-06-02 — Engine/Catalog Boundary Migration Baseline
+
+- Established the engine/catalog boundary migration baseline for the `v1.12.x`
+  line.
+- Migrated selected orchestration seams while preserving behavior first.
+- Fixed database-ownership and boundary-shaping issues needed for the next
+  release steps.
+- Preserved CLI behavior, JSON output, exit codes, storage format, and
+  repository format behavior.
+- Left later validation hardening and closure hygiene to `v1.12.1`-`v1.12.3`.
+
+------------------------------------------------------------------------
+
 ## v1.11.0 - 2026-05-31 — Behavior-Preserving Engine Facade Baseline
 
 Introduces the behavior-preserving engine facade baseline.

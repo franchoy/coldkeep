@@ -276,9 +276,37 @@ go build ./...
 scripts/audit_ci_enforcement.sh --local-only
 
 go build -o coldkeep ./cmd/coldkeep
+
+expected_version="1.13.8"
+
+human_version=$(./coldkeep version)
+if [ "$human_version" != "coldkeep version $expected_version" ]; then
+  echo "version mismatch: human output=$human_version expected=coldkeep version $expected_version"
+  exit 1
+fi
+
+json_version=$(
+  ./coldkeep version --output json |
+    jq -er '
+      select(
+        .status == "ok" and
+        .command == "version" and
+        (.data.version | type) == "string"
+      ) |
+      .data.version
+    '
+)
+
+if [ "$json_version" != "$expected_version" ]; then
+  echo "version mismatch: JSON version=$json_version expected=$expected_version"
+  exit 1
+fi
 ```
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
+
+Expected: the built CLI reports exactly 1.13.8 in both human and JSON modes.
+A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
 `/tmp/coldkeep*`. Do not keep one-off repro scripts or evidence you care about
