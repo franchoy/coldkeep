@@ -242,7 +242,6 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 	}
 
 	res, err := eng.Remove(context.Background(), engine.RemoveRequest{
-		Mode:     engine.RemoveModeFileIDs,
 		FileIDs:  []int64{fileID},
 		DryRun:   dryRun,
 		FailFast: true,
@@ -270,7 +269,7 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 	if dryRun {
 		return batch.ItemResult{ID: fileID, Status: batch.ResultPlanned, Message: "would remove"}
 	}
-	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", item.RemovedMappings)}
+	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", item.RemovedChunkAssociations)}
 }
 var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
 	// Partial route in v1.13.1: by-ID restore uses engine item execution, but
@@ -290,12 +289,11 @@ var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputD
 	}
 
 	res, err := eng.Restore(context.Background(), engine.RestoreRequest{
-		Mode:      engine.RestoreModeFileIDs,
-		FileIDs:   []int64{fileID},
-		OutputDir: outputDir,
-		Overwrite: overwrite,
-		DryRun:    dryRun,
-		FailFast:  true,
+		FileIDs:         []int64{fileID},
+		DestinationRoot: outputDir,
+		Overwrite:       overwrite,
+		DryRun:          dryRun,
+		FailFast:        true,
 	})
 	if err != nil {
 		return storage.RestoreFileResult{}, err
@@ -311,7 +309,7 @@ var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputD
 	return storage.RestoreFileResult{
 		FileID:       fileID,
 		OriginalName: info.OriginalName,
-		OutputPath:   item.OutputPath,
+		OutputPath:   item.DestinationPath,
 		RestoredHash: item.RestoredHash,
 	}, nil
 }

@@ -21,7 +21,6 @@ func TestRemoveByIDThroughEngine(t *testing.T) {
 	eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
 
 	res, err := eng.Remove(context.Background(), engine.RemoveRequest{
-		Mode:     engine.RemoveModeFileIDs,
 		FileIDs:  []int64{stored.FileID},
 		FailFast: true,
 	})
@@ -38,7 +37,6 @@ func TestRemoveByIDDryRunThroughEngine(t *testing.T) {
 	eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
 
 	res, err := eng.Remove(context.Background(), engine.RemoveRequest{
-		Mode:     engine.RemoveModeFileIDs,
 		FileIDs:  []int64{stored.FileID},
 		DryRun:   true,
 		FailFast: true,
@@ -58,7 +56,6 @@ func TestRemoveByIDRetainedSnapshotFailsClosed(t *testing.T) {
 
 	eng := newRemoveTestEngine(t, db, t.TempDir())
 	res, err := eng.Remove(context.Background(), engine.RemoveRequest{
-		Mode:     engine.RemoveModeFileIDs,
 		FileIDs:  []int64{retainedID},
 		FailFast: true,
 	})
@@ -67,19 +64,6 @@ func TestRemoveByIDRetainedSnapshotFailsClosed(t *testing.T) {
 	}
 
 	assertRetainedSnapshotRemoveFailed(t, res)
-}
-
-func TestRemoveStoredPathDeferredOnEngine(t *testing.T) {
-	db := openSnapshotTestDB(t)
-	eng, err := engine.New(engine.Config{DB: db, ContainerDir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-
-	_, err = eng.Remove(context.Background(), engine.RemoveRequest{Mode: engine.RemoveModeStoredPath, StoredPath: "a.txt"})
-	if !errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented for stored-path remove, got %v", err)
-	}
 }
 
 func storeRemoveFixture(t *testing.T, filename, content string) (*sql.DB, storage.StorageContext, storage.StoreFileResult) {
@@ -127,11 +111,11 @@ func assertRemoveSuccess(t *testing.T, res engine.RemoveResult) {
 	if item.Status != engine.BatchItemOK {
 		t.Fatalf("expected status ok, got %q", item.Status)
 	}
-	if item.RemovedMappings <= 0 {
-		t.Fatalf("expected RemovedMappings > 0, got %d", item.RemovedMappings)
+	if item.RemovedChunkAssociations <= 0 {
+		t.Fatalf("expected RemovedChunkAssociations > 0, got %d", item.RemovedChunkAssociations)
 	}
-	if !item.Removed {
-		t.Fatalf("expected Removed=true")
+	if !item.LogicalFileRemoved {
+		t.Fatalf("expected LogicalFileRemoved=true")
 	}
 }
 

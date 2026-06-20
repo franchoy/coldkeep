@@ -74,13 +74,13 @@ type Engine interface {
 	// Phase 8: single-file mode is active; folder mode remains deferred.
 	Store(ctx context.Context, req StoreRequest) (StoreResult, error)
 
-	// Remove removes logical files from the repository.
+	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.
-	// Phase 9: file-ID mode is active; stored-path modes remain deferred.
+	// Active semantics are limited to by-ID remove.
 	Remove(ctx context.Context, req RemoveRequest) (RemoveResult, error)
 
-	// Restore restores logical files by ID or by stored path.
+	// Restore restores logical files by logical file ID.
 	// Safety invariant: Restore must never write outside the intended destination.
-	// Phase 7: file-ID mode is active; stored-path mode remains deferred.
+	// Active semantics are limited to by-ID restore.
 	Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error)
 }

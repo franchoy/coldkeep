@@ -158,9 +158,6 @@ func storeWithOptionalCodec(ctx storage.StorageContext, req StoreRequest) (stora
 }
 
 func validateRemoveRequest(req RemoveRequest) error {
-	if req.Mode != RemoveModeFileIDs {
-		return ErrNotImplemented
-	}
 	if len(req.FileIDs) == 0 {
 		return fmt.Errorf("engine: remove requires at least one file ID")
 	}
@@ -207,10 +204,10 @@ func (e *DefaultEngine) liveRemoveFileID(fileID int64) RemoveItemResult {
 		return failedRemoveItemWithInvariant(fileID, err)
 	}
 	return RemoveItemResult{
-		FileID:          fileID,
-		Status:          BatchItemOK,
-		RemovedMappings: removed.RemovedMappings,
-		Removed:         true,
+		FileID:                   fileID,
+		Status:                   BatchItemOK,
+		RemovedChunkAssociations: removed.RemovedMappings,
+		LogicalFileRemoved:       true,
 	}
 }
 
@@ -237,13 +234,10 @@ func appendRemoveItem(result *RemoveResult, item RemoveItemResult) {
 }
 
 func validateRestoreRequest(req RestoreRequest) error {
-	if req.Mode != RestoreModeFileIDs {
-		return ErrNotImplemented
-	}
 	if len(req.FileIDs) == 0 {
 		return fmt.Errorf("engine: restore requires at least one file ID")
 	}
-	if strings.TrimSpace(req.OutputDir) == "" {
+	if strings.TrimSpace(req.DestinationRoot) == "" {
 		return fmt.Errorf("engine: restore output directory is required")
 	}
 	return nil
@@ -277,7 +271,7 @@ func (e *DefaultEngine) restoreFileID(req RestoreRequest, fileID int64) RestoreI
 }
 
 func (e *DefaultEngine) dryRunRestoreFileID(req RestoreRequest, fileID int64) RestoreItemResult {
-	item, err := dryRunRestoreByID(e.config.DB, fileID, req.OutputDir, req.Overwrite)
+	item, err := dryRunRestoreByID(e.config.DB, fileID, req.DestinationRoot, req.Overwrite)
 	if err != nil {
 		item.Status = BatchItemFailed
 		item.Error = err.Error()
@@ -287,15 +281,15 @@ func (e *DefaultEngine) dryRunRestoreFileID(req RestoreRequest, fileID int64) Re
 
 func (e *DefaultEngine) liveRestoreFileID(req RestoreRequest, fileID int64) RestoreItemResult {
 	sgctx := storage.StorageContext{DB: e.config.DB, ContainerDir: e.config.ContainerDir}
-	r, err := storage.RestoreFileWithStorageContextResultOptions(sgctx, fileID, req.OutputDir, storage.RestoreOptions{Overwrite: req.Overwrite})
+	r, err := storage.RestoreFileWithStorageContextResultOptions(sgctx, fileID, req.DestinationRoot, storage.RestoreOptions{Overwrite: req.Overwrite})
 	if err != nil {
 		return failedRestoreItem(fileID, err.Error())
 	}
 	return RestoreItemResult{
-		FileID:       fileID,
-		Status:       BatchItemOK,
-		OutputPath:   r.OutputPath,
-		RestoredHash: r.RestoredHash,
+		FileID:          fileID,
+		Status:          BatchItemOK,
+		DestinationPath: r.OutputPath,
+		RestoredHash:    r.RestoredHash,
 	}
 }
 
@@ -329,7 +323,7 @@ func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite
 		return item, fmt.Errorf("file ID %d is not COMPLETED", fileID)
 	}
 	out := filepath.Join(outputDir, info.OriginalName)
-	item.OutputPath = out
+	item.DestinationPath = out
 	if !overwrite {
 		if _, statErr := os.Stat(out); statErr == nil {
 			return item, fmt.Errorf("output file already exists: %s (use --overwrite)", out)

@@ -165,16 +165,6 @@ type StoreResult struct {
 // Restore
 // ---------------------------------------------------------------------------
 
-// RestoreMode selects how restore targets are addressed.
-type RestoreMode string
-
-const (
-	// RestoreModeFileIDs restores one or more logical file IDs to a directory.
-	RestoreModeFileIDs RestoreMode = "file_ids"
-	// RestoreModeStoredPath restores a single stored path.
-	RestoreModeStoredPath RestoreMode = "stored_path"
-)
-
 // RestoreDestinationMode controls how a restored file's output location is
 // derived. It mirrors the existing stored-path restore modes.
 type RestoreDestinationMode string
@@ -188,46 +178,14 @@ const (
 	RestoreDestinationOverride RestoreDestinationMode = "override"
 )
 
-// RestoreRequest is a candidate request for a future Restore operation.
-// Not part of the active v1.12 Engine interface.
+// RestoreRequest is the active by-ID restore request contract.
 //
 // Safety invariant: Restore must never write outside the intended destination.
-// The destination/mode fields exist precisely so this invariant can be enforced
-// in the engine/catalog rather than only in the CLI.
-//
-// Support limitation in v1.13.1: the active engine route owns only file-ID
-// restore. Stored-path restore and its destination semantics remain outside the
-// active engine path; non-file-ID engine calls return ErrNotImplemented and are
-// covered by Phase 2 tests. Contract split cleanup belongs to v1.13.8.
 type RestoreRequest struct {
-	// Mode selects file-ID or stored-path addressing.
-	// Support limitation in v1.13.1: only RestoreModeFileIDs is active through
-	// Engine.Restore.
-	Mode RestoreMode
-
-	// FileIDs is the set of logical file IDs to restore (Mode == file_ids).
+	// FileIDs is the ordered set of logical file IDs to restore.
 	FileIDs []int64
-	// OutputDir is the destination directory for file-ID restore.
-	OutputDir string
-
-	// StoredPath is the single stored path to restore (Mode == stored_path).
-	// Support limitation in v1.13.1: this remains a direct CLI/storage concern,
-	// not an active Engine.Restore field.
-	StoredPath string
-	// DestinationMode controls output location derivation for stored-path
-	// restore.
-	// Support limitation in v1.13.1: destination-mode handling applies only to
-	// deferred stored-path restore, not the active file-ID engine route.
-	DestinationMode RestoreDestinationMode
-	// Destination is the prefix or override target, required by prefix/override
-	// destination modes.
-	// Support limitation in v1.13.1: this is meaningful only for deferred
-	// stored-path restore.
-	Destination string
-	// Strict enforces strict metadata application.
-	Strict bool
-	// NoMetadata disables metadata application (mutually exclusive with Strict).
-	NoMetadata bool
+	// DestinationRoot is the output root used to derive per-item destinations.
+	DestinationRoot string
 
 	// Overwrite permits overwriting existing files.
 	Overwrite bool
@@ -235,31 +193,14 @@ type RestoreRequest struct {
 	DryRun bool
 	// FailFast stops a batch on the first failure.
 	FailFast bool
-	// InputPath is an optional batch-input source for file-ID restore.
-	//
-	// Deferred: whether batch input parsing remains a CLI-level concern or moves
-	// into the engine is decided in Phase 7. Retained here so the contract can
-	// represent the existing command, but current engine support still covers
-	// only the file-ID execution subset.
-	InputPath string
-	// Workers is the batch parallelism; zero means the default.
-	// Support limitation in v1.13.1: execution remains sequential today; this
-	// field is provisional rather than proof of active worker support.
-	Workers int
-	// Limit caps the number of restored items when greater than zero.
-	// Support limitation in v1.13.1: this remains a provisional batch-shaping
-	// field on a contract that is not yet split cleanly by ownership.
-	Limit int
 }
 
 // RestoreItemResult is the outcome of restoring a single target.
 type RestoreItemResult struct {
-	// FileID is the logical file ID (file-ID mode).
+	// FileID is the restored logical file ID.
 	FileID int64
-	// StoredPath is the stored path (stored-path mode).
-	StoredPath string
-	// OutputPath is the path the file was (or would be) written to.
-	OutputPath string
+	// DestinationPath is the path the file was (or would be) written to.
+	DestinationPath string
 	// RestoredHash is the content hash of the restored file.
 	RestoredHash string
 	// Status is the per-item outcome.
@@ -287,63 +228,24 @@ type RestoreResult struct {
 // Remove
 // ---------------------------------------------------------------------------
 
-// RemoveMode selects how remove targets are addressed.
-type RemoveMode string
-
-const (
-	// RemoveModeFileIDs removes one or more logical file IDs.
-	RemoveModeFileIDs RemoveMode = "file_ids"
-	// RemoveModeStoredPath removes a single stored path.
-	RemoveModeStoredPath RemoveMode = "stored_path"
-	// RemoveModeStoredPaths removes a batch of stored paths.
-	RemoveModeStoredPaths RemoveMode = "stored_paths"
-)
-
-// RemoveRequest is a candidate request for a future Remove operation.
-// Not part of the active v1.12 Engine interface.
-//
-// Support limitation in v1.13.1: the active engine route owns only file-ID
-// remove. Stored-path and stored-paths modes remain outside the active engine
-// path; non-file-ID engine calls return ErrNotImplemented and are covered by
-// Phase 2 tests. Contract split cleanup belongs to v1.13.8.
+// RemoveRequest is the active by-ID remove request contract.
 type RemoveRequest struct {
-	// Mode selects file-ID, single stored-path, or stored-paths addressing.
-	// Support limitation in v1.13.1: only RemoveModeFileIDs is active through
-	// Engine.Remove.
-	Mode RemoveMode
-	// FileIDs is the set of logical file IDs to remove (Mode == file_ids).
+	// FileIDs is the ordered set of logical file IDs to remove.
 	FileIDs []int64
-	// StoredPath is the single stored path to remove (Mode == stored_path).
-	// Support limitation in v1.13.1: this remains a direct CLI/storage concern,
-	// not an active Engine.Remove field.
-	StoredPath string
-	// StoredPaths is the batch of stored paths (Mode == stored_paths).
-	// Support limitation in v1.13.1: this remains a direct CLI/batch concern,
-	// not an active Engine.Remove field.
-	StoredPaths []string
 	// DryRun simulates without mutating.
 	DryRun bool
 	// FailFast stops a batch on the first failure.
 	FailFast bool
-	// InputPath is an optional batch-input source.
-	//
-	// Deferred: batch input parsing ownership is decided in Phase 9. The field
-	// remains provisional and does not imply active stored-path engine support.
-	InputPath string
 }
 
 // RemoveItemResult is the outcome of removing a single target.
 type RemoveItemResult struct {
-	// FileID is the logical file ID (file-ID mode).
+	// FileID is the removed logical file ID.
 	FileID int64
-	// StoredPath is the stored path (stored-path modes).
-	StoredPath string
-	// RemovedMappings is the count of removed chunk mappings (file-ID mode).
-	RemovedMappings int
-	// RemainingRefCount is the logical-file ref count after removal.
-	RemainingRefCount int
-	// Removed indicates whether the logical file row was removed.
-	Removed bool
+	// LogicalFileRemoved reports whether the logical file row was removed.
+	LogicalFileRemoved bool
+	// RemovedChunkAssociations is the count of removed file_chunk associations.
+	RemovedChunkAssociations int
 	// Status is the per-item outcome.
 	Status BatchItemStatus
 	// Error is a non-empty message when Status is failed.
@@ -365,8 +267,6 @@ type RemoveResult struct {
 	Items []RemoveItemResult
 	// Summary aggregates the item outcomes.
 	Summary BatchSummary
-	// Warnings carries structured, non-fatal warnings.
-	Warnings []OperationWarning
 }
 
 // ---------------------------------------------------------------------------

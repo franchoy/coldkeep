@@ -3,7 +3,6 @@ package engine_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,10 +17,9 @@ func TestRestoreDryRunByIDThroughEngine(t *testing.T) {
 
 	outDir := t.TempDir()
 	res, err := eng.Restore(context.Background(), engine.RestoreRequest{
-		Mode:      engine.RestoreModeFileIDs,
-		FileIDs:   []int64{fileID},
-		OutputDir: outDir,
-		DryRun:    true,
+		FileIDs:         []int64{fileID},
+		DestinationRoot: outDir,
+		DryRun:          true,
 	})
 	if err != nil {
 		t.Fatalf("Restore dry-run: %v", err)
@@ -30,28 +28,14 @@ func TestRestoreDryRunByIDThroughEngine(t *testing.T) {
 	assertRestoreDryRunResult(t, res, filepath.Join(outDir, "phase7.txt"))
 }
 
-func TestRestoreStoredPathDeferred(t *testing.T) {
-	db := openSnapshotTestDB(t)
-	eng := newRestoreTestEngine(t, db)
-
-	_, err := eng.Restore(context.Background(), engine.RestoreRequest{
-		Mode:       engine.RestoreModeStoredPath,
-		StoredPath: "samples/hello.txt",
-	})
-	if !errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented for stored-path mode, got %v", err)
-	}
-}
-
 func TestRestoreFailFastStopsOnFirstFailure(t *testing.T) {
 	db := openSnapshotTestDB(t)
 	eng := newRestoreTestEngine(t, db)
 
 	res, err := eng.Restore(context.Background(), engine.RestoreRequest{
-		Mode:      engine.RestoreModeFileIDs,
-		FileIDs:   []int64{-1, 2},
-		OutputDir: t.TempDir(),
-		FailFast:  true,
+		FileIDs:         []int64{-1, 2},
+		DestinationRoot: t.TempDir(),
+		FailFast:        true,
 	})
 	if err != nil {
 		t.Fatalf("Restore fail-fast: %v", err)
@@ -105,10 +89,10 @@ func assertRestoreDryRunResult(t *testing.T, res engine.RestoreResult, wantOutpu
 	if item.Status != engine.BatchItemOK {
 		t.Fatalf("expected item status ok, got %q", item.Status)
 	}
-	if item.OutputPath != wantOutputPath {
-		t.Fatalf("expected output path %q, got %q", wantOutputPath, item.OutputPath)
+	if item.DestinationPath != wantOutputPath {
+		t.Fatalf("expected output path %q, got %q", wantOutputPath, item.DestinationPath)
 	}
-	assertFileDoesNotExist(t, item.OutputPath)
+	assertFileDoesNotExist(t, item.DestinationPath)
 }
 
 func assertFileDoesNotExist(t *testing.T, path string) {
