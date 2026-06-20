@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,11 +332,7 @@ func readSingleRestoredPortabilityFile(t *testing.T, restoreDir string) []byte {
 	if err := pathsafe.ValidateSafeFileName(entryName); err != nil {
 		t.Fatalf("expected restored entry name to be safe, got %q: %v", entryName, err)
 	}
-	restoredPath, err := pathsafe.SafeJoin(restoreDir, entryName)
-	if err != nil {
-		t.Fatalf("resolve restored output path for %q: %v", entryName, err)
-	}
-	data, err := os.ReadFile(restoredPath)
+	data, err := fs.ReadFile(os.DirFS(restoreDir), entryName)
 	if err != nil {
 		t.Fatalf("read restored output: %v", err)
 	}
