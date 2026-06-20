@@ -79,6 +79,13 @@ type Engine interface {
 	// Active semantics are limited to by-ID remove.
 	Remove(ctx context.Context, req RemoveRequest) (RemoveResult, error)
 
+	// RemoveStoredPaths unlinks one or more current stored physical-path mappings.
+	//
+	// Safety invariant: the operation must preserve logical-file identity,
+	// file-chunk ownership, chunk live-reference counts, and payload storage.
+	// Physical payload reclamation remains GC-owned.
+	RemoveStoredPaths(ctx context.Context, req RemoveStoredPathsRequest) (RemoveStoredPathsResult, error)
+
 	// Restore restores logical files by logical file ID.
 	// Safety invariant: Restore must never write outside the intended destination.
 	// Active semantics are limited to by-ID restore.

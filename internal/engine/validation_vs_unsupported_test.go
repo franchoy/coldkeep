@@ -108,6 +108,21 @@ func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 		})
 		assertValidationBoundary(t, err, "engine: restore stored path strict metadata and no metadata are mutually exclusive")
 	})
+
+	t.Run("remove stored paths requires targets", func(t *testing.T) {
+		db := openSnapshotTestDB(t)
+		eng := newRemoveTestEngine(t, db, t.TempDir())
+
+		_, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{})
+		assertValidationBoundary(t, err, "engine: remove stored paths requires at least one target")
+	})
+
+	t.Run("remove stored paths requires database", func(t *testing.T) {
+		_, err := (&engine.DefaultEngine{}).RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+			StoredPaths: []string{"/docs/a.txt"},
+		})
+		assertValidationBoundary(t, err, "engine: remove stored paths database is required")
+	})
 }
 
 func TestPerItemExecutionFailuresRemainOutsideUnsupportedClassification(t *testing.T) {

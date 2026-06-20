@@ -31,6 +31,9 @@ func allCandidateTypes() []struct {
 		{"RemoveRequest", engine.RemoveRequest{}},
 		{"RemoveItemResult", engine.RemoveItemResult{}},
 		{"RemoveResult", engine.RemoveResult{}},
+		{"RemoveStoredPathsRequest", engine.RemoveStoredPathsRequest{}},
+		{"RemoveStoredPathItemResult", engine.RemoveStoredPathItemResult{}},
+		{"RemoveStoredPathsResult", engine.RemoveStoredPathsResult{}},
 		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
 		{"GarbageCollectResult", engine.GarbageCollectResult{}},
 		{"SnapshotMeta", engine.SnapshotMeta{}},
@@ -231,6 +234,62 @@ func TestRemoveContractRepresentsByIDOnlySurface(t *testing.T) {
 	}
 	if len(res.Items) != 2 || res.Summary.OK != 1 || res.Summary.Failed != 1 {
 		t.Fatalf("remove result not representable: %+v", res)
+	}
+}
+
+func TestRemoveStoredPathsRequestHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RemoveStoredPathsRequest{}), []string{
+		"StoredPaths",
+		"DryRun",
+		"FailFast",
+	})
+}
+
+func TestRemoveStoredPathItemResultHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RemoveStoredPathItemResult{}), []string{
+		"RawTarget",
+		"StoredPath",
+		"LogicalFileID",
+		"RemainingRefCount",
+		"MappingRemoved",
+		"Status",
+		"Error",
+		"InvariantCode",
+		"RecommendedAction",
+	})
+}
+
+func TestRemoveStoredPathsResultHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RemoveStoredPathsResult{}), []string{
+		"DryRun",
+		"ExecutionMode",
+		"Items",
+		"Summary",
+	})
+}
+
+func TestRemoveStoredPathsContractRepresentsBatchStoredMappingUnlink(t *testing.T) {
+	req := engine.RemoveStoredPathsRequest{
+		StoredPaths: []string{" /docs/a.txt ", "", "/docs/a.txt", "/docs/b.txt"},
+		DryRun:      true,
+		FailFast:    true,
+	}
+	if len(req.StoredPaths) != 4 || !req.DryRun || !req.FailFast {
+		t.Fatalf("stored-path remove request not representable: %+v", req)
+	}
+
+	res := engine.RemoveStoredPathsResult{
+		DryRun:        true,
+		ExecutionMode: engine.ExecutionModeSequential,
+		Items: []engine.RemoveStoredPathItemResult{
+			{RawTarget: " /docs/a.txt ", StoredPath: "/docs/a.txt", LogicalFileID: 7, Status: engine.BatchItemPlanned},
+			{RawTarget: "", Status: engine.BatchItemFailed, Error: "stored path is required"},
+			{RawTarget: "/docs/a.txt", StoredPath: "/docs/a.txt", Status: engine.BatchItemSkipped, Error: "duplicate target"},
+		},
+		Summary: engine.BatchSummary{OK: 1, Failed: 1, Skipped: 1},
+	}
+	if len(res.Items) != 3 || res.Summary.OK != 1 || res.Summary.Failed != 1 || res.Summary.Skipped != 1 {
+		t.Fatalf("stored-path remove result not representable: %+v", res)
 	}
 }
 

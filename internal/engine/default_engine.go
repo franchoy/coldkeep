@@ -279,6 +279,19 @@ func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (RemoveRe
 	return e.removeFileIDs(req), nil
 }
 
+func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredPathsRequest) (RemoveStoredPathsResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RemoveStoredPathsResult{}, err
+	}
+	if err := validateRemoveStoredPathsRequest(req); err != nil {
+		return RemoveStoredPathsResult{}, err
+	}
+	if err := e.validateRemoveStoredPathsDependencies(); err != nil {
+		return RemoveStoredPathsResult{}, err
+	}
+	return e.removeStoredPaths(req), nil
+}
+
 func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
 	if err := ctx.Err(); err != nil {
 		return RestoreResult{}, err

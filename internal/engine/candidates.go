@@ -60,9 +60,11 @@ type BatchItemStatus string
 const (
 	// BatchItemOK indicates the item completed successfully.
 	BatchItemOK BatchItemStatus = "ok"
+	// BatchItemPlanned indicates the item was validated/read-only planned.
+	BatchItemPlanned BatchItemStatus = "planned"
 	// BatchItemFailed indicates the item failed.
 	BatchItemFailed BatchItemStatus = "failed"
-	// BatchItemSkipped indicates the item was skipped (e.g. dry-run/no-op).
+	// BatchItemSkipped indicates the item was skipped (e.g. duplicate/no-op).
 	BatchItemSkipped BatchItemStatus = "skipped"
 )
 
@@ -303,6 +305,51 @@ type RemoveResult struct {
 	ExecutionMode ExecutionMode
 	// Items holds per-target outcomes.
 	Items []RemoveItemResult
+	// Summary aggregates the item outcomes.
+	Summary BatchSummary
+}
+
+// RemoveStoredPathsRequest is the active stored-path batch remove contract.
+type RemoveStoredPathsRequest struct {
+	// StoredPaths is the ordered set of raw stored-path targets.
+	StoredPaths []string
+	// DryRun simulates unlinking without mutating.
+	DryRun bool
+	// FailFast stops on the first executable target failure.
+	FailFast bool
+}
+
+// RemoveStoredPathItemResult is the outcome of unlinking one stored-path
+// target.
+type RemoveStoredPathItemResult struct {
+	// RawTarget is the exact caller-provided text before trimming.
+	RawTarget string
+	// StoredPath is the trimmed stored-path value used for lookup/mutation.
+	StoredPath string
+	// LogicalFileID is the logical file owning the current mapping.
+	LogicalFileID int64
+	// RemainingRefCount is the remaining current ref-count after a live unlink.
+	RemainingRefCount int64
+	// MappingRemoved reports whether one physical_file row was removed.
+	MappingRemoved bool
+	// Status is the per-item outcome.
+	Status BatchItemStatus
+	// Error is a non-empty message when Status is failed.
+	Error string
+	// InvariantCode is the machine-readable invariant identifier when available.
+	InvariantCode string
+	// RecommendedAction is operator guidance associated with InvariantCode.
+	RecommendedAction string
+}
+
+// RemoveStoredPathsResult is the active stored-path batch remove result.
+type RemoveStoredPathsResult struct {
+	// DryRun echoes whether the operation was a simulation.
+	DryRun bool
+	// ExecutionMode echoes how the batch was executed.
+	ExecutionMode ExecutionMode
+	// Items holds per-target outcomes.
+	Items []RemoveStoredPathItemResult
 	// Summary aggregates the item outcomes.
 	Summary BatchSummary
 }
