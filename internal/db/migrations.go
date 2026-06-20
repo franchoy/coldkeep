@@ -240,16 +240,21 @@ func runSQLitePhysicalFileMigration(dbconn sqliteContextExecutor, ctx context.Co
 		SELECT
 			'/migrated/' ||
 			CASE
-				WHEN TRIM(COALESCE(original_name, '')) = '' THEN 'file'
-				ELSE TRIM(original_name)
-			END || '-' || CAST(id AS TEXT),
-			id,
+				WHEN TRIM(COALESCE(lf.original_name, '')) = '' THEN 'file'
+				ELSE TRIM(lf.original_name)
+			END || '-' || CAST(lf.id AS TEXT),
+			lf.id,
 			NULL,
 			NULL,
 			NULL,
 			NULL,
 			0
-		FROM logical_file
+		FROM logical_file AS lf
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM physical_file AS pf
+			WHERE pf.logical_file_id = lf.id
+		)
 	`); err != nil {
 		return fmt.Errorf("backfill physical_file: %w", err)
 	}
