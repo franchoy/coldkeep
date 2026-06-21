@@ -562,30 +562,47 @@ For v1.2 physical path identity rules (canonicalization strategy, case behavior,
 
 - [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md)
 
-### Remove Semantics Consistency
+### Current restore/remove boundary
 
-v1.2 introduces a critical consistency guarantee between two remove entry points:
+Coldkeep now exposes four active restore/remove engine methods:
 
-**remove-by-stored-path (new)** and **remove-by-ID (legacy)** are now semantically symmetric:
+- `Engine.Restore` for by-ID restore only
+- `Engine.RestoreStoredPath` for exactly one current `physical_file.path`
+- `Engine.Remove` for by-ID logical deletion only
+- `Engine.RemoveStoredPaths` for one or more current `physical_file.path`
+  unlinks
 
-- Both cascade through all physical_file mappings before cleanup
-- Both maintain the invariant: `logical_file.ref_count == COUNT(physical_file rows)`
-- Both prevent orphan physical_file rows from pointing to deleted logical_file
+The production layering is:
 
-**Implementation:**
+```text
+CLI -> Engine -> Storage
+```
 
-- `remove-by-stored-path`: Removes one physical_file mapping, decrements logical_file.ref_count
-- `remove-by-ID`: Cascades through ALL physical_file mappings (using remove-by-stored-path primitive), then deletes logical_file and file_chunk records
+The CLI owns parsing, command-shape validation, input-file reading, renderer
+projection, and performance spans. The engine owns typed requests, validation,
+method-selected addressing semantics, batch preparation, and batch result
+meaning. Storage owns catalog lookup and mutation, overwrite behavior,
+path-safety enforcement, payload reconstruction, transactions, ref-count
+transitions, snapshot-retention enforcement, and temporary chunk pinning.
 
-**Data Integrity:**
-The cascade design ensures that:
+Restore and remove are intentionally distinct:
 
-1. No physical_file rows can exist after their logical_file is deleted
-2. At each step of removal, ref_count correctly reflects the number of remaining physical mappings
-3. References to deleted logical_file are impossible by construction
+- by-ID restore reconstructs one or more logical files under a destination root
+- stored-path restore reconstructs exactly one current mapping using original,
+  prefix, or override destination semantics
+- by-ID remove deletes logical identity and logical content associations
+- stored-path remove unlinks current mappings and updates `logical_file.ref_count`
 
-**Migration Path:**
-This architecture enables future phases (v1.3+) to redefine higher-level remove commands entirely in terms of the physical_file → logical_file → chunk model without breaking storage guarantees.
+Restore does not persistently mutate logical identity, physical mappings,
+logical ref counts, snapshots, file-chunk ownership, or chunk live-reference
+ownership. It may temporarily mutate `chunk.pin_count` during payload
+reconstruction and must restore pin state on success and failure.
+
+Neither remove path directly deletes payload bytes, container files, or block
+files. GC alone owns physical payload reclamation.
+
+Both live remove forms refuse snapshot-retained logical files with
+`SNAPSHOT_RETAINED_DELETE_BLOCKED`.
 
 ### Invariant-Driven Concurrency Safety
 
@@ -724,25 +741,14 @@ Phase 8 guarantees:
 - deep inspect traversals can be large and should be bounded with `--limit N`
 - trace diagnostics are emitted on stderr (`--trace`, `--trace-json`) so stdout payloads remain stable for piping and automation
 
-### Dry-run Support (Deferred beyond v1.2)
+### Stored-path remove dry-run
 
-v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.
+Single `remove --stored-path` intentionally remains a live-only command shape.
 
-**Rationale:**
-
-- Dry-run requires a rollback-safe preview of transactional changes
-- The remove transaction is tightly coupled to the transactional remove-by-ID cascade path
-- Exposing dry-run now would require significant refactoring of the cascade logic
-- The overhead of implementing dry-run correctly (separate read-only simulation) is not justified for the initial release
-
-**Post-v1.2 plan:**
-Dry-run support for `remove --stored-path` will be added when:
-
-1. The remove transaction primitive is refactored for independent preview semantics
-2. Integration tests validate that dry-run output accurately mirrors execute behavior
-3. Documentation clarifies the dry-run contract (what is previewed, what is guaranteed, what is advisory)
-
-Users can currently force-verify remove safety via explicit `verify` before `remove`, which provides correctness assurance without dry-run.
+Batch `remove --stored-paths` supports dry-run through the dedicated engine
+boundary, but that dry-run remains a lookup/planning path rather than a full
+proof of live success. Snapshot-retention refusal, transaction-time failures,
+and other live invariant failures are still enforced only during execution.
 
 This means architecture documentation should evolve by extension, not by rewrite.
 

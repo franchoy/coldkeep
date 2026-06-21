@@ -2,14 +2,13 @@ package engine
 
 import "time"
 
-// Mutating and read-side operation candidates — inactive in v1.12 Phase 2.
+// Mutating and read-side operation candidates.
 //
-// These request and result types define the future operation contracts for the
-// engine facade. They are NOT part of the active Engine interface (Stats,
-// Inspect, Verify) and must not be routed from the CLI until explicit later
-// phases. Phase 2 expands these placeholders into realistic, renderer-neutral,
-// backend-neutral contracts that can preserve existing command behavior when
-// the migrations begin.
+// This file holds both active engine contract shapes and future-only request
+// and result types that are not yet part of the active Engine interface.
+// Active restore/remove shapes below describe the implemented v1.13.8
+// boundaries. Snapshot mutation, repair, recovery, and other future-only
+// shapes remain candidate-only until explicitly activated.
 //
 // Contract rules (see docs/release/v1.12/engine-baseline.md):
 //   - Requests represent operation intent, not CLI syntax.
@@ -211,8 +210,7 @@ type RestoreItemResult struct {
 	Error string
 }
 
-// RestoreResult is a candidate result for a future Restore operation.
-// Not part of the active v1.12 Engine interface.
+// RestoreResult is the active by-ID restore batch result contract.
 type RestoreResult struct {
 	// DryRun echoes whether the operation was a simulation.
 	DryRun bool
@@ -296,8 +294,7 @@ type RemoveItemResult struct {
 	RecommendedAction string
 }
 
-// RemoveResult is a candidate result for a future Remove operation.
-// Not part of the active v1.12 Engine interface.
+// RemoveResult is the active by-ID remove batch result contract.
 type RemoveResult struct {
 	// DryRun echoes whether the operation was a simulation.
 	DryRun bool

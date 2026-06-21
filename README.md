@@ -38,7 +38,9 @@ The current development focus is v1.13.8:
 - preserve valid zero-reference logical-file state across migration and reopen;
 - separate by-ID restore from stored-path restore;
 - separate by-ID logical removal from stored-path mapping removal;
-- route mature stored-path operations through dedicated engine boundaries;
+- route stored-path restore/remove through dedicated engine boundaries while
+  preserving CLI compatibility;
+- harden stored-path destination safety and remove reachability invariants;
 - preserve PostgreSQL as the current normal local runtime backend;
 - preserve CLI, JSON, exit-code, storage-format, and repository-format behavior.
 

@@ -1,10 +1,9 @@
-// Package engine defines the behavior-preserving facade for coldkeep operations.
+// Package engine defines the coldkeep engine boundary.
 //
-// v1.11.0 — Behavior-Preserving Engine Facade Baseline.
-//
-// This package introduces the engine boundary without changing any observable
-// behavior. CLI commands are not routed through the engine in Phase 1.
-// Wrapper-only implementation begins in Phase 2.
+// The package owns typed operation requests and results, request-level
+// validation, and behavior-preserving orchestration between CLI callers and
+// lower domain packages. Storage, snapshot, verification, maintenance, and
+// other domain packages retain their execution ownership.
 //
 // # Invariants
 //
@@ -30,17 +29,14 @@ import (
 	"errors"
 )
 
-// ErrNotImplemented is returned by engine methods that are not yet wired to
-// real implementations. Wrapper-only implementation begins in Phase 2.
+// ErrNotImplemented is returned by active engine methods when a genuinely
+// deferred mode remains outside the implemented surface.
 var ErrNotImplemented = errors.New("engine operation not implemented")
 
 // Engine is the behavior-preserving facade for coldkeep operations.
 //
 // All implementations must preserve existing CLI output, JSON output, exit
 // codes, storage format, repository format, and schema behavior.
-//
-// Phase 1: interface contract only. Methods return ErrNotImplemented until
-// Phase 2 wrapper-only implementation is complete.
 type Engine interface {
 	// Stats returns repository statistics.
 	Stats(ctx context.Context, req StatsRequest) (StatsResult, error)
@@ -71,16 +67,18 @@ type Engine interface {
 
 	// Store stores a file into the repository.
 	// Safety invariant: Store must not create inconsistent catalog/storage state.
-	// Phase 8: single-file mode is active; folder mode remains deferred.
+	// Active semantics are limited to single-file store.
 	Store(ctx context.Context, req StoreRequest) (StoreResult, error)
 
 	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.
-	// Active semantics are limited to by-ID remove.
+	// Method selection owns addressing semantics: this method is by-ID only.
 	Remove(ctx context.Context, req RemoveRequest) (RemoveResult, error)
 
 	// RemoveStoredPaths unlinks one or more current stored physical-path mappings.
 	//
+	// Method selection owns addressing semantics: this method is for current
+	// physical_file.path mappings rather than logical file IDs.
 	// Safety invariant: the operation must preserve logical-file identity,
 	// file-chunk ownership, chunk live-reference counts, and payload storage.
 	// Physical payload reclamation remains GC-owned.
@@ -88,11 +86,13 @@ type Engine interface {
 
 	// Restore restores logical files by logical file ID.
 	// Safety invariant: Restore must never write outside the intended destination.
-	// Active semantics are limited to by-ID restore.
+	// Method selection owns addressing semantics: this method is by-ID only.
 	Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error)
 
 	// RestoreStoredPath restores one current stored physical-path mapping.
 	//
+	// Method selection owns addressing semantics: this method restores exactly
+	// one current physical_file.path mapping rather than a logical file ID.
 	// Safety invariant: the operation must preserve logical identity,
 	// physical mappings, snapshot state, and ref-count ownership. Storage may
 	// temporarily pin chunks while reconstructing payloads.

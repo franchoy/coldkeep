@@ -143,7 +143,7 @@ func TestDiffSnapshotsPhaseNarrowsPrefixesBeforeEngineSeam(t *testing.T) {
 	}
 }
 
-func TestRestoreStoredPathPreservesDirectCLIStoragePath(t *testing.T) {
+func TestRestoreStoredPathRoutesThroughDedicatedEngineMethod(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalNewEngine := newCommandEngine
 	originalRestoreByID := restoreByIDPhase
@@ -200,7 +200,7 @@ func TestRestoreStoredPathPreservesDirectCLIStoragePath(t *testing.T) {
 	}
 }
 
-func TestRemoveStoredPathPreservesDirectCLIStoragePath(t *testing.T) {
+func TestRemoveStoredPathRoutesThroughDedicatedEngineMethod(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalNewEngine := newCommandEngine
 	originalRemoveByID := removeByIDPhase
@@ -252,7 +252,7 @@ func TestRemoveStoredPathPreservesDirectCLIStoragePath(t *testing.T) {
 	}
 }
 
-func TestRemoveStoredPathsPreservesDirectCLIStoredPathBatchPath(t *testing.T) {
+func TestRemoveStoredPathsRouteThroughDedicatedEngineBatchMethod(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalNewEngine := newCommandEngine
 	originalRemoveByID := removeByIDPhase

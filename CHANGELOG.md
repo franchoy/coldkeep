@@ -24,9 +24,10 @@ project, do not start here; start with [README.md](README.md).
 
 In progress.
 
-Planned work includes release-metadata reconciliation, preservation of valid
-zero-reference logical-file state across migration, and restore/remove
-stored-path boundary cleanup.
+Current work includes the inherited corrective baseline, by-ID restore/remove
+contract narrowing, dedicated stored-path restore/remove engine boundaries, CLI
+stored-path routing migration, restore destination-safety hardening, and remove
+reachability / verification / GC boundary proof.
 
 ------------------------------------------------------------------------
 

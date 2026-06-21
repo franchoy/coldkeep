@@ -10,12 +10,8 @@ import (
 )
 
 // TestEngineActiveInterfaceApprovedMethods asserts that the active Engine
-// interface contains exactly the methods approved for v1.12:
-// Stats, Inspect, Verify (original), the 4 read-side snapshot methods
-// added in v1.12 Phase 5 (SnapshotList, SnapshotShow, SnapshotStats, SnapshotDiff),
-// GarbageCollect added in v1.12 Phase 6, Restore added in v1.12 Phase 7,
-// and Store added in v1.12 Phase 8 (single-file mode), plus Remove added in
-// v1.12 Phase 9 (file-ID mode).
+// interface contains exactly the currently supported engine methods and no
+// accidentally activated future-only methods.
 //
 // This test is a guardrail: it must fail if a candidate method is
 // accidentally added to the interface without explicit phase approval.
@@ -46,8 +42,7 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 // TestEngineActiveInterfaceExcludesCandidateOnlyOperations proves the active
 // Engine interface still excludes future-only snapshot mutation and corrective
 // integrity operations. Their request/result types are intentionally present as
-// candidate contracts, but v1.13.1 must not imply they are active engine-owned
-// methods.
+// candidate contracts, but they are not active engine-owned methods.
 func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
 
@@ -70,8 +65,8 @@ func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
 }
 
 // TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership
-// documents which request/result pairs are intentionally future-only in
-// v1.13.1 and ties them to the approved active engine method set.
+// documents which request/result pairs remain intentionally future-only and
+// ties them to the approved active engine method set.
 func TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership(t *testing.T) {
 	activeMethods := activeEngineMethodSet()
 

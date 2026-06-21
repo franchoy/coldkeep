@@ -21,8 +21,8 @@ import (
 //
 // Database backend selection (SQLite vs PostgreSQL) is not decided here;
 // the caller is responsible for opening the correct backend and providing
-// the connection. Config fields will expand as wrapper-only implementations
-// require additional dependencies.
+// the connection. Additional dependencies are supplied only when an active
+// engine method needs them.
 type Config struct {
 	// DB is the active database connection.
 	// The caller is responsible for the connection lifetime.
@@ -30,15 +30,15 @@ type Config struct {
 	// ContainerDir is the path to the coldkeep containers directory.
 	// Defaults to container.ContainersDir if empty.
 	ContainerDir string
-	// StoreContext provides writer+chunker-aware dependencies for store wrappers.
-	// Phase 8: required for Store until store orchestration is fully engine-owned.
+	// StoreContext provides writer+chunker-aware dependencies for active store
+	// orchestration.
 	StoreContext *storage.StorageContext
 }
 
 // DefaultEngine is the canonical Engine implementation.
 //
-// Phase 2: wrapper-only. All methods delegate to existing domain packages.
-// No business logic is moved; the engine is a thin delegation layer.
+// It preserves existing command behavior while routing supported operations
+// through typed engine methods and lower domain packages.
 type DefaultEngine struct {
 	config Config
 	obs    *observability.Service
