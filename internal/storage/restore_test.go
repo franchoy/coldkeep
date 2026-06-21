@@ -1086,6 +1086,54 @@ func TestRestoreFileByStoredPathRejectsSymlinkedOverridePath(t *testing.T) {
 	assertOpenFileContent(t, fixture.realFile, fixture.sentinelData, "real target after rejected restore")
 }
 
+func TestRestoreFileByStoredPathOverrideRejectsSymlinkedParentWithoutOutsideWrite(t *testing.T) {
+	dbconn, sgctx, storedPath, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
+	defer func() { _ = dbconn.Close() }()
+
+	outside := t.TempDir()
+	overrideRoot := t.TempDir()
+	linkParent := filepath.Join(overrideRoot, "linked-parent")
+	requireSymlink(t, outside, linkParent)
+	overridePath := filepath.Join(linkParent, "restored.bin")
+
+	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:       true,
+		DestinationMode: RestoreDestinationOverride,
+		Destination:     overridePath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlinked override parent to be rejected, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(outside, "restored.bin")); !os.IsNotExist(statErr) {
+		t.Fatalf("outside override destination should not be created, stat=%v", statErr)
+	}
+}
+
+func TestRestoreFileByStoredPathOriginalModeRejectsSymlinkedParentWithoutOutsideWrite(t *testing.T) {
+	dbconn, sgctx, _, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
+	defer func() { _ = dbconn.Close() }()
+
+	outside := t.TempDir()
+	linkParent := filepath.Join(t.TempDir(), "stored-parent-link")
+	requireSymlink(t, outside, linkParent)
+	storedPath := filepath.Join(linkParent, "restored.bin")
+	if _, err := dbconn.Exec(`UPDATE physical_file SET path = $1`, storedPath); err != nil {
+		t.Fatalf("update stored path mapping: %v", err)
+	}
+
+	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected original-mode symlinked parent to be rejected, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(outside, "restored.bin")); !os.IsNotExist(statErr) {
+		t.Fatalf("outside original destination should not be created, stat=%v", statErr)
+	}
+}
+
 func TestRestoreFileByStoredPathOverrideMode(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

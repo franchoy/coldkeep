@@ -355,6 +355,84 @@ func TestRunRemoveCommandStoredPathPreservesInvariantErrorProjection(t *testing.
 	}
 }
 
+func TestStoredPathCommandsDoNotBypassEngine(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+
+	restoreCalls := 0
+	removeCalls := 0
+	installStoredPathCommandStubs(t, dbconn, stubCommandEngine{
+		restoreStoredPathFunc: func(_ context.Context, req engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error) {
+			restoreCalls++
+			return engine.RestoreStoredPathResult{
+				StoredPath:      req.StoredPath,
+				FileID:          7,
+				DestinationMode: req.DestinationMode,
+				DestinationPath: "/tmp/out.txt",
+				RestoredHash:    "abc123",
+			}, nil
+		},
+		removeStoredPathsFunc: func(_ context.Context, req engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error) {
+			removeCalls++
+			items := make([]engine.RemoveStoredPathItemResult, 0, len(req.StoredPaths))
+			for _, storedPath := range req.StoredPaths {
+				items = append(items, engine.RemoveStoredPathItemResult{
+					RawTarget:         storedPath,
+					StoredPath:        strings.TrimSpace(storedPath),
+					LogicalFileID:     9,
+					RemainingRefCount: 0,
+					MappingRemoved:    !req.DryRun,
+					Status:            engine.BatchItemOK,
+				})
+			}
+			return engine.RemoveStoredPathsResult{
+				DryRun:  req.DryRun,
+				Items:   items,
+				Summary: engine.BatchSummary{OK: len(items)},
+			}, nil
+		},
+	}, nil, nil)
+
+	if err := runRestoreCommand(parsedCommandLine{
+		method: "restore",
+		flags: map[string][]string{
+			"stored-path": {"/docs/a.txt"},
+			"mode":        {"override"},
+			"destination": {"/tmp/out.txt"},
+			"output":      {"json"},
+		},
+	}, outputModeJSON); err != nil {
+		t.Fatalf("runRestoreCommand stored-path: %v", err)
+	}
+
+	if err := runRemoveCommand(parsedCommandLine{
+		method: "remove",
+		flags: map[string][]string{
+			"stored-path": {"/docs/a.txt"},
+			"output":      {"json"},
+		},
+	}, outputModeJSON); err != nil {
+		t.Fatalf("runRemoveCommand stored-path: %v", err)
+	}
+
+	if err := runRemoveCommand(parsedCommandLine{
+		method:      "remove",
+		positionals: []string{"/docs/a.txt", "/docs/b.txt"},
+		flags: map[string][]string{
+			"stored-paths": {""},
+			"output":       {"json"},
+		},
+	}, outputModeJSON); err != nil {
+		t.Fatalf("runRemoveCommand stored-paths: %v", err)
+	}
+
+	if restoreCalls != 1 {
+		t.Fatalf("expected exactly one stored-path restore engine call, got %d", restoreCalls)
+	}
+	if removeCalls != 2 {
+		t.Fatalf("expected exactly two stored-path remove engine calls, got %d", removeCalls)
+	}
+}
+
 func installStoredPathCommandStubs(
 	t *testing.T,
 	dbconn *sql.DB,
