@@ -2,16 +2,23 @@ package storage
 
 import (
 	"database/sql"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/tests/testdb"
+	"github.com/franchoy/coldkeep/tests/utils/removestate"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -796,5 +803,131 @@ func TestRemoveFileByIDAndRemoveByStoredPathAreSymmetric(t *testing.T) {
 	}
 	if totalOrphans != 0 {
 		t.Fatalf("expected 0 orphan physical_file rows in entire DB, got %d", totalOrphans)
+	}
+}
+
+func TestRemoveStoredPathDoesNotDeletePayloadBeforeGC(t *testing.T) {
+	repo := NewTestRepository(t)
+
+	inputPath := filepath.Join(t.TempDir(), "stored-path-payload.txt")
+	if err := os.WriteFile(inputPath, []byte("stored-path-remove-payload"), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	stored, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, inputPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store fixture: %v", err)
+	}
+	beforeState := removestate.Capture(t, repo.DB, stored.FileID, repo.ContainersDir)
+
+	beforeEntries, err := os.ReadDir(repo.ContainersDir)
+	if err != nil {
+		t.Fatalf("read containers dir before remove: %v", err)
+	}
+	if len(beforeEntries) == 0 {
+		t.Fatal("expected container payload before stored-path remove")
+	}
+
+	result, err := RemoveFileByStoredPathWithStorageContextResult(repo.Storage, stored.Path)
+	if err != nil {
+		t.Fatalf("RemoveFileByStoredPathWithStorageContextResult: %v", err)
+	}
+	if !result.Removed || result.RemainingRefCount != 0 {
+		t.Fatalf("unexpected stored-path remove result: %+v", result)
+	}
+
+	afterEntries, err := os.ReadDir(repo.ContainersDir)
+	if err != nil {
+		t.Fatalf("read containers dir after remove: %v", err)
+	}
+	if len(afterEntries) == 0 {
+		t.Fatal("stored-path unlink must not delete payload container files before GC")
+	}
+	afterState := removestate.Capture(t, repo.DB, stored.FileID, repo.ContainersDir)
+	if !afterState.LogicalFileExists || afterState.RefCount != 0 {
+		t.Fatalf("expected stable zero-reference state after stored-path remove, got %+v", afterState)
+	}
+	if len(afterState.PhysicalPaths) != 0 {
+		t.Fatalf("expected no physical mappings after stored-path remove, got %+v", afterState)
+	}
+	if !reflect.DeepEqual(beforeState.FileChunkIDs, afterState.FileChunkIDs) || !reflect.DeepEqual(beforeState.ChunkLiveRefs, afterState.ChunkLiveRefs) || !reflect.DeepEqual(beforeState.ChunkPinCounts, afterState.ChunkPinCounts) {
+		t.Fatalf("stored-path unlink must preserve logical chunk ownership: before=%+v after=%+v", beforeState, afterState)
+	}
+}
+
+func TestRemoveByIDDoesNotDeletePayloadBeforeGC(t *testing.T) {
+	repo := NewTestRepository(t)
+
+	inputPath := filepath.Join(t.TempDir(), "by-id-payload.txt")
+	if err := os.WriteFile(inputPath, []byte("by-id-remove-payload"), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	stored, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, inputPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store fixture: %v", err)
+	}
+
+	beforeEntries, err := os.ReadDir(repo.ContainersDir)
+	if err != nil {
+		t.Fatalf("read containers dir before remove: %v", err)
+	}
+	if len(beforeEntries) == 0 {
+		t.Fatal("expected container payload before by-ID remove")
+	}
+
+	result, err := RemoveFileWithDBResult(repo.DB, stored.FileID)
+	if err != nil {
+		t.Fatalf("RemoveFileWithDBResult: %v", err)
+	}
+	if result.FileID != stored.FileID || result.RemovedMappings == 0 {
+		t.Fatalf("unexpected by-ID remove result: %+v", result)
+	}
+
+	afterEntries, err := os.ReadDir(repo.ContainersDir)
+	if err != nil {
+		t.Fatalf("read containers dir after by-ID remove: %v", err)
+	}
+	if len(afterEntries) == 0 {
+		t.Fatal("by-ID remove must not delete payload container files before GC")
+	}
+}
+
+func TestRemoveImplementationsDoNotOwnPayloadDeletion(t *testing.T) {
+	t.Parallel()
+
+	files := []string{
+		"remove.go",
+		"remove_lookup.go",
+	}
+
+	for _, name := range files {
+		t.Run(name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			path := filepath.Join(".", name)
+			file, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+
+				switch pkg.Name + "." + sel.Sel.Name {
+				case "os.Remove", "os.RemoveAll", "container.DeleteContainerFile", "container.DeleteContainer", "blocks.DeleteBlock":
+					t.Fatalf("%s must not own payload deletion via %s", path, pkg.Name+"."+sel.Sel.Name)
+				}
+				return true
+			})
+		})
 	}
 }

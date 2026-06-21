@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	idb "github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -117,6 +119,223 @@ func TestCurrentLogicalFileRoots(t *testing.T) {
 	}
 	if roots[0].Type != EntityLogicalFile || roots[1].Type != EntityLogicalFile {
 		t.Fatalf("expected logical_file roots, got %#v", roots)
+	}
+}
+
+func TestStoredPathUnlinkUpdatesCurrentRootsWithoutDeletingLogicalGraph(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"roots-current.txt",
+		int64(32),
+		"roots-current-hash",
+		filestate.LogicalFileCompleted,
+		int64(2),
+		"v2-fastcdc",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"roots-current-chunk",
+		int64(32),
+		filestate.ChunkCompleted,
+		int64(1),
+		int64(0),
+		"v2-fastcdc",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`, logicalID, chunkID); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	pathA := "/roots/current-a.txt"
+	pathB := "/roots/current-b.txt"
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES ($1, $2), ($3, $2)`, pathA, logicalID, pathB); err != nil {
+		t.Fatalf("insert physical_file rows: %v", err)
+	}
+
+	before, err := svc.CurrentLogicalFileRoots(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentLogicalFileRoots before remove: %v", err)
+	}
+	if len(before) != 1 || before[0].ID != logicalID {
+		t.Fatalf("unexpected roots before remove: %#v", before)
+	}
+
+	if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(storage.StorageContext{DB: dbconn}, pathA); err != nil {
+		t.Fatalf("remove first stored path: %v", err)
+	}
+	afterFirst, err := svc.CurrentLogicalFileRoots(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentLogicalFileRoots after first remove: %v", err)
+	}
+	if len(afterFirst) != 1 || afterFirst[0].ID != logicalID {
+		t.Fatalf("logical file should remain a current root after one-of-many unlink: %#v", afterFirst)
+	}
+
+	if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(storage.StorageContext{DB: dbconn}, pathB); err != nil {
+		t.Fatalf("remove final stored path: %v", err)
+	}
+	afterSecond, err := svc.CurrentLogicalFileRoots(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentLogicalFileRoots after final remove: %v", err)
+	}
+	if len(afterSecond) != 0 {
+		t.Fatalf("expected no current roots after final unlink, got %#v", afterSecond)
+	}
+
+	var logicalCount, fileChunkCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = $1`, logicalID).Scan(&logicalCount); err != nil {
+		t.Fatalf("count logical_file rows: %v", err)
+	}
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, logicalID).Scan(&fileChunkCount); err != nil {
+		t.Fatalf("count file_chunk rows: %v", err)
+	}
+	if logicalCount != 1 || fileChunkCount != 1 {
+		t.Fatalf("expected logical/file_chunk graph to remain after final unlink, got logical=%d file_chunk=%d", logicalCount, fileChunkCount)
+	}
+}
+
+func TestSnapshotRetainedLogicalFileRemainsReachableWithoutCurrentMappings(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	var logicalID, chunkID, pathID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"snapshot-only.txt",
+		int64(48),
+		"snapshot-only-hash",
+		filestate.LogicalFileCompleted,
+		int64(0),
+		"v2-fastcdc",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"snapshot-only-chunk",
+		int64(48),
+		filestate.ChunkCompleted,
+		int64(1),
+		int64(0),
+		"v2-fastcdc",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`, logicalID, chunkID); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ($1, CURRENT_TIMESTAMP, $2)`, "snap-roots", "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if err := dbconn.QueryRow(`INSERT INTO snapshot_path (path) VALUES ($1) RETURNING id`, "/snapshots/only.txt").Scan(&pathID); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)`, "snap-roots", pathID, logicalID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	currentRoots, err := svc.CurrentLogicalFileRoots(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentLogicalFileRoots: %v", err)
+	}
+	if len(currentRoots) != 0 {
+		t.Fatalf("expected no current roots, got %#v", currentRoots)
+	}
+	snapshotRoots, err := svc.SnapshotRoots(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("SnapshotRoots: %v", err)
+	}
+	if len(snapshotRoots) != 1 || snapshotRoots[0].ID != logicalID {
+		t.Fatalf("expected snapshot root for logical file, got %#v", snapshotRoots)
+	}
+	roots, err := svc.GCRoots(context.Background(), GCRootOptions{})
+	if err != nil {
+		t.Fatalf("GCRoots: %v", err)
+	}
+	if len(roots) != 1 || roots[0].ID != logicalID {
+		t.Fatalf("expected retained logical file in GC roots, got %#v", roots)
+	}
+	reachable, err := svc.ReachableChunksFromRoots(context.Background(), roots)
+	if err != nil {
+		t.Fatalf("ReachableChunksFromRoots: %v", err)
+	}
+	if _, ok := reachable[chunkID]; !ok {
+		t.Fatalf("expected chunk %d to remain reachable from snapshot roots", chunkID)
+	}
+}
+
+func TestZeroReferenceLogicalFileWithoutSnapshotIsNotCurrentOrSnapshotRoot(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	var logicalID, chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"zero-unretained.txt",
+		int64(24),
+		"zero-unretained-hash",
+		filestate.LogicalFileCompleted,
+		int64(0),
+		"v2-fastcdc",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"zero-unretained-chunk",
+		int64(24),
+		filestate.ChunkCompleted,
+		int64(1),
+		int64(0),
+		"v2-fastcdc",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`, logicalID, chunkID); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	currentRoots, err := svc.CurrentLogicalFileRoots(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentLogicalFileRoots: %v", err)
+	}
+	if len(currentRoots) != 0 {
+		t.Fatalf("expected no current roots, got %#v", currentRoots)
+	}
+	snapshotRoots, err := svc.SnapshotRoots(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("SnapshotRoots: %v", err)
+	}
+	if len(snapshotRoots) != 0 {
+		t.Fatalf("expected no snapshot roots, got %#v", snapshotRoots)
+	}
+	roots, err := svc.GCRoots(context.Background(), GCRootOptions{})
+	if err != nil {
+		t.Fatalf("GCRoots: %v", err)
+	}
+	if len(roots) != 0 {
+		t.Fatalf("expected no GC roots, got %#v", roots)
+	}
+	reachable, err := svc.ReachableChunksFromRoots(context.Background(), roots)
+	if err != nil {
+		t.Fatalf("ReachableChunksFromRoots: %v", err)
+	}
+	if len(reachable) != 0 {
+		t.Fatalf("expected no reachable chunks without current or snapshot roots, got %#v", reachable)
 	}
 }
 

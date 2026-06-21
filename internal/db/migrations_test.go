@@ -1608,6 +1608,81 @@ func TestPostgresSchemaRerunPreservesZeroReferenceLogicalFile(t *testing.T) {
 	}
 }
 
+func TestPostgresSchemaRerunLeavesCurrentPositiveRefCountWithoutMappingDetectable(t *testing.T) {
+	if os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
+	}
+
+	dbconn := openTempPostgresDatabase(t, "coldkeep_phase10_postgres_mismatch")
+
+	schemaSQL, err := loadPostgresSchema()
+	if err != nil {
+		t.Fatalf("load postgres schema SQL: %v", err)
+	}
+	if _, err := dbconn.Exec(schemaSQL); err != nil {
+		t.Fatalf("apply postgres schema SQL: %v", err)
+	}
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"positive-mismatch.bin",
+		int64(9),
+		"pg-positive-mismatch-hash",
+		"COMPLETED",
+		int64(1),
+		"v2-fastcdc",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert positive-ref mismatch logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(schemaSQL); err != nil {
+		t.Fatalf("rerun postgres schema SQL: %v", err)
+	}
+
+	var refCount int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
+		t.Fatalf("read logical ref_count after rerun: %v", err)
+	}
+	if refCount != 1 {
+		t.Fatalf("expected ref_count to remain 1 after rerun, got %d", refCount)
+	}
+
+	var physicalCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical mappings after rerun: %v", err)
+	}
+	if physicalCount != 0 {
+		t.Fatalf("expected zero physical mappings after rerun, got %d", physicalCount)
+	}
+
+	var migratedCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(&migratedCount); err != nil {
+		t.Fatalf("count migrated mappings after rerun: %v", err)
+	}
+	if migratedCount != 0 {
+		t.Fatalf("expected no migrated mapping after rerun, got %d", migratedCount)
+	}
+
+	var refCountMismatches int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		LEFT JOIN (
+			SELECT logical_file_id, COUNT(*) AS actual_count
+			FROM physical_file
+			GROUP BY logical_file_id
+		) pf ON pf.logical_file_id = lf.id
+		WHERE lf.id = $1 AND lf.ref_count <> COALESCE(pf.actual_count, 0)
+	`, logicalID).Scan(&refCountMismatches); err != nil {
+		t.Fatalf("count ref_count mismatches after rerun: %v", err)
+	}
+	if refCountMismatches != 1 {
+		t.Fatalf("expected positive-ref/no-mapping mismatch to remain detectable after rerun, got %d", refCountMismatches)
+	}
+}
+
 func TestPostgresSchemaMigratesLegacyPreV6LogicalFileMapping(t *testing.T) {
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")

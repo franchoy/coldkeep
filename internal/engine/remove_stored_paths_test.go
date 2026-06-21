@@ -13,6 +13,7 @@ import (
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/tests/utils/removestate"
 	"github.com/franchoy/coldkeep/tests/utils/testgate"
 )
 
@@ -341,6 +342,56 @@ func TestRemoveStoredPathsRefusesSnapshotRetainedMapping(t *testing.T) {
 	assertRemoveStoredPathStateEqual(t, before, after)
 }
 
+func TestRemoveStoredPathsMixedBatchDecrementsRefCountOncePerSuccessfulMapping(t *testing.T) {
+	fixture := newRemoveStoredPathFixture(t, []string{"batch-a.txt", "batch-b.txt", "batch-c.txt", "batch-d.txt"}, 4)
+	targetB := addStoredPathMapping(t, fixture.db, fixture.logicalID, "batch-extra-b.txt")
+	targetC := addStoredPathMapping(t, fixture.db, fixture.logicalID, "batch-extra-c.txt")
+	before := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
+
+	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+		StoredPaths: []string{
+			fixture.storedPath,
+			fixture.storedPath,
+			"   ",
+			targetB,
+			filepath.Join(t.TempDir(), "missing.txt"),
+			targetC,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RemoveStoredPaths mixed batch accounting: %v", err)
+	}
+
+	assertStoredPathStatuses(t, result.Items, []engine.BatchItemStatus{
+		engine.BatchItemOK,
+		engine.BatchItemSkipped,
+		engine.BatchItemFailed,
+		engine.BatchItemOK,
+		engine.BatchItemFailed,
+		engine.BatchItemOK,
+	})
+	if result.Summary.OK != 3 || result.Summary.Failed != 2 || result.Summary.Skipped != 1 {
+		t.Fatalf("unexpected summary: %+v", result.Summary)
+	}
+
+	after := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
+	if !after.logicalExists {
+		t.Fatalf("logical file should remain after mixed batch: %+v", after)
+	}
+	if after.refCount != before.refCount-3 {
+		t.Fatalf("expected ref_count to drop by 3, before=%d after=%d", before.refCount, after.refCount)
+	}
+	if after.physicalCount != before.physicalCount-3 {
+		t.Fatalf("expected physical mapping count to drop by 3, before=%d after=%d", before.physicalCount, after.physicalCount)
+	}
+	if after.physicalCount != int(after.refCount) {
+		t.Fatalf("expected physical count to match ref_count, state=%+v", after)
+	}
+	if before.fileChunkCount != after.fileChunkCount || !reflect.DeepEqual(before.chunkLiveRefs, after.chunkLiveRefs) || !reflect.DeepEqual(before.chunkPinCounts, after.chunkPinCounts) {
+		t.Fatalf("unexpected chunk graph drift: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestRemoveStoredPathsReportsNeverStoredTarget(t *testing.T) {
 	fixture := newRemoveStoredPathFixture(t, []string{"never-stored-anchor.txt"}, 1)
 	missingPath := filepath.Join(t.TempDir(), "never-stored.txt")
@@ -373,6 +424,36 @@ func TestRemoveStoredPathsRollsBackRefCountMismatch(t *testing.T) {
 	}
 	after := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
 	assertRemoveStoredPathStateEqual(t, before, after)
+}
+
+func TestRemoveStoredPathsSecondUnlinkReportsAlreadyRemovedWithoutFurtherMutation(t *testing.T) {
+	fixture := newRemoveStoredPathFixture(t, []string{"repeat-a.txt", "repeat-b.txt"}, 2)
+
+	first, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+		StoredPaths: []string{fixture.storedPath},
+	})
+	if err != nil {
+		t.Fatalf("first RemoveStoredPaths: %v", err)
+	}
+	if item := first.Items[0]; item.Status != engine.BatchItemOK || !item.MappingRemoved || item.RemainingRefCount != 1 {
+		t.Fatalf("unexpected first unlink item: %+v", item)
+	}
+	afterFirst := removestate.Capture(t, fixture.db, fixture.logicalID, "")
+
+	second, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+		StoredPaths: []string{fixture.storedPath},
+	})
+	if err != nil {
+		t.Fatalf("second RemoveStoredPaths: %v", err)
+	}
+	if item := second.Items[0]; item.Status != engine.BatchItemFailed || item.MappingRemoved {
+		t.Fatalf("unexpected second unlink item: %+v", item)
+	}
+	if !strings.Contains(second.Items[0].Error, "already removed") && !strings.Contains(second.Items[0].Error, "not found (never stored)") {
+		t.Fatalf("expected already-removed/never-stored meaning, got %+v", second.Items[0])
+	}
+	afterSecond := removestate.Capture(t, fixture.db, fixture.logicalID, "")
+	removestate.AssertEqual(t, afterFirst, afterSecond)
 }
 
 func TestRemoveStoredPathsContinuesAfterExecutionFailureByDefault(t *testing.T) {

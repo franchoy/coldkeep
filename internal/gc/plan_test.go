@@ -4,13 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+type gcTestRepository struct {
+	DB            *sql.DB
+	Storage       storage.StorageContext
+	ContainersDir string
+}
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -23,6 +34,24 @@ func openTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("run migrations: %v", err)
 	}
 	return dbconn
+}
+
+func newGCTestRepository(t *testing.T) *gcTestRepository {
+	t.Helper()
+
+	dbconn := openTestDB(t)
+	containersDir := t.TempDir()
+	repo := &gcTestRepository{
+		DB:            dbconn,
+		ContainersDir: containersDir,
+		Storage: storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: containersDir,
+		},
+	}
+	t.Cleanup(func() { _ = repo.Storage.Close() })
+	return repo
 }
 
 func insertChunk(t *testing.T, dbconn *sql.DB, hash string, size, liveRef, pinCount int) int64 {
@@ -204,6 +233,82 @@ func TestBuildPlanChunkReachableFromPhysicalFile(t *testing.T) {
 	}
 	if len(plan.AffectedContainers) != 0 {
 		t.Errorf("AffectedContainers = %d, want 0", len(plan.AffectedContainers))
+	}
+}
+
+func TestBuildPlanStoredPathOneOfManyUnlinkDoesNotMakePayloadReclaimable(t *testing.T) {
+	repo := newGCTestRepository(t)
+
+	inputPath := filepath.Join(t.TempDir(), "gc-one-of-many.txt")
+	if err := os.WriteFile(inputPath, []byte("gc-one-of-many-payload"), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	stored, err := storage.StoreFileWithStorageContextAndCodecResult(repo.Storage, inputPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store fixture: %v", err)
+	}
+
+	secondPath := filepath.Join(t.TempDir(), "gc-one-of-many-duplicate.txt")
+	if _, err := repo.DB.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`,
+		secondPath,
+		stored.FileID,
+	); err != nil {
+		t.Fatalf("insert second physical mapping: %v", err)
+	}
+	if _, err := repo.DB.Exec(`UPDATE logical_file SET ref_count = 2 WHERE id = $1`, stored.FileID); err != nil {
+		t.Fatalf("update ref_count to two mappings: %v", err)
+	}
+
+	if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(repo.Storage, stored.Path); err != nil {
+		t.Fatalf("remove one mapping: %v", err)
+	}
+
+	plan, err := BuildPlan(context.Background(), repo.DB, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan after one-of-many unlink: %v", err)
+	}
+	if plan.UnreachableChunks != 0 {
+		t.Fatalf("expected zero unreachable chunks after one-of-many unlink, got %d", plan.UnreachableChunks)
+	}
+	if plan.ReclaimableBytes != 0 || plan.PhysicallyReclaimableBytes != 0 {
+		t.Fatalf("expected no reclaimable bytes after one-of-many unlink, got logical=%d physical=%d", plan.ReclaimableBytes, plan.PhysicallyReclaimableBytes)
+	}
+}
+
+func TestBuildPlanLastStoredPathUnlinkDoesNotTransferPayloadOwnershipAwayFromGC(t *testing.T) {
+	repo := newGCTestRepository(t)
+
+	inputPath := filepath.Join(t.TempDir(), "gc-last-mapping.txt")
+	if err := os.WriteFile(inputPath, []byte("gc-last-mapping-payload"), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	stored, err := storage.StoreFileWithStorageContextAndCodecResult(repo.Storage, inputPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store fixture: %v", err)
+	}
+
+	if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(repo.Storage, stored.Path); err != nil {
+		t.Fatalf("remove final mapping: %v", err)
+	}
+
+	entries, err := os.ReadDir(repo.ContainersDir)
+	if err != nil {
+		t.Fatalf("read containers dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected payload container file to remain immediately after unlink")
+	}
+
+	plan, err := BuildPlan(context.Background(), repo.DB, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan after final unlink: %v", err)
+	}
+	if plan.UnreachableChunks == 0 {
+		t.Fatal("expected unreachable chunks after final mapping unlink")
+	}
+	if plan.ReclaimableBytes != 0 || plan.PhysicallyReclaimableBytes != 0 {
+		t.Fatalf("expected GC to retain ownership while live_ref_count remains positive, got logical=%d physical=%d", plan.ReclaimableBytes, plan.PhysicallyReclaimableBytes)
 	}
 }
 
