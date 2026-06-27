@@ -139,7 +139,8 @@ sed 's/^/  /' "$PKG_LIST"
 echo
 
 echo "Running coverage..."
-go test -covermode=atomic -coverprofile="$COVER_PROFILE" $(cat "$PKG_LIST")
+mapfile -t packages < "$PKG_LIST"
+go test -covermode=atomic -coverprofile="$COVER_PROFILE" "${packages[@]}"
 
 echo
 echo "Coverage by function/package:"
