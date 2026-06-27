@@ -81,6 +81,12 @@ func reopenMigratingSQLiteDB(t *testing.T, dbconn *sql.DB, dbPath string) *sql.D
 
 func assertRemoveMigrationZeroState(t *testing.T, dbconn *sql.DB, logicalID int64, phase string) {
 	t.Helper()
+	assertRemoveMigrationLogicalState(t, dbconn, logicalID, phase)
+	assertRemoveMigrationPhysicalState(t, dbconn, logicalID, phase)
+}
+
+func assertRemoveMigrationLogicalState(t *testing.T, dbconn *sql.DB, logicalID int64, phase string) {
+	t.Helper()
 	var logicalExists int64
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = ?`, logicalID).Scan(&logicalExists); err != nil {
 		t.Fatalf("check logical file existence %s: %v", phase, err)
@@ -95,6 +101,10 @@ func assertRemoveMigrationZeroState(t *testing.T, dbconn *sql.DB, logicalID int6
 	if refCount != 0 {
 		t.Fatalf("expected logical ref_count=0 %s, got %d", phase, refCount)
 	}
+}
+
+func assertRemoveMigrationPhysicalState(t *testing.T, dbconn *sql.DB, logicalID int64, phase string) {
+	t.Helper()
 	var physicalCount int64
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?`, logicalID).Scan(&physicalCount); err != nil {
 		t.Fatalf("count physical mappings %s: %v", phase, err)

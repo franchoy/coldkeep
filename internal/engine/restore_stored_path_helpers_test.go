@@ -67,21 +67,21 @@ func seedSnapshotRetentionReference(t *testing.T, db *sql.DB, fileID int64, stor
 
 func insertRestoreSnapshotRow(t *testing.T, db *sql.DB, snapshotID string) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`, snapshotID, "2026-06-01T00:00:00Z", "full", "restore-stored-path"); err != nil {
+	if _, err := execPreparedTestSQL(db, `INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`, snapshotID, "2026-06-01T00:00:00Z", "full", "restore-stored-path"); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
 }
 
 func insertRestoreSnapshotPathRow(t *testing.T, db *sql.DB, pathID int64, storedPath string) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, pathID, storedPath); err != nil {
+	if _, err := execPreparedTestSQL(db, `INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, pathID, storedPath); err != nil {
 		t.Fatalf("insert snapshot_path: %v", err)
 	}
 }
 
 func insertRestoreSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID string, pathID, fileID, size int64) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ($1, $2, $3, $4)`, snapshotID, pathID, fileID, size); err != nil {
+	if _, err := execPreparedTestSQL(db, `INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ($1, $2, $3, $4)`, snapshotID, pathID, fileID, size); err != nil {
 		t.Fatalf("insert snapshot_file: %v", err)
 	}
 }
@@ -296,12 +296,12 @@ func trustedDropDatabaseStatement(identifier string) string {
 }
 
 func execTrustedPostgresDatabaseDDL(dbconn *sql.DB, statement string) error {
-	_, err := dbconn.Exec(statement)
+	_, err := execPreparedTestDDL(dbconn, statement)
 	return err
 }
 
 func terminateRestorePostgresSessions(adminDB *sql.DB, dbName string) error {
-	_, err := adminDB.Exec(`
+	_, err := execPreparedTestSQL(adminDB, `
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity
 		WHERE datname = $1 AND pid <> pg_backend_pid()
@@ -311,6 +311,24 @@ func terminateRestorePostgresSessions(adminDB *sql.DB, dbName string) error {
 
 func dropRestorePostgresDatabase(adminDB *sql.DB, dbName string) error {
 	return execTrustedPostgresDatabaseDDL(adminDB, trustedDropDatabaseStatement(dbName))
+}
+
+func execPreparedTestDDL(dbconn *sql.DB, query string) (sql.Result, error) {
+	stmt, err := dbconn.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+	return stmt.Exec()
+}
+
+func execPreparedTestSQL(dbconn *sql.DB, query string, args ...any) (sql.Result, error) {
+	stmt, err := dbconn.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+	return stmt.Exec(args...)
 }
 
 func trustedQuotedPostgresIdentifier(identifier string) string {

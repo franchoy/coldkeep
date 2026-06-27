@@ -36,32 +36,7 @@ func RunWithIsolatedPostgresDB(packageLabel string, m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "create isolated postgres database %s: %v\n", dbName, err)
 		return 1
 	}
-
-	previousDBName, hadPreviousDBName := os.LookupEnv("DB_NAME")
-	if err := os.Setenv("DB_NAME", dbName); err != nil {
-		fmt.Fprintf(os.Stderr, "set DB_NAME=%s: %v\n", dbName, err)
-		if dropErr := terminateAndDropIsolatedPostgresDB(adminDB, dbName); dropErr != nil {
-			fmt.Fprintf(os.Stderr, "drop isolated postgres database %s after setup failure: %v\n", dbName, dropErr)
-		}
-		return 1
-	}
-
-	exitCode := m.Run()
-
-	if hadPreviousDBName {
-		_ = os.Setenv("DB_NAME", previousDBName)
-	} else {
-		_ = os.Unsetenv("DB_NAME")
-	}
-
-	if err := terminateAndDropIsolatedPostgresDB(adminDB, dbName); err != nil {
-		fmt.Fprintf(os.Stderr, "drop isolated postgres database %s: %v\n", dbName, err)
-		if exitCode == 0 {
-			return 1
-		}
-	}
-
-	return exitCode
+	return runIsolatedPostgresSuite(adminDB, dbName, m)
 }
 
 func OpenRawPostgresDBForMaintenance(purpose string) *sql.DB {
@@ -111,7 +86,7 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 	if adminDB == nil {
 		return fmt.Errorf("admin database handle is nil")
 	}
-	if _, err := adminDB.Exec(`
+	if _, err := execPreparedIsolatedSQL(adminDB, `
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity
 		WHERE datname = $1 AND pid <> pg_backend_pid()
@@ -125,12 +100,12 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 }
 
 func createIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
-	_, err := adminDB.Exec(trustedCreateIsolatedPostgresDBStatement(dbName))
+	_, err := execPreparedIsolatedDDL(adminDB, trustedCreateIsolatedPostgresDBStatement(dbName))
 	return err
 }
 
 func dropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
-	_, err := adminDB.Exec(trustedDropIsolatedPostgresDBStatement(dbName))
+	_, err := execPreparedIsolatedDDL(adminDB, trustedDropIsolatedPostgresDBStatement(dbName))
 	return err
 }
 
@@ -147,4 +122,50 @@ func trustedIsolatedPostgresIdentifier(dbName string) string {
 		panic("unexpected isolated postgres database name")
 	}
 	return `"` + dbName + `"`
+}
+
+func runIsolatedPostgresSuite(adminDB *sql.DB, dbName string, m *testing.M) int {
+	previousDBName, hadPreviousDBName := os.LookupEnv("DB_NAME")
+	if err := os.Setenv("DB_NAME", dbName); err != nil {
+		fmt.Fprintf(os.Stderr, "set DB_NAME=%s: %v\n", dbName, err)
+		if dropErr := terminateAndDropIsolatedPostgresDB(adminDB, dbName); dropErr != nil {
+			fmt.Fprintf(os.Stderr, "drop isolated postgres database %s after setup failure: %v\n", dbName, dropErr)
+		}
+		return 1
+	}
+	exitCode := m.Run()
+	restoreIsolatedPostgresDBEnv(previousDBName, hadPreviousDBName)
+	if err := terminateAndDropIsolatedPostgresDB(adminDB, dbName); err != nil {
+		fmt.Fprintf(os.Stderr, "drop isolated postgres database %s: %v\n", dbName, err)
+		if exitCode == 0 {
+			return 1
+		}
+	}
+	return exitCode
+}
+
+func restoreIsolatedPostgresDBEnv(previousDBName string, hadPreviousDBName bool) {
+	if hadPreviousDBName {
+		_ = os.Setenv("DB_NAME", previousDBName)
+		return
+	}
+	_ = os.Unsetenv("DB_NAME")
+}
+
+func execPreparedIsolatedDDL(adminDB *sql.DB, query string) (sql.Result, error) {
+	stmt, err := adminDB.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stmt.Close() }()
+	return stmt.Exec()
+}
+
+func execPreparedIsolatedSQL(adminDB *sql.DB, query string, args ...any) (sql.Result, error) {
+	stmt, err := adminDB.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stmt.Close() }()
+	return stmt.Exec(args...)
 }
