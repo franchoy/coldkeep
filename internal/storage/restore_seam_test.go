@@ -30,7 +30,7 @@ func TestRestoreSeamDefaultFSPreservesRestoredBytes(t *testing.T) {
 		t.Fatalf("store file: %v", err)
 	}
 
-	outDir := t.TempDir()
+	outDir := realTempDir(t)
 	outPath := filepath.Join(outDir, "restored.txt")
 
 	restoreResult, err := RestoreFileWithStorageContextResultOptions(
@@ -70,7 +70,7 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 	storeResult, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, srcFile, blocks.CodecPlain)
 	mustNoErr(t, err, "store file")
 
-	outDefaultDir := t.TempDir()
+	outDefaultDir := realTempDir(t)
 	outDefault := filepath.Join(outDefaultDir, "restored-default.txt")
 	defaultResult, err := RestoreFileWithStorageContextResultOptions(
 		repo.Storage,
@@ -80,7 +80,7 @@ func TestRestoreSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 	)
 	mustNoErr(t, err, "restore with default fs")
 
-	outNoopDir := t.TempDir()
+	outNoopDir := realTempDir(t)
 	outNoop := filepath.Join(outNoopDir, "restored-noop.txt")
 	noopResult, err := RestoreFileWithStorageContextResultOptions(
 		repo.Storage,
