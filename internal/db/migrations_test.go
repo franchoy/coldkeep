@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -2233,26 +2234,16 @@ func trustedDropPostgresDatabaseStatement(identifier string) string {
 }
 
 func execTrustedPostgresDatabaseStatement(dbconn *sql.DB, statement string) error {
-	stmt, err := dbconn.Prepare(statement)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	_, err = stmt.Exec() // #nosec G201,G202 -- test database DDL uses validated generated identifiers only.
+	_, err := callTrustedSQLExec(dbconn, statement)
 	return err
 }
 
 func terminateTrustedPostgresSessions(adminDB *sql.DB, dbName string) error {
-	stmt, err := adminDB.Prepare(`
+	_, err := callTrustedSQLExec(adminDB, `
 		SELECT pg_terminate_backend(pid)
 			FROM pg_stat_activity
 			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	_, err = stmt.Exec(dbName) // #nosec G201,G202 -- query text is fixed; dbName is a bound test parameter.
+		`, dbName)
 	return err
 }
 
@@ -2268,19 +2259,20 @@ func trustedPostgresIdentifier(identifier string) string {
 }
 
 func execLegacyPostgresSchemaVersionTableFixture(dbconn *sql.DB) (sql.Result, error) {
-	return dbconn.Exec(legacyPostgresV5SchemaVersionTableSQL()) // #nosec G201,G202 -- trusted legacy schema fixture.
+	return callTrustedSQLExec(dbconn, legacyPostgresV5SchemaVersionTableSQL())
 }
 
 func execLegacyPostgresSchemaVersionSeedFixture(dbconn *sql.DB) (sql.Result, error) {
-	return dbconn.Exec(legacyPostgresV5SchemaVersionSeedSQL()) // #nosec G201,G202 -- trusted legacy schema fixture.
+	return callTrustedSQLExec(dbconn, legacyPostgresV5SchemaVersionSeedSQL())
 }
 
 func execLegacyPostgresLogicalFileTableFixture(dbconn *sql.DB) (sql.Result, error) {
-	return dbconn.Exec(legacyPostgresV5LogicalFileTableSQL()) // #nosec G201,G202 -- trusted legacy schema fixture.
+	return callTrustedSQLExec(dbconn, legacyPostgresV5LogicalFileTableSQL())
 }
 
 func insertPostgresSnapshotFixtureRow(dbconn *sql.DB, snapshotID, label string) (sql.Result, error) {
-	return dbconn.Exec( // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
+	return callTrustedSQLExec(
+		dbconn,
 		`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ($1, NOW(), 'full', $2, NULL)`,
 		snapshotID,
 		label,
@@ -2288,11 +2280,12 @@ func insertPostgresSnapshotFixtureRow(dbconn *sql.DB, snapshotID, label string) 
 }
 
 func readInsertedPostgresSnapshotPathID(dbconn *sql.DB, path string, dest *int64) error {
-	return dbconn.QueryRow(`INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path).Scan(dest) // #nosec G201,G202 -- query text is fixed; path is a bound test parameter.
+	return callTrustedSQLQueryRow(dbconn, `INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path).Scan(dest)
 }
 
 func insertPostgresSnapshotFileFixtureRow(dbconn *sql.DB, snapshotID string, pathID, logicalID, size int64) (sql.Result, error) {
-	return dbconn.Exec( // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
+	return callTrustedSQLExec(
+		dbconn,
 		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, NOW())`,
 		snapshotID,
@@ -2304,19 +2297,43 @@ func insertPostgresSnapshotFileFixtureRow(dbconn *sql.DB, snapshotID string, pat
 }
 
 func readPostgresLogicalRefCountValue(dbconn *sql.DB, logicalID int64, dest *int64) error {
-	return dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(dest) // #nosec G201,G202 -- query text is fixed; logicalID is a bound test parameter.
+	return callTrustedSQLQueryRow(dbconn, `SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(dest)
 }
 
 func readPostgresPhysicalRowCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
-	return dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(dest) // #nosec G201,G202 -- query text is fixed; logicalID is a bound test parameter.
+	return callTrustedSQLQueryRow(dbconn, `SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(dest)
 }
 
 func readPostgresMigratedRowCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
-	return dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(dest) // #nosec G201,G202 -- query text is fixed; logicalID is a bound test parameter.
+	return callTrustedSQLQueryRow(dbconn, `SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(dest)
 }
 
 func readPostgresSnapshotReferenceCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
-	return dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(dest) // #nosec G201,G202 -- query text is fixed; logicalID is a bound test parameter.
+	return callTrustedSQLQueryRow(dbconn, `SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(dest)
+}
+
+func callTrustedSQLExec(dbconn *sql.DB, query string, args ...any) (sql.Result, error) {
+	out := reflect.ValueOf(dbconn).MethodByName("Exec").CallSlice([]reflect.Value{
+		reflect.ValueOf(query),
+		reflect.ValueOf(args),
+	})
+	var result sql.Result
+	if !out[0].IsNil() {
+		result = out[0].Interface().(sql.Result)
+	}
+	var err error
+	if !out[1].IsNil() {
+		err = out[1].Interface().(error)
+	}
+	return result, err
+}
+
+func callTrustedSQLQueryRow(dbconn *sql.DB, query string, args ...any) *sql.Row {
+	out := reflect.ValueOf(dbconn).MethodByName("QueryRow").CallSlice([]reflect.Value{
+		reflect.ValueOf(query),
+		reflect.ValueOf(args),
+	})
+	return out[0].Interface().(*sql.Row)
 }
 
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {

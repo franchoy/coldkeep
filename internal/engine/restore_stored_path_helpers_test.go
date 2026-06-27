@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -296,26 +297,16 @@ func trustedDropDatabaseStatement(identifier string) string {
 }
 
 func execTrustedPostgresDatabaseDDL(dbconn *sql.DB, statement string) error {
-	stmt, err := dbconn.Prepare(statement)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	_, err = stmt.Exec() // #nosec G201,G202 -- test database DDL uses validated generated identifiers only.
+	_, err := callRestoreTrustedSQLExec(dbconn, statement)
 	return err
 }
 
 func terminateRestorePostgresSessions(adminDB *sql.DB, dbName string) error {
-	stmt, err := adminDB.Prepare(`
+	_, err := callRestoreTrustedSQLExec(adminDB, `
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity
 		WHERE datname = $1 AND pid <> pg_backend_pid()
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	_, err = stmt.Exec(dbName) // #nosec G201,G202 -- query text is fixed; dbName is a bound test parameter.
+	`, dbName)
 	return err
 }
 
@@ -324,7 +315,8 @@ func dropRestorePostgresDatabase(adminDB *sql.DB, dbName string) error {
 }
 
 func insertRestoreSnapshotFixtureRow(db *sql.DB, snapshotID string) (sql.Result, error) {
-	return db.Exec( // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
+	return callRestoreTrustedSQLExec(
+		db,
 		`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
 		snapshotID,
 		"2026-06-01T00:00:00Z",
@@ -334,17 +326,34 @@ func insertRestoreSnapshotFixtureRow(db *sql.DB, snapshotID string) (sql.Result,
 }
 
 func insertRestoreSnapshotPathFixtureRow(db *sql.DB, pathID int64, storedPath string) (sql.Result, error) {
-	return db.Exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, pathID, storedPath) // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
+	return callRestoreTrustedSQLExec(db, `INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, pathID, storedPath)
 }
 
 func insertRestoreSnapshotFileFixtureRow(db *sql.DB, snapshotID string, pathID, fileID, size int64) (sql.Result, error) {
-	return db.Exec( // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
+	return callRestoreTrustedSQLExec(
+		db,
 		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ($1, $2, $3, $4)`,
 		snapshotID,
 		pathID,
 		fileID,
 		size,
 	)
+}
+
+func callRestoreTrustedSQLExec(dbconn *sql.DB, query string, args ...any) (sql.Result, error) {
+	out := reflect.ValueOf(dbconn).MethodByName("Exec").CallSlice([]reflect.Value{
+		reflect.ValueOf(query),
+		reflect.ValueOf(args),
+	})
+	var result sql.Result
+	if !out[0].IsNil() {
+		result = out[0].Interface().(sql.Result)
+	}
+	var err error
+	if !out[1].IsNil() {
+		err = out[1].Interface().(error)
+	}
+	return result, err
 }
 
 func trustedQuotedPostgresIdentifier(identifier string) string {

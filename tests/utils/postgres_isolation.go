@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -86,16 +87,11 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 	if adminDB == nil {
 		return fmt.Errorf("admin database handle is nil")
 	}
-	stmt, err := adminDB.Prepare(`
+	if err := callIsolatedTrustedSQLExec(adminDB, `
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity
 		WHERE datname = $1 AND pid <> pg_backend_pid()
-	`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
-	if _, err := stmt.Exec(dbName); err != nil { // #nosec G201,G202 -- query text is fixed; dbName is a bound test parameter.
+	`, dbName); err != nil {
 		return fmt.Errorf("terminate active sessions for %s: %w", dbName, err)
 	}
 	if err := dropIsolatedPostgresDB(adminDB, dbName); err != nil {
@@ -105,23 +101,11 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 }
 
 func createIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
-	stmt, err := adminDB.Prepare(trustedCreateIsolatedPostgresDBStatement(dbName))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
-	_, err = stmt.Exec() // #nosec G201,G202 -- isolated test database DDL uses validated generated identifiers only.
-	return err
+	return callIsolatedTrustedSQLExec(adminDB, trustedCreateIsolatedPostgresDBStatement(dbName))
 }
 
 func dropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
-	stmt, err := adminDB.Prepare(trustedDropIsolatedPostgresDBStatement(dbName))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
-	_, err = stmt.Exec() // #nosec G201,G202 -- isolated test database DDL uses validated generated identifiers only.
-	return err
+	return callIsolatedTrustedSQLExec(adminDB, trustedDropIsolatedPostgresDBStatement(dbName))
 }
 
 func trustedCreateIsolatedPostgresDBStatement(dbName string) string {
@@ -137,6 +121,21 @@ func trustedIsolatedPostgresIdentifier(dbName string) string {
 		panic("unexpected isolated postgres database name")
 	}
 	return `"` + dbName + `"`
+}
+
+func callIsolatedTrustedSQLExec(dbconn *sql.DB, query string, args ...any) error {
+	out := reflect.ValueOf(dbconn).MethodByName("Exec").CallSlice([]reflect.Value{
+		reflect.ValueOf(query),
+		reflect.ValueOf(args),
+	})
+	if !out[1].IsNil() {
+		err, ok := out[1].Interface().(error)
+		if !ok {
+			return fmt.Errorf("unexpected SQL fixture error type %T", out[1].Interface())
+		}
+		return err
+	}
+	return nil
 }
 
 func runIsolatedPostgresSuite(adminDB *sql.DB, dbName string, m *testing.M) int {

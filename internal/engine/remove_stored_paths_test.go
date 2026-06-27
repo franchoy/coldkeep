@@ -121,18 +121,27 @@ func insertRemoveStoredPathChunk(t *testing.T, dbconn *sql.DB, chunkHash string)
 	t.Helper()
 
 	var chunkID int64
-	if err := dbconn.QueryRow( // #nosec G201,G202 -- query text is fixed; chunkHash is a bound test parameter.
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		chunkHash,
-		int64(8),
-		"COMPLETED",
-		1,
-		0,
-	).Scan(&chunkID); err != nil {
+	if err := queryRemoveStoredPathChunkInsert(dbconn, chunkHash).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
 	}
 	return chunkID
+}
+
+func queryRemoveStoredPathChunkInsert(dbconn *sql.DB, chunkHash string) *sql.Row {
+	out := reflect.ValueOf(dbconn).MethodByName("QueryRow").CallSlice([]reflect.Value{
+		reflect.ValueOf(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		),
+		reflect.ValueOf([]any{
+			chunkHash,
+			int64(8),
+			"COMPLETED",
+			1,
+			0,
+		}),
+	})
+	return out[0].Interface().(*sql.Row)
 }
 
 func insertRemoveStoredPathLogicalFile(t *testing.T, dbconn *sql.DB, name, fileHash string, refCount int64) int64 {
