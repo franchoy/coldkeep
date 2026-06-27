@@ -808,24 +808,9 @@ func TestRemoveFileByIDAndRemoveByStoredPathAreSymmetric(t *testing.T) {
 
 func TestRemoveStoredPathDoesNotDeletePayloadBeforeGC(t *testing.T) {
 	repo := NewTestRepository(t)
-
-	inputPath := filepath.Join(t.TempDir(), "stored-path-payload.txt")
-	if err := os.WriteFile(inputPath, []byte("stored-path-remove-payload"), 0o600); err != nil {
-		t.Fatalf("write input: %v", err)
-	}
-	stored, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, inputPath, blocks.CodecPlain)
-	if err != nil {
-		t.Fatalf("store fixture: %v", err)
-	}
+	stored := seedRemovePayloadFixture(t, repo, "stored-path-payload.txt", "stored-path-remove-payload")
 	beforeState := removestate.Capture(t, repo.DB, stored.FileID, repo.ContainersDir)
-
-	beforeEntries, err := os.ReadDir(repo.ContainersDir)
-	if err != nil {
-		t.Fatalf("read containers dir before remove: %v", err)
-	}
-	if len(beforeEntries) == 0 {
-		t.Fatal("expected container payload before stored-path remove")
-	}
+	assertPayloadContainersPresent(t, repo.ContainersDir, "before stored-path remove")
 
 	result, err := RemoveFileByStoredPathWithStorageContextResult(repo.Storage, stored.Path)
 	if err != nil {
@@ -834,45 +819,15 @@ func TestRemoveStoredPathDoesNotDeletePayloadBeforeGC(t *testing.T) {
 	if !result.Removed || result.RemainingRefCount != 0 {
 		t.Fatalf("unexpected stored-path remove result: %+v", result)
 	}
-
-	afterEntries, err := os.ReadDir(repo.ContainersDir)
-	if err != nil {
-		t.Fatalf("read containers dir after remove: %v", err)
-	}
-	if len(afterEntries) == 0 {
-		t.Fatal("stored-path unlink must not delete payload container files before GC")
-	}
+	assertPayloadContainersPresent(t, repo.ContainersDir, "after stored-path remove")
 	afterState := removestate.Capture(t, repo.DB, stored.FileID, repo.ContainersDir)
-	if !afterState.LogicalFileExists || afterState.RefCount != 0 {
-		t.Fatalf("expected stable zero-reference state after stored-path remove, got %+v", afterState)
-	}
-	if len(afterState.PhysicalPaths) != 0 {
-		t.Fatalf("expected no physical mappings after stored-path remove, got %+v", afterState)
-	}
-	if !reflect.DeepEqual(beforeState.FileChunkIDs, afterState.FileChunkIDs) || !reflect.DeepEqual(beforeState.ChunkLiveRefs, afterState.ChunkLiveRefs) || !reflect.DeepEqual(beforeState.ChunkPinCounts, afterState.ChunkPinCounts) {
-		t.Fatalf("stored-path unlink must preserve logical chunk ownership: before=%+v after=%+v", beforeState, afterState)
-	}
+	assertStoredPathRemovePreservesPayloadState(t, beforeState, afterState)
 }
 
 func TestRemoveByIDDoesNotDeletePayloadBeforeGC(t *testing.T) {
 	repo := NewTestRepository(t)
-
-	inputPath := filepath.Join(t.TempDir(), "by-id-payload.txt")
-	if err := os.WriteFile(inputPath, []byte("by-id-remove-payload"), 0o600); err != nil {
-		t.Fatalf("write input: %v", err)
-	}
-	stored, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, inputPath, blocks.CodecPlain)
-	if err != nil {
-		t.Fatalf("store fixture: %v", err)
-	}
-
-	beforeEntries, err := os.ReadDir(repo.ContainersDir)
-	if err != nil {
-		t.Fatalf("read containers dir before remove: %v", err)
-	}
-	if len(beforeEntries) == 0 {
-		t.Fatal("expected container payload before by-ID remove")
-	}
+	stored := seedRemovePayloadFixture(t, repo, "by-id-payload.txt", "by-id-remove-payload")
+	assertPayloadContainersPresent(t, repo.ContainersDir, "before by-ID remove")
 
 	result, err := RemoveFileWithDBResult(repo.DB, stored.FileID)
 	if err != nil {
@@ -882,12 +837,43 @@ func TestRemoveByIDDoesNotDeletePayloadBeforeGC(t *testing.T) {
 		t.Fatalf("unexpected by-ID remove result: %+v", result)
 	}
 
-	afterEntries, err := os.ReadDir(repo.ContainersDir)
-	if err != nil {
-		t.Fatalf("read containers dir after by-ID remove: %v", err)
+	assertPayloadContainersPresent(t, repo.ContainersDir, "after by-ID remove")
+}
+
+func seedRemovePayloadFixture(t *testing.T, repo *TestRepository, name, payload string) StoreFileResult {
+	t.Helper()
+	inputPath := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(inputPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
 	}
-	if len(afterEntries) == 0 {
-		t.Fatal("by-ID remove must not delete payload container files before GC")
+	stored, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, inputPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store fixture: %v", err)
+	}
+	return stored
+}
+
+func assertPayloadContainersPresent(t *testing.T, containersDir, phase string) {
+	t.Helper()
+	entries, err := os.ReadDir(containersDir)
+	if err != nil {
+		t.Fatalf("read containers dir %s: %v", phase, err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("expected container payload %s", phase)
+	}
+}
+
+func assertStoredPathRemovePreservesPayloadState(t *testing.T, beforeState, afterState removestate.Snapshot) {
+	t.Helper()
+	if !afterState.LogicalFileExists || afterState.RefCount != 0 {
+		t.Fatalf("expected stable zero-reference state after stored-path remove, got %+v", afterState)
+	}
+	if len(afterState.PhysicalPaths) != 0 {
+		t.Fatalf("expected no physical mappings after stored-path remove, got %+v", afterState)
+	}
+	if !reflect.DeepEqual(beforeState.FileChunkIDs, afterState.FileChunkIDs) || !reflect.DeepEqual(beforeState.ChunkLiveRefs, afterState.ChunkLiveRefs) || !reflect.DeepEqual(beforeState.ChunkPinCounts, afterState.ChunkPinCounts) {
+		t.Fatalf("stored-path unlink must preserve logical chunk ownership: before=%+v after=%+v", beforeState, afterState)
 	}
 }
 

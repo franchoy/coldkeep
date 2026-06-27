@@ -3,7 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -104,12 +104,7 @@ func trustedCLIRestoreOutputPath(t *testing.T, path string) string {
 
 func readTrustedCLIRestoreOutputFile(t *testing.T, path string) ([]byte, error) {
 	t.Helper()
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	return io.ReadAll(file)
+	return fs.ReadFile(os.DirFS(filepath.Dir(path)), filepath.Base(path))
 }
 
 func requireCLINoRestoreTempFiles(t *testing.T, dir string) {

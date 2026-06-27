@@ -93,19 +93,8 @@ func addStoredPathMapping(t *testing.T, dbconn *sql.DB, logicalID int64, name st
 func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, refCount int64) (int64, []string) {
 	t.Helper()
 
-	var logicalID int64
 	hashes := buildRemoveStoredPathFixtureHashes(names, refCount)
-	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
-		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
-		names[0],
-		int64(8),
-		hashes.logicalHash,
-		"COMPLETED",
-		refCount,
-	).Scan(&logicalID); err != nil {
-		t.Fatalf("insert logical_file: %v", err)
-	}
+	logicalID := insertRemoveStoredPathLogicalFile(t, dbconn, names[0], hashes.logicalHash, refCount)
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
@@ -137,6 +126,23 @@ func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, r
 		}
 	}
 	return logicalID, paths
+}
+
+func insertRemoveStoredPathLogicalFile(t *testing.T, dbconn *sql.DB, name, fileHash string, refCount int64) int64 {
+	t.Helper()
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
+		name,
+		int64(8),
+		fileHash,
+		"COMPLETED",
+		refCount,
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	return logicalID
 }
 
 type removeStoredPathFixtureHashes struct {

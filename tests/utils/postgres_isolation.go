@@ -4,15 +4,19 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
 	_ "github.com/lib/pq"
 )
 
 const isolatedDBMaintenanceEnv = "COLDKEEP_TEST_DB_MAINTENANCE"
+
+var isolatedPostgresIdentifierPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
+var isolatedPostgresDBCounter uint64
 
 // RunWithIsolatedPostgresDB executes a package test suite against a unique
 // PostgreSQL database so concurrently running test binaries do not share rows.
@@ -28,7 +32,7 @@ func RunWithIsolatedPostgresDB(packageLabel string, m *testing.M) int {
 	defer func() { _ = adminDB.Close() }()
 
 	dbName := isolatedPostgresDBName(packageLabel)
-	if _, err := adminDB.Exec("CREATE DATABASE " + dbName); err != nil {
+	if err := createIsolatedPostgresDB(adminDB, dbName); err != nil {
 		fmt.Fprintf(os.Stderr, "create isolated postgres database %s: %v\n", dbName, err)
 		return 1
 	}
@@ -100,7 +104,7 @@ func isolatedPostgresDBName(packageLabel string) string {
 	if sanitized == "" {
 		sanitized = "pkg"
 	}
-	return fmt.Sprintf("coldkeep_%s_%d", sanitized, time.Now().UnixNano())
+	return fmt.Sprintf("coldkeep_%s_%d", sanitized, atomic.AddUint64(&isolatedPostgresDBCounter, 1))
 }
 
 func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
@@ -114,8 +118,33 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 	`, dbName); err != nil {
 		return fmt.Errorf("terminate active sessions for %s: %w", dbName, err)
 	}
-	if _, err := adminDB.Exec("DROP DATABASE IF EXISTS " + dbName); err != nil {
+	if err := dropIsolatedPostgresDB(adminDB, dbName); err != nil {
 		return fmt.Errorf("drop database %s: %w", dbName, err)
 	}
 	return nil
+}
+
+func createIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
+	_, err := adminDB.Exec(trustedCreateIsolatedPostgresDBStatement(dbName))
+	return err
+}
+
+func dropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
+	_, err := adminDB.Exec(trustedDropIsolatedPostgresDBStatement(dbName))
+	return err
+}
+
+func trustedCreateIsolatedPostgresDBStatement(dbName string) string {
+	return fmt.Sprintf("CREATE DATABASE %s", trustedIsolatedPostgresIdentifier(dbName))
+}
+
+func trustedDropIsolatedPostgresDBStatement(dbName string) string {
+	return fmt.Sprintf("DROP DATABASE IF EXISTS %s", trustedIsolatedPostgresIdentifier(dbName))
+}
+
+func trustedIsolatedPostgresIdentifier(dbName string) string {
+	if !isolatedPostgresIdentifierPattern.MatchString(dbName) {
+		panic("unexpected isolated postgres database name")
+	}
+	return `"` + dbName + `"`
 }

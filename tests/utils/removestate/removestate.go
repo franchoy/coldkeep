@@ -31,18 +31,30 @@ func Capture(t testing.TB, dbconn *sql.DB, logicalFileID int64, containersDir st
 		ChunkLiveRefs:  make(map[int64]int64),
 		ChunkPinCounts: make(map[int64]int64),
 	}
+	captureRemoveStateLogicalFile(t, dbconn, logicalFileID, &s)
+	captureRemoveStatePhysicalPaths(t, dbconn, logicalFileID, &s)
+	captureRemoveStateChunkGraph(t, dbconn, logicalFileID, &s)
+	captureRemoveStateReferenceCounts(t, dbconn, logicalFileID, &s)
+	captureRemoveStateContainerFiles(t, containersDir, &s)
+	return s
+}
 
+func captureRemoveStateLogicalFile(t testing.TB, dbconn *sql.DB, logicalFileID int64, snapshot *Snapshot) {
+	t.Helper()
 	var logicalCount int64
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = $1`, logicalFileID).Scan(&logicalCount); err != nil {
 		t.Fatalf("count logical_file rows: %v", err)
 	}
-	s.LogicalFileExists = logicalCount == 1
-	if s.LogicalFileExists {
-		if err := dbconn.QueryRow(`SELECT status, original_name, ref_count FROM logical_file WHERE id = $1`, logicalFileID).Scan(&s.Status, &s.OriginalName, &s.RefCount); err != nil {
+	snapshot.LogicalFileExists = logicalCount == 1
+	if snapshot.LogicalFileExists {
+		if err := dbconn.QueryRow(`SELECT status, original_name, ref_count FROM logical_file WHERE id = $1`, logicalFileID).Scan(&snapshot.Status, &snapshot.OriginalName, &snapshot.RefCount); err != nil {
 			t.Fatalf("read logical_file state: %v", err)
 		}
 	}
+}
 
+func captureRemoveStatePhysicalPaths(t testing.TB, dbconn *sql.DB, logicalFileID int64, snapshot *Snapshot) {
+	t.Helper()
 	physicalRows, err := dbconn.Query(`SELECT path FROM physical_file WHERE logical_file_id = $1 ORDER BY path ASC`, logicalFileID)
 	if err != nil {
 		t.Fatalf("query physical_file paths: %v", err)
@@ -54,12 +66,15 @@ func Capture(t testing.TB, dbconn *sql.DB, logicalFileID int64, containersDir st
 		if err := physicalRows.Scan(&path); err != nil {
 			t.Fatalf("scan physical_file path: %v", err)
 		}
-		s.PhysicalPaths = append(s.PhysicalPaths, path)
+		snapshot.PhysicalPaths = append(snapshot.PhysicalPaths, path)
 	}
 	if err := physicalRows.Err(); err != nil {
 		t.Fatalf("iterate physical_file paths: %v", err)
 	}
+}
 
+func captureRemoveStateChunkGraph(t testing.TB, dbconn *sql.DB, logicalFileID int64, snapshot *Snapshot) {
+	t.Helper()
 	fileChunkRows, err := dbconn.Query(`
 		SELECT fc.chunk_id, c.live_ref_count, c.pin_count
 		FROM file_chunk fc
@@ -77,15 +92,18 @@ func Capture(t testing.TB, dbconn *sql.DB, logicalFileID int64, containersDir st
 		if err := fileChunkRows.Scan(&chunkID, &liveRefCount, &pinCount); err != nil {
 			t.Fatalf("scan file_chunk state: %v", err)
 		}
-		s.FileChunkIDs = append(s.FileChunkIDs, chunkID)
-		s.ChunkLiveRefs[chunkID] = liveRefCount
-		s.ChunkPinCounts[chunkID] = pinCount
+		snapshot.FileChunkIDs = append(snapshot.FileChunkIDs, chunkID)
+		snapshot.ChunkLiveRefs[chunkID] = liveRefCount
+		snapshot.ChunkPinCounts[chunkID] = pinCount
 	}
 	if err := fileChunkRows.Err(); err != nil {
 		t.Fatalf("iterate file_chunk state: %v", err)
 	}
+}
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalFileID).Scan(&s.SnapshotRefs); err != nil {
+func captureRemoveStateReferenceCounts(t testing.TB, dbconn *sql.DB, logicalFileID int64, snapshot *Snapshot) {
+	t.Helper()
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalFileID).Scan(&snapshot.SnapshotRefs); err != nil {
 		t.Fatalf("count snapshot_file refs: %v", err)
 	}
 	if err := dbconn.QueryRow(`
@@ -93,7 +111,7 @@ func Capture(t testing.TB, dbconn *sql.DB, logicalFileID int64, containersDir st
 		FROM blocks b
 		JOIN file_chunk fc ON fc.chunk_id = b.chunk_id
 		WHERE fc.logical_file_id = $1
-	`, logicalFileID).Scan(&s.BlockRefs); err != nil {
+	`, logicalFileID).Scan(&snapshot.BlockRefs); err != nil {
 		t.Fatalf("count block refs: %v", err)
 	}
 	if err := dbconn.QueryRow(`
@@ -101,25 +119,27 @@ func Capture(t testing.TB, dbconn *sql.DB, logicalFileID int64, containersDir st
 		FROM chunk_block_refs cbr
 		JOIN file_chunk fc ON fc.chunk_id = cbr.chunk_id
 		WHERE fc.logical_file_id = $1
-	`, logicalFileID).Scan(&s.StorageBlockRefs); err != nil {
+	`, logicalFileID).Scan(&snapshot.StorageBlockRefs); err != nil {
 		t.Fatalf("count storage block refs: %v", err)
 	}
+}
 
-	if containersDir != "" {
-		entries, err := os.ReadDir(containersDir)
-		if err != nil && !os.IsNotExist(err) {
-			t.Fatalf("read containers dir: %v", err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			s.ContainerFiles = append(s.ContainerFiles, filepath.Base(entry.Name()))
-		}
-		sort.Strings(s.ContainerFiles)
+func captureRemoveStateContainerFiles(t testing.TB, containersDir string, snapshot *Snapshot) {
+	t.Helper()
+	if containersDir == "" {
+		return
 	}
-
-	return s
+	entries, err := os.ReadDir(containersDir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read containers dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		snapshot.ContainerFiles = append(snapshot.ContainerFiles, filepath.Base(entry.Name()))
+	}
+	sort.Strings(snapshot.ContainerFiles)
 }
 
 func AssertEqual(t testing.TB, before, after Snapshot) {

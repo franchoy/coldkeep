@@ -290,50 +290,36 @@ func assertLogicalChunkGraphPreserved(t *testing.T, dbconn *sql.DB, logicalID in
 func TestZeroReferenceLogicalFileWithoutSnapshotIsNotCurrentOrSnapshotRoot(t *testing.T) {
 	dbconn := openGraphTestDB(t)
 	svc := NewService(dbconn)
+	seedZeroReferenceReachabilityFixture(t, dbconn)
+	assertCurrentRootIDs(t, svc)
+	assertSnapshotRootIDs(t, svc)
+	assertNoGraphRootsOrReachableChunks(t, svc)
+}
 
+func seedZeroReferenceReachabilityFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
 	var logicalID, chunkID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
 		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		"zero-unretained.txt",
-		int64(24),
-		"zero-unretained-hash",
-		filestate.LogicalFileCompleted,
-		int64(0),
-		"v2-fastcdc",
+		"zero-unretained.txt", int64(24), "zero-unretained-hash", filestate.LogicalFileCompleted, int64(0), "v2-fastcdc",
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
 	}
 	if err := dbconn.QueryRow(
 		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
 		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		"zero-unretained-chunk",
-		int64(24),
-		filestate.ChunkCompleted,
-		int64(1),
-		int64(0),
-		"v2-fastcdc",
+		"zero-unretained-chunk", int64(24), filestate.ChunkCompleted, int64(1), int64(0), "v2-fastcdc",
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
 	}
 	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`, logicalID, chunkID); err != nil {
 		t.Fatalf("insert file_chunk: %v", err)
 	}
+}
 
-	currentRoots, err := svc.CurrentLogicalFileRoots(context.Background())
-	if err != nil {
-		t.Fatalf("CurrentLogicalFileRoots: %v", err)
-	}
-	if len(currentRoots) != 0 {
-		t.Fatalf("expected no current roots, got %#v", currentRoots)
-	}
-	snapshotRoots, err := svc.SnapshotRoots(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("SnapshotRoots: %v", err)
-	}
-	if len(snapshotRoots) != 0 {
-		t.Fatalf("expected no snapshot roots, got %#v", snapshotRoots)
-	}
+func assertNoGraphRootsOrReachableChunks(t *testing.T, svc *Service) {
+	t.Helper()
 	roots, err := svc.GCRoots(context.Background(), GCRootOptions{})
 	if err != nil {
 		t.Fatalf("GCRoots: %v", err)

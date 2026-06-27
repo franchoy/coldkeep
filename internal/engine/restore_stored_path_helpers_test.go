@@ -60,13 +60,28 @@ func seedSnapshotRetentionReference(t *testing.T, db *sql.DB, fileID int64, stor
 	t.Helper()
 
 	snapshotID, pathID := snapshotRestoreReferenceIDs(fileID)
+	insertRestoreSnapshotRow(t, db, snapshotID)
+	insertRestoreSnapshotPathRow(t, db, pathID, storedPath)
+	insertRestoreSnapshotFileRow(t, db, snapshotID, pathID, fileID, int64(len(storedPath)))
+}
+
+func insertRestoreSnapshotRow(t *testing.T, db *sql.DB, snapshotID string) {
+	t.Helper()
 	if _, err := db.Exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`, snapshotID, "2026-06-01T00:00:00Z", "full", "restore-stored-path"); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
+}
+
+func insertRestoreSnapshotPathRow(t *testing.T, db *sql.DB, pathID int64, storedPath string) {
+	t.Helper()
 	if _, err := db.Exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, pathID, storedPath); err != nil {
 		t.Fatalf("insert snapshot_path: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ($1, $2, $3, $4)`, snapshotID, pathID, fileID, int64(len(storedPath))); err != nil {
+}
+
+func insertRestoreSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID string, pathID, fileID, size int64) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ($1, $2, $3, $4)`, snapshotID, pathID, fileID, size); err != nil {
 		t.Fatalf("insert snapshot_file: %v", err)
 	}
 }
@@ -250,12 +265,8 @@ func openTempPostgresEngineDatabase(t *testing.T, prefix string) *sql.DB {
 	}
 
 	t.Cleanup(func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_ = execTrustedPostgresDatabaseDDL(adminDB, trustedDropDatabaseStatement(testDBName))
+		_ = terminateRestorePostgresSessions(adminDB, testDBName)
+		_ = dropRestorePostgresDatabase(adminDB, testDBName)
 		_ = adminDB.Close()
 	})
 
@@ -284,9 +295,22 @@ func trustedDropDatabaseStatement(identifier string) string {
 	return fmt.Sprintf("DROP DATABASE IF EXISTS %s", trustedQuotedPostgresIdentifier(identifier))
 }
 
-func execTrustedPostgresDatabaseDDL(db *sql.DB, statement string) error {
-	_, err := db.Exec(statement)
+func execTrustedPostgresDatabaseDDL(dbconn *sql.DB, statement string) error {
+	_, err := dbconn.Exec(statement)
 	return err
+}
+
+func terminateRestorePostgresSessions(adminDB *sql.DB, dbName string) error {
+	_, err := adminDB.Exec(`
+		SELECT pg_terminate_backend(pid)
+		FROM pg_stat_activity
+		WHERE datname = $1 AND pid <> pg_backend_pid()
+	`, dbName)
+	return err
+}
+
+func dropRestorePostgresDatabase(adminDB *sql.DB, dbName string) error {
+	return execTrustedPostgresDatabaseDDL(adminDB, trustedDropDatabaseStatement(dbName))
 }
 
 func trustedQuotedPostgresIdentifier(identifier string) string {

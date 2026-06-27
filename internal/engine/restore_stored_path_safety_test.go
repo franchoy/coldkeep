@@ -62,13 +62,6 @@ func trustedRestoreTestDir(t *testing.T, root, name string) string {
 	return dir
 }
 
-func ensureTrustedRestoreParentDir(t *testing.T, targetPath string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
-		t.Fatalf("mkdir trusted restore parent dir: %v", err)
-	}
-}
-
 func updateStoredPathMapping(t *testing.T, db *sql.DB, fileID int64, storedPath string) {
 	t.Helper()
 
@@ -212,14 +205,15 @@ func TestRestoreStoredPathOverwriteFalsePreservesExistingDestination(t *testing.
 		{
 			name: "prefix",
 			buildRequest: func(t *testing.T, fixture storedPathRestoreFixture, sentinel []byte) engine.RestoreStoredPathRequest {
+				storedPath := "/existing-prefix.bin"
+				updateStoredPathMapping(t, fixture.db, fixture.stored.FileID, storedPath)
 				prefixRoot := trustedRestoreTestDir(t, t.TempDir(), "prefix-root")
-				dst := expectedPrefixModeOutputPath(prefixRoot, fixture.stored.Path)
-				ensureTrustedRestoreParentDir(t, dst)
+				dst := expectedPrefixModeOutputPath(prefixRoot, storedPath)
 				if err := os.WriteFile(dst, sentinel, 0o600); err != nil {
 					t.Fatalf("write prefix sentinel: %v", err)
 				}
 				return engine.RestoreStoredPathRequest{
-					StoredPath:      fixture.stored.Path,
+					StoredPath:      storedPath,
 					DestinationMode: engine.RestoreDestinationPrefix,
 					DestinationRoot: prefixRoot,
 				}
@@ -231,7 +225,6 @@ func TestRestoreStoredPathOverwriteFalsePreservesExistingDestination(t *testing.
 			name: "override",
 			buildRequest: func(t *testing.T, fixture storedPathRestoreFixture, sentinel []byte) engine.RestoreStoredPathRequest {
 				overridePath := trustedRestoreTestPath(t, t.TempDir(), "override-existing.bin")
-				ensureTrustedRestoreParentDir(t, overridePath)
 				if err := os.WriteFile(overridePath, sentinel, 0o600); err != nil {
 					t.Fatalf("write override sentinel: %v", err)
 				}
@@ -249,9 +242,9 @@ func TestRestoreStoredPathOverwriteFalsePreservesExistingDestination(t *testing.
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newStoredPathRestoreFixture(t, "restore-stored-path-overwrite-false")
-			before := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
 			sentinel := []byte("existing-destination")
 			req := tc.buildRequest(t, fixture, sentinel)
+			before := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
 
 			result, err := fixture.engine.RestoreStoredPath(context.Background(), req)
 			if err == nil || !strings.Contains(err.Error(), tc.expectedErrSub) {
@@ -263,7 +256,7 @@ func TestRestoreStoredPathOverwriteFalsePreservesExistingDestination(t *testing.
 
 			switch req.DestinationMode {
 			case engine.RestoreDestinationPrefix:
-				requireFileBytes(t, expectedPrefixModeOutputPath(req.DestinationRoot, fixture.stored.Path), sentinel)
+				requireFileBytes(t, expectedPrefixModeOutputPath(req.DestinationRoot, req.StoredPath), sentinel)
 				requireNoRestoreTempFiles(t, req.DestinationRoot)
 			case engine.RestoreDestinationOverride:
 				requireFileBytes(t, req.DestinationPath, sentinel)

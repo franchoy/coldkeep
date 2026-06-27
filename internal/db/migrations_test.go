@@ -1897,15 +1897,29 @@ func applyCurrentPostgresSchemaFixture(t *testing.T, dbconn *sql.DB) {
 
 func applyLegacyPostgresV5SchemaFixture(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	execLegacyPostgresFixtureStatement(t, dbconn, legacyPostgresV5SchemaVersionTableSQL())
-	execLegacyPostgresFixtureStatement(t, dbconn, legacyPostgresV5SchemaVersionSeedSQL())
-	execLegacyPostgresFixtureStatement(t, dbconn, legacyPostgresV5LogicalFileTableSQL())
+	createLegacyPostgresV5SchemaVersionTable(t, dbconn)
+	seedLegacyPostgresV5SchemaVersion(t, dbconn)
+	createLegacyPostgresV5LogicalFileTable(t, dbconn)
 }
 
-func execLegacyPostgresFixtureStatement(t *testing.T, dbconn *sql.DB, statement string) {
+func createLegacyPostgresV5SchemaVersionTable(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	if _, err := dbconn.Exec(statement); err != nil {
-		t.Fatalf("apply legacy postgres fixture statement: %v", err)
+	if _, err := dbconn.Exec(legacyPostgresV5SchemaVersionTableSQL()); err != nil {
+		t.Fatalf("apply legacy postgres schema_version table fixture: %v", err)
+	}
+}
+
+func seedLegacyPostgresV5SchemaVersion(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if _, err := dbconn.Exec(legacyPostgresV5SchemaVersionSeedSQL()); err != nil {
+		t.Fatalf("apply legacy postgres schema_version seed fixture: %v", err)
+	}
+}
+
+func createLegacyPostgresV5LogicalFileTable(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if _, err := dbconn.Exec(legacyPostgresV5LogicalFileTableSQL()); err != nil {
+		t.Fatalf("apply legacy postgres logical_file fixture: %v", err)
 	}
 }
 
@@ -1966,6 +1980,13 @@ func insertLegacyPostgresLogicalFile(t *testing.T, dbconn *sql.DB, name string, 
 
 func insertPostgresSnapshotReference(t *testing.T, dbconn *sql.DB, snapshotID, label, path string, logicalID, size int64) {
 	t.Helper()
+	insertPostgresSnapshotRow(t, dbconn, snapshotID, label)
+	pathID := insertPostgresSnapshotPathRow(t, dbconn, path)
+	insertPostgresSnapshotFileRow(t, dbconn, snapshotID, pathID, logicalID, size)
+}
+
+func insertPostgresSnapshotRow(t *testing.T, dbconn *sql.DB, snapshotID, label string) {
+	t.Helper()
 	if _, err := dbconn.Exec(
 		`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ($1, NOW(), 'full', $2, NULL)`,
 		snapshotID,
@@ -1973,10 +1994,19 @@ func insertPostgresSnapshotReference(t *testing.T, dbconn *sql.DB, snapshotID, l
 	); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
+}
+
+func insertPostgresSnapshotPathRow(t *testing.T, dbconn *sql.DB, path string) int64 {
+	t.Helper()
 	var pathID int64
 	if err := dbconn.QueryRow(`INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path).Scan(&pathID); err != nil {
 		t.Fatalf("insert snapshot_path: %v", err)
 	}
+	return pathID
+}
+
+func insertPostgresSnapshotFileRow(t *testing.T, dbconn *sql.DB, snapshotID string, pathID, logicalID, size int64) {
+	t.Helper()
 	if _, err := dbconn.Exec(
 		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, NOW())`,
@@ -1992,10 +2022,7 @@ func insertPostgresSnapshotReference(t *testing.T, dbconn *sql.DB, snapshotID, l
 
 func assertPostgresPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int64, want postgresPhysicalFileState) {
 	t.Helper()
-	var refCount int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
-		t.Fatalf("read logical ref_count after schema application: %v", err)
-	}
+	refCount := readPostgresLogicalRefCount(t, dbconn, logicalID)
 	if refCount != want.refCount {
 		t.Fatalf("unexpected ref_count after schema application: got %d want %d", refCount, want.refCount)
 	}
@@ -2007,10 +2034,7 @@ func assertPostgresPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int
 
 func assertPostgresPhysicalRowCount(t *testing.T, dbconn *sql.DB, logicalID, want int64, context string) {
 	t.Helper()
-	var physicalCount int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
-		t.Fatalf("%s: %v", context, err)
-	}
+	physicalCount := countPostgresPhysicalRows(t, dbconn, logicalID)
 	if physicalCount != want {
 		t.Fatalf("%s: got %d want %d", context, physicalCount, want)
 	}
@@ -2018,10 +2042,7 @@ func assertPostgresPhysicalRowCount(t *testing.T, dbconn *sql.DB, logicalID, wan
 
 func assertPostgresMigratedRowCount(t *testing.T, dbconn *sql.DB, logicalID, want int64) {
 	t.Helper()
-	var migratedCount int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(&migratedCount); err != nil {
-		t.Fatalf("count migrated mappings after schema application: %v", err)
-	}
+	migratedCount := countPostgresMigratedRows(t, dbconn, logicalID)
 	if migratedCount != want {
 		t.Fatalf("unexpected migrated mapping count after schema application: got %d want %d", migratedCount, want)
 	}
@@ -2029,13 +2050,46 @@ func assertPostgresMigratedRowCount(t *testing.T, dbconn *sql.DB, logicalID, wan
 
 func assertPostgresSnapshotReferenceCount(t *testing.T, dbconn *sql.DB, logicalID, want int64) {
 	t.Helper()
+	snapshotRefs := countPostgresSnapshotRefs(t, dbconn, logicalID)
+	if snapshotRefs != want {
+		t.Fatalf("unexpected snapshot reference count after schema application: got %d want %d", snapshotRefs, want)
+	}
+}
+
+func readPostgresLogicalRefCount(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var refCount int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
+		t.Fatalf("read logical ref_count after schema application: %v", err)
+	}
+	return refCount
+}
+
+func countPostgresPhysicalRows(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var physicalCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical mappings after schema application: %v", err)
+	}
+	return physicalCount
+}
+
+func countPostgresMigratedRows(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var migratedCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(&migratedCount); err != nil {
+		t.Fatalf("count migrated mappings after schema application: %v", err)
+	}
+	return migratedCount
+}
+
+func countPostgresSnapshotRefs(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
 	var snapshotRefs int64
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(&snapshotRefs); err != nil {
 		t.Fatalf("count snapshot references after schema application: %v", err)
 	}
-	if snapshotRefs != want {
-		t.Fatalf("unexpected snapshot reference count after schema application: got %d want %d", snapshotRefs, want)
-	}
+	return snapshotRefs
 }
 
 func countPostgresRefCountMismatches(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
@@ -2148,12 +2202,8 @@ func openTempPostgresDatabaseWithName(t *testing.T, prefix string) (*sql.DB, str
 	}
 
 	t.Cleanup(func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-				FROM pg_stat_activity
-				WHERE datname = $1 AND pid <> pg_backend_pid()
-			`, testDBName)
-		_ = execTrustedPostgresDatabaseStatement(adminDB, trustedDropPostgresDatabaseStatement(testDBName))
+		_ = terminateTrustedPostgresSessions(adminDB, testDBName)
+		_ = dropTrustedPostgresDatabase(adminDB, testDBName)
 		_ = adminDB.Close()
 	})
 
@@ -2194,9 +2244,22 @@ func trustedDropPostgresDatabaseStatement(identifier string) string {
 	return fmt.Sprintf("DROP DATABASE IF EXISTS %s", trustedPostgresIdentifier(identifier))
 }
 
-func execTrustedPostgresDatabaseStatement(db *sql.DB, statement string) error {
-	_, err := db.Exec(statement)
+func execTrustedPostgresDatabaseStatement(dbconn *sql.DB, statement string) error {
+	_, err := dbconn.Exec(statement)
 	return err
+}
+
+func terminateTrustedPostgresSessions(adminDB *sql.DB, dbName string) error {
+	_, err := adminDB.Exec(`
+		SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity
+			WHERE datname = $1 AND pid <> pg_backend_pid()
+		`, dbName)
+	return err
+}
+
+func dropTrustedPostgresDatabase(adminDB *sql.DB, dbName string) error {
+	return execTrustedPostgresDatabaseStatement(adminDB, trustedDropPostgresDatabaseStatement(dbName))
 }
 
 func trustedPostgresIdentifier(identifier string) string {
