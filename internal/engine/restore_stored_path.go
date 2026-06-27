@@ -9,50 +9,77 @@ import (
 )
 
 func normalizeRestoreStoredPathRequest(req RestoreStoredPathRequest) (RestoreStoredPathRequest, error) {
+	normalized, err := normalizeRestoreStoredPath(req)
+	if err != nil {
+		return RestoreStoredPathRequest{}, err
+	}
+	if err := validateRestoreStoredPathMetadataOptions(normalized); err != nil {
+		return RestoreStoredPathRequest{}, err
+	}
+	if normalized.DestinationMode, err = normalizeRestoreStoredPathMode(normalized.DestinationMode); err != nil {
+		return RestoreStoredPathRequest{}, err
+	}
+	if err := validateRestoreStoredPathDestination(normalized); err != nil {
+		return RestoreStoredPathRequest{}, err
+	}
+	return normalized, nil
+}
+
+func normalizeRestoreStoredPath(req RestoreStoredPathRequest) (RestoreStoredPathRequest, error) {
 	req.StoredPath = strings.TrimSpace(req.StoredPath)
 	if req.StoredPath == "" {
 		return RestoreStoredPathRequest{}, fmt.Errorf("engine: restore stored path is required")
 	}
+	return req, nil
+}
+
+func validateRestoreStoredPathMetadataOptions(req RestoreStoredPathRequest) error {
 	if req.StrictMetadata && req.NoMetadata {
-		return RestoreStoredPathRequest{}, fmt.Errorf("engine: restore stored path strict metadata and no metadata are mutually exclusive")
+		return fmt.Errorf("engine: restore stored path strict metadata and no metadata are mutually exclusive")
 	}
+	return nil
+}
 
-	switch req.DestinationMode {
+func normalizeRestoreStoredPathMode(mode RestoreDestinationMode) (RestoreDestinationMode, error) {
+	switch mode {
 	case "":
-		req.DestinationMode = RestoreDestinationOriginal
+		return RestoreDestinationOriginal, nil
 	case RestoreDestinationOriginal, RestoreDestinationPrefix, RestoreDestinationOverride:
+		return mode, nil
 	default:
-		return RestoreStoredPathRequest{}, fmt.Errorf("engine: invalid restore stored-path destination mode %q", req.DestinationMode)
+		return "", fmt.Errorf("engine: invalid restore stored-path destination mode %q", mode)
 	}
+}
 
+func validateRestoreStoredPathDestination(req RestoreStoredPathRequest) error {
 	hasDestinationRoot := strings.TrimSpace(req.DestinationRoot) != ""
 	hasDestinationPath := strings.TrimSpace(req.DestinationPath) != ""
 
 	switch req.DestinationMode {
 	case RestoreDestinationOriginal:
 		if hasDestinationRoot {
-			return RestoreStoredPathRequest{}, fmt.Errorf("engine: restore stored path original mode does not accept a destination root")
+			return fmt.Errorf("engine: restore stored path original mode does not accept a destination root")
 		}
 		if hasDestinationPath {
-			return RestoreStoredPathRequest{}, fmt.Errorf("engine: restore stored path original mode does not accept a destination path")
+			return fmt.Errorf("engine: restore stored path original mode does not accept a destination path")
 		}
 	case RestoreDestinationPrefix:
 		if !hasDestinationRoot {
-			return RestoreStoredPathRequest{}, fmt.Errorf("engine: restore stored path prefix mode requires a destination root")
+			return fmt.Errorf("engine: restore stored path prefix mode requires a destination root")
 		}
 		if hasDestinationPath {
-			return RestoreStoredPathRequest{}, fmt.Errorf("engine: restore stored path prefix mode does not accept an exact destination path")
+			return fmt.Errorf("engine: restore stored path prefix mode does not accept an exact destination path")
 		}
 	case RestoreDestinationOverride:
 		if !hasDestinationPath {
-			return RestoreStoredPathRequest{}, fmt.Errorf("engine: restore stored path override mode requires an exact destination path")
+			return fmt.Errorf("engine: restore stored path override mode requires an exact destination path")
 		}
 		if hasDestinationRoot {
-			return RestoreStoredPathRequest{}, fmt.Errorf("engine: restore stored path override mode does not accept a destination root")
+			return fmt.Errorf("engine: restore stored path override mode does not accept a destination root")
 		}
 	}
 
-	return req, nil
+	return nil
 }
 
 func (e *DefaultEngine) validateRestoreStoredPathDependencies() error {

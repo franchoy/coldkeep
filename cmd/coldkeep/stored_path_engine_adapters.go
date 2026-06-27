@@ -131,32 +131,44 @@ func removeStoredPathsResultToBatchReport(result engine.RemoveStoredPathsResult,
 
 func removeStoredPathItemToBatchResult(item engine.RemoveStoredPathItemResult) batch.ItemResult {
 	status := engineBatchStatusToCLI(item.Status)
-	message := strings.TrimSpace(item.Error)
-	rawValue := storedPathBatchRawValue(item)
-
-	switch item.Status {
-	case engine.BatchItemOK:
-		message = fmt.Sprintf("removed stored_path remaining_ref_count=%d", item.RemainingRefCount)
-	case engine.BatchItemPlanned:
-		message = "would remove stored-path mapping"
-	case engine.BatchItemSkipped:
-		if message == "" {
-			message = "duplicate target"
-		}
-	case engine.BatchItemFailed:
-		if item.StoredPath == "" && item.RawTarget != "" && message == "stored path is required" {
-			message = fmt.Sprintf("invalid stored path %q", item.RawTarget)
-		}
-	}
-
 	return batch.ItemResult{
 		ID:                item.LogicalFileID,
-		RawValue:          rawValue,
+		RawValue:          storedPathBatchRawValue(item),
 		Status:            status,
-		Message:           message,
+		Message:           removeStoredPathBatchMessage(item),
 		InvariantCode:     item.InvariantCode,
 		RecommendedAction: item.RecommendedAction,
 	}
+}
+
+func removeStoredPathBatchMessage(item engine.RemoveStoredPathItemResult) string {
+	switch item.Status {
+	case engine.BatchItemOK:
+		return fmt.Sprintf("removed stored_path remaining_ref_count=%d", item.RemainingRefCount)
+	case engine.BatchItemPlanned:
+		return "would remove stored-path mapping"
+	case engine.BatchItemSkipped:
+		return defaultStoredPathBatchMessage(strings.TrimSpace(item.Error), "duplicate target")
+	case engine.BatchItemFailed:
+		return failedStoredPathBatchMessage(item)
+	default:
+		return strings.TrimSpace(item.Error)
+	}
+}
+
+func defaultStoredPathBatchMessage(message, fallback string) string {
+	if message == "" {
+		return fallback
+	}
+	return message
+}
+
+func failedStoredPathBatchMessage(item engine.RemoveStoredPathItemResult) string {
+	message := strings.TrimSpace(item.Error)
+	if item.StoredPath == "" && item.RawTarget != "" && message == "stored path is required" {
+		return fmt.Sprintf("invalid stored path %q", item.RawTarget)
+	}
+	return message
 }
 
 func storedPathBatchRawValue(item engine.RemoveStoredPathItemResult) string {
