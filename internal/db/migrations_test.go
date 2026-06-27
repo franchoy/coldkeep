@@ -1524,247 +1524,59 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 }
 
 func TestPostgresSchemaRerunPreservesZeroReferenceLogicalFile(t *testing.T) {
-	if os.Getenv("COLDKEEP_TEST_DB") == "" {
-		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
-	}
-
+	requireLivePostgresTestDB(t)
 	dbconn := openTempPostgresDatabase(t, "coldkeep_phase0c_postgres_zero")
+	applyCurrentPostgresSchemaFixture(t, dbconn)
 
-	schemaSQL, err := loadPostgresSchema()
-	if err != nil {
-		t.Fatalf("load postgres schema SQL: %v", err)
-	}
-	if _, err := dbconn.Exec(schemaSQL); err != nil {
-		t.Fatalf("apply postgres schema SQL: %v", err)
-	}
+	logicalID := insertPostgresMigrationLogicalFile(t, dbconn, "zero-current.bin", 7, "pg-zero-current-hash", 0)
+	insertPostgresSnapshotReference(t, dbconn, "snap-zero", "zero", "archive/zero.bin", logicalID, 7)
 
-	var logicalID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		"zero-current.bin",
-		int64(7),
-		"pg-zero-current-hash",
-		"COMPLETED",
-		int64(0),
-		"v2-fastcdc",
-	).Scan(&logicalID); err != nil {
-		t.Fatalf("insert zero-reference logical file: %v", err)
-	}
+	applyCurrentPostgresSchemaFixture(t, dbconn)
 
-	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ('snap-zero', NOW(), 'full', 'zero', NULL)`); err != nil {
-		t.Fatalf("insert snapshot: %v", err)
-	}
-	var pathID int64
-	if err := dbconn.QueryRow(`INSERT INTO snapshot_path(path) VALUES ('archive/zero.bin') RETURNING id`).Scan(&pathID); err != nil {
-		t.Fatalf("insert snapshot_path: %v", err)
-	}
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
-		 VALUES ($1, $2, $3, $4, $5, NOW())`,
-		"snap-zero",
-		pathID,
-		logicalID,
-		int64(7),
-		int64(0644),
-	); err != nil {
-		t.Fatalf("insert snapshot_file: %v", err)
-	}
-
-	if _, err := dbconn.Exec(schemaSQL); err != nil {
-		t.Fatalf("rerun postgres schema SQL: %v", err)
-	}
-
-	var refCount int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
-		t.Fatalf("read logical ref_count after rerun: %v", err)
-	}
-	if refCount != 0 {
-		t.Fatalf("expected ref_count to remain 0 after rerun, got %d", refCount)
-	}
-
-	var physicalCount int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
-		t.Fatalf("count physical mappings after rerun: %v", err)
-	}
-	if physicalCount != 0 {
-		t.Fatalf("expected zero physical mappings after rerun, got %d", physicalCount)
-	}
-
-	var migratedCount int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(&migratedCount); err != nil {
-		t.Fatalf("count migrated mappings after rerun: %v", err)
-	}
-	if migratedCount != 0 {
-		t.Fatalf("expected no migrated mapping after rerun, got %d", migratedCount)
-	}
-
-	var snapshotRefs int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(&snapshotRefs); err != nil {
-		t.Fatalf("count snapshot references after rerun: %v", err)
-	}
-	if snapshotRefs != 1 {
-		t.Fatalf("expected snapshot reference to survive rerun, got %d", snapshotRefs)
-	}
+	assertPostgresPhysicalFileState(t, dbconn, logicalID, postgresPhysicalFileState{
+		refCount:     0,
+		physicalRows: 0,
+		migratedRows: 0,
+	})
+	assertPostgresSnapshotReferenceCount(t, dbconn, logicalID, 1)
 }
 
 func TestPostgresSchemaRerunLeavesCurrentPositiveRefCountWithoutMappingDetectable(t *testing.T) {
-	if os.Getenv("COLDKEEP_TEST_DB") == "" {
-		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
-	}
-
+	requireLivePostgresTestDB(t)
 	dbconn := openTempPostgresDatabase(t, "coldkeep_phase10_postgres_mismatch")
+	applyCurrentPostgresSchemaFixture(t, dbconn)
 
-	schemaSQL, err := loadPostgresSchema()
-	if err != nil {
-		t.Fatalf("load postgres schema SQL: %v", err)
-	}
-	if _, err := dbconn.Exec(schemaSQL); err != nil {
-		t.Fatalf("apply postgres schema SQL: %v", err)
-	}
+	logicalID := insertPostgresMigrationLogicalFile(t, dbconn, "positive-mismatch.bin", 9, "pg-positive-mismatch-hash", 1)
 
-	var logicalID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		"positive-mismatch.bin",
-		int64(9),
-		"pg-positive-mismatch-hash",
-		"COMPLETED",
-		int64(1),
-		"v2-fastcdc",
-	).Scan(&logicalID); err != nil {
-		t.Fatalf("insert positive-ref mismatch logical file: %v", err)
-	}
+	applyCurrentPostgresSchemaFixture(t, dbconn)
 
-	if _, err := dbconn.Exec(schemaSQL); err != nil {
-		t.Fatalf("rerun postgres schema SQL: %v", err)
-	}
-
-	var refCount int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
-		t.Fatalf("read logical ref_count after rerun: %v", err)
-	}
-	if refCount != 1 {
-		t.Fatalf("expected ref_count to remain 1 after rerun, got %d", refCount)
-	}
-
-	var physicalCount int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
-		t.Fatalf("count physical mappings after rerun: %v", err)
-	}
-	if physicalCount != 0 {
-		t.Fatalf("expected zero physical mappings after rerun, got %d", physicalCount)
-	}
-
-	var migratedCount int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(&migratedCount); err != nil {
-		t.Fatalf("count migrated mappings after rerun: %v", err)
-	}
-	if migratedCount != 0 {
-		t.Fatalf("expected no migrated mapping after rerun, got %d", migratedCount)
-	}
-
-	var refCountMismatches int64
-	if err := dbconn.QueryRow(`
-		SELECT COUNT(*)
-		FROM logical_file lf
-		LEFT JOIN (
-			SELECT logical_file_id, COUNT(*) AS actual_count
-			FROM physical_file
-			GROUP BY logical_file_id
-		) pf ON pf.logical_file_id = lf.id
-		WHERE lf.id = $1 AND lf.ref_count <> COALESCE(pf.actual_count, 0)
-	`, logicalID).Scan(&refCountMismatches); err != nil {
-		t.Fatalf("count ref_count mismatches after rerun: %v", err)
-	}
-	if refCountMismatches != 1 {
-		t.Fatalf("expected positive-ref/no-mapping mismatch to remain detectable after rerun, got %d", refCountMismatches)
+	assertPostgresPhysicalFileState(t, dbconn, logicalID, postgresPhysicalFileState{
+		refCount:     1,
+		physicalRows: 0,
+		migratedRows: 0,
+	})
+	if got := countPostgresRefCountMismatches(t, dbconn, logicalID); got != 1 {
+		t.Fatalf("expected positive-ref/no-mapping mismatch to remain detectable after rerun, got %d", got)
 	}
 }
 
 func TestPostgresSchemaMigratesLegacyPreV6LogicalFileMapping(t *testing.T) {
-	if os.Getenv("COLDKEEP_TEST_DB") == "" {
-		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
-	}
-
+	requireLivePostgresTestDB(t)
 	dbconn := openTempPostgresDatabase(t, "coldkeep_phase0c_postgres_legacy")
+	applyLegacyPostgresV5SchemaFixture(t, dbconn)
 
-	legacySchema := `
-		CREATE TABLE schema_version (
-			version INTEGER PRIMARY KEY
-		);
-		INSERT INTO schema_version(version) VALUES (5);
-		CREATE TABLE logical_file (
-			id BIGSERIAL PRIMARY KEY,
-			original_name TEXT NOT NULL,
-			total_size BIGINT NOT NULL,
-			file_hash TEXT NOT NULL,
-			status TEXT NOT NULL,
-			retry_count INTEGER NOT NULL DEFAULT 0,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-	`
-	if _, err := dbconn.Exec(legacySchema); err != nil {
-		t.Fatalf("create legacy postgres v5 schema: %v", err)
-	}
+	logicalID := insertLegacyPostgresLogicalFile(t, dbconn, "legacy-file.bin", 11, "legacy-file-hash")
 
-	var logicalID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
-		"legacy-file.bin",
-		int64(11),
-		"legacy-file-hash",
-		"COMPLETED",
-	).Scan(&logicalID); err != nil {
-		t.Fatalf("insert legacy logical_file row: %v", err)
-	}
+	applyCurrentPostgresSchemaFixture(t, dbconn)
 
-	schemaSQL, err := loadPostgresSchema()
-	if err != nil {
-		t.Fatalf("load postgres schema SQL: %v", err)
-	}
-	if _, err := dbconn.Exec(schemaSQL); err != nil {
-		t.Fatalf("apply postgres schema SQL: %v", err)
-	}
+	assertPostgresPhysicalFileState(t, dbconn, logicalID, postgresPhysicalFileState{
+		refCount:     1,
+		physicalRows: 1,
+	})
+	assertPostgresSchemaVersion(t, dbconn, 16)
 
-	var refCount int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
-		t.Fatalf("read logical ref_count after migration: %v", err)
-	}
-	if refCount != 1 {
-		t.Fatalf("expected legacy logical file ref_count=1 after migration, got %d", refCount)
-	}
-
-	var physicalCount int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
-		t.Fatalf("count physical mappings after migration: %v", err)
-	}
-	if physicalCount != 1 {
-		t.Fatalf("expected exactly one synthetic mapping after migration, got %d", physicalCount)
-	}
-
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
-		t.Fatalf("read schema version after migration: %v", err)
-	}
-	if schemaVersion != 16 {
-		t.Fatalf("expected schema version 16 after migration, got %d", schemaVersion)
-	}
-
-	if _, err := dbconn.Exec(schemaSQL); err != nil {
-		t.Fatalf("rerun postgres schema SQL: %v", err)
-	}
-
-	var physicalCountAfterRerun int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCountAfterRerun); err != nil {
-		t.Fatalf("count physical mappings after rerun: %v", err)
-	}
-	if physicalCountAfterRerun != 1 {
-		t.Fatalf("expected one synthetic mapping after rerun, got %d", physicalCountAfterRerun)
-	}
+	applyCurrentPostgresSchemaFixture(t, dbconn)
+	assertPostgresPhysicalRowCount(t, dbconn, logicalID, 1, "count physical mappings after rerun")
 }
 
 func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
@@ -2226,6 +2038,185 @@ func getenvOrDefault(key, fallback string) string {
 	return value
 }
 
+func requireLivePostgresTestDB(t *testing.T) {
+	t.Helper()
+	if os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
+	}
+}
+
+type postgresPhysicalFileState struct {
+	refCount     int64
+	physicalRows int64
+	migratedRows int64
+}
+
+func applyCurrentPostgresSchemaFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if err := EnsurePostgresSchema(dbconn); err != nil {
+		t.Fatalf("ensure postgres schema: %v", err)
+	}
+}
+
+func applyLegacyPostgresV5SchemaFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (version INTEGER PRIMARY KEY)`,
+		`INSERT INTO schema_version(version) VALUES (5)`,
+		`CREATE TABLE logical_file (
+			id BIGSERIAL PRIMARY KEY,
+			original_name TEXT NOT NULL,
+			total_size BIGINT NOT NULL,
+			file_hash TEXT NOT NULL,
+			status TEXT NOT NULL,
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+	} {
+		if _, err := dbconn.Exec(stmt); err != nil {
+			t.Fatalf("apply legacy postgres v5 fixture statement: %v", err)
+		}
+	}
+}
+
+func insertPostgresMigrationLogicalFile(t *testing.T, dbconn *sql.DB, name string, size int64, hash string, refCount int64) int64 {
+	t.Helper()
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		name,
+		size,
+		hash,
+		"COMPLETED",
+		refCount,
+		"v2-fastcdc",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert postgres migration logical file: %v", err)
+	}
+	return logicalID
+}
+
+func insertLegacyPostgresLogicalFile(t *testing.T, dbconn *sql.DB, name string, size int64, hash string) int64 {
+	t.Helper()
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		name,
+		size,
+		hash,
+		"COMPLETED",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert legacy logical_file row: %v", err)
+	}
+	return logicalID
+}
+
+func insertPostgresSnapshotReference(t *testing.T, dbconn *sql.DB, snapshotID, label, path string, logicalID, size int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ($1, NOW(), 'full', $2, NULL)`,
+		snapshotID,
+		label,
+	); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	var pathID int64
+	if err := dbconn.QueryRow(`INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path).Scan(&pathID); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		snapshotID,
+		pathID,
+		logicalID,
+		size,
+		int64(0o644),
+	); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+}
+
+func assertPostgresPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int64, want postgresPhysicalFileState) {
+	t.Helper()
+	var refCount int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
+		t.Fatalf("read logical ref_count after schema application: %v", err)
+	}
+	if refCount != want.refCount {
+		t.Fatalf("unexpected ref_count after schema application: got %d want %d", refCount, want.refCount)
+	}
+	assertPostgresPhysicalRowCount(t, dbconn, logicalID, want.physicalRows, "count physical mappings after schema application")
+	if want.migratedRows >= 0 {
+		assertPostgresMigratedRowCount(t, dbconn, logicalID, want.migratedRows)
+	}
+}
+
+func assertPostgresPhysicalRowCount(t *testing.T, dbconn *sql.DB, logicalID, want int64, context string) {
+	t.Helper()
+	var physicalCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
+		t.Fatalf("%s: %v", context, err)
+	}
+	if physicalCount != want {
+		t.Fatalf("%s: got %d want %d", context, physicalCount, want)
+	}
+}
+
+func assertPostgresMigratedRowCount(t *testing.T, dbconn *sql.DB, logicalID, want int64) {
+	t.Helper()
+	var migratedCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(&migratedCount); err != nil {
+		t.Fatalf("count migrated mappings after schema application: %v", err)
+	}
+	if migratedCount != want {
+		t.Fatalf("unexpected migrated mapping count after schema application: got %d want %d", migratedCount, want)
+	}
+}
+
+func assertPostgresSnapshotReferenceCount(t *testing.T, dbconn *sql.DB, logicalID, want int64) {
+	t.Helper()
+	var snapshotRefs int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(&snapshotRefs); err != nil {
+		t.Fatalf("count snapshot references after schema application: %v", err)
+	}
+	if snapshotRefs != want {
+		t.Fatalf("unexpected snapshot reference count after schema application: got %d want %d", snapshotRefs, want)
+	}
+}
+
+func countPostgresRefCountMismatches(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var refCountMismatches int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		LEFT JOIN (
+			SELECT logical_file_id, COUNT(*) AS actual_count
+			FROM physical_file
+			GROUP BY logical_file_id
+		) pf ON pf.logical_file_id = lf.id
+		WHERE lf.id = $1 AND lf.ref_count <> COALESCE(pf.actual_count, 0)
+	`, logicalID).Scan(&refCountMismatches); err != nil {
+		t.Fatalf("count ref_count mismatches after schema application: %v", err)
+	}
+	return refCountMismatches
+}
+
+func assertPostgresSchemaVersion(t *testing.T, dbconn *sql.DB, want int) {
+	t.Helper()
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version after schema application: %v", err)
+	}
+	if schemaVersion != want {
+		t.Fatalf("unexpected schema version after schema application: got %d want %d", schemaVersion, want)
+	}
+}
+
 func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
 	t.Helper()
 
@@ -2255,7 +2246,8 @@ func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
 	}
 
 	testDBName := fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
+	quotedDBName := quotePostgresIdentifier(testDBName)
+	if _, err := adminDB.Exec("CREATE DATABASE " + quotedDBName); err != nil {
 		_ = adminDB.Close()
 		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
 	}
@@ -2263,10 +2255,10 @@ func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
 	t.Cleanup(func() {
 		_, _ = adminDB.Exec(`
 			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
+				FROM pg_stat_activity
+				WHERE datname = $1 AND pid <> pg_backend_pid()
+			`, testDBName)
+		_, _ = adminDB.Exec("DROP DATABASE IF EXISTS " + quotedDBName)
 		_ = adminDB.Close()
 	})
 
@@ -2290,6 +2282,10 @@ func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
 
 	t.Cleanup(func() { _ = dbconn.Close() })
 	return dbconn
+}
+
+func quotePostgresIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {
@@ -2456,144 +2452,29 @@ func TestRunMigrationsBackfillsPhysicalFileForLegacyLogicalFiles(t *testing.T) {
 }
 
 func TestRunMigrationsPreservesCurrentZeroReferenceLogicalFile(t *testing.T) {
-	dbconn, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	if err := RunMigrations(dbconn); err != nil {
-		t.Fatalf("run migrations first pass: %v", err)
-	}
-
+	dbconn := newSQLiteMigrationTestDB(t)
 	logicalID := insertMigrationLogicalFile(t, dbconn, "zero-current.bin", 7, "zero-current-hash", 0)
-
-	if err := RunMigrations(dbconn); err != nil {
-		t.Fatalf("run migrations second pass: %v", err)
-	}
-
-	after := readMigrationPhysicalFileState(t, dbconn, logicalID)
-	if after.refCount != 0 {
-		t.Fatalf("expected ref_count to remain 0 after rerun, got %d", after.refCount)
-	}
-	if after.mappingCount != 0 {
-		t.Fatalf("expected zero physical mappings after rerun, got %d", after.mappingCount)
-	}
-	if after.migratedCount != 0 {
-		t.Fatalf("expected no migrated mapping after rerun, got %d", after.migratedCount)
-	}
-
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
-		t.Fatalf("read schema version after rerun: %v", err)
-	}
-	if schemaVersion != 16 {
-		t.Fatalf("expected schema version 16 after rerun, got %d", schemaVersion)
-	}
+	rerunSQLiteMigrations(t, dbconn)
+	assertSQLiteMigrationPhysicalFileState(t, dbconn, logicalID, migrationPhysicalFileState{refCount: 0, mappingCount: 0, migratedCount: 0})
+	assertSQLiteMigrationSchemaVersion(t, dbconn, 16)
 }
 
 func TestRunMigrationsPreservesSnapshotRetainedZeroReferenceLogicalFile(t *testing.T) {
-	dbconn, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	if err := RunMigrations(dbconn); err != nil {
-		t.Fatalf("run migrations first pass: %v", err)
-	}
-
+	dbconn := newSQLiteMigrationTestDB(t)
 	logicalID := insertMigrationLogicalFile(t, dbconn, "snapshot-retained-zero.bin", 9, "snapshot-retained-zero-hash", 0)
-
-	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES (?, CURRENT_TIMESTAMP, 'full', ?, NULL)`, "snap-zero", "zero"); err != nil {
-		t.Fatalf("insert snapshot: %v", err)
-	}
-	res, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES (?)`, "archive/zero.bin")
-	if err != nil {
-		t.Fatalf("insert snapshot_path: %v", err)
-	}
-	pathID, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("read snapshot_path id: %v", err)
-	}
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
-		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		"snap-zero",
-		pathID,
-		logicalID,
-		int64(9),
-		int64(0644),
-	); err != nil {
-		t.Fatalf("insert snapshot_file: %v", err)
-	}
-
-	if err := RunMigrations(dbconn); err != nil {
-		t.Fatalf("run migrations second pass: %v", err)
-	}
-
-	after := readMigrationPhysicalFileState(t, dbconn, logicalID)
-	if after.refCount != 0 {
-		t.Fatalf("expected snapshot-retained logical ref_count to remain 0, got %d", after.refCount)
-	}
-	if after.mappingCount != 0 {
-		t.Fatalf("expected zero physical mappings after rerun, got %d", after.mappingCount)
-	}
-	if after.migratedCount != 0 {
-		t.Fatalf("expected no migrated mapping for snapshot-retained zero-reference logical file, got %d", after.migratedCount)
-	}
-
-	var snapshotRefs int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = ?`, logicalID).Scan(&snapshotRefs); err != nil {
-		t.Fatalf("count snapshot references after rerun: %v", err)
-	}
-	if snapshotRefs != 1 {
-		t.Fatalf("expected snapshot reference to survive rerun, got %d", snapshotRefs)
-	}
+	insertSQLiteSnapshotReference(t, dbconn, "snap-zero", "zero", "archive/zero.bin", logicalID, 9)
+	rerunSQLiteMigrations(t, dbconn)
+	assertSQLiteMigrationPhysicalFileState(t, dbconn, logicalID, migrationPhysicalFileState{refCount: 0, mappingCount: 0, migratedCount: 0})
+	assertSQLiteSnapshotReferenceCount(t, dbconn, logicalID, 1)
 }
 
 func TestRunMigrationsLeavesCurrentPositiveRefCountWithoutMappingDetectable(t *testing.T) {
-	dbconn, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	if err := RunMigrations(dbconn); err != nil {
-		t.Fatalf("run migrations first pass: %v", err)
-	}
-
+	dbconn := newSQLiteMigrationTestDB(t)
 	logicalID := insertMigrationLogicalFile(t, dbconn, "mismatch.bin", 5, "mismatch-hash", 1)
-
-	if err := RunMigrations(dbconn); err != nil {
-		t.Fatalf("run migrations second pass: %v", err)
-	}
-
-	after := readMigrationPhysicalFileState(t, dbconn, logicalID)
-	if after.refCount != 1 {
-		t.Fatalf("expected positive mismatch ref_count to remain 1, got %d", after.refCount)
-	}
-	if after.mappingCount != 0 {
-		t.Fatalf("expected zero physical mappings after rerun, got %d", after.mappingCount)
-	}
-	if after.migratedCount != 0 {
-		t.Fatalf("expected no migrated mapping for positive-refcount mismatch, got %d", after.migratedCount)
-	}
-
-	var mismatchCount int64
-	if err := dbconn.QueryRow(`
-		SELECT COUNT(*)
-		FROM logical_file lf
-		WHERE lf.ref_count != (
-			SELECT COUNT(*)
-			FROM physical_file pf
-			WHERE pf.logical_file_id = lf.id
-		)
-	`).Scan(&mismatchCount); err != nil {
-		t.Fatalf("count mismatches after rerun: %v", err)
-	}
-	if mismatchCount != 1 {
-		t.Fatalf("expected mismatch count to remain 1 after rerun, got %d", mismatchCount)
+	rerunSQLiteMigrations(t, dbconn)
+	assertSQLiteMigrationPhysicalFileState(t, dbconn, logicalID, migrationPhysicalFileState{refCount: 1, mappingCount: 0, migratedCount: 0})
+	if got := countSQLiteMigrationRefCountMismatches(t, dbconn); got != 1 {
+		t.Fatalf("expected mismatch count to remain 1 after rerun, got %d", got)
 	}
 }
 
@@ -2675,6 +2556,97 @@ func readMigrationPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int6
 		t.Fatalf("count migrated paths: %v", err)
 	}
 	return state
+}
+
+func newSQLiteMigrationTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+	rerunSQLiteMigrations(t, dbconn)
+	return dbconn
+}
+
+func rerunSQLiteMigrations(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run sqlite migrations: %v", err)
+	}
+}
+
+func insertSQLiteSnapshotReference(t *testing.T, dbconn *sql.DB, snapshotID, label, path string, logicalID, size int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES (?, CURRENT_TIMESTAMP, 'full', ?, NULL)`, snapshotID, label); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	res, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES (?)`, path)
+	if err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	pathID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("read snapshot_path id: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
+		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		snapshotID,
+		pathID,
+		logicalID,
+		size,
+		int64(0o644),
+	); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+}
+
+func assertSQLiteMigrationPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int64, want migrationPhysicalFileState) {
+	t.Helper()
+	got := readMigrationPhysicalFileState(t, dbconn, logicalID)
+	if got != want {
+		t.Fatalf("unexpected sqlite migration physical-file state: got=%+v want=%+v", got, want)
+	}
+}
+
+func assertSQLiteMigrationSchemaVersion(t *testing.T, dbconn *sql.DB, want int) {
+	t.Helper()
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version after rerun: %v", err)
+	}
+	if schemaVersion != want {
+		t.Fatalf("expected schema version %d after rerun, got %d", want, schemaVersion)
+	}
+}
+
+func assertSQLiteSnapshotReferenceCount(t *testing.T, dbconn *sql.DB, logicalID, want int64) {
+	t.Helper()
+	var snapshotRefs int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = ?`, logicalID).Scan(&snapshotRefs); err != nil {
+		t.Fatalf("count snapshot references after rerun: %v", err)
+	}
+	if snapshotRefs != want {
+		t.Fatalf("expected snapshot reference count %d after rerun, got %d", want, snapshotRefs)
+	}
+}
+
+func countSQLiteMigrationRefCountMismatches(t *testing.T, dbconn *sql.DB) int64 {
+	t.Helper()
+	var mismatchCount int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		WHERE lf.ref_count != (
+			SELECT COUNT(*)
+			FROM physical_file pf
+			WHERE pf.logical_file_id = lf.id
+		)
+	`).Scan(&mismatchCount); err != nil {
+		t.Fatalf("count mismatches after rerun: %v", err)
+	}
+	return mismatchCount
 }
 
 func requireMigrationPhysicalFileStateStable(t *testing.T, before, after migrationPhysicalFileState, wantMappingCount int) {
