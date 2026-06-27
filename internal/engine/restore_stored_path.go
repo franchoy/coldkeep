@@ -57,28 +57,43 @@ func validateRestoreStoredPathDestination(req RestoreStoredPathRequest) error {
 
 	switch req.DestinationMode {
 	case RestoreDestinationOriginal:
-		if hasDestinationRoot {
-			return fmt.Errorf("engine: restore stored path original mode does not accept a destination root")
-		}
-		if hasDestinationPath {
-			return fmt.Errorf("engine: restore stored path original mode does not accept a destination path")
-		}
+		return validateRestoreStoredPathOriginalDestination(hasDestinationRoot, hasDestinationPath)
 	case RestoreDestinationPrefix:
-		if !hasDestinationRoot {
-			return fmt.Errorf("engine: restore stored path prefix mode requires a destination root")
-		}
-		if hasDestinationPath {
-			return fmt.Errorf("engine: restore stored path prefix mode does not accept an exact destination path")
-		}
+		return validateRestoreStoredPathPrefixDestination(hasDestinationRoot, hasDestinationPath)
 	case RestoreDestinationOverride:
-		if !hasDestinationPath {
-			return fmt.Errorf("engine: restore stored path override mode requires an exact destination path")
-		}
-		if hasDestinationRoot {
-			return fmt.Errorf("engine: restore stored path override mode does not accept a destination root")
-		}
+		return validateRestoreStoredPathOverrideDestination(hasDestinationRoot, hasDestinationPath)
 	}
 
+	return nil
+}
+
+func validateRestoreStoredPathOriginalDestination(hasDestinationRoot, hasDestinationPath bool) error {
+	if hasDestinationRoot {
+		return fmt.Errorf("engine: restore stored path original mode does not accept a destination root")
+	}
+	if hasDestinationPath {
+		return fmt.Errorf("engine: restore stored path original mode does not accept a destination path")
+	}
+	return nil
+}
+
+func validateRestoreStoredPathPrefixDestination(hasDestinationRoot, hasDestinationPath bool) error {
+	if !hasDestinationRoot {
+		return fmt.Errorf("engine: restore stored path prefix mode requires a destination root")
+	}
+	if hasDestinationPath {
+		return fmt.Errorf("engine: restore stored path prefix mode does not accept an exact destination path")
+	}
+	return nil
+}
+
+func validateRestoreStoredPathOverrideDestination(hasDestinationRoot, hasDestinationPath bool) error {
+	if !hasDestinationPath {
+		return fmt.Errorf("engine: restore stored path override mode requires an exact destination path")
+	}
+	if hasDestinationRoot {
+		return fmt.Errorf("engine: restore stored path override mode does not accept a destination root")
+	}
 	return nil
 }
 

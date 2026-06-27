@@ -226,22 +226,29 @@ func TestRemoveStoredPathsRemovesLastMappingToZero(t *testing.T) {
 	eng := newRemoveTestEngine(t, dbconn, t.TempDir())
 	logicalID, paths := seedRemoveStoredPathFixture(t, dbconn, []string{"last-zero.txt"}, 1)
 
-	result, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{paths[0]},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths last mapping: %v", err)
-	}
+	assertLastStoredPathRemoved(t, removeStoredPathsWithRequest(t, eng, engine.RemoveStoredPathsRequest{StoredPaths: []string{paths[0]}}, "RemoveStoredPaths last mapping"))
+	assertLastStoredPathZeroState(t, queryRemoveStoredPathState(t, dbconn, logicalID))
+	reopened := reopenSQLiteRemoveStateDB(t, dbconn, dbPath)
+	assertLastStoredPathReopenState(t, reopened, logicalID)
+}
+
+func assertLastStoredPathRemoved(t *testing.T, result engine.RemoveStoredPathsResult) {
+	t.Helper()
 	item := result.Items[0]
 	if item.Status != engine.BatchItemOK || item.RemainingRefCount != 0 || !item.MappingRemoved {
 		t.Fatalf("unexpected last-mapping item: %+v", item)
 	}
+}
 
-	state := queryRemoveStoredPathState(t, dbconn, logicalID)
+func assertLastStoredPathZeroState(t *testing.T, state removeStoredPathState) {
+	t.Helper()
 	if !state.logicalExists || state.refCount != 0 || state.physicalCount != 0 {
 		t.Fatalf("unexpected last-mapping state before rerun: %+v", state)
 	}
+}
 
+func reopenSQLiteRemoveStateDB(t *testing.T, dbconn *sql.DB, dbPath string) *sql.DB {
+	t.Helper()
 	if err := dbconn.Close(); err != nil {
 		t.Fatalf("close sqlite db: %v", err)
 	}
@@ -249,12 +256,11 @@ func TestRemoveStoredPathsRemovesLastMappingToZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen sqlite db: %v", err)
 	}
-	defer func() { _ = reopened.Close() }()
+	t.Cleanup(func() { _ = reopened.Close() })
 	if err := dbpkg.RunMigrations(reopened); err != nil {
 		t.Fatalf("rerun migrations: %v", err)
 	}
-
-	assertLastStoredPathReopenState(t, reopened, logicalID)
+	return reopened
 }
 
 func TestRemoveStoredPathsPreservesLogicalAndChunkGraph(t *testing.T) {

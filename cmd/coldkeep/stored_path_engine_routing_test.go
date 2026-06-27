@@ -331,20 +331,32 @@ func assertStoredPathBatchParity(t *testing.T, output string) {
 
 func assertStoredPathBatchParityResults(t *testing.T, results []any) {
 	t.Helper()
-	first := results[0].(map[string]any)
-	if _, hasRawValue := first["raw_value"]; hasRawValue {
-		t.Fatalf("blank-target raw_value should stay omitted after trimming, got %v", first)
+	assertStoredPathBlankProjection(t, results[0].(map[string]any))
+	assertStoredPathPlannedProjection(t, results[1].(map[string]any))
+	assertStoredPathDuplicateProjection(t, results[2].(map[string]any))
+}
+
+func assertStoredPathBlankProjection(t *testing.T, result map[string]any) {
+	t.Helper()
+	if _, hasRawValue := result["raw_value"]; hasRawValue {
+		t.Fatalf("blank-target raw_value should stay omitted after trimming, got %v", result)
 	}
-	if first["error"] != "invalid stored path \"   \"" {
-		t.Fatalf("unexpected blank-target projection: %v", first)
+	if result["error"] != "invalid stored path \"   \"" {
+		t.Fatalf("unexpected blank-target projection: %v", result)
 	}
-	second := results[1].(map[string]any)
-	if second["status"] != string(batch.ResultPlanned) || second["raw_value"] != "/docs/a.txt" || second["message"] != "would remove stored-path mapping" {
-		t.Fatalf("unexpected planned projection: %v", second)
+}
+
+func assertStoredPathPlannedProjection(t *testing.T, result map[string]any) {
+	t.Helper()
+	if result["status"] != string(batch.ResultPlanned) || result["raw_value"] != "/docs/a.txt" || result["message"] != "would remove stored-path mapping" {
+		t.Fatalf("unexpected planned projection: %v", result)
 	}
-	third := results[2].(map[string]any)
-	if third["status"] != string(batch.ResultSkipped) || third["raw_value"] != "/docs/a.txt" || third["message"] != "duplicate target" {
-		t.Fatalf("unexpected duplicate projection: %v", third)
+}
+
+func assertStoredPathDuplicateProjection(t *testing.T, result map[string]any) {
+	t.Helper()
+	if result["status"] != string(batch.ResultSkipped) || result["raw_value"] != "/docs/a.txt" || result["message"] != "duplicate target" {
+		t.Fatalf("unexpected duplicate projection: %v", result)
 	}
 }
 

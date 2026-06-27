@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -224,13 +225,7 @@ func TestRemoveStoredPathsPostgres(t *testing.T) {
 
 	firstResult := removeStoredPathsWithRequest(t, eng, engine.RemoveStoredPathsRequest{StoredPaths: []string{paths[0]}}, "RemoveStoredPaths postgres first unlink")
 	assertStoredPathUnlinkSuccess(t, firstResult, 1)
-	afterFirst := queryRemoveStoredPathState(t, dbconn, logicalID)
-	if !afterFirst.logicalExists || afterFirst.refCount != 1 || afterFirst.physicalCount != 1 {
-		t.Fatalf("unexpected postgres first unlink state: before=%+v after=%+v", before, afterFirst)
-	}
-	if before.fileChunkCount != afterFirst.fileChunkCount || !reflect.DeepEqual(before.chunkLiveRefs, afterFirst.chunkLiveRefs) {
-		t.Fatalf("unexpected postgres graph drift: before=%+v after=%+v", before, afterFirst)
-	}
+	assertPostgresFirstUnlinkState(t, before, queryRemoveStoredPathState(t, dbconn, logicalID))
 
 	secondResult := removeStoredPathsWithRequest(t, eng, engine.RemoveStoredPathsRequest{StoredPaths: []string{paths[1]}}, "RemoveStoredPaths postgres second unlink")
 	assertStoredPathUnlinkSuccess(t, secondResult, 0)
@@ -238,9 +233,23 @@ func TestRemoveStoredPathsPostgres(t *testing.T) {
 	if err := dbpkg.EnsurePostgresSchema(dbconn); err != nil {
 		t.Fatalf("EnsurePostgresSchema rerun: %v", err)
 	}
-	afterSecond := queryRemoveStoredPathState(t, dbconn, logicalID)
-	if !afterSecond.logicalExists || afterSecond.refCount != 0 || afterSecond.physicalCount != 0 {
-		t.Fatalf("unexpected postgres last-mapping state: %+v", afterSecond)
+	assertPostgresLastUnlinkState(t, dbconn, logicalID, queryRemoveStoredPathState(t, dbconn, logicalID))
+}
+
+func assertPostgresFirstUnlinkState(t *testing.T, before, after removeStoredPathState) {
+	t.Helper()
+	if !after.logicalExists || after.refCount != 1 || after.physicalCount != 1 {
+		t.Fatalf("unexpected postgres first unlink state: before=%+v after=%+v", before, after)
+	}
+	if before.fileChunkCount != after.fileChunkCount || !reflect.DeepEqual(before.chunkLiveRefs, after.chunkLiveRefs) {
+		t.Fatalf("unexpected postgres graph drift: before=%+v after=%+v", before, after)
+	}
+}
+
+func assertPostgresLastUnlinkState(t *testing.T, dbconn *sql.DB, logicalID int64, state removeStoredPathState) {
+	t.Helper()
+	if !state.logicalExists || state.refCount != 0 || state.physicalCount != 0 {
+		t.Fatalf("unexpected postgres last-mapping state: %+v", state)
 	}
 	var migratedCount int64
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(&migratedCount); err != nil {
