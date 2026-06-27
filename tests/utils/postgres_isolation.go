@@ -86,11 +86,16 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 	if adminDB == nil {
 		return fmt.Errorf("admin database handle is nil")
 	}
-	if _, err := execPreparedIsolatedSQL(adminDB, `
+	stmt, err := adminDB.Prepare(`
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity
 		WHERE datname = $1 AND pid <> pg_backend_pid()
-	`, dbName); err != nil {
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	if _, err := stmt.Exec(dbName); err != nil {
 		return fmt.Errorf("terminate active sessions for %s: %w", dbName, err)
 	}
 	if err := dropIsolatedPostgresDB(adminDB, dbName); err != nil {
@@ -100,12 +105,22 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 }
 
 func createIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
-	_, err := execPreparedIsolatedDDL(adminDB, trustedCreateIsolatedPostgresDBStatement(dbName))
+	stmt, err := adminDB.Prepare(trustedCreateIsolatedPostgresDBStatement(dbName))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	_, err = stmt.Exec()
 	return err
 }
 
 func dropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
-	_, err := execPreparedIsolatedDDL(adminDB, trustedDropIsolatedPostgresDBStatement(dbName))
+	stmt, err := adminDB.Prepare(trustedDropIsolatedPostgresDBStatement(dbName))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	_, err = stmt.Exec()
 	return err
 }
 
@@ -150,22 +165,4 @@ func restoreIsolatedPostgresDBEnv(previousDBName string, hadPreviousDBName bool)
 		return
 	}
 	_ = os.Unsetenv("DB_NAME")
-}
-
-func execPreparedIsolatedDDL(adminDB *sql.DB, query string) (sql.Result, error) {
-	stmt, err := adminDB.Prepare(query)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = stmt.Close() }()
-	return stmt.Exec()
-}
-
-func execPreparedIsolatedSQL(adminDB *sql.DB, query string, args ...any) (sql.Result, error) {
-	stmt, err := adminDB.Prepare(query)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = stmt.Close() }()
-	return stmt.Exec(args...)
 }

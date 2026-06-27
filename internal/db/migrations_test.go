@@ -1904,21 +1904,21 @@ func applyLegacyPostgresV5SchemaFixture(t *testing.T, dbconn *sql.DB) {
 
 func createLegacyPostgresV5SchemaVersionTable(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	if _, err := execPreparedNoArgs(dbconn, legacyPostgresV5SchemaVersionTableSQL()); err != nil {
+	if _, err := execLegacyPostgresSchemaVersionTableFixture(dbconn); err != nil {
 		t.Fatalf("apply legacy postgres schema_version table fixture: %v", err)
 	}
 }
 
 func seedLegacyPostgresV5SchemaVersion(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	if _, err := execPreparedNoArgs(dbconn, legacyPostgresV5SchemaVersionSeedSQL()); err != nil {
+	if _, err := execLegacyPostgresSchemaVersionSeedFixture(dbconn); err != nil {
 		t.Fatalf("apply legacy postgres schema_version seed fixture: %v", err)
 	}
 }
 
 func createLegacyPostgresV5LogicalFileTable(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	if _, err := execPreparedNoArgs(dbconn, legacyPostgresV5LogicalFileTableSQL()); err != nil {
+	if _, err := execLegacyPostgresLogicalFileTableFixture(dbconn); err != nil {
 		t.Fatalf("apply legacy postgres logical_file fixture: %v", err)
 	}
 }
@@ -1987,12 +1987,7 @@ func insertPostgresSnapshotReference(t *testing.T, dbconn *sql.DB, snapshotID, l
 
 func insertPostgresSnapshotRow(t *testing.T, dbconn *sql.DB, snapshotID, label string) {
 	t.Helper()
-	if _, err := execPrepared(
-		dbconn,
-		`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ($1, NOW(), 'full', $2, NULL)`,
-		snapshotID,
-		label,
-	); err != nil {
+	if _, err := insertPostgresSnapshotFixtureRow(dbconn, snapshotID, label); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
 }
@@ -2000,7 +1995,7 @@ func insertPostgresSnapshotRow(t *testing.T, dbconn *sql.DB, snapshotID, label s
 func insertPostgresSnapshotPathRow(t *testing.T, dbconn *sql.DB, path string) int64 {
 	t.Helper()
 	var pathID int64
-	if err := queryPreparedRow(dbconn, &pathID, `INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path); err != nil {
+	if err := readInsertedPostgresSnapshotPathID(dbconn, path, &pathID); err != nil {
 		t.Fatalf("insert snapshot_path: %v", err)
 	}
 	return pathID
@@ -2008,16 +2003,7 @@ func insertPostgresSnapshotPathRow(t *testing.T, dbconn *sql.DB, path string) in
 
 func insertPostgresSnapshotFileRow(t *testing.T, dbconn *sql.DB, snapshotID string, pathID, logicalID, size int64) {
 	t.Helper()
-	if _, err := execPrepared(
-		dbconn,
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
-		 VALUES ($1, $2, $3, $4, $5, NOW())`,
-		snapshotID,
-		pathID,
-		logicalID,
-		size,
-		int64(0o644),
-	); err != nil {
+	if _, err := insertPostgresSnapshotFileFixtureRow(dbconn, snapshotID, pathID, logicalID, size); err != nil {
 		t.Fatalf("insert snapshot_file: %v", err)
 	}
 }
@@ -2061,7 +2047,7 @@ func assertPostgresSnapshotReferenceCount(t *testing.T, dbconn *sql.DB, logicalI
 func readPostgresLogicalRefCount(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
 	t.Helper()
 	var refCount int64
-	if err := queryPreparedRow(dbconn, &refCount, `SELECT ref_count FROM logical_file WHERE id = $1`, logicalID); err != nil {
+	if err := readPostgresLogicalRefCountValue(dbconn, logicalID, &refCount); err != nil {
 		t.Fatalf("read logical ref_count after schema application: %v", err)
 	}
 	return refCount
@@ -2070,7 +2056,7 @@ func readPostgresLogicalRefCount(t *testing.T, dbconn *sql.DB, logicalID int64) 
 func countPostgresPhysicalRows(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
 	t.Helper()
 	var physicalCount int64
-	if err := queryPreparedRow(dbconn, &physicalCount, `SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID); err != nil {
+	if err := readPostgresPhysicalRowCount(dbconn, logicalID, &physicalCount); err != nil {
 		t.Fatalf("count physical mappings after schema application: %v", err)
 	}
 	return physicalCount
@@ -2079,7 +2065,7 @@ func countPostgresPhysicalRows(t *testing.T, dbconn *sql.DB, logicalID int64) in
 func countPostgresMigratedRows(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
 	t.Helper()
 	var migratedCount int64
-	if err := queryPreparedRow(dbconn, &migratedCount, `SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID); err != nil {
+	if err := readPostgresMigratedRowCount(dbconn, logicalID, &migratedCount); err != nil {
 		t.Fatalf("count migrated mappings after schema application: %v", err)
 	}
 	return migratedCount
@@ -2088,7 +2074,7 @@ func countPostgresMigratedRows(t *testing.T, dbconn *sql.DB, logicalID int64) in
 func countPostgresSnapshotRefs(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
 	t.Helper()
 	var snapshotRefs int64
-	if err := queryPreparedRow(dbconn, &snapshotRefs, `SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID); err != nil {
+	if err := readPostgresSnapshotReferenceCount(dbconn, logicalID, &snapshotRefs); err != nil {
 		t.Fatalf("count snapshot references after schema application: %v", err)
 	}
 	return snapshotRefs
@@ -2247,16 +2233,26 @@ func trustedDropPostgresDatabaseStatement(identifier string) string {
 }
 
 func execTrustedPostgresDatabaseStatement(dbconn *sql.DB, statement string) error {
-	_, err := execPreparedNoArgs(dbconn, statement)
+	stmt, err := dbconn.Prepare(statement)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	_, err = stmt.Exec()
 	return err
 }
 
 func terminateTrustedPostgresSessions(adminDB *sql.DB, dbName string) error {
-	_, err := execPrepared(adminDB, `
+	stmt, err := adminDB.Prepare(`
 		SELECT pg_terminate_backend(pid)
 			FROM pg_stat_activity
 			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, dbName)
+		`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	_, err = stmt.Exec(dbName)
 	return err
 }
 
@@ -2271,36 +2267,56 @@ func trustedPostgresIdentifier(identifier string) string {
 	return quotePostgresIdentifier(identifier)
 }
 
-func execPreparedNoArgs(dbconn *sql.DB, query string) (sql.Result, error) {
-	stmt, err := dbconn.Prepare(query)
-	if err != nil {
-		return nil, err
-	}
-	defer stmt.Close()
-	return stmt.Exec()
+func execLegacyPostgresSchemaVersionTableFixture(dbconn *sql.DB) (sql.Result, error) {
+	return dbconn.Exec(legacyPostgresV5SchemaVersionTableSQL())
 }
 
-func execPrepared(dbconn *sql.DB, query string, args ...any) (sql.Result, error) {
-	stmt, err := dbconn.Prepare(query)
-	if err != nil {
-		return nil, err
-	}
-	defer stmt.Close()
-	return stmt.Exec(args...)
+func execLegacyPostgresSchemaVersionSeedFixture(dbconn *sql.DB) (sql.Result, error) {
+	return dbconn.Exec(legacyPostgresV5SchemaVersionSeedSQL())
 }
 
-func queryPreparedRow(dbconn *sql.DB, dest any, query string, args ...any) error {
-	stmt, err := dbconn.Prepare(query)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	switch d := dest.(type) {
-	case *int64:
-		return stmt.QueryRow(args...).Scan(d)
-	default:
-		return fmt.Errorf("unsupported scan destination %T", dest)
-	}
+func execLegacyPostgresLogicalFileTableFixture(dbconn *sql.DB) (sql.Result, error) {
+	return dbconn.Exec(legacyPostgresV5LogicalFileTableSQL())
+}
+
+func insertPostgresSnapshotFixtureRow(dbconn *sql.DB, snapshotID, label string) (sql.Result, error) {
+	return dbconn.Exec(
+		`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ($1, NOW(), 'full', $2, NULL)`,
+		snapshotID,
+		label,
+	)
+}
+
+func readInsertedPostgresSnapshotPathID(dbconn *sql.DB, path string, dest *int64) error {
+	return dbconn.QueryRow(`INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path).Scan(dest)
+}
+
+func insertPostgresSnapshotFileFixtureRow(dbconn *sql.DB, snapshotID string, pathID, logicalID, size int64) (sql.Result, error) {
+	return dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		snapshotID,
+		pathID,
+		logicalID,
+		size,
+		int64(0o644),
+	)
+}
+
+func readPostgresLogicalRefCountValue(dbconn *sql.DB, logicalID int64, dest *int64) error {
+	return dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(dest)
+}
+
+func readPostgresPhysicalRowCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
+	return dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(dest)
+}
+
+func readPostgresMigratedRowCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
+	return dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(dest)
+}
+
+func readPostgresSnapshotReferenceCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
+	return dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(dest)
 }
 
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {

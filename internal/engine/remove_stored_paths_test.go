@@ -96,18 +96,7 @@ func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, r
 	hashes := buildRemoveStoredPathFixtureHashes(names, refCount)
 	logicalID := insertRemoveStoredPathLogicalFile(t, dbconn, names[0], hashes.logicalHash, refCount)
 
-	var chunkID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		hashes.chunkHash,
-		int64(8),
-		"COMPLETED",
-		1,
-		0,
-	).Scan(&chunkID); err != nil {
-		t.Fatalf("insert chunk: %v", err)
-	}
+	chunkID := insertRemoveStoredPathChunk(t, dbconn, hashes.chunkHash)
 	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`, logicalID, chunkID); err != nil {
 		t.Fatalf("insert file_chunk: %v", err)
 	}
@@ -126,6 +115,24 @@ func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, r
 		}
 	}
 	return logicalID, paths
+}
+
+func insertRemoveStoredPathChunk(t *testing.T, dbconn *sql.DB, chunkHash string) int64 {
+	t.Helper()
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		chunkHash,
+		int64(8),
+		"COMPLETED",
+		1,
+		0,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	return chunkID
 }
 
 func insertRemoveStoredPathLogicalFile(t *testing.T, dbconn *sql.DB, name, fileHash string, refCount int64) int64 {
