@@ -4,13 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+type gcTestRepository struct {
+	DB            *sql.DB
+	Storage       storage.StorageContext
+	ContainersDir string
+}
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -23,6 +34,24 @@ func openTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("run migrations: %v", err)
 	}
 	return dbconn
+}
+
+func newGCTestRepository(t *testing.T) *gcTestRepository {
+	t.Helper()
+
+	dbconn := openTestDB(t)
+	containersDir := t.TempDir()
+	repo := &gcTestRepository{
+		DB:            dbconn,
+		ContainersDir: containersDir,
+		Storage: storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: containersDir,
+		},
+	}
+	t.Cleanup(func() { _ = repo.Storage.Close() })
+	return repo
 }
 
 func insertChunk(t *testing.T, dbconn *sql.DB, hash string, size, liveRef, pinCount int) int64 {
@@ -204,6 +233,92 @@ func TestBuildPlanChunkReachableFromPhysicalFile(t *testing.T) {
 	}
 	if len(plan.AffectedContainers) != 0 {
 		t.Errorf("AffectedContainers = %d, want 0", len(plan.AffectedContainers))
+	}
+}
+
+func TestBuildPlanStoredPathOneOfManyUnlinkDoesNotMakePayloadReclaimable(t *testing.T) {
+	repo := newGCTestRepository(t)
+	stored := seedStoredPathGCFixture(t, repo, "gc-one-of-many.txt", "gc-one-of-many-payload")
+	addDuplicateStoredPathMapping(t, repo, stored.FileID, "gc-one-of-many-duplicate.txt")
+	removeStoredPathGCMapping(t, repo, stored.Path, "remove one mapping")
+	assertGCPlanNoReclaimablePayload(t, repo, "after one-of-many unlink")
+}
+
+func TestBuildPlanLastStoredPathUnlinkDoesNotTransferPayloadOwnershipAwayFromGC(t *testing.T) {
+	repo := newGCTestRepository(t)
+	stored := seedStoredPathGCFixture(t, repo, "gc-last-mapping.txt", "gc-last-mapping-payload")
+	removeStoredPathGCMapping(t, repo, stored.Path, "remove final mapping")
+	assertPayloadContainerStillPresent(t, repo)
+	assertGCPlanKeepsPayloadOwnership(t, repo, "after final unlink")
+}
+
+func seedStoredPathGCFixture(t *testing.T, repo *gcTestRepository, name, payload string) storage.StoreFileResult {
+	t.Helper()
+	inputPath := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(inputPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	stored, err := storage.StoreFileWithStorageContextAndCodecResult(repo.Storage, inputPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store fixture: %v", err)
+	}
+	return stored
+}
+
+func addDuplicateStoredPathMapping(t *testing.T, repo *gcTestRepository, fileID int64, name string) {
+	t.Helper()
+	secondPath := filepath.Join(t.TempDir(), name)
+	if _, err := repo.DB.Exec(`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`, secondPath, fileID); err != nil {
+		t.Fatalf("insert second physical mapping: %v", err)
+	}
+	if _, err := repo.DB.Exec(`UPDATE logical_file SET ref_count = 2 WHERE id = $1`, fileID); err != nil {
+		t.Fatalf("update ref_count to two mappings: %v", err)
+	}
+}
+
+func removeStoredPathGCMapping(t *testing.T, repo *gcTestRepository, path, action string) {
+	t.Helper()
+	if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(repo.Storage, path); err != nil {
+		t.Fatalf("%s: %v", action, err)
+	}
+}
+
+func assertGCPlanNoReclaimablePayload(t *testing.T, repo *gcTestRepository, phase string) {
+	t.Helper()
+	plan, err := BuildPlan(context.Background(), repo.DB, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan %s: %v", phase, err)
+	}
+	if plan.UnreachableChunks != 0 {
+		t.Fatalf("expected zero unreachable chunks %s, got %d", phase, plan.UnreachableChunks)
+	}
+	if plan.ReclaimableBytes != 0 || plan.PhysicallyReclaimableBytes != 0 {
+		t.Fatalf("expected no reclaimable bytes %s, got logical=%d physical=%d", phase, plan.ReclaimableBytes, plan.PhysicallyReclaimableBytes)
+	}
+}
+
+func assertPayloadContainerStillPresent(t *testing.T, repo *gcTestRepository) {
+	t.Helper()
+	entries, err := os.ReadDir(repo.ContainersDir)
+	if err != nil {
+		t.Fatalf("read containers dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected payload container file to remain immediately after unlink")
+	}
+}
+
+func assertGCPlanKeepsPayloadOwnership(t *testing.T, repo *gcTestRepository, phase string) {
+	t.Helper()
+	plan, err := BuildPlan(context.Background(), repo.DB, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan %s: %v", phase, err)
+	}
+	if plan.UnreachableChunks == 0 {
+		t.Fatalf("expected unreachable chunks %s", phase)
+	}
+	if plan.ReclaimableBytes != 0 || plan.PhysicallyReclaimableBytes != 0 {
+		t.Fatalf("expected GC to retain ownership %s, got logical=%d physical=%d", phase, plan.ReclaimableBytes, plan.PhysicallyReclaimableBytes)
 	}
 }
 

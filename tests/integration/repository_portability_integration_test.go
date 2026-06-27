@@ -220,11 +220,11 @@ func requireSuccessfulPortabilityRestore(t *testing.T, result engine.RestoreResu
 	if got := result.Summary.Failed; got != 0 {
 		t.Fatalf("expected restore summary Failed=0, got %d", got)
 	}
-	if result.Items[0].OutputPath == "" {
+	if result.Items[0].DestinationPath == "" {
 		t.Fatal("expected non-empty restore output path")
 	}
 
-	return result.Items[0].OutputPath
+	return result.Items[0].DestinationPath
 }
 
 func newPortabilitySourceState(t *testing.T, fixture portabilityFixture) *portabilitySourceState {
@@ -359,10 +359,9 @@ func runPortabilityDestinationFlow(t *testing.T, fixture portabilityFixture, fil
 	}
 
 	restoreResult, err := destinationEngine.Restore(context.Background(), engine.RestoreRequest{
-		Mode:      engine.RestoreModeFileIDs,
-		FileIDs:   []int64{fileID},
-		OutputDir: fixture.restoreDir,
-		Overwrite: true,
+		FileIDs:         []int64{fileID},
+		DestinationRoot: fixture.restoreDir,
+		Overwrite:       true,
 	})
 	if err != nil {
 		t.Fatalf("destination Restore: %v", err)

@@ -852,6 +852,9 @@ func validateRestoreWritePath(path string) error {
 	if err != nil {
 		return fmt.Errorf("resolve restore write path: %w", err)
 	}
+	if err := pathsafe.ValidatePathHasNoSymlinkComponents(absPath); err != nil {
+		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
+	}
 	if err := pathsafe.ValidateWritePathUnderTrustedRoot(filepath.Dir(absPath), absPath); err != nil {
 		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
 	}

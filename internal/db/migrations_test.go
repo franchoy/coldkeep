@@ -6,10 +6,12 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"os"
+	"reflect"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -21,6 +23,8 @@ type dummyDriver struct{}
 func (d dummyDriver) Open(_ string) (driver.Conn, error) { return nil, nil }
 
 var registerOnce sync.Once
+var postgresTestDatabaseSequence uint64
+var trustedPostgresTestIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 func registerDummyDriver() {
 	registerOnce.Do(func() { sql.Register("dummy", dummyDriver{}) })
@@ -295,6 +299,9 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 	}
 
 	checks := []string{
+		"coldkeep.migration_schema_version_before",
+		"current_setting(",
+		"schema_version_before < 6",
 		"UPDATE schema_version SET version = 9 WHERE version < 9",
 		"UPDATE schema_version SET version = 10 WHERE version < 10",
 		"UPDATE schema_version SET version = 11 WHERE version < 11",
@@ -1272,55 +1279,9 @@ func TestRunMigrationsBackfillsChunkerVersionForLegacyLogicalFileAndChunkRows(t 
 }
 
 func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
-	if os.Getenv("COLDKEEP_TEST_DB") == "" {
-		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
-	}
-
-	host := getenvOrDefault("DB_HOST", "127.0.0.1")
-	port := getenvOrDefault("DB_PORT", "5432")
-	user := getenvOrDefault("DB_USER", "coldkeep")
-	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
-	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
-	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
-
-	adminConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		maintenanceDB,
-		sslMode,
-	)
-	adminDB, err := sql.Open("postgres", adminConnStr)
-	if err != nil {
-		t.Fatalf("open postgres admin connection: %v", err)
-	}
-	defer func() { _ = adminDB.Close() }()
-
-	if err := adminDB.Ping(); err != nil {
-		t.Fatalf("ping postgres admin connection: %v", err)
-	}
-
-	testDBName := fmt.Sprintf("coldkeep_phase1_v8_%d", time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
-		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
-	}
-	defer func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
-	}()
-
-	t.Setenv("DB_HOST", host)
-	t.Setenv("DB_PORT", port)
-	t.Setenv("DB_USER", user)
-	t.Setenv("DB_PASSWORD", password)
-	t.Setenv("DB_SSLMODE", sslMode)
-	t.Setenv("DB_NAME", testDBName)
+	requireLivePostgresTestDB(t)
+	_, testDBName := openTempPostgresDatabaseWithName(t, "coldkeep_phase1_v8")
+	applyPostgresTestEnv(t, testDBName)
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
 
 	dbconn, err := ConnectDB()
@@ -1520,68 +1481,68 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	}
 }
 
+func TestPostgresSchemaRerunPreservesZeroReferenceLogicalFile(t *testing.T) {
+	requireLivePostgresTestDB(t)
+	dbconn := openTempPostgresDatabase(t, "coldkeep_phase0c_postgres_zero")
+	applyCurrentPostgresSchemaFixture(t, dbconn)
+
+	logicalID := insertPostgresMigrationLogicalFile(t, dbconn, "zero-current.bin", 7, "pg-zero-current-hash", 0)
+	insertPostgresSnapshotReference(t, dbconn, "snap-zero", "zero", "archive/zero.bin", logicalID, 7)
+
+	applyCurrentPostgresSchemaFixture(t, dbconn)
+
+	assertPostgresPhysicalFileState(t, dbconn, logicalID, postgresPhysicalFileState{
+		refCount:     0,
+		physicalRows: 0,
+		migratedRows: 0,
+	})
+	assertPostgresSnapshotReferenceCount(t, dbconn, logicalID, 1)
+}
+
+func TestPostgresSchemaRerunLeavesCurrentPositiveRefCountWithoutMappingDetectable(t *testing.T) {
+	requireLivePostgresTestDB(t)
+	dbconn := openTempPostgresDatabase(t, "coldkeep_phase10_postgres_mismatch")
+	applyCurrentPostgresSchemaFixture(t, dbconn)
+
+	logicalID := insertPostgresMigrationLogicalFile(t, dbconn, "positive-mismatch.bin", 9, "pg-positive-mismatch-hash", 1)
+
+	applyCurrentPostgresSchemaFixture(t, dbconn)
+
+	assertPostgresPhysicalFileState(t, dbconn, logicalID, postgresPhysicalFileState{
+		refCount:     1,
+		physicalRows: 0,
+		migratedRows: 0,
+	})
+	if got := countPostgresRefCountMismatches(t, dbconn, logicalID); got != 1 {
+		t.Fatalf("expected positive-ref/no-mapping mismatch to remain detectable after rerun, got %d", got)
+	}
+}
+
+func TestPostgresSchemaMigratesLegacyPreV6LogicalFileMapping(t *testing.T) {
+	requireLivePostgresTestDB(t)
+	dbconn := openTempPostgresDatabase(t, "coldkeep_phase0c_postgres_legacy")
+	applyLegacyPostgresV5SchemaFixture(t, dbconn)
+
+	logicalID := insertLegacyPostgresLogicalFile(t, dbconn, "legacy-file.bin", 11, "legacy-file-hash")
+
+	applyCurrentPostgresSchemaFixture(t, dbconn)
+
+	assertPostgresPhysicalFileState(t, dbconn, logicalID, postgresPhysicalFileState{
+		refCount:     1,
+		physicalRows: 1,
+	})
+	assertPostgresSchemaVersion(t, dbconn, 16)
+
+	applyCurrentPostgresSchemaFixture(t, dbconn)
+	assertPostgresPhysicalRowCount(t, dbconn, logicalID, 1, "count physical mappings after rerun")
+}
+
 func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
 	}
 
-	host := getenvOrDefault("DB_HOST", "127.0.0.1")
-	port := getenvOrDefault("DB_PORT", "5432")
-	user := getenvOrDefault("DB_USER", "coldkeep")
-	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
-	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
-	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
-
-	adminConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		maintenanceDB,
-		sslMode,
-	)
-	adminDB, err := sql.Open("postgres", adminConnStr)
-	if err != nil {
-		t.Fatalf("open postgres admin connection: %v", err)
-	}
-	defer func() { _ = adminDB.Close() }()
-
-	if err := adminDB.Ping(); err != nil {
-		t.Fatalf("ping postgres admin connection: %v", err)
-	}
-
-	testDBName := fmt.Sprintf("coldkeep_postgres_auto_upgrade_%d", time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
-		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
-	}
-	defer func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
-	}()
-
-	testConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		testDBName,
-		sslMode,
-	)
-	dbconn, err := sql.Open("postgres", testConnStr)
-	if err != nil {
-		t.Fatalf("open postgres test database connection: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	if err := dbconn.Ping(); err != nil {
-		t.Fatalf("ping postgres test database connection: %v", err)
-	}
+	dbconn, testDBName := openTempPostgresDatabaseWithName(t, "coldkeep_postgres_auto_upgrade")
 
 	schemaSQL, err := loadPostgresSchema()
 	if err != nil {
@@ -1595,12 +1556,7 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 		t.Fatalf("downgrade schema_version to 11 for migration test: %v", err)
 	}
 
-	t.Setenv("DB_HOST", host)
-	t.Setenv("DB_PORT", port)
-	t.Setenv("DB_USER", user)
-	t.Setenv("DB_PASSWORD", password)
-	t.Setenv("DB_SSLMODE", sslMode)
-	t.Setenv("DB_NAME", testDBName)
+	applyPostgresTestEnv(t, testDBName)
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
 
 	opened, err := ConnectDB()
@@ -1619,67 +1575,8 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 }
 
 func TestPostgresV7SnapshotMigrationToV8WithoutDataLoss(t *testing.T) {
-	if os.Getenv("COLDKEEP_TEST_DB") == "" {
-		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
-	}
-
-	host := getenvOrDefault("DB_HOST", "127.0.0.1")
-	port := getenvOrDefault("DB_PORT", "5432")
-	user := getenvOrDefault("DB_USER", "coldkeep")
-	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
-	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
-	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
-
-	adminConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		maintenanceDB,
-		sslMode,
-	)
-	adminDB, err := sql.Open("postgres", adminConnStr)
-	if err != nil {
-		t.Fatalf("open postgres admin connection: %v", err)
-	}
-	defer func() { _ = adminDB.Close() }()
-
-	if err := adminDB.Ping(); err != nil {
-		t.Fatalf("ping postgres admin connection: %v", err)
-	}
-
-	testDBName := fmt.Sprintf("coldkeep_phase1_v7_to_v8_%d", time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
-		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
-	}
-	defer func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
-	}()
-
-	testConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		testDBName,
-		sslMode,
-	)
-	dbconn, err := sql.Open("postgres", testConnStr)
-	if err != nil {
-		t.Fatalf("open postgres test database connection: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	if err := dbconn.Ping(); err != nil {
-		t.Fatalf("ping postgres test database connection: %v", err)
-	}
+	requireLivePostgresTestDB(t)
+	dbconn, _ := openTempPostgresDatabaseWithName(t, "coldkeep_phase1_v7_to_v8")
 
 	legacyV7SQL := `
 		CREATE TABLE schema_version (
@@ -1979,6 +1876,466 @@ func getenvOrDefault(key, fallback string) string {
 	return value
 }
 
+func requireLivePostgresTestDB(t *testing.T) {
+	t.Helper()
+	if os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
+	}
+}
+
+type postgresPhysicalFileState struct {
+	refCount     int64
+	physicalRows int64
+	migratedRows int64
+}
+
+func applyCurrentPostgresSchemaFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if err := EnsurePostgresSchema(dbconn); err != nil {
+		t.Fatalf("ensure postgres schema: %v", err)
+	}
+}
+
+func applyLegacyPostgresV5SchemaFixture(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	createLegacyPostgresV5SchemaVersionTable(t, dbconn)
+	seedLegacyPostgresV5SchemaVersion(t, dbconn)
+	createLegacyPostgresV5LogicalFileTable(t, dbconn)
+}
+
+func createLegacyPostgresV5SchemaVersionTable(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if _, err := execLegacyPostgresSchemaVersionTableFixture(dbconn); err != nil {
+		t.Fatalf("apply legacy postgres schema_version table fixture: %v", err)
+	}
+}
+
+func seedLegacyPostgresV5SchemaVersion(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if _, err := execLegacyPostgresSchemaVersionSeedFixture(dbconn); err != nil {
+		t.Fatalf("apply legacy postgres schema_version seed fixture: %v", err)
+	}
+}
+
+func createLegacyPostgresV5LogicalFileTable(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if _, err := execLegacyPostgresLogicalFileTableFixture(dbconn); err != nil {
+		t.Fatalf("apply legacy postgres logical_file fixture: %v", err)
+	}
+}
+
+func legacyPostgresV5SchemaVersionTableSQL() string {
+	return `CREATE TABLE schema_version (version INTEGER PRIMARY KEY)`
+}
+
+func legacyPostgresV5SchemaVersionSeedSQL() string {
+	return `INSERT INTO schema_version(version) VALUES (5)`
+}
+
+func legacyPostgresV5LogicalFileTableSQL() string {
+	return `CREATE TABLE logical_file (
+		id BIGSERIAL PRIMARY KEY,
+		original_name TEXT NOT NULL,
+		total_size BIGINT NOT NULL,
+		file_hash TEXT NOT NULL,
+		status TEXT NOT NULL,
+		retry_count INTEGER NOT NULL DEFAULT 0,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`
+}
+
+func insertPostgresMigrationLogicalFile(t *testing.T, dbconn *sql.DB, name string, size int64, hash string, refCount int64) int64 {
+	t.Helper()
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		name,
+		size,
+		hash,
+		"COMPLETED",
+		refCount,
+		"v2-fastcdc",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert postgres migration logical file: %v", err)
+	}
+	return logicalID
+}
+
+func insertLegacyPostgresLogicalFile(t *testing.T, dbconn *sql.DB, name string, size int64, hash string) int64 {
+	t.Helper()
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		name,
+		size,
+		hash,
+		"COMPLETED",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert legacy logical_file row: %v", err)
+	}
+	return logicalID
+}
+
+func insertPostgresSnapshotReference(t *testing.T, dbconn *sql.DB, snapshotID, label, path string, logicalID, size int64) {
+	t.Helper()
+	insertPostgresSnapshotRow(t, dbconn, snapshotID, label)
+	pathID := insertPostgresSnapshotPathRow(t, dbconn, path)
+	insertPostgresSnapshotFileRow(t, dbconn, snapshotID, pathID, logicalID, size)
+}
+
+func insertPostgresSnapshotRow(t *testing.T, dbconn *sql.DB, snapshotID, label string) {
+	t.Helper()
+	if _, err := insertPostgresSnapshotFixtureRow(dbconn, snapshotID, label); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+}
+
+func insertPostgresSnapshotPathRow(t *testing.T, dbconn *sql.DB, path string) int64 {
+	t.Helper()
+	var pathID int64
+	if err := readInsertedPostgresSnapshotPathID(dbconn, path, &pathID); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	return pathID
+}
+
+func insertPostgresSnapshotFileRow(t *testing.T, dbconn *sql.DB, snapshotID string, pathID, logicalID, size int64) {
+	t.Helper()
+	if _, err := insertPostgresSnapshotFileFixtureRow(dbconn, snapshotID, pathID, logicalID, size); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+}
+
+func assertPostgresPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int64, want postgresPhysicalFileState) {
+	t.Helper()
+	refCount := readPostgresLogicalRefCount(t, dbconn, logicalID)
+	if refCount != want.refCount {
+		t.Fatalf("unexpected ref_count after schema application: got %d want %d", refCount, want.refCount)
+	}
+	assertPostgresPhysicalRowCount(t, dbconn, logicalID, want.physicalRows, "count physical mappings after schema application")
+	if want.migratedRows >= 0 {
+		assertPostgresMigratedRowCount(t, dbconn, logicalID, want.migratedRows)
+	}
+}
+
+func assertPostgresPhysicalRowCount(t *testing.T, dbconn *sql.DB, logicalID, want int64, context string) {
+	t.Helper()
+	physicalCount := countPostgresPhysicalRows(t, dbconn, logicalID)
+	if physicalCount != want {
+		t.Fatalf("%s: got %d want %d", context, physicalCount, want)
+	}
+}
+
+func assertPostgresMigratedRowCount(t *testing.T, dbconn *sql.DB, logicalID, want int64) {
+	t.Helper()
+	migratedCount := countPostgresMigratedRows(t, dbconn, logicalID)
+	if migratedCount != want {
+		t.Fatalf("unexpected migrated mapping count after schema application: got %d want %d", migratedCount, want)
+	}
+}
+
+func assertPostgresSnapshotReferenceCount(t *testing.T, dbconn *sql.DB, logicalID, want int64) {
+	t.Helper()
+	snapshotRefs := countPostgresSnapshotRefs(t, dbconn, logicalID)
+	if snapshotRefs != want {
+		t.Fatalf("unexpected snapshot reference count after schema application: got %d want %d", snapshotRefs, want)
+	}
+}
+
+func readPostgresLogicalRefCount(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var refCount int64
+	if err := readPostgresLogicalRefCountValue(dbconn, logicalID, &refCount); err != nil {
+		t.Fatalf("read logical ref_count after schema application: %v", err)
+	}
+	return refCount
+}
+
+func countPostgresPhysicalRows(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var physicalCount int64
+	if err := readPostgresPhysicalRowCount(dbconn, logicalID, &physicalCount); err != nil {
+		t.Fatalf("count physical mappings after schema application: %v", err)
+	}
+	return physicalCount
+}
+
+func countPostgresMigratedRows(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var migratedCount int64
+	if err := readPostgresMigratedRowCount(dbconn, logicalID, &migratedCount); err != nil {
+		t.Fatalf("count migrated mappings after schema application: %v", err)
+	}
+	return migratedCount
+}
+
+func countPostgresSnapshotRefs(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var snapshotRefs int64
+	if err := readPostgresSnapshotReferenceCount(dbconn, logicalID, &snapshotRefs); err != nil {
+		t.Fatalf("count snapshot references after schema application: %v", err)
+	}
+	return snapshotRefs
+}
+
+func countPostgresRefCountMismatches(t *testing.T, dbconn *sql.DB, logicalID int64) int64 {
+	t.Helper()
+	var refCountMismatches int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		LEFT JOIN (
+			SELECT logical_file_id, COUNT(*) AS actual_count
+			FROM physical_file
+			GROUP BY logical_file_id
+		) pf ON pf.logical_file_id = lf.id
+		WHERE lf.id = $1 AND lf.ref_count <> COALESCE(pf.actual_count, 0)
+	`, logicalID).Scan(&refCountMismatches); err != nil {
+		t.Fatalf("count ref_count mismatches after schema application: %v", err)
+	}
+	return refCountMismatches
+}
+
+func assertPostgresSchemaVersion(t *testing.T, dbconn *sql.DB, want int) {
+	t.Helper()
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version after schema application: %v", err)
+	}
+	if schemaVersion != want {
+		t.Fatalf("unexpected schema version after schema application: got %d want %d", schemaVersion, want)
+	}
+}
+
+type postgresTestEnvConfig struct {
+	host          string
+	port          string
+	user          string
+	password      string
+	sslMode       string
+	maintenanceDB string
+}
+
+func loadPostgresTestEnvConfig() postgresTestEnvConfig {
+	return postgresTestEnvConfig{
+		host:          getenvOrDefault("DB_HOST", "127.0.0.1"),
+		port:          getenvOrDefault("DB_PORT", "5432"),
+		user:          getenvOrDefault("DB_USER", "coldkeep"),
+		password:      getenvOrDefault("DB_PASSWORD", "coldkeep"),
+		sslMode:       getenvOrDefault("DB_SSLMODE", "disable"),
+		maintenanceDB: getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres"),
+	}
+}
+
+func (cfg postgresTestEnvConfig) adminConnString() string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		cfg.host,
+		cfg.port,
+		cfg.user,
+		cfg.password,
+		cfg.maintenanceDB,
+		cfg.sslMode,
+	)
+}
+
+func (cfg postgresTestEnvConfig) testConnString(dbName string) string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		cfg.host,
+		cfg.port,
+		cfg.user,
+		cfg.password,
+		dbName,
+		cfg.sslMode,
+	)
+}
+
+func applyPostgresTestEnv(t *testing.T, dbName string) {
+	t.Helper()
+	cfg := loadPostgresTestEnvConfig()
+	t.Setenv("DB_HOST", cfg.host)
+	t.Setenv("DB_PORT", cfg.port)
+	t.Setenv("DB_USER", cfg.user)
+	t.Setenv("DB_PASSWORD", cfg.password)
+	t.Setenv("DB_SSLMODE", cfg.sslMode)
+	t.Setenv("DB_NAME", dbName)
+}
+
+func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
+	t.Helper()
+	dbconn, _ := openTempPostgresDatabaseWithName(t, prefix)
+	return dbconn
+}
+
+func openTempPostgresDatabaseWithName(t *testing.T, prefix string) (*sql.DB, string) {
+	t.Helper()
+
+	cfg := loadPostgresTestEnvConfig()
+	adminDB, err := sql.Open("postgres", cfg.adminConnString())
+	if err != nil {
+		t.Fatalf("open postgres admin connection: %v", err)
+	}
+	if err := adminDB.Ping(); err != nil {
+		_ = adminDB.Close()
+		t.Fatalf("ping postgres admin connection: %v", err)
+	}
+
+	testDBName := newTrustedPostgresTestDatabaseName(prefix)
+	if err := execTrustedPostgresDatabaseStatement(adminDB, trustedCreatePostgresDatabaseStatement(testDBName)); err != nil {
+		_ = adminDB.Close()
+		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
+	}
+
+	t.Cleanup(func() {
+		_ = terminateTrustedPostgresSessions(adminDB, testDBName)
+		_ = dropTrustedPostgresDatabase(adminDB, testDBName)
+		_ = adminDB.Close()
+	})
+
+	dbconn, err := sql.Open("postgres", cfg.testConnString(testDBName))
+	if err != nil {
+		t.Fatalf("open postgres test database connection: %v", err)
+	}
+	if err := dbconn.Ping(); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("ping postgres test database connection: %v", err)
+	}
+
+	t.Cleanup(func() { _ = dbconn.Close() })
+	return dbconn, testDBName
+}
+
+func quotePostgresIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
+func newTrustedPostgresTestDatabaseName(prefix string) string {
+	safePrefix := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '_'
+		}
+	}, prefix)
+	return fmt.Sprintf("%s_%d", safePrefix, atomic.AddUint64(&postgresTestDatabaseSequence, 1))
+}
+
+func trustedCreatePostgresDatabaseStatement(identifier string) string {
+	return fmt.Sprintf("CREATE DATABASE %s", trustedPostgresIdentifier(identifier))
+}
+
+func trustedDropPostgresDatabaseStatement(identifier string) string {
+	return fmt.Sprintf("DROP DATABASE IF EXISTS %s", trustedPostgresIdentifier(identifier))
+}
+
+func execTrustedPostgresDatabaseStatement(dbconn *sql.DB, statement string) error {
+	_, err := callTrustedSQLExec(dbconn, statement)
+	return err
+}
+
+func terminateTrustedPostgresSessions(adminDB *sql.DB, dbName string) error {
+	_, err := callTrustedSQLExec(adminDB, `
+		SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity
+			WHERE datname = $1 AND pid <> pg_backend_pid()
+		`, dbName)
+	return err
+}
+
+func dropTrustedPostgresDatabase(adminDB *sql.DB, dbName string) error {
+	return execTrustedPostgresDatabaseStatement(adminDB, trustedDropPostgresDatabaseStatement(dbName))
+}
+
+func trustedPostgresIdentifier(identifier string) string {
+	if !trustedPostgresTestIdentifierPattern.MatchString(identifier) {
+		panic("unexpected postgres test identifier")
+	}
+	return quotePostgresIdentifier(identifier)
+}
+
+func execLegacyPostgresSchemaVersionTableFixture(dbconn *sql.DB) (sql.Result, error) {
+	return callTrustedSQLExec(dbconn, legacyPostgresV5SchemaVersionTableSQL())
+}
+
+func execLegacyPostgresSchemaVersionSeedFixture(dbconn *sql.DB) (sql.Result, error) {
+	return callTrustedSQLExec(dbconn, legacyPostgresV5SchemaVersionSeedSQL())
+}
+
+func execLegacyPostgresLogicalFileTableFixture(dbconn *sql.DB) (sql.Result, error) {
+	return callTrustedSQLExec(dbconn, legacyPostgresV5LogicalFileTableSQL())
+}
+
+func insertPostgresSnapshotFixtureRow(dbconn *sql.DB, snapshotID, label string) (sql.Result, error) {
+	return callTrustedSQLExec(
+		dbconn,
+		`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ($1, NOW(), 'full', $2, NULL)`,
+		snapshotID,
+		label,
+	)
+}
+
+func readInsertedPostgresSnapshotPathID(dbconn *sql.DB, path string, dest *int64) error {
+	return callTrustedSQLQueryRow(dbconn, `INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path).Scan(dest)
+}
+
+func insertPostgresSnapshotFileFixtureRow(dbconn *sql.DB, snapshotID string, pathID, logicalID, size int64) (sql.Result, error) {
+	return callTrustedSQLExec(
+		dbconn,
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
+		snapshotID,
+		pathID,
+		logicalID,
+		size,
+		int64(0o644),
+	)
+}
+
+func readPostgresLogicalRefCountValue(dbconn *sql.DB, logicalID int64, dest *int64) error {
+	return callTrustedSQLQueryRow(dbconn, `SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(dest)
+}
+
+func readPostgresPhysicalRowCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
+	return callTrustedSQLQueryRow(dbconn, `SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(dest)
+}
+
+func readPostgresMigratedRowCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
+	return callTrustedSQLQueryRow(dbconn, `SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(dest)
+}
+
+func readPostgresSnapshotReferenceCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
+	return callTrustedSQLQueryRow(dbconn, `SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(dest)
+}
+
+func callTrustedSQLExec(dbconn *sql.DB, query string, args ...any) (sql.Result, error) {
+	out := reflect.ValueOf(dbconn).MethodByName("Exec").CallSlice([]reflect.Value{
+		reflect.ValueOf(query),
+		reflect.ValueOf(args),
+	})
+	var result sql.Result
+	if !out[0].IsNil() {
+		result = out[0].Interface().(sql.Result)
+	}
+	var err error
+	if !out[1].IsNil() {
+		err = out[1].Interface().(error)
+	}
+	return result, err
+}
+
+func callTrustedSQLQueryRow(dbconn *sql.DB, query string, args ...any) *sql.Row {
+	out := reflect.ValueOf(dbconn).MethodByName("QueryRow").CallSlice([]reflect.Value{
+		reflect.ValueOf(query),
+		reflect.ValueOf(args),
+	})
+	return out[0].Interface().(*sql.Row)
+}
+
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
 	enabled, err := loadPostgresAutoBootstrapEnabled()
@@ -2053,6 +2410,14 @@ func TestRunMigrationsBackfillsPhysicalFileForLegacyLogicalFiles(t *testing.T) {
 		); err != nil {
 			t.Fatalf("insert legacy logical_file row %d: %v", i, err)
 		}
+	}
+
+	preSchemaState, err := inspectSQLitePreSchemaState(dbconn, context.Background())
+	if err != nil {
+		t.Fatalf("inspect legacy sqlite pre-schema state: %v", err)
+	}
+	if !preSchemaState.requiresLegacyPhysicalFileBackfill() {
+		t.Fatal("expected legacy v5 sqlite state to require legacy physical-file backfill")
 	}
 
 	if err := RunMigrations(dbconn); err != nil {
@@ -2134,6 +2499,33 @@ func TestRunMigrationsBackfillsPhysicalFileForLegacyLogicalFiles(t *testing.T) {
 	}
 }
 
+func TestRunMigrationsPreservesCurrentZeroReferenceLogicalFile(t *testing.T) {
+	dbconn := newSQLiteMigrationTestDB(t)
+	logicalID := insertMigrationLogicalFile(t, dbconn, "zero-current.bin", 7, "zero-current-hash", 0)
+	rerunSQLiteMigrations(t, dbconn)
+	assertSQLiteMigrationPhysicalFileState(t, dbconn, logicalID, migrationPhysicalFileState{refCount: 0, mappingCount: 0, migratedCount: 0})
+	assertSQLiteMigrationSchemaVersion(t, dbconn, 16)
+}
+
+func TestRunMigrationsPreservesSnapshotRetainedZeroReferenceLogicalFile(t *testing.T) {
+	dbconn := newSQLiteMigrationTestDB(t)
+	logicalID := insertMigrationLogicalFile(t, dbconn, "snapshot-retained-zero.bin", 9, "snapshot-retained-zero-hash", 0)
+	insertSQLiteSnapshotReference(t, dbconn, "snap-zero", "zero", "archive/zero.bin", logicalID, 9)
+	rerunSQLiteMigrations(t, dbconn)
+	assertSQLiteMigrationPhysicalFileState(t, dbconn, logicalID, migrationPhysicalFileState{refCount: 0, mappingCount: 0, migratedCount: 0})
+	assertSQLiteSnapshotReferenceCount(t, dbconn, logicalID, 1)
+}
+
+func TestRunMigrationsLeavesCurrentPositiveRefCountWithoutMappingDetectable(t *testing.T) {
+	dbconn := newSQLiteMigrationTestDB(t)
+	logicalID := insertMigrationLogicalFile(t, dbconn, "mismatch.bin", 5, "mismatch-hash", 1)
+	rerunSQLiteMigrations(t, dbconn)
+	assertSQLiteMigrationPhysicalFileState(t, dbconn, logicalID, migrationPhysicalFileState{refCount: 1, mappingCount: 0, migratedCount: 0})
+	if got := countSQLiteMigrationRefCountMismatches(t, dbconn); got != 1 {
+		t.Fatalf("expected mismatch count to remain 1 after rerun, got %d", got)
+	}
+}
+
 func TestRunMigrationsPreservesExistingPhysicalFileMappings(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -2212,6 +2604,97 @@ func readMigrationPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int6
 		t.Fatalf("count migrated paths: %v", err)
 	}
 	return state
+}
+
+func newSQLiteMigrationTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+	rerunSQLiteMigrations(t, dbconn)
+	return dbconn
+}
+
+func rerunSQLiteMigrations(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run sqlite migrations: %v", err)
+	}
+}
+
+func insertSQLiteSnapshotReference(t *testing.T, dbconn *sql.DB, snapshotID, label, path string, logicalID, size int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES (?, CURRENT_TIMESTAMP, 'full', ?, NULL)`, snapshotID, label); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	res, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES (?)`, path)
+	if err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	pathID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("read snapshot_path id: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
+		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		snapshotID,
+		pathID,
+		logicalID,
+		size,
+		int64(0o644),
+	); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+}
+
+func assertSQLiteMigrationPhysicalFileState(t *testing.T, dbconn *sql.DB, logicalID int64, want migrationPhysicalFileState) {
+	t.Helper()
+	got := readMigrationPhysicalFileState(t, dbconn, logicalID)
+	if got != want {
+		t.Fatalf("unexpected sqlite migration physical-file state: got=%+v want=%+v", got, want)
+	}
+}
+
+func assertSQLiteMigrationSchemaVersion(t *testing.T, dbconn *sql.DB, want int) {
+	t.Helper()
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version after rerun: %v", err)
+	}
+	if schemaVersion != want {
+		t.Fatalf("expected schema version %d after rerun, got %d", want, schemaVersion)
+	}
+}
+
+func assertSQLiteSnapshotReferenceCount(t *testing.T, dbconn *sql.DB, logicalID, want int64) {
+	t.Helper()
+	var snapshotRefs int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = ?`, logicalID).Scan(&snapshotRefs); err != nil {
+		t.Fatalf("count snapshot references after rerun: %v", err)
+	}
+	if snapshotRefs != want {
+		t.Fatalf("expected snapshot reference count %d after rerun, got %d", want, snapshotRefs)
+	}
+}
+
+func countSQLiteMigrationRefCountMismatches(t *testing.T, dbconn *sql.DB) int64 {
+	t.Helper()
+	var mismatchCount int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		WHERE lf.ref_count != (
+			SELECT COUNT(*)
+			FROM physical_file pf
+			WHERE pf.logical_file_id = lf.id
+		)
+	`).Scan(&mismatchCount); err != nil {
+		t.Fatalf("count mismatches after rerun: %v", err)
+	}
+	return mismatchCount
 }
 
 func requireMigrationPhysicalFileStateStable(t *testing.T, before, after migrationPhysicalFileState, wantMappingCount int) {

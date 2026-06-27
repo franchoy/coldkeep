@@ -65,47 +65,4 @@ func TestUnsupportedEngineModesRemainRecognizedByIsUnsupported(t *testing.T) {
 			t.Fatalf("expected recursive store error to classify as unsupported, got %v", err)
 		}
 	})
-
-	t.Run("stored-path restore", func(t *testing.T) {
-		db := openSnapshotTestDB(t)
-		eng := newRestoreTestEngine(t, db)
-		_, err := eng.Restore(context.Background(), engine.RestoreRequest{
-			Mode:       engine.RestoreModeStoredPath,
-			StoredPath: "samples/hello.txt",
-			OutputDir:  t.TempDir(),
-			DryRun:     true,
-		})
-		if !engine.IsUnsupported(err) {
-			t.Fatalf("expected stored-path restore error to classify as unsupported, got %v", err)
-		}
-	})
-
-	t.Run("stored-path remove", func(t *testing.T) {
-		db, sgctx, stored := storeRemoveFixture(t, "remove-unsupported-isunsupported.txt", "phase3-remove-unsupported")
-		eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
-		_, err := eng.Remove(context.Background(), engine.RemoveRequest{
-			Mode:       engine.RemoveModeStoredPath,
-			StoredPath: stored.Path,
-		})
-		if !engine.IsUnsupported(err) {
-			t.Fatalf("expected stored-path remove error to classify as unsupported, got %v", err)
-		}
-	})
-
-	t.Run("stored-paths remove", func(t *testing.T) {
-		db, sgctx, first := storeRemoveFixture(t, "remove-unsupported-isunsupported-batch-1.txt", "phase3-remove-unsupported-batch-1")
-		second, err := storeRemoveFixtureSecondPath(t, sgctx)
-		if err != nil {
-			t.Fatalf("second store fixture: %v", err)
-		}
-
-		eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
-		_, err = eng.Remove(context.Background(), engine.RemoveRequest{
-			Mode:        engine.RemoveModeStoredPaths,
-			StoredPaths: []string{first.Path, second.Path},
-		})
-		if !engine.IsUnsupported(err) {
-			t.Fatalf("expected stored-paths remove error to classify as unsupported, got %v", err)
-		}
-	})
 }

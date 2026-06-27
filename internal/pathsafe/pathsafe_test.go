@@ -189,6 +189,38 @@ func TestValidatePathHasNoSymlinkComponentsRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestValidatePathHasNoSymlinkComponentsRejectsSymlinkTarget(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "sentinel.bin")
+	if err := os.WriteFile(outside, []byte("sentinel"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	linkPath := filepath.Join(root, "target-link.bin")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+
+	err := ValidatePathHasNoSymlinkComponents(linkPath)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink target rejection, got: %v", err)
+	}
+}
+
+func TestValidateWritePathUnderTrustedRootRejectsSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	linkPath := filepath.Join(root, "link")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+
+	targetPath := filepath.Join(linkPath, "nested", "file.bin")
+	err := ValidateWritePathUnderTrustedRoot(root, targetPath)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected trusted-root symlink rejection, got: %v", err)
+	}
+}
+
 func TestValidatePathHasNoSymlinkComponentsAllowsMissingSuffix(t *testing.T) {
 	// Use EvalSymlinks so the path does not traverse OS-managed symlinks
 	// (e.g. /var -> /private/var on macOS) before reaching the missing suffix.

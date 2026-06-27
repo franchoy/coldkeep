@@ -81,7 +81,7 @@ func TestRestoreCrossPlatformDestinationPathForms(t *testing.T) {
 			storeResult, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, srcFile, blocks.CodecPlain)
 			mustNoErr(t, err, "store file")
 
-			outRoot := t.TempDir()
+			outRoot := realTempDir(t)
 			outPath := tc.buildDst(outRoot)
 
 			_, err = RestoreFileWithStorageContextResultOptions(
@@ -194,7 +194,7 @@ func TestRestoreCrossPlatformBytesRemainDeterministic(t *testing.T) {
 			storeResult, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, srcFile, blocks.CodecPlain)
 			mustNoErr(t, err, "store file")
 
-			outPath := filepath.Join(t.TempDir(), "restored.bin")
+			outPath := filepath.Join(realTempDir(t), "restored.bin")
 			_, err = RestoreFileWithStorageContextResultOptions(
 				repo.Storage,
 				storeResult.FileID,

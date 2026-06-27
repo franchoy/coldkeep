@@ -26,9 +26,14 @@ func allCandidateTypes() []struct {
 		{"RestoreRequest", engine.RestoreRequest{}},
 		{"RestoreItemResult", engine.RestoreItemResult{}},
 		{"RestoreResult", engine.RestoreResult{}},
+		{"RestoreStoredPathRequest", engine.RestoreStoredPathRequest{}},
+		{"RestoreStoredPathResult", engine.RestoreStoredPathResult{}},
 		{"RemoveRequest", engine.RemoveRequest{}},
 		{"RemoveItemResult", engine.RemoveItemResult{}},
 		{"RemoveResult", engine.RemoveResult{}},
+		{"RemoveStoredPathsRequest", engine.RemoveStoredPathsRequest{}},
+		{"RemoveStoredPathItemResult", engine.RemoveStoredPathItemResult{}},
+		{"RemoveStoredPathsResult", engine.RemoveStoredPathsResult{}},
 		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
 		{"GarbageCollectResult", engine.GarbageCollectResult{}},
 		{"SnapshotMeta", engine.SnapshotMeta{}},
@@ -126,50 +131,26 @@ func assertNeutralType(t *testing.T, rt reflect.Type, path string, seen map[refl
 	}
 }
 
-// TestRestoreContractRepresentsAllModes proves the restore contract can express
-// file-ID batch restore and stored-path restore with each destination mode and
-// the overwrite/strict/metadata options.
-func TestRestoreContractRepresentsAllModes(t *testing.T) {
-	byIDs := engine.RestoreRequest{
-		Mode:      engine.RestoreModeFileIDs,
-		FileIDs:   []int64{1, 2, 3},
-		OutputDir: "/out",
-		Overwrite: true,
-		DryRun:    true,
-		FailFast:  true,
-		Workers:   4,
-		Limit:     10,
-		InputPath: "/batch.txt",
+// TestRestoreContractRepresentsByIDOnlySurface proves the active restore
+// contract now represents only by-ID restore semantics.
+func TestRestoreContractRepresentsByIDOnlySurface(t *testing.T) {
+	req := engine.RestoreRequest{
+		FileIDs:         []int64{1, 2, 3},
+		DestinationRoot: "/out",
+		Overwrite:       true,
+		DryRun:          true,
+		FailFast:        true,
 	}
-	if byIDs.Mode != engine.RestoreModeFileIDs || len(byIDs.FileIDs) != 3 {
-		t.Fatalf("file-ID restore not representable: %+v", byIDs)
-	}
-
-	for _, mode := range []engine.RestoreDestinationMode{
-		engine.RestoreDestinationOriginal,
-		engine.RestoreDestinationPrefix,
-		engine.RestoreDestinationOverride,
-	} {
-		req := engine.RestoreRequest{
-			Mode:            engine.RestoreModeStoredPath,
-			StoredPath:      "a/b/c.txt",
-			DestinationMode: mode,
-			Destination:     "/dest",
-			Overwrite:       true,
-			Strict:          true,
-			NoMetadata:      false,
-		}
-		if req.DestinationMode != mode {
-			t.Errorf("stored-path restore mode %q not representable", mode)
-		}
+	if len(req.FileIDs) != 3 || req.DestinationRoot == "" {
+		t.Fatalf("by-ID restore not representable: %+v", req)
 	}
 
 	res := engine.RestoreResult{
 		DryRun:        true,
-		ExecutionMode: engine.ExecutionModeParallel,
+		ExecutionMode: engine.ExecutionModeSequential,
 		Items: []engine.RestoreItemResult{
-			{FileID: 1, OutputPath: "/out/1", RestoredHash: "h", Status: engine.BatchItemOK},
-			{StoredPath: "x", Status: engine.BatchItemFailed, Error: "boom"},
+			{FileID: 1, DestinationPath: "/out/1", RestoredHash: "h", Status: engine.BatchItemOK},
+			{FileID: 2, Status: engine.BatchItemFailed, Error: "boom"},
 		},
 		Summary: engine.BatchSummary{OK: 1, Failed: 1},
 	}
@@ -178,29 +159,152 @@ func TestRestoreContractRepresentsAllModes(t *testing.T) {
 	}
 }
 
-// TestRemoveContractRepresentsAllModes proves remove can express ID batch,
-// single stored-path, and stored-paths batch removal.
-func TestRemoveContractRepresentsAllModes(t *testing.T) {
-	cases := []engine.RemoveRequest{
-		{Mode: engine.RemoveModeFileIDs, FileIDs: []int64{1, 2}, DryRun: true, FailFast: true},
-		{Mode: engine.RemoveModeStoredPath, StoredPath: "a.txt"},
-		{Mode: engine.RemoveModeStoredPaths, StoredPaths: []string{"a", "b"}, InputPath: "/in"},
+func TestRestoreStoredPathRequestHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RestoreStoredPathRequest{}), []string{
+		"StoredPath",
+		"DestinationMode",
+		"DestinationRoot",
+		"DestinationPath",
+		"Overwrite",
+		"StrictMetadata",
+		"NoMetadata",
+	})
+}
+
+func TestRestoreStoredPathResultHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RestoreStoredPathResult{}), []string{
+		"StoredPath",
+		"FileID",
+		"DestinationMode",
+		"DestinationPath",
+		"RestoredHash",
+	})
+}
+
+func TestRestoreStoredPathContractRepresentsSingleStoredMappingRestore(t *testing.T) {
+	cases := []engine.RestoreStoredPathRequest{
+		{
+			StoredPath: "/docs/original.txt",
+			Overwrite:  true,
+		},
+		{
+			StoredPath:      "/docs/prefix.txt",
+			DestinationMode: engine.RestoreDestinationPrefix,
+			DestinationRoot: "/tmp/out",
+		},
+		{
+			StoredPath:      "/docs/override.txt",
+			DestinationMode: engine.RestoreDestinationOverride,
+			DestinationPath: "/tmp/out.txt",
+			StrictMetadata:  true,
+		},
 	}
 	for _, req := range cases {
-		if req.Mode == "" {
-			t.Errorf("remove mode not representable: %+v", req)
+		if req.StoredPath == "" {
+			t.Fatalf("stored-path restore request not representable: %+v", req)
 		}
+	}
+
+	res := engine.RestoreStoredPathResult{
+		StoredPath:      "/docs/original.txt",
+		FileID:          42,
+		DestinationMode: engine.RestoreDestinationOriginal,
+		DestinationPath: "/docs/original.txt",
+		RestoredHash:    "hash",
+	}
+	if res.StoredPath == "" || res.FileID <= 0 || res.DestinationPath == "" {
+		t.Fatalf("stored-path restore result not representable: %+v", res)
+	}
+}
+
+// TestRemoveContractRepresentsByIDOnlySurface proves the active remove
+// contract now represents only by-ID remove semantics.
+func TestRemoveContractRepresentsByIDOnlySurface(t *testing.T) {
+	req := engine.RemoveRequest{FileIDs: []int64{1, 2}, DryRun: true, FailFast: true}
+	if len(req.FileIDs) != 2 {
+		t.Fatalf("by-ID remove not representable: %+v", req)
 	}
 
 	res := engine.RemoveResult{
 		Items: []engine.RemoveItemResult{
-			{FileID: 1, RemainingRefCount: 0, Removed: true, Status: engine.BatchItemOK},
-			{StoredPath: "a", RemainingRefCount: 2, Removed: false, Status: engine.BatchItemOK},
+			{FileID: 1, LogicalFileRemoved: true, RemovedChunkAssociations: 2, Status: engine.BatchItemOK},
+			{FileID: 2, Status: engine.BatchItemFailed, Error: "boom"},
 		},
-		Summary: engine.BatchSummary{OK: 2},
+		Summary: engine.BatchSummary{OK: 1, Failed: 1},
 	}
-	if len(res.Items) != 2 {
+	if len(res.Items) != 2 || res.Summary.OK != 1 || res.Summary.Failed != 1 {
 		t.Fatalf("remove result not representable: %+v", res)
+	}
+}
+
+func TestRemoveStoredPathsRequestHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RemoveStoredPathsRequest{}), []string{
+		"StoredPaths",
+		"DryRun",
+		"FailFast",
+	})
+}
+
+func TestRemoveStoredPathItemResultHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RemoveStoredPathItemResult{}), []string{
+		"RawTarget",
+		"StoredPath",
+		"LogicalFileID",
+		"RemainingRefCount",
+		"MappingRemoved",
+		"Status",
+		"Error",
+		"InvariantCode",
+		"RecommendedAction",
+	})
+}
+
+func TestRemoveStoredPathsResultHasOnlyApprovedFields(t *testing.T) {
+	assertStructFields(t, reflect.TypeOf(engine.RemoveStoredPathsResult{}), []string{
+		"DryRun",
+		"ExecutionMode",
+		"Items",
+		"Summary",
+	})
+}
+
+func TestRemoveStoredPathsContractRepresentsBatchStoredMappingUnlink(t *testing.T) {
+	req := engine.RemoveStoredPathsRequest{
+		StoredPaths: []string{" /docs/a.txt ", "", "/docs/a.txt", "/docs/b.txt"},
+		DryRun:      true,
+		FailFast:    true,
+	}
+	if len(req.StoredPaths) != 4 || !req.DryRun || !req.FailFast {
+		t.Fatalf("stored-path remove request not representable: %+v", req)
+	}
+
+	res := engine.RemoveStoredPathsResult{
+		DryRun:        true,
+		ExecutionMode: engine.ExecutionModeSequential,
+		Items: []engine.RemoveStoredPathItemResult{
+			{RawTarget: " /docs/a.txt ", StoredPath: "/docs/a.txt", LogicalFileID: 7, Status: engine.BatchItemPlanned},
+			{RawTarget: "", Status: engine.BatchItemFailed, Error: "stored path is required"},
+			{RawTarget: "/docs/a.txt", StoredPath: "/docs/a.txt", Status: engine.BatchItemSkipped, Error: "duplicate target"},
+		},
+		Summary: engine.BatchSummary{OK: 1, Failed: 1, Skipped: 1},
+	}
+	if len(res.Items) != 3 || res.Summary.OK != 1 || res.Summary.Failed != 1 || res.Summary.Skipped != 1 {
+		t.Fatalf("stored-path remove result not representable: %+v", res)
+	}
+}
+
+func assertStructFields(t *testing.T, rt reflect.Type, want []string) {
+	t.Helper()
+
+	got := make([]string, 0, rt.NumField())
+	for i := 0; i < rt.NumField(); i++ {
+		field := rt.Field(i)
+		if field.IsExported() {
+			got = append(got, field.Name)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s fields mismatch: got %v want %v", rt.Name(), got, want)
 	}
 }
 

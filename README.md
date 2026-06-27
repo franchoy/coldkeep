@@ -21,27 +21,31 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.12%20planning%20%2F%20engine--catalog%20migration-blue)
+![Status](https://img.shields.io/badge/status-v1.13.8%20in%20progress%20%2F%20restore--remove%20boundary-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
-> Migration note (v1.9): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v15 schema at startup.
+> Migration note (v1.9): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v16 schema at startup.
 
 ## Current release state
 
-Coldkeep v1.11 introduced the behavior-preserving engine facade.
+Coldkeep v1.13.7 established the SQLite-first repository portability baseline,
+added direct relocation evidence, and corrected physical-file migration
+idempotency for already-mapped logical files.
 
-The current development focus is v1.12:
+The current development focus is v1.13.8:
 
-- migrate business orchestration into engine entry points;
-- introduce catalog/metadata facade boundaries;
-- prepare the SQLite-first local catalog direction;
-- preserve PostgreSQL compatibility;
-- keep CLI behavior, JSON output, exit codes, and repository/storage formats stable.
+- preserve valid zero-reference logical-file state across migration and reopen;
+- separate by-ID restore from stored-path restore;
+- separate by-ID logical removal from stored-path mapping removal;
+- route stored-path restore/remove through dedicated engine boundaries while
+  preserving CLI compatibility;
+- harden stored-path destination safety and remove reachability invariants;
+- preserve PostgreSQL as the current normal local runtime backend;
+- preserve CLI, JSON, exit-code, storage-format, and repository-format behavior.
 
-The v1.12 migration must preserve existing behavior first and prove parity before lifting logic. No
-command is routed through the engine unless its request/result contract can represent the existing
-command behavior.
+SQLite-first remains the future local product direction. v1.13.8 does not
+switch the normal runtime backend and does not add a normal SQLite local mode.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.

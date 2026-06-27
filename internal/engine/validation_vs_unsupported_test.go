@@ -31,45 +31,6 @@ func TestUnsupportedEngineModesRemainUnsupportedBoundaries(t *testing.T) {
 		})
 		assertUnsupportedBoundary(t, err, engine.ErrNotImplemented.Error())
 	})
-
-	t.Run("stored-path restore", func(t *testing.T) {
-		db := openSnapshotTestDB(t)
-		eng := newRestoreTestEngine(t, db)
-
-		_, err := eng.Restore(context.Background(), engine.RestoreRequest{
-			Mode:       engine.RestoreModeStoredPath,
-			StoredPath: "samples/hello.txt",
-			OutputDir:  t.TempDir(),
-			DryRun:     true,
-		})
-		assertUnsupportedBoundary(t, err, engine.ErrNotImplemented.Error())
-	})
-
-	t.Run("stored-path remove", func(t *testing.T) {
-		db, sgctx, stored := storeRemoveFixture(t, "remove-boundary-unsupported.txt", "phase5-remove-boundary-unsupported")
-		eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
-
-		_, err := eng.Remove(context.Background(), engine.RemoveRequest{
-			Mode:       engine.RemoveModeStoredPath,
-			StoredPath: stored.Path,
-		})
-		assertUnsupportedBoundary(t, err, engine.ErrNotImplemented.Error())
-	})
-
-	t.Run("stored-paths remove", func(t *testing.T) {
-		db, sgctx, first := storeRemoveFixture(t, "remove-boundary-unsupported-batch-1.txt", "phase5-remove-boundary-unsupported-batch-1")
-		second, err := storeRemoveFixtureSecondPath(t, sgctx)
-		if err != nil {
-			t.Fatalf("second store fixture: %v", err)
-		}
-
-		eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
-		_, err = eng.Remove(context.Background(), engine.RemoveRequest{
-			Mode:        engine.RemoveModeStoredPaths,
-			StoredPaths: []string{first.Path, second.Path},
-		})
-		assertUnsupportedBoundary(t, err, engine.ErrNotImplemented.Error())
-	})
 }
 
 func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
@@ -104,7 +65,7 @@ func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 		db := openSnapshotTestDB(t)
 		eng := newRemoveTestEngine(t, db, t.TempDir())
 
-		_, err := eng.Remove(context.Background(), engine.RemoveRequest{Mode: engine.RemoveModeFileIDs})
+		_, err := eng.Remove(context.Background(), engine.RemoveRequest{})
 		assertValidationBoundary(t, err, "engine: remove requires at least one file ID")
 	})
 
@@ -113,8 +74,7 @@ func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 		eng := newRestoreTestEngine(t, db)
 
 		_, err := eng.Restore(context.Background(), engine.RestoreRequest{
-			Mode:      engine.RestoreModeFileIDs,
-			OutputDir: t.TempDir(),
+			DestinationRoot: t.TempDir(),
 		})
 		assertValidationBoundary(t, err, "engine: restore requires at least one file ID")
 	})
@@ -124,10 +84,44 @@ func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 		eng := newRestoreTestEngine(t, db)
 
 		_, err := eng.Restore(context.Background(), engine.RestoreRequest{
-			Mode:    engine.RestoreModeFileIDs,
 			FileIDs: []int64{42},
 		})
 		assertValidationBoundary(t, err, "engine: restore output directory is required")
+	})
+
+	t.Run("restore stored path requires stored path", func(t *testing.T) {
+		db, sgctx, _ := storeRemoveFixture(t, "restore-stored-path-validation.txt", "restore-stored-path-validation")
+		eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
+
+		_, err := eng.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{})
+		assertValidationBoundary(t, err, "engine: restore stored path is required")
+	})
+
+	t.Run("restore stored path rejects conflicting metadata modes", func(t *testing.T) {
+		db, sgctx, stored := storeRemoveFixture(t, "restore-stored-path-metadata.txt", "restore-stored-path-metadata")
+		eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
+
+		_, err := eng.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+			StoredPath:     stored.Path,
+			StrictMetadata: true,
+			NoMetadata:     true,
+		})
+		assertValidationBoundary(t, err, "engine: restore stored path strict metadata and no metadata are mutually exclusive")
+	})
+
+	t.Run("remove stored paths requires targets", func(t *testing.T) {
+		db := openSnapshotTestDB(t)
+		eng := newRemoveTestEngine(t, db, t.TempDir())
+
+		_, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{})
+		assertValidationBoundary(t, err, "engine: remove stored paths requires at least one target")
+	})
+
+	t.Run("remove stored paths requires database", func(t *testing.T) {
+		_, err := (&engine.DefaultEngine{}).RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+			StoredPaths: []string{"/docs/a.txt"},
+		})
+		assertValidationBoundary(t, err, "engine: remove stored paths database is required")
 	})
 }
 
@@ -136,7 +130,6 @@ func TestPerItemExecutionFailuresRemainOutsideUnsupportedClassification(t *testi
 	eng := newRemoveTestEngine(t, db, t.TempDir())
 
 	res, err := eng.Remove(context.Background(), engine.RemoveRequest{
-		Mode:    engine.RemoveModeFileIDs,
 		FileIDs: []int64{-1},
 	})
 	assertRemoveReturnedNonUnsupportedTopLevelSuccess(t, err)

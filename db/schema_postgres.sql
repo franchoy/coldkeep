@@ -1,10 +1,24 @@
 BEGIN;
 
 DO $$
+DECLARE
+  schema_version_before INTEGER := 0;
 BEGIN
+  IF to_regclass('public.schema_version') IS NOT NULL THEN
+    EXECUTE
+      'SELECT COALESCE(MAX(version), 0) FROM public.schema_version'
+      INTO schema_version_before;
+  END IF;
+
   PERFORM set_config(
     'coldkeep.migration_had_schema_version',
     CASE WHEN to_regclass('public.schema_version') IS NULL THEN '0' ELSE '1' END,
+    true
+  );
+
+  PERFORM set_config(
+    'coldkeep.migration_schema_version_before',
+    schema_version_before::TEXT,
     true
   );
 END $$;
@@ -230,29 +244,46 @@ BEGIN
   END IF;
 END $$;
 
-UPDATE logical_file
-SET ref_count = 1
-WHERE ref_count IS NULL OR ref_count < 1;
+DO $$
+DECLARE
+  schema_version_before INTEGER :=
+    COALESCE(
+      NULLIF(
+        current_setting(
+          'coldkeep.migration_schema_version_before',
+          true
+        ),
+        ''
+      ),
+      '0'
+    )::INTEGER;
+BEGIN
+  IF schema_version_before < 6 THEN
+    UPDATE logical_file
+    SET ref_count = 1
+    WHERE ref_count IS NULL OR ref_count < 1;
 
-INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
-SELECT
-  '/migrated/' ||
-  CASE
-    WHEN BTRIM(COALESCE(lf.original_name, '')) = '' THEN 'file'
-    ELSE BTRIM(lf.original_name)
-  END || '-' || lf.id::TEXT,
-  lf.id,
-  NULL,
-  NULL,
-  NULL,
-  NULL,
-  FALSE
-FROM logical_file AS lf
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM physical_file AS pf
-  WHERE pf.logical_file_id = lf.id
-);
+    INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+    SELECT
+      '/migrated/' ||
+      CASE
+        WHEN BTRIM(COALESCE(lf.original_name, '')) = '' THEN 'file'
+        ELSE BTRIM(lf.original_name)
+      END || '-' || lf.id::TEXT,
+      lf.id,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      FALSE
+    FROM logical_file AS lf
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM physical_file AS pf
+      WHERE pf.logical_file_id = lf.id
+    );
+  END IF;
+END $$;
 
 UPDATE schema_version SET version = 6 WHERE version < 6;
 

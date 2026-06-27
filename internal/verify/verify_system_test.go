@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,6 +106,72 @@ func TestVerifySystemStandardDetectsLogicalRefCountMismatch(t *testing.T) {
 	}
 	if code, ok := invariants.Code(err); !ok || code != invariants.CodePhysicalGraphRefCountMismatch {
 		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphRefCountMismatch, code, ok, err)
+	}
+}
+
+func TestVerifySystemStandardAcceptsValidZeroReferenceLogicalFile(t *testing.T) {
+	containersDir := t.TempDir()
+	dbconn := openPreV15MigratedVerifyDB(t, containersDir)
+	defer func() { _ = dbconn.Close() }()
+
+	var logicalID int64
+	if err := dbconn.QueryRow(`SELECT id FROM logical_file LIMIT 1`).Scan(&logicalID); err != nil {
+		t.Fatalf("read logical_file id: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM physical_file WHERE logical_file_id = $1`, logicalID); err != nil {
+		t.Fatalf("delete physical mappings: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = 0 WHERE id = $1`, logicalID); err != nil {
+		t.Fatalf("set zero ref_count: %v", err)
+	}
+
+	if err := VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
+		t.Fatalf("verify standard should accept valid zero-reference logical file: %v", err)
+	}
+}
+
+func TestVerifySystemStandardDetectsLogicalRefCountPhysicalMappingMismatchTable(t *testing.T) {
+	cases := []struct {
+		name        string
+		refCount    int64
+		mappingRows int
+	}{
+		{name: "zero refs one mapping", refCount: 0, mappingRows: 1},
+		{name: "one ref two mappings", refCount: 1, mappingRows: 2},
+		{name: "three refs one mapping", refCount: 3, mappingRows: 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbconn := openVerifyTestDB(t)
+			defer func() { _ = dbconn.Close() }()
+
+			var logicalID int64
+			if err := dbconn.QueryRow(
+				`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+				 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
+				tc.name, int64(0), strings.Repeat("m", 64), filestate.LogicalFileCompleted, tc.refCount,
+			).Scan(&logicalID); err != nil {
+				t.Fatalf("insert logical file: %v", err)
+			}
+			for i := 0; i < tc.mappingRows; i++ {
+				if _, err := dbconn.Exec(
+					`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`,
+					filepath.Join("/verify", tc.name, strconv.Itoa(i)),
+					logicalID,
+				); err != nil {
+					t.Fatalf("insert physical_file row %d: %v", i, err)
+				}
+			}
+
+			err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), "logical ref_count mismatches=1") {
+				t.Fatalf("expected logical ref_count mismatch verification error, got: %v", err)
+			}
+			if code, ok := invariants.Code(err); !ok || code != invariants.CodePhysicalGraphRefCountMismatch {
+				t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphRefCountMismatch, code, ok, err)
+			}
+		})
 	}
 }
 

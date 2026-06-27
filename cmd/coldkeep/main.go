@@ -183,8 +183,8 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
 // Transitional CLI ownership in v1.13.1: doctor still owns corrective
-// recovery orchestration directly through recovery hooks. v1.13.9 owns any
-// later repair/recovery boundary decisions, and v1.13.11 owns remaining
+// recovery orchestration directly through recovery hooks. v1.13.10 owns any
+// later repair/recovery boundary decisions, and v1.13.12 owns remaining
 // thin-wrapper proof around this seam.
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
@@ -192,12 +192,12 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 
 // Transitional CLI ownership in v1.13.1: repair remains direct maintenance
-// execution rather than active engine ownership. v1.13.9 owns broader
+// execution rather than active engine ownership. v1.13.10 owns broader
 // repair/recovery boundary decisions.
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 
 // Transitional CLI ownership in v1.13.1: chunk live-ref-count repair remains
-// a direct maintenance phase hook, not an engine-routed workflow. v1.13.9 owns
+// a direct maintenance phase hook, not an engine-routed workflow. v1.13.10 owns
 // later cleanup if this boundary changes.
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
@@ -229,9 +229,7 @@ var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName strin
 	}, nil
 }
 var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun bool) batch.ItemResult {
-	// Partial route in v1.13.1: by-ID remove uses engine item execution, but
-	// stored-path and stored-paths remove remain direct CLI/storage paths until
-	// the explicit split cleanup in v1.13.7.
+	// By-ID remove remains the active engine-owned path.
 	if sgctx == nil || sgctx.DB == nil {
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: "remove: storage context DB is required"}
 	}
@@ -242,7 +240,6 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 	}
 
 	res, err := eng.Remove(context.Background(), engine.RemoveRequest{
-		Mode:     engine.RemoveModeFileIDs,
 		FileIDs:  []int64{fileID},
 		DryRun:   dryRun,
 		FailFast: true,
@@ -270,12 +267,10 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 	if dryRun {
 		return batch.ItemResult{ID: fileID, Status: batch.ResultPlanned, Message: "would remove"}
 	}
-	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", item.RemovedMappings)}
+	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", item.RemovedChunkAssociations)}
 }
 var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
-	// Partial route in v1.13.1: by-ID restore uses engine item execution, but
-	// stored-path restore remains a direct CLI/storage path until the explicit
-	// split cleanup in v1.13.7.
+	// By-ID restore remains the active engine-owned path.
 	if sgctx == nil || sgctx.DB == nil {
 		return storage.RestoreFileResult{}, fmt.Errorf("restore: storage context DB is required")
 	}
@@ -290,12 +285,11 @@ var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputD
 	}
 
 	res, err := eng.Restore(context.Background(), engine.RestoreRequest{
-		Mode:      engine.RestoreModeFileIDs,
-		FileIDs:   []int64{fileID},
-		OutputDir: outputDir,
-		Overwrite: overwrite,
-		DryRun:    dryRun,
-		FailFast:  true,
+		FileIDs:         []int64{fileID},
+		DestinationRoot: outputDir,
+		Overwrite:       overwrite,
+		DryRun:          dryRun,
+		FailFast:        true,
 	})
 	if err != nil {
 		return storage.RestoreFileResult{}, err
@@ -311,7 +305,7 @@ var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputD
 	return storage.RestoreFileResult{
 		FileID:       fileID,
 		OriginalName: info.OriginalName,
-		OutputPath:   item.OutputPath,
+		OutputPath:   item.DestinationPath,
 		RestoredHash: item.RestoredHash,
 	}, nil
 }
@@ -349,12 +343,12 @@ var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 
 // Transitional CLI ownership in v1.13.1: snapshot create remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// snapshot package workflow rather than an active engine method. v1.13.9 owns
 // the snapshot mutation boundary cleanup.
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 
 // Transitional CLI ownership in v1.13.1: snapshot restore remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// snapshot package workflow rather than an active engine method. v1.13.9 owns
 // later snapshot mutation boundary cleanup.
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
 var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
@@ -430,7 +424,7 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 }
 
 // Transitional CLI ownership in v1.13.1: snapshot delete remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.8 owns
+// snapshot package workflow rather than an active engine method. v1.13.9 owns
 // later snapshot mutation boundary cleanup.
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
@@ -1820,13 +1814,20 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		defer func() { _ = sgctx.Close() }()
 		perf.Mark("setup")
 
-		result, err := storage.RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, storage.RestoreOptions{
-			Overwrite:       overwrite,
-			DestinationMode: destinationMode,
-			Destination:     destination,
-			StrictMetadata:  strictMetadata,
-			NoMetadata:      noMetadata,
-		})
+		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+		if err != nil {
+			return err
+		}
+		result, normalizedMode, err := restoreStoredPathWithEngine(
+			context.Background(),
+			eng,
+			storedPath,
+			destinationMode,
+			destination,
+			overwrite,
+			strictMetadata,
+			noMetadata,
+		)
 		if err != nil {
 			return err
 		}
@@ -1841,7 +1842,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 					"output_path":   result.OutputPath,
 					"file_id":       result.FileID,
 					"restored_hash": result.RestoredHash,
-					"mode":          destinationMode,
+					"mode":          normalizedMode,
 					"perf_spans":    perf.Spans(),
 				},
 			}
@@ -1972,7 +1973,11 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 		defer func() { _ = sgctx.Close() }()
 
-		result, err := storage.RemoveFileByStoredPathWithStorageContextResult(sgctx, storedPath)
+		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+		if err != nil {
+			return err
+		}
+		result, err := removeStoredPathWithEngine(context.Background(), eng, storedPath)
 		if err != nil {
 			return err
 		}
@@ -2013,15 +2018,8 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		if err != nil {
 			return usageErrorf("failed to open/read input file: %v", err)
 		}
-		preparedTargets := prepareRemoveStoredPathTargets(rawTargets)
-		if len(preparedTargets) == 0 {
+		if len(rawTargets) == 0 {
 			return usageErrorf("no valid stored paths after parsing input")
-		}
-		if !hasExecutableRemoveStoredPathTarget(preparedTargets) {
-			removePerf.Mark("setup")
-			report := executeRemoveStoredPathPrepared(dryRun, failFast, preparedTargets, nil)
-			removePerf.Mark("operation")
-			return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 		}
 
 		sgctx, err := loadDefaultStorageContextPhase()
@@ -2031,7 +2029,23 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		defer func() { _ = sgctx.Close() }()
 		removePerf.Mark("setup")
 
-		report := executeRemoveStoredPathPrepared(dryRun, failFast, preparedTargets, &sgctx)
+		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+		if err != nil {
+			return err
+		}
+		orderedTargets := make([]string, 0, len(rawTargets))
+		for _, target := range rawTargets {
+			orderedTargets = append(orderedTargets, target.Value)
+		}
+		result, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+			StoredPaths: orderedTargets,
+			DryRun:      dryRun,
+			FailFast:    failFast,
+		})
+		if err != nil {
+			return err
+		}
+		report := removeStoredPathsResultToBatchReport(result, failFast)
 		removePerf.Mark("operation")
 		return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 	}
@@ -2224,130 +2238,6 @@ func annotateBatchFailureFromError(err error, item *batch.ItemResult) {
 
 	item.InvariantCode = code
 	item.RecommendedAction = invariants.RecommendedActionForCode(code)
-}
-
-type preparedRemoveStoredPathTarget struct {
-	StoredPath string
-	Executable bool
-	Result     batch.ItemResult
-}
-
-func prepareRemoveStoredPathTargets(raw []batch.RawTarget) []preparedRemoveStoredPathTarget {
-	prepared := make([]preparedRemoveStoredPathTarget, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-
-	for _, item := range raw {
-		path := strings.TrimSpace(item.Value)
-		if path == "" {
-			prepared = append(prepared, preparedRemoveStoredPathTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					RawValue: item.Value,
-					Status:   batch.ResultFailed,
-					Message:  fmt.Sprintf("invalid stored path %q", item.Value),
-				},
-			})
-			continue
-		}
-
-		if _, exists := seen[path]; exists {
-			prepared = append(prepared, preparedRemoveStoredPathTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					RawValue: path,
-					Status:   batch.ResultSkipped,
-					Message:  "duplicate target",
-				},
-			})
-			continue
-		}
-
-		seen[path] = struct{}{}
-		prepared = append(prepared, preparedRemoveStoredPathTarget{StoredPath: path, Executable: true})
-	}
-
-	return prepared
-}
-
-func hasExecutableRemoveStoredPathTarget(targets []preparedRemoveStoredPathTarget) bool {
-	for _, target := range targets {
-		if target.Executable {
-			return true
-		}
-	}
-	return false
-}
-
-func executeRemoveStoredPathPrepared(dryRun bool, failFast bool, targets []preparedRemoveStoredPathTarget, sgctx *storage.StorageContext) batch.Report {
-	results := make([]batch.ItemResult, 0, len(targets))
-
-	for _, target := range targets {
-		if !target.Executable {
-			results = append(results, target.Result)
-			continue
-		}
-
-		var item batch.ItemResult
-		if dryRun {
-			if sgctx == nil || sgctx.DB == nil {
-				item = batch.ItemResult{RawValue: target.StoredPath, Status: batch.ResultFailed, Message: "internal error: storage context unavailable"}
-			} else {
-				item = executeRemoveStoredPathDryRunItem(sgctx.DB, target.StoredPath)
-			}
-		} else {
-			if sgctx == nil {
-				item = batch.ItemResult{RawValue: target.StoredPath, Status: batch.ResultFailed, Message: "internal error: storage context unavailable"}
-			} else {
-				item = executeRemoveStoredPathItem(sgctx, target.StoredPath)
-			}
-		}
-
-		results = append(results, item)
-		if failFast && item.Status == batch.ResultFailed {
-			break
-		}
-	}
-
-	report := batch.NewReport(batch.OperationRemove, dryRun, results)
-	report.ExecutionMode = batch.ExecutionModeContinueOnError
-	if failFast {
-		report.ExecutionMode = batch.ExecutionModeFailFast
-	}
-	return report
-}
-
-func executeRemoveStoredPathDryRunItem(dbconn *sql.DB, storedPath string) batch.ItemResult {
-	normalized := strings.TrimSpace(storedPath)
-	if normalized == "" {
-		return batch.ItemResult{RawValue: storedPath, Status: batch.ResultFailed, Message: fmt.Sprintf("invalid stored path %q", storedPath)}
-	}
-
-	var logicalID int64
-	err := dbconn.QueryRow(`SELECT logical_file_id FROM physical_file WHERE path = $1`, normalized).Scan(&logicalID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return batch.ItemResult{RawValue: normalized, Status: batch.ResultFailed, Message: fmt.Sprintf("physical_file[%q]: not found (never stored)", normalized)}
-		}
-		return batch.ItemResult{RawValue: normalized, Status: batch.ResultFailed, Message: err.Error()}
-	}
-
-	return batch.ItemResult{ID: logicalID, RawValue: normalized, Status: batch.ResultPlanned, Message: "would remove stored-path mapping"}
-}
-
-func executeRemoveStoredPathItem(sgctx *storage.StorageContext, storedPath string) batch.ItemResult {
-	result, err := storage.RemoveFileByStoredPathWithStorageContextResult(*sgctx, storedPath)
-	if err != nil {
-		item := batch.ItemResult{RawValue: strings.TrimSpace(storedPath), Status: batch.ResultFailed, Message: err.Error()}
-		annotateBatchFailureFromError(err, &item)
-		return item
-	}
-
-	return batch.ItemResult{
-		ID:       result.LogicalFileID,
-		RawValue: result.StoredPath,
-		Status:   batch.ResultSuccess,
-		Message:  fmt.Sprintf("removed stored_path remaining_ref_count=%d", result.RemainingRefCount),
-	}
 }
 
 func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode, spans ...[]perfSpan) error {
