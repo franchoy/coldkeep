@@ -147,18 +147,27 @@ func queryRemoveStoredPathChunkInsert(dbconn *sql.DB, chunkHash string) *sql.Row
 func insertRemoveStoredPathLogicalFile(t *testing.T, dbconn *sql.DB, name, fileHash string, refCount int64) int64 {
 	t.Helper()
 	var logicalID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
-		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
-		name,
-		int64(8),
-		fileHash,
-		"COMPLETED",
-		refCount,
-	).Scan(&logicalID); err != nil {
+	if err := queryRemoveStoredPathLogicalFileInsert(dbconn, name, fileHash, refCount).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
 	}
 	return logicalID
+}
+
+func queryRemoveStoredPathLogicalFileInsert(dbconn *sql.DB, name, fileHash string, refCount int64) *sql.Row {
+	out := reflect.ValueOf(dbconn).MethodByName("QueryRow").CallSlice([]reflect.Value{
+		reflect.ValueOf(
+			`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
+		),
+		reflect.ValueOf([]any{
+			name,
+			int64(8),
+			fileHash,
+			"COMPLETED",
+			refCount,
+		}),
+	})
+	return out[0].Interface().(*sql.Row)
 }
 
 type removeStoredPathFixtureHashes struct {
