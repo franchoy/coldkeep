@@ -94,13 +94,13 @@ func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, r
 	t.Helper()
 
 	var logicalID int64
-	hash := removeStoredPathFixtureHash(names, refCount)
+	hashes := buildRemoveStoredPathFixtureHashes(names, refCount)
 	if err := dbconn.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
 		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		names[0],
 		int64(8),
-		hash,
+		hashes.logicalHash,
 		"COMPLETED",
 		refCount,
 	).Scan(&logicalID); err != nil {
@@ -111,7 +111,7 @@ func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, r
 	if err := dbconn.QueryRow(
 		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
 		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		hash+"-chunk",
+		hashes.chunkHash,
 		int64(8),
 		"COMPLETED",
 		1,
@@ -139,7 +139,20 @@ func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, r
 	return logicalID, paths
 }
 
-func removeStoredPathFixtureHash(names []string, refCount int64) string {
+type removeStoredPathFixtureHashes struct {
+	logicalHash string
+	chunkHash   string
+}
+
+func buildRemoveStoredPathFixtureHashes(names []string, refCount int64) removeStoredPathFixtureHashes {
+	base := removeStoredPathFixtureHashBase(names, refCount)
+	return removeStoredPathFixtureHashes{
+		logicalHash: base,
+		chunkHash:   base + "_chunk",
+	}
+}
+
+func removeStoredPathFixtureHashBase(names []string, refCount int64) string {
 	var builder strings.Builder
 	builder.WriteString("phase7-remove")
 	for _, name := range names {

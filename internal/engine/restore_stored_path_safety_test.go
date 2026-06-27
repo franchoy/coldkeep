@@ -55,11 +55,18 @@ func trustedRestoreTestPath(t *testing.T, root, name string) string {
 
 func trustedRestoreTestDir(t *testing.T, root, name string) string {
 	t.Helper()
-	dir := filepath.Join(root, name)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir, err := os.MkdirTemp(root, name+"-")
+	if err != nil {
 		t.Fatalf("mkdir trusted restore test dir: %v", err)
 	}
 	return dir
+}
+
+func ensureTrustedRestoreParentDir(t *testing.T, targetPath string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+		t.Fatalf("mkdir trusted restore parent dir: %v", err)
+	}
 }
 
 func updateStoredPathMapping(t *testing.T, db *sql.DB, fileID int64, storedPath string) {
@@ -207,9 +214,7 @@ func TestRestoreStoredPathOverwriteFalsePreservesExistingDestination(t *testing.
 			buildRequest: func(t *testing.T, fixture storedPathRestoreFixture, sentinel []byte) engine.RestoreStoredPathRequest {
 				prefixRoot := trustedRestoreTestDir(t, t.TempDir(), "prefix-root")
 				dst := expectedPrefixModeOutputPath(prefixRoot, fixture.stored.Path)
-				if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-					t.Fatalf("mkdir prefix dst: %v", err)
-				}
+				ensureTrustedRestoreParentDir(t, dst)
 				if err := os.WriteFile(dst, sentinel, 0o600); err != nil {
 					t.Fatalf("write prefix sentinel: %v", err)
 				}
@@ -226,9 +231,7 @@ func TestRestoreStoredPathOverwriteFalsePreservesExistingDestination(t *testing.
 			name: "override",
 			buildRequest: func(t *testing.T, fixture storedPathRestoreFixture, sentinel []byte) engine.RestoreStoredPathRequest {
 				overridePath := trustedRestoreTestPath(t, t.TempDir(), "override-existing.bin")
-				if err := os.MkdirAll(filepath.Dir(overridePath), 0o700); err != nil {
-					t.Fatalf("mkdir override dst: %v", err)
-				}
+				ensureTrustedRestoreParentDir(t, overridePath)
 				if err := os.WriteFile(overridePath, sentinel, 0o600); err != nil {
 					t.Fatalf("write override sentinel: %v", err)
 				}

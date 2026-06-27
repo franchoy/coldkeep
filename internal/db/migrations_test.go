@@ -6,10 +6,11 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -21,6 +22,8 @@ type dummyDriver struct{}
 func (d dummyDriver) Open(_ string) (driver.Conn, error) { return nil, nil }
 
 var registerOnce sync.Once
+var postgresTestDatabaseSequence uint64
+var trustedPostgresTestIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 func registerDummyDriver() {
 	registerOnce.Do(func() { sql.Register("dummy", dummyDriver{}) })
@@ -1275,55 +1278,9 @@ func TestRunMigrationsBackfillsChunkerVersionForLegacyLogicalFileAndChunkRows(t 
 }
 
 func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
-	if os.Getenv("COLDKEEP_TEST_DB") == "" {
-		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
-	}
-
-	host := getenvOrDefault("DB_HOST", "127.0.0.1")
-	port := getenvOrDefault("DB_PORT", "5432")
-	user := getenvOrDefault("DB_USER", "coldkeep")
-	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
-	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
-	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
-
-	adminConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		maintenanceDB,
-		sslMode,
-	)
-	adminDB, err := sql.Open("postgres", adminConnStr)
-	if err != nil {
-		t.Fatalf("open postgres admin connection: %v", err)
-	}
-	defer func() { _ = adminDB.Close() }()
-
-	if err := adminDB.Ping(); err != nil {
-		t.Fatalf("ping postgres admin connection: %v", err)
-	}
-
-	testDBName := fmt.Sprintf("coldkeep_phase1_v8_%d", time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
-		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
-	}
-	defer func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
-	}()
-
-	t.Setenv("DB_HOST", host)
-	t.Setenv("DB_PORT", port)
-	t.Setenv("DB_USER", user)
-	t.Setenv("DB_PASSWORD", password)
-	t.Setenv("DB_SSLMODE", sslMode)
-	t.Setenv("DB_NAME", testDBName)
+	requireLivePostgresTestDB(t)
+	_, testDBName := openTempPostgresDatabaseWithName(t, "coldkeep_phase1_v8")
+	applyPostgresTestEnv(t, testDBName)
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
 
 	dbconn, err := ConnectDB()
@@ -1584,63 +1541,7 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
 	}
 
-	host := getenvOrDefault("DB_HOST", "127.0.0.1")
-	port := getenvOrDefault("DB_PORT", "5432")
-	user := getenvOrDefault("DB_USER", "coldkeep")
-	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
-	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
-	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
-
-	adminConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		maintenanceDB,
-		sslMode,
-	)
-	adminDB, err := sql.Open("postgres", adminConnStr)
-	if err != nil {
-		t.Fatalf("open postgres admin connection: %v", err)
-	}
-	defer func() { _ = adminDB.Close() }()
-
-	if err := adminDB.Ping(); err != nil {
-		t.Fatalf("ping postgres admin connection: %v", err)
-	}
-
-	testDBName := fmt.Sprintf("coldkeep_postgres_auto_upgrade_%d", time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
-		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
-	}
-	defer func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
-	}()
-
-	testConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		testDBName,
-		sslMode,
-	)
-	dbconn, err := sql.Open("postgres", testConnStr)
-	if err != nil {
-		t.Fatalf("open postgres test database connection: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	if err := dbconn.Ping(); err != nil {
-		t.Fatalf("ping postgres test database connection: %v", err)
-	}
+	dbconn, testDBName := openTempPostgresDatabaseWithName(t, "coldkeep_postgres_auto_upgrade")
 
 	schemaSQL, err := loadPostgresSchema()
 	if err != nil {
@@ -1654,12 +1555,7 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 		t.Fatalf("downgrade schema_version to 11 for migration test: %v", err)
 	}
 
-	t.Setenv("DB_HOST", host)
-	t.Setenv("DB_PORT", port)
-	t.Setenv("DB_USER", user)
-	t.Setenv("DB_PASSWORD", password)
-	t.Setenv("DB_SSLMODE", sslMode)
-	t.Setenv("DB_NAME", testDBName)
+	applyPostgresTestEnv(t, testDBName)
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
 
 	opened, err := ConnectDB()
@@ -1678,67 +1574,8 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 }
 
 func TestPostgresV7SnapshotMigrationToV8WithoutDataLoss(t *testing.T) {
-	if os.Getenv("COLDKEEP_TEST_DB") == "" {
-		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
-	}
-
-	host := getenvOrDefault("DB_HOST", "127.0.0.1")
-	port := getenvOrDefault("DB_PORT", "5432")
-	user := getenvOrDefault("DB_USER", "coldkeep")
-	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
-	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
-	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
-
-	adminConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		maintenanceDB,
-		sslMode,
-	)
-	adminDB, err := sql.Open("postgres", adminConnStr)
-	if err != nil {
-		t.Fatalf("open postgres admin connection: %v", err)
-	}
-	defer func() { _ = adminDB.Close() }()
-
-	if err := adminDB.Ping(); err != nil {
-		t.Fatalf("ping postgres admin connection: %v", err)
-	}
-
-	testDBName := fmt.Sprintf("coldkeep_phase1_v7_to_v8_%d", time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
-		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
-	}
-	defer func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
-	}()
-
-	testConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		testDBName,
-		sslMode,
-	)
-	dbconn, err := sql.Open("postgres", testConnStr)
-	if err != nil {
-		t.Fatalf("open postgres test database connection: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	if err := dbconn.Ping(); err != nil {
-		t.Fatalf("ping postgres test database connection: %v", err)
-	}
+	requireLivePostgresTestDB(t)
+	dbconn, _ := openTempPostgresDatabaseWithName(t, "coldkeep_phase1_v7_to_v8")
 
 	legacyV7SQL := `
 		CREATE TABLE schema_version (
@@ -2060,24 +1897,37 @@ func applyCurrentPostgresSchemaFixture(t *testing.T, dbconn *sql.DB) {
 
 func applyLegacyPostgresV5SchemaFixture(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	for _, stmt := range []string{
-		`CREATE TABLE schema_version (version INTEGER PRIMARY KEY)`,
-		`INSERT INTO schema_version(version) VALUES (5)`,
-		`CREATE TABLE logical_file (
-			id BIGSERIAL PRIMARY KEY,
-			original_name TEXT NOT NULL,
-			total_size BIGINT NOT NULL,
-			file_hash TEXT NOT NULL,
-			status TEXT NOT NULL,
-			retry_count INTEGER NOT NULL DEFAULT 0,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-	} {
-		if _, err := dbconn.Exec(stmt); err != nil {
-			t.Fatalf("apply legacy postgres v5 fixture statement: %v", err)
-		}
+	execLegacyPostgresFixtureStatement(t, dbconn, legacyPostgresV5SchemaVersionTableSQL())
+	execLegacyPostgresFixtureStatement(t, dbconn, legacyPostgresV5SchemaVersionSeedSQL())
+	execLegacyPostgresFixtureStatement(t, dbconn, legacyPostgresV5LogicalFileTableSQL())
+}
+
+func execLegacyPostgresFixtureStatement(t *testing.T, dbconn *sql.DB, statement string) {
+	t.Helper()
+	if _, err := dbconn.Exec(statement); err != nil {
+		t.Fatalf("apply legacy postgres fixture statement: %v", err)
 	}
+}
+
+func legacyPostgresV5SchemaVersionTableSQL() string {
+	return `CREATE TABLE schema_version (version INTEGER PRIMARY KEY)`
+}
+
+func legacyPostgresV5SchemaVersionSeedSQL() string {
+	return `INSERT INTO schema_version(version) VALUES (5)`
+}
+
+func legacyPostgresV5LogicalFileTableSQL() string {
+	return `CREATE TABLE logical_file (
+		id BIGSERIAL PRIMARY KEY,
+		original_name TEXT NOT NULL,
+		total_size BIGINT NOT NULL,
+		file_hash TEXT NOT NULL,
+		status TEXT NOT NULL,
+		retry_count INTEGER NOT NULL DEFAULT 0,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`
 }
 
 func insertPostgresMigrationLogicalFile(t *testing.T, dbconn *sql.DB, name string, size int64, hash string, refCount int64) int64 {
@@ -2217,26 +2067,72 @@ func assertPostgresSchemaVersion(t *testing.T, dbconn *sql.DB, want int) {
 	}
 }
 
+type postgresTestEnvConfig struct {
+	host          string
+	port          string
+	user          string
+	password      string
+	sslMode       string
+	maintenanceDB string
+}
+
+func loadPostgresTestEnvConfig() postgresTestEnvConfig {
+	return postgresTestEnvConfig{
+		host:          getenvOrDefault("DB_HOST", "127.0.0.1"),
+		port:          getenvOrDefault("DB_PORT", "5432"),
+		user:          getenvOrDefault("DB_USER", "coldkeep"),
+		password:      getenvOrDefault("DB_PASSWORD", "coldkeep"),
+		sslMode:       getenvOrDefault("DB_SSLMODE", "disable"),
+		maintenanceDB: getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres"),
+	}
+}
+
+func (cfg postgresTestEnvConfig) adminConnString() string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		cfg.host,
+		cfg.port,
+		cfg.user,
+		cfg.password,
+		cfg.maintenanceDB,
+		cfg.sslMode,
+	)
+}
+
+func (cfg postgresTestEnvConfig) testConnString(dbName string) string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		cfg.host,
+		cfg.port,
+		cfg.user,
+		cfg.password,
+		dbName,
+		cfg.sslMode,
+	)
+}
+
+func applyPostgresTestEnv(t *testing.T, dbName string) {
+	t.Helper()
+	cfg := loadPostgresTestEnvConfig()
+	t.Setenv("DB_HOST", cfg.host)
+	t.Setenv("DB_PORT", cfg.port)
+	t.Setenv("DB_USER", cfg.user)
+	t.Setenv("DB_PASSWORD", cfg.password)
+	t.Setenv("DB_SSLMODE", cfg.sslMode)
+	t.Setenv("DB_NAME", dbName)
+}
+
 func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
 	t.Helper()
+	dbconn, _ := openTempPostgresDatabaseWithName(t, prefix)
+	return dbconn
+}
 
-	host := getenvOrDefault("DB_HOST", "127.0.0.1")
-	port := getenvOrDefault("DB_PORT", "5432")
-	user := getenvOrDefault("DB_USER", "coldkeep")
-	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
-	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
-	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
+func openTempPostgresDatabaseWithName(t *testing.T, prefix string) (*sql.DB, string) {
+	t.Helper()
 
-	adminConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		maintenanceDB,
-		sslMode,
-	)
-	adminDB, err := sql.Open("postgres", adminConnStr)
+	cfg := loadPostgresTestEnvConfig()
+	adminDB, err := sql.Open("postgres", cfg.adminConnString())
 	if err != nil {
 		t.Fatalf("open postgres admin connection: %v", err)
 	}
@@ -2245,9 +2141,8 @@ func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
 		t.Fatalf("ping postgres admin connection: %v", err)
 	}
 
-	testDBName := fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
-	quotedDBName := quotePostgresIdentifier(testDBName)
-	if _, err := adminDB.Exec("CREATE DATABASE " + quotedDBName); err != nil {
+	testDBName := newTrustedPostgresTestDatabaseName(prefix)
+	if err := execTrustedPostgresDatabaseStatement(adminDB, trustedCreatePostgresDatabaseStatement(testDBName)); err != nil {
 		_ = adminDB.Close()
 		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
 	}
@@ -2258,20 +2153,11 @@ func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
 				FROM pg_stat_activity
 				WHERE datname = $1 AND pid <> pg_backend_pid()
 			`, testDBName)
-		_, _ = adminDB.Exec("DROP DATABASE IF EXISTS " + quotedDBName)
+		_ = execTrustedPostgresDatabaseStatement(adminDB, trustedDropPostgresDatabaseStatement(testDBName))
 		_ = adminDB.Close()
 	})
 
-	testConnStr := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
-		host,
-		port,
-		user,
-		password,
-		testDBName,
-		sslMode,
-	)
-	dbconn, err := sql.Open("postgres", testConnStr)
+	dbconn, err := sql.Open("postgres", cfg.testConnString(testDBName))
 	if err != nil {
 		t.Fatalf("open postgres test database connection: %v", err)
 	}
@@ -2281,11 +2167,43 @@ func openTempPostgresDatabase(t *testing.T, prefix string) *sql.DB {
 	}
 
 	t.Cleanup(func() { _ = dbconn.Close() })
-	return dbconn
+	return dbconn, testDBName
 }
 
 func quotePostgresIdentifier(identifier string) string {
 	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
+func newTrustedPostgresTestDatabaseName(prefix string) string {
+	safePrefix := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '_'
+		}
+	}, prefix)
+	return fmt.Sprintf("%s_%d", safePrefix, atomic.AddUint64(&postgresTestDatabaseSequence, 1))
+}
+
+func trustedCreatePostgresDatabaseStatement(identifier string) string {
+	return fmt.Sprintf("CREATE DATABASE %s", trustedPostgresIdentifier(identifier))
+}
+
+func trustedDropPostgresDatabaseStatement(identifier string) string {
+	return fmt.Sprintf("DROP DATABASE IF EXISTS %s", trustedPostgresIdentifier(identifier))
+}
+
+func execTrustedPostgresDatabaseStatement(db *sql.DB, statement string) error {
+	_, err := db.Exec(statement)
+	return err
+}
+
+func trustedPostgresIdentifier(identifier string) string {
+	if !trustedPostgresTestIdentifierPattern.MatchString(identifier) {
+		panic("unexpected postgres test identifier")
+	}
+	return quotePostgresIdentifier(identifier)
 }
 
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {

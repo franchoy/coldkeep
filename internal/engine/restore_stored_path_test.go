@@ -1,7 +1,6 @@
 package engine_test
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
@@ -17,8 +15,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/tests/utils/testgate"
-
-	_ "github.com/lib/pq"
 )
 
 type storedPathRestoreFixture struct {
@@ -569,210 +565,4 @@ func assertRestoreStoredPathResult(t *testing.T, got engine.RestoreStoredPathRes
 	if got.RestoredHash != wantHash {
 		t.Fatalf("RestoredHash: got %q want %q", got.RestoredHash, wantHash)
 	}
-}
-
-func assertRestoredBytes(t *testing.T, path string, want []byte) {
-	t.Helper()
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read restored bytes: %v", err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("restored bytes mismatch: got=%q want=%q", string(got), string(want))
-	}
-}
-
-func expectedPrefixModeOutputPath(prefixRoot string, storedPath string) string {
-	relativePath := storedPath
-	if vol := filepath.VolumeName(relativePath); vol != "" {
-		relativePath = strings.TrimPrefix(relativePath, vol)
-	}
-	relativePath = strings.TrimLeft(relativePath, `/\`)
-	return filepath.Join(prefixRoot, relativePath)
-}
-
-func setPhysicalFileMetadataComplete(t *testing.T, db *sql.DB, fileID int64, complete bool) {
-	t.Helper()
-	if _, err := db.Exec(`UPDATE physical_file SET is_metadata_complete = $1, mode = NULL, mtime = NULL, uid = NULL, gid = NULL WHERE logical_file_id = $2`, complete, fileID); err != nil {
-		t.Fatalf("update physical_file metadata completeness: %v", err)
-	}
-}
-
-func seedSnapshotRetentionReference(t *testing.T, db *sql.DB, fileID int64, storedPath string) {
-	t.Helper()
-	snapshotID := fmt.Sprintf("snap-restore-%d", time.Now().UnixNano())
-	pathID := time.Now().UnixNano()
-	if _, err := db.Exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`, snapshotID, time.Now().UTC().Format(time.RFC3339), "full", "restore-stored-path"); err != nil {
-		t.Fatalf("insert snapshot: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, pathID, storedPath); err != nil {
-		t.Fatalf("insert snapshot_path: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ($1, $2, $3, $4)`, snapshotID, pathID, fileID, int64(len(storedPath))); err != nil {
-		t.Fatalf("insert snapshot_file: %v", err)
-	}
-}
-
-func snapshotRestoreCatalogState(t *testing.T, db *sql.DB, fileID int64) restoreCatalogState {
-	t.Helper()
-
-	state := restoreCatalogState{
-		chunkLiveRefs:  make(map[int64]int64),
-		chunkPinCounts: make(map[int64]int64),
-	}
-
-	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file`).Scan(&state.logicalFileCount); err != nil {
-		t.Fatalf("count logical_file rows: %v", err)
-	}
-	if err := db.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, fileID).Scan(&state.refCount); err != nil {
-		t.Fatalf("read logical_file.ref_count: %v", err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, fileID).Scan(&state.physicalCount); err != nil {
-		t.Fatalf("count physical_file rows: %v", err)
-	}
-	if state.physicalCount > 0 {
-		if err := db.QueryRow(`SELECT path FROM physical_file WHERE logical_file_id = $1 ORDER BY path LIMIT 1`, fileID).Scan(&state.physicalPath); err != nil {
-			t.Fatalf("read physical_file.path: %v", err)
-		}
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, fileID).Scan(&state.snapshotCount); err != nil {
-		t.Fatalf("count snapshot_file rows: %v", err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&state.fileChunkCount); err != nil {
-		t.Fatalf("count file_chunk rows: %v", err)
-	}
-
-	rows, err := db.Query(`
-		SELECT c.id, c.live_ref_count, c.pin_count
-		FROM file_chunk fc
-		JOIN chunk c ON c.id = fc.chunk_id
-		WHERE fc.logical_file_id = $1
-		ORDER BY fc.chunk_order ASC
-	`, fileID)
-	if err != nil {
-		t.Fatalf("query chunk refs: %v", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var chunkID, liveRefCount, pinCount int64
-		if err := rows.Scan(&chunkID, &liveRefCount, &pinCount); err != nil {
-			t.Fatalf("scan chunk refs: %v", err)
-		}
-		state.chunkLiveRefs[chunkID] = liveRefCount
-		state.chunkPinCounts[chunkID] = pinCount
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate chunk refs: %v", err)
-	}
-
-	return state
-}
-
-func assertRestoreCatalogStateEqual(t *testing.T, before, after restoreCatalogState) {
-	t.Helper()
-	if before.logicalFileCount != after.logicalFileCount {
-		t.Fatalf("logical_file count changed: before=%d after=%d", before.logicalFileCount, after.logicalFileCount)
-	}
-	if before.refCount != after.refCount {
-		t.Fatalf("logical_file.ref_count changed: before=%d after=%d", before.refCount, after.refCount)
-	}
-	if before.physicalCount != after.physicalCount {
-		t.Fatalf("physical_file count changed: before=%d after=%d", before.physicalCount, after.physicalCount)
-	}
-	if before.physicalPath != after.physicalPath {
-		t.Fatalf("physical_file.path changed: before=%q after=%q", before.physicalPath, after.physicalPath)
-	}
-	if before.snapshotCount != after.snapshotCount {
-		t.Fatalf("snapshot_file count changed: before=%d after=%d", before.snapshotCount, after.snapshotCount)
-	}
-	if before.fileChunkCount != after.fileChunkCount {
-		t.Fatalf("file_chunk count changed: before=%d after=%d", before.fileChunkCount, after.fileChunkCount)
-	}
-	if len(before.chunkLiveRefs) != len(after.chunkLiveRefs) {
-		t.Fatalf("chunk.live_ref_count set changed: before=%v after=%v", before.chunkLiveRefs, after.chunkLiveRefs)
-	}
-	for chunkID, beforeCount := range before.chunkLiveRefs {
-		if after.chunkLiveRefs[chunkID] != beforeCount {
-			t.Fatalf("chunk.live_ref_count changed for chunk %d: before=%d after=%d", chunkID, beforeCount, after.chunkLiveRefs[chunkID])
-		}
-		if after.chunkPinCounts[chunkID] != before.chunkPinCounts[chunkID] {
-			t.Fatalf("chunk.pin_count changed for chunk %d: before=%d after=%d", chunkID, before.chunkPinCounts[chunkID], after.chunkPinCounts[chunkID])
-		}
-	}
-}
-
-func logicalFileChunkIDs(t *testing.T, db *sql.DB, fileID int64) []int64 {
-	t.Helper()
-
-	rows, err := db.Query(`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order ASC`, fileID)
-	if err != nil {
-		t.Fatalf("query file chunks: %v", err)
-	}
-	defer rows.Close()
-
-	var ids []int64
-	for rows.Next() {
-		var chunkID int64
-		if err := rows.Scan(&chunkID); err != nil {
-			t.Fatalf("scan chunk id: %v", err)
-		}
-		ids = append(ids, chunkID)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate file chunks: %v", err)
-	}
-	return ids
-}
-
-func chunkPinCount(t *testing.T, db *sql.DB, chunkID int64) int64 {
-	t.Helper()
-	var pinCount int64
-	if err := db.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinCount); err != nil {
-		t.Fatalf("read chunk pin_count: %v", err)
-	}
-	return pinCount
-}
-
-func openTempPostgresEngineDatabase(t *testing.T, prefix string) *sql.DB {
-	t.Helper()
-
-	adminDB := openRawPostgresDB(t, "")
-	testDBName := fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
-		_ = adminDB.Close()
-		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
-	}
-
-	t.Cleanup(func() {
-		_, _ = adminDB.Exec(`
-			SELECT pg_terminate_backend(pid)
-			FROM pg_stat_activity
-			WHERE datname = $1 AND pid <> pg_backend_pid()
-		`, testDBName)
-		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
-		_ = adminDB.Close()
-	})
-
-	db := openRawPostgresDB(t, testDBName)
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
-
-func openRawPostgresDB(t *testing.T, dbName string) *sql.DB {
-	t.Helper()
-
-	connStr, err := dbpkg.BuildPostgresConnStringFromEnv(dbName)
-	if err != nil {
-		t.Fatalf("BuildPostgresConnStringFromEnv(%q): %v", dbName, err)
-	}
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		t.Fatalf("sql.Open(postgres): %v", err)
-	}
-	if err := db.Ping(); err != nil {
-		_ = db.Close()
-		t.Fatalf("ping postgres: %v", err)
-	}
-	return db
 }

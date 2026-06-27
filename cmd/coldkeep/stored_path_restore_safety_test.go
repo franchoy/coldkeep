@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -87,7 +88,7 @@ func requireCLIPathAbsent(t *testing.T, path string) {
 func requireCLIFileBytes(t *testing.T, path string, want []byte) {
 	t.Helper()
 
-	got, err := readTrustedCLIRestoreOutputFile(t, path)
+	got, err := readTrustedCLIRestoreOutputFile(t, trustedCLIRestoreOutputPath(t, path))
 	if err != nil {
 		t.Fatalf("read %q: %v", path, err)
 	}
@@ -96,9 +97,19 @@ func requireCLIFileBytes(t *testing.T, path string, want []byte) {
 	}
 }
 
+func trustedCLIRestoreOutputPath(t *testing.T, path string) string {
+	t.Helper()
+	return filepath.Clean(path)
+}
+
 func readTrustedCLIRestoreOutputFile(t *testing.T, path string) ([]byte, error) {
 	t.Helper()
-	return os.ReadFile(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
 }
 
 func requireCLINoRestoreTempFiles(t *testing.T, dir string) {
