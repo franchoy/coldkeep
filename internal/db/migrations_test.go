@@ -2238,7 +2238,7 @@ func execTrustedPostgresDatabaseStatement(dbconn *sql.DB, statement string) erro
 		return err
 	}
 	defer stmt.Close()
-	_, err = stmt.Exec()
+	_, err = stmt.Exec() // #nosec G201,G202 -- test database DDL uses validated generated identifiers only.
 	return err
 }
 
@@ -2252,7 +2252,7 @@ func terminateTrustedPostgresSessions(adminDB *sql.DB, dbName string) error {
 		return err
 	}
 	defer stmt.Close()
-	_, err = stmt.Exec(dbName)
+	_, err = stmt.Exec(dbName) // #nosec G201,G202 -- query text is fixed; dbName is a bound test parameter.
 	return err
 }
 
@@ -2268,19 +2268,19 @@ func trustedPostgresIdentifier(identifier string) string {
 }
 
 func execLegacyPostgresSchemaVersionTableFixture(dbconn *sql.DB) (sql.Result, error) {
-	return dbconn.Exec(legacyPostgresV5SchemaVersionTableSQL())
+	return dbconn.Exec(legacyPostgresV5SchemaVersionTableSQL()) // #nosec G201,G202 -- trusted legacy schema fixture.
 }
 
 func execLegacyPostgresSchemaVersionSeedFixture(dbconn *sql.DB) (sql.Result, error) {
-	return dbconn.Exec(legacyPostgresV5SchemaVersionSeedSQL())
+	return dbconn.Exec(legacyPostgresV5SchemaVersionSeedSQL()) // #nosec G201,G202 -- trusted legacy schema fixture.
 }
 
 func execLegacyPostgresLogicalFileTableFixture(dbconn *sql.DB) (sql.Result, error) {
-	return dbconn.Exec(legacyPostgresV5LogicalFileTableSQL())
+	return dbconn.Exec(legacyPostgresV5LogicalFileTableSQL()) // #nosec G201,G202 -- trusted legacy schema fixture.
 }
 
 func insertPostgresSnapshotFixtureRow(dbconn *sql.DB, snapshotID, label string) (sql.Result, error) {
-	return dbconn.Exec(
+	return dbconn.Exec( // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
 		`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ($1, NOW(), 'full', $2, NULL)`,
 		snapshotID,
 		label,
@@ -2288,11 +2288,11 @@ func insertPostgresSnapshotFixtureRow(dbconn *sql.DB, snapshotID, label string) 
 }
 
 func readInsertedPostgresSnapshotPathID(dbconn *sql.DB, path string, dest *int64) error {
-	return dbconn.QueryRow(`INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path).Scan(dest)
+	return dbconn.QueryRow(`INSERT INTO snapshot_path(path) VALUES ($1) RETURNING id`, path).Scan(dest) // #nosec G201,G202 -- query text is fixed; path is a bound test parameter.
 }
 
 func insertPostgresSnapshotFileFixtureRow(dbconn *sql.DB, snapshotID string, pathID, logicalID, size int64) (sql.Result, error) {
-	return dbconn.Exec(
+	return dbconn.Exec( // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
 		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, NOW())`,
 		snapshotID,
@@ -2304,19 +2304,19 @@ func insertPostgresSnapshotFileFixtureRow(dbconn *sql.DB, snapshotID string, pat
 }
 
 func readPostgresLogicalRefCountValue(dbconn *sql.DB, logicalID int64, dest *int64) error {
-	return dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(dest)
+	return dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(dest) // #nosec G201,G202 -- query text is fixed; logicalID is a bound test parameter.
 }
 
 func readPostgresPhysicalRowCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
-	return dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(dest)
+	return dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(dest) // #nosec G201,G202 -- query text is fixed; logicalID is a bound test parameter.
 }
 
 func readPostgresMigratedRowCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
-	return dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(dest)
+	return dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(dest) // #nosec G201,G202 -- query text is fixed; logicalID is a bound test parameter.
 }
 
 func readPostgresSnapshotReferenceCount(dbconn *sql.DB, logicalID int64, dest *int64) error {
-	return dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(dest)
+	return dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(dest) // #nosec G201,G202 -- query text is fixed; logicalID is a bound test parameter.
 }
 
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {

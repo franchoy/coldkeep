@@ -95,7 +95,7 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 		return err
 	}
 	defer func() { _ = stmt.Close() }()
-	if _, err := stmt.Exec(dbName); err != nil {
+	if _, err := stmt.Exec(dbName); err != nil { // #nosec G201,G202 -- query text is fixed; dbName is a bound test parameter.
 		return fmt.Errorf("terminate active sessions for %s: %w", dbName, err)
 	}
 	if err := dropIsolatedPostgresDB(adminDB, dbName); err != nil {
@@ -110,7 +110,7 @@ func createIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 		return err
 	}
 	defer func() { _ = stmt.Close() }()
-	_, err = stmt.Exec()
+	_, err = stmt.Exec() // #nosec G201,G202 -- isolated test database DDL uses validated generated identifiers only.
 	return err
 }
 
@@ -120,7 +120,7 @@ func dropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 		return err
 	}
 	defer func() { _ = stmt.Close() }()
-	_, err = stmt.Exec()
+	_, err = stmt.Exec() // #nosec G201,G202 -- isolated test database DDL uses validated generated identifiers only.
 	return err
 }
 

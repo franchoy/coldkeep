@@ -301,7 +301,7 @@ func execTrustedPostgresDatabaseDDL(dbconn *sql.DB, statement string) error {
 		return err
 	}
 	defer stmt.Close()
-	_, err = stmt.Exec()
+	_, err = stmt.Exec() // #nosec G201,G202 -- test database DDL uses validated generated identifiers only.
 	return err
 }
 
@@ -315,7 +315,7 @@ func terminateRestorePostgresSessions(adminDB *sql.DB, dbName string) error {
 		return err
 	}
 	defer stmt.Close()
-	_, err = stmt.Exec(dbName)
+	_, err = stmt.Exec(dbName) // #nosec G201,G202 -- query text is fixed; dbName is a bound test parameter.
 	return err
 }
 
@@ -324,7 +324,7 @@ func dropRestorePostgresDatabase(adminDB *sql.DB, dbName string) error {
 }
 
 func insertRestoreSnapshotFixtureRow(db *sql.DB, snapshotID string) (sql.Result, error) {
-	return db.Exec(
+	return db.Exec( // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
 		`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
 		snapshotID,
 		"2026-06-01T00:00:00Z",
@@ -334,11 +334,11 @@ func insertRestoreSnapshotFixtureRow(db *sql.DB, snapshotID string) (sql.Result,
 }
 
 func insertRestoreSnapshotPathFixtureRow(db *sql.DB, pathID int64, storedPath string) (sql.Result, error) {
-	return db.Exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, pathID, storedPath)
+	return db.Exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, pathID, storedPath) // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
 }
 
 func insertRestoreSnapshotFileFixtureRow(db *sql.DB, snapshotID string, pathID, fileID, size int64) (sql.Result, error) {
-	return db.Exec(
+	return db.Exec( // #nosec G201,G202 -- query text is fixed; values are bound test parameters.
 		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ($1, $2, $3, $4)`,
 		snapshotID,
 		pathID,

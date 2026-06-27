@@ -121,7 +121,7 @@ func insertRemoveStoredPathChunk(t *testing.T, dbconn *sql.DB, chunkHash string)
 	t.Helper()
 
 	var chunkID int64
-	if err := dbconn.QueryRow(
+	if err := dbconn.QueryRow( // #nosec G201,G202 -- query text is fixed; chunkHash is a bound test parameter.
 		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
 		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		chunkHash,
