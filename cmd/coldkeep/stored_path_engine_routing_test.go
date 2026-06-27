@@ -60,36 +60,10 @@ func TestRunRestoreCommandStoredPathUsesEngineJSONParity(t *testing.T) {
 	}, &restoreByIDCalled, nil)
 
 	output := captureStdout(t, func() {
-		err := runRestoreCommand(parsedCommandLine{
-			method: "restore",
-			flags: map[string][]string{
-				"stored-path": {"/docs/routed.txt"},
-				"mode":        {"prefix"},
-				"destination": {"/tmp/out"},
-				"overwrite":   {""},
-				"strict":      {""},
-				"output":      {"json"},
-			},
-		}, outputModeJSON)
-		if err != nil {
-			t.Fatalf("runRestoreCommand: %v", err)
-		}
+		runStoredPathRestoreJSONCommand(t)
 	})
 
-	payload := assertSingleJSONObjectLine(t, output)
-	data, ok := payload["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected data object, got %v", payload)
-	}
-	if data["stored_path"] != "/docs/routed.txt" || data["output_path"] != "/tmp/out/docs/routed.txt" {
-		t.Fatalf("unexpected restore payload data: %v", data)
-	}
-	if data["file_id"] != float64(42) || data["restored_hash"] != "abc123" || data["mode"] != "prefix" {
-		t.Fatalf("unexpected restore payload fields: %v", data)
-	}
-	if _, ok := data["perf_spans"].([]any); !ok {
-		t.Fatalf("expected perf_spans array, got %T", data["perf_spans"])
-	}
+	assertStoredPathRestoreJSONParity(t, output)
 	if restoreByIDCalled {
 		t.Fatal("stored-path restore must not route through restoreByIDPhase")
 	}
@@ -243,50 +217,16 @@ func TestRunRemoveCommandStoredPathsUsesEngineBatchParity(t *testing.T) {
 	}, nil, nil)
 
 	output := captureStdout(t, func() {
-		err := runRemoveCommand(parsedCommandLine{
-			method:      "remove",
-			positionals: []string{"   ", " /docs/a.txt ", "/docs/a.txt"},
-			flags: map[string][]string{
-				"stored-paths": {""},
-				"dry-run":      {""},
-				"output":       {"json"},
-			},
-		}, outputModeJSON)
-		if err == nil {
-			t.Fatal("expected non-nil batch error due to failed item")
-		}
+		runStoredPathBatchParityCommand(t)
 	})
 
-	payload := assertSingleJSONObjectLine(t, output)
-	if payload["execution_mode"] != string(batch.ExecutionModeContinueOnError) {
-		t.Fatalf("unexpected execution mode: %v", payload)
-	}
-	summary, _ := payload["summary"].(map[string]any)
-	if summary["planned"] != float64(1) || summary["failed"] != float64(1) || summary["skipped"] != float64(1) {
-		t.Fatalf("unexpected summary: %v", summary)
-	}
-	results := payload["results"].([]any)
-	first := results[0].(map[string]any)
-	if _, hasRawValue := first["raw_value"]; hasRawValue {
-		t.Fatalf("blank-target raw_value should stay omitted after trimming, got %v", first)
-	}
-	if first["error"] != "invalid stored path \"   \"" {
-		t.Fatalf("unexpected blank-target projection: %v", first)
-	}
-	second := results[1].(map[string]any)
-	if second["status"] != string(batch.ResultPlanned) || second["raw_value"] != "/docs/a.txt" || second["message"] != "would remove stored-path mapping" {
-		t.Fatalf("unexpected planned projection: %v", second)
-	}
-	third := results[2].(map[string]any)
-	if third["status"] != string(batch.ResultSkipped) || third["raw_value"] != "/docs/a.txt" || third["message"] != "duplicate target" {
-		t.Fatalf("unexpected duplicate projection: %v", third)
-	}
+	assertStoredPathBatchParity(t, output)
 }
 
 func TestRunRemoveCommandStoredPathsInputFileRemainsCLIOwned(t *testing.T) {
 	dbconn := openSnapshotRoutingDB(t)
 	inputPath := filepath.Join(t.TempDir(), "targets.txt")
-	if err := os.WriteFile(inputPath, []byte("# comment\n /docs/a.txt \n/docs/b.txt\n"), 0o644); err != nil {
+	if err := os.WriteFile(inputPath, []byte("# comment\n /docs/a.txt \n/docs/b.txt\n"), 0o600); err != nil {
 		t.Fatalf("write input file: %v", err)
 	}
 
@@ -320,6 +260,91 @@ func TestRunRemoveCommandStoredPathsInputFileRemainsCLIOwned(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected CLI to load input file and route targets to Engine.RemoveStoredPaths")
+	}
+}
+
+func runStoredPathRestoreJSONCommand(t *testing.T) {
+	t.Helper()
+	err := runRestoreCommand(parsedCommandLine{
+		method: "restore",
+		flags: map[string][]string{
+			"stored-path": {"/docs/routed.txt"},
+			"mode":        {"prefix"},
+			"destination": {"/tmp/out"},
+			"overwrite":   {""},
+			"strict":      {""},
+			"output":      {"json"},
+		},
+	}, outputModeJSON)
+	if err != nil {
+		t.Fatalf("runRestoreCommand: %v", err)
+	}
+}
+
+func assertStoredPathRestoreJSONParity(t *testing.T, output string) {
+	t.Helper()
+	payload := assertSingleJSONObjectLine(t, output)
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %v", payload)
+	}
+	if data["stored_path"] != "/docs/routed.txt" || data["output_path"] != "/tmp/out/docs/routed.txt" {
+		t.Fatalf("unexpected restore payload data: %v", data)
+	}
+	if data["file_id"] != float64(42) || data["restored_hash"] != "abc123" || data["mode"] != "prefix" {
+		t.Fatalf("unexpected restore payload fields: %v", data)
+	}
+	if _, ok := data["perf_spans"].([]any); !ok {
+		t.Fatalf("expected perf_spans array, got %T", data["perf_spans"])
+	}
+}
+
+func runStoredPathBatchParityCommand(t *testing.T) {
+	t.Helper()
+	err := runRemoveCommand(parsedCommandLine{
+		method:      "remove",
+		positionals: []string{"   ", " /docs/a.txt ", "/docs/a.txt"},
+		flags: map[string][]string{
+			"stored-paths": {""},
+			"dry-run":      {""},
+			"output":       {"json"},
+		},
+	}, outputModeJSON)
+	if err == nil {
+		t.Fatal("expected non-nil batch error due to failed item")
+	}
+}
+
+func assertStoredPathBatchParity(t *testing.T, output string) {
+	t.Helper()
+	payload := assertSingleJSONObjectLine(t, output)
+	if payload["execution_mode"] != string(batch.ExecutionModeContinueOnError) {
+		t.Fatalf("unexpected execution mode: %v", payload)
+	}
+	summary, _ := payload["summary"].(map[string]any)
+	if summary["planned"] != float64(1) || summary["failed"] != float64(1) || summary["skipped"] != float64(1) {
+		t.Fatalf("unexpected summary: %v", summary)
+	}
+	results := payload["results"].([]any)
+	assertStoredPathBatchParityResults(t, results)
+}
+
+func assertStoredPathBatchParityResults(t *testing.T, results []any) {
+	t.Helper()
+	first := results[0].(map[string]any)
+	if _, hasRawValue := first["raw_value"]; hasRawValue {
+		t.Fatalf("blank-target raw_value should stay omitted after trimming, got %v", first)
+	}
+	if first["error"] != "invalid stored path \"   \"" {
+		t.Fatalf("unexpected blank-target projection: %v", first)
+	}
+	second := results[1].(map[string]any)
+	if second["status"] != string(batch.ResultPlanned) || second["raw_value"] != "/docs/a.txt" || second["message"] != "would remove stored-path mapping" {
+		t.Fatalf("unexpected planned projection: %v", second)
+	}
+	third := results[2].(map[string]any)
+	if third["status"] != string(batch.ResultSkipped) || third["raw_value"] != "/docs/a.txt" || third["message"] != "duplicate target" {
+		t.Fatalf("unexpected duplicate projection: %v", third)
 	}
 }
 

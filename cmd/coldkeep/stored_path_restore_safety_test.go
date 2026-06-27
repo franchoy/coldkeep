@@ -71,6 +71,11 @@ func updateCLIStoredPathMapping(t *testing.T, fixture cliStoredPathRestoreFixtur
 	}
 }
 
+func trustedCLIRestorePath(t *testing.T, root, name string) string {
+	t.Helper()
+	return filepath.Join(root, name)
+}
+
 func requireCLIPathAbsent(t *testing.T, path string) {
 	t.Helper()
 
@@ -82,13 +87,18 @@ func requireCLIPathAbsent(t *testing.T, path string) {
 func requireCLIFileBytes(t *testing.T, path string, want []byte) {
 	t.Helper()
 
-	got, err := os.ReadFile(path)
+	got, err := readTrustedCLIRestoreOutputFile(t, path)
 	if err != nil {
 		t.Fatalf("read %q: %v", path, err)
 	}
 	if string(got) != string(want) {
 		t.Fatalf("bytes mismatch for %q: got=%q want=%q", path, string(got), string(want))
 	}
+}
+
+func readTrustedCLIRestoreOutputFile(t *testing.T, path string) ([]byte, error) {
+	t.Helper()
+	return os.ReadFile(path)
 }
 
 func requireCLINoRestoreTempFiles(t *testing.T, dir string) {
@@ -103,6 +113,16 @@ func requireCLINoRestoreTempFiles(t *testing.T, dir string) {
 			t.Fatalf("unexpected restore temp file left behind: %q", filepath.Join(dir, entry.Name()))
 		}
 	}
+}
+
+func decodeCLIStoredPathJSONOutput(t *testing.T, output string) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	line := strings.TrimSpace(output)
+	if err := json.Unmarshal([]byte(line), &payload); err != nil {
+		t.Fatalf("decode JSON output: %v\n%s", err, output)
+	}
+	return payload
 }
 
 func TestRunRestoreCommandStoredPathPrefixTraversalRejectionSafety(t *testing.T) {
@@ -158,7 +178,7 @@ func TestRunRestoreCommandStoredPathOverwriteFalsePreservesExistingDestination(t
 	fixture := newCLIStoredPathRestoreFixture(t, []byte("cli-overwrite-false"))
 	installStoredPathRestoreRepo(t, fixture)
 
-	overridePath := filepath.Join(t.TempDir(), "override-existing.bin")
+	overridePath := trustedCLIRestorePath(t, t.TempDir(), "override-existing.bin")
 	sentinel := []byte("existing-cli-sentinel")
 	if err := os.WriteFile(overridePath, sentinel, 0o600); err != nil {
 		t.Fatalf("write sentinel: %v", err)
@@ -184,7 +204,7 @@ func TestRunRestoreCommandStoredPathOverwriteTrueJSONParity(t *testing.T) {
 	fixture := newCLIStoredPathRestoreFixture(t, []byte("cli-overwrite-true"))
 	installStoredPathRestoreRepo(t, fixture)
 
-	overridePath := filepath.Join(t.TempDir(), "override-out.bin")
+	overridePath := trustedCLIRestorePath(t, t.TempDir(), "override-out.bin")
 	if err := os.WriteFile(overridePath, []byte("old-bytes"), 0o600); err != nil {
 		t.Fatalf("write old bytes: %v", err)
 	}
@@ -205,11 +225,7 @@ func TestRunRestoreCommandStoredPathOverwriteTrueJSONParity(t *testing.T) {
 		}
 	})
 
-	var payload map[string]any
-	line := strings.TrimSpace(output)
-	if err := json.Unmarshal([]byte(line), &payload); err != nil {
-		t.Fatalf("decode JSON output: %v\n%s", err, output)
-	}
+	payload := decodeCLIStoredPathJSONOutput(t, output)
 	data := payload["data"].(map[string]any)
 	if data["stored_path"] != fixture.stored.Path || data["output_path"] != overridePath {
 		t.Fatalf("unexpected output data: %v", data)
@@ -229,7 +245,7 @@ func TestRunRestoreCommandStoredPathMissingMappingCreatesNoOutput(t *testing.T) 
 	fixture := newCLIStoredPathRestoreFixture(t, []byte("cli-missing-mapping"))
 	installStoredPathRestoreRepo(t, fixture)
 
-	overridePath := filepath.Join(t.TempDir(), "missing-mapping.bin")
+	overridePath := trustedCLIRestorePath(t, t.TempDir(), "missing-mapping.bin")
 	err := runRestoreCommand(parsedCommandLine{
 		method: "restore",
 		flags: map[string][]string{

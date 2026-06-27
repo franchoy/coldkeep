@@ -8,13 +8,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/tests/utils/removestate"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
 )
 
 type removeStoredPathFixture struct {
@@ -35,293 +32,6 @@ type removeStoredPathState struct {
 	chunkPinCounts map[int64]int64
 }
 
-func TestRemoveStoredPathsRejectsCancelledContext(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"cancelled.txt"}, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	result, err := fixture.engine.RemoveStoredPaths(ctx, engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err == nil {
-		t.Fatal("expected cancelled context error")
-	}
-	if engine.IsUnsupported(err) {
-		t.Fatalf("cancelled context must not classify as unsupported: %v", err)
-	}
-	if result.DryRun || result.ExecutionMode != "" || len(result.Items) != 0 || result.Summary != (engine.BatchSummary{}) {
-		t.Fatalf("expected zero result on cancelled context, got %+v", result)
-	}
-}
-
-func TestRemoveStoredPathsRejectsEmptyRequest(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"empty.txt"}, 1)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{})
-	assertRemoveStoredPathsValidationError(t, result, err, "engine: remove stored paths requires at least one target")
-}
-
-func TestRemoveStoredPathsRejectsMissingDatabase(t *testing.T) {
-	result, err := (&engine.DefaultEngine{}).RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{"/docs/a.txt"},
-	})
-	assertRemoveStoredPathsValidationError(t, result, err, "engine: remove stored paths database is required")
-}
-
-func TestRemoveStoredPathsPreservesInputOrder(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"ordered.txt"}, 1)
-	other := addStoredPathMapping(t, fixture.db, fixture.logicalID, "ordered-b.txt")
-
-	rawTargets := []string{"   ", fixture.storedPath, fixture.storedPath, "/missing/path", other}
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: rawTargets,
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths preserve order: %v", err)
-	}
-
-	got := make([]string, 0, len(result.Items))
-	for _, item := range result.Items {
-		got = append(got, item.RawTarget)
-	}
-	if !reflect.DeepEqual(got, rawTargets) {
-		t.Fatalf("raw target order mismatch: got %v want %v", got, rawTargets)
-	}
-}
-
-func TestRemoveStoredPathsTrimsTargets(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"trimmed.txt"}, 1)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{"  " + fixture.storedPath + "  "},
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths trims targets: %v", err)
-	}
-	if got := result.Items[0].StoredPath; got != fixture.storedPath {
-		t.Fatalf("expected trimmed stored path %q, got %q", fixture.storedPath, got)
-	}
-}
-
-func TestRemoveStoredPathsReportsBlankTargets(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"blank.txt"}, 1)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{"   "},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths blank target: %v", err)
-	}
-	item := result.Items[0]
-	if item.RawTarget != "   " || item.StoredPath != "" || item.Status != engine.BatchItemFailed || item.Error != "stored path is required" || item.MappingRemoved {
-		t.Fatalf("unexpected blank target item: %+v", item)
-	}
-	assertLogicalFileStillExists(t, fixture.db, fixture.logicalID)
-}
-
-func TestRemoveStoredPathsSkipsDuplicateTargets(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"duplicate.txt"}, 1)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath, "  " + fixture.storedPath + "  "},
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths duplicate target: %v", err)
-	}
-	if len(result.Items) != 2 {
-		t.Fatalf("expected two items, got %d", len(result.Items))
-	}
-	if result.Items[1].Status != engine.BatchItemSkipped || result.Items[1].Error != "duplicate target" || result.Items[1].StoredPath != fixture.storedPath {
-		t.Fatalf("unexpected duplicate item: %+v", result.Items[1])
-	}
-}
-
-func TestRemoveStoredPathsDryRunPlansExistingMapping(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"dry-run-existing.txt"}, 1)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths dry-run existing: %v", err)
-	}
-	item := result.Items[0]
-	if item.Status != engine.BatchItemPlanned || item.LogicalFileID != fixture.logicalID || item.MappingRemoved || item.StoredPath != fixture.storedPath {
-		t.Fatalf("unexpected dry-run item: %+v", item)
-	}
-}
-
-func TestRemoveStoredPathsDryRunReportsMissingMapping(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"dry-run-missing.txt"}, 1)
-	missingPath := filepath.Join(t.TempDir(), "missing.txt")
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{missingPath},
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths dry-run missing: %v", err)
-	}
-	item := result.Items[0]
-	if item.Status != engine.BatchItemFailed || !strings.Contains(item.Error, "not found (never stored)") || item.MappingRemoved {
-		t.Fatalf("unexpected missing mapping item: %+v", item)
-	}
-}
-
-func TestRemoveStoredPathsDryRunDoesNotMutateCatalog(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"dry-run-no-mutate.txt"}, 1)
-	before := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths dry-run no mutate: %v", err)
-	}
-	if result.Items[0].Status != engine.BatchItemPlanned {
-		t.Fatalf("expected planned status, got %+v", result.Items[0])
-	}
-	after := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	assertRemoveStoredPathStateEqual(t, before, after)
-}
-
-func TestRemoveStoredPathsDryRunPreservesSnapshotRetentionParityGap(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"dry-run-snapshot-gap.txt"}, 1)
-	seedSnapshotRetentionReference(t, fixture.db, fixture.logicalID, fixture.storedPath)
-	before := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-
-	dryRunResult, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths dry-run retained: %v", err)
-	}
-	if dryRunResult.Items[0].Status != engine.BatchItemPlanned {
-		t.Fatalf("expected planned dry-run item, got %+v", dryRunResult.Items[0])
-	}
-	afterDryRun := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	assertRemoveStoredPathStateEqual(t, before, afterDryRun)
-
-	liveResult, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths live retained: %v", err)
-	}
-	item := liveResult.Items[0]
-	if item.Status != engine.BatchItemFailed || item.InvariantCode != invariants.CodeSnapshotRetainedDeleteBlocked || item.RecommendedAction == "" {
-		t.Fatalf("unexpected retained live item: %+v", item)
-	}
-	afterLive := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	assertRemoveStoredPathStateEqual(t, before, afterLive)
-}
-
-func TestRemoveStoredPathsRemovesOneOfMultipleMappings(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"multi-a.txt", "multi-b.txt"}, 2)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths one-of-many: %v", err)
-	}
-	item := result.Items[0]
-	if item.Status != engine.BatchItemOK || !item.MappingRemoved || item.RemainingRefCount != 1 {
-		t.Fatalf("unexpected one-of-many item: %+v", item)
-	}
-
-	state := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	if !state.logicalExists || state.refCount != 1 || state.physicalCount != 1 {
-		t.Fatalf("unexpected one-of-many state: %+v", state)
-	}
-}
-
-func TestRemoveStoredPathsRemovesLastMappingToZero(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "phase7-last-mapping.db")
-	dbconn := openFileBackedSQLiteDB(t, dbPath)
-	eng := newRemoveTestEngine(t, dbconn, t.TempDir())
-	logicalID, paths := seedRemoveStoredPathFixture(t, dbconn, []string{"last-zero.txt"}, 1)
-
-	result, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{paths[0]},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths last mapping: %v", err)
-	}
-	item := result.Items[0]
-	if item.Status != engine.BatchItemOK || item.RemainingRefCount != 0 || !item.MappingRemoved {
-		t.Fatalf("unexpected last-mapping item: %+v", item)
-	}
-
-	state := queryRemoveStoredPathState(t, dbconn, logicalID)
-	if !state.logicalExists || state.refCount != 0 || state.physicalCount != 0 {
-		t.Fatalf("unexpected last-mapping state before rerun: %+v", state)
-	}
-
-	if err := dbconn.Close(); err != nil {
-		t.Fatalf("close sqlite db: %v", err)
-	}
-	reopened, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("reopen sqlite db: %v", err)
-	}
-	defer func() { _ = reopened.Close() }()
-	if err := dbpkg.RunMigrations(reopened); err != nil {
-		t.Fatalf("rerun migrations: %v", err)
-	}
-
-	var refCount int64
-	if err := reopened.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
-		t.Fatalf("read ref_count after reopen: %v", err)
-	}
-	if refCount != 0 {
-		t.Fatalf("expected ref_count=0 after reopen, got %d", refCount)
-	}
-	var physicalCount int64
-	if err := reopened.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
-		t.Fatalf("count physical_file after reopen: %v", err)
-	}
-	if physicalCount != 0 {
-		t.Fatalf("expected zero physical mappings after reopen, got %d", physicalCount)
-	}
-	var migratedCount int64
-	if err := reopened.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE '/migrated/%' AND logical_file_id = $1`, logicalID).Scan(&migratedCount); err != nil {
-		t.Fatalf("count migrated mappings after reopen: %v", err)
-	}
-	if migratedCount != 0 {
-		t.Fatalf("expected no migrated mapping resurrection, got %d", migratedCount)
-	}
-}
-
-func TestRemoveStoredPathsPreservesLogicalAndChunkGraph(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"graph-a.txt", "graph-b.txt"}, 2)
-	before := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths preserve graph: %v", err)
-	}
-	if result.Items[0].Status != engine.BatchItemOK {
-		t.Fatalf("expected success item, got %+v", result.Items[0])
-	}
-
-	after := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	if !after.logicalExists {
-		t.Fatalf("logical file unexpectedly removed: %+v", after)
-	}
-	if before.originalName != after.originalName || before.fileChunkCount != after.fileChunkCount || !reflect.DeepEqual(before.chunkLiveRefs, after.chunkLiveRefs) || !reflect.DeepEqual(before.chunkPinCounts, after.chunkPinCounts) {
-		t.Fatalf("logical/chunk graph changed unexpectedly: before=%+v after=%+v", before, after)
-	}
-}
-
 func TestRemoveStoredPathsRefusesSnapshotRetainedMapping(t *testing.T) {
 	fixture := newRemoveStoredPathFixture(t, []string{"snapshot-retained.txt"}, 1)
 	seedSnapshotRetentionReference(t, fixture.db, fixture.logicalID, fixture.storedPath)
@@ -340,295 +50,6 @@ func TestRemoveStoredPathsRefusesSnapshotRetainedMapping(t *testing.T) {
 	}
 	after := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
 	assertRemoveStoredPathStateEqual(t, before, after)
-}
-
-func TestRemoveStoredPathsMixedBatchDecrementsRefCountOncePerSuccessfulMapping(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"batch-a.txt", "batch-b.txt", "batch-c.txt", "batch-d.txt"}, 4)
-	targetB := addStoredPathMapping(t, fixture.db, fixture.logicalID, "batch-extra-b.txt")
-	targetC := addStoredPathMapping(t, fixture.db, fixture.logicalID, "batch-extra-c.txt")
-	before := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{
-			fixture.storedPath,
-			fixture.storedPath,
-			"   ",
-			targetB,
-			filepath.Join(t.TempDir(), "missing.txt"),
-			targetC,
-		},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths mixed batch accounting: %v", err)
-	}
-
-	assertStoredPathStatuses(t, result.Items, []engine.BatchItemStatus{
-		engine.BatchItemOK,
-		engine.BatchItemSkipped,
-		engine.BatchItemFailed,
-		engine.BatchItemOK,
-		engine.BatchItemFailed,
-		engine.BatchItemOK,
-	})
-	if result.Summary.OK != 3 || result.Summary.Failed != 2 || result.Summary.Skipped != 1 {
-		t.Fatalf("unexpected summary: %+v", result.Summary)
-	}
-
-	after := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	if !after.logicalExists {
-		t.Fatalf("logical file should remain after mixed batch: %+v", after)
-	}
-	if after.refCount != before.refCount-3 {
-		t.Fatalf("expected ref_count to drop by 3, before=%d after=%d", before.refCount, after.refCount)
-	}
-	if after.physicalCount != before.physicalCount-3 {
-		t.Fatalf("expected physical mapping count to drop by 3, before=%d after=%d", before.physicalCount, after.physicalCount)
-	}
-	if after.physicalCount != int(after.refCount) {
-		t.Fatalf("expected physical count to match ref_count, state=%+v", after)
-	}
-	if before.fileChunkCount != after.fileChunkCount || !reflect.DeepEqual(before.chunkLiveRefs, after.chunkLiveRefs) || !reflect.DeepEqual(before.chunkPinCounts, after.chunkPinCounts) {
-		t.Fatalf("unexpected chunk graph drift: before=%+v after=%+v", before, after)
-	}
-}
-
-func TestRemoveStoredPathsReportsNeverStoredTarget(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"never-stored-anchor.txt"}, 1)
-	missingPath := filepath.Join(t.TempDir(), "never-stored.txt")
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{missingPath},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths never stored: %v", err)
-	}
-	item := result.Items[0]
-	if item.Status != engine.BatchItemFailed || !strings.Contains(item.Error, "not found (never stored)") {
-		t.Fatalf("unexpected never-stored item: %+v", item)
-	}
-}
-
-func TestRemoveStoredPathsRollsBackRefCountMismatch(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"rollback.txt"}, 5)
-	before := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths ref-count mismatch: %v", err)
-	}
-	item := result.Items[0]
-	if item.Status != engine.BatchItemFailed || !strings.Contains(item.Error, "ref_count invariant mismatch") || item.MappingRemoved {
-		t.Fatalf("unexpected ref-count mismatch item: %+v", item)
-	}
-	after := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	assertRemoveStoredPathStateEqual(t, before, after)
-}
-
-func TestRemoveStoredPathsSecondUnlinkReportsAlreadyRemovedWithoutFurtherMutation(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"repeat-a.txt", "repeat-b.txt"}, 2)
-
-	first, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err != nil {
-		t.Fatalf("first RemoveStoredPaths: %v", err)
-	}
-	if item := first.Items[0]; item.Status != engine.BatchItemOK || !item.MappingRemoved || item.RemainingRefCount != 1 {
-		t.Fatalf("unexpected first unlink item: %+v", item)
-	}
-	afterFirst := removestate.Capture(t, fixture.db, fixture.logicalID, "")
-
-	second, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err != nil {
-		t.Fatalf("second RemoveStoredPaths: %v", err)
-	}
-	if item := second.Items[0]; item.Status != engine.BatchItemFailed || item.MappingRemoved {
-		t.Fatalf("unexpected second unlink item: %+v", item)
-	}
-	if !strings.Contains(second.Items[0].Error, "already removed") && !strings.Contains(second.Items[0].Error, "not found (never stored)") {
-		t.Fatalf("expected already-removed/never-stored meaning, got %+v", second.Items[0])
-	}
-	afterSecond := removestate.Capture(t, fixture.db, fixture.logicalID, "")
-	removestate.AssertEqual(t, afterFirst, afterSecond)
-}
-
-func TestRemoveStoredPathsContinuesAfterExecutionFailureByDefault(t *testing.T) {
-	first := newRemoveStoredPathFixture(t, []string{"continue-a.txt"}, 1)
-	secondPath := addStandaloneStoredPathFixture(t, first.db, "continue-b.txt")
-	missingPath := filepath.Join(t.TempDir(), "missing.txt")
-
-	result, err := first.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{first.storedPath, missingPath, secondPath},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths continue after failure: %v", err)
-	}
-	assertStoredPathStatuses(t, result.Items, []engine.BatchItemStatus{
-		engine.BatchItemOK,
-		engine.BatchItemFailed,
-		engine.BatchItemOK,
-	})
-	if result.Summary.OK != 2 || result.Summary.Failed != 1 || result.Summary.Skipped != 0 {
-		t.Fatalf("unexpected summary: %+v", result.Summary)
-	}
-}
-
-func TestRemoveStoredPathsFailFastStopsAfterExecutionFailure(t *testing.T) {
-	first := newRemoveStoredPathFixture(t, []string{"failfast-a.txt"}, 1)
-	secondPath := addStandaloneStoredPathFixture(t, first.db, "failfast-b.txt")
-	missingPath := filepath.Join(t.TempDir(), "missing.txt")
-
-	result, err := first.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{first.storedPath, missingPath, secondPath},
-		FailFast:    true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths fail-fast: %v", err)
-	}
-	assertStoredPathStatuses(t, result.Items, []engine.BatchItemStatus{
-		engine.BatchItemOK,
-		engine.BatchItemFailed,
-	})
-	if result.Summary.OK != 1 || result.Summary.Failed != 1 || result.Summary.Skipped != 1 {
-		t.Fatalf("unexpected fail-fast summary: %+v", result.Summary)
-	}
-}
-
-func TestRemoveStoredPathsFailFastIgnoresBlankAndDuplicatePreparedItems(t *testing.T) {
-	first := newRemoveStoredPathFixture(t, []string{"ignore-blank-dup.txt"}, 1)
-	otherPath := addStandaloneStoredPathFixture(t, first.db, "ignore-blank-dup-other.txt")
-	missingPath := filepath.Join(t.TempDir(), "missing.txt")
-
-	result, err := first.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{"   ", first.storedPath, "  " + first.storedPath + "  ", missingPath, otherPath},
-		FailFast:    true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths fail-fast ignores blank/dup: %v", err)
-	}
-	assertStoredPathStatuses(t, result.Items, []engine.BatchItemStatus{
-		engine.BatchItemFailed,
-		engine.BatchItemOK,
-		engine.BatchItemSkipped,
-		engine.BatchItemFailed,
-	})
-	if result.Summary.OK != 1 || result.Summary.Failed != 2 || result.Summary.Skipped != 2 {
-		t.Fatalf("unexpected summary: %+v", result.Summary)
-	}
-}
-
-func TestRemoveStoredPathsSummaryMatchesItemOutcomes(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"summary.txt"}, 1)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath, "", fixture.storedPath},
-		DryRun:      true,
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths summary: %v", err)
-	}
-	assertStoredPathStatuses(t, result.Items, []engine.BatchItemStatus{
-		engine.BatchItemPlanned,
-		engine.BatchItemFailed,
-		engine.BatchItemSkipped,
-	})
-	if !result.DryRun || result.ExecutionMode != engine.ExecutionModeSequential {
-		t.Fatalf("unexpected result envelope: %+v", result)
-	}
-	if result.Summary.OK != 1 || result.Summary.Failed != 1 || result.Summary.Skipped != 1 {
-		t.Fatalf("unexpected summary: %+v", result.Summary)
-	}
-}
-
-func TestRemoveStoredPathsProjectsSnapshotInvariantMetadata(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"snapshot-metadata.txt"}, 1)
-	seedSnapshotRetentionReference(t, fixture.db, fixture.logicalID, fixture.storedPath)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths snapshot metadata: %v", err)
-	}
-	item := result.Items[0]
-	if item.InvariantCode != invariants.CodeSnapshotRetainedDeleteBlocked || item.RecommendedAction != invariants.RecommendedActionForCode(invariants.CodeSnapshotRetainedDeleteBlocked) {
-		t.Fatalf("unexpected snapshot invariant metadata: %+v", item)
-	}
-}
-
-func TestRemoveStoredPathsProjectsRefCountInvariantMetadata(t *testing.T) {
-	fixture := newRemoveStoredPathFixture(t, []string{"refcount-metadata.txt"}, 5)
-
-	result, err := fixture.engine.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{fixture.storedPath},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths ref-count metadata: %v", err)
-	}
-	item := result.Items[0]
-	if item.InvariantCode != invariants.CodePhysicalGraphRefCountMismatch || item.RecommendedAction != invariants.RecommendedActionForCode(invariants.CodePhysicalGraphRefCountMismatch) {
-		t.Fatalf("unexpected ref-count invariant metadata: %+v", item)
-	}
-}
-
-func TestRemoveStoredPathsPostgres(t *testing.T) {
-	testgate.RequireDB(t)
-	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
-
-	dbconn := openTempPostgresEngineDatabase(t, "coldkeep_phase7_remove")
-	if err := dbpkg.EnsurePostgresSchema(dbconn); err != nil {
-		t.Fatalf("EnsurePostgresSchema: %v", err)
-	}
-
-	eng := newRemoveTestEngine(t, dbconn, t.TempDir())
-	logicalID, paths := seedRemoveStoredPathFixture(t, dbconn, []string{"postgres-a.txt", "postgres-b.txt"}, 2)
-	before := queryRemoveStoredPathState(t, dbconn, logicalID)
-
-	firstResult, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{paths[0]},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths postgres first unlink: %v", err)
-	}
-	if item := firstResult.Items[0]; item.Status != engine.BatchItemOK || item.RemainingRefCount != 1 || !item.MappingRemoved {
-		t.Fatalf("unexpected postgres first unlink item: %+v", item)
-	}
-	afterFirst := queryRemoveStoredPathState(t, dbconn, logicalID)
-	if !afterFirst.logicalExists || afterFirst.refCount != 1 || afterFirst.physicalCount != 1 {
-		t.Fatalf("unexpected postgres first unlink state: before=%+v after=%+v", before, afterFirst)
-	}
-	if before.fileChunkCount != afterFirst.fileChunkCount || !reflect.DeepEqual(before.chunkLiveRefs, afterFirst.chunkLiveRefs) {
-		t.Fatalf("unexpected postgres graph drift: before=%+v after=%+v", before, afterFirst)
-	}
-
-	secondResult, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-		StoredPaths: []string{paths[1]},
-	})
-	if err != nil {
-		t.Fatalf("RemoveStoredPaths postgres second unlink: %v", err)
-	}
-	if item := secondResult.Items[0]; item.Status != engine.BatchItemOK || item.RemainingRefCount != 0 || !item.MappingRemoved {
-		t.Fatalf("unexpected postgres second unlink item: %+v", item)
-	}
-
-	if err := dbpkg.EnsurePostgresSchema(dbconn); err != nil {
-		t.Fatalf("EnsurePostgresSchema rerun: %v", err)
-	}
-	afterSecond := queryRemoveStoredPathState(t, dbconn, logicalID)
-	if !afterSecond.logicalExists || afterSecond.refCount != 0 || afterSecond.physicalCount != 0 {
-		t.Fatalf("unexpected postgres last-mapping state: %+v", afterSecond)
-	}
-	var migratedCount int64
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1 AND path LIKE '/migrated/%'`, logicalID).Scan(&migratedCount); err != nil {
-		t.Fatalf("count postgres migrated mappings: %v", err)
-	}
-	if migratedCount != 0 {
-		t.Fatalf("expected no postgres migrated mapping resurrection, got %d", migratedCount)
-	}
 }
 
 func newRemoveStoredPathFixture(t *testing.T, names []string, refCount int64) removeStoredPathFixture {
@@ -673,7 +94,7 @@ func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, r
 	t.Helper()
 
 	var logicalID int64
-	hash := fmt.Sprintf("phase7-remove-%d", time.Now().UnixNano())
+	hash := removeStoredPathFixtureHash(names, refCount)
 	if err := dbconn.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
 		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
@@ -718,6 +139,23 @@ func seedRemoveStoredPathFixture(t *testing.T, dbconn *sql.DB, names []string, r
 	return logicalID, paths
 }
 
+func removeStoredPathFixtureHash(names []string, refCount int64) string {
+	var builder strings.Builder
+	builder.WriteString("phase7-remove")
+	for _, name := range names {
+		builder.WriteByte('-')
+		for _, r := range name {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+				builder.WriteRune(r)
+			default:
+				builder.WriteByte('_')
+			}
+		}
+	}
+	return fmt.Sprintf("%s-r%d", builder.String(), refCount)
+}
+
 func openFileBackedSQLiteDB(t *testing.T, dbPath string) *sql.DB {
 	t.Helper()
 
@@ -731,6 +169,31 @@ func openFileBackedSQLiteDB(t *testing.T, dbPath string) *sql.DB {
 	return dbconn
 }
 
+func assertLastStoredPathReopenState(t *testing.T, reopened *sql.DB, logicalID int64) {
+	t.Helper()
+	var refCount int64
+	if err := reopened.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
+		t.Fatalf("read ref_count after reopen: %v", err)
+	}
+	if refCount != 0 {
+		t.Fatalf("expected ref_count=0 after reopen, got %d", refCount)
+	}
+	var physicalCount int64
+	if err := reopened.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical_file after reopen: %v", err)
+	}
+	if physicalCount != 0 {
+		t.Fatalf("expected zero physical mappings after reopen, got %d", physicalCount)
+	}
+	var migratedCount int64
+	if err := reopened.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE '/migrated/%' AND logical_file_id = $1`, logicalID).Scan(&migratedCount); err != nil {
+		t.Fatalf("count migrated mappings after reopen: %v", err)
+	}
+	if migratedCount != 0 {
+		t.Fatalf("expected no migrated mapping resurrection, got %d", migratedCount)
+	}
+}
+
 func queryRemoveStoredPathState(t *testing.T, dbconn *sql.DB, logicalID int64) removeStoredPathState {
 	t.Helper()
 
@@ -739,26 +202,38 @@ func queryRemoveStoredPathState(t *testing.T, dbconn *sql.DB, logicalID int64) r
 		chunkPinCounts: make(map[int64]int64),
 	}
 
+	loadRemoveStoredPathLogicalState(t, dbconn, logicalID, &state)
+	loadRemoveStoredPathCount(t, dbconn, `SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID, &state.physicalCount, "count physical_file rows")
+	loadRemoveStoredPathCount(t, dbconn, `SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID, &state.snapshotCount, "count snapshot_file rows")
+	loadRemoveStoredPathCount(t, dbconn, `SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, logicalID, &state.fileChunkCount, "count file_chunk rows")
+	loadRemoveStoredPathChunkState(t, dbconn, logicalID, &state)
+	return state
+}
+
+func loadRemoveStoredPathLogicalState(t *testing.T, dbconn *sql.DB, logicalID int64, state *removeStoredPathState) {
+	t.Helper()
 	var logicalCount int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = $1`, logicalID).Scan(&logicalCount); err != nil {
 		t.Fatalf("count logical_file rows: %v", err)
 	}
 	state.logicalExists = logicalCount == 1
-	if state.logicalExists {
-		if err := dbconn.QueryRow(`SELECT original_name, ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&state.originalName, &state.refCount); err != nil {
-			t.Fatalf("read logical_file state: %v", err)
-		}
+	if !state.logicalExists {
+		return
 	}
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&state.physicalCount); err != nil {
-		t.Fatalf("count physical_file rows: %v", err)
+	if err := dbconn.QueryRow(`SELECT original_name, ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&state.originalName, &state.refCount); err != nil {
+		t.Fatalf("read logical_file state: %v", err)
 	}
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, logicalID).Scan(&state.snapshotCount); err != nil {
-		t.Fatalf("count snapshot_file rows: %v", err)
-	}
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, logicalID).Scan(&state.fileChunkCount); err != nil {
-		t.Fatalf("count file_chunk rows: %v", err)
-	}
+}
 
+func loadRemoveStoredPathCount(t *testing.T, dbconn *sql.DB, query string, logicalID int64, dest *int, context string) {
+	t.Helper()
+	if err := dbconn.QueryRow(query, logicalID).Scan(dest); err != nil {
+		t.Fatalf("%s: %v", context, err)
+	}
+}
+
+func loadRemoveStoredPathChunkState(t *testing.T, dbconn *sql.DB, logicalID int64, state *removeStoredPathState) {
+	t.Helper()
 	rows, err := dbconn.Query(`
 		SELECT c.id, c.live_ref_count, c.pin_count
 		FROM file_chunk fc
@@ -782,8 +257,6 @@ func queryRemoveStoredPathState(t *testing.T, dbconn *sql.DB, logicalID int64) r
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate chunk state: %v", err)
 	}
-
-	return state
 }
 
 func assertRemoveStoredPathStateEqual(t *testing.T, before, after removeStoredPathState) {
