@@ -1,7 +1,9 @@
 package pathsafe
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -259,6 +261,72 @@ func validateJoinedPathWithinRoot(rootAbs string, joinedAbs string, rel string) 
 	return nil
 }
 
+// NearestExistingAncestorDir returns the nearest existing ancestor directory
+// strictly above path. It does not return path itself, so callers can validate
+// the final component as part of a trusted-root or exact-target check.
+func NearestExistingAncestorDir(path string) (string, error) {
+	if err := validateNonEmptyTrimmed(path, "path"); err != nil {
+		return "", err
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+
+	current := filepath.Dir(filepath.Clean(absPath))
+	for {
+		info, statErr := os.Lstat(current)
+		if statErr == nil {
+			if !info.IsDir() {
+				parent := filepath.Dir(current)
+				if parent == current {
+					return "", fmt.Errorf("nearest existing ancestor is not a directory: %q", current)
+				}
+				current = parent
+				continue
+			}
+			return current, nil
+		}
+		if !errorsIsNotExist(statErr) {
+			return "", fmt.Errorf("stat ancestor %q: %w", current, statErr)
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("no existing ancestor directory found for %q", absPath)
+		}
+		current = parent
+	}
+}
+
+func errorsIsNotExist(err error) bool {
+	return err != nil && (os.IsNotExist(err) || errors.Is(err, fs.ErrNotExist))
+}
+
+// ValidateTrustedRootPath validates a proposed trusted restore root without
+// resolving aliases above it. The root itself must not be a symlink, but
+// aliases in ancestors above the trusted root are allowed.
+func ValidateTrustedRootPath(root string) (string, error) {
+	if err := validateNonEmptyTrimmed(root, "root path"); err != nil {
+		return "", err
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+	info, statErr := os.Lstat(absRoot)
+	if statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("path component is a symlink: %q", absRoot)
+		}
+	} else if !errorsIsNotExist(statErr) {
+		return "", fmt.Errorf("stat root %q: %w", absRoot, statErr)
+	}
+	return filepath.Clean(absRoot), nil
+}
+
 // ValidateWritePathUnderTrustedRoot checks that no existing path component
 // below root is a symlink in the target write path. The root itself is
 // trusted and not checked, so system-managed symlinks in the destination
@@ -273,6 +341,9 @@ func ValidateWritePathUnderTrustedRoot(root, path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("resolve path: %w", err)
+	}
+	if err := validateJoinedPathWithinRoot(absRoot, absPath, path); err != nil {
+		return err
 	}
 	return validateNoSymlinksUnderRoot(absRoot, absPath)
 }

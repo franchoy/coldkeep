@@ -221,6 +221,90 @@ func TestValidateWritePathUnderTrustedRootRejectsSymlinkedParent(t *testing.T) {
 	}
 }
 
+func TestValidateWritePathUnderTrustedRootAllowsOuterAlias(t *testing.T) {
+	realParent := t.TempDir()
+	aliasLink := filepath.Join(t.TempDir(), "outer-link")
+	if err := os.Symlink(realParent, aliasLink); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+
+	realRoot := filepath.Join(realParent, "trusted")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real trusted root: %v", err)
+	}
+	aliasRoot := filepath.Join(aliasLink, "trusted")
+	targetPath := filepath.Join(aliasRoot, "nested", "file.bin")
+
+	if err := ValidateWritePathUnderTrustedRoot(aliasRoot, targetPath); err != nil {
+		t.Fatalf("expected outer alias above trusted root to be allowed, got: %v", err)
+	}
+}
+
+func TestNearestExistingAncestorDirFindsParentForMissingSuffix(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "nested", "missing", "file.bin")
+
+	got, err := NearestExistingAncestorDir(path)
+	if err != nil {
+		t.Fatalf("NearestExistingAncestorDir returned error: %v", err)
+	}
+	if got != root {
+		t.Fatalf("nearest ancestor mismatch: got=%q want=%q", got, root)
+	}
+}
+
+func TestNearestExistingAncestorDirSkipsExistingSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	linkPath := filepath.Join(root, "linked-parent")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+
+	got, err := NearestExistingAncestorDir(filepath.Join(linkPath, "restored.bin"))
+	if err != nil {
+		t.Fatalf("NearestExistingAncestorDir returned error: %v", err)
+	}
+	if got != root {
+		t.Fatalf("nearest ancestor mismatch: got=%q want=%q", got, root)
+	}
+}
+
+func TestValidateTrustedRootPathRejectsSymlinkRoot(t *testing.T) {
+	realRoot := t.TempDir()
+	symlinkRoot := filepath.Join(t.TempDir(), "trusted-link")
+	if err := os.Symlink(realRoot, symlinkRoot); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+
+	_, err := ValidateTrustedRootPath(symlinkRoot)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink trusted-root rejection, got: %v", err)
+	}
+}
+
+func TestValidateTrustedRootPathAllowsOuterAlias(t *testing.T) {
+	realParent := t.TempDir()
+	aliasLink := filepath.Join(t.TempDir(), "outer-link")
+	if err := os.Symlink(realParent, aliasLink); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+
+	realRoot := filepath.Join(realParent, "trusted")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real trusted root: %v", err)
+	}
+	aliasRoot := filepath.Join(aliasLink, "trusted")
+
+	got, err := ValidateTrustedRootPath(aliasRoot)
+	if err != nil {
+		t.Fatalf("expected outer alias trusted root to be allowed, got: %v", err)
+	}
+	if got != filepath.Clean(aliasRoot) {
+		t.Fatalf("trusted root mismatch: got=%q want=%q", got, filepath.Clean(aliasRoot))
+	}
+}
+
 func TestValidatePathHasNoSymlinkComponentsAllowsMissingSuffix(t *testing.T) {
 	// Use EvalSymlinks so the path does not traverse OS-managed symlinks
 	// (e.g. /var -> /private/var on macOS) before reaching the missing suffix.

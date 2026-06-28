@@ -138,6 +138,13 @@ func storageRestoreDestination(req RestoreStoredPathRequest) string {
 	}
 }
 
+func storageRestoreTrustedRoot(req RestoreStoredPathRequest) string {
+	if req.DestinationMode == RestoreDestinationPrefix {
+		return req.DestinationRoot
+	}
+	return ""
+}
+
 func (e *DefaultEngine) RestoreStoredPath(ctx context.Context, req RestoreStoredPathRequest) (RestoreStoredPathResult, error) {
 	if err := ctx.Err(); err != nil {
 		return RestoreStoredPathResult{}, err
@@ -158,6 +165,7 @@ func (e *DefaultEngine) RestoreStoredPath(ctx context.Context, req RestoreStored
 			Overwrite:       normalized.Overwrite,
 			DestinationMode: toStorageRestoreDestinationMode(normalized.DestinationMode),
 			Destination:     storageRestoreDestination(normalized),
+			TrustedRoot:     storageRestoreTrustedRoot(normalized),
 			StrictMetadata:  normalized.StrictMetadata,
 			NoMetadata:      normalized.NoMetadata,
 		},

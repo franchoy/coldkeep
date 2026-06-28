@@ -284,6 +284,59 @@ func TestRestoreStoredPathOverrideMode(t *testing.T) {
 	assertRestoredBytes(t, result.DestinationPath, fixture.payload)
 }
 
+func TestRestoreStoredPathPrefixModeAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-prefix-outer-alias")
+	realParent := t.TempDir()
+	aliasLink := filepath.Join(t.TempDir(), "outer-link")
+	requireSymlink(t, realParent, aliasLink)
+
+	realRoot := filepath.Join(realParent, "trusted-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	aliasRoot := filepath.Join(aliasLink, "trusted-root")
+	expectedPath := expectedPrefixModeOutputPath(aliasRoot, fixture.stored.Path)
+
+	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+		StoredPath:      fixture.stored.Path,
+		DestinationMode: engine.RestoreDestinationPrefix,
+		DestinationRoot: aliasRoot,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("RestoreStoredPath prefix outer alias: %v", err)
+	}
+
+	assertRestoreStoredPathResult(t, result, fixture.stored.Path, fixture.stored.FileID, engine.RestoreDestinationPrefix, expectedPath, fixture.stored.FileHash)
+	assertRestoredBytes(t, result.DestinationPath, fixture.payload)
+}
+
+func TestRestoreStoredPathOverrideModeAllowsOuterAliasAboveDerivedRoot(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-override-outer-alias")
+	realParent := t.TempDir()
+	aliasLink := filepath.Join(t.TempDir(), "outer-link")
+	requireSymlink(t, realParent, aliasLink)
+
+	realRoot := filepath.Join(realParent, "override-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	overridePath := filepath.Join(aliasLink, "override-root", "restore-target.bin")
+
+	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+		StoredPath:      fixture.stored.Path,
+		DestinationMode: engine.RestoreDestinationOverride,
+		DestinationPath: overridePath,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("RestoreStoredPath override outer alias: %v", err)
+	}
+
+	assertRestoreStoredPathResult(t, result, fixture.stored.Path, fixture.stored.FileID, engine.RestoreDestinationOverride, overridePath, fixture.stored.FileHash)
+	assertRestoredBytes(t, result.DestinationPath, fixture.payload)
+}
+
 func TestRestoreStoredPathPreservesExistingDestinationWithoutOverwrite(t *testing.T) {
 	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-no-overwrite")
 

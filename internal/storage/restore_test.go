@@ -1323,7 +1323,7 @@ func TestRestoreFileByStoredPathNoMetadataBypassesStrictIncompleteCheck(t *testi
 
 func TestRestoreFileByStoredPathRejectsInvalidDestinationMode(t *testing.T) {
 	descriptor := RestoreDescriptor{Path: "/a/b/c.bin"}
-	_, err := resolveRestoreOutputPath(descriptor, RestoreOptions{DestinationMode: RestoreDestinationMode("unsupported")})
+	_, _, err := resolveRestoreOutputPath(descriptor, RestoreOptions{DestinationMode: RestoreDestinationMode("unsupported")})
 	if err == nil || !strings.Contains(err.Error(), "unsupported restore destination mode") {
 		t.Fatalf("expected unsupported destination mode error, got: %v", err)
 	}

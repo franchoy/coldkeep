@@ -1739,6 +1739,208 @@ func TestRestoreSnapshotCompatibleWithVersionedLogicalMetadata(t *testing.T) {
 	}
 }
 
+func makeSnapshotOuterAliasRoot(t *testing.T, rootName string) string {
+	t.Helper()
+
+	realParent := t.TempDir()
+	aliasLink := filepath.Join(t.TempDir(), "outer-link")
+	if err := os.Symlink(realParent, aliasLink); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+
+	realRoot := filepath.Join(realParent, rootName)
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	return filepath.Join(aliasLink, rootName)
+}
+
+func TestRestoreSnapshotPrefixAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), db)
+	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
+
+	sourcePath := filepath.Join(t.TempDir(), "docs", "snapshot-prefix-outer-alias.txt")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	content := []byte("snapshot prefix outer alias")
+	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain); err != nil {
+		t.Fatalf("store source file: %v", err)
+	}
+
+	snapshotID := "snap-prefix-outer-alias"
+	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
+		t.Fatalf("CreateSnapshotWithOptions: %v", err)
+	}
+
+	files, err := ListSnapshotFiles(ctx, db, snapshotID, 0, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 snapshot file row, got %d", len(files))
+	}
+
+	aliasRoot := makeSnapshotOuterAliasRoot(t, "prefix-root")
+	res, err := RestoreSnapshot(ctx, db, snapshotID, []string{files[0].Path}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationPrefix,
+		Destination:     aliasRoot,
+		Overwrite:       true,
+		StorageContext:  &sgctx,
+	})
+	if err != nil {
+		t.Fatalf("RestoreSnapshot prefix outer alias: %v", err)
+	}
+	if res.RestoredFiles != 1 {
+		t.Fatalf("expected 1 restored file, got %d", res.RestoredFiles)
+	}
+
+	wantPath := filepath.Join(aliasRoot, filepath.FromSlash(files[0].Path))
+	restored, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read restored snapshot file: %v", err)
+	}
+	if string(restored) != string(content) {
+		t.Fatalf("unexpected restored snapshot payload: got=%q want=%q", string(restored), string(content))
+	}
+}
+
+func TestRestoreSnapshotOverrideAllowsOuterAliasAboveDerivedRoot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), db)
+	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
+
+	sourcePath := filepath.Join(t.TempDir(), "docs", "snapshot-override-outer-alias.txt")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	content := []byte("snapshot override outer alias")
+	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain); err != nil {
+		t.Fatalf("store source file: %v", err)
+	}
+
+	snapshotID := "snap-override-outer-alias"
+	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
+		t.Fatalf("CreateSnapshotWithOptions: %v", err)
+	}
+
+	files, err := ListSnapshotFiles(ctx, db, snapshotID, 0, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 snapshot file row, got %d", len(files))
+	}
+
+	aliasRoot := makeSnapshotOuterAliasRoot(t, "override-root")
+	overridePath := filepath.Join(aliasRoot, "restored.txt")
+	res, err := RestoreSnapshot(ctx, db, snapshotID, []string{files[0].Path}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOverride,
+		Destination:     overridePath,
+		Overwrite:       true,
+		StorageContext:  &sgctx,
+	})
+	if err != nil {
+		t.Fatalf("RestoreSnapshot override outer alias: %v", err)
+	}
+	if res.RestoredFiles != 1 {
+		t.Fatalf("expected 1 restored file, got %d", res.RestoredFiles)
+	}
+
+	restored, err := os.ReadFile(overridePath)
+	if err != nil {
+		t.Fatalf("read restored snapshot file: %v", err)
+	}
+	if string(restored) != string(content) {
+		t.Fatalf("unexpected restored snapshot payload: got=%q want=%q", string(restored), string(content))
+	}
+}
+
+func TestRestoreSnapshotOriginalAllowsOuterAliasAboveWorkingDirectoryRoot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), db)
+	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
+
+	sourcePath := filepath.Join(t.TempDir(), "docs", "snapshot-original-outer-alias.txt")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	content := []byte("snapshot original outer alias")
+	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain); err != nil {
+		t.Fatalf("store source file: %v", err)
+	}
+
+	snapshotID := "snap-original-outer-alias"
+	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
+		t.Fatalf("CreateSnapshotWithOptions: %v", err)
+	}
+
+	files, err := ListSnapshotFiles(ctx, db, snapshotID, 0, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 snapshot file row, got %d", len(files))
+	}
+
+	aliasRoot := makeSnapshotOuterAliasRoot(t, "working-root")
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(aliasRoot); err != nil {
+		t.Fatalf("chdir alias root: %v", err)
+	}
+	defer func() {
+		if chdirErr := os.Chdir(originalWD); chdirErr != nil {
+			t.Fatalf("restore working directory: %v", chdirErr)
+		}
+	}()
+
+	res, err := RestoreSnapshot(ctx, db, snapshotID, []string{files[0].Path}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		Overwrite:       true,
+		StorageContext:  &sgctx,
+	})
+	if err != nil {
+		t.Fatalf("RestoreSnapshot original outer alias: %v", err)
+	}
+	if res.RestoredFiles != 1 {
+		t.Fatalf("expected 1 restored file, got %d", res.RestoredFiles)
+	}
+
+	outputPath := filepath.Clean(filepath.FromSlash(files[0].Path))
+	restored, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read restored snapshot file: %v", err)
+	}
+	if string(restored) != string(content) {
+		t.Fatalf("unexpected restored snapshot payload: got=%q want=%q", string(restored), string(content))
+	}
+}
+
 // ---- planSnapshotRestoreOutputs output-path tests ----
 
 // TestPlanSnapshotRestoreOutputsPrefixModeProducesCorrectPaths verifies that prefix mode

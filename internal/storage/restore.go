@@ -36,6 +36,7 @@ type RestoreOptions struct {
 	Overwrite       bool
 	DestinationMode RestoreDestinationMode
 	Destination     string
+	TrustedRoot     string
 	StrictMetadata  bool
 	NoMetadata      bool
 	fs              fsx.FS
@@ -815,11 +816,12 @@ func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, 
 		return RestoreFileResult{}, fmt.Errorf("metadata is incomplete for %q (use --no-metadata to bypass)", descriptor.Path)
 	}
 
-	resolvedOutputPath, err := resolveRestoreOutputPath(descriptor, opts)
+	resolvedOutputPath, resolvedTrustedRoot, err := resolveRestoreOutputPath(descriptor, opts)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
 
+	opts.TrustedRoot = resolvedTrustedRoot
 	result, err := restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
 	if err != nil {
 		return RestoreFileResult{}, err
@@ -847,15 +849,25 @@ func RestoreFileByStoredPathWithStorageContext(sgctx StorageContext, storedPath 
 	return err
 }
 
-func validateRestoreWritePath(path string) error {
+func validateRestoreWritePath(path string, trustedRoot string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("resolve restore write path: %w", err)
 	}
-	if err := pathsafe.ValidatePathHasNoSymlinkComponents(absPath); err != nil {
-		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
+
+	root := strings.TrimSpace(trustedRoot)
+	if root == "" {
+		root, err = pathsafe.NearestExistingAncestorDir(absPath)
+		if err != nil {
+			return fmt.Errorf("derive restore trusted root: %w", err)
+		}
+	} else {
+		root, err = pathsafe.ValidateTrustedRootPath(root)
+		if err != nil {
+			return fmt.Errorf("validate restore trusted root: %w", err)
+		}
 	}
-	if err := pathsafe.ValidateWritePathUnderTrustedRoot(filepath.Dir(absPath), absPath); err != nil {
+	if err := pathsafe.ValidateWritePathUnderTrustedRoot(root, absPath); err != nil {
 		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
 	}
 	return nil
@@ -879,7 +891,7 @@ func syncRestoredFileDir(fsys fsx.FS, outputPath string) error {
 	return dir.Close()
 }
 
-func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, error) {
+func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, string, error) {
 	mode := opts.DestinationMode
 	if mode == "" {
 		mode = RestoreDestinationOriginal
@@ -887,23 +899,26 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 
 	switch mode {
 	case RestoreDestinationOriginal:
-		if err := validateRestoreWritePath(descriptor.Path); err != nil {
-			return "", fmt.Errorf("resolve restore original destination: %w", err)
+		trustedRoot := strings.TrimSpace(opts.TrustedRoot)
+		if trustedRoot == "" {
+			var err error
+			trustedRoot, err = pathsafe.NearestExistingAncestorDir(descriptor.Path)
+			if err != nil {
+				return "", "", fmt.Errorf("resolve restore original trusted root: %w", err)
+			}
 		}
-		return descriptor.Path, nil
+		if err := validateRestoreWritePath(descriptor.Path, trustedRoot); err != nil {
+			return "", "", fmt.Errorf("resolve restore original destination: %w", err)
+		}
+		return descriptor.Path, trustedRoot, nil
 	case RestoreDestinationPrefix:
 		prefix := strings.TrimSpace(opts.Destination)
 		if prefix == "" {
-			return "", fmt.Errorf("restore prefix destination is required for mode %q", RestoreDestinationPrefix)
+			return "", "", fmt.Errorf("restore prefix destination is required for mode %q", RestoreDestinationPrefix)
 		}
-		absPrefix, err := filepath.Abs(prefix)
+		trustedRoot, err := pathsafe.ValidateTrustedRootPath(prefix)
 		if err != nil {
-			return "", fmt.Errorf("resolve restore prefix destination: %w", err)
-		}
-		// Reject a destination root that is itself a symlink: following it could
-		// redirect all writes to an unexpected location.
-		if prefixInfo, lstatErr := os.Lstat(absPrefix); lstatErr == nil && prefixInfo.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("restore prefix destination is a symlink: %q", absPrefix)
+			return "", "", fmt.Errorf("resolve restore prefix destination: %w", err)
 		}
 
 		relativePath := descriptor.Path
@@ -912,29 +927,39 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 		}
 		relativePath = strings.TrimLeft(relativePath, `/\`)
 		if relativePath == "" {
-			return "", fmt.Errorf("cannot derive relative path from stored path %q", descriptor.Path)
+			return "", "", fmt.Errorf("cannot derive relative path from stored path %q", descriptor.Path)
 		}
 
-		joinedPath, err := pathsafe.SafeJoin(absPrefix, relativePath)
+		joinedPath, err := pathsafe.SafeJoin(trustedRoot, relativePath)
 		if err != nil {
-			return "", fmt.Errorf("resolve restore prefix destination: %w", err)
+			return "", "", fmt.Errorf("resolve restore prefix destination: %w", err)
 		}
-		return joinedPath, nil
+		if err := validateRestoreWritePath(joinedPath, trustedRoot); err != nil {
+			return "", "", fmt.Errorf("resolve restore prefix destination: %w", err)
+		}
+		return joinedPath, trustedRoot, nil
 	case RestoreDestinationOverride:
 		overridePath := strings.TrimSpace(opts.Destination)
 		if overridePath == "" {
-			return "", fmt.Errorf("restore override destination is required for mode %q", RestoreDestinationOverride)
+			return "", "", fmt.Errorf("restore override destination is required for mode %q", RestoreDestinationOverride)
 		}
 		absOverridePath, err := filepath.Abs(overridePath)
 		if err != nil {
-			return "", fmt.Errorf("resolve restore override destination: %w", err)
+			return "", "", fmt.Errorf("resolve restore override destination: %w", err)
 		}
-		if err := validateRestoreWritePath(absOverridePath); err != nil {
-			return "", fmt.Errorf("resolve restore override destination: %w", err)
+		trustedRoot := strings.TrimSpace(opts.TrustedRoot)
+		if trustedRoot == "" {
+			trustedRoot, err = pathsafe.NearestExistingAncestorDir(absOverridePath)
+			if err != nil {
+				return "", "", fmt.Errorf("resolve restore override trusted root: %w", err)
+			}
 		}
-		return filepath.Clean(absOverridePath), nil
+		if err := validateRestoreWritePath(absOverridePath, trustedRoot); err != nil {
+			return "", "", fmt.Errorf("resolve restore override destination: %w", err)
+		}
+		return filepath.Clean(absOverridePath), trustedRoot, nil
 	default:
-		return "", fmt.Errorf("unsupported restore destination mode: %s", mode)
+		return "", "", fmt.Errorf("unsupported restore destination mode: %s", mode)
 	}
 }
 
@@ -995,7 +1020,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 		outputPath = filepath.Join(outputPath, originalName)
 	}
-	if err := validateRestoreWritePath(outputPath); err != nil {
+	if err := validateRestoreWritePath(outputPath, opts.TrustedRoot); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("validate output path %s: %w", outputPath, err)
 	}
 	result.OutputPath = outputPath
