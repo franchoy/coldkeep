@@ -16,6 +16,12 @@ type preparedRemoveStoredPathTarget struct {
 	item       RemoveStoredPathItemResult
 }
 
+type removeStoredPathsPreflight struct {
+	prepared           []preparedRemoveStoredPathTarget
+	terminalResult     RemoveStoredPathsResult
+	requiresRepository bool
+}
+
 func validateRemoveStoredPathsRequest(req RemoveStoredPathsRequest) error {
 	if len(req.StoredPaths) == 0 {
 		return fmt.Errorf("engine: remove stored paths requires at least one target")
@@ -76,8 +82,43 @@ func prepareRemoveStoredPathTargets(targets []string) []preparedRemoveStoredPath
 	return prepared
 }
 
-func (e *DefaultEngine) removeStoredPaths(req RemoveStoredPathsRequest) RemoveStoredPathsResult {
+func PreflightRemoveStoredPaths(req RemoveStoredPathsRequest) (RemoveStoredPathsResult, bool, error) {
+	preflight, err := preflightRemoveStoredPaths(req)
+	if err != nil {
+		return RemoveStoredPathsResult{}, false, err
+	}
+	return preflight.terminalResult, preflight.requiresRepository, nil
+}
+
+func preflightRemoveStoredPaths(req RemoveStoredPathsRequest) (removeStoredPathsPreflight, error) {
+	if err := validateRemoveStoredPathsRequest(req); err != nil {
+		return removeStoredPathsPreflight{}, err
+	}
+
 	prepared := prepareRemoveStoredPathTargets(req.StoredPaths)
+	result := RemoveStoredPathsResult{
+		DryRun:        req.DryRun,
+		ExecutionMode: ExecutionModeSequential,
+		Items:         make([]RemoveStoredPathItemResult, 0, len(prepared)),
+	}
+	requiresRepository := false
+
+	for _, target := range prepared {
+		if target.executable {
+			requiresRepository = true
+			continue
+		}
+		appendRemoveStoredPathItem(&result, target.item)
+	}
+
+	return removeStoredPathsPreflight{
+		prepared:           prepared,
+		terminalResult:     result,
+		requiresRepository: requiresRepository,
+	}, nil
+}
+
+func (e *DefaultEngine) removeStoredPaths(req RemoveStoredPathsRequest, prepared []preparedRemoveStoredPathTarget) RemoveStoredPathsResult {
 	result := RemoveStoredPathsResult{
 		DryRun:        req.DryRun,
 		ExecutionMode: ExecutionModeSequential,
@@ -102,7 +143,6 @@ func (e *DefaultEngine) removeStoredPaths(req RemoveStoredPathsRequest) RemoveSt
 		}
 	}
 
-	finalizeBatchSummary(&result.Summary, len(req.StoredPaths))
 	return result
 }
 

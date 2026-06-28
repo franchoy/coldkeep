@@ -263,6 +263,58 @@ func TestRunRemoveCommandStoredPathsInputFileRemainsCLIOwned(t *testing.T) {
 	}
 }
 
+func TestRunRemoveCommandStoredPathsAllInvalidSkipsRepositoryInitialization(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalNewEngine := newCommandEngine
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		newCommandEngine = originalNewEngine
+	})
+
+	loadCalls := 0
+	engineCalls := 0
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		loadCalls++
+		return storage.StorageContext{}, errors.New("repository should not be loaded")
+	}
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		engineCalls++
+		return stubCommandEngine{}, errors.New("engine should not be constructed")
+	}
+
+	output := captureStdout(t, func() {
+		err := runRemoveCommand(parsedCommandLine{
+			method:      "remove",
+			positionals: []string{"   ", "\t"},
+			flags: map[string][]string{
+				"stored-paths": {""},
+				"dry-run":      {""},
+				"output":       {"json"},
+			},
+		}, outputModeJSON)
+		if err == nil {
+			t.Fatal("expected non-nil batch error due to invalid items")
+		}
+	})
+
+	if loadCalls != 0 {
+		t.Fatalf("expected no repository load, got %d", loadCalls)
+	}
+	if engineCalls != 0 {
+		t.Fatalf("expected no engine construction, got %d", engineCalls)
+	}
+
+	payload := assertSingleJSONObjectLine(t, output)
+	summary, _ := payload["summary"].(map[string]any)
+	if summary["total"] != float64(2) || summary["failed"] != float64(2) {
+		t.Fatalf("unexpected summary: %v", summary)
+	}
+	results := payload["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("expected two results, got %d", len(results))
+	}
+}
+
 func runStoredPathRestoreJSONCommand(t *testing.T) {
 	t.Helper()
 	err := runRestoreCommand(parsedCommandLine{

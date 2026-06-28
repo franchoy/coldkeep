@@ -283,13 +283,17 @@ func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredP
 	if err := ctx.Err(); err != nil {
 		return RemoveStoredPathsResult{}, err
 	}
-	if err := validateRemoveStoredPathsRequest(req); err != nil {
+	preflight, err := preflightRemoveStoredPaths(req)
+	if err != nil {
 		return RemoveStoredPathsResult{}, err
+	}
+	if !preflight.requiresRepository {
+		return preflight.terminalResult, nil
 	}
 	if err := e.validateRemoveStoredPathsDependencies(); err != nil {
 		return RemoveStoredPathsResult{}, err
 	}
-	return e.removeStoredPaths(req), nil
+	return e.removeStoredPaths(req, preflight.prepared), nil
 }
 
 func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error) {

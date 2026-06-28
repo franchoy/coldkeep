@@ -2022,6 +2022,25 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return usageErrorf("no valid stored paths after parsing input")
 		}
 
+		orderedTargets := make([]string, 0, len(rawTargets))
+		for _, target := range rawTargets {
+			orderedTargets = append(orderedTargets, target.Value)
+		}
+		req := engine.RemoveStoredPathsRequest{
+			StoredPaths: orderedTargets,
+			DryRun:      dryRun,
+			FailFast:    failFast,
+		}
+		terminalResult, requiresRepository, err := engine.PreflightRemoveStoredPaths(req)
+		if err != nil {
+			return err
+		}
+		if !requiresRepository {
+			report := removeStoredPathsResultToBatchReport(terminalResult, failFast)
+			removePerf.Mark("operation")
+			return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
+		}
+
 		sgctx, err := loadDefaultStorageContextPhase()
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
@@ -2033,15 +2052,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		if err != nil {
 			return err
 		}
-		orderedTargets := make([]string, 0, len(rawTargets))
-		for _, target := range rawTargets {
-			orderedTargets = append(orderedTargets, target.Value)
-		}
-		result, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-			StoredPaths: orderedTargets,
-			DryRun:      dryRun,
-			FailFast:    failFast,
-		})
+		result, err := eng.RemoveStoredPaths(context.Background(), req)
 		if err != nil {
 			return err
 		}
