@@ -61,6 +61,7 @@ fi
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 WORKFLOW_FILE="${COLDKEEP_CI_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/ci.yml}"
+CODEQL_WORKFLOW_FILE="${COLDKEEP_CODEQL_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/codeql.yml}"
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
 
 require_pattern() {
@@ -81,8 +82,12 @@ check_local_workflow() {
 
   echo "[audit] checking local workflow invariants"
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^  push:$' 'CI push trigger' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^\s+- main$' 'CI push branch retains main' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^\s+- release/\*\*$' 'CI push branch includes release/**' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'tags:\s*\[\s*"v\*"\s*\]' 'release tag trigger (v*)' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'merge_group:' 'merge queue trigger' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CI workflow_dispatch trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^  cross-platform:$' 'cross-platform job exists' || check_status=1
@@ -130,6 +135,15 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'BENCHMARK_RESULT.*!= "success"' 'required gate rejects skipped benchmark job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'CROSS_PLATFORM_RESULT.*!= "success"' 'required gate rejects skipped cross-platform job' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" 'name:\s*CodeQL' 'CodeQL workflow file' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^  push:$' 'CodeQL push trigger' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- main$' 'CodeQL push branch retains main' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- release/\*\*$' 'CodeQL push branch includes release/**' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CodeQL workflow_dispatch trigger' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" 'language:\s*actions' 'CodeQL retains actions analysis' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" 'language:\s*go' 'CodeQL retains Go analysis' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" 'language:\s*python' 'CodeQL retains Python analysis' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^  schedule:$' 'CodeQL weekly schedule trigger' || check_status=1
   require_pattern "$REPO_ROOT/internal/pathsafe/pathsafe_test.go" 'filepath\.EvalSymlinks\(t\.TempDir\(\)\)' 'generic symlink-component test retains canonical-path-specific coverage outside restore enforcement' || check_status=1
   if grep -Eq 'filepath\.EvalSymlinks\(t\.TempDir\(\)\)' "$REPO_ROOT/internal/storage/"*test.go 2>/dev/null; then
     echo "[audit] ERROR: storage restore tests must not canonicalize t.TempDir() with filepath.EvalSymlinks" >&2

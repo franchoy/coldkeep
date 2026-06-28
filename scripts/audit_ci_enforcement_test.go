@@ -13,6 +13,7 @@ import (
 
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 	workflow = strings.Replace(
 		workflow,
 		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform]",
@@ -20,7 +21,7 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 		1,
 	)
 
-	stderr := runAuditLocalOnly(t, workflow, true)
+	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
 	if !strings.Contains(stderr, "required gate depends on all upstream jobs") {
 		t.Fatalf("expected missing cross-platform dependency error, got:\n%s", stderr)
 	}
@@ -28,6 +29,7 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformSuccessAssertion(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 	workflow = strings.Replace(
 		workflow,
 		`             [ "${BENCHMARK_RESULT}" != "success" ] || \
@@ -36,29 +38,78 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformSuccessAssertion(t 
 		1,
 	)
 
-	stderr := runAuditLocalOnly(t, workflow, true)
+	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
 	if !strings.Contains(stderr, "required gate rejects skipped cross-platform job") {
 		t.Fatalf("expected missing cross-platform success assertion error, got:\n%s", stderr)
 	}
 }
 
+func TestAuditCIEnforcementLocalWorkflowRequiresReleaseBranchPushTrigger(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	workflow = strings.Replace(workflow, "      - release/**\n", "", 1)
+
+	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "CI push branch includes release/**") {
+		t.Fatalf("expected missing CI release branch trigger error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementLocalWorkflowRequiresWorkflowDispatch(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	workflow = strings.Replace(workflow, "  workflow_dispatch:\n", "", 1)
+
+	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "CI workflow_dispatch trigger") {
+		t.Fatalf("expected missing CI workflow_dispatch error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementLocalCodeQLRequiresReleaseBranchPushTrigger(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	codeqlWorkflow = strings.Replace(codeqlWorkflow, "      - release/**\n", "", 1)
+
+	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "CodeQL push branch includes release/**") {
+		t.Fatalf("expected missing CodeQL release branch trigger error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementLocalCodeQLRequiresWorkflowDispatch(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	codeqlWorkflow = strings.Replace(codeqlWorkflow, "  workflow_dispatch:\n", "", 1)
+
+	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "CodeQL workflow_dispatch trigger") {
+		t.Fatalf("expected missing CodeQL workflow_dispatch error, got:\n%s", stderr)
+	}
+}
+
 func TestAuditCIEnforcementLocalWorkflowPassesCurrentConfiguration(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
-	output := runAuditLocalOnly(t, workflow, false)
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false)
 	if !strings.Contains(output, "[audit] PASSED") {
 		t.Fatalf("expected audit pass output, got:\n%s", output)
 	}
 }
 
-func runAuditLocalOnly(t *testing.T, workflow string, wantFailure bool) string {
+func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wantFailure bool) string {
 	t.Helper()
 
 	tmpDir := t.TempDir()
 	workflowPath := filepath.Join(tmpDir, "ci.yml")
+	codeqlWorkflowPath := filepath.Join(tmpDir, "codeql.yml")
 	matrixPath := filepath.Join(tmpDir, "VALIDATION_MATRIX.md")
 
 	if err := os.WriteFile(workflowPath, []byte(workflow), 0o600); err != nil {
 		t.Fatalf("write workflow fixture: %v", err)
+	}
+	if err := os.WriteFile(codeqlWorkflowPath, []byte(codeqlWorkflow), 0o600); err != nil {
+		t.Fatalf("write codeql workflow fixture: %v", err)
 	}
 	if err := os.WriteFile(matrixPath, []byte(readRepoFile(t, "VALIDATION_MATRIX.md")), 0o600); err != nil {
 		t.Fatalf("write validation matrix fixture: %v", err)
@@ -68,6 +119,7 @@ func runAuditLocalOnly(t *testing.T, workflow string, wantFailure bool) string {
 	cmd.Dir = repoRoot(t)
 	cmd.Env = append(os.Environ(),
 		"COLDKEEP_CI_WORKFLOW_FILE="+workflowPath,
+		"COLDKEEP_CODEQL_WORKFLOW_FILE="+codeqlWorkflowPath,
 		"COLDKEEP_VALIDATION_MATRIX_FILE="+matrixPath,
 	)
 	output, err := cmd.CombinedOutput()
