@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 )
 
 func makeOuterAliasRoot(t *testing.T, rootName string) string {
@@ -18,28 +19,35 @@ func makeOuterAliasRoot(t *testing.T, rootName string) string {
 	aliasLink := filepath.Join(t.TempDir(), "outer-link")
 	requireSymlink(t, realParent, aliasLink)
 
-	realRoot := filepath.Join(realParent, rootName)
-	if err := os.MkdirAll(realRoot, 0o700); err != nil {
+	realRoot, err := os.MkdirTemp(realParent, rootName+"-")
+	if err != nil {
 		t.Fatalf("mkdir real root: %v", err)
 	}
-	return filepath.Join(aliasLink, rootName)
+	return filepath.Join(aliasLink, filepath.Base(realRoot))
 }
 
 func requireOutputBytes(t *testing.T, path string, want []byte) {
 	t.Helper()
 
-	file, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		t.Fatalf("read output file %q: %v", path, err)
-	}
-	defer func() { _ = file.Close() }()
-	got, err := io.ReadAll(file)
+	got, err := readTrustedOutputBytes(path)
 	if err != nil {
 		t.Fatalf("read output file %q: %v", path, err)
 	}
 	if string(got) != string(want) {
 		t.Fatalf("output bytes mismatch: got=%q want=%q", string(got), string(want))
 	}
+}
+
+func readTrustedOutputBytes(path string) ([]byte, error) {
+	root, err := pathsafe.NearestExistingAncestorDir(path)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	return fs.ReadFile(os.DirFS(root), filepath.ToSlash(rel))
 }
 
 func TestRestoreWithTrustedRootAllowsOuterAliasForExactOutputPath(t *testing.T) {

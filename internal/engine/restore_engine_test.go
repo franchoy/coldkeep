@@ -54,11 +54,11 @@ func TestRestoreByIDAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
 	aliasLink := filepath.Join(t.TempDir(), "outer-link")
 	requireSymlink(t, realParent, aliasLink)
 
-	realRoot := filepath.Join(realParent, "trusted-root")
-	if err := os.MkdirAll(realRoot, 0o700); err != nil {
+	realRoot, err := os.MkdirTemp(realParent, "trusted-root-")
+	if err != nil {
 		t.Fatalf("mkdir real root: %v", err)
 	}
-	aliasRoot := filepath.Join(aliasLink, "trusted-root")
+	aliasRoot := filepath.Join(aliasLink, filepath.Base(realRoot))
 
 	res, err := fixture.engine.Restore(context.Background(), engine.RestoreRequest{
 		FileIDs:         []int64{fixture.stored.FileID},

@@ -228,11 +228,11 @@ func TestValidateWritePathUnderTrustedRootAllowsOuterAlias(t *testing.T) {
 		t.Skipf("symlink unavailable on this platform/environment: %v", err)
 	}
 
-	realRoot := filepath.Join(realParent, "trusted")
-	if err := os.MkdirAll(realRoot, 0o700); err != nil {
+	realRoot, err := os.MkdirTemp(realParent, "trusted-")
+	if err != nil {
 		t.Fatalf("mkdir real trusted root: %v", err)
 	}
-	aliasRoot := filepath.Join(aliasLink, "trusted")
+	aliasRoot := filepath.Join(aliasLink, filepath.Base(realRoot))
 	targetPath := filepath.Join(aliasRoot, "nested", "file.bin")
 
 	if err := ValidateWritePathUnderTrustedRoot(aliasRoot, targetPath); err != nil {

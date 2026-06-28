@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -766,7 +768,7 @@ func TestRestoreFileByStoredPathUsesLexicalPhysicalPathIdentityAboveAlias(t *tes
 		t.Fatalf("chdir alias root: %v", err)
 	}
 
-	relativeStoredPath := filepath.Join("nested", "restored-from-lexical-alias.bin")
+	relativeStoredPath := filepath.Join(fixture.nestedDir, "restored-from-lexical-alias.bin")
 	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(fixture.sgctx, relativeStoredPath, RestoreOptions{Overwrite: true})
 	if err != nil {
 		t.Fatalf("restore by stored path through lexical alias: %v", err)
@@ -775,7 +777,7 @@ func TestRestoreFileByStoredPathUsesLexicalPhysicalPathIdentityAboveAlias(t *tes
 		t.Fatalf("expected restore output path %q, got %q", fixture.storedPath, result.OutputPath)
 	}
 
-	restored, err := os.ReadFile(fixture.storedPath)
+	restored, err := readTrustedRestoreTestFileBytes(fixture.storedPath)
 	if err != nil {
 		t.Fatalf("read restored file: %v", err)
 	}
@@ -788,6 +790,7 @@ type storedPathLexicalAliasRestoreFixture struct {
 	db         *sql.DB
 	sgctx      StorageContext
 	aliasRoot  string
+	nestedDir  string
 	storedPath string
 	payload    []byte
 }
@@ -813,8 +816,8 @@ func setupStoredPathLexicalAliasRestoreFixture(t *testing.T) storedPathLexicalAl
 	}
 
 	fileID := seedStoredPathLexicalAliasRestoreRows(t, dbconn, containerFilename, hex.EncodeToString(hash[:]), payload)
-	aliasRoot := makeStoredPathLexicalAliasRoot(t)
-	storedPath := filepath.Join(aliasRoot, "nested", "restored-from-lexical-alias.bin")
+	aliasRoot, nestedDirName := makeStoredPathLexicalAliasRoot(t)
+	storedPath := filepath.Join(aliasRoot, nestedDirName, "restored-from-lexical-alias.bin")
 
 	if _, err := dbconn.Exec(
 		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
@@ -834,6 +837,7 @@ func setupStoredPathLexicalAliasRestoreFixture(t *testing.T) storedPathLexicalAl
 		db:         dbconn,
 		sgctx:      StorageContext{DB: dbconn, ContainerDir: containersDir},
 		aliasRoot:  aliasRoot,
+		nestedDir:  nestedDirName,
 		storedPath: storedPath,
 		payload:    payload,
 	}
@@ -842,16 +846,7 @@ func setupStoredPathLexicalAliasRestoreFixture(t *testing.T) storedPathLexicalAl
 func seedStoredPathLexicalAliasRestoreRows(t *testing.T, dbconn *sql.DB, containerFilename string, hash string, payload []byte) int64 {
 	t.Helper()
 
-	var containerID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO container (filename, current_size, max_size, sealed)
-		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
-		containerFilename,
-		int64(container.ContainerHdrLen+len(payload)),
-		container.GetContainerMaxSize(),
-	).Scan(&containerID); err != nil {
-		t.Fatalf("insert container: %v", err)
-	}
+	containerID := insertStoredPathLexicalAliasContainer(t, dbconn, containerFilename, payload)
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
@@ -901,18 +896,50 @@ func seedStoredPathLexicalAliasRestoreRows(t *testing.T, dbconn *sql.DB, contain
 	return fileID
 }
 
-func makeStoredPathLexicalAliasRoot(t *testing.T) string {
+func insertStoredPathLexicalAliasContainer(t *testing.T, dbconn *sql.DB, containerFilename string, payload []byte) int64 {
+	t.Helper()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	return containerID
+}
+
+func makeStoredPathLexicalAliasRoot(t *testing.T) (string, string) {
 	t.Helper()
 
 	realParent := t.TempDir()
 	aliasParent := filepath.Join(t.TempDir(), "restore-root-alias")
 	requireSymlink(t, realParent, aliasParent)
 
-	realRoot := filepath.Join(realParent, "restore-root")
-	if err := os.MkdirAll(filepath.Join(realRoot, "nested"), 0o700); err != nil {
+	realRoot, err := os.MkdirTemp(realParent, "restore-root-")
+	if err != nil {
 		t.Fatalf("mkdir real root: %v", err)
 	}
-	return filepath.Join(aliasParent, "restore-root")
+	nestedDir, err := os.MkdirTemp(realRoot, "nested-")
+	if err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	return filepath.Join(aliasParent, filepath.Base(realRoot)), filepath.Base(nestedDir)
+}
+
+func readTrustedRestoreTestFileBytes(path string) ([]byte, error) {
+	root, err := pathsafe.NearestExistingAncestorDir(path)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	return fs.ReadFile(os.DirFS(root), filepath.ToSlash(rel))
 }
 
 func TestRestoreIgnoresConfiguredRuntimeChunker(t *testing.T) {

@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,7 +90,11 @@ func readRepoFile(t *testing.T, relPath string) string {
 	if err != nil {
 		t.Fatalf("resolve %s: %v", relPath, err)
 	}
-	content, err := os.ReadFile(filepath.Clean(path))
+	relPathFromRoot, err := filepath.Rel(repoRoot(t), path)
+	if err != nil {
+		t.Fatalf("rel %s: %v", relPath, err)
+	}
+	content, err := fs.ReadFile(os.DirFS(repoRoot(t)), filepath.ToSlash(relPathFromRoot))
 	if err != nil {
 		t.Fatalf("read %s: %v", relPath, err)
 	}

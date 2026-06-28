@@ -290,11 +290,11 @@ func TestRestoreStoredPathPrefixModeAllowsOuterAliasAboveTrustedRoot(t *testing.
 	aliasLink := filepath.Join(t.TempDir(), "outer-link")
 	requireSymlink(t, realParent, aliasLink)
 
-	realRoot := filepath.Join(realParent, "trusted-root")
-	if err := os.MkdirAll(realRoot, 0o700); err != nil {
+	realRoot, err := os.MkdirTemp(realParent, "trusted-root-")
+	if err != nil {
 		t.Fatalf("mkdir real root: %v", err)
 	}
-	aliasRoot := filepath.Join(aliasLink, "trusted-root")
+	aliasRoot := filepath.Join(aliasLink, filepath.Base(realRoot))
 	expectedPath := expectedPrefixModeOutputPath(aliasRoot, fixture.stored.Path)
 
 	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
@@ -317,11 +317,11 @@ func TestRestoreStoredPathOverrideModeAllowsOuterAliasAboveDerivedRoot(t *testin
 	aliasLink := filepath.Join(t.TempDir(), "outer-link")
 	requireSymlink(t, realParent, aliasLink)
 
-	realRoot := filepath.Join(realParent, "override-root")
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	realRoot, err := os.MkdirTemp(realParent, "override-root-")
+	if err != nil {
 		t.Fatalf("mkdir real root: %v", err)
 	}
-	overridePath := filepath.Join(aliasLink, "override-root", "restore-target.bin")
+	overridePath := filepath.Join(aliasLink, filepath.Base(realRoot), "restore-target.bin")
 
 	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
 		StoredPath:      fixture.stored.Path,
