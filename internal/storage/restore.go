@@ -927,7 +927,10 @@ func deriveRestorePrefixRelativePath(storedPath string) (string, error) {
 	if trimmed == "" {
 		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 	}
-	if pathsafe.IsWindowsDrivePath(trimmed) || strings.HasPrefix(trimmed, `\\`) || strings.HasPrefix(trimmed, `//`) || strings.HasPrefix(trimmed, `\`) {
+	if strings.HasPrefix(trimmed, `\\`) || strings.HasPrefix(trimmed, `//`) {
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	}
+	if runtime.GOOS != "windows" && (pathsafe.IsWindowsDrivePath(trimmed) || strings.HasPrefix(trimmed, `\`)) {
 		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 	}
 
