@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -741,9 +742,36 @@ func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int
 	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
 }
 
-func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPath string) (RestoreDescriptor, error) {
+func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPaths []string) (RestoreDescriptor, error) {
+	if len(storedPaths) == 0 {
+		return RestoreDescriptor{}, fmt.Errorf("physical file path cannot be empty")
+	}
+
 	var descriptor RestoreDescriptor
-	err := dbconn.QueryRowContext(
+
+	for _, storedPath := range storedPaths {
+		err := scanRestoreDescriptorByPhysicalPath(ctx, dbconn, storedPath, &descriptor)
+		if err == nil {
+			return descriptor, nil
+		}
+		if err != sql.ErrNoRows {
+			return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor for path %q: %w", storedPath, err)
+		}
+	}
+
+	descriptor, err := buildRestoreDescriptorFromCanonicalIdentity(ctx, dbconn, storedPaths[0])
+	if err == nil {
+		return descriptor, nil
+	}
+	if err != sql.ErrNoRows {
+		return RestoreDescriptor{}, err
+	}
+
+	return RestoreDescriptor{}, fmt.Errorf("physical file path %q not found", storedPaths[0])
+}
+
+func scanRestoreDescriptorByPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPath string, descriptor *RestoreDescriptor) error {
+	return dbconn.QueryRowContext(
 		ctx,
 		`SELECT
 			pf.path,
@@ -767,14 +795,140 @@ func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB,
 		&descriptor.GID,
 		&descriptor.IsMetadataComplete,
 	)
+}
+
+func buildRestoreDescriptorFromCanonicalIdentity(ctx context.Context, dbconn *sql.DB, normalizedStoredPath string) (RestoreDescriptor, error) {
+	rows, err := dbconn.QueryContext(
+		ctx,
+		`SELECT
+			pf.path,
+			pf.logical_file_id,
+			pf.mode,
+			pf.mtime,
+			pf.uid,
+			pf.gid,
+			pf.is_metadata_complete
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.status = $1`,
+		filestate.LogicalFileCompleted,
+	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return RestoreDescriptor{}, fmt.Errorf("physical file path %q not found", storedPath)
+		return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor by canonical identity: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var descriptor RestoreDescriptor
+		if err := rows.Scan(
+			&descriptor.Path,
+			&descriptor.LogicalFileID,
+			&descriptor.Mode,
+			&descriptor.MTime,
+			&descriptor.UID,
+			&descriptor.GID,
+			&descriptor.IsMetadataComplete,
+		); err != nil {
+			return RestoreDescriptor{}, fmt.Errorf("scan canonical restore descriptor candidate: %w", err)
 		}
-		return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor for path %q: %w", storedPath, err)
+
+		candidatePath, err := normalizeRestorePhysicalPathIdentity(descriptor.Path)
+		if err != nil {
+			continue
+		}
+		if candidatePath == normalizedStoredPath {
+			return descriptor, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return RestoreDescriptor{}, fmt.Errorf("iterate canonical restore descriptor candidates: %w", err)
+	}
+	return RestoreDescriptor{}, sql.ErrNoRows
+}
+
+func restoreDescriptorLookupPaths(storedPath string) ([]string, error) {
+	normalizedPath, err := normalizeRestorePhysicalPathIdentity(storedPath)
+	if err != nil {
+		return nil, err
 	}
 
-	return descriptor, nil
+	lookupPaths := []string{normalizedPath}
+	trimmed := strings.TrimSpace(storedPath)
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("resolve absolute physical file path: %w", err)
+	}
+	lexicalPath := filepath.Clean(absPath)
+	if lexicalPath != normalizedPath {
+		lookupPaths = append(lookupPaths, lexicalPath)
+	}
+	return lookupPaths, nil
+}
+
+func normalizeRestorePhysicalPathIdentity(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("physical file path cannot be empty")
+	}
+
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute physical file path: %w", err)
+	}
+	cleaned := filepath.Clean(absPath)
+
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err == nil {
+		resolvedAbs, absErr := filepath.Abs(resolved)
+		if absErr != nil {
+			return "", fmt.Errorf("resolve absolute canonical physical file path: %w", absErr)
+		}
+		return filepath.Clean(resolvedAbs), nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("canonicalize physical file path: %w", err)
+	}
+
+	ancestor, err := pathsafe.NearestExistingAncestorDir(cleaned)
+	if err != nil {
+		return cleaned, nil
+	}
+	resolvedAncestor, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return cleaned, nil
+		}
+		return "", fmt.Errorf("canonicalize physical file ancestor: %w", err)
+	}
+	resolvedAncestorAbs, err := filepath.Abs(resolvedAncestor)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute canonical physical file ancestor: %w", err)
+	}
+	relativeSuffix, err := filepath.Rel(ancestor, cleaned)
+	if err != nil {
+		return "", fmt.Errorf("derive physical file relative suffix: %w", err)
+	}
+	return filepath.Clean(filepath.Join(resolvedAncestorAbs, relativeSuffix)), nil
+}
+
+func deriveRestorePrefixRelativePath(storedPath string) (string, error) {
+	trimmed := strings.TrimSpace(storedPath)
+	if trimmed == "" {
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	}
+	if pathsafe.IsWindowsDrivePath(trimmed) || strings.HasPrefix(trimmed, `\\`) || strings.HasPrefix(trimmed, `//`) || strings.HasPrefix(trimmed, `\`) {
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	}
+
+	relativePath := trimmed
+	if vol := filepath.VolumeName(relativePath); vol != "" {
+		relativePath = strings.TrimPrefix(relativePath, vol)
+	}
+	relativePath = strings.TrimLeft(relativePath, `/\`)
+	if relativePath == "" {
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	}
+	return relativePath, nil
 }
 
 // RestoreFileByStoredPathWithStorageContextResultOptions restores a file using the
@@ -785,7 +939,7 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
 	}
 
-	normalizedPath, err := normalizePhysicalFilePath(storedPath)
+	lookupPaths, err := restoreDescriptorLookupPaths(storedPath)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
@@ -793,7 +947,7 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, normalizedPath)
+	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, lookupPaths)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
@@ -921,13 +1075,9 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 			return "", "", fmt.Errorf("resolve restore prefix destination: %w", err)
 		}
 
-		relativePath := descriptor.Path
-		if vol := filepath.VolumeName(relativePath); vol != "" {
-			relativePath = strings.TrimPrefix(relativePath, vol)
-		}
-		relativePath = strings.TrimLeft(relativePath, `/\`)
-		if relativePath == "" {
-			return "", "", fmt.Errorf("cannot derive relative path from stored path %q", descriptor.Path)
+		relativePath, err := deriveRestorePrefixRelativePath(descriptor.Path)
+		if err != nil {
+			return "", "", err
 		}
 
 		joinedPath, err := pathsafe.SafeJoin(trustedRoot, relativePath)

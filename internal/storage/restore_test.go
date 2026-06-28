@@ -613,7 +613,7 @@ func TestBuildRestoreDescriptorFromPhysicalPathNotFound(t *testing.T) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	_, err = buildRestoreDescriptorFromPhysicalPath(ctx, dbconn, "/missing/path.bin")
+	_, err = buildRestoreDescriptorFromPhysicalPath(ctx, dbconn, []string{"/missing/path.bin"})
 	if err == nil || !strings.Contains(err.Error(), "physical file path \"/missing/path.bin\" not found") {
 		t.Fatalf("expected physical path not found error, got: %v", err)
 	}
@@ -750,6 +750,136 @@ func TestRestoreFileByStoredPathUsesPhysicalPathIdentity(t *testing.T) {
 	}
 	if refCountAfter != refCountBefore {
 		t.Fatalf("expected restore to keep ref_count unchanged, before=%d after=%d", refCountBefore, refCountAfter)
+	}
+}
+
+func TestRestoreFileByStoredPathUsesLexicalPhysicalPathIdentityAboveAlias(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("restore-by-physical-path-alias")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+
+	containerFilename := "restore-by-path-alias.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
+		hash,
+		int64(len(payload)),
+		filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
+		"legacy-alias-name.bin",
+		int64(len(payload)),
+		hash,
+		filestate.LogicalFileCompleted,
+		1,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID,
+		chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	realParent := t.TempDir()
+	aliasParent := filepath.Join(t.TempDir(), "restore-root-alias")
+	requireSymlink(t, realParent, aliasParent)
+
+	realRoot := filepath.Join(realParent, "restore-root")
+	if err := os.MkdirAll(filepath.Join(realRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	aliasRoot := filepath.Join(aliasParent, "restore-root")
+	storedPath := filepath.Join(aliasRoot, "nested", "restored-from-lexical-alias.bin")
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		storedPath,
+		fileID,
+		nil,
+		nil,
+		nil,
+		nil,
+		0,
+	); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(originalWD) }()
+	if err := os.Chdir(aliasRoot); err != nil {
+		t.Fatalf("chdir alias root: %v", err)
+	}
+
+	relativeStoredPath := filepath.Join("nested", "restored-from-lexical-alias.bin")
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, relativeStoredPath, RestoreOptions{Overwrite: true})
+	if err != nil {
+		t.Fatalf("restore by stored path through lexical alias: %v", err)
+	}
+	if result.OutputPath != storedPath {
+		t.Fatalf("expected restore output path %q, got %q", storedPath, result.OutputPath)
+	}
+
+	restored, err := os.ReadFile(storedPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != string(payload) {
+		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
 	}
 }
 
