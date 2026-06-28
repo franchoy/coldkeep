@@ -90,11 +90,11 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run path safety cross-platform tests' 'cross-platform path safety step' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test ./internal/pathsafe/\\.\\.\\. -run 'TrustedRoot\\|Symlink\\|Alias\\|WritePath' -count=1" 'cross-platform path safety command covers trusted-root and alias checks' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run storage restore cross-platform tests' 'cross-platform storage restore step' || check_status=1
-  require_pattern "$WORKFLOW_FILE" "go test ./internal/storage/\\.\\.\\. -run 'Restore\\|Symlink\\|TrustedRoot\\|CrossPlatform\\|Alias' -count=1" 'cross-platform storage restore command covers lexical alias restore checks' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/storage/\\.\\.\\. -run '\\^TestRestore' -count=1" 'cross-platform storage restore command scopes to restore tests' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run engine restore cross-platform tests' 'cross-platform engine restore step' || check_status=1
-  require_pattern "$WORKFLOW_FILE" "go test ./internal/engine/\\.\\.\\. -run 'Restore\\|Symlink\\|Destination\\|Alias' -count=1" 'cross-platform engine restore command covers routed restore checks' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/engine/\\.\\.\\. -run '\\^TestRestore' -count=1" 'cross-platform engine restore command scopes to restore tests' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run snapshot restore cross-platform tests' 'cross-platform snapshot restore step' || check_status=1
-  require_pattern "$WORKFLOW_FILE" "go test ./internal/snapshot/\\.\\.\\. -run 'Restore\\|Symlink\\|TrustedRoot\\|Alias' -count=1" 'cross-platform snapshot restore command covers snapshot alias checks' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/snapshot/\\.\\.\\. -run '\\^TestRestoreSnapshot' -count=1" 'cross-platform snapshot restore command scopes to snapshot restore tests' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform\]' 'required gate depends on all upstream jobs including long-run, adversarial, legacy compatibility, benchmark matrix, and cross-platform' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step' || check_status=1

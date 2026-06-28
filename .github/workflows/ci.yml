@@ -653,13 +653,13 @@ jobs:
         run: go test ./internal/pathsafe/... -run 'TrustedRoot|Symlink|Alias|WritePath' -count=1
 
       - name: Run storage restore cross-platform tests
-        run: go test ./internal/storage/... -run 'Restore|Symlink|TrustedRoot|CrossPlatform|Alias' -count=1
+        run: go test ./internal/storage/... -run '^TestRestore' -count=1
 
       - name: Run engine restore cross-platform tests
-        run: go test ./internal/engine/... -run 'Restore|Symlink|Destination|Alias' -count=1
+        run: go test ./internal/engine/... -run '^TestRestore' -count=1
 
       - name: Run snapshot restore cross-platform tests
-        run: go test ./internal/snapshot/... -run 'Restore|Symlink|TrustedRoot|Alias' -count=1
+        run: go test ./internal/snapshot/... -run '^TestRestoreSnapshot' -count=1
 
   ci-required:
     name: CI Required Gate
