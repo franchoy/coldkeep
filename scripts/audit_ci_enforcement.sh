@@ -60,8 +60,8 @@ fi
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
-WORKFLOW_FILE="$REPO_ROOT/.github/workflows/ci.yml"
-VALIDATION_MATRIX_FILE="$REPO_ROOT/VALIDATION_MATRIX.md"
+WORKFLOW_FILE="${COLDKEEP_CI_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/ci.yml}"
+VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
 
 require_pattern() {
   local file="$1"
@@ -85,7 +85,17 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'merge_group:' 'merge queue trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix\]' 'required gate depends on all upstream jobs including long-run, adversarial, legacy compatibility, and benchmark matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^  cross-platform:$' 'cross-platform job exists' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run path safety cross-platform tests' 'cross-platform path safety step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/pathsafe/\\.\\.\\. -run 'TrustedRoot\\|Symlink\\|Alias\\|WritePath' -count=1" 'cross-platform path safety command covers trusted-root and alias checks' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run storage restore cross-platform tests' 'cross-platform storage restore step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/storage/\\.\\.\\. -run 'Restore\\|Symlink\\|TrustedRoot\\|CrossPlatform\\|Alias' -count=1" 'cross-platform storage restore command covers lexical alias restore checks' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run engine restore cross-platform tests' 'cross-platform engine restore step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/engine/\\.\\.\\. -run 'Restore\\|Symlink\\|Destination\\|Alias' -count=1" 'cross-platform engine restore command covers routed restore checks' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run snapshot restore cross-platform tests' 'cross-platform snapshot restore step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/snapshot/\\.\\.\\. -run 'Restore\\|Symlink\\|TrustedRoot\\|Alias' -count=1" 'cross-platform snapshot restore command covers snapshot alias checks' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform\]' 'required gate depends on all upstream jobs including long-run, adversarial, legacy compatibility, benchmark matrix, and cross-platform' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_smart_quotes\.sh' 'smart-quote guard command' || check_status=1
@@ -119,6 +129,14 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'ADVERSARIAL_RESULT.*!= "success"' 'required gate rejects skipped adversarial job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'BENCHMARK_RESULT.*!= "success"' 'required gate rejects skipped benchmark job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'CROSS_PLATFORM_RESULT.*!= "success"' 'required gate rejects skipped cross-platform job' || check_status=1
+  require_pattern "$REPO_ROOT/internal/pathsafe/pathsafe_test.go" 'filepath\.EvalSymlinks\(t\.TempDir\(\)\)' 'generic symlink-component test retains canonical-path-specific coverage outside restore enforcement' || check_status=1
+  if grep -Eq 'filepath\.EvalSymlinks\(t\.TempDir\(\)\)' "$REPO_ROOT/internal/storage/"*test.go 2>/dev/null; then
+    echo "[audit] ERROR: storage restore tests must not canonicalize t.TempDir() with filepath.EvalSymlinks" >&2
+    check_status=1
+  else
+    echo "[audit] ok: storage restore tests preserve native lexical temp paths"
+  fi
   require_pattern "$VALIDATION_MATRIX_FILE" '^# (v1\.0 )?Validation Matrix$' 'validation matrix artifact (legacy or current style)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G1 \|' 'validation matrix deterministic restore row (G1)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G2 \|' 'validation matrix repeat store does not drift chunk graph row (G2)' || check_status=1

@@ -650,15 +650,21 @@ jobs:
         run: go env
 
       - name: Run path safety cross-platform tests
-        run: go test ./internal/pathsafe/... -count=1
+        run: go test ./internal/pathsafe/... -run 'TrustedRoot|Symlink|Alias|WritePath' -count=1
 
-      - name: Run restore cross-platform tests
-        run: go test ./internal/storage -run "RestoreCrossPlatform|RestoreSeam" -count=1
+      - name: Run storage restore cross-platform tests
+        run: go test ./internal/storage/... -run 'Restore|Symlink|TrustedRoot|CrossPlatform|Alias' -count=1
+
+      - name: Run engine restore cross-platform tests
+        run: go test ./internal/engine/... -run 'Restore|Symlink|Destination|Alias' -count=1
+
+      - name: Run snapshot restore cross-platform tests
+        run: go test ./internal/snapshot/... -run 'Restore|Symlink|TrustedRoot|Alias' -count=1
 
   ci-required:
     name: CI Required Gate
     runs-on: ubuntu-latest
-    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix]
+    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform]
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
@@ -672,6 +678,7 @@ jobs:
           SMOKE_RESULT: ${{ needs.smoke.result }}
           LEGACY_COMPATIBILITY_RESULT: ${{ needs['legacy-compatibility'].result }}
           BENCHMARK_RESULT: ${{ needs['benchmark-matrix'].result }}
+          CROSS_PLATFORM_RESULT: ${{ needs['cross-platform'].result }}
         run: |
           echo "quality=${QUALITY_RESULT}"
           echo "correctness-matrix=${CORRECTNESS_MATRIX_RESULT}"
@@ -681,6 +688,7 @@ jobs:
           echo "smoke=${SMOKE_RESULT}"
           echo "legacy-compatibility=${LEGACY_COMPATIBILITY_RESULT}"
           echo "benchmark=${BENCHMARK_RESULT}"
+          echo "cross-platform=${CROSS_PLATFORM_RESULT}"
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
              [ "${CORRECTNESS_MATRIX_RESULT}" != "success" ] || \
@@ -689,7 +697,8 @@ jobs:
              [ "${ADVERSARIAL_RESULT}" != "success" ] || \
              [ "${SMOKE_RESULT}" != "success" ] || \
              [ "${LEGACY_COMPATIBILITY_RESULT}" != "success" ] || \
-             [ "${BENCHMARK_RESULT}" != "success" ]; then
+             [ "${BENCHMARK_RESULT}" != "success" ] || \
+             [ "${CROSS_PLATFORM_RESULT}" != "success" ]; then
             echo "One or more required jobs failed or were skipped."
             exit 1
           fi
