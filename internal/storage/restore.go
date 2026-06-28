@@ -971,7 +971,7 @@ func containsRestorePrefixTraversal(path string) bool {
 }
 
 func projectRestorePrefixRelativePath(cleanedPath string) (string, error) {
-	if !filepath.IsAbs(cleanedPath) {
+	if !filepath.IsAbs(cleanedPath) && !strings.HasPrefix(cleanedPath, `/`) && !strings.HasPrefix(cleanedPath, `\`) {
 		return cleanedPath, nil
 	}
 
