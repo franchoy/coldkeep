@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,7 +19,7 @@ func makeOuterAliasRoot(t *testing.T, rootName string) string {
 	requireSymlink(t, realParent, aliasLink)
 
 	realRoot := filepath.Join(realParent, rootName)
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	if err := os.MkdirAll(realRoot, 0o700); err != nil {
 		t.Fatalf("mkdir real root: %v", err)
 	}
 	return filepath.Join(aliasLink, rootName)
@@ -27,7 +28,12 @@ func makeOuterAliasRoot(t *testing.T, rootName string) string {
 func requireOutputBytes(t *testing.T, path string, want []byte) {
 	t.Helper()
 
-	got, err := os.ReadFile(path)
+	file, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		t.Fatalf("read output file %q: %v", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	got, err := io.ReadAll(file)
 	if err != nil {
 		t.Fatalf("read output file %q: %v", path, err)
 	}

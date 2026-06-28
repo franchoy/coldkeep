@@ -55,7 +55,7 @@ func TestRestoreByIDAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
 	requireSymlink(t, realParent, aliasLink)
 
 	realRoot := filepath.Join(realParent, "trusted-root")
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	if err := os.MkdirAll(realRoot, 0o700); err != nil {
 		t.Fatalf("mkdir real root: %v", err)
 	}
 	aliasRoot := filepath.Join(aliasLink, "trusted-root")
@@ -75,13 +75,7 @@ func TestRestoreByIDAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
 	if res.Items[0].DestinationPath != wantPath {
 		t.Fatalf("destination path mismatch: got=%q want=%q", res.Items[0].DestinationPath, wantPath)
 	}
-	got, readErr := os.ReadFile(wantPath)
-	if readErr != nil {
-		t.Fatalf("read restored file: %v", readErr)
-	}
-	if string(got) != string(fixture.payload) {
-		t.Fatalf("restored payload mismatch: got=%q want=%q", string(got), string(fixture.payload))
-	}
+	assertRestoredBytes(t, wantPath, fixture.payload)
 }
 
 func seedRestoreDryRunLogicalFile(t *testing.T, db *sql.DB) int64 {

@@ -276,28 +276,38 @@ func NearestExistingAncestorDir(path string) (string, error) {
 
 	current := filepath.Dir(filepath.Clean(absPath))
 	for {
-		info, statErr := os.Lstat(current)
-		if statErr == nil {
-			if !info.IsDir() {
-				parent := filepath.Dir(current)
-				if parent == current {
-					return "", fmt.Errorf("nearest existing ancestor is not a directory: %q", current)
-				}
-				current = parent
-				continue
-			}
-			return current, nil
+		next, done, err := nearestExistingAncestorDirStep(current, absPath)
+		if err != nil {
+			return "", err
 		}
-		if !errorsIsNotExist(statErr) {
-			return "", fmt.Errorf("stat ancestor %q: %w", current, statErr)
+		if done {
+			return next, nil
 		}
+		current = next
+	}
+}
 
+func nearestExistingAncestorDirStep(current string, absPath string) (string, bool, error) {
+	info, statErr := os.Lstat(current)
+	if statErr == nil {
+		if info.IsDir() {
+			return current, true, nil
+		}
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", fmt.Errorf("no existing ancestor directory found for %q", absPath)
+			return "", false, fmt.Errorf("nearest existing ancestor is not a directory: %q", current)
 		}
-		current = parent
+		return parent, false, nil
 	}
+	if !errorsIsNotExist(statErr) {
+		return "", false, fmt.Errorf("stat ancestor %q: %w", current, statErr)
+	}
+
+	parent := filepath.Dir(current)
+	if parent == current {
+		return "", false, fmt.Errorf("no existing ancestor directory found for %q", absPath)
+	}
+	return parent, false, nil
 }
 
 func errorsIsNotExist(err error) bool {

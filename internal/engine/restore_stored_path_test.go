@@ -291,7 +291,7 @@ func TestRestoreStoredPathPrefixModeAllowsOuterAliasAboveTrustedRoot(t *testing.
 	requireSymlink(t, realParent, aliasLink)
 
 	realRoot := filepath.Join(realParent, "trusted-root")
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	if err := os.MkdirAll(realRoot, 0o700); err != nil {
 		t.Fatalf("mkdir real root: %v", err)
 	}
 	aliasRoot := filepath.Join(aliasLink, "trusted-root")

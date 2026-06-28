@@ -229,7 +229,7 @@ func TestValidateWritePathUnderTrustedRootAllowsOuterAlias(t *testing.T) {
 	}
 
 	realRoot := filepath.Join(realParent, "trusted")
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	if err := os.MkdirAll(realRoot, 0o700); err != nil {
 		t.Fatalf("mkdir real trusted root: %v", err)
 	}
 	aliasRoot := filepath.Join(aliasLink, "trusted")

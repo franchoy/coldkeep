@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 )
 
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.T) {
@@ -83,7 +85,11 @@ func runAuditLocalOnly(t *testing.T, workflow string, wantFailure bool) string {
 func readRepoFile(t *testing.T, relPath string) string {
 	t.Helper()
 
-	content, err := os.ReadFile(filepath.Join(repoRoot(t), relPath))
+	path, err := pathsafe.SafeJoin(repoRoot(t), filepath.ToSlash(relPath))
+	if err != nil {
+		t.Fatalf("resolve %s: %v", relPath, err)
+	}
+	content, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		t.Fatalf("read %s: %v", relPath, err)
 	}
