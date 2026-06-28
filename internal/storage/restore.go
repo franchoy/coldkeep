@@ -923,26 +923,70 @@ func canonicalizeMissingRestorePhysicalPath(cleaned string) (string, error) {
 }
 
 func deriveRestorePrefixRelativePath(storedPath string) (string, error) {
-	trimmed := strings.TrimSpace(storedPath)
-	if trimmed == "" {
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-	}
-	if strings.HasPrefix(trimmed, `\\`) || strings.HasPrefix(trimmed, `//`) {
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-	}
-	if runtime.GOOS != "windows" && (pathsafe.IsWindowsDrivePath(trimmed) || strings.HasPrefix(trimmed, `\`)) {
+	cleanedPath, err := normalizeRestorePrefixInput(storedPath)
+	if err != nil {
 		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 	}
 
-	relativePath := trimmed
-	if vol := filepath.VolumeName(relativePath); vol != "" {
-		relativePath = strings.TrimPrefix(relativePath, vol)
+	relativePath, err := projectRestorePrefixRelativePath(cleanedPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 	}
-	relativePath = strings.TrimLeft(relativePath, `/\`)
-	if relativePath == "" {
+	if err := validateRestorePrefixRelativePath(relativePath); err != nil {
 		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 	}
 	return relativePath, nil
+}
+
+func normalizeRestorePrefixInput(storedPath string) (string, error) {
+	trimmed := strings.TrimSpace(storedPath)
+	if trimmed == "" {
+		return "", fmt.Errorf("empty stored path")
+	}
+	if strings.HasPrefix(trimmed, `\\`) || strings.HasPrefix(trimmed, `//`) {
+		return "", fmt.Errorf("unsupported rooted path form")
+	}
+	if runtime.GOOS != "windows" && isForeignRootedPath(trimmed) {
+		return "", fmt.Errorf("foreign rooted path")
+	}
+	if containsRestorePrefixTraversal(trimmed) {
+		return "", fmt.Errorf("path traversal")
+	}
+	return filepath.Clean(trimmed), nil
+}
+
+func isForeignRootedPath(path string) bool {
+	return pathsafe.IsWindowsDrivePath(path) || strings.HasPrefix(path, `\`)
+}
+
+func containsRestorePrefixTraversal(path string) bool {
+	for _, segment := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func projectRestorePrefixRelativePath(cleanedPath string) (string, error) {
+	if !filepath.IsAbs(cleanedPath) {
+		return cleanedPath, nil
+	}
+
+	return filepath.Rel(restorePrefixProjectionBase(cleanedPath), cleanedPath)
+}
+
+func restorePrefixProjectionBase(cleanedPath string) string {
+	if volume := filepath.VolumeName(cleanedPath); volume != "" {
+		return volume + string(filepath.Separator)
+	}
+	return string(filepath.Separator)
+}
+
+func validateRestorePrefixRelativePath(relativePath string) error {
+	return pathsafe.ValidateStoredRelativePath(relativePath)
 }
 
 // RestoreFileByStoredPathWithStorageContextResultOptions restores a file using the

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -211,5 +212,82 @@ func TestRestoreCrossPlatformBytesRemainDeterministic(t *testing.T) {
 					len(got), len(p.content), p.notes)
 			}
 		})
+	}
+}
+
+func TestValidateRestorePrefixRelativePath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{name: "normal child path", path: "child.bin"},
+		{name: "nested child path", path: filepath.Join("nested", "child.bin")},
+		{name: "dot", path: ".", wantErr: true},
+		{name: "parent", path: "..", wantErr: true},
+		{name: "parent child", path: filepath.Join("..", "child"), wantErr: true},
+		{name: "platform native parent traversal", path: filepath.Clean(filepath.Join("nested", "..", "..", "child")), wantErr: true},
+		{name: "absolute path", path: filepath.Join(string(filepath.Separator), "abs", "child.bin"), wantErr: true},
+		{name: "empty", path: "", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRestorePrefixRelativePath(tc.path)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %q", tc.path)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for %q: %v", tc.path, err)
+			}
+		})
+	}
+}
+
+func TestDeriveRestorePrefixRelativePathUsesPlatformProjection(t *testing.T) {
+	t.Parallel()
+
+	storedPath := filepath.Join(t.TempDir(), "nested", "child.bin")
+	got, err := deriveRestorePrefixRelativePath(storedPath)
+	if err != nil {
+		t.Fatalf("deriveRestorePrefixRelativePath: %v", err)
+	}
+
+	want, err := filepath.Rel(restorePrefixProjectionBase(filepath.Clean(storedPath)), filepath.Clean(storedPath))
+	if err != nil {
+		t.Fatalf("filepath.Rel expected path: %v", err)
+	}
+	if got != want {
+		t.Fatalf("relative path mismatch: got=%q want=%q", got, want)
+	}
+	if runtime.GOOS == "windows" && strings.HasPrefix(got, filepath.VolumeName(storedPath)) {
+		t.Fatalf("relative path retained volume prefix on windows: %q", got)
+	}
+}
+
+func TestResolvePrefixRestoreOutputPathPreservesLexicalRoot(t *testing.T) {
+	t.Parallel()
+
+	descriptor := RestoreDescriptor{Path: filepath.Join(t.TempDir(), "nested", "child.bin"), LogicalFileID: 1}
+	prefixRoot := t.TempDir()
+
+	outputPath, trustedRoot, err := resolvePrefixRestoreOutputPath(descriptor, RestoreOptions{
+		DestinationMode: RestoreDestinationPrefix,
+		Destination:     prefixRoot,
+		TrustedRoot:     prefixRoot,
+	})
+	if err != nil {
+		t.Fatalf("resolvePrefixRestoreOutputPath: %v", err)
+	}
+
+	want := expectedPrefixModeOutputPath(prefixRoot, descriptor.Path)
+	if outputPath != want {
+		t.Fatalf("output path mismatch: got=%q want=%q", outputPath, want)
+	}
+	if trustedRoot != filepath.Clean(prefixRoot) {
+		t.Fatalf("trusted root mismatch: got=%q want=%q", trustedRoot, filepath.Clean(prefixRoot))
 	}
 }

@@ -102,7 +102,7 @@ func TestRestoreStoredPathPrefixAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
 	)
 	mustNoErr(t, err, "restore stored path prefix through outer alias")
 
-	expectedPath := filepath.Join(aliasRoot, strings.TrimLeft(storeResult.Path, `/\`))
+	expectedPath := expectedPrefixModeOutputPath(aliasRoot, storeResult.Path)
 	if result.OutputPath != expectedPath {
 		t.Fatalf("output path mismatch: got=%q want=%q", result.OutputPath, expectedPath)
 	}
