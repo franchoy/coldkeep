@@ -290,11 +290,11 @@ func TestValidateTrustedRootPathAllowsOuterAlias(t *testing.T) {
 		t.Skipf("symlink unavailable on this platform/environment: %v", err)
 	}
 
-	realRoot := filepath.Join(realParent, "trusted")
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	realRoot, err := os.MkdirTemp(realParent, "trusted-")
+	if err != nil {
 		t.Fatalf("mkdir real trusted root: %v", err)
 	}
-	aliasRoot := filepath.Join(aliasLink, "trusted")
+	aliasRoot := filepath.Join(aliasLink, filepath.Base(realRoot))
 
 	got, err := ValidateTrustedRootPath(aliasRoot)
 	if err != nil {
