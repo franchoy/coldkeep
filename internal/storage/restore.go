@@ -816,7 +816,9 @@ func buildRestoreDescriptorFromCanonicalIdentity(ctx context.Context, dbconn *sq
 	if err != nil {
 		return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor by canonical identity: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		var descriptor RestoreDescriptor
