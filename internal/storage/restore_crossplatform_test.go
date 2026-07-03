@@ -256,7 +256,7 @@ func TestDeriveRestorePrefixRelativePathUsesPlatformProjection(t *testing.T) {
 		t.Fatalf("deriveRestorePrefixRelativePath: %v", err)
 	}
 
-	want, err := filepath.Rel(restorePrefixProjectionBase(filepath.Clean(storedPath)), filepath.Clean(storedPath))
+	want, err := filepath.Rel(string(filepath.Separator), filepath.Clean(storedPath))
 	if err != nil {
 		t.Fatalf("filepath.Rel expected path: %v", err)
 	}

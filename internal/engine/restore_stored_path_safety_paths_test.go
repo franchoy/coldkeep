@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -109,10 +110,10 @@ func TestRestoreStoredPathPrefixRejectsTraversalWithoutOutsideWrite(t *testing.T
 
 func TestRestoreStoredPathPrefixFailsClosedForForeignRootedPaths(t *testing.T) {
 	cases := []string{
-		`C:\outside\file.bin`,
 		`C:/outside/file.bin`,
-		`\\server\share\file.bin`,
-		`//server/share/file.bin`,
+	}
+	if runtime.GOOS == "windows" {
+		cases = append(cases, `//server/share/file.bin`)
 	}
 
 	for _, storedPath := range cases {
@@ -133,6 +134,100 @@ func TestRestoreStoredPathPrefixFailsClosedForForeignRootedPaths(t *testing.T) {
 			}
 			if result != (engine.RestoreStoredPathResult{}) {
 				t.Fatalf("expected zero result on rooted-path failure, got %+v", result)
+			}
+			requireNoRestoreTempFiles(t, prefixRoot)
+			after := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
+			assertRestoreCatalogStateEqual(t, before, after)
+			requirePinnedChunksReleased(t, fixture.db, fixture.stored.FileID)
+		})
+	}
+}
+
+func TestRestoreStoredPathPrefixAcceptsWindowsDriveQualifiedStoredPath(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-prefix-drive")
+	storedPath := `C:\data\file.bin`
+	updateStoredPathMapping(t, fixture.db, fixture.stored.FileID, storedPath)
+	prefixRoot := t.TempDir()
+	before := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
+
+	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+		StoredPath:      storedPath,
+		DestinationMode: engine.RestoreDestinationPrefix,
+		DestinationRoot: prefixRoot,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("expected drive-qualified prefix restore to succeed, got: %v", err)
+	}
+
+	expectedPath := filepath.Join(prefixRoot, "data", "file.bin")
+	assertRestoreStoredPathResult(t, result, storedPath, fixture.stored.FileID, engine.RestoreDestinationPrefix, expectedPath, fixture.stored.FileHash)
+	requireFileBytes(t, result.DestinationPath, fixture.payload)
+	requireNoRestoreTempFiles(t, prefixRoot)
+	after := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
+	assertRestoreCatalogStateEqual(t, before, after)
+	requirePinnedChunksReleased(t, fixture.db, fixture.stored.FileID)
+}
+
+func TestRestoreStoredPathPrefixAcceptsWindowsUNCStoredPath(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-prefix-unc")
+	storedPath := `\\server\share\data\file.bin`
+	updateStoredPathMapping(t, fixture.db, fixture.stored.FileID, storedPath)
+	prefixRoot := t.TempDir()
+	before := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
+
+	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+		StoredPath:      storedPath,
+		DestinationMode: engine.RestoreDestinationPrefix,
+		DestinationRoot: prefixRoot,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("expected UNC prefix restore to succeed, got: %v", err)
+	}
+
+	expectedPath := filepath.Join(prefixRoot, "data", "file.bin")
+	assertRestoreStoredPathResult(t, result, storedPath, fixture.stored.FileID, engine.RestoreDestinationPrefix, expectedPath, fixture.stored.FileHash)
+	requireFileBytes(t, result.DestinationPath, fixture.payload)
+	requireNoRestoreTempFiles(t, prefixRoot)
+	after := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
+	assertRestoreCatalogStateEqual(t, before, after)
+	requirePinnedChunksReleased(t, fixture.db, fixture.stored.FileID)
+}
+
+func TestRestoreStoredPathPrefixRejectsMalformedOrCorruptWindowsStoredPaths(t *testing.T) {
+	cases := []string{
+		`\\server`,
+		`\\server\`,
+		`\root-relative\file.bin`,
+		`\data\file.bin`,
+		`C:drive-relative\file.bin`,
+		`relative\file.bin`,
+		"relative/file.bin",
+		`..\escape.bin`,
+	}
+	if runtime.GOOS == "windows" {
+		cases = append(cases, `//server/share/file.bin`, `/data/file.bin`)
+	}
+
+	for _, storedPath := range cases {
+		t.Run(strings.ReplaceAll(strings.ReplaceAll(storedPath, "\\", "_"), "/", "_"), func(t *testing.T) {
+			fixture := newStoredPathRestoreFixture(t, "restore-stored-path-prefix-corrupt-windows")
+			updateStoredPathMapping(t, fixture.db, fixture.stored.FileID, storedPath)
+			prefixRoot := t.TempDir()
+			before := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
+
+			result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+				StoredPath:      storedPath,
+				DestinationMode: engine.RestoreDestinationPrefix,
+				DestinationRoot: prefixRoot,
+				Overwrite:       true,
+			})
+			if err == nil {
+				t.Fatalf("expected corrupt Windows stored path restore to fail, got result=%+v", result)
+			}
+			if result != (engine.RestoreStoredPathResult{}) {
+				t.Fatalf("expected zero result on corrupt Windows stored path failure, got %+v", result)
 			}
 			requireNoRestoreTempFiles(t, prefixRoot)
 			after := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
@@ -169,6 +264,9 @@ func TestRestoreStoredPathPrefixRejectsSymlinkedParentWithoutOutsideWrite(t *tes
 	prefixRoot := t.TempDir()
 	outside := t.TempDir()
 	storedPath := "/tmp/parent/escape.bin"
+	if runtime.GOOS == "windows" {
+		storedPath = `C:\tmp\parent\escape.bin`
+	}
 	updateStoredPathMapping(t, fixture.db, fixture.stored.FileID, storedPath)
 	requireSymlink(t, outside, filepath.Join(prefixRoot, "tmp"))
 	before := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)

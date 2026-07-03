@@ -615,7 +615,7 @@ func TestBuildRestoreDescriptorFromPhysicalPathNotFound(t *testing.T) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	_, err = buildRestoreDescriptorFromPhysicalPath(ctx, dbconn, []string{"/missing/path.bin"})
+	_, err = buildRestoreDescriptorFromPhysicalPath(ctx, dbconn, []string{"/missing/path.bin"}, "/missing/path.bin")
 	if err == nil || !strings.Contains(err.Error(), "physical file path \"/missing/path.bin\" not found") {
 		t.Fatalf("expected physical path not found error, got: %v", err)
 	}

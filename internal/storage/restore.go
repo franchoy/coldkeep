@@ -742,7 +742,7 @@ func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int
 	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
 }
 
-func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPaths []string) (RestoreDescriptor, error) {
+func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPaths []string, notFoundPath string) (RestoreDescriptor, error) {
 	if len(storedPaths) == 0 {
 		return RestoreDescriptor{}, fmt.Errorf("physical file path cannot be empty")
 	}
@@ -767,7 +767,10 @@ func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB,
 		return RestoreDescriptor{}, err
 	}
 
-	return RestoreDescriptor{}, fmt.Errorf("physical file path %q not found", storedPaths[0])
+	if strings.TrimSpace(notFoundPath) == "" {
+		notFoundPath = storedPaths[0]
+	}
+	return RestoreDescriptor{}, fmt.Errorf("physical file path %q not found", notFoundPath)
 }
 
 func scanRestoreDescriptorByPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPath string, descriptor *RestoreDescriptor) error {
@@ -848,23 +851,23 @@ func buildRestoreDescriptorFromCanonicalIdentity(ctx context.Context, dbconn *sq
 	return RestoreDescriptor{}, sql.ErrNoRows
 }
 
-func restoreDescriptorLookupPaths(storedPath string) ([]string, error) {
+func restoreDescriptorLookupPaths(storedPath string) ([]string, string, error) {
+	requestedPath := strings.TrimSpace(storedPath)
 	normalizedPath, err := normalizeRestorePhysicalPathIdentity(storedPath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	lookupPaths := []string{normalizedPath}
-	trimmed := strings.TrimSpace(storedPath)
-	absPath, err := filepath.Abs(trimmed)
+	absPath, err := filepath.Abs(requestedPath)
 	if err != nil {
-		return nil, fmt.Errorf("resolve absolute physical file path: %w", err)
+		return nil, "", fmt.Errorf("resolve absolute physical file path: %w", err)
 	}
 	lexicalPath := filepath.Clean(absPath)
 	if lexicalPath != normalizedPath {
 		lookupPaths = append(lookupPaths, lexicalPath)
 	}
-	return lookupPaths, nil
+	return lookupPaths, requestedPath, nil
 }
 
 func normalizeRestorePhysicalPathIdentity(path string) (string, error) {
@@ -923,40 +926,44 @@ func canonicalizeMissingRestorePhysicalPath(cleaned string) (string, error) {
 }
 
 func deriveRestorePrefixRelativePath(storedPath string) (string, error) {
-	cleanedPath, err := normalizeRestorePrefixInput(storedPath)
-	if err != nil {
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-	}
-
-	relativePath, err := projectRestorePrefixRelativePath(cleanedPath)
-	if err != nil {
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-	}
-	if err := validateRestorePrefixRelativePath(relativePath); err != nil {
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-	}
-	return relativePath, nil
-}
-
-func normalizeRestorePrefixInput(storedPath string) (string, error) {
 	trimmed := strings.TrimSpace(storedPath)
 	if trimmed == "" {
-		return "", fmt.Errorf("empty stored path")
-	}
-	if strings.HasPrefix(trimmed, `\\`) || strings.HasPrefix(trimmed, `//`) {
-		return "", fmt.Errorf("unsupported rooted path form")
-	}
-	if runtime.GOOS != "windows" && isForeignRootedPath(trimmed) {
-		return "", fmt.Errorf("foreign rooted path")
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 	}
 	if containsRestorePrefixTraversal(trimmed) {
-		return "", fmt.Errorf("path traversal")
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 	}
-	return filepath.Clean(trimmed), nil
-}
 
-func isForeignRootedPath(path string) bool {
-	return pathsafe.IsWindowsDrivePath(path) || strings.HasPrefix(path, `\`)
+	switch {
+	case isCanonicalWindowsUNCPath(trimmed):
+		relativePath, err := deriveCanonicalWindowsUNCRelativePath(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+		}
+		return relativePath, nil
+	case isWindowsDriveAbsolutePath(trimmed):
+		relativePath, err := deriveWindowsDriveRelativePath(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+		}
+		return relativePath, nil
+	case runtime.GOOS != "windows" && filepath.IsAbs(trimmed):
+		relativePath, err := filepath.Rel(string(filepath.Separator), filepath.Clean(trimmed))
+		if err != nil {
+			return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+		}
+		if err := validateRestorePrefixRelativePath(relativePath); err != nil {
+			return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+		}
+		return relativePath, nil
+	case isWindowsDriveLikePath(trimmed), strings.HasPrefix(trimmed, `\`), strings.HasPrefix(trimmed, `/`), strings.HasPrefix(trimmed, `//`):
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	}
+
+	if !filepath.IsAbs(trimmed) {
+		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	}
+	return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 }
 
 func containsRestorePrefixTraversal(path string) bool {
@@ -970,19 +977,49 @@ func containsRestorePrefixTraversal(path string) bool {
 	return false
 }
 
-func projectRestorePrefixRelativePath(cleanedPath string) (string, error) {
-	if !filepath.IsAbs(cleanedPath) && !strings.HasPrefix(cleanedPath, `/`) && !strings.HasPrefix(cleanedPath, `\`) {
-		return cleanedPath, nil
-	}
-
-	return filepath.Rel(restorePrefixProjectionBase(cleanedPath), cleanedPath)
+func isWindowsDriveLikePath(path string) bool {
+	return len(path) >= 2 && isWindowsDriveLetter(path[0]) && path[1] == ':'
 }
 
-func restorePrefixProjectionBase(cleanedPath string) string {
-	if volume := filepath.VolumeName(cleanedPath); volume != "" {
-		return volume + string(filepath.Separator)
+func isWindowsDriveAbsolutePath(path string) bool {
+	if !isWindowsDriveLikePath(path) || len(path) < 3 {
+		return false
 	}
-	return string(filepath.Separator)
+	if strings.Contains(path, "/") {
+		return false
+	}
+	return path[2] == '\\'
+}
+
+func isCanonicalWindowsUNCPath(path string) bool {
+	return strings.HasPrefix(path, `\\`) && !strings.Contains(path, "/")
+}
+
+func deriveWindowsDriveRelativePath(path string) (string, error) {
+	if !isWindowsDriveAbsolutePath(path) {
+		return "", fmt.Errorf("unsupported drive path")
+	}
+	relativePath := strings.TrimPrefix(path[2:], `\`)
+	if err := validateRestorePrefixRelativePath(relativePath); err != nil {
+		return "", err
+	}
+	return relativePath, nil
+}
+
+func deriveCanonicalWindowsUNCRelativePath(path string) (string, error) {
+	parts := strings.Split(strings.TrimPrefix(path, `\\`), `\`)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("malformed UNC path")
+	}
+	relativePath := strings.Join(parts[2:], `\`)
+	if err := validateRestorePrefixRelativePath(relativePath); err != nil {
+		return "", err
+	}
+	return relativePath, nil
+}
+
+func isWindowsDriveLetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
 func validateRestorePrefixRelativePath(relativePath string) error {
@@ -997,7 +1034,7 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
 	}
 
-	lookupPaths, err := restoreDescriptorLookupPaths(storedPath)
+	lookupPaths, notFoundPath, err := restoreDescriptorLookupPaths(storedPath)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
@@ -1005,7 +1042,7 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, lookupPaths)
+	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, lookupPaths, notFoundPath)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}

@@ -481,18 +481,28 @@ func TestRestoreStoredPathReleasesPinsAfterFailure(t *testing.T) {
 func TestRestoreStoredPathReturnsMissingMappingErrorUnchanged(t *testing.T) {
 	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-missing-mapping")
 
-	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
-		StoredPath: "/missing/path.bin",
-		Overwrite:  true,
-	})
-	if err == nil || !strings.Contains(err.Error(), `physical file path "/missing/path.bin" not found`) {
-		t.Fatalf("expected missing mapping error, got result=%+v err=%v", result, err)
+	cases := []string{
+		"/missing/path.bin",
+		`D:\missing\path.bin`,
 	}
-	if engine.IsUnsupported(err) {
-		t.Fatalf("missing mapping error must not classify as unsupported: %v", err)
-	}
-	if result != (engine.RestoreStoredPathResult{}) {
-		t.Fatalf("expected zero result on missing mapping error, got %+v", result)
+
+	for _, storedPath := range cases {
+		t.Run(strings.ReplaceAll(strings.ReplaceAll(storedPath, `\`, "_"), "/", "_"), func(t *testing.T) {
+			result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+				StoredPath: storedPath,
+				Overwrite:  true,
+			})
+			wantErr := fmt.Sprintf("physical file path %q not found", storedPath)
+			if err == nil || !strings.Contains(err.Error(), wantErr) {
+				t.Fatalf("expected missing mapping error %q, got result=%+v err=%v", wantErr, result, err)
+			}
+			if engine.IsUnsupported(err) {
+				t.Fatalf("missing mapping error must not classify as unsupported: %v", err)
+			}
+			if result != (engine.RestoreStoredPathResult{}) {
+				t.Fatalf("expected zero result on missing mapping error, got %+v", result)
+			}
+		})
 	}
 }
 
@@ -560,6 +570,7 @@ func newStoredPathRestoreFixtureFromDB(t *testing.T, db *sql.DB, payload []byte,
 		Writer:       container.NewLocalWriterWithDirAndDB(containerDir, container.GetContainerMaxSize(), db),
 		ContainerDir: containerDir,
 	}
+	t.Cleanup(func() { _ = sgctx.Close() })
 
 	inputPath := filepath.Join(t.TempDir(), "restore-stored-path-postgres.txt")
 	if err := os.WriteFile(inputPath, payload, 0o600); err != nil {
