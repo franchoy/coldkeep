@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +17,7 @@ import (
 	"time"
 
 	dbschema "github.com/franchoy/coldkeep/db"
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -39,6 +43,93 @@ import (
 
 func adversarialG6Codecs() []string {
 	return []string{"plain", "aes-gcm"}
+}
+
+func requireDeterministicG6Env(name string) bool {
+	return strings.TrimSpace(os.Getenv(name)) == "1"
+}
+
+type g6DeterministicInterleavingGate struct {
+	eventCh   chan storage.TestStoreInterleavingHookEvent
+	releaseCh chan struct{}
+}
+
+func newG6DeterministicInterleavingGate() *g6DeterministicInterleavingGate {
+	return &g6DeterministicInterleavingGate{
+		eventCh:   make(chan storage.TestStoreInterleavingHookEvent, 1),
+		releaseCh: make(chan struct{}),
+	}
+}
+
+func (g *g6DeterministicInterleavingGate) await(t *testing.T) storage.TestStoreInterleavingHookEvent {
+	t.Helper()
+	select {
+	case event := <-g.eventCh:
+		return event
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for deterministic G6 interleaving gate")
+		return storage.TestStoreInterleavingHookEvent{}
+	}
+}
+
+func (g *g6DeterministicInterleavingGate) release() {
+	close(g.releaseCh)
+}
+
+func assertDeterministicG6ChunkState(t *testing.T, dbconn *sql.DB, chunkHash string, size int, wantLogicalRefs int) {
+	t.Helper()
+
+	var chunkID int64
+	var chunkStatus string
+	if err := dbconn.QueryRow(
+		`SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`,
+		chunkHash,
+		size,
+	).Scan(&chunkID, &chunkStatus); err != nil {
+		t.Fatalf("load deterministic G6 chunk state: %v", err)
+	}
+	if chunkStatus != "COMPLETED" {
+		t.Fatalf("expected deterministic G6 chunk to be COMPLETED, got %s", chunkStatus)
+	}
+
+	var packedRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs WHERE chunk_id = $1`, chunkID).Scan(&packedRows); err != nil {
+		t.Fatalf("count packed rows: %v", err)
+	}
+	if packedRows != 1 {
+		t.Fatalf("expected one packed row for deterministic G6 chunk, got %d", packedRows)
+	}
+
+	var legacyRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE chunk_id = $1`, chunkID).Scan(&legacyRows); err != nil {
+		t.Fatalf("count legacy rows: %v", err)
+	}
+	if legacyRows != 1 {
+		t.Fatalf("expected one legacy companion row for deterministic G6 chunk, got %d", legacyRows)
+	}
+
+	var logicalRefs int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, chunkID).Scan(&logicalRefs); err != nil {
+		t.Fatalf("count logical refs: %v", err)
+	}
+	if logicalRefs != wantLogicalRefs {
+		t.Fatalf("expected logical refs=%d for deterministic G6 chunk, got %d", wantLogicalRefs, logicalRefs)
+	}
+
+	var physicalRefs int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM physical_file pf
+		 WHERE pf.logical_file_id IN (
+		   SELECT DISTINCT logical_file_id FROM file_chunk WHERE chunk_id = $1
+		 )`,
+		chunkID,
+	).Scan(&physicalRefs); err != nil {
+		t.Fatalf("count physical refs: %v", err)
+	}
+	if physicalRefs != 1 {
+		t.Fatalf("expected one physical-file ref for deterministic G6 chunk, got %d", physicalRefs)
+	}
 }
 
 func configureAdversarialG6Codec(t *testing.T, codec string) {
@@ -742,6 +833,201 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 				restoreMustMatchHashG6(t, dbconn, id, outPath, wantHash)
 			}
 		})
+	}
+}
+
+func TestAdversarialG6DeterministicStoreInterleavingPostgres(t *testing.T) {
+	if requireDeterministicG6Env("COLDKEEP_REQUIRE_DETERMINISTIC_G6_POSTGRES") && os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Fatal("deterministic G6 PostgreSQL regression requires COLDKEEP_TEST_DB=1")
+	}
+	testgate.RequireDB(t)
+
+	var retryCaseExecuted bool
+	for _, codec := range adversarialG6Codecs() {
+		t.Run(codec, func(t *testing.T) {
+			configureAdversarialG6Codec(t, codec)
+
+			dbconn, _, _, _, tmp, _ := setupAdversarialG6Env(t)
+			defer dbconn.Close()
+
+			inputDir := filepath.Join(tmp, "input-deterministic")
+			if err := os.MkdirAll(inputDir, 0o755); err != nil {
+				t.Fatalf("mkdir deterministic input dir: %v", err)
+			}
+
+			inPath := filepath.Join(inputDir, fmt.Sprintf("g6-deterministic-%s.bin", codec))
+			payload := []byte("g6-deterministic-controlled-interleaving-payload")
+			if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+				t.Fatalf("write deterministic input: %v", err)
+			}
+			sum := sha256.Sum256(payload)
+			chunkHash := hex.EncodeToString(sum[:])
+
+			runCase := func(name string, target storage.TestStoreInterleavingEvent) {
+				t.Run(name, func(t *testing.T) {
+					gate := newG6DeterministicInterleavingGate()
+					var fired bool
+					sgctx, err := storage.LoadDefaultStorageContext()
+					if err != nil {
+						t.Fatalf("load default storage context: %v", err)
+					}
+					defer func() { _ = sgctx.Close() }()
+					resetHooks := storage.InstallTestStoreInterleavingHooks(&sgctx, func(_ context.Context, event storage.TestStoreInterleavingHookEvent) error {
+						if fired || event.Event != target || event.ChunkHash != chunkHash {
+							return nil
+						}
+						fired = true
+						gate.eventCh <- event
+						<-gate.releaseCh
+						return nil
+					})
+					t.Cleanup(resetHooks)
+					t.Cleanup(gate.release)
+
+					storeCodec := blocks.CodecPlain
+					if codec == "aes-gcm" {
+						storeCodec = blocks.CodecAESGCM
+					}
+
+					done := make(chan error, 1)
+					go func() {
+						_, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, storeCodec)
+						done <- err
+					}()
+
+					event := gate.await(t)
+					if event.StoreOpID == "" {
+						t.Fatal("expected deterministic G6 event to include store op id")
+					}
+
+					var packedRows int
+					if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&packedRows); err != nil {
+						t.Fatalf("count chunk_block_refs before commit: %v", err)
+					}
+					if packedRows != 0 {
+						t.Fatalf("expected no committed packed refs before release, got %d", packedRows)
+					}
+
+					var legacyRows int
+					if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&legacyRows); err != nil {
+						t.Fatalf("count blocks before commit: %v", err)
+					}
+					if legacyRows != 0 {
+						t.Fatalf("expected no committed legacy rows before release, got %d", legacyRows)
+					}
+
+					gate.release()
+					select {
+					case err := <-done:
+						if err != nil {
+							t.Fatalf("deterministic postgres store failed: %v", err)
+						}
+					case <-time.After(20 * time.Second):
+						t.Fatal("timeout waiting for deterministic postgres store")
+					}
+
+					assertDeterministicG6ChunkState(t, dbconn, chunkHash, len(payload), 1)
+					if err := verify.VerifyRepository(dbconn, container.ContainersDir); err != nil {
+						t.Fatalf("full verify repository after deterministic postgres interleaving: %v", err)
+					}
+				})
+			}
+
+			runRetryCase := func() {
+				t.Run("retry_path_remains_packed", func(t *testing.T) {
+					retryCaseExecuted = true
+					if _, err := dbconn.Exec(`DELETE FROM file_chunk`); err != nil {
+						t.Fatalf("delete file_chunk before retry case: %v", err)
+					}
+					if _, err := dbconn.Exec(`DELETE FROM logical_file`); err != nil {
+						t.Fatalf("delete logical_file before retry case: %v", err)
+					}
+					if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs`); err != nil {
+						t.Fatalf("delete chunk_block_refs before retry case: %v", err)
+					}
+					if _, err := dbconn.Exec(`DELETE FROM blocks`); err != nil {
+						t.Fatalf("delete blocks before retry case: %v", err)
+					}
+					if _, err := dbconn.Exec(`DELETE FROM storage_blocks`); err != nil {
+						t.Fatalf("delete storage_blocks before retry case: %v", err)
+					}
+					if _, err := dbconn.Exec(`DELETE FROM chunk`); err != nil {
+						t.Fatalf("delete chunk before retry case: %v", err)
+					}
+
+					var chunkID int64
+					if err := dbconn.QueryRow(
+						`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count, chunker_version)
+						 VALUES ($1, $2, $3, 0, 0, $4)
+						 RETURNING id`,
+						chunkHash,
+						len(payload),
+						"ABORTED",
+						"v2-fastcdc",
+					).Scan(&chunkID); err != nil {
+						t.Fatalf("insert aborted retry chunk: %v", err)
+					}
+
+					sgctx, err := storage.LoadDefaultStorageContext()
+					if err != nil {
+						t.Fatalf("load default storage context for retry case: %v", err)
+					}
+					defer func() { _ = sgctx.Close() }()
+					var events []storage.TestStoreInterleavingHookEvent
+					resetHooks := storage.InstallTestStoreInterleavingHooks(&sgctx, func(_ context.Context, event storage.TestStoreInterleavingHookEvent) error {
+						events = append(events, event)
+						return nil
+					})
+					t.Cleanup(resetHooks)
+
+					storeCodec := blocks.CodecPlain
+					if codec == "aes-gcm" {
+						storeCodec = blocks.CodecAESGCM
+					}
+
+					if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, storeCodec); err != nil {
+						t.Fatalf("store retry-case file: %v", err)
+					}
+
+					var sawRetryCAS bool
+					var sawPackedMetadata bool
+					var sawLegacyCompanion bool
+					for _, event := range events {
+						if event.ChunkID != chunkID {
+							continue
+						}
+						switch event.Event {
+						case storage.TestStoreInterleavingEventBeforeChunkRetryCAS:
+							sawRetryCAS = true
+						case storage.TestStoreInterleavingEventAfterPackedMetadata:
+							sawPackedMetadata = true
+						case storage.TestStoreInterleavingEventAfterLegacyCompanionInsert:
+							sawLegacyCompanion = true
+						}
+					}
+					if !sawRetryCAS || !sawPackedMetadata || !sawLegacyCompanion {
+						t.Fatalf(
+							"expected retry path to remain packed on postgres, got retry=%t packed=%t companion=%t events=%+v",
+							sawRetryCAS,
+							sawPackedMetadata,
+							sawLegacyCompanion,
+							events,
+						)
+					}
+					assertDeterministicG6ChunkState(t, dbconn, chunkHash, len(payload), 1)
+					if err := verify.VerifyRepository(dbconn, container.ContainersDir); err != nil {
+						t.Fatalf("full verify repository after deterministic postgres retry case: %v", err)
+					}
+				})
+			}
+
+			runCase("packed_metadata", storage.TestStoreInterleavingEventAfterPackedMetadata)
+			runCase("legacy_companion", storage.TestStoreInterleavingEventAfterLegacyCompanionInsert)
+			runRetryCase()
+		})
+	}
+	if requireDeterministicG6Env("COLDKEEP_REQUIRE_DETERMINISTIC_G6_RETRY_CASE") && !retryCaseExecuted {
+		t.Fatal("deterministic G6 PostgreSQL regression did not execute retry_path_remains_packed")
 	}
 }
 

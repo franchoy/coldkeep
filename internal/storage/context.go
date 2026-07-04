@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
@@ -27,6 +28,9 @@ type StorageContext struct {
 	// If nil, the registry default chunker is used. Set this in tests or when a
 	// specific chunker version is required.
 	Chunker chunk.Chunker
+	// test-only deterministic interleaving seam; nil in normal operation.
+	interleavingHooks *storeInterleavingHooks
+	interleavingSeq   *atomic.Uint64
 }
 
 // EffectiveChunker returns the configured Chunker or the default if none was set.
