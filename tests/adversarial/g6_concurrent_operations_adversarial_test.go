@@ -850,24 +850,24 @@ func TestAdversarialG6DeterministicStoreInterleavingPostgres(t *testing.T) {
 		t.Run(codec, func(t *testing.T) {
 			configureAdversarialG6Codec(t, codec)
 
-			dbconn, _, _, _, tmp, _ := setupAdversarialG6Env(t)
-			defer dbconn.Close()
-
-			inputDir := filepath.Join(tmp, "input-deterministic")
-			if err := os.MkdirAll(inputDir, 0o755); err != nil {
-				t.Fatalf("mkdir deterministic input dir: %v", err)
-			}
-
-			inPath := filepath.Join(inputDir, fmt.Sprintf("g6-deterministic-%s.bin", codec))
-			payload := []byte("g6-deterministic-controlled-interleaving-payload")
-			if err := os.WriteFile(inPath, payload, 0o600); err != nil {
-				t.Fatalf("write deterministic input: %v", err)
-			}
-			sum := sha256.Sum256(payload)
-			chunkHash := hex.EncodeToString(sum[:])
-
 			runCase := func(name string, target storage.TestStoreInterleavingEvent) {
 				t.Run(name, func(t *testing.T) {
+					dbconn, _, _, _, tmp, _ := setupAdversarialG6Env(t)
+					defer dbconn.Close()
+
+					inputDir := filepath.Join(tmp, "input-deterministic")
+					if err := os.MkdirAll(inputDir, 0o755); err != nil {
+						t.Fatalf("mkdir deterministic input dir: %v", err)
+					}
+
+					inPath := filepath.Join(inputDir, fmt.Sprintf("g6-deterministic-%s-%s.bin", codec, name))
+					payload := []byte("g6-deterministic-controlled-interleaving-payload")
+					if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+						t.Fatalf("write deterministic input: %v", err)
+					}
+					sum := sha256.Sum256(payload)
+					chunkHash := hex.EncodeToString(sum[:])
+
 					gate := newG6DeterministicInterleavingGate()
 					var fired bool
 					sgctx, err := storage.LoadDefaultStorageContext()
@@ -939,6 +939,22 @@ func TestAdversarialG6DeterministicStoreInterleavingPostgres(t *testing.T) {
 			runRetryCase := func() {
 				t.Run("retry_path_remains_packed", func(t *testing.T) {
 					retryCaseExecuted = true
+					dbconn, _, _, _, tmp, _ := setupAdversarialG6Env(t)
+					defer dbconn.Close()
+
+					inputDir := filepath.Join(tmp, "input-deterministic")
+					if err := os.MkdirAll(inputDir, 0o755); err != nil {
+						t.Fatalf("mkdir deterministic input dir: %v", err)
+					}
+
+					inPath := filepath.Join(inputDir, fmt.Sprintf("g6-deterministic-%s-retry.bin", codec))
+					payload := []byte("g6-deterministic-controlled-interleaving-payload")
+					if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+						t.Fatalf("write deterministic retry input: %v", err)
+					}
+					sum := sha256.Sum256(payload)
+					chunkHash := hex.EncodeToString(sum[:])
+
 					if _, err := dbconn.Exec(`DELETE FROM file_chunk`); err != nil {
 						t.Fatalf("delete file_chunk before retry case: %v", err)
 					}
