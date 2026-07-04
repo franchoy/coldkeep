@@ -69,7 +69,7 @@ require_pattern() {
   local pattern="$2"
   local description="$3"
 
-  if grep -Eq "$pattern" "$file"; then
+  if grep -Eq -- "$pattern" "$file"; then
     echo "[audit] ok: $description"
   else
     echo "[audit] ERROR: missing $description" >&2
@@ -77,8 +77,54 @@ require_pattern() {
   fi
 }
 
+require_content_pattern() {
+  local content="$1"
+  local pattern="$2"
+  local description="$3"
+
+  if grep -Eq -- "$pattern" <<<"$content"; then
+    echo "[audit] ok: $description"
+  else
+    echo "[audit] ERROR: missing $description" >&2
+    return 1
+  fi
+}
+
+extract_job_block() {
+  local job_name="$1"
+  awk -v job_name="$job_name" '
+    $0 ~ ("^  " job_name ":$") {
+      in_job = 1
+    }
+    in_job && $0 ~ "^  [A-Za-z0-9_-]+:$" && $0 !~ ("^  " job_name ":$") {
+      exit
+    }
+    in_job {
+      print
+    }
+  ' "$WORKFLOW_FILE"
+}
+
+extract_step_block_from_content() {
+  local content="$1"
+  local step_name="$2"
+  awk -v step_name="$step_name" '
+    $0 == "      - name: " step_name {
+      in_step = 1
+    }
+    in_step && $0 ~ "^      - name: " && $0 != "      - name: " step_name {
+      exit
+    }
+    in_step {
+      print
+    }
+  ' <<<"$content"
+}
+
 check_local_workflow() {
   local check_status=0
+  local adversarial_block=""
+  local deterministic_g6_block=""
 
   echo "[audit] checking local workflow invariants"
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
@@ -120,6 +166,28 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G17\)' 'adversarial workflow step names batch coverage through G17' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14\\|TestAdversarialG15\\|TestAdversarialG16\\|TestAdversarialG17'" 'explicit G14-G17 adversarial gate command' || check_status=1
+  adversarial_block="$(extract_job_block adversarial)"
+  if [[ -z "$adversarial_block" ]]; then
+    echo "[audit] ERROR: missing adversarial job block content" >&2
+    check_status=1
+  else
+    require_content_pattern "$adversarial_block" '^    services:$' 'adversarial job declares services' || check_status=1
+    require_content_pattern "$adversarial_block" '^      postgres:$' 'adversarial job provisions postgres service' || check_status=1
+    require_content_pattern "$adversarial_block" 'image:\s*postgres:16' 'adversarial job pins postgres service image' || check_status=1
+    deterministic_g6_block="$(extract_step_block_from_content "$adversarial_block" "Run deterministic G6 PostgreSQL interleaving regression")"
+    if [[ -z "$deterministic_g6_block" ]]; then
+      echo "[audit] ERROR: missing deterministic G6 PostgreSQL regression step block" >&2
+      check_status=1
+    else
+      require_content_pattern "$deterministic_g6_block" '^      - name: Run deterministic G6 PostgreSQL interleaving regression$' 'deterministic G6 PostgreSQL regression step' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'COLDKEEP_TEST_DB:\s*1' 'deterministic G6 PostgreSQL regression enables DB gate' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'COLDKEEP_DB_AUTO_BOOTSTRAP:\s*true' 'deterministic G6 PostgreSQL regression enables DB bootstrap' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'COLDKEEP_REQUIRE_DETERMINISTIC_G6_POSTGRES:\s*1' 'deterministic G6 PostgreSQL regression forbids DB skip' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'COLDKEEP_REQUIRE_DETERMINISTIC_G6_RETRY_CASE:\s*1' 'deterministic G6 PostgreSQL regression requires retry-case execution' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'go test -v -race -count=1 ./tests/adversarial/\.\.\.' 'deterministic G6 PostgreSQL regression targets adversarial package explicitly' || check_status=1
+      require_content_pattern "$deterministic_g6_block" "-run '\\^TestAdversarialG6DeterministicStoreInterleavingPostgres\\$'" 'deterministic G6 PostgreSQL regression uses exact selector' || check_status=1
+    fi
+  fi
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ failure\(\) \}\}' 'smoke artifact upload is failure-only' || check_status=1

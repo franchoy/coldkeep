@@ -97,6 +97,38 @@ func TestAuditCIEnforcementLocalWorkflowPassesCurrentConfiguration(t *testing.T)
 	}
 }
 
+func TestAuditCIEnforcementLocalWorkflowRequiresDeterministicG6PostgresCommand(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	workflow = strings.Replace(
+		workflow,
+		"          go test -v -race -count=1 ./tests/adversarial/... \\\n            -run '^TestAdversarialG6DeterministicStoreInterleavingPostgres$'\n",
+		"",
+		1,
+	)
+
+	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "deterministic G6 PostgreSQL regression targets adversarial package explicitly") {
+		t.Fatalf("expected missing deterministic G6 postgres command error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementLocalWorkflowRequiresDeterministicG6DBGate(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	workflow = strings.Replace(
+		workflow,
+		"      - name: Run deterministic G6 PostgreSQL interleaving regression\n        env:\n          COLDKEEP_TEST_DB: 1\n",
+		"      - name: Run deterministic G6 PostgreSQL interleaving regression\n        env:\n",
+		1,
+	)
+
+	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "deterministic G6 PostgreSQL regression enables DB gate") {
+		t.Fatalf("expected missing deterministic G6 postgres DB gate error, got:\n%s", stderr)
+	}
+}
+
 func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wantFailure bool) string {
 	t.Helper()
 
