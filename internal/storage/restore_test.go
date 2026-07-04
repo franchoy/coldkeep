@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1116,7 +1117,7 @@ func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 		t.Fatalf("insert file_chunk: %v", err)
 	}
 
-	storedPath := filepath.Join(string(os.PathSeparator), "home", "tester", "docs", "prefix-file.bin")
+	storedPath := storedPathPrefixFixturePath()
 	if _, err := dbconn.Exec(
 		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -1154,6 +1155,13 @@ func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 	if string(restored) != string(payload) {
 		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
 	}
+}
+
+func storedPathPrefixFixturePath() string {
+	if runtime.GOOS == "windows" {
+		return `C:\home\tester\docs\prefix-file.bin`
+	}
+	return filepath.Join(string(os.PathSeparator), "home", "tester", "docs", "prefix-file.bin")
 }
 
 func TestRestoreFileByStoredPathPrefixModeCreatesMissingParents(t *testing.T) {
