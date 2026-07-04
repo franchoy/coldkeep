@@ -82,6 +82,32 @@ func insertPhysicalFile(t *testing.T, db *sql.DB, path string, logicalFileID int
 	}
 }
 
+func storeSnapshotFixtureFile(t *testing.T, db *sql.DB, sgctx storage.StorageContext, sourceRoot, storedPath string, content []byte) storage.StoreFileResult {
+	t.Helper()
+
+	sourcePath := filepath.Join(sourceRoot, filepath.FromSlash(storedPath))
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	storeResult, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store source file: %v", err)
+	}
+	if err := sgctx.Writer.FinalizeContainer(); err != nil {
+		t.Fatalf("finalize fixture container: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE physical_file SET path = ? WHERE logical_file_id = ?`, storedPath, storeResult.FileID); err != nil {
+		t.Fatalf("rewrite physical_file path for snapshot fixture: %v", err)
+	}
+
+	storeResult.Path = storedPath
+	return storeResult
+}
+
 func TestSnapshotSourceQuerySQLiteDoesNotAppendForUpdate(t *testing.T) {
 	dbconn := openTestDB(t)
 	query := snapshotSourceQuery(dbconn)
@@ -1676,19 +1702,8 @@ func TestRestoreSnapshotCompatibleWithVersionedLogicalMetadata(t *testing.T) {
 	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
 
 	sourceDir := t.TempDir()
-	sourcePath := filepath.Join(sourceDir, "docs", "snapshot-version-compat.txt")
-	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
-		t.Fatalf("create source directory: %v", err)
-	}
 	content := []byte("snapshot restore compatibility across versioned metadata")
-	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
-
-	storeResult, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain)
-	if err != nil {
-		t.Fatalf("store source file: %v", err)
-	}
+	storeResult := storeSnapshotFixtureFile(t, db, sgctx, sourceDir, "docs/snapshot-version-compat.txt", content)
 
 	snapshotID := "snap-restore-version-compat"
 	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
@@ -1763,18 +1778,8 @@ func TestRestoreSnapshotPrefixAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
 	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), db)
 	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
 
-	sourcePath := filepath.Join(t.TempDir(), "docs", "snapshot-prefix-outer-alias.txt")
-	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
-		t.Fatalf("create source directory: %v", err)
-	}
 	content := []byte("snapshot prefix outer alias")
-	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
-
-	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain); err != nil {
-		t.Fatalf("store source file: %v", err)
-	}
+	storeSnapshotFixtureFile(t, db, sgctx, t.TempDir(), "docs/snapshot-prefix-outer-alias.txt", content)
 
 	snapshotID := "snap-prefix-outer-alias"
 	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
@@ -1821,18 +1826,8 @@ func TestRestoreSnapshotOverrideAllowsOuterAliasAboveDerivedRoot(t *testing.T) {
 	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), db)
 	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
 
-	sourcePath := filepath.Join(t.TempDir(), "docs", "snapshot-override-outer-alias.txt")
-	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
-		t.Fatalf("create source directory: %v", err)
-	}
 	content := []byte("snapshot override outer alias")
-	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
-
-	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain); err != nil {
-		t.Fatalf("store source file: %v", err)
-	}
+	storeSnapshotFixtureFile(t, db, sgctx, t.TempDir(), "docs/snapshot-override-outer-alias.txt", content)
 
 	snapshotID := "snap-override-outer-alias"
 	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
@@ -1879,18 +1874,8 @@ func TestRestoreSnapshotOriginalAllowsOuterAliasAboveWorkingDirectoryRoot(t *tes
 	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), db)
 	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
 
-	sourcePath := filepath.Join(t.TempDir(), "docs", "snapshot-original-outer-alias.txt")
-	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
-		t.Fatalf("create source directory: %v", err)
-	}
 	content := []byte("snapshot original outer alias")
-	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
-
-	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain); err != nil {
-		t.Fatalf("store source file: %v", err)
-	}
+	storeSnapshotFixtureFile(t, db, sgctx, t.TempDir(), "docs/snapshot-original-outer-alias.txt", content)
 
 	snapshotID := "snap-original-outer-alias"
 	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
