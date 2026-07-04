@@ -2,9 +2,10 @@ package testutils
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -15,9 +16,19 @@ import (
 )
 
 const isolatedDBMaintenanceEnv = "COLDKEEP_TEST_DB_MAINTENANCE"
+const preserveFailureStateEnv = "COLDKEEP_TEST_PRESERVE_FAILURE_STATE"
 
 var isolatedPostgresIdentifierPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 var isolatedPostgresDBCounter uint64
+
+type sqlExecDB interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func PreserveFailureStateEnabled() bool {
+	v := strings.TrimSpace(os.Getenv(preserveFailureStateEnv))
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
 
 // RunWithIsolatedPostgresDB executes a package test suite against a unique
 // PostgreSQL database so concurrently running test binaries do not share rows.
@@ -37,7 +48,7 @@ func RunWithIsolatedPostgresDB(packageLabel string, m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "create isolated postgres database %s: %v\n", dbName, err)
 		return 1
 	}
-	return runIsolatedPostgresSuite(adminDB, dbName, m)
+	return runIsolatedPostgresSuite(adminDB, packageLabel, dbName, m)
 }
 
 func OpenRawPostgresDBForMaintenance(purpose string) *sql.DB {
@@ -83,7 +94,7 @@ func isolatedPostgresDBName(packageLabel string) string {
 	return fmt.Sprintf("coldkeep_%s_%d", sanitized, atomic.AddUint64(&isolatedPostgresDBCounter, 1))
 }
 
-func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
+func terminateAndDropIsolatedPostgresDB(adminDB sqlExecDB, dbName string) error {
 	if adminDB == nil {
 		return fmt.Errorf("admin database handle is nil")
 	}
@@ -100,11 +111,11 @@ func terminateAndDropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
 	return nil
 }
 
-func createIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
+func createIsolatedPostgresDB(adminDB sqlExecDB, dbName string) error {
 	return callIsolatedTrustedSQLExec(adminDB, trustedCreateIsolatedPostgresDBStatement(dbName))
 }
 
-func dropIsolatedPostgresDB(adminDB *sql.DB, dbName string) error {
+func dropIsolatedPostgresDB(adminDB sqlExecDB, dbName string) error {
 	return callIsolatedTrustedSQLExec(adminDB, trustedDropIsolatedPostgresDBStatement(dbName))
 }
 
@@ -123,22 +134,67 @@ func trustedIsolatedPostgresIdentifier(dbName string) string {
 	return `"` + dbName + `"`
 }
 
-func callIsolatedTrustedSQLExec(dbconn *sql.DB, query string, args ...any) error {
-	out := reflect.ValueOf(dbconn).MethodByName("Exec").CallSlice([]reflect.Value{
-		reflect.ValueOf(query),
-		reflect.ValueOf(args),
-	})
-	if !out[1].IsNil() {
-		err, ok := out[1].Interface().(error)
-		if !ok {
-			return fmt.Errorf("unexpected SQL fixture error type %T", out[1].Interface())
-		}
-		return err
-	}
-	return nil
+func callIsolatedTrustedSQLExec(dbconn sqlExecDB, query string, args ...any) error {
+	_, err := dbconn.Exec(query, args...)
+	return err
 }
 
-func runIsolatedPostgresSuite(adminDB *sql.DB, dbName string, m *testing.M) int {
+func shouldPreserveFailedIsolatedPostgresDB(exitCode int) bool {
+	return exitCode != 0 && PreserveFailureStateEnabled()
+}
+
+func shouldDropAsUnrelatedIsolatedPostgresDB(currentDB string) bool {
+	if !DiagnosticManifestEnabled() {
+		return false
+	}
+
+	paths, err := filepath.Glob(filepath.Join(DiagnosticDir(), "g6-failure-*.json"))
+	if err != nil {
+		return false
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var payload struct {
+			IsolatedDatabaseName string `json:"isolated_database_name"`
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			continue
+		}
+		if strings.TrimSpace(payload.IsolatedDatabaseName) != "" && payload.IsolatedDatabaseName != currentDB {
+			return true
+		}
+	}
+	return false
+}
+
+func finalizeIsolatedPostgresDB(adminDB sqlExecDB, packageLabel, dbName string, exitCode int) int {
+	if shouldPreserveFailedIsolatedPostgresDB(exitCode) {
+		if shouldDropAsUnrelatedIsolatedPostgresDB(dbName) {
+			fmt.Fprintf(os.Stderr, "dropping isolated postgres database %s because a richer diagnostic manifest already preserved a different failing database\n", dbName)
+			if err := terminateAndDropIsolatedPostgresDB(adminDB, dbName); err != nil {
+				fmt.Fprintf(os.Stderr, "drop isolated postgres database %s: %v\n", dbName, err)
+			}
+			return exitCode
+		}
+		if _, err := WritePreservedIsolatedDBManifest(packageLabel, dbName); err != nil {
+			fmt.Fprintf(os.Stderr, "write isolated postgres diagnostic manifest for %s: %v\n", dbName, err)
+		}
+		fmt.Fprintf(os.Stderr, "preserving isolated postgres database %s because %s is enabled and test suite failed\n", dbName, preserveFailureStateEnv)
+		return exitCode
+	}
+	if err := terminateAndDropIsolatedPostgresDB(adminDB, dbName); err != nil {
+		fmt.Fprintf(os.Stderr, "drop isolated postgres database %s: %v\n", dbName, err)
+		if exitCode == 0 {
+			return 1
+		}
+	}
+	return exitCode
+}
+
+func runIsolatedPostgresSuite(adminDB *sql.DB, packageLabel, dbName string, m *testing.M) int {
 	previousDBName, hadPreviousDBName := os.LookupEnv("DB_NAME")
 	if err := os.Setenv("DB_NAME", dbName); err != nil {
 		fmt.Fprintf(os.Stderr, "set DB_NAME=%s: %v\n", dbName, err)
@@ -149,13 +205,7 @@ func runIsolatedPostgresSuite(adminDB *sql.DB, dbName string, m *testing.M) int 
 	}
 	exitCode := m.Run()
 	restoreIsolatedPostgresDBEnv(previousDBName, hadPreviousDBName)
-	if err := terminateAndDropIsolatedPostgresDB(adminDB, dbName); err != nil {
-		fmt.Fprintf(os.Stderr, "drop isolated postgres database %s: %v\n", dbName, err)
-		if exitCode == 0 {
-			return 1
-		}
-	}
-	return exitCode
+	return finalizeIsolatedPostgresDB(adminDB, packageLabel, dbName, exitCode)
 }
 
 func restoreIsolatedPostgresDBEnv(previousDBName string, hadPreviousDBName bool) {

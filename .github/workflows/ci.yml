@@ -400,10 +400,13 @@ jobs:
           cache: true
 
       - name: Run adversarial validation (G1–G17)
+        id: adversarial_g1_g17
         env:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_LONG_RUN: 1
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_TEST_PRESERVE_FAILURE_STATE: "1"
+          COLDKEEP_TEST_DIAGNOSTIC_DIR: ${{ runner.temp }}/adversarial-diag
           COLDKEEP_CODEC: ${{ matrix.codec }}
           COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
           DB_HOST: 127.0.0.1
@@ -412,7 +415,115 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: go test -race -count=1 ./tests/adversarial/...
+        run: |
+          set +e
+          diag_dir="${RUNNER_TEMP}/adversarial-diag"
+          mkdir -p "$diag_dir"
+          log_file="$diag_dir/adversarial-${{ matrix.codec }}.log"
+          echo "diag_dir=$diag_dir" >> "$GITHUB_OUTPUT"
+          echo "log_file=$log_file" >> "$GITHUB_OUTPUT"
+
+          go test -race -count=1 ./tests/adversarial/... 2>&1 | tee "$log_file"
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Collect G6 failure diagnostics
+        if: ${{ failure() && steps.adversarial_g1_g17.outcome == 'failure' }}
+        continue-on-error: true
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          set +e
+          diag_dir="${{ steps.adversarial_g1_g17.outputs.diag_dir }}"
+          export diag_dir
+          artifact_dir="${RUNNER_TEMP}/g6-failure-artifacts"
+          mkdir -p "$artifact_dir/manifests" "$artifact_dir/db" "$artifact_dir/fs" "$artifact_dir/logs"
+
+          if [ -n "$diag_dir" ] && [ -d "$diag_dir" ]; then
+            cp -R "$diag_dir"/. "$artifact_dir/manifests/" 2>/dev/null || true
+          fi
+
+          python3 - <<'PY' > "${artifact_dir}/manifest-index.tsv"
+          import glob
+          import json
+          import os
+
+          diag_dir = os.environ.get("diag_dir", "")
+          if not diag_dir or not os.path.isdir(diag_dir):
+              raise SystemExit(0)
+
+          seen = set()
+          for path in sorted(glob.glob(os.path.join(diag_dir, "*.json"))):
+              try:
+                  with open(path, "r", encoding="utf-8") as fh:
+                      payload = json.load(fh)
+              except Exception:
+                  continue
+
+              db_name = payload.get("isolated_database_name") or payload.get("database_name") or ""
+              temp_root = payload.get("preserved_temporary_root") or ""
+              kind = payload.get("kind") or ""
+              key = (db_name, temp_root, kind)
+              if key in seen:
+                  continue
+              seen.add(key)
+              print(f"{db_name}\t{temp_root}\t{kind}\t{os.path.basename(path)}")
+          PY
+
+          export PGPASSWORD="$DB_PASSWORD"
+          collection_ok=1
+          while IFS=$'\t' read -r db_name temp_root kind manifest_file; do
+            if [ -n "$db_name" ]; then
+              dump_path="${artifact_dir}/db/${db_name}.dump"
+              if pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$db_name" --format=custom --no-owner --no-privileges --file "$dump_path"; then
+                echo "dumped preserved database $db_name to $dump_path"
+                psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${db_name}' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
+                psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "DROP DATABASE IF EXISTS \"${db_name}\";" >/dev/null 2>&1 || true
+                echo "cleaned preserved database $db_name after dump"
+              else
+                echo "failed to dump preserved database $db_name" >&2
+                collection_ok=0
+              fi
+            fi
+
+            if [ -n "$temp_root" ] && [ -d "$temp_root" ]; then
+              root_name="$(basename "$temp_root")"
+              inventory_path="${artifact_dir}/fs/${root_name}.inventory.txt"
+              archive_path="${artifact_dir}/fs/${root_name}.tar.gz"
+              find "$temp_root" -printf '%M %u %g %s %TY-%Tm-%TdT%TT %p\n' | sort > "$inventory_path"
+              if tar -C "$(dirname "$temp_root")" -czf "$archive_path" "$root_name"; then
+                rm -rf "$temp_root"
+                echo "cleaned preserved temp root $temp_root after archive"
+              else
+                echo "failed to archive preserved temp root $temp_root" >&2
+                collection_ok=0
+              fi
+            fi
+          done < "${artifact_dir}/manifest-index.tsv"
+
+          log_file="${{ steps.adversarial_g1_g17.outputs.log_file }}"
+          if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+            cp "$log_file" "$artifact_dir/logs/" || true
+          fi
+
+          if [ "$collection_ok" -ne 1 ]; then
+            echo "one or more G6 diagnostic collection operations failed" >&2
+            exit 1
+          fi
+
+      - name: Upload G6 failure diagnostics
+        if: ${{ failure() && steps.adversarial_g1_g17.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v5
+        with:
+          name: g6-failure-${{ matrix.codec }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/g6-failure-artifacts
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Run Phase 7 snapshot-retention adversarial tests (G14–G17)
         env:

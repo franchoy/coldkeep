@@ -6,6 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -46,10 +49,13 @@ func configureAdversarialG6Codec(t *testing.T, codec string) {
 	}
 }
 
-func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, string, string) {
+func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, string, string, string) {
 	t.Helper()
 
-	tmp := t.TempDir()
+	tmp, err := os.MkdirTemp("", "coldkeep-adversarial-g6-*")
+	if err != nil {
+		t.Fatalf("mkdir temp root: %v", err)
+	}
 	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	t.Cleanup(func() { container.ContainersDir = origContainersDir })
@@ -75,6 +81,12 @@ func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, st
 	}
 	t.Cleanup(func() {
 		_ = dbconn.Close()
+		preserveFailureState := t.Failed() && testutils.PreserveFailureStateEnabled()
+		if preserveFailureState {
+			t.Logf("preserving G6 diagnostic state: db=%s containers_dir=%s temp_root=%s", testDBName, container.ContainersDir, tmp)
+			_ = adminDB.Close()
+			return
+		}
 		_, _ = adminDB.Exec(`
 			SELECT pg_terminate_backend(pid)
 			FROM pg_stat_activity
@@ -82,6 +94,7 @@ func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, st
 		`, testDBName)
 		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
 		_ = adminDB.Close()
+		_ = os.RemoveAll(tmp)
 	})
 
 	testutils.ApplySchema(t, dbconn)
@@ -90,7 +103,7 @@ func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, st
 	repoRoot := testutils.FindRepoRoot(t)
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 
-	return dbconn, env, repoRoot, binPath, tmp
+	return dbconn, env, repoRoot, binPath, tmp, testDBName
 }
 
 type adversarialG6PostgresTestConfig struct {
@@ -198,10 +211,11 @@ func countInt64QueryG6(t *testing.T, dbconn *sql.DB, query string, args ...any) 
 	return n
 }
 
-func verifyConcurrentInvariantsG6(t *testing.T, dbconn *sql.DB) {
+func verifyConcurrentInvariantsG6(t *testing.T, dbconn *sql.DB, diag *g6FailureDiagnosticContext) {
 	t.Helper()
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		logConcurrentInvariantFailureG6(t, dbconn, err, diag)
 		t.Fatalf("verify full: %v", err)
 	}
 	testutils.AssertNoProcessingRows(t, dbconn)
@@ -218,15 +232,439 @@ func verifyConcurrentInvariantsG6(t *testing.T, dbconn *sql.DB) {
 	}
 }
 
+var g6ChunkIDPattern = regexp.MustCompile(`chunk (\d+)`)
+
+type g6FailureDiagnosticContext struct {
+	TestName      string
+	Backend       string
+	OuterJobCodec string
+	InnerSubtest  string
+	GOMAXPROCS    int
+	Concurrency   int
+	IsolatedDB    string
+	TempRoot      string
+	StoreResults  []g6StoreOperationResult
+}
+
+type g6StoreOperationResult struct {
+	Worker int    `json:"worker"`
+	FileID int64  `json:"file_id,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type g6ChunkFailureDiagnosticManifest struct {
+	Kind                    string                   `json:"kind"`
+	TestName                string                   `json:"test_name"`
+	TimestampUTC            time.Time                `json:"timestamp_utc"`
+	Backend                 string                   `json:"backend"`
+	OuterJobCodec           string                   `json:"outer_job_codec"`
+	InnerSubtestCodec       string                   `json:"inner_subtest_codec"`
+	GOMAXPROCS              int                      `json:"gomaxprocs"`
+	ConcurrencyCount        int                      `json:"concurrency_count"`
+	IsolatedDatabaseName    string                   `json:"isolated_database_name"`
+	PreservedTemporaryRoot  string                   `json:"preserved_temporary_root"`
+	OffendingChunkID        *int64                   `json:"offending_chunk_id,omitempty"`
+	OffendingChunkHash      string                   `json:"offending_chunk_hash,omitempty"`
+	VerifyError             string                   `json:"verify_error"`
+	SchemaVersion           int64                    `json:"schema_version"`
+	StoreResults            []g6StoreOperationResult `json:"store_results"`
+	RelevantConfiguration   map[string]string        `json:"relevant_configuration,omitempty"`
+	MigrationCompanionState g6ChunkMetadataRecord    `json:"migration_companion_state"`
+}
+
+type g6ChunkMetadataRecord struct {
+	LegacyMappingID         *int64 `json:"legacy_mapping_id,omitempty"`
+	LegacyCodec             string `json:"legacy_codec,omitempty"`
+	LegacyFormatVersion     *int64 `json:"legacy_format_version,omitempty"`
+	LegacyPlaintextSize     *int64 `json:"legacy_plaintext_size,omitempty"`
+	LegacyStoredSize        *int64 `json:"legacy_stored_size,omitempty"`
+	LegacyNonceLength       *int64 `json:"legacy_nonce_length,omitempty"`
+	LegacyContainerID       *int64 `json:"legacy_container_id,omitempty"`
+	LegacyOffset            *int64 `json:"legacy_offset,omitempty"`
+	PackedBlockID           *int64 `json:"packed_block_id,omitempty"`
+	PackedOffsetInBlock     *int64 `json:"packed_offset_in_block,omitempty"`
+	PackedSizeInBlock       *int64 `json:"packed_size_in_block,omitempty"`
+	PackedContainerID       *int64 `json:"packed_container_id,omitempty"`
+	PackedContainerOffset   *int64 `json:"packed_container_offset,omitempty"`
+	PackedPlaintextSize     *int64 `json:"packed_plaintext_size,omitempty"`
+	TotalReferencedBytes    *int64 `json:"packed_total_referenced_bytes,omitempty"`
+	PayloadPrefixBytes      *int64 `json:"payload_prefix_bytes,omitempty"`
+	LegacyContainerFilename string `json:"legacy_container_filename,omitempty"`
+	PackedContainerFilename string `json:"packed_container_filename,omitempty"`
+}
+
+func logConcurrentInvariantFailureG6(t *testing.T, dbconn *sql.DB, verifyErr error, diag *g6FailureDiagnosticContext) {
+	t.Helper()
+
+	t.Logf("G6 verify failure diagnostics: db=%s containers_dir=%s err=%v", os.Getenv("DB_NAME"), container.ContainersDir, verifyErr)
+
+	manifest := g6ChunkFailureDiagnosticManifest{
+		Kind:                   "g6_concurrent_store_failure",
+		TestName:               t.Name(),
+		TimestampUTC:           time.Now().UTC(),
+		VerifyError:            verifyErr.Error(),
+		StoreResults:           append([]g6StoreOperationResult(nil), diagStoreResultsG6(diag)...),
+		RelevantConfiguration:  g6RelevantConfiguration(),
+		Backend:                diagStringG6(diag, func(v *g6FailureDiagnosticContext) string { return v.Backend }),
+		OuterJobCodec:          diagStringG6(diag, func(v *g6FailureDiagnosticContext) string { return v.OuterJobCodec }),
+		InnerSubtestCodec:      diagStringG6(diag, func(v *g6FailureDiagnosticContext) string { return v.InnerSubtest }),
+		GOMAXPROCS:             diagIntG6(diag, func(v *g6FailureDiagnosticContext) int { return v.GOMAXPROCS }),
+		ConcurrencyCount:       diagIntG6(diag, func(v *g6FailureDiagnosticContext) int { return v.Concurrency }),
+		IsolatedDatabaseName:   diagStringG6(diag, func(v *g6FailureDiagnosticContext) string { return v.IsolatedDB }),
+		PreservedTemporaryRoot: diagStringG6(diag, func(v *g6FailureDiagnosticContext) string { return v.TempRoot }),
+	}
+	if manifest.TestName == "" && diag != nil && diag.TestName != "" {
+		manifest.TestName = diag.TestName
+	}
+	if manifest.GOMAXPROCS == 0 {
+		manifest.GOMAXPROCS = runtime.GOMAXPROCS(0)
+	}
+	if v, err := g6SchemaVersion(dbconn); err == nil {
+		manifest.SchemaVersion = v
+	} else {
+		t.Logf("G6 verify diagnostics: schema version query failed: %v", err)
+	}
+
+	matches := g6ChunkIDPattern.FindStringSubmatch(verifyErr.Error())
+	if len(matches) != 2 {
+		logMixedChunkShapesG6(t, dbconn)
+		writeConcurrentInvariantManifestG6(t, manifest)
+		return
+	}
+
+	var chunkID int64
+	if _, err := fmt.Sscanf(matches[1], "%d", &chunkID); err != nil {
+		t.Logf("G6 verify diagnostics: parse chunk id from %q: %v", matches[1], err)
+		logMixedChunkShapesG6(t, dbconn)
+		writeConcurrentInvariantManifestG6(t, manifest)
+		return
+	}
+
+	manifest.OffendingChunkID = &chunkID
+	chunkMeta, chunkHash, err := logChunkMetadataG6(t, dbconn, chunkID)
+	if err != nil {
+		t.Logf("G6 verify diagnostics: collect chunk metadata chunk_id=%d: %v", chunkID, err)
+		writeConcurrentInvariantManifestG6(t, manifest)
+		return
+	}
+	manifest.OffendingChunkHash = chunkHash
+	manifest.MigrationCompanionState = chunkMeta
+	writeConcurrentInvariantManifestG6(t, manifest)
+}
+
+func logMixedChunkShapesG6(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+
+	rows, err := dbconn.Query(`
+		SELECT c.id,
+		       EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id) AS has_packed,
+		       (SELECT COUNT(*) FROM blocks b WHERE b.chunk_id = c.id) AS legacy_rows
+		FROM chunk c
+		WHERE EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id)
+		   OR EXISTS (SELECT 1 FROM blocks b WHERE b.chunk_id = c.id)
+		ORDER BY c.id
+	`)
+	if err != nil {
+		t.Logf("G6 verify diagnostics: query mixed chunk shapes: %v", err)
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var chunkID int64
+		var hasPacked bool
+		var legacyRows int64
+		if err := rows.Scan(&chunkID, &hasPacked, &legacyRows); err != nil {
+			t.Logf("G6 verify diagnostics: scan mixed chunk shape: %v", err)
+			return
+		}
+		if hasPacked && legacyRows > 0 {
+			t.Logf("G6 verify diagnostics: mixed mapping chunk_id=%d has_packed=%t legacy_rows=%d", chunkID, hasPacked, legacyRows)
+			_, _, _ = logChunkMetadataG6(t, dbconn, chunkID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Logf("G6 verify diagnostics: iterate mixed chunk shapes: %v", err)
+	}
+}
+
+func logChunkMetadataG6(t *testing.T, dbconn *sql.DB, chunkID int64) (g6ChunkMetadataRecord, string, error) {
+	t.Helper()
+
+	type chunkMeta struct {
+		chunkSize            int64
+		chunkHash            string
+		chunkStatus          string
+		legacyMappingID      sql.NullInt64
+		legacyCodec          sql.NullString
+		legacyFormatVersion  sql.NullInt64
+		legacyPlaintextSize  sql.NullInt64
+		legacyStoredSize     sql.NullInt64
+		legacyNonceLen       sql.NullInt64
+		legacyContainerID    sql.NullInt64
+		legacyOffset         sql.NullInt64
+		packedBlockID        sql.NullInt64
+		packedOffsetInBlock  sql.NullInt64
+		packedSizeInBlock    sql.NullInt64
+		packedContainerID    sql.NullInt64
+		packedContainerOff   sql.NullInt64
+		packedPlaintextSize  sql.NullInt64
+		totalReferencedBytes sql.NullInt64
+	}
+
+	var meta chunkMeta
+	err := dbconn.QueryRow(`
+		SELECT
+			c.size,
+			c.chunk_hash,
+			c.status,
+			b.id,
+			b.codec,
+			b.format_version,
+			b.plaintext_size,
+			b.stored_size,
+			OCTET_LENGTH(b.nonce),
+			b.container_id,
+			b.block_offset,
+			r.block_id,
+			r.offset_in_block,
+			r.size_in_block,
+			sb.container_id,
+			sb.container_offset,
+			sb.plaintext_size,
+			(
+				SELECT COALESCE(SUM(size_in_block), 0)
+				FROM chunk_block_refs
+				WHERE block_id = r.block_id
+			)
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		WHERE c.id = $1
+	`, chunkID).Scan(
+		&meta.chunkSize,
+		&meta.chunkHash,
+		&meta.chunkStatus,
+		&meta.legacyMappingID,
+		&meta.legacyCodec,
+		&meta.legacyFormatVersion,
+		&meta.legacyPlaintextSize,
+		&meta.legacyStoredSize,
+		&meta.legacyNonceLen,
+		&meta.legacyContainerID,
+		&meta.legacyOffset,
+		&meta.packedBlockID,
+		&meta.packedOffsetInBlock,
+		&meta.packedSizeInBlock,
+		&meta.packedContainerID,
+		&meta.packedContainerOff,
+		&meta.packedPlaintextSize,
+		&meta.totalReferencedBytes,
+	)
+	if err != nil {
+		return g6ChunkMetadataRecord{}, "", err
+	}
+
+	var payloadPrefixBytes *int64
+	if meta.packedPlaintextSize.Valid && meta.totalReferencedBytes.Valid {
+		v := meta.packedPlaintextSize.Int64 - meta.totalReferencedBytes.Int64
+		payloadPrefixBytes = &v
+	}
+
+	t.Logf(
+		"G6 verify diagnostics: chunk_id=%d status=%s chunk_size=%d legacy_codec=%v legacy_format=%v legacy_plaintext=%v legacy_stored=%v legacy_nonce_len=%v legacy_container=%v legacy_offset=%v packed_block=%v packed_offset_in_block=%v packed_size_in_block=%v packed_container=%v packed_container_offset=%v packed_plaintext=%v packed_total_referenced=%v payload_prefix_bytes=%v",
+		chunkID,
+		meta.chunkStatus,
+		meta.chunkSize,
+		nullStringValueG6(meta.legacyCodec),
+		nullInt64ValueG6(meta.legacyFormatVersion),
+		nullInt64ValueG6(meta.legacyPlaintextSize),
+		nullInt64ValueG6(meta.legacyStoredSize),
+		nullInt64ValueG6(meta.legacyNonceLen),
+		nullInt64ValueG6(meta.legacyContainerID),
+		nullInt64ValueG6(meta.legacyOffset),
+		nullInt64ValueG6(meta.packedBlockID),
+		nullInt64ValueG6(meta.packedOffsetInBlock),
+		nullInt64ValueG6(meta.packedSizeInBlock),
+		nullInt64ValueG6(meta.packedContainerID),
+		nullInt64ValueG6(meta.packedContainerOff),
+		nullInt64ValueG6(meta.packedPlaintextSize),
+		nullInt64ValueG6(meta.totalReferencedBytes),
+		nullInt64PointerValueG6(payloadPrefixBytes),
+	)
+
+	legacyContainerFilename := logContainerMetadataG6(t, dbconn, "legacy", meta.legacyContainerID)
+	packedContainerFilename := logContainerMetadataG6(t, dbconn, "packed", meta.packedContainerID)
+
+	return g6ChunkMetadataRecord{
+		LegacyMappingID:         nullInt64PointerG6(meta.legacyMappingID),
+		LegacyCodec:             nullStringPlainG6(meta.legacyCodec),
+		LegacyFormatVersion:     nullInt64PointerG6(meta.legacyFormatVersion),
+		LegacyPlaintextSize:     nullInt64PointerG6(meta.legacyPlaintextSize),
+		LegacyStoredSize:        nullInt64PointerG6(meta.legacyStoredSize),
+		LegacyNonceLength:       nullInt64PointerG6(meta.legacyNonceLen),
+		LegacyContainerID:       nullInt64PointerG6(meta.legacyContainerID),
+		LegacyOffset:            nullInt64PointerG6(meta.legacyOffset),
+		PackedBlockID:           nullInt64PointerG6(meta.packedBlockID),
+		PackedOffsetInBlock:     nullInt64PointerG6(meta.packedOffsetInBlock),
+		PackedSizeInBlock:       nullInt64PointerG6(meta.packedSizeInBlock),
+		PackedContainerID:       nullInt64PointerG6(meta.packedContainerID),
+		PackedContainerOffset:   nullInt64PointerG6(meta.packedContainerOff),
+		PackedPlaintextSize:     nullInt64PointerG6(meta.packedPlaintextSize),
+		TotalReferencedBytes:    nullInt64PointerG6(meta.totalReferencedBytes),
+		PayloadPrefixBytes:      payloadPrefixBytes,
+		LegacyContainerFilename: legacyContainerFilename,
+		PackedContainerFilename: packedContainerFilename,
+	}, meta.chunkHash, nil
+}
+
+func logContainerMetadataG6(t *testing.T, dbconn *sql.DB, label string, containerID sql.NullInt64) string {
+	t.Helper()
+
+	if !containerID.Valid {
+		return ""
+	}
+
+	var filename string
+	var currentSize int64
+	var maxSize int64
+	var sealed bool
+	var sealing bool
+	var quarantine bool
+	if err := dbconn.QueryRow(`
+		SELECT filename, current_size, max_size, sealed, sealing, quarantine
+		FROM container
+		WHERE id = $1
+	`, containerID.Int64).Scan(&filename, &currentSize, &maxSize, &sealed, &sealing, &quarantine); err != nil {
+		t.Logf("G6 verify diagnostics: query %s container %d: %v", label, containerID.Int64, err)
+		return ""
+	}
+
+	t.Logf(
+		"G6 verify diagnostics: %s_container_id=%d filename=%s current_size=%d max_size=%d sealed=%t sealing=%t quarantine=%t",
+		label,
+		containerID.Int64,
+		filename,
+		currentSize,
+		maxSize,
+		sealed,
+		sealing,
+		quarantine,
+	)
+	return filename
+}
+
+func nullInt64ValueG6(v sql.NullInt64) any {
+	if !v.Valid {
+		return nil
+	}
+	return v.Int64
+}
+
+func nullStringValueG6(v sql.NullString) any {
+	if !v.Valid {
+		return nil
+	}
+	return v.String
+}
+
+func nullInt64PointerG6(v sql.NullInt64) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := v.Int64
+	return &out
+}
+
+func nullInt64PointerValueG6(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func nullStringPlainG6(v sql.NullString) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
+}
+
+func diagStringG6(ctx *g6FailureDiagnosticContext, getter func(*g6FailureDiagnosticContext) string) string {
+	if ctx == nil {
+		return ""
+	}
+	return getter(ctx)
+}
+
+func diagIntG6(ctx *g6FailureDiagnosticContext, getter func(*g6FailureDiagnosticContext) int) int {
+	if ctx == nil {
+		return 0
+	}
+	return getter(ctx)
+}
+
+func diagStoreResultsG6(ctx *g6FailureDiagnosticContext) []g6StoreOperationResult {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.StoreResults
+}
+
+func g6SchemaVersion(dbconn *sql.DB) (int64, error) {
+	var version int64
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
+func g6RelevantConfiguration() map[string]string {
+	keys := []string{
+		"COLDKEEP_DB_AUTO_BOOTSTRAP",
+		"COLDKEEP_CODEC",
+		"COLDKEEP_COMPRESSION",
+		"COLDKEEP_BLOCK_TARGET_SIZE_MB",
+		"COLDKEEP_PACKED_BLOCK_SIZE_MIB",
+		"COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS",
+		"COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS",
+		"COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS",
+		"COLDKEEP_LONG_RUN",
+	}
+	cfg := make(map[string]string)
+	for _, key := range keys {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			cfg[key] = v
+		}
+	}
+	return cfg
+}
+
+func writeConcurrentInvariantManifestG6(t *testing.T, manifest g6ChunkFailureDiagnosticManifest) {
+	t.Helper()
+
+	if !testutils.DiagnosticManifestEnabled() {
+		return
+	}
+	path, err := testutils.WriteDiagnosticJSON("g6-failure", manifest)
+	if err != nil {
+		t.Logf("G6 verify diagnostics: write failure manifest: %v", err)
+		return
+	}
+	t.Logf("G6 verify diagnostics: wrote failure manifest %s", path)
+}
+
 func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testing.T) {
 	testgate.RequireDB(t)
 	testgate.RequireLongRun(t)
 
 	for _, codec := range adversarialG6Codecs() {
 		t.Run(codec, func(t *testing.T) {
+			outerJobCodec := os.Getenv("COLDKEEP_CODEC")
 			configureAdversarialG6Codec(t, codec)
 
-			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG6Env(t)
+			dbconn, env, repoRoot, binPath, tmp, testDBName := setupAdversarialG6Env(t)
 			defer dbconn.Close()
 
 			inputDir := filepath.Join(tmp, "input")
@@ -256,14 +694,32 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 				}()
 			}
 			ids := make([]int64, workers)
+			storeResults := make([]g6StoreOperationResult, workers)
 			for i := 0; i < workers; i++ {
 				res := <-resultCh
+				storeResults[res.idx] = g6StoreOperationResult{
+					Worker: res.idx,
+					FileID: res.id,
+				}
+				if res.err != nil {
+					storeResults[res.idx].Error = res.err.Error()
+				}
 				if res.err != nil {
 					t.Fatalf("concurrent store worker %d failed: %v", res.idx, res.err)
 				}
 				ids[res.idx] = res.id
 			}
-			verifyConcurrentInvariantsG6(t, dbconn)
+			verifyConcurrentInvariantsG6(t, dbconn, &g6FailureDiagnosticContext{
+				TestName:      t.Name(),
+				Backend:       "postgres",
+				OuterJobCodec: outerJobCodec,
+				InnerSubtest:  codec,
+				GOMAXPROCS:    runtime.GOMAXPROCS(0),
+				Concurrency:   workers,
+				IsolatedDB:    testDBName,
+				TempRoot:      tmp,
+				StoreResults:  storeResults,
+			})
 
 			baseGraph := testutils.QueryChunkGraph(t, dbconn, ids[0])
 			if len(baseGraph) == 0 {
@@ -297,7 +753,7 @@ func TestAdversarialG6ConcurrentStoresSharedChunkInputsPreserveHealthyRestores(t
 		t.Run(codec, func(t *testing.T) {
 			configureAdversarialG6Codec(t, codec)
 
-			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG6Env(t)
+			dbconn, env, repoRoot, binPath, tmp, _ := setupAdversarialG6Env(t)
 			defer dbconn.Close()
 
 			inputDir := filepath.Join(tmp, "input")
@@ -335,7 +791,7 @@ func TestAdversarialG6ConcurrentStoresSharedChunkInputsPreserveHealthyRestores(t
 				t.Fatalf("concurrent store hybrid_b failed: %v", errB)
 			}
 
-			verifyConcurrentInvariantsG6(t, dbconn)
+			verifyConcurrentInvariantsG6(t, dbconn, nil)
 
 			outA := filepath.Join(restoreDir, "hybrid_a.restored.bin")
 			outB := filepath.Join(restoreDir, "hybrid_b.restored.bin")
@@ -352,7 +808,7 @@ func TestAdversarialG6ConcurrentStoreAndGCDoNotLoseReachableData(t *testing.T) {
 		t.Run(codec, func(t *testing.T) {
 			configureAdversarialG6Codec(t, codec)
 
-			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG6Env(t)
+			dbconn, env, repoRoot, binPath, tmp, _ := setupAdversarialG6Env(t)
 			defer dbconn.Close()
 
 			inputDir := filepath.Join(tmp, "input")
@@ -396,7 +852,7 @@ func TestAdversarialG6ConcurrentStoreAndGCDoNotLoseReachableData(t *testing.T) {
 				t.Fatalf("concurrent gc failed: %v", gcErr)
 			}
 
-			verifyConcurrentInvariantsG6(t, dbconn)
+			verifyConcurrentInvariantsG6(t, dbconn, nil)
 
 			restoreMustMatchHashG6(t, dbconn, anchorID, filepath.Join(restoreDir, "anchor.restored.bin"), anchorHash)
 			restoreMustMatchHashG6(t, dbconn, newID, filepath.Join(restoreDir, "new.restored.bin"), newHash)
@@ -412,7 +868,7 @@ func TestAdversarialG6ConcurrentRemoveAndGCPreserveOtherLiveFiles(t *testing.T) 
 		t.Run(codec, func(t *testing.T) {
 			configureAdversarialG6Codec(t, codec)
 
-			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG6Env(t)
+			dbconn, env, repoRoot, binPath, tmp, _ := setupAdversarialG6Env(t)
 			defer dbconn.Close()
 
 			inputDir := filepath.Join(tmp, "input")
@@ -459,7 +915,7 @@ func TestAdversarialG6ConcurrentRemoveAndGCPreserveOtherLiveFiles(t *testing.T) 
 				t.Fatalf("concurrent gc failed: %v", gcErr)
 			}
 
-			verifyConcurrentInvariantsG6(t, dbconn)
+			verifyConcurrentInvariantsG6(t, dbconn, nil)
 
 			restoreMustMatchHashG6(t, dbconn, secondID, filepath.Join(restoreDir, "second.restored.bin"), secondHash)
 
@@ -485,7 +941,7 @@ func TestAdversarialG6ConcurrentSnapshotCreateAndGCPreserveRetainedData(t *testi
 		t.Run(codec, func(t *testing.T) {
 			configureAdversarialG6Codec(t, codec)
 
-			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG6Env(t)
+			dbconn, env, repoRoot, binPath, tmp, _ := setupAdversarialG6Env(t)
 			defer dbconn.Close()
 
 			inputDir := filepath.Join(tmp, "input")
@@ -531,7 +987,7 @@ func TestAdversarialG6ConcurrentSnapshotCreateAndGCPreserveRetainedData(t *testi
 				t.Fatalf("concurrent gc failed: %v", gcErr)
 			}
 
-			verifyConcurrentInvariantsG6(t, dbconn)
+			verifyConcurrentInvariantsG6(t, dbconn, nil)
 
 			// snapshot must still exist in the DB
 			var snapCount int64
