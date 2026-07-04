@@ -52,6 +52,7 @@ func requireDeterministicG6Env(name string) bool {
 type g6DeterministicInterleavingGate struct {
 	eventCh   chan storage.TestStoreInterleavingHookEvent
 	releaseCh chan struct{}
+	once      sync.Once
 }
 
 func newG6DeterministicInterleavingGate() *g6DeterministicInterleavingGate {
@@ -73,7 +74,9 @@ func (g *g6DeterministicInterleavingGate) await(t *testing.T) storage.TestStoreI
 }
 
 func (g *g6DeterministicInterleavingGate) release() {
-	close(g.releaseCh)
+	g.once.Do(func() {
+		close(g.releaseCh)
+	})
 }
 
 func assertDeterministicG6ChunkState(t *testing.T, dbconn *sql.DB, chunkHash string, size int, wantLogicalRefs int) {
