@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -205,7 +206,7 @@ func TestRestoreStoredPathOverwriteFalsePreservesExistingDestination(t *testing.
 		{
 			name: "prefix",
 			buildRequest: func(t *testing.T, fixture storedPathRestoreFixture, sentinel []byte) engine.RestoreStoredPathRequest {
-				storedPath := "/existing-prefix.bin"
+				storedPath := existingPrefixStoredPathFixture()
 				updateStoredPathMapping(t, fixture.db, fixture.stored.FileID, storedPath)
 				prefixRoot := trustedRestoreTestDir(t, t.TempDir(), "prefix-root")
 				dst := expectedPrefixModeOutputPath(prefixRoot, storedPath)
@@ -271,6 +272,13 @@ func TestRestoreStoredPathOverwriteFalsePreservesExistingDestination(t *testing.
 			requirePinnedChunksReleased(t, fixture.db, fixture.stored.FileID)
 		})
 	}
+}
+
+func existingPrefixStoredPathFixture() string {
+	if runtime.GOOS == "windows" {
+		return `C:\existing-prefix.bin`
+	}
+	return "/existing-prefix.bin"
 }
 
 func TestRestoreStoredPathMissingPayloadFailsWithoutDestinationMutation(t *testing.T) {
