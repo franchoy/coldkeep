@@ -113,7 +113,7 @@ func TestRestoreStoredPathPrefixFailsClosedForForeignRootedPaths(t *testing.T) {
 		`C:/outside/file.bin`,
 	}
 	if runtime.GOOS == "windows" {
-		cases = append(cases, `//server/share/file.bin`)
+		cases = append(cases, `//server/share/data/file.bin`)
 	}
 
 	for _, storedPath := range cases {
@@ -207,7 +207,7 @@ func TestRestoreStoredPathPrefixRejectsMalformedOrCorruptWindowsStoredPaths(t *t
 		`..\escape.bin`,
 	}
 	if runtime.GOOS == "windows" {
-		cases = append(cases, `//server/share/file.bin`, `/data/file.bin`)
+		cases = append(cases, `//server/share/data/file.bin`, `/data/file.bin`)
 	}
 
 	for _, storedPath := range cases {

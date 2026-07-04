@@ -580,6 +580,9 @@ func newStoredPathRestoreFixtureFromDB(t *testing.T, db *sql.DB, payload []byte,
 	if err != nil {
 		t.Fatalf("store fixture: %v", err)
 	}
+	if err := sgctx.Writer.FinalizeContainer(); err != nil {
+		t.Fatalf("finalize fixture container: %v", err)
+	}
 	return newStoredPathRestoreFixtureFromExistingStore(t, db, sgctx, stored, payload)
 }
 
@@ -629,4 +632,47 @@ func assertRestoreStoredPathResult(t *testing.T, got engine.RestoreStoredPathRes
 	if got.RestoredHash != wantHash {
 		t.Fatalf("RestoredHash: got %q want %q", got.RestoredHash, wantHash)
 	}
+}
+
+func TestNewStoredPathRestoreFixtureFinalizesContainerWriter(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-fixture-lifecycle")
+
+	writer, ok := fixture.sgctx.Writer.(*container.LocalWriter)
+	if !ok {
+		t.Fatalf("expected LocalWriter fixture, got %T", fixture.sgctx.Writer)
+	}
+	if _, _, active := writer.ActiveContainerState(); active {
+		t.Fatal("expected fixture writer to have no active container after setup")
+	}
+
+	containerPath := singleFixtureContainerPath(t, fixture.sgctx.ContainerDir)
+	renamedPath := containerPath + ".renamed"
+
+	if err := os.Rename(containerPath, renamedPath); err != nil {
+		t.Fatalf("rename fixture container after setup: %v", err)
+	}
+	if err := os.Rename(renamedPath, containerPath); err != nil {
+		t.Fatalf("rename fixture container back after setup: %v", err)
+	}
+}
+
+func singleFixtureContainerPath(t *testing.T, containerDir string) string {
+	t.Helper()
+
+	entries, err := os.ReadDir(containerDir)
+	if err != nil {
+		t.Fatalf("read fixture container dir: %v", err)
+	}
+
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		files = append(files, filepath.Join(containerDir, entry.Name()))
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected exactly one fixture container payload, found %d (%v)", len(files), files)
+	}
+	return files[0]
 }
