@@ -39,6 +39,8 @@ func allCandidateTypes() []struct {
 		{"SnapshotMeta", engine.SnapshotMeta{}},
 		{"SnapshotCreateRequest", engine.SnapshotCreateRequest{}},
 		{"SnapshotCreateResult", engine.SnapshotCreateResult{}},
+		{"SnapshotDeleteParent", engine.SnapshotDeleteParent{}},
+		{"SnapshotDeletePreviewResult", engine.SnapshotDeletePreviewResult{}},
 		{"SnapshotListRequest", engine.SnapshotListRequest{}},
 		{"SnapshotListResult", engine.SnapshotListResult{}},
 		{"SnapshotFile", engine.SnapshotFile{}},
@@ -50,6 +52,9 @@ func allCandidateTypes() []struct {
 		{"SnapshotDiffRequest", engine.SnapshotDiffRequest{}},
 		{"SnapshotDiffSummary", engine.SnapshotDiffSummary{}},
 		{"SnapshotDiffResult", engine.SnapshotDiffResult{}},
+		{"SnapshotRestoreSelection", engine.SnapshotRestoreSelection{}},
+		{"SnapshotRestoreDestination", engine.SnapshotRestoreDestination{}},
+		{"SnapshotRestoreWarning", engine.SnapshotRestoreWarning{}},
 		{"SnapshotRestoreRequest", engine.SnapshotRestoreRequest{}},
 		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
 		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
@@ -344,7 +349,7 @@ func TestSnapshotContractsRepresentAllOperations(t *testing.T) {
 	assertSnapshotStatsContract(t)
 	assertSnapshotDiffContracts(t, q)
 	assertSnapshotDeleteContract(t)
-	assertSnapshotRestoreContract(t, q)
+	assertSnapshotRestoreContract(t, after, before)
 }
 
 func snapshotContractQuery() (engine.SnapshotQuery, time.Time, time.Time) {
@@ -375,6 +380,17 @@ func assertSnapshotCreateContracts(t *testing.T) {
 	full := engine.SnapshotCreateRequest{Label: "full"}
 	if len(full.Paths) != 0 {
 		t.Error("snapshot create (full) not representable")
+	}
+	result := engine.SnapshotCreateResult{
+		SnapshotID:    "s1",
+		Type:          engine.SnapshotTypePartial,
+		PathsCount:    1,
+		FilesInserted: 2,
+		Label:         "l",
+		ParentID:      "p0",
+	}
+	if result.SnapshotID == "" || result.Type == "" {
+		t.Error("snapshot create result not representable")
 	}
 }
 
@@ -430,26 +446,80 @@ func snapshotDiffFilters() []engine.SnapshotDiffFilter {
 
 func assertSnapshotDeleteContract(t *testing.T) {
 	t.Helper()
-	del := engine.SnapshotDeleteRequest{SnapshotID: "s1", DryRun: true}
-	delForce := engine.SnapshotDeleteRequest{SnapshotID: "s1", Force: true}
-	if del.DryRun == delForce.DryRun {
-		t.Error("snapshot delete dry-run/force not distinguishable")
+	previewReq := engine.SnapshotDeleteRequest{SnapshotID: "s1", Mode: engine.SnapshotDeleteModePreview}
+	executeReq := engine.SnapshotDeleteRequest{SnapshotID: "s1", Mode: engine.SnapshotDeleteModeExecute}
+	if previewReq.Mode == executeReq.Mode {
+		t.Error("snapshot delete preview/execute modes not distinguishable")
+	}
+
+	preview := engine.SnapshotDeleteResult{
+		SnapshotID: "s1",
+		Mode:       engine.SnapshotDeleteModePreview,
+		Deleted:    false,
+		Preview: &engine.SnapshotDeletePreviewResult{
+			Parent:      engine.SnapshotDeleteParent{ID: "p0", State: engine.SnapshotDeleteParentPresent},
+			Children:    []string{"c1", "c2"},
+			TotalFiles:  10,
+			UniqueFiles: 4,
+			SharedFiles: 6,
+		},
+	}
+	if preview.Preview == nil || preview.Deleted {
+		t.Error("snapshot delete preview result not representable")
+	}
+
+	execute := engine.SnapshotDeleteResult{
+		SnapshotID: "s1",
+		Mode:       engine.SnapshotDeleteModeExecute,
+		Deleted:    true,
+	}
+	if !execute.Deleted || execute.Preview != nil {
+		t.Error("snapshot delete execute result not representable")
 	}
 }
 
-func assertSnapshotRestoreContract(t *testing.T, q engine.SnapshotQuery) {
+func assertSnapshotRestoreContract(t *testing.T, after time.Time, before time.Time) {
 	t.Helper()
 	restore := engine.SnapshotRestoreRequest{
-		SnapshotID:      "s1",
-		Paths:           []string{"a"},
-		DestinationMode: engine.RestoreDestinationPrefix,
-		Destination:     "/dst",
-		Overwrite:       true,
-		Strict:          true,
-		Query:           q,
+		SnapshotID: "s1",
+		Paths:      []string{"a", "dir/"},
+		Selection: engine.SnapshotRestoreSelection{
+			ExactPaths:     []string{"docs/a.txt", "docs/a.txt"},
+			Prefixes:       []string{"docs/", "logs/"},
+			Pattern:        "*.txt",
+			Regex:          "^docs/",
+			ModifiedAfter:  &after,
+			ModifiedBefore: &before,
+		},
+		Destination: engine.SnapshotRestoreDestination{
+			Mode: engine.SnapshotRestoreDestinationPrefix,
+			Path: "/dst",
+		},
+		Overwrite: true,
+		Metadata:  engine.SnapshotRestoreMetadataStrict,
 	}
-	if restore.DestinationMode != engine.RestoreDestinationPrefix {
+	if restore.Destination.Mode != engine.SnapshotRestoreDestinationPrefix {
 		t.Error("snapshot restore not representable")
+	}
+
+	result := engine.SnapshotRestoreResult{
+		SnapshotID:          "s1",
+		DestinationMode:     engine.SnapshotRestoreDestinationPrefix,
+		RequestedPathsCount: 2,
+		RestoredFiles:       3,
+		OutputTarget:        "/dst",
+		OutputPaths:         []string{"/dst/docs/a.txt"},
+		Warnings: []engine.SnapshotRestoreWarning{
+			{
+				Code:      engine.SnapshotRestoreWarningMetadata,
+				Path:      "/dst/docs/a.txt",
+				Operation: "chmod",
+				Detail:    "permission denied",
+			},
+		},
+	}
+	if result.DestinationMode == "" || result.RestoredFiles == 0 {
+		t.Error("snapshot restore result not representable")
 	}
 }
 
