@@ -69,14 +69,37 @@ func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
 // ties them to the approved active engine method set.
 func TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership(t *testing.T) {
 	activeMethods := activeEngineMethodSet()
+	for _, tc := range candidateOnlyOperationCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			if activeMethods[tc.forbiddenMethod] {
+				t.Fatalf("candidate-only contract %q unexpectedly has active engine method %q", tc.name, tc.forbiddenMethod)
+			}
 
-	cases := []struct {
-		name              string
-		requestType       any
-		resultType        any
-		forbiddenMethod   string
-		laterOwnerRelease string
-	}{
+			reqType := reflect.TypeOf(tc.requestType)
+			resType := reflect.TypeOf(tc.resultType)
+			if reqType.Name() == "" || resType.Name() == "" {
+				t.Fatalf("candidate-only contract %q must remain a named request/result type", tc.name)
+			}
+			if reqType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" || resType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" {
+				t.Fatalf("candidate-only contract %q moved outside engine package unexpectedly", tc.name)
+			}
+			if tc.laterOwnerRelease == "" {
+				t.Fatalf("candidate-only contract %q must record a later owner release", tc.name)
+			}
+		})
+	}
+}
+
+type candidateOnlyOperationCase struct {
+	name              string
+	requestType       any
+	resultType        any
+	forbiddenMethod   string
+	laterOwnerRelease string
+}
+
+func candidateOnlyOperationCases() []candidateOnlyOperationCase {
+	return []candidateOnlyOperationCase{
 		{
 			name:              "snapshot create",
 			requestType:       engine.SnapshotCreateRequest{},
@@ -113,26 +136,6 @@ func TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership(t *te
 			laterOwnerRelease: "v1.13.10",
 		},
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if activeMethods[tc.forbiddenMethod] {
-				t.Fatalf("candidate-only contract %q unexpectedly has active engine method %q", tc.name, tc.forbiddenMethod)
-			}
-
-			reqType := reflect.TypeOf(tc.requestType)
-			resType := reflect.TypeOf(tc.resultType)
-			if reqType.Name() == "" || resType.Name() == "" {
-				t.Fatalf("candidate-only contract %q must remain a named request/result type", tc.name)
-			}
-			if reqType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" || resType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" {
-				t.Fatalf("candidate-only contract %q moved outside engine package unexpectedly", tc.name)
-			}
-			if tc.laterOwnerRelease == "" {
-				t.Fatalf("candidate-only contract %q must record a later owner release", tc.name)
-			}
-		})
-	}
 }
 
 func activeEngineMethodSet() map[string]bool {
@@ -151,55 +154,7 @@ func TestCandidateContractsAreRendererNeutral(t *testing.T) {
 	forbidden := []string{
 		"cobra", "command", "renderer", "writer", "stdout", "stderr",
 	}
-
-	typesToCheck := []struct {
-		name string
-		val  any
-	}{
-		{"OperationWarning", engine.OperationWarning{}},
-		{"BatchSummary", engine.BatchSummary{}},
-		{"SnapshotQuery", engine.SnapshotQuery{}},
-		{"StoreRequest", engine.StoreRequest{}},
-		{"StoreResult", engine.StoreResult{}},
-		{"RestoreRequest", engine.RestoreRequest{}},
-		{"RestoreItemResult", engine.RestoreItemResult{}},
-		{"RestoreResult", engine.RestoreResult{}},
-		{"RemoveRequest", engine.RemoveRequest{}},
-		{"RemoveItemResult", engine.RemoveItemResult{}},
-		{"RemoveResult", engine.RemoveResult{}},
-		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
-		{"GarbageCollectResult", engine.GarbageCollectResult{}},
-		{"SnapshotMeta", engine.SnapshotMeta{}},
-		{"SnapshotCreateRequest", engine.SnapshotCreateRequest{}},
-		{"SnapshotCreateResult", engine.SnapshotCreateResult{}},
-		{"SnapshotDeleteParent", engine.SnapshotDeleteParent{}},
-		{"SnapshotDeletePreviewResult", engine.SnapshotDeletePreviewResult{}},
-		{"SnapshotListRequest", engine.SnapshotListRequest{}},
-		{"SnapshotListResult", engine.SnapshotListResult{}},
-		{"SnapshotFile", engine.SnapshotFile{}},
-		{"SnapshotShowRequest", engine.SnapshotShowRequest{}},
-		{"SnapshotShowResult", engine.SnapshotShowResult{}},
-		{"SnapshotStatsRequest", engine.SnapshotStatsRequest{}},
-		{"SnapshotStatsResult", engine.SnapshotStatsResult{}},
-		{"SnapshotDiffEntry", engine.SnapshotDiffEntry{}},
-		{"SnapshotDiffRequest", engine.SnapshotDiffRequest{}},
-		{"SnapshotDiffSummary", engine.SnapshotDiffSummary{}},
-		{"SnapshotDiffResult", engine.SnapshotDiffResult{}},
-		{"SnapshotRestoreSelection", engine.SnapshotRestoreSelection{}},
-		{"SnapshotRestoreDestination", engine.SnapshotRestoreDestination{}},
-		{"SnapshotRestoreWarning", engine.SnapshotRestoreWarning{}},
-		{"SnapshotRestoreRequest", engine.SnapshotRestoreRequest{}},
-		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
-		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
-		{"SnapshotDeleteResult", engine.SnapshotDeleteResult{}},
-		{"RepairRequest", engine.RepairRequest{}},
-		{"RepairTargetResult", engine.RepairTargetResult{}},
-		{"RepairResult", engine.RepairResult{}},
-		{"RecoverRequest", engine.RecoverRequest{}},
-		{"RecoverResult", engine.RecoverResult{}},
-	}
-
-	for _, tc := range typesToCheck {
+	for _, tc := range allCandidateTypes() {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := reflect.TypeOf(tc.val)
 			for i := 0; i < rt.NumField(); i++ {

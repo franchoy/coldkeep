@@ -175,81 +175,9 @@ func TestSnapshotMutationPointerAndSliceShapes(t *testing.T) {
 }
 
 func TestSnapshotMutationRepresentability(t *testing.T) {
-	createFull := engine.SnapshotCreateRequest{}
-	createPartial := engine.SnapshotCreateRequest{Paths: []string{"docs/a.txt"}}
-	if len(createFull.Paths) != 0 || len(createPartial.Paths) != 1 {
-		t.Fatal("snapshot create request shape no longer represents full and partial snapshots")
-	}
-	createResult := engine.SnapshotCreateResult{
-		SnapshotID:    "snap-abc",
-		Type:          engine.SnapshotTypePartial,
-		PathsCount:    1,
-		FilesInserted: 3,
-		Label:         "label",
-		ParentID:      "parent",
-	}
-	if createResult.SnapshotID == "" || createResult.Type == "" {
-		t.Fatal("snapshot create result shape not representable")
-	}
-
-	preview := engine.SnapshotDeleteResult{
-		SnapshotID: "s1",
-		Mode:       engine.SnapshotDeleteModePreview,
-		Preview: &engine.SnapshotDeletePreviewResult{
-			Parent:      engine.SnapshotDeleteParent{ID: "p0", State: engine.SnapshotDeleteParentPresent},
-			Children:    []string{"c1"},
-			TotalFiles:  5,
-			UniqueFiles: 2,
-			SharedFiles: 3,
-		},
-	}
-	execute := engine.SnapshotDeleteResult{
-		SnapshotID: "s1",
-		Mode:       engine.SnapshotDeleteModeExecute,
-		Deleted:    true,
-	}
-	if preview.Preview == nil || execute.Preview != nil || !execute.Deleted {
-		t.Fatal("snapshot delete result shape not representable")
-	}
-
-	after := time.Unix(0, 0)
-	before := time.Unix(100, 0)
-	restoreReq := engine.SnapshotRestoreRequest{
-		SnapshotID: "s1",
-		Paths:      []string{"docs/a.txt"},
-		Selection: engine.SnapshotRestoreSelection{
-			ExactPaths:     []string{"docs/a.txt", "docs/a.txt"},
-			Prefixes:       []string{"docs/", "docs/sub/"},
-			Pattern:        "*.txt",
-			Regex:          "^docs/",
-			MinSize:        int64Ptr(1),
-			MaxSize:        int64Ptr(10),
-			ModifiedAfter:  &after,
-			ModifiedBefore: &before,
-		},
-		Destination: engine.SnapshotRestoreDestination{
-			Mode: engine.SnapshotRestoreDestinationOriginal,
-			Path: "/tmp/out",
-		},
-		Metadata: engine.SnapshotRestoreMetadataBestEffort,
-	}
-	if len(restoreReq.Selection.ExactPaths) != 2 || len(restoreReq.Selection.Prefixes) != 2 {
-		t.Fatal("snapshot restore request no longer preserves repeated selectors")
-	}
-	restoreResult := engine.SnapshotRestoreResult{
-		SnapshotID:          "s1",
-		DestinationMode:     engine.SnapshotRestoreDestinationOverride,
-		RequestedPathsCount: 1,
-		RestoredFiles:       1,
-		OutputTarget:        "/tmp/out.txt",
-		OutputPaths:         []string{"/tmp/out.txt"},
-		Warnings: []engine.SnapshotRestoreWarning{
-			{Code: engine.SnapshotRestoreWarningMetadata, Path: "/tmp/out.txt", Operation: "chmod", Detail: "failed"},
-		},
-	}
-	if restoreResult.DestinationMode == "" || len(restoreResult.OutputPaths) != 1 {
-		t.Fatal("snapshot restore result shape not representable")
-	}
+	assertSnapshotCreateRepresentability(t)
+	assertSnapshotDeleteRepresentability(t)
+	assertSnapshotRestoreRepresentability(t)
 }
 
 func TestSnapshotMutationContractsDoNotExposeImplementationDependencies(t *testing.T) {
@@ -295,6 +223,96 @@ func TestDefaultEngineDoesNotConsumeSnapshotMutationRequestTypes(t *testing.T) {
 				t.Fatalf("DefaultEngine method %s unexpectedly consumes snapshot mutation request type %v", method.Name, arg)
 			}
 		}
+	}
+}
+
+func assertSnapshotCreateRepresentability(t *testing.T) {
+	t.Helper()
+
+	createFull := engine.SnapshotCreateRequest{}
+	createPartial := engine.SnapshotCreateRequest{Paths: []string{"docs/a.txt"}}
+	if len(createFull.Paths) != 0 || len(createPartial.Paths) != 1 {
+		t.Fatal("snapshot create request shape no longer represents full and partial snapshots")
+	}
+
+	createResult := engine.SnapshotCreateResult{
+		SnapshotID:    "snap-abc",
+		Type:          engine.SnapshotTypePartial,
+		PathsCount:    1,
+		FilesInserted: 3,
+		Label:         "label",
+		ParentID:      "parent",
+	}
+	if createResult.SnapshotID == "" || createResult.Type == "" {
+		t.Fatal("snapshot create result shape not representable")
+	}
+}
+
+func assertSnapshotDeleteRepresentability(t *testing.T) {
+	t.Helper()
+
+	preview := engine.SnapshotDeleteResult{
+		SnapshotID: "s1",
+		Mode:       engine.SnapshotDeleteModePreview,
+		Preview: &engine.SnapshotDeletePreviewResult{
+			Parent:      engine.SnapshotDeleteParent{ID: "p0", State: engine.SnapshotDeleteParentPresent},
+			Children:    []string{"c1"},
+			TotalFiles:  5,
+			UniqueFiles: 2,
+			SharedFiles: 3,
+		},
+	}
+	execute := engine.SnapshotDeleteResult{
+		SnapshotID: "s1",
+		Mode:       engine.SnapshotDeleteModeExecute,
+		Deleted:    true,
+	}
+	if preview.Preview == nil || execute.Preview != nil || !execute.Deleted {
+		t.Fatal("snapshot delete result shape not representable")
+	}
+}
+
+func assertSnapshotRestoreRepresentability(t *testing.T) {
+	t.Helper()
+
+	after := time.Unix(0, 0)
+	before := time.Unix(100, 0)
+	restoreReq := engine.SnapshotRestoreRequest{
+		SnapshotID: "s1",
+		Paths:      []string{"docs/a.txt"},
+		Selection: engine.SnapshotRestoreSelection{
+			ExactPaths:     []string{"docs/a.txt", "docs/a.txt"},
+			Prefixes:       []string{"docs/", "docs/sub/"},
+			Pattern:        "*.txt",
+			Regex:          "^docs/",
+			MinSize:        int64Ptr(1),
+			MaxSize:        int64Ptr(10),
+			ModifiedAfter:  &after,
+			ModifiedBefore: &before,
+		},
+		Destination: engine.SnapshotRestoreDestination{
+			Mode: engine.SnapshotRestoreDestinationOriginal,
+			Path: "/tmp/out",
+		},
+		Metadata: engine.SnapshotRestoreMetadataBestEffort,
+	}
+	if len(restoreReq.Selection.ExactPaths) != 2 || len(restoreReq.Selection.Prefixes) != 2 {
+		t.Fatal("snapshot restore request no longer preserves repeated selectors")
+	}
+
+	restoreResult := engine.SnapshotRestoreResult{
+		SnapshotID:          "s1",
+		DestinationMode:     engine.SnapshotRestoreDestinationOverride,
+		RequestedPathsCount: 1,
+		RestoredFiles:       1,
+		OutputTarget:        "/tmp/out.txt",
+		OutputPaths:         []string{"/tmp/out.txt"},
+		Warnings: []engine.SnapshotRestoreWarning{
+			{Code: engine.SnapshotRestoreWarningMetadata, Path: "/tmp/out.txt", Operation: "chmod", Detail: "failed"},
+		},
+	}
+	if restoreResult.DestinationMode == "" || len(restoreResult.OutputPaths) != 1 {
+		t.Fatal("snapshot restore result shape not representable")
 	}
 }
 

@@ -14,6 +14,20 @@ func allCandidateTypes() []struct {
 	name string
 	val  any
 } {
+	types := append([]struct {
+		name string
+		val  any
+	}{},
+		coreCandidateTypes()...,
+	)
+	types = append(types, snapshotMutationCandidateTypes()...)
+	return append(types, correctiveCandidateTypes()...)
+}
+
+func coreCandidateTypes() []struct {
+	name string
+	val  any
+} {
 	return []struct {
 		name string
 		val  any
@@ -37,10 +51,6 @@ func allCandidateTypes() []struct {
 		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
 		{"GarbageCollectResult", engine.GarbageCollectResult{}},
 		{"SnapshotMeta", engine.SnapshotMeta{}},
-		{"SnapshotCreateRequest", engine.SnapshotCreateRequest{}},
-		{"SnapshotCreateResult", engine.SnapshotCreateResult{}},
-		{"SnapshotDeleteParent", engine.SnapshotDeleteParent{}},
-		{"SnapshotDeletePreviewResult", engine.SnapshotDeletePreviewResult{}},
 		{"SnapshotListRequest", engine.SnapshotListRequest{}},
 		{"SnapshotListResult", engine.SnapshotListResult{}},
 		{"SnapshotFile", engine.SnapshotFile{}},
@@ -52,6 +62,21 @@ func allCandidateTypes() []struct {
 		{"SnapshotDiffRequest", engine.SnapshotDiffRequest{}},
 		{"SnapshotDiffSummary", engine.SnapshotDiffSummary{}},
 		{"SnapshotDiffResult", engine.SnapshotDiffResult{}},
+	}
+}
+
+func snapshotMutationCandidateTypes() []struct {
+	name string
+	val  any
+} {
+	return []struct {
+		name string
+		val  any
+	}{
+		{"SnapshotCreateRequest", engine.SnapshotCreateRequest{}},
+		{"SnapshotCreateResult", engine.SnapshotCreateResult{}},
+		{"SnapshotDeleteParent", engine.SnapshotDeleteParent{}},
+		{"SnapshotDeletePreviewResult", engine.SnapshotDeletePreviewResult{}},
 		{"SnapshotRestoreSelection", engine.SnapshotRestoreSelection{}},
 		{"SnapshotRestoreDestination", engine.SnapshotRestoreDestination{}},
 		{"SnapshotRestoreWarning", engine.SnapshotRestoreWarning{}},
@@ -59,6 +84,17 @@ func allCandidateTypes() []struct {
 		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
 		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
 		{"SnapshotDeleteResult", engine.SnapshotDeleteResult{}},
+	}
+}
+
+func correctiveCandidateTypes() []struct {
+	name string
+	val  any
+} {
+	return []struct {
+		name string
+		val  any
+	}{
 		{"RepairRequest", engine.RepairRequest{}},
 		{"RepairTargetResult", engine.RepairTargetResult{}},
 		{"RepairResult", engine.RepairResult{}},
