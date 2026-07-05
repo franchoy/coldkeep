@@ -204,6 +204,17 @@ type SnapshotCreateOptions struct {
 	Paths    []string
 }
 
+// CreateSnapshotResult reports the committed outcome of an atomic snapshot
+// creation mutation.
+type CreateSnapshotResult struct {
+	SnapshotID    string
+	Type          string
+	PathsCount    int
+	FilesInserted int
+	Label         string
+	ParentID      string
+}
+
 // Match reports whether entry e satisfies all criteria in q.
 // A nil query always returns true.
 func (q *SnapshotQuery) Match(e SnapshotFileEntry) bool {
@@ -1360,203 +1371,361 @@ func RestoreSnapshot(
 // CreateSnapshotWithOptions creates an atomic point-in-time snapshot from current physical_file rows.
 // When opts.Paths is nil or empty, all physical_file rows are copied into the snapshot.
 // When opts.Paths is non-empty, rows are filtered by exact paths and directory prefixes ending with '/'.
-func CreateSnapshotWithOptions(
+func CreateSnapshotWithOptionsResult(
 	ctx context.Context,
 	dbconn *sql.DB,
 	opts SnapshotCreateOptions,
-) error {
-	snapshotID := opts.ID
-	snapshotType := opts.Type
-	label := opts.Label
-	parentID := opts.ParentID
-	paths := opts.Paths
-
-	if dbconn == nil {
-		return errors.New("snapshot db cannot be nil")
-	}
-	if snapshotID == "" {
-		return errors.New("snapshot id cannot be empty")
-	}
-	if snapshotType != "full" && snapshotType != "partial" {
-		return fmt.Errorf("snapshot type must be 'full' or 'partial', got %q", snapshotType)
-	}
-
-	hasPaths := len(paths) > 0
-	if hasPaths && snapshotType != "partial" {
-		return fmt.Errorf("snapshot type must be 'partial' when paths are provided, got %q", snapshotType)
-	}
-	if !hasPaths && snapshotType != "full" {
-		return fmt.Errorf("snapshot type must be 'full' when no paths are provided, got %q", snapshotType)
+) (CreateSnapshotResult, error) {
+	req, err := prepareSnapshotCreateOptionsResult(dbconn, opts)
+	if err != nil {
+		return CreateSnapshotResult{}, err
 	}
 
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin snapshot transaction: %w", err)
+		return CreateSnapshotResult{}, fmt.Errorf("begin snapshot transaction: %w", err)
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
 
+	result, err := createSnapshotWithOptionsInTx(ctx, tx, dbconn, req)
+	if err != nil {
+		return CreateSnapshotResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CreateSnapshotResult{}, fmt.Errorf("commit snapshot transaction: %w", err)
+	}
+	logSnapshotCreateResult(result)
+	return result, nil
+}
+
+func createSnapshotWithOptionsInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	dbconn *sql.DB,
+	req snapshotCreateRequest,
+) (CreateSnapshotResult, error) {
+	snapshotRow, err := buildSnapshotCreateRow(ctx, tx, req)
+	if err != nil {
+		return CreateSnapshotResult{}, err
+	}
+	if err := insertSnapshot(ctx, tx, snapshotRow); err != nil {
+		return CreateSnapshotResult{}, err
+	}
+
+	insertRows, insertPaths, err := buildSnapshotCreateInsertRows(ctx, tx, dbconn, req)
+	if err != nil {
+		return CreateSnapshotResult{}, err
+	}
+	if err := insertSnapshotFilesByPathIDNoReturningBatch(ctx, tx, insertRows, insertPaths); err != nil {
+		return CreateSnapshotResult{}, err
+	}
+	return buildSnapshotCreateResult(req, len(insertRows)), nil
+}
+
+type snapshotCreateRequest struct {
+	snapshotID   string
+	snapshotType string
+	label        *string
+	parentID     *string
+	paths        []string
+	hasPaths     bool
+}
+
+type snapshotCreateFilters struct {
+	exactFilters []string
+	dirPrefixes  []string
+	exactSet     map[string]struct{}
+}
+
+type pendingSnapshotFile struct {
+	normalizedPath string
+	logicalFileID  int64
+	totalSize      int64
+	mode           sql.NullInt64
+	mtime          sql.NullTime
+}
+
+func prepareSnapshotCreateOptionsResult(dbconn *sql.DB, opts SnapshotCreateOptions) (snapshotCreateRequest, error) {
+	req := snapshotCreateRequest{
+		snapshotID:   opts.ID,
+		snapshotType: opts.Type,
+		label:        opts.Label,
+		parentID:     opts.ParentID,
+		paths:        opts.Paths,
+		hasPaths:     len(opts.Paths) > 0,
+	}
+	if dbconn == nil {
+		return snapshotCreateRequest{}, errors.New("snapshot db cannot be nil")
+	}
+	if req.snapshotID == "" {
+		return snapshotCreateRequest{}, errors.New("snapshot id cannot be empty")
+	}
+	if err := validateSnapshotCreateTypeRequest(req); err != nil {
+		return snapshotCreateRequest{}, err
+	}
+	return req, nil
+}
+
+func validateSnapshotCreateTypeRequest(req snapshotCreateRequest) error {
+	if req.snapshotType != "full" && req.snapshotType != "partial" {
+		return fmt.Errorf("snapshot type must be 'full' or 'partial', got %q", req.snapshotType)
+	}
+	if req.hasPaths && req.snapshotType != "partial" {
+		return fmt.Errorf("snapshot type must be 'partial' when paths are provided, got %q", req.snapshotType)
+	}
+	if !req.hasPaths && req.snapshotType != "full" {
+		return fmt.Errorf("snapshot type must be 'full' when no paths are provided, got %q", req.snapshotType)
+	}
+	return nil
+}
+
+func buildSnapshotCreateRow(ctx context.Context, tx *sql.Tx, req snapshotCreateRequest) (Snapshot, error) {
 	s := Snapshot{
-		ID:        snapshotID,
+		ID:        req.snapshotID,
 		CreatedAt: time.Now().UTC(),
-		Type:      snapshotType,
+		Type:      req.snapshotType,
 	}
-	if label != nil {
-		s.Label = sql.NullString{String: *label, Valid: true}
+	if req.label != nil {
+		s.Label = sql.NullString{String: *req.label, Valid: true}
 	}
-	if parentID != nil && strings.TrimSpace(*parentID) != "" {
-		trimmedParentID := strings.TrimSpace(*parentID)
-		if trimmedParentID == snapshotID {
-			return fmt.Errorf("parent snapshot %q cannot reference itself", trimmedParentID)
-		}
-		if hasCycle, err := snapshotAncestorCycleExists(ctx, tx, trimmedParentID, snapshotID, 100); err != nil {
-			return fmt.Errorf("validate snapshot parent ancestry for %q: %w", trimmedParentID, err)
-		} else if hasCycle {
-			return fmt.Errorf("parent snapshot %q has a cyclic ancestry; cannot create snapshot with cyclic lineage", trimmedParentID)
-		}
-		if snapshotType != "full" {
-			return errors.New("--from is currently supported only for full snapshots")
-		}
-
-		var parentType string
-		err := tx.QueryRowContext(ctx, `SELECT type FROM snapshot WHERE id = $1`, trimmedParentID).Scan(&parentType)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("parent snapshot %q not found", trimmedParentID)
-			}
-			return fmt.Errorf("validate parent snapshot %q: %w", trimmedParentID, err)
-		}
-		if parentType != "full" {
-			return fmt.Errorf("parent snapshot %q is partial; --from is currently supported only for full snapshots", trimmedParentID)
-		}
-
-		s.ParentID = sql.NullString{String: trimmedParentID, Valid: true}
+	if err := setSnapshotCreateParent(ctx, tx, req, &s); err != nil {
+		return Snapshot{}, err
 	}
+	return s, nil
+}
 
-	if err := insertSnapshot(ctx, tx, s); err != nil {
+func setSnapshotCreateParent(ctx context.Context, tx *sql.Tx, req snapshotCreateRequest, s *Snapshot) error {
+	trimmedParentID, ok := snapshotCreateParentID(req.parentID)
+	if !ok {
+		return nil
+	}
+	if trimmedParentID == req.snapshotID {
+		return fmt.Errorf("parent snapshot %q cannot reference itself", trimmedParentID)
+	}
+	if err := validateSnapshotCreateParentType(req.snapshotType); err != nil {
 		return err
 	}
+	if err := validateSnapshotCreateParentAncestry(ctx, tx, trimmedParentID, req.snapshotID); err != nil {
+		return err
+	}
+	parentType, err := lookupSnapshotCreateParentType(ctx, tx, trimmedParentID)
+	if err != nil {
+		return err
+	}
+	if parentType != "full" {
+		return fmt.Errorf("parent snapshot %q is partial; --from is currently supported only for full snapshots", trimmedParentID)
+	}
+	s.ParentID = sql.NullString{String: trimmedParentID, Valid: true}
+	return nil
+}
 
-	var (
-		exactFilters   []string
-		dirPrefixes    []string
-		exactFilterSet = make(map[string]struct{})
-	)
+func snapshotCreateParentID(parentID *string) (string, bool) {
+	if parentID == nil {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(*parentID)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
+}
 
-	if hasPaths {
-		seenInput := make(map[string]struct{})
-		for _, rawPath := range paths {
-			normalizedPath, normErr := NormalizeSnapshotPath(rawPath)
-			if normErr != nil {
-				return fmt.Errorf("normalize input path %q: %w", rawPath, normErr)
-			}
-			if _, exists := seenInput[normalizedPath]; exists {
-				continue
-			}
-			seenInput[normalizedPath] = struct{}{}
+func validateSnapshotCreateParentType(snapshotType string) error {
+	if snapshotType != "full" {
+		return errors.New("--from is currently supported only for full snapshots")
+	}
+	return nil
+}
 
-			if strings.HasSuffix(normalizedPath, "/") {
-				dirPrefixes = append(dirPrefixes, normalizedPath)
-				continue
-			}
+func validateSnapshotCreateParentAncestry(
+	ctx context.Context,
+	tx *sql.Tx,
+	parentID string,
+	snapshotID string,
+) error {
+	hasCycle, err := snapshotAncestorCycleExists(ctx, tx, parentID, snapshotID, 100)
+	if err != nil {
+		return fmt.Errorf("validate snapshot parent ancestry for %q: %w", parentID, err)
+	}
+	if hasCycle {
+		return fmt.Errorf("parent snapshot %q has a cyclic ancestry; cannot create snapshot with cyclic lineage", parentID)
+	}
+	return nil
+}
 
-			exactFilters = append(exactFilters, normalizedPath)
-			exactFilterSet[normalizedPath] = struct{}{}
-		}
+func lookupSnapshotCreateParentType(ctx context.Context, tx *sql.Tx, parentID string) (string, error) {
+	var parentType string
+	err := tx.QueryRowContext(ctx, `SELECT type FROM snapshot WHERE id = $1`, parentID).Scan(&parentType)
+	if err == nil {
+		return parentType, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("parent snapshot %q not found", parentID)
+	}
+	return "", fmt.Errorf("validate parent snapshot %q: %w", parentID, err)
+}
 
-		sort.Strings(exactFilters)
-		sort.Strings(dirPrefixes)
+func buildSnapshotCreateInsertRows(
+	ctx context.Context,
+	tx *sql.Tx,
+	dbconn *sql.DB,
+	req snapshotCreateRequest,
+) ([]snapshotFileDBRow, []string, error) {
+	filters, err := buildSnapshotCreateFilters(req.paths, req.hasPaths)
+	if err != nil {
+		return nil, nil, err
+	}
+	pending, err := collectPendingSnapshotCreateFiles(ctx, tx, dbconn, filters)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resolveSnapshotCreateInsertRows(ctx, tx, req.snapshotID, pending)
+}
 
-		if len(exactFilters) == 0 && len(dirPrefixes) == 0 {
-			return errors.New("partial snapshot requires at least one valid path filter")
-		}
+func buildSnapshotCreateFilters(paths []string, hasPaths bool) (snapshotCreateFilters, error) {
+	filters := snapshotCreateFilters{exactSet: make(map[string]struct{})}
+	if !hasPaths {
+		return filters, nil
 	}
 
+	seenInput := make(map[string]struct{})
+	for _, rawPath := range paths {
+		normalizedPath, err := NormalizeSnapshotPath(rawPath)
+		if err != nil {
+			return snapshotCreateFilters{}, fmt.Errorf("normalize input path %q: %w", rawPath, err)
+		}
+		if _, exists := seenInput[normalizedPath]; exists {
+			continue
+		}
+		seenInput[normalizedPath] = struct{}{}
+		if strings.HasSuffix(normalizedPath, "/") {
+			filters.dirPrefixes = append(filters.dirPrefixes, normalizedPath)
+			continue
+		}
+		filters.exactFilters = append(filters.exactFilters, normalizedPath)
+		filters.exactSet[normalizedPath] = struct{}{}
+	}
+
+	sort.Strings(filters.exactFilters)
+	sort.Strings(filters.dirPrefixes)
+	if len(filters.exactFilters) == 0 && len(filters.dirPrefixes) == 0 {
+		return snapshotCreateFilters{}, errors.New("partial snapshot requires at least one valid path filter")
+	}
+	return filters, nil
+}
+
+func collectPendingSnapshotCreateFiles(
+	ctx context.Context,
+	tx *sql.Tx,
+	dbconn *sql.DB,
+	filters snapshotCreateFilters,
+) ([]pendingSnapshotFile, error) {
 	rows, err := tx.QueryContext(ctx, snapshotSourceQuery(dbconn))
 	if err != nil {
-		return fmt.Errorf("query snapshot source rows: %w", err)
+		return nil, fmt.Errorf("query snapshot source rows: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	seenSnapshotPaths := make(map[string]struct{})
 	foundExact := make(map[string]struct{})
-
-	type pendingSnapshotFile struct {
-		normalizedPath string
-		logicalFileID  int64
-		totalSize      int64
-		mode           sql.NullInt64
-		mtime          sql.NullTime
-	}
+	seenPaths := make(map[string]struct{})
 	pending := make([]pendingSnapshotFile, 0, 128)
-
 	for rows.Next() {
-		var (
-			path          string
-			logicalFileID int64
-			totalSize     int64
-			mode          sql.NullInt64
-			mtime         sql.NullTime
-		)
-		if err := rows.Scan(&path, &logicalFileID, &totalSize, &mode, &mtime); err != nil {
-			return fmt.Errorf("scan snapshot source row: %w", err)
-		}
-
-		normalizedPath, err := normalizeSourcePathForSnapshot(path)
+		entry, matched, err := scanPendingSnapshotCreateFile(rows, filters, foundExact)
 		if err != nil {
-			return fmt.Errorf("normalize source physical_file path %q: %w", path, err)
+			return nil, err
 		}
-
-		if hasPaths {
-			matched := false
-			if _, isExact := exactFilterSet[normalizedPath]; isExact {
-				foundExact[normalizedPath] = struct{}{}
-				matched = true
-			}
-			if !matched {
-				for _, prefix := range dirPrefixes {
-					if strings.HasPrefix(normalizedPath, prefix) {
-						matched = true
-						break
-					}
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
-
-		if _, duplicate := seenSnapshotPaths[normalizedPath]; duplicate {
+		if !matched {
 			continue
 		}
-		seenSnapshotPaths[normalizedPath] = struct{}{}
-		pending = append(pending, pendingSnapshotFile{
-			normalizedPath: normalizedPath,
-			logicalFileID:  logicalFileID,
-			totalSize:      totalSize,
-			mode:           mode,
-			mtime:          mtime,
-		})
+		if _, duplicate := seenPaths[entry.normalizedPath]; duplicate {
+			continue
+		}
+		seenPaths[entry.normalizedPath] = struct{}{}
+		pending = append(pending, entry)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate snapshot source rows: %w", err)
+		return nil, fmt.Errorf("iterate snapshot source rows: %w", err)
+	}
+	if err := validateSnapshotCreateExactMatches(filters.exactFilters, foundExact); err != nil {
+		return nil, err
+	}
+	return pending, nil
+}
+
+func scanPendingSnapshotCreateFile(
+	rows *sql.Rows,
+	filters snapshotCreateFilters,
+	foundExact map[string]struct{},
+) (pendingSnapshotFile, bool, error) {
+	var (
+		path          string
+		logicalFileID int64
+		totalSize     int64
+		mode          sql.NullInt64
+		mtime         sql.NullTime
+	)
+	if err := rows.Scan(&path, &logicalFileID, &totalSize, &mode, &mtime); err != nil {
+		return pendingSnapshotFile{}, false, fmt.Errorf("scan snapshot source row: %w", err)
 	}
 
+	normalizedPath, err := normalizeSourcePathForSnapshot(path)
+	if err != nil {
+		return pendingSnapshotFile{}, false, fmt.Errorf("normalize source physical_file path %q: %w", path, err)
+	}
+	matched := snapshotCreatePathMatches(normalizedPath, filters, foundExact)
+	return pendingSnapshotFile{
+		normalizedPath: normalizedPath,
+		logicalFileID:  logicalFileID,
+		totalSize:      totalSize,
+		mode:           mode,
+		mtime:          mtime,
+	}, matched, nil
+}
+
+func snapshotCreatePathMatches(
+	normalizedPath string,
+	filters snapshotCreateFilters,
+	foundExact map[string]struct{},
+) bool {
+	if len(filters.exactFilters) == 0 && len(filters.dirPrefixes) == 0 {
+		return true
+	}
+	if _, isExact := filters.exactSet[normalizedPath]; isExact {
+		foundExact[normalizedPath] = struct{}{}
+		return true
+	}
+	for _, prefix := range filters.dirPrefixes {
+		if strings.HasPrefix(normalizedPath, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateSnapshotCreateExactMatches(exactFilters []string, foundExact map[string]struct{}) error {
 	for _, exactPath := range exactFilters {
 		if _, ok := foundExact[exactPath]; !ok {
 			return fmt.Errorf("path not found in current state: %s", exactPath)
 		}
 	}
+	return nil
+}
 
-	// Batch-resolve all unique snapshot paths to their snapshot_path IDs.
+func resolveSnapshotCreateInsertRows(
+	ctx context.Context,
+	tx *sql.Tx,
+	snapshotID string,
+	pending []pendingSnapshotFile,
+) ([]snapshotFileDBRow, []string, error) {
 	allPaths := make([]string, 0, len(pending))
 	for _, entry := range pending {
 		allPaths = append(allPaths, entry.normalizedPath)
 	}
 	pathIDs, err := ResolveSnapshotPaths(ctx, tx, allPaths)
 	if err != nil {
-		return fmt.Errorf("resolve snapshot_path ids for snapshot %s: %w", snapshotID, err)
+		return nil, nil, fmt.Errorf("resolve snapshot_path ids for snapshot %s: %w", snapshotID, err)
 	}
 
 	insertRows := make([]snapshotFileDBRow, 0, len(pending))
@@ -1564,7 +1733,7 @@ func CreateSnapshotWithOptions(
 	for _, entry := range pending {
 		pathID, ok := pathIDs[entry.normalizedPath]
 		if !ok {
-			return fmt.Errorf("no path_id resolved for %q in snapshot %s", entry.normalizedPath, snapshotID)
+			return nil, nil, fmt.Errorf("no path_id resolved for %q in snapshot %s", entry.normalizedPath, snapshotID)
 		}
 		insertRows = append(insertRows, snapshotFileDBRow{
 			SnapshotID:    snapshotID,
@@ -1576,24 +1745,40 @@ func CreateSnapshotWithOptions(
 		})
 		insertPaths = append(insertPaths, entry.normalizedPath)
 	}
+	return insertRows, insertPaths, nil
+}
 
-	if err := insertSnapshotFilesByPathIDNoReturningBatch(ctx, tx, insertRows, insertPaths); err != nil {
-		return err
+func buildSnapshotCreateResult(req snapshotCreateRequest, insertedCount int) CreateSnapshotResult {
+	result := CreateSnapshotResult{
+		SnapshotID:    req.snapshotID,
+		Type:          req.snapshotType,
+		PathsCount:    len(req.paths),
+		FilesInserted: insertedCount,
 	}
-
-	insertedCount := len(insertRows)
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit snapshot transaction: %w", err)
+	if req.label != nil {
+		result.Label = strings.TrimSpace(*req.label)
 	}
-
-	if insertedCount == 0 {
-		log.Printf("snapshot: created id=%s type=%s files=0 (empty snapshot)", snapshotID, snapshotType)
-		return nil
+	if req.parentID != nil {
+		result.ParentID = strings.TrimSpace(*req.parentID)
 	}
+	return result
+}
 
-	log.Printf("snapshot: created id=%s type=%s files=%d", snapshotID, snapshotType, insertedCount)
-	return nil
+func logSnapshotCreateResult(result CreateSnapshotResult) {
+	if result.FilesInserted == 0 {
+		log.Printf("snapshot: created id=%s type=%s files=0 (empty snapshot)", result.SnapshotID, result.Type)
+		return
+	}
+	log.Printf("snapshot: created id=%s type=%s files=%d", result.SnapshotID, result.Type, result.FilesInserted)
+}
+
+func CreateSnapshotWithOptions(
+	ctx context.Context,
+	dbconn *sql.DB,
+	opts SnapshotCreateOptions,
+) error {
+	_, err := CreateSnapshotWithOptionsResult(ctx, dbconn, opts)
+	return err
 }
 
 // CreateSnapshot is a compatibility wrapper for callers that still use positional arguments.

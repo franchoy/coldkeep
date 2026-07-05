@@ -419,13 +419,8 @@ type SnapshotMeta struct {
 	FileCount int
 }
 
-// SnapshotCreateRequest is a frozen v1.13.9 candidate request for a future
-// SnapshotCreate operation. Not part of the active Engine interface.
-//
-// Structural surface is approved in v1.13.9 Phase 5, but request/result
-// presence still does not mean active engine ownership. Activation belongs to
-// later authorized phases; current CLI and snapshot-domain execution remain
-// unchanged.
+// SnapshotCreateRequest is the frozen active v1.13.9 Engine snapshot-create
+// request surface.
 //
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics.
@@ -440,13 +435,8 @@ type SnapshotCreateRequest struct {
 	Paths []string
 }
 
-// SnapshotCreateResult is a frozen v1.13.9 candidate result for a future
-// SnapshotCreate operation. Not part of the active Engine interface.
-//
-// Structural surface is approved in v1.13.9 Phase 5, but request/result
-// presence still does not mean active engine ownership. Activation belongs to
-// later authorized phases; current CLI and snapshot-domain execution remain
-// unchanged.
+// SnapshotCreateResult is the frozen active v1.13.9 Engine snapshot-create
+// result surface.
 type SnapshotCreateResult struct {
 	SnapshotID    string
 	Type          SnapshotType

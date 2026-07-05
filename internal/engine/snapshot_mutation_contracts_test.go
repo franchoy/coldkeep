@@ -211,14 +211,13 @@ func TestSnapshotMutationContractsDoNotExposeImplementationDependencies(t *testi
 	}
 }
 
-func TestDefaultEngineDoesNotConsumeSnapshotMutationRequestTypes(t *testing.T) {
+func TestDefaultEngineDoesNotConsumeInactiveSnapshotMutationRequestTypes(t *testing.T) {
 	defaultEngine := reflect.TypeOf((*engine.DefaultEngine)(nil))
 	for i := 0; i < defaultEngine.NumMethod(); i++ {
 		method := defaultEngine.Method(i)
 		for j := 0; j < method.Type.NumIn(); j++ {
 			arg := method.Type.In(j)
-			if arg == reflect.TypeOf(engine.SnapshotCreateRequest{}) ||
-				arg == reflect.TypeOf(engine.SnapshotDeleteRequest{}) ||
+			if arg == reflect.TypeOf(engine.SnapshotDeleteRequest{}) ||
 				arg == reflect.TypeOf(engine.SnapshotRestoreRequest{}) {
 				t.Fatalf("DefaultEngine method %s unexpectedly consumes snapshot mutation request type %v", method.Name, arg)
 			}

@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"reflect"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/observability"
@@ -14,6 +16,32 @@ func TestNewRequiresDB(t *testing.T) {
 	_, err := New(Config{})
 	if err == nil {
 		t.Fatal("New with nil DB: want error, got nil")
+	}
+}
+
+func TestEngineSnapshotCreateSignature(t *testing.T) {
+	typ := reflect.TypeOf((*Engine)(nil)).Elem()
+	method, ok := typ.MethodByName("SnapshotCreate")
+	if !ok {
+		t.Fatal("Engine must expose SnapshotCreate")
+	}
+	if method.Type.NumIn() != 2 {
+		t.Fatalf("SnapshotCreate input count: got %d want 2", method.Type.NumIn())
+	}
+	if got := method.Type.In(0); got != reflect.TypeOf((*context.Context)(nil)).Elem() {
+		t.Fatalf("SnapshotCreate ctx type: got %v", got)
+	}
+	if got := method.Type.In(1); got != reflect.TypeOf(SnapshotCreateRequest{}) {
+		t.Fatalf("SnapshotCreate request type: got %v", got)
+	}
+	if method.Type.NumOut() != 2 {
+		t.Fatalf("SnapshotCreate output count: got %d want 2", method.Type.NumOut())
+	}
+	if got := method.Type.Out(0); got != reflect.TypeOf(SnapshotCreateResult{}) {
+		t.Fatalf("SnapshotCreate result type: got %v", got)
+	}
+	if got := method.Type.Out(1); got != reflect.TypeOf((*error)(nil)).Elem() {
+		t.Fatalf("SnapshotCreate error type: got %v", got)
 	}
 }
 
