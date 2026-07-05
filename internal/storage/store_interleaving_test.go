@@ -109,9 +109,14 @@ func openSharedStoreInterleavingDB(t *testing.T) (*sql.DB, *sql.DB) {
 	if err != nil {
 		t.Fatalf("open primary sqlite db: %v", err)
 	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
 	t.Cleanup(func() { _ = dbconn.Close() })
 	if _, err := dbconn.Exec(`PRAGMA journal_mode=WAL`); err != nil {
 		t.Fatalf("enable sqlite wal mode: %v", err)
+	}
+	if err := db.ApplySQLiteSessionPragmas(dbconn); err != nil {
+		t.Fatalf("configure primary sqlite session: %v", err)
 	}
 	if err := db.RunMigrations(dbconn); err != nil {
 		t.Fatalf("run migrations: %v", err)
@@ -120,7 +125,12 @@ func openSharedStoreInterleavingDB(t *testing.T) (*sql.DB, *sql.DB) {
 	if err != nil {
 		t.Fatalf("open observer sqlite db: %v", err)
 	}
+	observer.SetMaxOpenConns(1)
+	observer.SetMaxIdleConns(1)
 	t.Cleanup(func() { _ = observer.Close() })
+	if err := db.ApplySQLiteSessionPragmas(observer); err != nil {
+		t.Fatalf("configure observer sqlite session: %v", err)
+	}
 	return dbconn, observer
 }
 
