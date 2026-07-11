@@ -23,7 +23,7 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "GarbageCollect", "Store", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "GarbageCollect", "Store", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)
@@ -39,11 +39,10 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 	}
 }
 
-// TestEngineActiveInterfaceExcludesCandidateOnlyOperations proves the active
-// Engine interface still excludes future-only snapshot mutation and corrective
-// integrity operations. Their request/result types are intentionally present as
-// candidate contracts, but they are not active engine-owned methods.
-func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
+// TestEngineActiveInterfaceExcludesStillInactiveOperations proves the active
+// Engine interface still excludes future-only snapshot restore and corrective
+// integrity operations.
+func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
 
 	got := make([]string, 0, typ.NumMethod())
@@ -52,7 +51,6 @@ func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"SnapshotDelete",
 		"SnapshotRestore",
 		"Repair",
 		"Recover",
@@ -99,13 +97,6 @@ type candidateOnlyOperationCase struct {
 
 func candidateOnlyOperationCases() []candidateOnlyOperationCase {
 	return []candidateOnlyOperationCase{
-		{
-			name:              "snapshot delete",
-			requestType:       engine.SnapshotDeleteRequest{},
-			resultType:        engine.SnapshotDeleteResult{},
-			forbiddenMethod:   "SnapshotDelete",
-			laterOwnerRelease: "v1.13.9",
-		},
 		{
 			name:              "snapshot restore",
 			requestType:       engine.SnapshotRestoreRequest{},

@@ -757,13 +757,8 @@ type SnapshotDeletePreviewResult struct {
 	SharedFiles int64
 }
 
-// SnapshotDeleteRequest is a frozen v1.13.9 candidate request for a future
-// SnapshotDelete operation. Not part of the active Engine interface.
-//
-// Structural surface is approved in v1.13.9 Phase 5, but request/result
-// presence still does not mean active engine ownership. Activation belongs to
-// later authorized phases; current CLI and snapshot-domain execution remain
-// unchanged.
+// SnapshotDeleteRequest is the frozen v1.13.9 active request for
+// Engine.SnapshotDelete.
 //
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics. Deleting a snapshot removes only its metadata; content
@@ -773,13 +768,8 @@ type SnapshotDeleteRequest struct {
 	Mode       SnapshotDeleteMode
 }
 
-// SnapshotDeleteResult is a frozen v1.13.9 candidate result for a future
-// SnapshotDelete operation. Not part of the active Engine interface.
-//
-// Structural surface is approved in v1.13.9 Phase 5, but request/result
-// presence still does not mean active engine ownership. Activation belongs to
-// later authorized phases; current CLI and snapshot-domain execution remain
-// unchanged.
+// SnapshotDeleteResult is the frozen v1.13.9 active result for
+// Engine.SnapshotDelete.
 type SnapshotDeleteResult struct {
 	SnapshotID string
 	Mode       SnapshotDeleteMode

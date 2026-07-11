@@ -117,3 +117,35 @@ func assertCreateSnapshotResult(
 func sqlNullInt64() sql.NullInt64 { return sql.NullInt64{} }
 
 func sqlNullTime() sql.NullTime { return sql.NullTime{} }
+
+func sqlNullString(v string) sql.NullString { return sql.NullString{String: v, Valid: true} }
+
+func snapshotRowCount(t *testing.T, db *sql.DB, snapshotID string) int {
+	t.Helper()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, snapshotID).Scan(&count); err != nil {
+		t.Fatalf("count snapshot rows %s: %v", snapshotID, err)
+	}
+	return count
+}
+
+func snapshotFileRowCount(t *testing.T, db *sql.DB, snapshotID string) int {
+	t.Helper()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, snapshotID).Scan(&count); err != nil {
+		t.Fatalf("count snapshot_file rows %s: %v", snapshotID, err)
+	}
+	return count
+}
+
+func snapshotParentValue(t *testing.T, db *sql.DB, snapshotID string) sql.NullString {
+	t.Helper()
+
+	var parentID sql.NullString
+	if err := db.QueryRow(`SELECT parent_id FROM snapshot WHERE id = ?`, snapshotID).Scan(&parentID); err != nil {
+		t.Fatalf("query snapshot parent_id %s: %v", snapshotID, err)
+	}
+	return parentID
+}

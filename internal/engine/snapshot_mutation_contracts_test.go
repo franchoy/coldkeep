@@ -217,8 +217,7 @@ func TestDefaultEngineDoesNotConsumeInactiveSnapshotMutationRequestTypes(t *test
 		method := defaultEngine.Method(i)
 		for j := 0; j < method.Type.NumIn(); j++ {
 			arg := method.Type.In(j)
-			if arg == reflect.TypeOf(engine.SnapshotDeleteRequest{}) ||
-				arg == reflect.TypeOf(engine.SnapshotRestoreRequest{}) {
+			if arg == reflect.TypeOf(engine.SnapshotRestoreRequest{}) {
 				t.Fatalf("DefaultEngine method %s unexpectedly consumes snapshot mutation request type %v", method.Name, arg)
 			}
 		}

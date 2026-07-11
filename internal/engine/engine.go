@@ -64,6 +64,11 @@ type Engine interface {
 	// engine, and the underlying mutation must remain atomic.
 	SnapshotCreate(ctx context.Context, req SnapshotCreateRequest) (SnapshotCreateResult, error)
 
+	// SnapshotDelete previews or executes a metadata-only snapshot deletion.
+	// Preview is read-only and DB-only. Execute must be affected-row honest and
+	// must not fabricate preview data.
+	SnapshotDelete(ctx context.Context, req SnapshotDeleteRequest) (SnapshotDeleteResult, error)
+
 	// GarbageCollect runs dry-run or live GC against the repository.
 	// Safety invariant: GC must never delete reachable data.
 	// Live GC is only supported on the PostgreSQL backend; dry-run is supported
