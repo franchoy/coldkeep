@@ -345,10 +345,12 @@ var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 // v1.13.9 Phase 7.
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 
-// Transitional CLI ownership in v1.13.1: snapshot restore remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.9 owns
-// later snapshot mutation boundary cleanup.
+// Transitional direct snapshot-domain restore seam kept for lower-level
+// compatibility tests and non-CLI callers. Production CLI snapshot restore is
+// engine-routed in v1.13.9 Phase 11.
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
+var _ = restoreSnapshotPhase
+var currentWorkingDirectoryPhase = os.Getwd
 var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
@@ -5410,7 +5412,7 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 		return usageErrorf("--destination is required with --mode %s", destinationMode)
 	}
 
-	query, err := parseSnapshotQuery(parsed)
+	selection, err := parseSnapshotRestoreSelection(parsed)
 	if err != nil {
 		return err
 	}
@@ -5428,28 +5430,19 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	result, err := restoreSnapshotPhase(
-		ctx,
-		sgctx.DB,
-		snapshotID,
-		paths,
-		snapshot.RestoreSnapshotOptions{
-			DestinationMode: destinationMode,
-			Destination:     destination,
-			Overwrite:       parsed.hasFlag("overwrite"),
-			StrictMetadata:  strictMetadata,
-			NoMetadata:      noMetadata,
-			StorageContext:  &sgctx,
-			Query:           query,
-		},
-	)
+	req, jsonOutputRoot, err := buildSnapshotRestoreEngineRequest(snapshotID, paths, selection, destinationMode, destination, parsed)
+	if err != nil {
+		return err
+	}
+
+	result, err := runSnapshotRestoreEngine(ctx, sgctx, req)
 	if err != nil {
 		return err
 	}
 
 	durationMS := time.Since(startedAt).Milliseconds()
 	actionType := "full"
-	if len(paths) > 0 {
+	if req.RequestedPathsCount() > 0 {
 		actionType = "partial_restore"
 	}
 
@@ -5458,7 +5451,7 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 			"action":                "restore",
 			"snapshot_id":           snapshotID,
 			"type":                  actionType,
-			"requested_paths_count": len(paths),
+			"requested_paths_count": req.RequestedPathsCount(),
 			"restored_files":        result.RestoredFiles,
 			"duration_ms":           durationMS,
 		}
@@ -5467,8 +5460,8 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 			"command": "snapshot",
 			"data":    data,
 		}
-		if destination != "" {
-			data["output_root"] = destination
+		if jsonOutputRoot != "" {
+			data["output_root"] = jsonOutputRoot
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
@@ -5479,14 +5472,197 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 	if result.RestoredFiles == 0 {
 		emptyNote = " (empty snapshot selection)"
 	}
-	if len(paths) == 0 {
+	if req.RequestedPathsCount() == 0 {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s files=%d%s\n", snapshotID, result.RestoredFiles, emptyNote)
 	} else {
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s requested_paths=%d restored_files=%d%s\n", snapshotID, len(paths), result.RestoredFiles, emptyNote)
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s requested_paths=%d restored_files=%d%s\n", snapshotID, req.RequestedPathsCount(), result.RestoredFiles, emptyNote)
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", durationMS)
 	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
+}
+
+type snapshotRestoreCommandRequest struct {
+	EngineRequest engine.SnapshotRestoreRequest
+}
+
+func (r snapshotRestoreCommandRequest) RequestedPathsCount() int {
+	return len(r.EngineRequest.Paths)
+}
+
+func parseSnapshotRestoreSelection(parsed parsedCommandLine) (engine.SnapshotRestoreSelection, error) {
+	selection := engine.SnapshotRestoreSelection{}
+
+	if values := parsed.flagValues("path"); len(values) > 0 {
+		selection.ExactPaths = make([]string, 0, len(values))
+		for _, value := range values {
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				return engine.SnapshotRestoreSelection{}, usageErrorf("--path cannot be empty")
+			}
+			normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+			if err != nil {
+				return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --path value %q: %v", trimmed, err)
+			}
+			selection.ExactPaths = append(selection.ExactPaths, normalized)
+		}
+	}
+
+	if values := parsed.flagValues("prefix"); len(values) > 0 {
+		selection.Prefixes = make([]string, 0, len(values))
+		for _, value := range values {
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				return engine.SnapshotRestoreSelection{}, usageErrorf("--prefix cannot be empty")
+			}
+			normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+			if err != nil {
+				return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --prefix value %q: %v", trimmed, err)
+			}
+			if !strings.HasSuffix(normalized, "/") {
+				return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --prefix value %q: must end with '/'", trimmed)
+			}
+			selection.Prefixes = append(selection.Prefixes, normalized)
+		}
+	}
+
+	if value, ok := parsed.lastFlagValue("pattern"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return engine.SnapshotRestoreSelection{}, usageErrorf("--pattern cannot be empty")
+		}
+		if _, err := path.Match(trimmed, ""); err != nil {
+			return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --pattern value %q: %v", trimmed, err)
+		}
+		selection.Pattern = trimmed
+	}
+
+	if value, ok := parsed.lastFlagValue("regex"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return engine.SnapshotRestoreSelection{}, usageErrorf("--regex cannot be empty")
+		}
+		if _, err := regexp.Compile(trimmed); err != nil {
+			return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --regex value %q: %v", trimmed, err)
+		}
+		selection.Regex = trimmed
+	}
+
+	if value, ok := parsed.lastFlagValue("min-size"); ok {
+		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || n < 0 {
+			return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --min-size value %q: must be a non-negative integer", value)
+		}
+		selection.MinSize = &n
+	}
+
+	if value, ok := parsed.lastFlagValue("max-size"); ok {
+		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || n < 0 {
+			return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --max-size value %q: must be a non-negative integer", value)
+		}
+		selection.MaxSize = &n
+	}
+
+	if value, ok := parsed.lastFlagValue("modified-after"); ok {
+		parsedTime, err := parseSnapshotDateFlag("modified-after", value, false)
+		if err != nil {
+			return engine.SnapshotRestoreSelection{}, err
+		}
+		selection.ModifiedAfter = parsedTime
+	}
+
+	if value, ok := parsed.lastFlagValue("modified-before"); ok {
+		parsedTime, err := parseSnapshotDateFlag("modified-before", value, true)
+		if err != nil {
+			return engine.SnapshotRestoreSelection{}, err
+		}
+		selection.ModifiedBefore = parsedTime
+	}
+
+	if selection.MinSize != nil && selection.MaxSize != nil && *selection.MinSize > *selection.MaxSize {
+		return engine.SnapshotRestoreSelection{}, usageErrorf("--min-size must be <= --max-size")
+	}
+	if selection.ModifiedAfter != nil && selection.ModifiedBefore != nil && selection.ModifiedAfter.After(*selection.ModifiedBefore) {
+		return engine.SnapshotRestoreSelection{}, usageErrorf("--modified-after must be <= --modified-before")
+	}
+
+	return selection, nil
+}
+
+func buildSnapshotRestoreEngineRequest(
+	snapshotID string,
+	paths []string,
+	selection engine.SnapshotRestoreSelection,
+	destinationMode storage.RestoreDestinationMode,
+	destination string,
+	parsed parsedCommandLine,
+) (snapshotRestoreCommandRequest, string, error) {
+	engineMode, err := storageSnapshotRestoreModeToEngine(destinationMode)
+	if err != nil {
+		return snapshotRestoreCommandRequest{}, "", err
+	}
+
+	outputTarget := destination
+	jsonOutputRoot := destination
+	if destinationMode == storage.RestoreDestinationOriginal {
+		cwd, err := currentWorkingDirectoryPhase()
+		if err != nil {
+			return snapshotRestoreCommandRequest{}, "", fmt.Errorf("resolve current working directory: %w", err)
+		}
+		outputTarget = cwd
+		jsonOutputRoot = ""
+	}
+
+	return snapshotRestoreCommandRequest{
+		EngineRequest: engine.SnapshotRestoreRequest{
+			SnapshotID: snapshotID,
+			Paths:      append([]string(nil), paths...),
+			Selection:  selection,
+			Destination: engine.SnapshotRestoreDestination{
+				Mode: engineMode,
+				Path: outputTarget,
+			},
+			Overwrite: parsed.hasFlag("overwrite"),
+			Metadata:  snapshotRestoreMetadataModeFromCLI(parsed.hasFlag("strict"), parsed.hasFlag("no-metadata")),
+		},
+	}, jsonOutputRoot, nil
+}
+
+func runSnapshotRestoreEngine(
+	ctx context.Context,
+	sgctx storage.StorageContext,
+	req snapshotRestoreCommandRequest,
+) (engine.SnapshotRestoreResult, error) {
+	eng, err := newSnapshotRestoreCommandEngine(sgctx)
+	if err != nil {
+		return engine.SnapshotRestoreResult{}, err
+	}
+	return eng.SnapshotRestore(ctx, req.EngineRequest)
+}
+
+func storageSnapshotRestoreModeToEngine(mode storage.RestoreDestinationMode) (engine.SnapshotRestoreDestinationMode, error) {
+	switch mode {
+	case storage.RestoreDestinationOriginal:
+		return engine.SnapshotRestoreDestinationOriginal, nil
+	case storage.RestoreDestinationPrefix:
+		return engine.SnapshotRestoreDestinationPrefix, nil
+	case storage.RestoreDestinationOverride:
+		return engine.SnapshotRestoreDestinationOverride, nil
+	default:
+		return "", fmt.Errorf("unsupported restore destination mode %q", mode)
+	}
+}
+
+func snapshotRestoreMetadataModeFromCLI(strictMetadata bool, noMetadata bool) engine.SnapshotRestoreMetadataMode {
+	switch {
+	case strictMetadata:
+		return engine.SnapshotRestoreMetadataStrict
+	case noMetadata:
+		return engine.SnapshotRestoreMetadataNone
+	default:
+		return engine.SnapshotRestoreMetadataBestEffort
+	}
 }
 
 func printHelp() {

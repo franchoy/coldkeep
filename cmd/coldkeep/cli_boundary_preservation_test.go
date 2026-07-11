@@ -164,12 +164,14 @@ func TestRunSnapshotCommandDeleteUsesEngineOwnership(t *testing.T) {
 	}
 }
 
-func TestRunSnapshotCommandRestorePreservesDirectSnapshotOwnership(t *testing.T) {
+func TestRunSnapshotCommandRestoreUsesEngineOwnership(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalRestore := restoreSnapshotPhase
+	originalEngine := newSnapshotRestoreCommandEngine
+	originalCWD := currentWorkingDirectoryPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		restoreSnapshotPhase = originalRestore
+		newSnapshotRestoreCommandEngine = originalEngine
+		currentWorkingDirectoryPhase = originalCWD
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -179,26 +181,35 @@ func TestRunSnapshotCommandRestorePreservesDirectSnapshotOwnership(t *testing.T)
 		}
 		return storage.StorageContext{DB: dbconn}, nil
 	}
+	currentWorkingDirectoryPhase = func() (string, error) {
+		return "/cli/root", nil
+	}
 
 	called := false
-	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string, paths []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
-		called = true
-		if snapshotID != "snap-restore-owned" {
-			t.Fatalf("expected forwarded snapshot ID, got %q", snapshotID)
-		}
-		if len(paths) != 1 || paths[0] != "docs/" {
-			t.Fatalf("expected direct snapshot restore paths, got %v", paths)
-		}
-		if opts.Query == nil || len(opts.Query.ExactPaths) != 1 {
-			t.Fatalf("expected snapshot restore query to stay CLI/snapshot-owned, got %+v", opts.Query)
-		}
-		if _, ok := opts.Query.ExactPaths["docs/a.txt"]; !ok {
-			t.Fatalf("expected normalized exact path docs/a.txt, got %+v", opts.Query.ExactPaths)
-		}
-		return &snapshot.RestoreSnapshotResult{
-			SnapshotID:     snapshotID,
-			RestoredFiles:  1,
-			RequestedPaths: int64(len(paths)),
+	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+				called = true
+				if req.SnapshotID != "snap-restore-owned" {
+					t.Fatalf("expected forwarded snapshot ID, got %q", req.SnapshotID)
+				}
+				if len(req.Paths) != 1 || req.Paths[0] != "docs/" {
+					t.Fatalf("expected engine-routed snapshot restore paths, got %v", req.Paths)
+				}
+				if len(req.Selection.ExactPaths) != 1 || req.Selection.ExactPaths[0] != "docs/a.txt" {
+					t.Fatalf("expected exact path preservation, got %+v", req.Selection)
+				}
+				if req.Destination.Mode != engine.SnapshotRestoreDestinationOriginal || req.Destination.Path != "/cli/root" {
+					t.Fatalf("expected explicit original root, got %+v", req.Destination)
+				}
+				return engine.SnapshotRestoreResult{
+					SnapshotID:          req.SnapshotID,
+					DestinationMode:     req.Destination.Mode,
+					RequestedPathsCount: len(req.Paths),
+					RestoredFiles:       1,
+					OutputTarget:        req.Destination.Path,
+				}, nil
+			},
 		}, nil
 	}
 
@@ -217,7 +228,7 @@ func TestRunSnapshotCommandRestorePreservesDirectSnapshotOwnership(t *testing.T)
 	})
 
 	if !called {
-		t.Fatal("expected snapshot restore to preserve direct CLI/snapshot ownership")
+		t.Fatal("expected snapshot restore to route through engine ownership")
 	}
 
 	var payload map[string]any

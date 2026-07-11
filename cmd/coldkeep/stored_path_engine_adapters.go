@@ -17,6 +17,14 @@ var newCommandEngine = func(dbconn *sql.DB, containerDir string) (engine.Engine,
 	return engine.New(engine.Config{DB: dbconn, ContainerDir: containerDir})
 }
 
+var newSnapshotRestoreCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
+	return engine.New(engine.Config{
+		DB:           sgctx.DB,
+		ContainerDir: sgctx.EffectiveContainerDir(),
+		StoreContext: &sgctx,
+	})
+}
+
 func restoreStoredPathWithEngine(
 	ctx context.Context,
 	eng engine.Engine,

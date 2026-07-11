@@ -5081,10 +5081,10 @@ func TestRunSnapshotCommandRejectsUnknownSubcommand(t *testing.T) {
 
 func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalRestore := restoreSnapshotPhase
+	originalEngine := newSnapshotRestoreCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		restoreSnapshotPhase = originalRestore
+		newSnapshotRestoreCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -5099,16 +5099,18 @@ func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 		called        bool
 		gotSnapshotID string
 		gotPaths      []string
-		gotOpts       snapshot.RestoreSnapshotOptions
+		gotReq        engine.SnapshotRestoreRequest
 	)
-	restoreSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, paths []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
-		called = true
-		_ = ctx
-		_ = db
-		gotSnapshotID = snapshotID
-		gotPaths = append([]string(nil), paths...)
-		gotOpts = opts
-		return &snapshot.RestoreSnapshotResult{SnapshotID: snapshotID, RestoredFiles: 2, RequestedPaths: int64(len(paths))}, nil
+	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+				called = true
+				gotSnapshotID = req.SnapshotID
+				gotPaths = append([]string(nil), req.Paths...)
+				gotReq = req
+				return engine.SnapshotRestoreResult{SnapshotID: req.SnapshotID, RestoredFiles: 2, RequestedPathsCount: len(req.Paths)}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -5136,13 +5138,13 @@ func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
 		t.Fatalf("snapshot restore paths mismatch: got=%v", gotPaths)
 	}
-	if gotOpts.DestinationMode != storage.RestoreDestinationPrefix {
-		t.Fatalf("destination mode mismatch: got=%q", gotOpts.DestinationMode)
+	if gotReq.Destination.Mode != engine.SnapshotRestoreDestinationPrefix {
+		t.Fatalf("destination mode mismatch: got=%q", gotReq.Destination.Mode)
 	}
-	if gotOpts.Destination != "./restored" {
-		t.Fatalf("destination mismatch: got=%q", gotOpts.Destination)
+	if gotReq.Destination.Path != "./restored" {
+		t.Fatalf("destination mismatch: got=%q", gotReq.Destination.Path)
 	}
-	if !gotOpts.Overwrite {
+	if !gotReq.Overwrite {
 		t.Fatal("expected overwrite=true")
 	}
 
@@ -5161,10 +5163,10 @@ func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 
 func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalRestore := restoreSnapshotPhase
+	originalEngine := newSnapshotRestoreCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		restoreSnapshotPhase = originalRestore
+		newSnapshotRestoreCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -5176,9 +5178,13 @@ func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
 	}
 
 	gotPathCount := -1
-	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, paths []string, _ snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
-		gotPathCount = len(paths)
-		return &snapshot.RestoreSnapshotResult{SnapshotID: "snap-full-restore", RestoredFiles: 0}, nil
+	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+				gotPathCount = len(req.Paths)
+				return engine.SnapshotRestoreResult{SnapshotID: "snap-full-restore", RestoredFiles: 0}, nil
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -5197,10 +5203,10 @@ func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
 
 func TestRunSnapshotCommandRestoreForwardsSnapshotQuery(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalRestore := restoreSnapshotPhase
+	originalEngine := newSnapshotRestoreCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		restoreSnapshotPhase = originalRestore
+		newSnapshotRestoreCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -5211,10 +5217,14 @@ func TestRunSnapshotCommandRestoreForwardsSnapshotQuery(t *testing.T) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
 
-	var gotQuery *snapshot.SnapshotQuery
-	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, _ []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
-		gotQuery = opts.Query
-		return &snapshot.RestoreSnapshotResult{SnapshotID: "snap-query", RestoredFiles: 1}, nil
+	var gotSelection engine.SnapshotRestoreSelection
+	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+				gotSelection = req.Selection
+				return engine.SnapshotRestoreResult{SnapshotID: "snap-query", RestoredFiles: 1}, nil
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -5234,38 +5244,32 @@ func TestRunSnapshotCommandRestoreForwardsSnapshotQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runSnapshotCommand restore returned error: %v", err)
 	}
-	if gotQuery == nil {
-		t.Fatal("expected restore query to be forwarded")
+	if len(gotSelection.ExactPaths) != 2 {
+		t.Fatalf("expected 2 exact paths, got %#v", gotSelection.ExactPaths)
 	}
-	if len(gotQuery.ExactPaths) != 2 {
-		t.Fatalf("expected 2 exact paths, got %#v", gotQuery.ExactPaths)
+	if gotSelection.ExactPaths[0] != "docs/a.txt" || gotSelection.ExactPaths[1] != "docs/b.txt" {
+		t.Fatalf("expected normalized exact paths, got %#v", gotSelection.ExactPaths)
 	}
-	if _, ok := gotQuery.ExactPaths["docs/a.txt"]; !ok {
-		t.Fatalf("expected normalized path docs/a.txt, got %#v", gotQuery.ExactPaths)
+	if len(gotSelection.Prefixes) != 2 || gotSelection.Prefixes[0] != "docs/" || gotSelection.Prefixes[1] != "images/" {
+		t.Fatalf("expected normalized prefixes [docs/ images/], got %#v", gotSelection.Prefixes)
 	}
-	if _, ok := gotQuery.ExactPaths["docs/b.txt"]; !ok {
-		t.Fatalf("expected exact path docs/b.txt, got %#v", gotQuery.ExactPaths)
+	if gotSelection.Pattern != "*.txt" {
+		t.Fatalf("expected pattern '*.txt', got %q", gotSelection.Pattern)
 	}
-	if len(gotQuery.Prefixes) != 2 || gotQuery.Prefixes[0] != "docs/" || gotQuery.Prefixes[1] != "images/" {
-		t.Fatalf("expected normalized prefixes [docs/ images/], got %#v", gotQuery.Prefixes)
+	if gotSelection.Regex != "^docs/" {
+		t.Fatalf("expected regex '^docs/', got %#v", gotSelection.Regex)
 	}
-	if gotQuery.Pattern != "*.txt" {
-		t.Fatalf("expected pattern '*.txt', got %q", gotQuery.Pattern)
+	if gotSelection.MinSize == nil || *gotSelection.MinSize != 10 {
+		t.Fatalf("expected min size 10, got %#v", gotSelection.MinSize)
 	}
-	if gotQuery.Regex == nil || gotQuery.Regex.String() != "^docs/" {
-		t.Fatalf("expected regex '^docs/', got %#v", gotQuery.Regex)
+	if gotSelection.MaxSize == nil || *gotSelection.MaxSize != 20 {
+		t.Fatalf("expected max size 20, got %#v", gotSelection.MaxSize)
 	}
-	if gotQuery.MinSize == nil || *gotQuery.MinSize != 10 {
-		t.Fatalf("expected min size 10, got %#v", gotQuery.MinSize)
+	if gotSelection.ModifiedAfter == nil || gotSelection.ModifiedAfter.UTC().Format("2006-01-02") != "2026-01-01" {
+		t.Fatalf("expected modified-after date, got %#v", gotSelection.ModifiedAfter)
 	}
-	if gotQuery.MaxSize == nil || *gotQuery.MaxSize != 20 {
-		t.Fatalf("expected max size 20, got %#v", gotQuery.MaxSize)
-	}
-	if gotQuery.ModifiedAfter == nil || gotQuery.ModifiedAfter.UTC().Format("2006-01-02") != "2026-01-01" {
-		t.Fatalf("expected modified-after date, got %#v", gotQuery.ModifiedAfter)
-	}
-	if gotQuery.ModifiedBefore == nil || gotQuery.ModifiedBefore.UTC().Format("2006-01-02") != "2026-01-31" {
-		t.Fatalf("expected modified-before date, got %#v", gotQuery.ModifiedBefore)
+	if gotSelection.ModifiedBefore == nil || gotSelection.ModifiedBefore.UTC().Format("2006-01-02") != "2026-01-31" {
+		t.Fatalf("expected modified-before date, got %#v", gotSelection.ModifiedBefore)
 	}
 }
 
