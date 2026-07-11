@@ -11316,8 +11316,10 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 			t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", mode)
 
 			tmp := t.TempDir()
+			origContainersDir := container.ContainersDir
 			container.ContainersDir = filepath.Join(tmp, "containers")
-			_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+			t.Cleanup(func() { container.ContainersDir = origContainersDir })
+			t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 			testutils.ResetStorage(t)
 
 			dbconn, err := db.ConnectDB()
