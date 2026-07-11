@@ -456,89 +456,16 @@ func TestCreateSnapshotFullCopiesAllPhysicalFiles(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
-	mtimeA := time.Now().UTC().Truncate(time.Second)
-	mtimeB := mtimeA.Add(2 * time.Minute)
-
-	logicalA := insertLogicalFileWithSize(t, db, "hash-full-a", 101)
-	logicalB := insertLogicalFileWithSize(t, db, "hash-full-b", 202)
-	logicalC := insertLogicalFileWithSize(t, db, "hash-full-c", 303)
-
-	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{Int64: 0o644, Valid: true}, sql.NullTime{Time: mtimeA, Valid: true})
-	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{Int64: 0o600, Valid: true}, sql.NullTime{Time: mtimeB, Valid: true})
-	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+	fixture := seedCreateSnapshotFullFixture(t, db)
 
 	label := "phase2-full"
 	if err := CreateSnapshot(ctx, db, "snap-full-phase2", "full", &label, nil, nil); err != nil {
 		t.Fatalf("CreateSnapshot full: %v", err)
 	}
 
-	var snapshotCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ? AND type = ?`, "snap-full-phase2", "full").Scan(&snapshotCount); err != nil {
-		t.Fatalf("query snapshot row: %v", err)
-	}
-	if snapshotCount != 1 {
-		t.Fatalf("expected 1 snapshot row, got %d", snapshotCount)
-	}
-
-	var fileCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-full-phase2").Scan(&fileCount); err != nil {
-		t.Fatalf("count snapshot_file rows: %v", err)
-	}
-	if fileCount != 3 {
-		t.Fatalf("expected 3 snapshot_file rows, got %d", fileCount)
-	}
-
-	rows, err := db.Query(`
-		SELECT sp.path, sf.logical_file_id, sf.size, sf.mode
-		FROM snapshot_file sf
-		JOIN snapshot_path sp ON sp.id = sf.path_id
-		WHERE sf.snapshot_id = ?
-	`, "snap-full-phase2")
-	if err != nil {
-		t.Fatalf("query snapshot_file rows: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	seen := map[string]struct{}{}
-	for rows.Next() {
-		var (
-			path          string
-			logicalFileID int64
-			size          sql.NullInt64
-			mode          sql.NullInt64
-		)
-		if err := rows.Scan(&path, &logicalFileID, &size, &mode); err != nil {
-			t.Fatalf("scan snapshot_file row: %v", err)
-		}
-		seen[path] = struct{}{}
-		if !size.Valid {
-			t.Fatalf("expected size to be preserved for path=%s", path)
-		}
-
-		switch path {
-		case "docs/a.txt":
-			if logicalFileID != logicalA || size.Int64 != 101 || !mode.Valid || mode.Int64 != 0o644 {
-				t.Fatalf("unexpected metadata for docs/a.txt: logical_file_id=%d size=%v mode=%v", logicalFileID, size, mode)
-			}
-		case "docs/b.txt":
-			if logicalFileID != logicalB || size.Int64 != 202 || !mode.Valid || mode.Int64 != 0o600 {
-				t.Fatalf("unexpected metadata for docs/b.txt: logical_file_id=%d size=%v mode=%v", logicalFileID, size, mode)
-			}
-		case "img/x.png":
-			if logicalFileID != logicalC || size.Int64 != 303 {
-				t.Fatalf("unexpected metadata for img/x.png: logical_file_id=%d size=%v", logicalFileID, size)
-			}
-		default:
-			t.Fatalf("unexpected snapshot path: %s", path)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate snapshot_file rows: %v", err)
-	}
-
-	if len(seen) != 3 {
-		t.Fatalf("expected 3 unique paths in snapshot, got %d", len(seen))
-	}
+	assertSnapshotRowCount(t, db, "snap-full-phase2", "full", 1)
+	assertSnapshotFileCount(t, db, "snap-full-phase2", 3)
+	assertCreateSnapshotFullRows(t, db, "snap-full-phase2", fixture)
 }
 
 func TestCreateSnapshotPartialFiltersExactAndDirectory(t *testing.T) {
@@ -2804,6 +2731,155 @@ func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
+	fixture := seedDeleteSnapshotRowsOnlyFixture(t, ctx, db)
+
+	assertRetainedLogicalIDs(t, mustComputeReachabilitySummary(t, ctx, db), []int64{fixture.logicalA, fixture.logicalB}, nil)
+
+	if err := DeleteSnapshot(ctx, db, fixture.deletedSnapshotID); err != nil {
+		t.Fatalf("DeleteSnapshot: %v", err)
+	}
+
+	assertSnapshotIDCount(t, db, fixture.deletedSnapshotID, 0)
+	assertSnapshotFileCount(t, db, fixture.deletedSnapshotID, 0)
+	assertSnapshotIDCount(t, db, fixture.survivingSnapshotID, 1)
+	assertLogicalFileCount(t, db, 2)
+	assertLogicalFileIDCount(t, db, fixture.logicalB, 1)
+	assertRetainedLogicalIDs(t, mustComputeReachabilitySummary(t, ctx, db), []int64{fixture.logicalA}, []int64{fixture.logicalB})
+}
+
+type createSnapshotFullFixture struct {
+	logicalByPath map[string]int64
+	sizeByPath    map[string]int64
+	modeByPath    map[string]sql.NullInt64
+}
+
+func seedCreateSnapshotFullFixture(t *testing.T, db *sql.DB) createSnapshotFullFixture {
+	t.Helper()
+
+	mtimeA := time.Now().UTC().Truncate(time.Second)
+	mtimeB := mtimeA.Add(2 * time.Minute)
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-full-a", 101)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-full-b", 202)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-full-c", 303)
+
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{Int64: 0o644, Valid: true}, sql.NullTime{Time: mtimeA, Valid: true})
+	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{Int64: 0o600, Valid: true}, sql.NullTime{Time: mtimeB, Valid: true})
+	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+
+	return createSnapshotFullFixture{
+		logicalByPath: map[string]int64{
+			"docs/a.txt": logicalA,
+			"docs/b.txt": logicalB,
+			"img/x.png":  logicalC,
+		},
+		sizeByPath: map[string]int64{
+			"docs/a.txt": 101,
+			"docs/b.txt": 202,
+			"img/x.png":  303,
+		},
+		modeByPath: map[string]sql.NullInt64{
+			"docs/a.txt": {Int64: 0o644, Valid: true},
+			"docs/b.txt": {Int64: 0o600, Valid: true},
+			"img/x.png":  {},
+		},
+	}
+}
+
+func assertSnapshotRowCount(t *testing.T, db *sql.DB, snapshotID, snapshotType string, want int) {
+	t.Helper()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ? AND type = ?`, snapshotID, snapshotType).Scan(&count); err != nil {
+		t.Fatalf("query snapshot row: %v", err)
+	}
+	if count != want {
+		t.Fatalf("expected %d snapshot rows for id=%s type=%s, got %d", want, snapshotID, snapshotType, count)
+	}
+}
+
+func assertSnapshotFileCount(t *testing.T, db *sql.DB, snapshotID string, want int) {
+	t.Helper()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, snapshotID).Scan(&count); err != nil {
+		t.Fatalf("count snapshot_file rows: %v", err)
+	}
+	if count != want {
+		t.Fatalf("expected %d snapshot_file rows for snapshot=%s, got %d", want, snapshotID, count)
+	}
+}
+
+func assertCreateSnapshotFullRows(t *testing.T, db *sql.DB, snapshotID string, fixture createSnapshotFullFixture) {
+	t.Helper()
+
+	rows, err := db.Query(`
+		SELECT sp.path, sf.logical_file_id, sf.size, sf.mode
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = ?
+	`, snapshotID)
+	if err != nil {
+		t.Fatalf("query snapshot_file rows: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		assertCreateSnapshotFullRow(t, rows, fixture, seen)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate snapshot_file rows: %v", err)
+	}
+	if len(seen) != len(fixture.logicalByPath) {
+		t.Fatalf("expected %d unique paths in snapshot, got %d", len(fixture.logicalByPath), len(seen))
+	}
+}
+
+func assertCreateSnapshotFullRow(
+	t *testing.T,
+	rows *sql.Rows,
+	fixture createSnapshotFullFixture,
+	seen map[string]struct{},
+) {
+	t.Helper()
+
+	var (
+		path          string
+		logicalFileID int64
+		size          sql.NullInt64
+		mode          sql.NullInt64
+	)
+	if err := rows.Scan(&path, &logicalFileID, &size, &mode); err != nil {
+		t.Fatalf("scan snapshot_file row: %v", err)
+	}
+	seen[path] = struct{}{}
+	if !size.Valid {
+		t.Fatalf("expected size to be preserved for path=%s", path)
+	}
+	wantLogicalID, ok := fixture.logicalByPath[path]
+	if !ok {
+		t.Fatalf("unexpected snapshot path: %s", path)
+	}
+	if logicalFileID != wantLogicalID || size.Int64 != fixture.sizeByPath[path] {
+		t.Fatalf("unexpected metadata for %s: logical_file_id=%d size=%v", path, logicalFileID, size)
+	}
+	wantMode := fixture.modeByPath[path]
+	if mode != wantMode {
+		t.Fatalf("unexpected mode for %s: got=%v want=%v", path, mode, wantMode)
+	}
+}
+
+type deleteSnapshotRowsOnlyFixture struct {
+	logicalA            int64
+	logicalB            int64
+	deletedSnapshotID   string
+	survivingSnapshotID string
+}
+
+func seedDeleteSnapshotRowsOnlyFixture(t *testing.T, ctx context.Context, db *sql.DB) deleteSnapshotRowsOnlyFixture {
+	t.Helper()
+
 	logicalA := insertLogicalFileWithSize(t, db, "hash-delete-a", 5)
 	logicalB := insertLogicalFileWithSize(t, db, "hash-delete-b", 7)
 	s1 := Snapshot{ID: "snap-delete-1", CreatedAt: time.Now().UTC(), Type: "full"}
@@ -2817,70 +2893,77 @@ func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 	insertSnapshotFileRow(t, db, s1.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, s2.ID, "img/x.png", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	before, err := retention.ComputeReachabilitySummary(ctx, db)
+	return deleteSnapshotRowsOnlyFixture{
+		logicalA:            logicalA,
+		logicalB:            logicalB,
+		deletedSnapshotID:   s1.ID,
+		survivingSnapshotID: s2.ID,
+	}
+}
+
+func mustComputeReachabilitySummary(t *testing.T, ctx context.Context, db *sql.DB) *retention.ReachabilitySummary {
+	t.Helper()
+
+	summary, err := retention.ComputeReachabilitySummary(ctx, db)
 	if err != nil {
-		t.Fatalf("ComputeReachabilitySummary before delete: %v", err)
+		t.Fatalf("ComputeReachabilitySummary: %v", err)
 	}
-	if _, ok := before.RetainedLogicalIDs[logicalA]; !ok {
-		t.Fatalf("expected logicalA=%d to be retained before delete", logicalA)
-	}
-	if _, ok := before.RetainedLogicalIDs[logicalB]; !ok {
-		t.Fatalf("expected logicalB=%d to be retained before delete", logicalB)
-	}
+	return summary
+}
 
-	if err := DeleteSnapshot(ctx, db, s1.ID); err != nil {
-		t.Fatalf("DeleteSnapshot: %v", err)
-	}
+func assertRetainedLogicalIDs(
+	t *testing.T,
+	summary *retention.ReachabilitySummary,
+	wantPresent []int64,
+	wantMissing []int64,
+) {
+	t.Helper()
 
-	var snapshotCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, s1.ID).Scan(&snapshotCount); err != nil {
-		t.Fatalf("query deleted snapshot: %v", err)
+	for _, logicalID := range wantPresent {
+		if _, ok := summary.RetainedLogicalIDs[logicalID]; !ok {
+			t.Fatalf("expected logical_id=%d to be retained", logicalID)
+		}
 	}
-	if snapshotCount != 0 {
-		t.Fatalf("expected deleted snapshot row to be gone, got count=%d", snapshotCount)
+	for _, logicalID := range wantMissing {
+		if _, ok := summary.RetainedLogicalIDs[logicalID]; ok {
+			t.Fatalf("expected logical_id=%d to be unretained", logicalID)
+		}
 	}
+}
 
-	var deletedFileCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, s1.ID).Scan(&deletedFileCount); err != nil {
-		t.Fatalf("query deleted snapshot files: %v", err)
-	}
-	if deletedFileCount != 0 {
-		t.Fatalf("expected deleted snapshot_file rows to be gone, got count=%d", deletedFileCount)
-	}
+func assertSnapshotIDCount(t *testing.T, db *sql.DB, snapshotID string, want int) {
+	t.Helper()
 
-	var survivingSnapshotCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, s2.ID).Scan(&survivingSnapshotCount); err != nil {
-		t.Fatalf("query surviving snapshot: %v", err)
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, snapshotID).Scan(&count); err != nil {
+		t.Fatalf("query snapshot id=%s: %v", snapshotID, err)
 	}
-	if survivingSnapshotCount != 1 {
-		t.Fatalf("expected other snapshot to remain, got count=%d", survivingSnapshotCount)
+	if count != want {
+		t.Fatalf("expected snapshot id=%s count=%d, got %d", snapshotID, want, count)
 	}
+}
 
-	var logicalCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file`).Scan(&logicalCount); err != nil {
+func assertLogicalFileCount(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file`).Scan(&count); err != nil {
 		t.Fatalf("query logical_file count: %v", err)
 	}
-	if logicalCount != 2 {
-		t.Fatalf("expected logical_file rows untouched, got count=%d", logicalCount)
+	if count != want {
+		t.Fatalf("expected logical_file count=%d, got %d", want, count)
 	}
+}
 
-	var logicalBCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = ?`, logicalB).Scan(&logicalBCount); err != nil {
-		t.Fatalf("query logical_file logicalB=%d: %v", logicalB, err)
-	}
-	if logicalBCount != 1 {
-		t.Fatalf("expected snapshot delete to leave logicalB row intact, got count=%d", logicalBCount)
-	}
+func assertLogicalFileIDCount(t *testing.T, db *sql.DB, logicalID int64, want int) {
+	t.Helper()
 
-	after, err := retention.ComputeReachabilitySummary(ctx, db)
-	if err != nil {
-		t.Fatalf("ComputeReachabilitySummary after delete: %v", err)
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = ?`, logicalID).Scan(&count); err != nil {
+		t.Fatalf("query logical_file id=%d: %v", logicalID, err)
 	}
-	if _, ok := after.RetainedLogicalIDs[logicalA]; !ok {
-		t.Fatalf("expected logicalA=%d to remain retained after delete", logicalA)
-	}
-	if _, ok := after.RetainedLogicalIDs[logicalB]; ok {
-		t.Fatalf("expected logicalB=%d to become unretained after deleting snapshot %s", logicalB, s1.ID)
+	if count != want {
+		t.Fatalf("expected logical_file id=%d count=%d, got %d", logicalID, want, count)
 	}
 }
 
