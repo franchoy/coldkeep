@@ -17,11 +17,19 @@ func TestSnapshotDeletePreviewRoutesThroughEngine(t *testing.T) {
 	assertSnapshotDeletePreviewResult(
 		t,
 		result,
-		SnapshotDeleteParent{ID: "snap-delete-parent", State: SnapshotDeleteParentPresent},
-		[]string{"snap-delete-child"},
-		3,
-		0,
-		3,
+		snapshotDeletePreviewExpectation{
+			SnapshotID: "snap-delete-target",
+			Mode:       SnapshotDeleteModePreview,
+			Deleted:    false,
+			Parent: snapshotDeleteParentExpectation{
+				ID:    "snap-delete-parent",
+				State: SnapshotDeleteParentPresent,
+			},
+			Children:    []string{"snap-delete-child"},
+			TotalFiles:  3,
+			UniqueFiles: 0,
+			SharedFiles: 3,
+		},
 	)
 }
 
@@ -208,30 +216,69 @@ func assertSnapshotDeletePreviewReadOnly(t *testing.T, dbconn *sql.DB, snapshotI
 	}
 }
 
+type snapshotDeleteParentExpectation struct {
+	ID    string
+	State SnapshotDeleteParentState
+}
+
+type snapshotDeletePreviewExpectation struct {
+	SnapshotID  string
+	Mode        SnapshotDeleteMode
+	Deleted     bool
+	Parent      snapshotDeleteParentExpectation
+	Children    []string
+	TotalFiles  int64
+	UniqueFiles int64
+	SharedFiles int64
+}
+
 func assertSnapshotDeletePreviewResult(
 	t *testing.T,
 	result SnapshotDeleteResult,
-	wantParent SnapshotDeleteParent,
-	wantChildren []string,
-	wantTotalFiles int64,
-	wantUniqueFiles int64,
-	wantSharedFiles int64,
+	want snapshotDeletePreviewExpectation,
 ) {
 	t.Helper()
 
-	if result.SnapshotID != "snap-delete-target" || result.Mode != SnapshotDeleteModePreview || result.Deleted {
-		t.Fatalf("unexpected preview result header: %+v", result)
-	}
 	if result.Preview == nil {
 		t.Fatal("expected preview payload")
 	}
-	if result.Preview.Parent != wantParent {
-		t.Fatalf("unexpected parent preview: %+v", result.Preview.Parent)
+	assertSnapshotDeletePreviewEnvelope(t, result, want)
+	assertSnapshotDeletePreviewParent(t, result.Preview.Parent, want.Parent)
+	assertSnapshotDeletePreviewChildren(t, result.Preview.Children, want.Children)
+	assertSnapshotDeletePreviewCounts(t, result.Preview, want)
+}
+
+func assertSnapshotDeletePreviewEnvelope(t *testing.T, got SnapshotDeleteResult, want snapshotDeletePreviewExpectation) {
+	t.Helper()
+
+	if got.SnapshotID != want.SnapshotID || got.Mode != want.Mode || got.Deleted != want.Deleted {
+		t.Fatalf("unexpected preview result header: %+v", got)
 	}
-	if strings.Join(result.Preview.Children, "|") != strings.Join(wantChildren, "|") {
-		t.Fatalf("unexpected children preview: %+v", result.Preview.Children)
+}
+
+func assertSnapshotDeletePreviewParent(t *testing.T, got SnapshotDeleteParent, want snapshotDeleteParentExpectation) {
+	t.Helper()
+
+	if got.ID != want.ID || got.State != want.State {
+		t.Fatalf("unexpected parent preview: %+v", got)
 	}
-	if result.Preview.TotalFiles != wantTotalFiles || result.Preview.UniqueFiles != wantUniqueFiles || result.Preview.SharedFiles != wantSharedFiles {
-		t.Fatalf("unexpected preview counts: %+v", result.Preview)
+}
+
+func assertSnapshotDeletePreviewChildren(t *testing.T, got []string, want []string) {
+	t.Helper()
+
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("unexpected children preview: %+v", got)
+	}
+}
+
+func assertSnapshotDeletePreviewCounts(t *testing.T, got *SnapshotDeletePreviewResult, want snapshotDeletePreviewExpectation) {
+	t.Helper()
+
+	if got.TotalFiles != want.TotalFiles || got.UniqueFiles != want.UniqueFiles || got.SharedFiles != want.SharedFiles {
+		t.Fatalf("unexpected preview counts: %+v", got)
+	}
+	if got.SharedFiles != got.TotalFiles-got.UniqueFiles {
+		t.Fatalf("unexpected preview count invariant: %+v", got)
 	}
 }
