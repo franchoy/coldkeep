@@ -69,6 +69,12 @@ type Engine interface {
 	// must not fabricate preview data.
 	SnapshotDelete(ctx context.Context, req SnapshotDeleteRequest) (SnapshotDeleteResult, error)
 
+	// SnapshotRestore restores snapshot-owned files through the engine boundary.
+	// Destination mode and lexical root/path are explicit, repeated selectors are
+	// preserved, restore may leave filesystem side effects before a later error,
+	// and the engine must not perform GC or repair as part of restore.
+	SnapshotRestore(ctx context.Context, req SnapshotRestoreRequest) (SnapshotRestoreResult, error)
+
 	// GarbageCollect runs dry-run or live GC against the repository.
 	// Safety invariant: GC must never delete reachable data.
 	// Live GC is only supported on the PostgreSQL backend; dry-run is supported

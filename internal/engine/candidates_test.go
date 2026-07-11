@@ -23,7 +23,7 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "GarbageCollect", "Store", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "SnapshotRestore", "GarbageCollect", "Store", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)
@@ -40,8 +40,8 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 }
 
 // TestEngineActiveInterfaceExcludesStillInactiveOperations proves the active
-// Engine interface still excludes future-only snapshot restore and corrective
-// integrity operations.
+// Engine interface still excludes corrective integrity operations that remain
+// future-only.
 func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
 
@@ -51,7 +51,6 @@ func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"SnapshotRestore",
 		"Repair",
 		"Recover",
 	} {
@@ -97,13 +96,6 @@ type candidateOnlyOperationCase struct {
 
 func candidateOnlyOperationCases() []candidateOnlyOperationCase {
 	return []candidateOnlyOperationCase{
-		{
-			name:              "snapshot restore",
-			requestType:       engine.SnapshotRestoreRequest{},
-			resultType:        engine.SnapshotRestoreResult{},
-			forbiddenMethod:   "SnapshotRestore",
-			laterOwnerRelease: "v1.13.9",
-		},
 		{
 			name:              "repair",
 			requestType:       engine.RepairRequest{},

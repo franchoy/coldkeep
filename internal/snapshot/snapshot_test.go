@@ -1926,6 +1926,49 @@ func TestRestoreSnapshotOriginalAllowsOuterAliasAboveWorkingDirectoryRoot(t *tes
 	}
 }
 
+func TestRestoreSnapshotOriginalModeUsesExplicitRootWithoutCWDDependency(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), db)
+	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
+
+	content := []byte("snapshot restore explicit original root")
+	storeSnapshotFixtureFile(t, db, sgctx, t.TempDir(), "docs/explicit.txt", content)
+
+	snapshotID := "snap-original-explicit-root"
+	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "partial", Paths: []string{"docs/explicit.txt"}}); err != nil {
+		t.Fatalf("CreateSnapshotWithOptions: %v", err)
+	}
+
+	explicitRoot := filepath.Join(t.TempDir(), "restore-explicit-root")
+	res, err := RestoreSnapshot(ctx, db, snapshotID, []string{"docs/explicit.txt"}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		OriginalRoot:    explicitRoot,
+		Overwrite:       true,
+		StorageContext:  &sgctx,
+	})
+	if err != nil {
+		t.Fatalf("RestoreSnapshot original explicit root: %v", err)
+	}
+	if res.RestoredFiles != 1 {
+		t.Fatalf("expected 1 restored file, got %d", res.RestoredFiles)
+	}
+
+	wantPath := filepath.Join(explicitRoot, "docs", "explicit.txt")
+	if len(res.OutputPaths) != 1 || res.OutputPaths[0] != wantPath {
+		t.Fatalf("unexpected output paths: got=%v want=%v", res.OutputPaths, []string{wantPath})
+	}
+	restored, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read restored snapshot file: %v", err)
+	}
+	if string(restored) != string(content) {
+		t.Fatalf("unexpected restored snapshot payload: got=%q want=%q", string(restored), string(content))
+	}
+}
+
 // ---- planSnapshotRestoreOutputs output-path tests ----
 
 // TestPlanSnapshotRestoreOutputsPrefixModeProducesCorrectPaths verifies that prefix mode
@@ -1994,6 +2037,30 @@ func TestPlanSnapshotRestoreOutputsOriginalModePreservesRelativePath(t *testing.
 	}
 }
 
+func TestPlanSnapshotRestoreOutputsOriginalModeExplicitRootPreservesLexicalIdentity(t *testing.T) {
+	rows := []snapshotRestoreRow{
+		{Path: "docs/a.txt", LogicalFileID: 1},
+	}
+	aliasRoot := filepath.Join(t.TempDir(), "alias-root")
+
+	plans, err := planSnapshotRestoreOutputs(rows, []string{"docs/a.txt"}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		OriginalRoot:    aliasRoot,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("planSnapshotRestoreOutputs original explicit root: %v", err)
+	}
+	if len(plans) != 1 {
+		t.Fatalf("expected 1 plan, got %d", len(plans))
+	}
+
+	want := filepath.Join(aliasRoot, "docs", "a.txt")
+	if plans[0].OutputPath != want {
+		t.Fatalf("original explicit root output path: want %q got %q", want, plans[0].OutputPath)
+	}
+}
+
 // TestPlanSnapshotRestoreOutputsCollisionDetectionTriggers verifies that the planner rejects
 // two rows that resolve to the same output path (e.g., duplicate snapshot_file rows).
 // The selection phase deduplicates, but the planner enforces this as a safety net.
@@ -2049,13 +2116,17 @@ func TestApplySnapshotMetadataAppliesChmodAndChtimes(t *testing.T) {
 	wantMtime := time.Date(2020, 6, 15, 10, 30, 0, 0, time.UTC)
 
 	opts := RestoreSnapshotOptions{StrictMetadata: false, NoMetadata: false}
-	if err := applySnapshotMetadata(
+	warnings, err := applySnapshotMetadata(
 		target,
 		sql.NullInt64{Int64: int64(wantMode), Valid: true},
 		sql.NullTime{Time: wantMtime, Valid: true},
 		opts,
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("applySnapshotMetadata: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no metadata warnings, got %+v", warnings)
 	}
 
 	info, err := os.Stat(target)
@@ -2086,13 +2157,17 @@ func TestApplySnapshotMetadataNoMetadataSkipsChmodAndChtimes(t *testing.T) {
 
 	// Pass mode 0o600 and an old mtime; both should be ignored.
 	opts := RestoreSnapshotOptions{NoMetadata: true}
-	if err := applySnapshotMetadata(
+	warnings, err := applySnapshotMetadata(
 		target,
 		sql.NullInt64{Int64: int64(0o600), Valid: true},
 		sql.NullTime{Time: time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
 		opts,
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("applySnapshotMetadata with NoMetadata should not error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no metadata warnings, got %+v", warnings)
 	}
 
 	after, err := os.Stat(target)
@@ -2113,12 +2188,15 @@ func TestApplySnapshotMetadataStrictPropagatesChmodError(t *testing.T) {
 	nonExistent := filepath.Join(t.TempDir(), "does-not-exist.txt")
 
 	opts := RestoreSnapshotOptions{StrictMetadata: true}
-	err := applySnapshotMetadata(
+	warnings, err := applySnapshotMetadata(
 		nonExistent,
 		sql.NullInt64{Int64: int64(0o600), Valid: true},
 		sql.NullTime{},
 		opts,
 	)
+	if len(warnings) != 0 {
+		t.Fatalf("strict metadata failure should not return warnings, got %+v", warnings)
+	}
 	if err == nil {
 		t.Fatalf("expected --strict to propagate chmod error, got nil")
 	}
@@ -2133,7 +2211,7 @@ func TestApplySnapshotMetadataStrictNotSetLogsAndContinues(t *testing.T) {
 	nonExistent := filepath.Join(t.TempDir(), "does-not-exist.txt")
 
 	opts := RestoreSnapshotOptions{StrictMetadata: false}
-	err := applySnapshotMetadata(
+	warnings, err := applySnapshotMetadata(
 		nonExistent,
 		sql.NullInt64{Int64: int64(0o600), Valid: true},
 		sql.NullTime{},
@@ -2141,6 +2219,32 @@ func TestApplySnapshotMetadataStrictNotSetLogsAndContinues(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("without --strict, chmod error should be logged not returned; got: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected one best-effort metadata warning, got %+v", warnings)
+	}
+	if warnings[0].Code != RestoreSnapshotWarningMetadata || warnings[0].Operation != "chmod" {
+		t.Fatalf("unexpected metadata warning: %+v", warnings[0])
+	}
+}
+
+func TestApplySnapshotMetadataBestEffortReturnsDeterministicWarnings(t *testing.T) {
+	nonExistent := filepath.Join(t.TempDir(), "does-not-exist.txt")
+
+	warnings, err := applySnapshotMetadata(
+		nonExistent,
+		sql.NullInt64{Int64: int64(0o600), Valid: true},
+		sql.NullTime{Time: time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
+		RestoreSnapshotOptions{},
+	)
+	if err != nil {
+		t.Fatalf("best-effort metadata should not fail restore, got %v", err)
+	}
+	if len(warnings) != 2 {
+		t.Fatalf("expected two warnings, got %+v", warnings)
+	}
+	if warnings[0].Operation != "chmod" || warnings[1].Operation != "chtimes" {
+		t.Fatalf("unexpected warning order: %+v", warnings)
 	}
 }
 

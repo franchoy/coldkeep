@@ -71,6 +71,32 @@ func TestEngineSnapshotDeleteSignature(t *testing.T) {
 	}
 }
 
+func TestEngineSnapshotRestoreSignature(t *testing.T) {
+	typ := reflect.TypeOf((*Engine)(nil)).Elem()
+	method, ok := typ.MethodByName("SnapshotRestore")
+	if !ok {
+		t.Fatal("Engine must expose SnapshotRestore")
+	}
+	if method.Type.NumIn() != 2 {
+		t.Fatalf("SnapshotRestore input count: got %d want 2", method.Type.NumIn())
+	}
+	if got := method.Type.In(0); got != reflect.TypeOf((*context.Context)(nil)).Elem() {
+		t.Fatalf("SnapshotRestore ctx type: got %v", got)
+	}
+	if got := method.Type.In(1); got != reflect.TypeOf(SnapshotRestoreRequest{}) {
+		t.Fatalf("SnapshotRestore request type: got %v", got)
+	}
+	if method.Type.NumOut() != 2 {
+		t.Fatalf("SnapshotRestore output count: got %d want 2", method.Type.NumOut())
+	}
+	if got := method.Type.Out(0); got != reflect.TypeOf(SnapshotRestoreResult{}) {
+		t.Fatalf("SnapshotRestore result type: got %v", got)
+	}
+	if got := method.Type.Out(1); got != reflect.TypeOf((*error)(nil)).Elem() {
+		t.Fatalf("SnapshotRestore error type: got %v", got)
+	}
+}
+
 func TestVerifyLevelFromString(t *testing.T) {
 	tests := []struct {
 		input   string

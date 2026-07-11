@@ -92,13 +92,30 @@ func newSnapshotFileDBRow(sf SnapshotFile, pathID int64) snapshotFileDBRow {
 type RestoreSnapshotOptions struct {
 	DestinationMode storage.RestoreDestinationMode
 	Destination     string
-	Overwrite       bool
-	StrictMetadata  bool
-	NoMetadata      bool
-	StorageContext  *storage.StorageContext
+	// OriginalRoot makes original-mode restore explicit for engine-owned callers.
+	// When empty, direct callers retain the legacy current-working-directory
+	// behavior for compatibility.
+	OriginalRoot   string
+	Overwrite      bool
+	StrictMetadata bool
+	NoMetadata     bool
+	StorageContext *storage.StorageContext
 	// Query is an optional filter applied on top of any path selections.
 	// A nil Query matches all entries.
 	Query *SnapshotQuery
+}
+
+type RestoreSnapshotWarningCode string
+
+const (
+	RestoreSnapshotWarningMetadata RestoreSnapshotWarningCode = "metadata_apply_failed"
+)
+
+type RestoreSnapshotWarning struct {
+	Code      RestoreSnapshotWarningCode
+	Path      string
+	Operation string
+	Detail    string
 }
 
 type RestoreSnapshotResult struct {
@@ -107,6 +124,7 @@ type RestoreSnapshotResult struct {
 	// RequestedPaths counts raw CLI input paths before normalization/deduplication.
 	RequestedPaths int64
 	OutputPaths    []string
+	Warnings       []RestoreSnapshotWarning
 }
 
 type SnapshotListFilter struct {
@@ -1226,53 +1244,15 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 
 	plans := make([]snapshotRestorePlanItem, 0, len(rows))
 	seenOutput := make(map[string]string)
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("resolve current working directory: %w", err)
-	}
-	cwdTrustedRoot, err := pathsafe.ValidateTrustedRootPath(cwd)
-	if err != nil {
-		return nil, fmt.Errorf("validate current working directory as trusted root: %w", err)
-	}
 
 	for _, row := range rows {
 		if err := pathsafe.ValidateStoredRelativePath(row.Path); err != nil {
 			return nil, fmt.Errorf("invalid snapshot restore path %q: %w", row.Path, err)
 		}
 
-		var outputPath string
-		trustedRoot := ""
-		switch mode {
-		case storage.RestoreDestinationOriginal:
-			// Snapshot path is already normalized and relative.
-			outputPath = filepath.Clean(filepath.FromSlash(row.Path))
-			trustedRoot = cwdTrustedRoot
-		case storage.RestoreDestinationPrefix:
-			prefix := strings.TrimSpace(opts.Destination)
-			trustedRoot, err = pathsafe.ValidateTrustedRootPath(prefix)
-			if err != nil {
-				return nil, fmt.Errorf("resolve prefix destination: %w", err)
-			}
-			outputPath, err = pathsafe.SafeJoin(trustedRoot, row.Path)
-			if err != nil {
-				return nil, fmt.Errorf("resolve prefix destination: %w", err)
-			}
-		case storage.RestoreDestinationOverride:
-			overridePath := strings.TrimSpace(opts.Destination)
-			absOverride, err := filepath.Abs(overridePath)
-			if err != nil {
-				return nil, fmt.Errorf("resolve override destination: %w", err)
-			}
-			outputPath = filepath.Clean(absOverride)
-			trustedRoot, err = pathsafe.NearestExistingAncestorDir(outputPath)
-			if err != nil {
-				return nil, fmt.Errorf("resolve override destination trusted root: %w", err)
-			}
-			if err := pathsafe.ValidateWritePathUnderTrustedRoot(trustedRoot, outputPath); err != nil {
-				return nil, fmt.Errorf("resolve override destination: %w", err)
-			}
-		default:
-			return nil, fmt.Errorf("unsupported restore destination mode: %s", mode)
+		outputPath, trustedRoot, err := resolveSnapshotRestoreOutput(row.Path, mode, opts)
+		if err != nil {
+			return nil, err
 		}
 
 		cleanOutputPath := filepath.Clean(outputPath)
@@ -1304,16 +1284,74 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 	return plans, nil
 }
 
-func applySnapshotMetadata(outputPath string, mode sql.NullInt64, mtime sql.NullTime, opts RestoreSnapshotOptions) error {
+func resolveSnapshotRestoreOutput(
+	snapshotPath string,
+	mode storage.RestoreDestinationMode,
+	opts RestoreSnapshotOptions,
+) (string, string, error) {
+	switch mode {
+	case storage.RestoreDestinationOriginal:
+		return resolveSnapshotRestoreOriginalOutput(snapshotPath, opts)
+	case storage.RestoreDestinationPrefix:
+		return resolveSnapshotRestorePrefixedOutput(snapshotPath, opts.Destination)
+	case storage.RestoreDestinationOverride:
+		return resolveSnapshotRestoreOverrideOutput(opts.Destination)
+	default:
+		return "", "", fmt.Errorf("unsupported restore destination mode: %s", mode)
+	}
+}
+
+func resolveSnapshotRestoreOriginalOutput(snapshotPath string, opts RestoreSnapshotOptions) (string, string, error) {
+	if strings.TrimSpace(opts.OriginalRoot) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", fmt.Errorf("resolve current working directory: %w", err)
+		}
+		trustedRoot, err := pathsafe.ValidateTrustedRootPath(cwd)
+		if err != nil {
+			return "", "", fmt.Errorf("validate current working directory as trusted root: %w", err)
+		}
+		return filepath.Clean(filepath.FromSlash(snapshotPath)), trustedRoot, nil
+	}
+	return resolveSnapshotRestorePrefixedOutput(snapshotPath, opts.OriginalRoot)
+}
+
+func resolveSnapshotRestorePrefixedOutput(snapshotPath, lexicalRoot string) (string, string, error) {
+	trustedRoot, err := pathsafe.ValidateTrustedRootPath(strings.TrimSpace(lexicalRoot))
+	if err != nil {
+		return "", "", fmt.Errorf("resolve prefix destination: %w", err)
+	}
+	outputPath := filepath.Clean(filepath.Join(lexicalRoot, filepath.FromSlash(snapshotPath)))
+	if err := pathsafe.ValidateWritePathUnderTrustedRoot(trustedRoot, outputPath); err != nil {
+		return "", "", fmt.Errorf("resolve prefix destination: %w", err)
+	}
+	return outputPath, trustedRoot, nil
+}
+
+func resolveSnapshotRestoreOverrideOutput(destination string) (string, string, error) {
+	outputPath := filepath.Clean(strings.TrimSpace(destination))
+	trustedRoot, err := pathsafe.NearestExistingAncestorDir(outputPath)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve override destination trusted root: %w", err)
+	}
+	if err := pathsafe.ValidateWritePathUnderTrustedRoot(trustedRoot, outputPath); err != nil {
+		return "", "", fmt.Errorf("resolve override destination: %w", err)
+	}
+	return outputPath, trustedRoot, nil
+}
+
+func applySnapshotMetadata(outputPath string, mode sql.NullInt64, mtime sql.NullTime, opts RestoreSnapshotOptions) ([]RestoreSnapshotWarning, error) {
 	if opts.NoMetadata {
-		return nil
+		return nil, nil
 	}
 
+	warnings := make([]RestoreSnapshotWarning, 0, 2)
 	metadataErrs := make([]string, 0)
 
 	if mode.Valid {
 		if err := os.Chmod(outputPath, os.FileMode(mode.Int64)); err != nil {
 			metadataErrs = append(metadataErrs, fmt.Sprintf("chmod: %v", err))
+			warnings = append(warnings, restoreSnapshotMetadataWarning(outputPath, "chmod", err))
 		}
 	}
 
@@ -1321,19 +1359,29 @@ func applySnapshotMetadata(outputPath string, mode sql.NullInt64, mtime sql.Null
 		mt := mtime.Time
 		if err := os.Chtimes(outputPath, mt, mt); err != nil {
 			metadataErrs = append(metadataErrs, fmt.Sprintf("chtimes: %v", err))
+			warnings = append(warnings, restoreSnapshotMetadataWarning(outputPath, "chtimes", err))
 		}
 	}
 
 	if len(metadataErrs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	metadataErr := fmt.Errorf("apply snapshot metadata for %q: %s", outputPath, strings.Join(metadataErrs, "; "))
 	if opts.StrictMetadata {
-		return metadataErr
+		return nil, metadataErr
 	}
 	log.Printf("snapshot: restore metadata warning path=%q error=%q", outputPath, metadataErr.Error())
-	return nil
+	return warnings, nil
+}
+
+func restoreSnapshotMetadataWarning(outputPath, operation string, err error) RestoreSnapshotWarning {
+	return RestoreSnapshotWarning{
+		Code:      RestoreSnapshotWarningMetadata,
+		Path:      outputPath,
+		Operation: operation,
+		Detail:    err.Error(),
+	}
 }
 
 func executeSnapshotRestorePlan(ctx context.Context, plans []snapshotRestorePlanItem, opts RestoreSnapshotOptions) (*RestoreSnapshotResult, error) {
@@ -1344,6 +1392,7 @@ func executeSnapshotRestorePlan(ctx context.Context, plans []snapshotRestorePlan
 	result := &RestoreSnapshotResult{
 		RestoredFiles: int64(0),
 		OutputPaths:   make([]string, 0, len(plans)),
+		Warnings:      make([]RestoreSnapshotWarning, 0),
 	}
 
 	validatedDirs := make(map[string]struct{})
@@ -1378,12 +1427,14 @@ func executeSnapshotRestorePlan(ctx context.Context, plans []snapshotRestorePlan
 			return nil, fmt.Errorf("restore snapshot path %q logical_file_id=%d: %w", plan.Path, plan.LogicalFileID, err)
 		}
 
-		if err := applySnapshotMetadata(restoreResult.OutputPath, plan.Mode, plan.MTime, opts); err != nil {
+		warnings, err := applySnapshotMetadata(restoreResult.OutputPath, plan.Mode, plan.MTime, opts)
+		if err != nil {
 			return nil, err
 		}
 
 		result.RestoredFiles++
 		result.OutputPaths = append(result.OutputPaths, restoreResult.OutputPath)
+		result.Warnings = append(result.Warnings, warnings...)
 	}
 
 	return result, nil

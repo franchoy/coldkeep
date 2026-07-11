@@ -19,6 +19,7 @@ type stubCommandEngine struct {
 	engine.Engine
 	snapshotCreateFunc    func(context.Context, engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error)
 	snapshotDeleteFunc    func(context.Context, engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error)
+	snapshotRestoreFunc   func(context.Context, engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error)
 	restoreStoredPathFunc func(context.Context, engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error)
 	removeStoredPathsFunc func(context.Context, engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error)
 }
@@ -35,6 +36,13 @@ func (s stubCommandEngine) SnapshotDelete(ctx context.Context, req engine.Snapsh
 		return s.snapshotDeleteFunc(ctx, req)
 	}
 	return engine.SnapshotDeleteResult{}, errors.New("unexpected SnapshotDelete call")
+}
+
+func (s stubCommandEngine) SnapshotRestore(ctx context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+	if s.snapshotRestoreFunc != nil {
+		return s.snapshotRestoreFunc(ctx, req)
+	}
+	return engine.SnapshotRestoreResult{}, errors.New("unexpected SnapshotRestore call")
 }
 
 func (s stubCommandEngine) RestoreStoredPath(ctx context.Context, req engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error) {

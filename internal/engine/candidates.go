@@ -681,13 +681,8 @@ type SnapshotRestoreSelection struct {
 	ModifiedBefore *time.Time
 }
 
-// SnapshotRestoreRequest is a frozen v1.13.9 candidate request for a future
-// SnapshotRestore operation. Not part of the active Engine interface.
-//
-// Structural surface is approved in v1.13.9 Phase 5, but request/result
-// presence still does not mean active engine ownership. Activation belongs to
-// later authorized phases; current CLI and snapshot-domain execution remain
-// unchanged.
+// SnapshotRestoreRequest is the frozen v1.13.9 active request for
+// Engine.SnapshotRestore.
 //
 // Safety invariant: Restore must never write outside the intended destination.
 type SnapshotRestoreRequest struct {
@@ -705,13 +700,8 @@ type SnapshotRestoreRequest struct {
 	Metadata SnapshotRestoreMetadataMode
 }
 
-// SnapshotRestoreResult is a frozen v1.13.9 candidate result for a future
-// SnapshotRestore operation. Not part of the active Engine interface.
-//
-// Structural surface is approved in v1.13.9 Phase 5, but request/result
-// presence still does not mean active engine ownership. Activation belongs to
-// later authorized phases; current CLI and snapshot-domain execution remain
-// unchanged.
+// SnapshotRestoreResult is the frozen v1.13.9 active result for
+// Engine.SnapshotRestore.
 type SnapshotRestoreResult struct {
 	SnapshotID          string
 	DestinationMode     SnapshotRestoreDestinationMode
