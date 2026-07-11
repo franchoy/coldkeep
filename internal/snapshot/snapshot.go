@@ -1099,6 +1099,41 @@ func buildSnapshotDiffEntry(
 	baseExists := snapshotDiffEntryExists(baseRows, path)
 	targetExists := snapshotDiffEntryExists(targetRows, path)
 
+	diffType, include := classifySnapshotDiffType(baseEntry, targetEntry, baseExists, targetExists)
+	if !include {
+		return SnapshotDiffEntry{}, false
+	}
+
+	entry := snapshotDiffEntryWithLogicalIDs(path, baseEntry, targetEntry, baseExists, targetExists)
+	entry.Type = diffType
+	return entry, true
+}
+
+func classifySnapshotDiffType(
+	baseEntry SnapshotFileEntry,
+	targetEntry SnapshotFileEntry,
+	baseExists bool,
+	targetExists bool,
+) (DiffType, bool) {
+	switch {
+	case !baseExists && targetExists:
+		return DiffAdded, true
+	case baseExists && !targetExists:
+		return DiffRemoved, true
+	case baseExists && targetExists && baseEntry.LogicalFileID != targetEntry.LogicalFileID:
+		return DiffModified, true
+	default:
+		return "", false
+	}
+}
+
+func snapshotDiffEntryWithLogicalIDs(
+	path string,
+	baseEntry SnapshotFileEntry,
+	targetEntry SnapshotFileEntry,
+	baseExists bool,
+	targetExists bool,
+) SnapshotDiffEntry {
 	entry := SnapshotDiffEntry{Path: path}
 	if baseExists {
 		entry.BaseLogicalID = sql.NullInt64{Int64: baseEntry.LogicalFileID, Valid: true}
@@ -1106,22 +1141,7 @@ func buildSnapshotDiffEntry(
 	if targetExists {
 		entry.TargetLogicalID = sql.NullInt64{Int64: targetEntry.LogicalFileID, Valid: true}
 	}
-
-	switch {
-	case !baseExists && targetExists:
-		entry.Type = DiffAdded
-	case baseExists && !targetExists:
-		entry.Type = DiffRemoved
-	case baseExists && targetExists:
-		if baseEntry.LogicalFileID == targetEntry.LogicalFileID {
-			return SnapshotDiffEntry{}, false
-		}
-		entry.Type = DiffModified
-	default:
-		return SnapshotDiffEntry{}, false
-	}
-
-	return entry, true
+	return entry
 }
 
 func snapshotDiffEntryExists(rows map[string]SnapshotFileEntry, path string) bool {
