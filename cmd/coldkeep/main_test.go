@@ -5130,7 +5130,7 @@ func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 	})
 
 	if !called {
-		t.Fatal("expected restoreSnapshotPhase to be called")
+		t.Fatal("expected snapshot restore to route through engine")
 	}
 	if gotSnapshotID != "snap-restore-1" {
 		t.Fatalf("snapshot ID mismatch: got=%q", gotSnapshotID)

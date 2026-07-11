@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
@@ -76,10 +77,12 @@ func TestRunSnapshotCommandRestoreRoutesThroughEngineWithExplicitOriginalRoot(t 
 	originalLoad := loadDefaultStorageContextPhase
 	originalEngine := newSnapshotRestoreCommandEngine
 	originalCWD := currentWorkingDirectoryPhase
+	originalRestore := restoreSnapshotPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		newSnapshotRestoreCommandEngine = originalEngine
 		currentWorkingDirectoryPhase = originalCWD
+		restoreSnapshotPhase = originalRestore
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -91,6 +94,10 @@ func TestRunSnapshotCommandRestoreRoutesThroughEngineWithExplicitOriginalRoot(t 
 	}
 	currentWorkingDirectoryPhase = func() (string, error) {
 		return "/explicit/original/root", nil
+	}
+	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string, _ []string, _ snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
+		t.Fatalf("restoreSnapshotPhase must not run in engine-routed snapshot restore path for %q", snapshotID)
+		return nil, nil
 	}
 
 	called := false
@@ -134,9 +141,11 @@ func TestRunSnapshotCommandRestoreRoutesThroughEngineWithExplicitOriginalRoot(t 
 func TestRunSnapshotCommandRestorePreservesSelectorSeparationAndRepetition(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalEngine := newSnapshotRestoreCommandEngine
+	originalRestore := restoreSnapshotPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		newSnapshotRestoreCommandEngine = originalEngine
+		restoreSnapshotPhase = originalRestore
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -145,6 +154,10 @@ func TestRunSnapshotCommandRestorePreservesSelectorSeparationAndRepetition(t *te
 			return storage.StorageContext{}, err
 		}
 		return storage.StorageContext{DB: dbconn}, nil
+	}
+	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string, _ []string, _ snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
+		t.Fatalf("restoreSnapshotPhase must not run in engine-routed snapshot restore path for %q", snapshotID)
+		return nil, nil
 	}
 
 	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {

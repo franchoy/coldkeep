@@ -340,16 +340,15 @@ var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, 
 var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 
-// Transitional direct snapshot-domain create seam kept for compatibility tests
-// and non-routed callers. Production CLI snapshot create is engine-routed in
-// v1.13.9 Phase 7.
+// Compatibility-only direct snapshot-domain create seam retained for lower-
+// level tests and non-CLI callers. Production CLI snapshot create routes
+// through Engine.SnapshotCreate.
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 
-// Transitional direct snapshot-domain restore seam kept for lower-level
-// compatibility tests and non-CLI callers. Production CLI snapshot restore is
-// engine-routed in v1.13.9 Phase 11.
+// Compatibility-only direct snapshot-domain restore seam retained for lower-
+// level tests and non-CLI callers. Production CLI snapshot restore routes
+// through Engine.SnapshotRestore.
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
-var _ = restoreSnapshotPhase
 var currentWorkingDirectoryPhase = os.Getwd
 var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
 	eng, err := engine.New(engine.Config{DB: db})
@@ -423,9 +422,9 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 	return stats, nil
 }
 
-// Transitional snapshot-domain delete seams remain for compatibility tests and
-// direct domain callers. Production CLI snapshot delete is engine-routed in
-// v1.13.9 Phase 9.
+// Compatibility-only direct snapshot-domain delete seams remain for lower-
+// level tests and non-CLI callers. Production CLI snapshot delete routes
+// through Engine.SnapshotDelete.
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
