@@ -421,9 +421,9 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 	return stats, nil
 }
 
-// Transitional CLI ownership in v1.13.1: snapshot delete remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.9 owns
-// later snapshot mutation boundary cleanup.
+// Transitional snapshot-domain delete seams remain for compatibility tests and
+// direct domain callers. Production CLI snapshot delete is engine-routed in
+// v1.13.9 Phase 9.
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
@@ -4898,19 +4898,29 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	var preview *snapshotDeleteLineagePreview
+	eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+	if err != nil {
+		return err
+	}
+	mode := engine.SnapshotDeleteModeExecute
 	if dryRun {
-		loadedPreview, err := snapshotDeleteLineagePreviewPhase(ctx, sgctx.DB, snapshotID)
-		if err != nil {
-			return err
-		}
-		preview = loadedPreview
+		mode = engine.SnapshotDeleteModePreview
+	}
+	result, err := eng.SnapshotDelete(ctx, engine.SnapshotDeleteRequest{
+		SnapshotID: snapshotID,
+		Mode:       mode,
+	})
+	if err != nil {
+		return err
 	}
 
-	if !dryRun {
-		if err := deleteSnapshotPhase(ctx, sgctx.DB, snapshotID); err != nil {
-			return err
-		}
+	renderedSnapshotID := result.SnapshotID
+	if renderedSnapshotID == "" {
+		renderedSnapshotID = snapshotID
+	}
+	preview, err := snapshotDeletePreviewFromEngineResult(result)
+	if err != nil {
+		return err
 	}
 
 	if outputMode == outputModeJSON {
@@ -4923,7 +4933,7 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 			"command": "snapshot",
 			"data": map[string]any{
 				"action":         action,
-				"snapshot_id":    snapshotID,
+				"snapshot_id":    renderedSnapshotID,
 				"dry_run":        dryRun,
 				"parent_id":      snapshotLabelJSONValue(previewParentID(preview)),
 				"parent_missing": previewParentMissing(preview),
@@ -4941,10 +4951,10 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	}
 
 	if dryRun {
-		output := formatSnapshotDeleteDryRunOutput(snapshotID, preview)
+		output := formatSnapshotDeleteDryRunOutput(renderedSnapshotID, preview)
 		_, _ = fmt.Fprint(os.Stdout, output)
 	} else {
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", renderedSnapshotID)
 		_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
 		_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	}
@@ -4952,6 +4962,34 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 }
 
 type snapshotDeleteLineagePreview = snapshot.DeleteLineagePreview
+
+func snapshotDeletePreviewFromEngineResult(result engine.SnapshotDeleteResult) (*snapshotDeleteLineagePreview, error) {
+	if result.Mode != engine.SnapshotDeleteModePreview {
+		return nil, nil
+	}
+	if result.Preview == nil {
+		return nil, fmt.Errorf("snapshot delete preview result missing preview payload")
+	}
+
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       result.SnapshotID,
+		ChildSnapshotIDs: append([]string(nil), result.Preview.Children...),
+		TotalFiles:       result.Preview.TotalFiles,
+		UniqueFiles:      result.Preview.UniqueFiles,
+		SharedFiles:      result.Preview.SharedFiles,
+	}
+	switch result.Preview.Parent.State {
+	case engine.SnapshotDeleteParentNone:
+	case engine.SnapshotDeleteParentPresent:
+		preview.ParentID = sql.NullString{String: result.Preview.Parent.ID, Valid: true}
+	case engine.SnapshotDeleteParentMissing:
+		preview.ParentID = sql.NullString{String: result.Preview.Parent.ID, Valid: true}
+		preview.ParentMissing = true
+	default:
+		return nil, fmt.Errorf("snapshot delete preview result has unknown parent state %q", result.Preview.Parent.State)
+	}
+	return preview, nil
+}
 
 func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
 	return snapshot.LoadDeleteLineagePreview(ctx, dbconn, snapshotID)

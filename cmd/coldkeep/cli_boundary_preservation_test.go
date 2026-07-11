@@ -94,12 +94,14 @@ func TestRunSnapshotCommandCreateUsesEngineOwnership(t *testing.T) {
 	}
 }
 
-func TestRunSnapshotCommandDeletePreservesDirectSnapshotOwnership(t *testing.T) {
+func TestRunSnapshotCommandDeleteUsesEngineOwnership(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDelete := deleteSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		deleteSnapshotPhase = originalDelete
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -112,11 +114,23 @@ func TestRunSnapshotCommandDeletePreservesDirectSnapshotOwnership(t *testing.T) 
 
 	called := false
 	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
-		called = true
-		if snapshotID != "snap-delete-owned" {
-			t.Fatalf("expected forwarded snapshot ID, got %q", snapshotID)
-		}
+		t.Fatalf("expected snapshot delete to avoid direct snapshot delete seam for %q", snapshotID)
 		return nil
+	}
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotDeleteFunc: func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+				called = true
+				if req.SnapshotID != "snap-delete-owned" || req.Mode != engine.SnapshotDeleteModeExecute {
+					t.Fatalf("unexpected snapshot delete request: %+v", req)
+				}
+				return engine.SnapshotDeleteResult{
+					SnapshotID: req.SnapshotID,
+					Mode:       engine.SnapshotDeleteModeExecute,
+					Deleted:    true,
+				}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -134,7 +148,7 @@ func TestRunSnapshotCommandDeletePreservesDirectSnapshotOwnership(t *testing.T) 
 	})
 
 	if !called {
-		t.Fatal("expected snapshot delete to preserve direct CLI/snapshot ownership")
+		t.Fatal("expected snapshot delete to route through engine ownership")
 	}
 
 	var payload map[string]any
