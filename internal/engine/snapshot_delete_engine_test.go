@@ -11,47 +11,18 @@ import (
 )
 
 func TestSnapshotDeletePreviewRoutesThroughEngine(t *testing.T) {
-	dbconn := openSnapshotCreateEngineDB(t)
-	seedSnapshotCreateEngineFiles(t, dbconn)
-	eng := newSnapshotCreateEngine(t, dbconn)
-
-	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:   "snap-delete-parent",
-		Type: "full",
-	})
-	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:       "snap-delete-target",
-		Type:     "full",
-		ParentID: stringPtr("snap-delete-parent"),
-	})
-	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:       "snap-delete-child",
-		Type:     "full",
-		ParentID: stringPtr("snap-delete-target"),
-	})
-
-	result, err := eng.SnapshotDelete(context.Background(), SnapshotDeleteRequest{
-		SnapshotID: " snap-delete-target ",
-		Mode:       SnapshotDeleteModePreview,
-	})
-	if err != nil {
-		t.Fatalf("SnapshotDelete preview: %v", err)
-	}
-	if result.SnapshotID != "snap-delete-target" || result.Mode != SnapshotDeleteModePreview || result.Deleted {
-		t.Fatalf("unexpected preview result header: %+v", result)
-	}
-	if result.Preview == nil {
-		t.Fatal("expected preview payload")
-	}
-	if result.Preview.Parent != (SnapshotDeleteParent{ID: "snap-delete-parent", State: SnapshotDeleteParentPresent}) {
-		t.Fatalf("unexpected parent preview: %+v", result.Preview.Parent)
-	}
-	if strings.Join(result.Preview.Children, "|") != "snap-delete-child" {
-		t.Fatalf("unexpected children preview: %+v", result.Preview.Children)
-	}
-	if result.Preview.TotalFiles != 3 || result.Preview.UniqueFiles != 0 || result.Preview.SharedFiles != 3 {
-		t.Fatalf("unexpected preview counts: %+v", result.Preview)
-	}
+	dbconn, eng := setupSnapshotDeletePreviewEngineCase(t)
+	result := runSnapshotDeletePreview(t, eng, " snap-delete-target ")
+	assertSnapshotDeletePreviewReadOnly(t, dbconn, "snap-delete-target", "snap-delete-child")
+	assertSnapshotDeletePreviewResult(
+		t,
+		result,
+		SnapshotDeleteParent{ID: "snap-delete-parent", State: SnapshotDeleteParentPresent},
+		[]string{"snap-delete-child"},
+		3,
+		0,
+		3,
+	)
 }
 
 func TestSnapshotDeletePreviewReportsMissingParentCompatibilityState(t *testing.T) {
@@ -185,4 +156,82 @@ func mustCreateSnapshotResult(t *testing.T, dbconn *sql.DB, opts snapshot.Snapsh
 
 func stringPtr(v string) *string {
 	return &v
+}
+
+func setupSnapshotDeletePreviewEngineCase(t *testing.T) (*sql.DB, *DefaultEngine) {
+	t.Helper()
+
+	dbconn := openSnapshotCreateEngineDB(t)
+	seedSnapshotCreateEngineFiles(t, dbconn)
+	eng := newSnapshotCreateEngine(t, dbconn)
+
+	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
+		ID:   "snap-delete-parent",
+		Type: "full",
+	})
+	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
+		ID:       "snap-delete-target",
+		Type:     "full",
+		ParentID: stringPtr("snap-delete-parent"),
+	})
+	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
+		ID:       "snap-delete-child",
+		Type:     "full",
+		ParentID: stringPtr("snap-delete-target"),
+	})
+
+	return dbconn, eng
+}
+
+func runSnapshotDeletePreview(t *testing.T, eng *DefaultEngine, snapshotID string) SnapshotDeleteResult {
+	t.Helper()
+
+	result, err := eng.SnapshotDelete(context.Background(), SnapshotDeleteRequest{
+		SnapshotID: snapshotID,
+		Mode:       SnapshotDeleteModePreview,
+	})
+	if err != nil {
+		t.Fatalf("SnapshotDelete preview: %v", err)
+	}
+	return result
+}
+
+func assertSnapshotDeletePreviewReadOnly(t *testing.T, dbconn *sql.DB, snapshotID, childSnapshotID string) {
+	t.Helper()
+
+	if !snapshotExists(t, dbconn, snapshotID) {
+		t.Fatalf("expected preview to keep snapshot %q", snapshotID)
+	}
+	childParent := snapshotParentID(t, dbconn, childSnapshotID)
+	if !childParent.Valid || childParent.String != snapshotID {
+		t.Fatalf("expected preview to preserve child parent_id=%q, got %+v", snapshotID, childParent)
+	}
+}
+
+func assertSnapshotDeletePreviewResult(
+	t *testing.T,
+	result SnapshotDeleteResult,
+	wantParent SnapshotDeleteParent,
+	wantChildren []string,
+	wantTotalFiles int64,
+	wantUniqueFiles int64,
+	wantSharedFiles int64,
+) {
+	t.Helper()
+
+	if result.SnapshotID != "snap-delete-target" || result.Mode != SnapshotDeleteModePreview || result.Deleted {
+		t.Fatalf("unexpected preview result header: %+v", result)
+	}
+	if result.Preview == nil {
+		t.Fatal("expected preview payload")
+	}
+	if result.Preview.Parent != wantParent {
+		t.Fatalf("unexpected parent preview: %+v", result.Preview.Parent)
+	}
+	if strings.Join(result.Preview.Children, "|") != strings.Join(wantChildren, "|") {
+		t.Fatalf("unexpected children preview: %+v", result.Preview.Children)
+	}
+	if result.Preview.TotalFiles != wantTotalFiles || result.Preview.UniqueFiles != wantUniqueFiles || result.Preview.SharedFiles != wantSharedFiles {
+		t.Fatalf("unexpected preview counts: %+v", result.Preview)
+	}
 }

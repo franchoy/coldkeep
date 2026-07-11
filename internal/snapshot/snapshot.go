@@ -735,48 +735,77 @@ func DeleteSnapshotWithResult(ctx context.Context, db *sql.DB, snapshotID string
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if strings.TrimSpace(snapshotID) == "" {
-		return DeleteSnapshotResult{}, errors.New("snapshot id cannot be empty")
-	}
-	snapshotID = strings.TrimSpace(snapshotID)
-
-	if _, err := GetSnapshot(ctx, db, snapshotID); err != nil {
+	normalizedID, err := normalizeDeleteSnapshotID(snapshotID)
+	if err != nil {
 		return DeleteSnapshotResult{}, err
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	if _, err := GetSnapshot(ctx, db, normalizedID); err != nil {
+		return DeleteSnapshotResult{}, err
+	}
+
+	tx, err := beginDeleteSnapshotTx(ctx, db)
 	if err != nil {
 		return DeleteSnapshotResult{}, fmt.Errorf("begin snapshot delete transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM snapshot_file WHERE snapshot_id = $1`, snapshotID); err != nil {
-		return DeleteSnapshotResult{}, fmt.Errorf("delete snapshot_file rows snapshot_id=%s: %w", snapshotID, err)
+	return deleteSnapshotWithResultInTx(ctx, tx, normalizedID)
+}
+
+func DeleteSnapshot(ctx context.Context, db *sql.DB, snapshotID string) error {
+	_, err := DeleteSnapshotWithResult(ctx, db, snapshotID)
+	return err
+}
+
+func normalizeDeleteSnapshotID(snapshotID string) (string, error) {
+	normalizedID := strings.TrimSpace(snapshotID)
+	if normalizedID == "" {
+		return "", errors.New("snapshot id cannot be empty")
 	}
-	deleteResult, err := tx.ExecContext(ctx, `DELETE FROM snapshot WHERE id = $1`, snapshotID)
-	if err != nil {
-		return DeleteSnapshotResult{}, fmt.Errorf("delete snapshot row id=%s: %w", snapshotID, err)
+	return normalizedID, nil
+}
+
+func beginDeleteSnapshotTx(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
+	return db.BeginTx(ctx, nil)
+}
+
+func deleteSnapshotWithResultInTx(ctx context.Context, tx *sql.Tx, snapshotID string) (DeleteSnapshotResult, error) {
+	if err := deleteSnapshotMembershipRows(ctx, tx, snapshotID); err != nil {
+		return DeleteSnapshotResult{}, err
 	}
-	rowsAffected, err := deleteResult.RowsAffected()
-	if err != nil {
-		return DeleteSnapshotResult{}, fmt.Errorf("determine deleted snapshot row count id=%s: %w", snapshotID, err)
-	}
-	if rowsAffected != 1 {
-		return DeleteSnapshotResult{}, fmt.Errorf("delete snapshot row id=%s affected %d rows", snapshotID, rowsAffected)
+	if err := deleteSnapshotRecord(ctx, tx, snapshotID); err != nil {
+		return DeleteSnapshotResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return DeleteSnapshotResult{}, fmt.Errorf("commit snapshot delete transaction: %w", err)
 	}
-
 	return DeleteSnapshotResult{
 		SnapshotID: snapshotID,
 		Deleted:    true,
 	}, nil
 }
 
-func DeleteSnapshot(ctx context.Context, db *sql.DB, snapshotID string) error {
-	_, err := DeleteSnapshotWithResult(ctx, db, snapshotID)
-	return err
+func deleteSnapshotMembershipRows(ctx context.Context, tx *sql.Tx, snapshotID string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM snapshot_file WHERE snapshot_id = $1`, snapshotID); err != nil {
+		return fmt.Errorf("delete snapshot_file rows snapshot_id=%s: %w", snapshotID, err)
+	}
+	return nil
+}
+
+func deleteSnapshotRecord(ctx context.Context, tx *sql.Tx, snapshotID string) error {
+	deleteResult, err := tx.ExecContext(ctx, `DELETE FROM snapshot WHERE id = $1`, snapshotID)
+	if err != nil {
+		return fmt.Errorf("delete snapshot row id=%s: %w", snapshotID, err)
+	}
+	rowsAffected, err := deleteResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("determine deleted snapshot row count id=%s: %w", snapshotID, err)
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf("delete snapshot row id=%s affected %d rows", snapshotID, rowsAffected)
+	}
+	return nil
 }
 
 func loadSnapshotFilesByPath(ctx context.Context, db *sql.DB, snapshotID string) (map[string]SnapshotFileEntry, error) {
