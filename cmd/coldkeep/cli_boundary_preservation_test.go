@@ -293,6 +293,40 @@ func TestRunRepairCommandPreservesDirectMaintenanceOwnership(t *testing.T) {
 	}
 }
 
+func TestRunRepairCommandDoesNotConstructEngine(t *testing.T) {
+	originalLogical := repairLogicalRefCountsPhase
+	originalEngine := newCommandEngine
+	t.Cleanup(func() {
+		repairLogicalRefCountsPhase = originalLogical
+		newCommandEngine = originalEngine
+	})
+
+	engineConstructed := false
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		engineConstructed = true
+		t.Fatal("repair should not construct an engine repair/recovery API")
+		return nil, nil
+	}
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{
+			ScannedLogicalFiles: 2,
+			UpdatedLogicalFiles: 1,
+		}, nil
+	}
+
+	err := runRepairCommand(parsedCommandLine{
+		method:      "repair",
+		positionals: []string{"ref-counts"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runRepairCommand: %v", err)
+	}
+	if engineConstructed {
+		t.Fatal("repair unexpectedly constructed an engine")
+	}
+}
+
 func TestRunDoctorCommandPreservesDirectRecoveryOwnership(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase
@@ -334,5 +368,50 @@ func TestRunDoctorCommandPreservesDirectRecoveryOwnership(t *testing.T) {
 	}
 	if verifyCalled {
 		t.Fatal("verify phase should not run after recovery failure")
+	}
+}
+
+func TestRunDoctorCommandDoesNotConstructEngine(t *testing.T) {
+	originalRecovery := doctorRecoveryPhase
+	originalSchema := doctorSchemaVersionPhase
+	originalVerify := doctorVerifyPhase
+	originalAudit := doctorSystemAuditPhase
+	originalEngine := newCommandEngine
+	t.Cleanup(func() {
+		doctorRecoveryPhase = originalRecovery
+		doctorSchemaVersionPhase = originalSchema
+		doctorVerifyPhase = originalVerify
+		doctorSystemAuditPhase = originalAudit
+		newCommandEngine = originalEngine
+	})
+
+	engineConstructed := false
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		engineConstructed = true
+		t.Fatal("doctor should not construct an engine repair/recovery API")
+		return nil, nil
+	}
+	doctorRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+	doctorSchemaVersionPhase = func() (int64, error) {
+		return 5, nil
+	}
+	doctorVerifyPhase = func(string, string, int, verify.VerifyLevel) error {
+		return nil
+	}
+	doctorSystemAuditPhase = func() (maintenance.SystemAuditSummary, error) {
+		return maintenance.SystemAuditSummary{}, nil
+	}
+
+	err := runDoctorCommand(parsedCommandLine{
+		method: "doctor",
+		flags:  map[string][]string{},
+	}, outputModeJSON)
+	if err != nil {
+		t.Fatalf("runDoctorCommand: %v", err)
+	}
+	if engineConstructed {
+		t.Fatal("doctor unexpectedly constructed an engine")
 	}
 }

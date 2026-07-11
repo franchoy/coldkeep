@@ -785,8 +785,9 @@ const (
 // Not part of the active v1.12 Engine interface.
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Repair and recover remain CLI/domain owned until
-// the explicit corrective-integrity follow-up in v1.13.10.
+// active engine ownership. Repair and recover remain CLI/domain owned after
+// the v1.13.9 Phase 14 boundary decision and the Phase 16 honesty proof; any
+// future activation must be explicit.
 type RepairRequest struct {
 	// Target selects the single-target repair (when Batch is false).
 	Target RepairTarget
@@ -838,8 +839,9 @@ type RepairResult struct {
 // operation. Not part of the active v1.12 Engine interface.
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Repair and recover remain CLI/domain owned until
-// the explicit corrective-integrity follow-up in v1.13.10.
+// active engine ownership. Repair and recover remain CLI/domain owned after
+// the v1.13.9 Phase 14 boundary decision and the Phase 16 honesty proof; any
+// future activation must be explicit.
 //
 // Safety invariant: Recovery must not legitimize corrupt mappings. Recovery is
 // a corrective integrity pass (abort dangling writes, clear stale sealing

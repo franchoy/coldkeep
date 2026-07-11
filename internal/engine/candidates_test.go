@@ -52,7 +52,11 @@ func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 
 	for _, forbidden := range []string{
 		"Repair",
+		"SnapshotRepair",
+		"RepairPlan",
 		"Recover",
+		"SnapshotRecover",
+		"RecoveryPlan",
 	} {
 		if slices.Contains(got, forbidden) {
 			t.Fatalf("Engine interface unexpectedly exposes candidate-only method %q; active methods=%v", forbidden, got)
@@ -101,14 +105,14 @@ func candidateOnlyOperationCases() []candidateOnlyOperationCase {
 			requestType:       engine.RepairRequest{},
 			resultType:        engine.RepairResult{},
 			forbiddenMethod:   "Repair",
-			laterOwnerRelease: "v1.13.10",
+			laterOwnerRelease: "v1.13.9 Phase 14+",
 		},
 		{
 			name:              "recover",
 			requestType:       engine.RecoverRequest{},
 			resultType:        engine.RecoverResult{},
 			forbiddenMethod:   "Recover",
-			laterOwnerRelease: "v1.13.10",
+			laterOwnerRelease: "v1.13.9 Phase 14+",
 		},
 	}
 }

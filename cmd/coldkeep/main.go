@@ -180,23 +180,25 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
-// Transitional CLI ownership in v1.13.1: doctor still owns corrective
-// recovery orchestration directly through recovery hooks. v1.13.10 owns any
-// later repair/recovery boundary decisions, and v1.13.12 owns remaining
-// thin-wrapper proof around this seam.
+// Transitional but intentional CLI ownership in v1.13.9: doctor still owns
+// corrective recovery orchestration directly through lower-layer recovery and
+// verify hooks. Phase 14 decided this boundary, Phase 15 defined the honesty
+// proof scope, and Phase 16 proves the seam remains CLI-owned rather than an
+// active engine repair/recovery API.
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 
-// Transitional CLI ownership in v1.13.1: repair remains direct maintenance
-// execution rather than active engine ownership. v1.13.10 owns broader
-// repair/recovery boundary decisions.
+// Transitional but intentional CLI ownership in v1.13.9: repair remains
+// direct maintenance execution rather than active engine ownership. The
+// checked-in repair/recovery boundary decision keeps this seam CLI-owned until
+// an explicit future activation phase says otherwise.
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 
-// Transitional CLI ownership in v1.13.1: chunk live-ref-count repair remains
-// a direct maintenance phase hook, not an engine-routed workflow. v1.13.10 owns
-// later cleanup if this boundary changes.
+// Transitional but intentional CLI ownership in v1.13.9: chunk live-ref-count
+// repair remains a direct maintenance phase hook, not an engine-routed
+// workflow. Any future boundary change must be explicit and behavior-preserving.
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
