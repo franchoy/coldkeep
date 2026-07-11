@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
@@ -15,12 +16,14 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-func TestRunSnapshotCommandCreatePreservesDirectSnapshotOwnership(t *testing.T) {
+func TestRunSnapshotCommandCreateUsesEngineOwnership(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -31,19 +34,30 @@ func TestRunSnapshotCommandCreatePreservesDirectSnapshotOwnership(t *testing.T) 
 		return storage.StorageContext{DB: dbconn}, nil
 	}
 
-	called := false
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		called = true
-		if opts.ID != "snap-cli-owned" {
-			t.Fatalf("expected forwarded snapshot ID, got %q", opts.ID)
-		}
-		if opts.Type != "partial" {
-			t.Fatalf("expected partial snapshot type, got %q", opts.Type)
-		}
-		if len(opts.Paths) != 1 || opts.Paths[0] != "docs/" {
-			t.Fatalf("expected direct snapshot create paths, got %v", opts.Paths)
-		}
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotCreateOptions) error {
+		t.Fatal("expected snapshot create to avoid direct CLI/snapshot ownership")
 		return nil
+	}
+
+	called := false
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				called = true
+				if req.ID != "snap-cli-owned" {
+					t.Fatalf("expected forwarded snapshot ID, got %q", req.ID)
+				}
+				if len(req.Paths) != 1 || req.Paths[0] != "docs/" {
+					t.Fatalf("expected engine-routed snapshot create paths, got %v", req.Paths)
+				}
+				return engine.SnapshotCreateResult{
+					SnapshotID:    "snap-cli-owned",
+					Type:          engine.SnapshotTypePartial,
+					PathsCount:    1,
+					FilesInserted: 1,
+				}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -61,7 +75,7 @@ func TestRunSnapshotCommandCreatePreservesDirectSnapshotOwnership(t *testing.T) 
 	})
 
 	if !called {
-		t.Fatal("expected snapshot create to preserve direct CLI/snapshot ownership")
+		t.Fatal("expected snapshot create to route through engine ownership")
 	}
 
 	var payload map[string]any

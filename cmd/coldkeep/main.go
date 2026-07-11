@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -342,9 +340,9 @@ var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, 
 var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 
-// Transitional CLI ownership in v1.13.1: snapshot create remains a direct
-// snapshot package workflow rather than an active engine method. v1.13.9 owns
-// the snapshot mutation boundary cleanup.
+// Transitional direct snapshot-domain create seam kept for compatibility tests
+// and non-routed callers. Production CLI snapshot create is engine-routed in
+// v1.13.9 Phase 7.
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 
 // Transitional CLI ownership in v1.13.1: snapshot restore remains a direct
@@ -4241,14 +4239,6 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 	return clirender.RenderSimulateStoreHuman(os.Stdout, r)
 }
 
-func generateSnapshotID() (string, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate snapshot id entropy: %w", err)
-	}
-	return "snap-" + hex.EncodeToString(b), nil
-}
-
 func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if len(parsed.positionals) < 1 {
 		return usageErrorf("Usage: coldkeep snapshot <create|restore|list|show|stats|delete|diff> ...")
@@ -5204,40 +5194,29 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	}
 
 	paths := parsed.positionals[1:]
-	snapshotType := "full"
-	if len(paths) > 0 {
-		snapshotType = "partial"
-	}
 
 	snapshotID, hasSnapshotID := parsed.lastFlagValue("id")
 	snapshotID = strings.TrimSpace(snapshotID)
 	if hasSnapshotID && snapshotID == "" {
 		return usageErrorf("--id cannot be empty")
 	}
-	if !hasSnapshotID {
-		generatedID, err := generateSnapshotID()
-		if err != nil {
-			return err
-		}
-		snapshotID = generatedID
-	}
 
-	var labelPtr *string
-	if label, hasLabel := parsed.lastFlagValue("label"); hasLabel {
-		trimmed := strings.TrimSpace(label)
+	label := ""
+	if rawLabel, hasLabel := parsed.lastFlagValue("label"); hasLabel {
+		trimmed := strings.TrimSpace(rawLabel)
 		if trimmed == "" {
 			return usageErrorf("--label cannot be empty")
 		}
-		labelPtr = &trimmed
+		label = trimmed
 	}
 
-	var parentIDPtr *string
+	parentID := ""
 	if fromID, hasFrom := parsed.lastFlagValue("from"); hasFrom {
 		trimmed := strings.TrimSpace(fromID)
 		if trimmed == "" {
 			return usageErrorf("--from cannot be empty")
 		}
-		parentIDPtr = &trimmed
+		parentID = trimmed
 	}
 
 	sgctx, err := loadDefaultStorageContextPhase()
@@ -5245,33 +5224,29 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
-	perf.Mark("setup")
 
 	if sgctx.DB == nil {
 		return errors.New("storage context DB is nil")
 	}
+	eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+	if err != nil {
+		return err
+	}
+	perf.Mark("setup")
 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	if err := createSnapshotPhase(ctx, sgctx.DB, snapshot.SnapshotCreateOptions{
+	result, err := eng.SnapshotCreate(ctx, engine.SnapshotCreateRequest{
 		ID:       snapshotID,
-		Type:     snapshotType,
-		Label:    labelPtr,
-		ParentID: parentIDPtr,
-		Paths:    paths,
-	}); err != nil {
+		Label:    label,
+		ParentID: parentID,
+		Paths:    append([]string(nil), paths...),
+	})
+	if err != nil {
 		return err
 	}
 	perf.Mark("operation")
-
-	var (
-		filesInserted    int64
-		hasFilesInserted bool
-	)
-	if err := sgctx.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&filesInserted); err == nil {
-		hasFilesInserted = true
-	}
 
 	if outputMode == outputModeJSON {
 		totalMs := int64(0)
@@ -5279,41 +5254,37 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 			totalMs += s.DurationMs
 		}
 		data := map[string]any{
-			"snapshot_id": snapshotID,
-			"type":        snapshotType,
-			"paths_count": len(paths),
-			"duration_ms": totalMs,
-			"perf_spans":  perf.Spans(),
+			"snapshot_id":    result.SnapshotID,
+			"type":           string(result.Type),
+			"paths_count":    result.PathsCount,
+			"files_inserted": result.FilesInserted,
+			"duration_ms":    totalMs,
+			"perf_spans":     perf.Spans(),
 		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
 			"data":    data,
 		}
-		if hasFilesInserted {
-			data["files_inserted"] = filesInserted
+		if result.Label != "" {
+			data["label"] = result.Label
 		}
-		if labelPtr != nil {
-			data["label"] = *labelPtr
-		}
-		if parentIDPtr != nil {
-			data["parent_id"] = *parentIDPtr
+		if result.ParentID != "" {
+			data["parent_id"] = result.ParentID
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
 	}
 
-	if parentIDPtr != nil {
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot %q created from parent %q\n", snapshotID, *parentIDPtr)
-	} else if snapshotType == "full" {
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s (all paths)\n", snapshotID, snapshotType)
+	if result.ParentID != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot %q created from parent %q\n", result.SnapshotID, result.ParentID)
+	} else if result.Type == engine.SnapshotTypeFull {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s (all paths)\n", result.SnapshotID, result.Type)
 	} else {
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s paths=%d\n", snapshotID, snapshotType, len(paths))
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s paths=%d\n", result.SnapshotID, result.Type, result.PathsCount)
 	}
-	if hasFilesInserted {
-		_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", filesInserted)
-	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", result.FilesInserted)
 	totalMs := int64(0)
 	for _, s := range perf.Spans() {
 		totalMs += s.DurationMs

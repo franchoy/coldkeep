@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -4683,10 +4685,10 @@ func TestRunStoreCommandAllowsCrossVersionReuseJSON(t *testing.T) {
 
 func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -4700,23 +4702,36 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	var (
 		called       bool
 		gotID        string
-		gotType      string
-		gotLabel     *string
-		gotParentID  *string
+		gotLabel     string
+		gotParentID  string
 		gotPaths     []string
-		gotDBNonNil  bool
-		gotCtxNonNil bool
+		gotResultReq engine.SnapshotCreateRequest
 	)
-	createSnapshotPhase = func(ctx context.Context, db *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		called = true
-		gotID = opts.ID
-		gotType = opts.Type
-		gotLabel = opts.Label
-		gotParentID = opts.ParentID
-		gotPaths = append([]string(nil), opts.Paths...)
-		gotDBNonNil = db != nil
-		gotCtxNonNil = ctx != nil
-		return nil
+	newCommandEngine = func(db *sql.DB, _ string) (engine.Engine, error) {
+		if db == nil {
+			t.Fatal("expected non-nil db")
+		}
+		return stubCommandEngine{
+			snapshotCreateFunc: func(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				called = true
+				gotID = req.ID
+				gotLabel = req.Label
+				gotParentID = req.ParentID
+				gotPaths = append([]string(nil), req.Paths...)
+				gotResultReq = req
+				if ctx == nil {
+					t.Fatal("expected non-nil ctx")
+				}
+				return engine.SnapshotCreateResult{
+					SnapshotID:    req.ID,
+					Type:          engine.SnapshotTypePartial,
+					PathsCount:    len(req.Paths),
+					FilesInserted: 2,
+					Label:         req.Label,
+					ParentID:      req.ParentID,
+				}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -4735,25 +4750,22 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	})
 
 	if !called {
-		t.Fatal("expected createSnapshotPhase to be called")
-	}
-	if !gotCtxNonNil || !gotDBNonNil {
-		t.Fatalf("expected non-nil ctx and db, got ctx=%v db=%v", gotCtxNonNil, gotDBNonNil)
+		t.Fatal("expected engine SnapshotCreate to be called")
 	}
 	if gotID != "snap-phase2" {
 		t.Fatalf("snapshot ID mismatch: got=%q", gotID)
 	}
-	if gotType != "partial" {
-		t.Fatalf("snapshot type mismatch: got=%q", gotType)
-	}
-	if gotLabel == nil || *gotLabel != "release-candidate" {
+	if gotLabel != "release-candidate" {
 		t.Fatalf("snapshot label mismatch: got=%v", gotLabel)
 	}
-	if gotParentID != nil {
+	if gotParentID != "" {
 		t.Fatalf("expected nil parentID when --from is not provided, got=%v", gotParentID)
 	}
 	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
 		t.Fatalf("snapshot paths mismatch: got=%v", gotPaths)
+	}
+	if !reflect.DeepEqual(gotResultReq.Paths, []string{"docs/", "a.txt"}) {
+		t.Fatalf("expected raw paths preserved, got=%v", gotResultReq.Paths)
 	}
 
 	var payload map[string]any
@@ -4770,14 +4782,17 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	if _, ok := data["duration_ms"]; !ok {
 		t.Fatalf("expected duration_ms in snapshot payload data, got=%v", data)
 	}
+	if got, _ := data["files_inserted"].(float64); int(got) != 2 {
+		t.Fatalf("expected files_inserted=2, got=%v", data["files_inserted"])
+	}
 }
 
 func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -4788,12 +4803,21 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
 
-	gotType := ""
+	gotType := engine.SnapshotType("")
 	gotPathCount := -1
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		gotType = opts.Type
-		gotPathCount = len(opts.Paths)
-		return nil
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				gotPathCount = len(req.Paths)
+				gotType = engine.SnapshotTypeFull
+				return engine.SnapshotCreateResult{
+					SnapshotID:    "snap-full",
+					Type:          engine.SnapshotTypeFull,
+					PathsCount:    0,
+					FilesInserted: 0,
+				}, nil
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -4805,7 +4829,7 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 		t.Fatalf("runSnapshotCommand returned error: %v", err)
 	}
 
-	if gotType != "full" {
+	if gotType != engine.SnapshotTypeFull {
 		t.Fatalf("expected full snapshot type, got %q", gotType)
 	}
 	if gotPathCount != 0 {
@@ -4815,10 +4839,10 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 
 func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -4829,10 +4853,20 @@ func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
 
-	var gotParentID *string
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		gotParentID = opts.ParentID
-		return nil
+	gotParentID := ""
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				gotParentID = req.ParentID
+				return engine.SnapshotCreateResult{
+					SnapshotID:    "snap-child",
+					Type:          engine.SnapshotTypeFull,
+					PathsCount:    0,
+					FilesInserted: 0,
+					ParentID:      req.ParentID,
+				}, nil
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -4847,7 +4881,7 @@ func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
 		t.Fatalf("runSnapshotCommand returned error: %v", err)
 	}
 
-	if gotParentID == nil || *gotParentID != "snap-parent" {
+	if gotParentID != "snap-parent" {
 		t.Fatalf("expected forwarded parentID snap-parent, got=%v", gotParentID)
 	}
 }
@@ -9174,10 +9208,10 @@ func TestRepairBatchPreStatefulRejectsMissingInputBeforeRepairExecution(t *testi
 
 func TestSnapshotCreateFromMissingParentStateDependentDeterministicError(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -9189,12 +9223,16 @@ func TestSnapshotCreateFromMissingParentStateDependentDeterministicError(t *test
 	}
 
 	createSnapshotCalls := 0
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		createSnapshotCalls++
-		if opts.ParentID == nil || *opts.ParentID != "missing-parent" {
-			t.Fatalf("expected parent id missing-parent, got %+v", opts.ParentID)
-		}
-		return fmt.Errorf(`snapshot %q does not exist`, *opts.ParentID)
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				createSnapshotCalls++
+				if req.ParentID != "missing-parent" {
+					t.Fatalf("expected parent id missing-parent, got %+v", req.ParentID)
+				}
+				return engine.SnapshotCreateResult{}, fmt.Errorf(`snapshot %q does not exist`, req.ParentID)
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -10413,10 +10451,10 @@ func TestRunGCCommandJSONIncludesPerfSpans(t *testing.T) {
 
 func TestRunSnapshotCreateCommandJSONIncludesPerfSpans(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	dbconn, err := sql.Open("sqlite3", ":memory:")
@@ -10432,14 +10470,26 @@ func TestRunSnapshotCreateCommandJSONIncludesPerfSpans(t *testing.T) {
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
-	createSnapshotPhase = func(ctx context.Context, db *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		if opts.ID != "phase1-perf-test" {
-			t.Fatalf("unexpected snapshot id: %q", opts.ID)
-		}
+	newCommandEngine = func(db *sql.DB, _ string) (engine.Engine, error) {
 		if db == nil {
 			t.Fatal("expected non-nil db")
 		}
-		return nil
+		return stubCommandEngine{
+			snapshotCreateFunc: func(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				if req.ID != "phase1-perf-test" {
+					t.Fatalf("unexpected snapshot id: %q", req.ID)
+				}
+				if ctx == nil {
+					t.Fatal("expected non-nil ctx")
+				}
+				return engine.SnapshotCreateResult{
+					SnapshotID:    req.ID,
+					Type:          engine.SnapshotTypeFull,
+					PathsCount:    0,
+					FilesInserted: 0,
+				}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
