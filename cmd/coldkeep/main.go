@@ -5493,101 +5493,187 @@ func (r snapshotRestoreCommandRequest) RequestedPathsCount() int {
 func parseSnapshotRestoreSelection(parsed parsedCommandLine) (engine.SnapshotRestoreSelection, error) {
 	selection := engine.SnapshotRestoreSelection{}
 
-	if values := parsed.flagValues("path"); len(values) > 0 {
-		selection.ExactPaths = make([]string, 0, len(values))
-		for _, value := range values {
-			trimmed := strings.TrimSpace(value)
-			if trimmed == "" {
-				return engine.SnapshotRestoreSelection{}, usageErrorf("--path cannot be empty")
-			}
-			normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
-			if err != nil {
-				return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --path value %q: %v", trimmed, err)
-			}
-			selection.ExactPaths = append(selection.ExactPaths, normalized)
-		}
+	if err := parseSnapshotRestoreExactPathSelectors(parsed, &selection); err != nil {
+		return engine.SnapshotRestoreSelection{}, err
 	}
-
-	if values := parsed.flagValues("prefix"); len(values) > 0 {
-		selection.Prefixes = make([]string, 0, len(values))
-		for _, value := range values {
-			trimmed := strings.TrimSpace(value)
-			if trimmed == "" {
-				return engine.SnapshotRestoreSelection{}, usageErrorf("--prefix cannot be empty")
-			}
-			normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
-			if err != nil {
-				return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --prefix value %q: %v", trimmed, err)
-			}
-			if !strings.HasSuffix(normalized, "/") {
-				return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --prefix value %q: must end with '/'", trimmed)
-			}
-			selection.Prefixes = append(selection.Prefixes, normalized)
-		}
+	if err := parseSnapshotRestorePrefixSelectors(parsed, &selection); err != nil {
+		return engine.SnapshotRestoreSelection{}, err
 	}
-
-	if value, ok := parsed.lastFlagValue("pattern"); ok {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			return engine.SnapshotRestoreSelection{}, usageErrorf("--pattern cannot be empty")
-		}
-		if _, err := path.Match(trimmed, ""); err != nil {
-			return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --pattern value %q: %v", trimmed, err)
-		}
-		selection.Pattern = trimmed
+	if err := parseSnapshotRestorePatternSelector(parsed, &selection); err != nil {
+		return engine.SnapshotRestoreSelection{}, err
 	}
-
-	if value, ok := parsed.lastFlagValue("regex"); ok {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			return engine.SnapshotRestoreSelection{}, usageErrorf("--regex cannot be empty")
-		}
-		if _, err := regexp.Compile(trimmed); err != nil {
-			return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --regex value %q: %v", trimmed, err)
-		}
-		selection.Regex = trimmed
+	if err := parseSnapshotRestoreRegexSelector(parsed, &selection); err != nil {
+		return engine.SnapshotRestoreSelection{}, err
 	}
-
-	if value, ok := parsed.lastFlagValue("min-size"); ok {
-		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-		if err != nil || n < 0 {
-			return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --min-size value %q: must be a non-negative integer", value)
-		}
-		selection.MinSize = &n
+	if err := parseSnapshotRestoreSizeSelectors(parsed, &selection); err != nil {
+		return engine.SnapshotRestoreSelection{}, err
 	}
-
-	if value, ok := parsed.lastFlagValue("max-size"); ok {
-		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-		if err != nil || n < 0 {
-			return engine.SnapshotRestoreSelection{}, usageErrorf("invalid --max-size value %q: must be a non-negative integer", value)
-		}
-		selection.MaxSize = &n
-	}
-
-	if value, ok := parsed.lastFlagValue("modified-after"); ok {
-		parsedTime, err := parseSnapshotDateFlag("modified-after", value, false)
-		if err != nil {
-			return engine.SnapshotRestoreSelection{}, err
-		}
-		selection.ModifiedAfter = parsedTime
-	}
-
-	if value, ok := parsed.lastFlagValue("modified-before"); ok {
-		parsedTime, err := parseSnapshotDateFlag("modified-before", value, true)
-		if err != nil {
-			return engine.SnapshotRestoreSelection{}, err
-		}
-		selection.ModifiedBefore = parsedTime
-	}
-
-	if selection.MinSize != nil && selection.MaxSize != nil && *selection.MinSize > *selection.MaxSize {
-		return engine.SnapshotRestoreSelection{}, usageErrorf("--min-size must be <= --max-size")
-	}
-	if selection.ModifiedAfter != nil && selection.ModifiedBefore != nil && selection.ModifiedAfter.After(*selection.ModifiedBefore) {
-		return engine.SnapshotRestoreSelection{}, usageErrorf("--modified-after must be <= --modified-before")
+	if err := parseSnapshotRestoreModifiedSelectors(parsed, &selection); err != nil {
+		return engine.SnapshotRestoreSelection{}, err
 	}
 
 	return selection, nil
+}
+
+func parseSnapshotRestoreExactPathSelectors(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	values := parsed.flagValues("path")
+	if len(values) == 0 {
+		return nil
+	}
+
+	selection.ExactPaths = make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return usageErrorf("--path cannot be empty")
+		}
+		normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+		if err != nil {
+			return usageErrorf("invalid --path value %q: %v", trimmed, err)
+		}
+		selection.ExactPaths = append(selection.ExactPaths, normalized)
+	}
+	return nil
+}
+
+func parseSnapshotRestorePrefixSelectors(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	values := parsed.flagValues("prefix")
+	if len(values) == 0 {
+		return nil
+	}
+
+	selection.Prefixes = make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return usageErrorf("--prefix cannot be empty")
+		}
+		normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+		if err != nil {
+			return usageErrorf("invalid --prefix value %q: %v", trimmed, err)
+		}
+		if !strings.HasSuffix(normalized, "/") {
+			return usageErrorf("invalid --prefix value %q: must end with '/'", trimmed)
+		}
+		selection.Prefixes = append(selection.Prefixes, normalized)
+	}
+	return nil
+}
+
+func parseSnapshotRestorePatternSelector(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	value, ok := parsed.lastFlagValue("pattern")
+	if !ok {
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return usageErrorf("--pattern cannot be empty")
+	}
+	if _, err := path.Match(trimmed, ""); err != nil {
+		return usageErrorf("invalid --pattern value %q: %v", trimmed, err)
+	}
+	selection.Pattern = trimmed
+	return nil
+}
+
+func parseSnapshotRestoreRegexSelector(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	value, ok := parsed.lastFlagValue("regex")
+	if !ok {
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return usageErrorf("--regex cannot be empty")
+	}
+	if _, err := regexp.Compile(trimmed); err != nil {
+		return usageErrorf("invalid --regex value %q: %v", trimmed, err)
+	}
+	selection.Regex = trimmed
+	return nil
+}
+
+func parseSnapshotRestoreSizeSelectors(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	if err := parseSnapshotRestoreMinSizeSelector(parsed, selection); err != nil {
+		return err
+	}
+	if err := parseSnapshotRestoreMaxSizeSelector(parsed, selection); err != nil {
+		return err
+	}
+	if selection.MinSize != nil && selection.MaxSize != nil && *selection.MinSize > *selection.MaxSize {
+		return usageErrorf("--min-size must be <= --max-size")
+	}
+	return nil
+}
+
+func parseSnapshotRestoreMinSizeSelector(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	value, ok := parsed.lastFlagValue("min-size")
+	if !ok {
+		return nil
+	}
+
+	n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || n < 0 {
+		return usageErrorf("invalid --min-size value %q: must be a non-negative integer", value)
+	}
+	selection.MinSize = &n
+	return nil
+}
+
+func parseSnapshotRestoreMaxSizeSelector(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	value, ok := parsed.lastFlagValue("max-size")
+	if !ok {
+		return nil
+	}
+
+	n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || n < 0 {
+		return usageErrorf("invalid --max-size value %q: must be a non-negative integer", value)
+	}
+	selection.MaxSize = &n
+	return nil
+}
+
+func parseSnapshotRestoreModifiedSelectors(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	if err := parseSnapshotRestoreModifiedAfterSelector(parsed, selection); err != nil {
+		return err
+	}
+	if err := parseSnapshotRestoreModifiedBeforeSelector(parsed, selection); err != nil {
+		return err
+	}
+	if selection.ModifiedAfter != nil && selection.ModifiedBefore != nil && selection.ModifiedAfter.After(*selection.ModifiedBefore) {
+		return usageErrorf("--modified-after must be <= --modified-before")
+	}
+	return nil
+}
+
+func parseSnapshotRestoreModifiedAfterSelector(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	value, ok := parsed.lastFlagValue("modified-after")
+	if !ok {
+		return nil
+	}
+
+	parsedTime, err := parseSnapshotDateFlag("modified-after", value, false)
+	if err != nil {
+		return err
+	}
+	selection.ModifiedAfter = parsedTime
+	return nil
+}
+
+func parseSnapshotRestoreModifiedBeforeSelector(parsed parsedCommandLine, selection *engine.SnapshotRestoreSelection) error {
+	value, ok := parsed.lastFlagValue("modified-before")
+	if !ok {
+		return nil
+	}
+
+	parsedTime, err := parseSnapshotDateFlag("modified-before", value, true)
+	if err != nil {
+		return err
+	}
+	selection.ModifiedBefore = parsedTime
+	return nil
 }
 
 func buildSnapshotRestoreEngineRequest(
