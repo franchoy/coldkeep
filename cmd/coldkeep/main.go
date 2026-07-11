@@ -4873,20 +4873,9 @@ func snapshotLineageUnavailableMessage(status snapshot.SnapshotLineageStatus) st
 func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "force", "dry-run", "dryRun", "output", "json"); err != nil {
+	req, dryRun, err := parseSnapshotDeleteCommandRequest(parsed)
+	if err != nil {
 		return err
-	}
-	if len(parsed.positionals) != 2 {
-		return usageErrorf("Usage: coldkeep snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]")
-	}
-	dryRun := parsed.hasFlag("dry-run", "dryRun")
-	if !dryRun && !parsed.hasFlag("force") {
-		return usageErrorf("snapshot delete requires --force or --dry-run")
-	}
-
-	snapshotID := strings.TrimSpace(parsed.positionals[1])
-	if snapshotID == "" {
-		return usageErrorf("snapshotID cannot be empty")
 	}
 
 	sgctx, err := loadSnapshotDB()
@@ -4898,70 +4887,124 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
-	if err != nil {
-		return err
-	}
-	mode := engine.SnapshotDeleteModeExecute
-	if dryRun {
-		mode = engine.SnapshotDeleteModePreview
-	}
-	result, err := eng.SnapshotDelete(ctx, engine.SnapshotDeleteRequest{
-		SnapshotID: snapshotID,
-		Mode:       mode,
-	})
+	result, err := runSnapshotDeleteEngine(ctx, sgctx, req)
 	if err != nil {
 		return err
 	}
 
 	renderedSnapshotID := result.SnapshotID
 	if renderedSnapshotID == "" {
-		renderedSnapshotID = snapshotID
+		renderedSnapshotID = req.SnapshotID
 	}
 	preview, err := snapshotDeletePreviewFromEngineResult(result)
 	if err != nil {
 		return err
 	}
 
+	return renderSnapshotDeleteResult(outputMode, renderedSnapshotID, dryRun, preview, time.Since(startedAt))
+}
+
+type snapshotDeleteLineagePreview = snapshot.DeleteLineagePreview
+
+type snapshotDeleteCommandRequest struct {
+	SnapshotID string
+	Mode       engine.SnapshotDeleteMode
+}
+
+func parseSnapshotDeleteCommandRequest(parsed parsedCommandLine) (snapshotDeleteCommandRequest, bool, error) {
+	if err := ensureAllowedFlags(parsed, "force", "dry-run", "dryRun", "output", "json"); err != nil {
+		return snapshotDeleteCommandRequest{}, false, err
+	}
+	if len(parsed.positionals) != 2 {
+		return snapshotDeleteCommandRequest{}, false, usageErrorf("Usage: coldkeep snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]")
+	}
+	dryRun := parsed.hasFlag("dry-run", "dryRun")
+	if !dryRun && !parsed.hasFlag("force") {
+		return snapshotDeleteCommandRequest{}, false, usageErrorf("snapshot delete requires --force or --dry-run")
+	}
+
+	snapshotID := strings.TrimSpace(parsed.positionals[1])
+	if snapshotID == "" {
+		return snapshotDeleteCommandRequest{}, false, usageErrorf("snapshotID cannot be empty")
+	}
+
+	mode := engine.SnapshotDeleteModeExecute
+	if dryRun {
+		mode = engine.SnapshotDeleteModePreview
+	}
+	return snapshotDeleteCommandRequest{
+		SnapshotID: snapshotID,
+		Mode:       mode,
+	}, dryRun, nil
+}
+
+func runSnapshotDeleteEngine(
+	ctx context.Context,
+	sgctx storage.StorageContext,
+	req snapshotDeleteCommandRequest,
+) (engine.SnapshotDeleteResult, error) {
+	eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
+	if err != nil {
+		return engine.SnapshotDeleteResult{}, err
+	}
+	return eng.SnapshotDelete(ctx, engine.SnapshotDeleteRequest{
+		SnapshotID: req.SnapshotID,
+		Mode:       req.Mode,
+	})
+}
+
+func renderSnapshotDeleteResult(
+	outputMode cliOutputMode,
+	snapshotID string,
+	dryRun bool,
+	preview *snapshotDeleteLineagePreview,
+	duration time.Duration,
+) error {
 	if outputMode == outputModeJSON {
-		action := "delete"
-		if dryRun {
-			action = "delete_dry_run"
-		}
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "snapshot",
-			"data": map[string]any{
-				"action":         action,
-				"snapshot_id":    renderedSnapshotID,
-				"dry_run":        dryRun,
-				"parent_id":      snapshotLabelJSONValue(previewParentID(preview)),
-				"parent_missing": previewParentMissing(preview),
-				"children":       previewChildren(preview),
-				"total_files":    previewTotalFiles(preview),
-				"unique_files":   previewUniqueFiles(preview),
-				"shared_files":   previewSharedFiles(preview),
-				"warnings":       previewWarnings(preview),
-				"duration_ms":    time.Since(startedAt).Milliseconds(),
-			},
-		}
+		payload := snapshotDeleteJSONPayload(snapshotID, dryRun, preview, duration)
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
 	}
-
 	if dryRun {
-		output := formatSnapshotDeleteDryRunOutput(renderedSnapshotID, preview)
+		output := formatSnapshotDeleteDryRunOutput(snapshotID, preview)
 		_, _ = fmt.Fprint(os.Stdout, output)
-	} else {
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", renderedSnapshotID)
-		_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-		_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+		return nil
 	}
+	_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", duration.Milliseconds())
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }
 
-type snapshotDeleteLineagePreview = snapshot.DeleteLineagePreview
+func snapshotDeleteJSONPayload(
+	snapshotID string,
+	dryRun bool,
+	preview *snapshotDeleteLineagePreview,
+	duration time.Duration,
+) map[string]any {
+	action := "delete"
+	if dryRun {
+		action = "delete_dry_run"
+	}
+	return map[string]any{
+		"status":  "ok",
+		"command": "snapshot",
+		"data": map[string]any{
+			"action":         action,
+			"snapshot_id":    snapshotID,
+			"dry_run":        dryRun,
+			"parent_id":      snapshotLabelJSONValue(previewParentID(preview)),
+			"parent_missing": previewParentMissing(preview),
+			"children":       previewChildren(preview),
+			"total_files":    previewTotalFiles(preview),
+			"unique_files":   previewUniqueFiles(preview),
+			"shared_files":   previewSharedFiles(preview),
+			"warnings":       previewWarnings(preview),
+			"duration_ms":    duration.Milliseconds(),
+		},
+	}
+}
 
 func snapshotDeletePreviewFromEngineResult(result engine.SnapshotDeleteResult) (*snapshotDeleteLineagePreview, error) {
 	if result.Mode != engine.SnapshotDeleteModePreview {
