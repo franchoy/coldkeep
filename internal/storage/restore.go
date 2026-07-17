@@ -927,43 +927,43 @@ func canonicalizeMissingRestorePhysicalPath(cleaned string) (string, error) {
 
 func deriveRestorePrefixRelativePath(storedPath string) (string, error) {
 	trimmed := strings.TrimSpace(storedPath)
-	if trimmed == "" {
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-	}
-	if containsRestorePrefixTraversal(trimmed) {
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	if trimmed == "" || containsRestorePrefixTraversal(trimmed) {
+		return "", invalidRestorePrefixPathError(storedPath)
 	}
 
+	relativePath, err := projectRestorePrefixRelativePath(trimmed)
+	if err != nil {
+		return "", invalidRestorePrefixPathError(storedPath)
+	}
+	return relativePath, nil
+}
+
+func projectRestorePrefixRelativePath(path string) (string, error) {
 	switch {
-	case isCanonicalWindowsUNCPath(trimmed):
-		relativePath, err := deriveCanonicalWindowsUNCRelativePath(trimmed)
-		if err != nil {
-			return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-		}
-		return relativePath, nil
-	case isWindowsDriveAbsolutePath(trimmed):
-		relativePath, err := deriveWindowsDriveRelativePath(trimmed)
-		if err != nil {
-			return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-		}
-		return relativePath, nil
-	case runtime.GOOS != "windows" && filepath.IsAbs(trimmed):
-		relativePath, err := filepath.Rel(string(filepath.Separator), filepath.Clean(trimmed))
-		if err != nil {
-			return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-		}
-		if err := validateRestorePrefixRelativePath(relativePath); err != nil {
-			return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
-		}
-		return relativePath, nil
-	case isWindowsDriveLikePath(trimmed), strings.HasPrefix(trimmed, `\`), strings.HasPrefix(trimmed, `/`), strings.HasPrefix(trimmed, `//`):
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	case isCanonicalWindowsUNCPath(path):
+		return deriveCanonicalWindowsUNCRelativePath(path)
+	case isWindowsDriveAbsolutePath(path):
+		return deriveWindowsDriveRelativePath(path)
+	case runtime.GOOS != "windows" && filepath.IsAbs(path):
+		return deriveNativeAbsoluteRestorePrefixPath(path)
+	default:
+		return "", fmt.Errorf("unsupported restore prefix path")
 	}
+}
 
-	if !filepath.IsAbs(trimmed) {
-		return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+func deriveNativeAbsoluteRestorePrefixPath(path string) (string, error) {
+	relativePath, err := filepath.Rel(string(filepath.Separator), filepath.Clean(path))
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+	if err := validateRestorePrefixRelativePath(relativePath); err != nil {
+		return "", err
+	}
+	return relativePath, nil
+}
+
+func invalidRestorePrefixPathError(storedPath string) error {
+	return fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
 }
 
 func containsRestorePrefixTraversal(path string) bool {
