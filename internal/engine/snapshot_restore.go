@@ -92,53 +92,52 @@ func prepareSnapshotRestoreRequest(
 
 func validateSnapshotRestoreDestination(dest SnapshotRestoreDestination) (SnapshotRestoreDestinationMode, string, error) {
 	outputTarget := strings.TrimSpace(dest.Path)
+	if err := validateSnapshotRestoreDestinationMode(dest.Mode); err != nil {
+		return "", "", err
+	}
+	if outputTarget == "" {
+		return "", "", snapshotRestoreDestinationPathRequiredError(dest.Mode)
+	}
+	if dest.Mode == SnapshotRestoreDestinationOverride && hasTrailingPathSeparator(outputTarget) {
+		return "", "", fmt.Errorf("engine: snapshot restore override mode requires exact destination file path")
+	}
+	return dest.Mode, outputTarget, nil
+}
 
-	switch dest.Mode {
-	case SnapshotRestoreDestinationOriginal:
-		if outputTarget == "" {
-			return "", "", fmt.Errorf("engine: snapshot restore original mode requires destination path")
-		}
-		return dest.Mode, outputTarget, nil
-	case SnapshotRestoreDestinationPrefix:
-		if outputTarget == "" {
-			return "", "", fmt.Errorf("engine: snapshot restore prefix mode requires destination path")
-		}
-		return dest.Mode, outputTarget, nil
-	case SnapshotRestoreDestinationOverride:
-		if outputTarget == "" {
-			return "", "", fmt.Errorf("engine: snapshot restore override mode requires destination path")
-		}
-		if hasTrailingPathSeparator(outputTarget) {
-			return "", "", fmt.Errorf("engine: snapshot restore override mode requires exact destination file path")
-		}
-		return dest.Mode, outputTarget, nil
+func validateSnapshotRestoreDestinationMode(mode SnapshotRestoreDestinationMode) error {
+	switch mode {
+	case SnapshotRestoreDestinationOriginal, SnapshotRestoreDestinationPrefix, SnapshotRestoreDestinationOverride:
+		return nil
 	case "":
-		return "", "", fmt.Errorf("engine: snapshot restore destination mode is required")
+		return fmt.Errorf("engine: snapshot restore destination mode is required")
 	default:
-		return "", "", fmt.Errorf("engine: unknown snapshot restore destination mode %q", dest.Mode)
+		return fmt.Errorf("engine: unknown snapshot restore destination mode %q", mode)
+	}
+}
+
+func snapshotRestoreDestinationPathRequiredError(mode SnapshotRestoreDestinationMode) error {
+	switch mode {
+	case SnapshotRestoreDestinationOriginal:
+		return fmt.Errorf("engine: snapshot restore original mode requires destination path")
+	case SnapshotRestoreDestinationPrefix:
+		return fmt.Errorf("engine: snapshot restore prefix mode requires destination path")
+	default:
+		return fmt.Errorf("engine: snapshot restore override mode requires destination path")
 	}
 }
 
 func buildSnapshotRestoreQuery(selection SnapshotRestoreSelection) (*snapshot.SnapshotQuery, error) {
-	minSize := cloneInt64(selection.MinSize)
-	maxSize := cloneInt64(selection.MaxSize)
-	if minSize != nil && maxSize != nil && *minSize > *maxSize {
-		return nil, fmt.Errorf("engine: snapshot restore min size cannot exceed max size")
+	minSize, maxSize, err := snapshotRestoreSizeRange(selection)
+	if err != nil {
+		return nil, err
 	}
-
-	modifiedAfter := cloneTime(selection.ModifiedAfter)
-	modifiedBefore := cloneTime(selection.ModifiedBefore)
-	if modifiedAfter != nil && modifiedBefore != nil && modifiedAfter.After(*modifiedBefore) {
-		return nil, fmt.Errorf("engine: snapshot restore modified-after cannot be after modified-before")
+	modifiedAfter, modifiedBefore, err := snapshotRestoreModifiedRange(selection)
+	if err != nil {
+		return nil, err
 	}
-
-	var compiledRegex *regexp.Regexp
-	if selection.Regex != "" {
-		re, err := regexp.Compile(selection.Regex)
-		if err != nil {
-			return nil, fmt.Errorf("engine: invalid snapshot restore regex %q: %w", selection.Regex, err)
-		}
-		compiledRegex = re
+	compiledRegex, err := compileSnapshotRestoreRegex(selection.Regex)
+	if err != nil {
+		return nil, err
 	}
 
 	query := &snapshot.SnapshotQuery{
@@ -155,6 +154,35 @@ func buildSnapshotRestoreQuery(selection SnapshotRestoreSelection) (*snapshot.Sn
 		return nil, nil
 	}
 	return query, nil
+}
+
+func snapshotRestoreSizeRange(selection SnapshotRestoreSelection) (*int64, *int64, error) {
+	minSize := cloneInt64(selection.MinSize)
+	maxSize := cloneInt64(selection.MaxSize)
+	if minSize != nil && maxSize != nil && *minSize > *maxSize {
+		return nil, nil, fmt.Errorf("engine: snapshot restore min size cannot exceed max size")
+	}
+	return minSize, maxSize, nil
+}
+
+func snapshotRestoreModifiedRange(selection SnapshotRestoreSelection) (*time.Time, *time.Time, error) {
+	modifiedAfter := cloneTime(selection.ModifiedAfter)
+	modifiedBefore := cloneTime(selection.ModifiedBefore)
+	if modifiedAfter != nil && modifiedBefore != nil && modifiedAfter.After(*modifiedBefore) {
+		return nil, nil, fmt.Errorf("engine: snapshot restore modified-after cannot be after modified-before")
+	}
+	return modifiedAfter, modifiedBefore, nil
+}
+
+func compileSnapshotRestoreRegex(pattern string) (*regexp.Regexp, error) {
+	if pattern == "" {
+		return nil, nil
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("engine: invalid snapshot restore regex %q: %w", pattern, err)
+	}
+	return compiled, nil
 }
 
 func buildSnapshotRestoreOptions(
@@ -195,14 +223,15 @@ func isEmptySnapshotRestoreQuery(q *snapshot.SnapshotQuery) bool {
 	if q == nil {
 		return true
 	}
-	return len(q.ExactPaths) == 0 &&
-		len(q.Prefixes) == 0 &&
-		q.Pattern == "" &&
-		q.Regex == nil &&
-		q.MinSize == nil &&
-		q.MaxSize == nil &&
-		q.ModifiedAfter == nil &&
-		q.ModifiedBefore == nil
+	return !hasSnapshotRestorePathSelector(q) && !hasSnapshotRestoreRangeSelector(q)
+}
+
+func hasSnapshotRestorePathSelector(q *snapshot.SnapshotQuery) bool {
+	return len(q.ExactPaths) > 0 || len(q.Prefixes) > 0 || q.Pattern != "" || q.Regex != nil
+}
+
+func hasSnapshotRestoreRangeSelector(q *snapshot.SnapshotQuery) bool {
+	return q.MinSize != nil || q.MaxSize != nil || q.ModifiedAfter != nil || q.ModifiedBefore != nil
 }
 
 func copyStringSet(values []string) map[string]struct{} {
