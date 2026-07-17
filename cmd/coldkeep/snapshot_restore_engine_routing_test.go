@@ -163,28 +163,7 @@ func TestRunSnapshotCommandRestorePreservesSelectorSeparationAndRepetition(t *te
 	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
 		return stubCommandEngine{
 			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
-				if len(req.Paths) != 1 || req.Paths[0] != "docs/" {
-					t.Fatalf("expected positional paths to remain separate, got %+v", req)
-				}
-				if len(req.Selection.ExactPaths) != 2 || req.Selection.ExactPaths[0] != "docs/a.txt" || req.Selection.ExactPaths[1] != "docs/a.txt" {
-					t.Fatalf("expected repeated exact selectors preserved, got %+v", req.Selection)
-				}
-				if len(req.Selection.Prefixes) != 2 || req.Selection.Prefixes[0] != "docs/" || req.Selection.Prefixes[1] != "docs/" {
-					t.Fatalf("expected repeated prefixes preserved, got %+v", req.Selection)
-				}
-				if req.Destination.Mode != engine.SnapshotRestoreDestinationOverride || req.Destination.Path != "/tmp/out.txt" {
-					t.Fatalf("unexpected override destination mapping: %+v", req.Destination)
-				}
-				if req.Metadata != engine.SnapshotRestoreMetadataStrict || !req.Overwrite {
-					t.Fatalf("unexpected overwrite/metadata mapping: %+v", req)
-				}
-				return engine.SnapshotRestoreResult{
-					SnapshotID:          req.SnapshotID,
-					DestinationMode:     req.Destination.Mode,
-					RequestedPathsCount: len(req.Paths),
-					RestoredFiles:       1,
-					OutputTarget:        req.Destination.Path,
-				}, nil
+				return assertSnapshotRestoreSelectorRequest(t, req), nil
 			},
 		}, nil
 	}
@@ -213,5 +192,56 @@ func TestRunSnapshotCommandRestorePreservesSelectorSeparationAndRepetition(t *te
 	}
 	if !strings.Contains(output, `"output_root":"/tmp/out.txt"`) {
 		t.Fatalf("expected output_root JSON compatibility, got %s", output)
+	}
+}
+
+func assertSnapshotRestoreSelectorRequest(t *testing.T, req engine.SnapshotRestoreRequest) engine.SnapshotRestoreResult {
+	t.Helper()
+	assertSnapshotRestorePositionalPaths(t, req)
+	assertSnapshotRestoreExactSelectors(t, req.Selection)
+	assertSnapshotRestorePrefixSelectors(t, req.Selection)
+	assertSnapshotRestoreDestination(t, req.Destination)
+	assertSnapshotRestoreMetadata(t, req)
+	return engine.SnapshotRestoreResult{
+		SnapshotID:          req.SnapshotID,
+		DestinationMode:     req.Destination.Mode,
+		RequestedPathsCount: len(req.Paths),
+		RestoredFiles:       1,
+		OutputTarget:        req.Destination.Path,
+	}
+}
+
+func assertSnapshotRestorePositionalPaths(t *testing.T, req engine.SnapshotRestoreRequest) {
+	t.Helper()
+	if len(req.Paths) != 1 || req.Paths[0] != "docs/" {
+		t.Fatalf("expected positional paths to remain separate, got %+v", req)
+	}
+}
+
+func assertSnapshotRestoreExactSelectors(t *testing.T, selection engine.SnapshotRestoreSelection) {
+	t.Helper()
+	if len(selection.ExactPaths) != 2 || selection.ExactPaths[0] != "docs/a.txt" || selection.ExactPaths[1] != "docs/a.txt" {
+		t.Fatalf("expected repeated exact selectors preserved, got %+v", selection)
+	}
+}
+
+func assertSnapshotRestorePrefixSelectors(t *testing.T, selection engine.SnapshotRestoreSelection) {
+	t.Helper()
+	if len(selection.Prefixes) != 2 || selection.Prefixes[0] != "docs/" || selection.Prefixes[1] != "docs/" {
+		t.Fatalf("expected repeated prefixes preserved, got %+v", selection)
+	}
+}
+
+func assertSnapshotRestoreDestination(t *testing.T, destination engine.SnapshotRestoreDestination) {
+	t.Helper()
+	if destination.Mode != engine.SnapshotRestoreDestinationOverride || destination.Path != "/tmp/out.txt" {
+		t.Fatalf("unexpected override destination mapping: %+v", destination)
+	}
+}
+
+func assertSnapshotRestoreMetadata(t *testing.T, req engine.SnapshotRestoreRequest) {
+	t.Helper()
+	if req.Metadata != engine.SnapshotRestoreMetadataStrict || !req.Overwrite {
+		t.Fatalf("unexpected overwrite/metadata mapping: %+v", req)
 	}
 }

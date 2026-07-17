@@ -206,12 +206,27 @@ func TestRunSnapshotCommandDeleteExecuteJSONRemainsSparse(t *testing.T) {
 		t.Fatalf("parse execute JSON output: %v output=%q", err, output)
 	}
 	data := payload["data"].(map[string]any)
+	assertSnapshotDeleteJSONHeader(t, data)
+	assertSnapshotDeleteJSONSparseFields(t, data)
+	assertSnapshotDeleteJSONZeroValues(t, data)
+}
+
+func assertSnapshotDeleteJSONHeader(t *testing.T, data map[string]any) {
+	t.Helper()
 	if data["action"] != "delete" || data["snapshot_id"] != "snap-sparse" || data["dry_run"] != false {
 		t.Fatalf("unexpected execute JSON header: %v", data)
 	}
+}
+
+func assertSnapshotDeleteJSONSparseFields(t *testing.T, data map[string]any) {
+	t.Helper()
 	if data["parent_id"] != nil || data["children"] != nil || data["warnings"] != nil {
 		t.Fatalf("expected sparse execute JSON preview fields, got %v", data)
 	}
+}
+
+func assertSnapshotDeleteJSONZeroValues(t *testing.T, data map[string]any) {
+	t.Helper()
 	if data["parent_missing"] != false || data["total_files"] != float64(0) || data["unique_files"] != float64(0) || data["shared_files"] != float64(0) {
 		t.Fatalf("expected sparse execute JSON zero values, got %v", data)
 	}
