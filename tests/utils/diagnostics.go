@@ -33,7 +33,22 @@ func WriteDiagnosticJSON(prefix string, payload any) (string, error) {
 	if !DiagnosticManifestEnabled() {
 		return "", nil
 	}
+	safePrefix := sanitizeDiagnosticName(prefix)
+	path, err := prepareDiagnosticManifestPath(safePrefix)
+	if err != nil {
+		return "", err
+	}
+	data, err := marshalDiagnosticPayload(safePrefix, payload)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("write diagnostic manifest %s: %w", path, err)
+	}
+	return path, nil
+}
 
+func prepareDiagnosticManifestPath(safePrefix string) (string, error) {
 	dir := DiagnosticDir()
 	info, err := os.Stat(dir)
 	switch {
@@ -46,22 +61,17 @@ func WriteDiagnosticJSON(prefix string, payload any) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("mkdir %s=%q: %w", diagnosticDirEnv, dir, err)
 	}
-
-	safePrefix := sanitizeDiagnosticName(prefix)
 	filename := fmt.Sprintf("%s-%s.json", safePrefix, time.Now().UTC().Format("20060102T150405.000000000Z"))
-	path := filepath.Join(dir, filename)
+	return filepath.Join(dir, filename), nil
+}
 
+func marshalDiagnosticPayload(safePrefix string, payload any) ([]byte, error) {
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("marshal diagnostic payload %q: %w", safePrefix, err)
+		return nil, fmt.Errorf("marshal diagnostic payload %q: %w", safePrefix, err)
 	}
 	data = append(data, '\n')
-
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", fmt.Errorf("write diagnostic manifest %s: %w", path, err)
-	}
-
-	return path, nil
+	return data, nil
 }
 
 func WritePreservedIsolatedDBManifest(packageLabel, dbName string) (string, error) {
