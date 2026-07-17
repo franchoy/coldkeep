@@ -36,8 +36,14 @@ func TestWriteConcurrentInvariantManifestG6WritesExpectedIdentifiers(t *testing.
 	t.Setenv("COLDKEEP_TEST_DIAGNOSTIC_DIR", diagDir)
 	t.Setenv("DB_PASSWORD", "secret-password")
 	t.Setenv("COLDKEEP_KEY", "secret-key")
+	writeConcurrentInvariantManifestG6(t, expectedG6DiagnosticManifest())
+	data := readSingleG6DiagnosticManifest(t, diagDir)
+	assertSafeG6DiagnosticPayload(t, data)
+	assertExpectedG6DiagnosticManifest(t, decodeG6DiagnosticManifest(t, data))
+}
 
-	writeConcurrentInvariantManifestG6(t, g6ChunkFailureDiagnosticManifest{
+func expectedG6DiagnosticManifest() g6ChunkFailureDiagnosticManifest {
+	return g6ChunkFailureDiagnosticManifest{
 		Kind:                 "g6_concurrent_store_failure",
 		TestName:             "TestAdversarialG6/plain",
 		TimestampUTC:         time.Now().UTC(),
@@ -50,8 +56,11 @@ func TestWriteConcurrentInvariantManifestG6WritesExpectedIdentifiers(t *testing.
 			{Worker: 0, FileID: 1},
 			{Worker: 1, Error: "boom"},
 		},
-	})
+	}
+}
 
+func readSingleG6DiagnosticManifest(t *testing.T, diagDir string) []byte {
+	t.Helper()
 	entries, err := os.ReadDir(diagDir)
 	if err != nil {
 		t.Fatalf("read diagnostic dir: %v", err)
@@ -59,11 +68,15 @@ func TestWriteConcurrentInvariantManifestG6WritesExpectedIdentifiers(t *testing.
 	if len(entries) != 1 {
 		t.Fatalf("expected one manifest file, got %d", len(entries))
 	}
-
 	data, err := os.ReadFile(filepath.Join(diagDir, entries[0].Name()))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
+	return data
+}
+
+func assertSafeG6DiagnosticPayload(t *testing.T, data []byte) {
+	t.Helper()
 	if string(data) == "" {
 		t.Fatal("expected non-empty manifest")
 	}
@@ -73,11 +86,19 @@ func TestWriteConcurrentInvariantManifestG6WritesExpectedIdentifiers(t *testing.
 	if containsSecretG6(string(data)) {
 		t.Fatalf("manifest leaked secret material: %s", data)
 	}
+}
 
+func decodeG6DiagnosticManifest(t *testing.T, data []byte) g6ChunkFailureDiagnosticManifest {
+	t.Helper()
 	var manifest g6ChunkFailureDiagnosticManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("unmarshal manifest: %v", err)
 	}
+	return manifest
+}
+
+func assertExpectedG6DiagnosticManifest(t *testing.T, manifest g6ChunkFailureDiagnosticManifest) {
+	t.Helper()
 	if manifest.TestName != "TestAdversarialG6/plain" || manifest.IsolatedDatabaseName != "coldkeep_adversarial_g6_123" {
 		t.Fatalf("unexpected manifest identifiers: %+v", manifest)
 	}

@@ -81,7 +81,16 @@ func (g *g6DeterministicInterleavingGate) release() {
 
 func assertDeterministicG6ChunkState(t *testing.T, dbconn *sql.DB, chunkHash string, size int, wantLogicalRefs int) {
 	t.Helper()
+	chunkID, chunkStatus := loadDeterministicG6Chunk(t, dbconn, chunkHash, size)
+	if chunkStatus != "COMPLETED" {
+		t.Fatalf("expected deterministic G6 chunk to be COMPLETED, got %s", chunkStatus)
+	}
+	assertDeterministicG6MappingCounts(t, dbconn, chunkID)
+	assertDeterministicG6ReferenceCounts(t, dbconn, chunkID, wantLogicalRefs)
+}
 
+func loadDeterministicG6Chunk(t *testing.T, dbconn *sql.DB, chunkHash string, size int) (int64, string) {
+	t.Helper()
 	var chunkID int64
 	var chunkStatus string
 	if err := dbconn.QueryRow(
@@ -91,10 +100,11 @@ func assertDeterministicG6ChunkState(t *testing.T, dbconn *sql.DB, chunkHash str
 	).Scan(&chunkID, &chunkStatus); err != nil {
 		t.Fatalf("load deterministic G6 chunk state: %v", err)
 	}
-	if chunkStatus != "COMPLETED" {
-		t.Fatalf("expected deterministic G6 chunk to be COMPLETED, got %s", chunkStatus)
-	}
+	return chunkID, chunkStatus
+}
 
+func assertDeterministicG6MappingCounts(t *testing.T, dbconn *sql.DB, chunkID int64) {
+	t.Helper()
 	var packedRows int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs WHERE chunk_id = $1`, chunkID).Scan(&packedRows); err != nil {
 		t.Fatalf("count packed rows: %v", err)
@@ -110,7 +120,10 @@ func assertDeterministicG6ChunkState(t *testing.T, dbconn *sql.DB, chunkHash str
 	if legacyRows != 1 {
 		t.Fatalf("expected one legacy companion row for deterministic G6 chunk, got %d", legacyRows)
 	}
+}
 
+func assertDeterministicG6ReferenceCounts(t *testing.T, dbconn *sql.DB, chunkID int64, wantLogicalRefs int) {
+	t.Helper()
 	var logicalRefs int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, chunkID).Scan(&logicalRefs); err != nil {
 		t.Fatalf("count logical refs: %v", err)
@@ -412,33 +425,40 @@ func runDeterministicRetryStore(t *testing.T, codec, inPath string) []storage.Te
 
 func assertDeterministicRetryEvents(t *testing.T, chunkID int64, events []storage.TestStoreInterleavingHookEvent) {
 	t.Helper()
+	seen := deterministicRetryEventSet(events, chunkID)
+	if !seen.retryCAS || !seen.packedMetadata || !seen.legacyCompanion {
+		t.Fatalf(
+			"expected retry path to remain packed on postgres, got retry=%t packed=%t companion=%t events=%+v",
+			seen.retryCAS,
+			seen.packedMetadata,
+			seen.legacyCompanion,
+			events,
+		)
+	}
+}
 
-	var sawRetryCAS bool
-	var sawPackedMetadata bool
-	var sawLegacyCompanion bool
+type deterministicRetryEvents struct {
+	retryCAS        bool
+	packedMetadata  bool
+	legacyCompanion bool
+}
+
+func deterministicRetryEventSet(events []storage.TestStoreInterleavingHookEvent, chunkID int64) deterministicRetryEvents {
+	var seen deterministicRetryEvents
 	for _, event := range events {
 		if event.ChunkID != chunkID {
 			continue
 		}
 		switch event.Event {
 		case storage.TestStoreInterleavingEventBeforeChunkRetryCAS:
-			sawRetryCAS = true
+			seen.retryCAS = true
 		case storage.TestStoreInterleavingEventAfterPackedMetadata:
-			sawPackedMetadata = true
+			seen.packedMetadata = true
 		case storage.TestStoreInterleavingEventAfterLegacyCompanionInsert:
-			sawLegacyCompanion = true
+			seen.legacyCompanion = true
 		}
 	}
-
-	if !sawRetryCAS || !sawPackedMetadata || !sawLegacyCompanion {
-		t.Fatalf(
-			"expected retry path to remain packed on postgres, got retry=%t packed=%t companion=%t events=%+v",
-			sawRetryCAS,
-			sawPackedMetadata,
-			sawLegacyCompanion,
-			events,
-		)
-	}
+	return seen
 }
 
 type adversarialG6PostgresTestConfig struct {
@@ -630,9 +650,15 @@ type g6ChunkMetadataRecord struct {
 
 func logConcurrentInvariantFailureG6(t *testing.T, dbconn *sql.DB, verifyErr error, diag *g6FailureDiagnosticContext) {
 	t.Helper()
-
 	t.Logf("G6 verify failure diagnostics: db=%s containers_dir=%s err=%v", os.Getenv("DB_NAME"), container.ContainersDir, verifyErr)
+	manifest := buildG6FailureManifest(t, verifyErr, diag)
+	loadG6FailureSchemaVersion(t, dbconn, &manifest)
+	attachG6OffendingChunkMetadata(t, dbconn, verifyErr, &manifest)
+	writeConcurrentInvariantManifestG6(t, manifest)
+}
 
+func buildG6FailureManifest(t *testing.T, verifyErr error, diag *g6FailureDiagnosticContext) g6ChunkFailureDiagnosticManifest {
+	t.Helper()
 	manifest := g6ChunkFailureDiagnosticManifest{
 		Kind:                   "g6_concurrent_store_failure",
 		TestName:               t.Name(),
@@ -654,16 +680,23 @@ func logConcurrentInvariantFailureG6(t *testing.T, dbconn *sql.DB, verifyErr err
 	if manifest.GOMAXPROCS == 0 {
 		manifest.GOMAXPROCS = runtime.GOMAXPROCS(0)
 	}
+	return manifest
+}
+
+func loadG6FailureSchemaVersion(t *testing.T, dbconn *sql.DB, manifest *g6ChunkFailureDiagnosticManifest) {
+	t.Helper()
 	if v, err := g6SchemaVersion(dbconn); err == nil {
 		manifest.SchemaVersion = v
 	} else {
 		t.Logf("G6 verify diagnostics: schema version query failed: %v", err)
 	}
+}
 
+func attachG6OffendingChunkMetadata(t *testing.T, dbconn *sql.DB, verifyErr error, manifest *g6ChunkFailureDiagnosticManifest) {
+	t.Helper()
 	matches := g6ChunkIDPattern.FindStringSubmatch(verifyErr.Error())
 	if len(matches) != 2 {
 		logMixedChunkShapesG6(t, dbconn)
-		writeConcurrentInvariantManifestG6(t, manifest)
 		return
 	}
 
@@ -671,7 +704,6 @@ func logConcurrentInvariantFailureG6(t *testing.T, dbconn *sql.DB, verifyErr err
 	if _, err := fmt.Sscanf(matches[1], "%d", &chunkID); err != nil {
 		t.Logf("G6 verify diagnostics: parse chunk id from %q: %v", matches[1], err)
 		logMixedChunkShapesG6(t, dbconn)
-		writeConcurrentInvariantManifestG6(t, manifest)
 		return
 	}
 
@@ -679,12 +711,10 @@ func logConcurrentInvariantFailureG6(t *testing.T, dbconn *sql.DB, verifyErr err
 	chunkMeta, chunkHash, err := logChunkMetadataG6(t, dbconn, chunkID)
 	if err != nil {
 		t.Logf("G6 verify diagnostics: collect chunk metadata chunk_id=%d: %v", chunkID, err)
-		writeConcurrentInvariantManifestG6(t, manifest)
 		return
 	}
 	manifest.OffendingChunkHash = chunkHash
 	manifest.MigrationCompanionState = chunkMeta
-	writeConcurrentInvariantManifestG6(t, manifest)
 }
 
 func logMixedChunkShapesG6(t *testing.T, dbconn *sql.DB) {
@@ -723,34 +753,30 @@ func logMixedChunkShapesG6(t *testing.T, dbconn *sql.DB) {
 	}
 }
 
-func logChunkMetadataG6(t *testing.T, dbconn *sql.DB, chunkID int64) (g6ChunkMetadataRecord, string, error) {
-	t.Helper()
+type g6ChunkMetadata struct {
+	chunkSize            int64
+	chunkHash            string
+	chunkStatus          string
+	legacyMappingID      sql.NullInt64
+	legacyCodec          sql.NullString
+	legacyFormatVersion  sql.NullInt64
+	legacyPlaintextSize  sql.NullInt64
+	legacyStoredSize     sql.NullInt64
+	legacyNonceLen       sql.NullInt64
+	legacyContainerID    sql.NullInt64
+	legacyOffset         sql.NullInt64
+	packedBlockID        sql.NullInt64
+	packedOffsetInBlock  sql.NullInt64
+	packedSizeInBlock    sql.NullInt64
+	packedContainerID    sql.NullInt64
+	packedContainerOff   sql.NullInt64
+	packedPlaintextSize  sql.NullInt64
+	totalReferencedBytes sql.NullInt64
+}
 
-	type chunkMeta struct {
-		chunkSize            int64
-		chunkHash            string
-		chunkStatus          string
-		legacyMappingID      sql.NullInt64
-		legacyCodec          sql.NullString
-		legacyFormatVersion  sql.NullInt64
-		legacyPlaintextSize  sql.NullInt64
-		legacyStoredSize     sql.NullInt64
-		legacyNonceLen       sql.NullInt64
-		legacyContainerID    sql.NullInt64
-		legacyOffset         sql.NullInt64
-		packedBlockID        sql.NullInt64
-		packedOffsetInBlock  sql.NullInt64
-		packedSizeInBlock    sql.NullInt64
-		packedContainerID    sql.NullInt64
-		packedContainerOff   sql.NullInt64
-		packedPlaintextSize  sql.NullInt64
-		totalReferencedBytes sql.NullInt64
-	}
-
-	var meta chunkMeta
-	err := dbconn.QueryRow(`
-		SELECT
-			c.size,
+const g6ChunkMetadataQuery = `
+			SELECT
+				c.size,
 			c.chunk_hash,
 			c.status,
 			b.id,
@@ -775,9 +801,26 @@ func logChunkMetadataG6(t *testing.T, dbconn *sql.DB, chunkID int64) (g6ChunkMet
 		FROM chunk c
 		LEFT JOIN blocks b ON b.chunk_id = c.id
 		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
-		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		WHERE c.id = $1
-	`, chunkID).Scan(
+			LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+			WHERE c.id = $1
+`
+
+func logChunkMetadataG6(t *testing.T, dbconn *sql.DB, chunkID int64) (g6ChunkMetadataRecord, string, error) {
+	t.Helper()
+	meta, err := loadG6ChunkMetadata(dbconn, chunkID)
+	if err != nil {
+		return g6ChunkMetadataRecord{}, "", err
+	}
+	payloadPrefixBytes := g6PayloadPrefixBytes(meta)
+	logG6ChunkMetadata(t, chunkID, meta, payloadPrefixBytes)
+	legacyFilename := logContainerMetadataG6(t, dbconn, "legacy", meta.legacyContainerID)
+	packedFilename := logContainerMetadataG6(t, dbconn, "packed", meta.packedContainerID)
+	return g6ChunkMetadataRecordFrom(meta, payloadPrefixBytes, legacyFilename, packedFilename), meta.chunkHash, nil
+}
+
+func loadG6ChunkMetadata(dbconn *sql.DB, chunkID int64) (g6ChunkMetadata, error) {
+	var meta g6ChunkMetadata
+	err := dbconn.QueryRow(g6ChunkMetadataQuery, chunkID).Scan(
 		&meta.chunkSize,
 		&meta.chunkHash,
 		&meta.chunkStatus,
@@ -797,16 +840,19 @@ func logChunkMetadataG6(t *testing.T, dbconn *sql.DB, chunkID int64) (g6ChunkMet
 		&meta.packedPlaintextSize,
 		&meta.totalReferencedBytes,
 	)
-	if err != nil {
-		return g6ChunkMetadataRecord{}, "", err
-	}
+	return meta, err
+}
 
-	var payloadPrefixBytes *int64
+func g6PayloadPrefixBytes(meta g6ChunkMetadata) *int64 {
 	if meta.packedPlaintextSize.Valid && meta.totalReferencedBytes.Valid {
 		v := meta.packedPlaintextSize.Int64 - meta.totalReferencedBytes.Int64
-		payloadPrefixBytes = &v
+		return &v
 	}
+	return nil
+}
 
+func logG6ChunkMetadata(t *testing.T, chunkID int64, meta g6ChunkMetadata, payloadPrefixBytes *int64) {
+	t.Helper()
 	t.Logf(
 		"G6 verify diagnostics: chunk_id=%d status=%s chunk_size=%d legacy_codec=%v legacy_format=%v legacy_plaintext=%v legacy_stored=%v legacy_nonce_len=%v legacy_container=%v legacy_offset=%v packed_block=%v packed_offset_in_block=%v packed_size_in_block=%v packed_container=%v packed_container_offset=%v packed_plaintext=%v packed_total_referenced=%v payload_prefix_bytes=%v",
 		chunkID,
@@ -828,10 +874,9 @@ func logChunkMetadataG6(t *testing.T, dbconn *sql.DB, chunkID int64) (g6ChunkMet
 		nullInt64ValueG6(meta.totalReferencedBytes),
 		nullInt64PointerValueG6(payloadPrefixBytes),
 	)
+}
 
-	legacyContainerFilename := logContainerMetadataG6(t, dbconn, "legacy", meta.legacyContainerID)
-	packedContainerFilename := logContainerMetadataG6(t, dbconn, "packed", meta.packedContainerID)
-
+func g6ChunkMetadataRecordFrom(meta g6ChunkMetadata, payloadPrefixBytes *int64, legacyContainerFilename, packedContainerFilename string) g6ChunkMetadataRecord {
 	return g6ChunkMetadataRecord{
 		LegacyMappingID:         nullInt64PointerG6(meta.legacyMappingID),
 		LegacyCodec:             nullStringPlainG6(meta.legacyCodec),
@@ -851,7 +896,7 @@ func logChunkMetadataG6(t *testing.T, dbconn *sql.DB, chunkID int64) (g6ChunkMet
 		PayloadPrefixBytes:      payloadPrefixBytes,
 		LegacyContainerFilename: legacyContainerFilename,
 		PackedContainerFilename: packedContainerFilename,
-	}, meta.chunkHash, nil
+	}
 }
 
 func logContainerMetadataG6(t *testing.T, dbconn *sql.DB, label string, containerID sql.NullInt64) string {
