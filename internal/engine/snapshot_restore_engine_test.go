@@ -19,51 +19,29 @@ func TestSnapshotRestoreRejectsInvalidRequests(t *testing.T) {
 	dbconn := openSnapshotCreateEngineDB(t)
 	sgctx := newSnapshotCreateStorageContext(t.TempDir(), dbconn)
 	eng := newSnapshotRestoreEngine(t, dbconn, &sgctx)
+	for _, tc := range snapshotRestoreInvalidRequestCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := eng.SnapshotRestore(context.Background(), tc.req)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
 
+type snapshotRestoreInvalidRequestCase struct {
+	name    string
+	req     SnapshotRestoreRequest
+	wantErr string
+}
+
+func snapshotRestoreInvalidRequestCases(t *testing.T) []snapshotRestoreInvalidRequestCase {
+	t.Helper()
+	cases := snapshotRestoreInvalidDestinationCases(t)
 	minSize := int64(8)
 	maxSize := int64(4)
-
-	tests := []struct {
-		name    string
-		req     SnapshotRestoreRequest
-		wantErr string
-	}{
-		{
-			name:    "blank snapshot id",
-			req:     SnapshotRestoreRequest{SnapshotID: "   ", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationOriginal, Path: t.TempDir()}},
-			wantErr: "snapshot id cannot be empty",
-		},
-		{
-			name:    "missing destination mode",
-			req:     SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Path: t.TempDir()}},
-			wantErr: "snapshot restore destination mode is required",
-		},
-		{
-			name:    "unknown destination mode",
-			req:     SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationMode("boom"), Path: t.TempDir()}},
-			wantErr: `unknown snapshot restore destination mode "boom"`,
-		},
-		{
-			name:    "missing original root",
-			req:     SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationOriginal}},
-			wantErr: "original mode requires destination path",
-		},
-		{
-			name:    "missing prefix root",
-			req:     SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationPrefix}},
-			wantErr: "prefix mode requires destination path",
-		},
-		{
-			name:    "missing override path",
-			req:     SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationOverride}},
-			wantErr: "override mode requires destination path",
-		},
-		{
-			name:    "unknown metadata mode",
-			req:     SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationOriginal, Path: t.TempDir()}, Metadata: SnapshotRestoreMetadataMode("boom")},
-			wantErr: `unknown snapshot restore metadata mode "boom"`,
-		},
-		{
+	return append(cases,
+		snapshotRestoreInvalidRequestCase{
 			name: "invalid regex",
 			req: SnapshotRestoreRequest{
 				SnapshotID:  "snap-restore",
@@ -72,7 +50,7 @@ func TestSnapshotRestoreRejectsInvalidRequests(t *testing.T) {
 			},
 			wantErr: "invalid snapshot restore regex",
 		},
-		{
+		snapshotRestoreInvalidRequestCase{
 			name: "invalid size range",
 			req: SnapshotRestoreRequest{
 				SnapshotID:  "snap-restore",
@@ -81,15 +59,20 @@ func TestSnapshotRestoreRejectsInvalidRequests(t *testing.T) {
 			},
 			wantErr: "min size cannot exceed max size",
 		},
-	}
+	)
+}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := eng.SnapshotRestore(context.Background(), tc.req)
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
-			}
-		})
+func snapshotRestoreInvalidDestinationCases(t *testing.T) []snapshotRestoreInvalidRequestCase {
+	t.Helper()
+	originalPath := SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationOriginal, Path: t.TempDir()}
+	return []snapshotRestoreInvalidRequestCase{
+		{name: "blank snapshot id", req: SnapshotRestoreRequest{SnapshotID: "   ", Destination: originalPath}, wantErr: "snapshot id cannot be empty"},
+		{name: "missing destination mode", req: SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Path: t.TempDir()}}, wantErr: "snapshot restore destination mode is required"},
+		{name: "unknown destination mode", req: SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationMode("boom"), Path: t.TempDir()}}, wantErr: `unknown snapshot restore destination mode "boom"`},
+		{name: "missing original root", req: SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationOriginal}}, wantErr: "original mode requires destination path"},
+		{name: "missing prefix root", req: SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationPrefix}}, wantErr: "prefix mode requires destination path"},
+		{name: "missing override path", req: SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: SnapshotRestoreDestination{Mode: SnapshotRestoreDestinationOverride}}, wantErr: "override mode requires destination path"},
+		{name: "unknown metadata mode", req: SnapshotRestoreRequest{SnapshotID: "snap-restore", Destination: originalPath, Metadata: SnapshotRestoreMetadataMode("boom")}, wantErr: `unknown snapshot restore metadata mode "boom"`},
 	}
 }
 
@@ -169,29 +152,41 @@ func TestSnapshotRestoreCopiesCallerOwnedInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareSnapshotRestoreRequest: %v", err)
 	}
+	mutateSnapshotRestoreCallerInputs(&req, &after)
+	assertPreparedSnapshotRestoreIdentityCopy(t, prepared)
+	assertPreparedSnapshotRestoreQueryCopy(t, prepared.restoreSnapshotOpts.Query)
+}
 
+func mutateSnapshotRestoreCallerInputs(req *SnapshotRestoreRequest, after *time.Time) {
 	req.Paths[0] = "mutated"
 	req.Selection.ExactPaths[0] = "changed"
 	req.Selection.Prefixes[0] = "changed/"
-	after = after.Add(2 * time.Hour)
+	*after = after.Add(2 * time.Hour)
+}
 
+func assertPreparedSnapshotRestoreIdentityCopy(t *testing.T, prepared preparedSnapshotRestoreRequest) {
+	t.Helper()
 	if prepared.snapshotID != "snap-copy" {
 		t.Fatalf("snapshot id not normalized: %q", prepared.snapshotID)
 	}
 	if !reflect.DeepEqual(prepared.paths, []string{"docs/a.txt"}) {
 		t.Fatalf("paths mutated through caller alias: %v", prepared.paths)
 	}
-	if prepared.restoreSnapshotOpts.Query == nil {
+}
+
+func assertPreparedSnapshotRestoreQueryCopy(t *testing.T, query *snapshot.SnapshotQuery) {
+	t.Helper()
+	if query == nil {
 		t.Fatal("expected restore query")
 	}
-	if _, ok := prepared.restoreSnapshotOpts.Query.ExactPaths["docs/a.txt"]; !ok {
-		t.Fatalf("expected exact path copy, got %+v", prepared.restoreSnapshotOpts.Query.ExactPaths)
+	if _, ok := query.ExactPaths["docs/a.txt"]; !ok {
+		t.Fatalf("expected exact path copy, got %+v", query.ExactPaths)
 	}
-	if !reflect.DeepEqual(prepared.restoreSnapshotOpts.Query.Prefixes, []string{"docs/"}) {
-		t.Fatalf("prefixes mutated through caller alias: %v", prepared.restoreSnapshotOpts.Query.Prefixes)
+	if !reflect.DeepEqual(query.Prefixes, []string{"docs/"}) {
+		t.Fatalf("prefixes mutated through caller alias: %v", query.Prefixes)
 	}
-	if prepared.restoreSnapshotOpts.Query.ModifiedAfter == nil || !prepared.restoreSnapshotOpts.Query.ModifiedAfter.Equal(time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)) {
-		t.Fatalf("modified-after pointer mutated through caller alias: %v", prepared.restoreSnapshotOpts.Query.ModifiedAfter)
+	if query.ModifiedAfter == nil || !query.ModifiedAfter.Equal(time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("modified-after pointer mutated through caller alias: %v", query.ModifiedAfter)
 	}
 }
 

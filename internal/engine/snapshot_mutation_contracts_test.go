@@ -124,28 +124,58 @@ func TestSnapshotMutationRestoreResultContractShape(t *testing.T) {
 }
 
 func TestSnapshotMutationEnumValues(t *testing.T) {
+	assertSnapshotTypeEnums(t)
+	assertSnapshotDeleteEnums(t)
+	assertSnapshotDeleteParentEnums(t)
+	assertSnapshotRestoreDestinationEnums(t)
+	assertSnapshotRestoreMetadataEnums(t)
+	assertSnapshotRestoreWarningEnums(t)
+}
+
+func assertSnapshotTypeEnums(t *testing.T) {
+	t.Helper()
 	if engine.SnapshotTypeFull != "full" || engine.SnapshotTypePartial != "partial" {
 		t.Fatalf("snapshot type enum drifted: full=%q partial=%q", engine.SnapshotTypeFull, engine.SnapshotTypePartial)
 	}
+}
+
+func assertSnapshotDeleteEnums(t *testing.T) {
+	t.Helper()
 	if engine.SnapshotDeleteModePreview != "preview" || engine.SnapshotDeleteModeExecute != "execute" {
 		t.Fatalf("snapshot delete mode enum drifted: preview=%q execute=%q", engine.SnapshotDeleteModePreview, engine.SnapshotDeleteModeExecute)
 	}
+}
+
+func assertSnapshotDeleteParentEnums(t *testing.T) {
+	t.Helper()
 	if engine.SnapshotDeleteParentNone != "none" || engine.SnapshotDeleteParentPresent != "present" || engine.SnapshotDeleteParentMissing != "missing" {
 		t.Fatalf("snapshot delete parent-state enum drifted: none=%q present=%q missing=%q",
 			engine.SnapshotDeleteParentNone, engine.SnapshotDeleteParentPresent, engine.SnapshotDeleteParentMissing)
 	}
+}
+
+func assertSnapshotRestoreDestinationEnums(t *testing.T) {
+	t.Helper()
 	if engine.SnapshotRestoreDestinationOriginal != "original" ||
 		engine.SnapshotRestoreDestinationPrefix != "prefix" ||
 		engine.SnapshotRestoreDestinationOverride != "override" {
 		t.Fatalf("snapshot restore destination enum drifted: original=%q prefix=%q override=%q",
 			engine.SnapshotRestoreDestinationOriginal, engine.SnapshotRestoreDestinationPrefix, engine.SnapshotRestoreDestinationOverride)
 	}
+}
+
+func assertSnapshotRestoreMetadataEnums(t *testing.T) {
+	t.Helper()
 	if engine.SnapshotRestoreMetadataBestEffort != "" ||
 		engine.SnapshotRestoreMetadataStrict != "strict" ||
 		engine.SnapshotRestoreMetadataNone != "none" {
 		t.Fatalf("snapshot restore metadata enum drifted: best-effort=%q strict=%q none=%q",
 			engine.SnapshotRestoreMetadataBestEffort, engine.SnapshotRestoreMetadataStrict, engine.SnapshotRestoreMetadataNone)
 	}
+}
+
+func assertSnapshotRestoreWarningEnums(t *testing.T) {
+	t.Helper()
 	if engine.SnapshotRestoreWarningMetadata != "metadata_apply_failed" {
 		t.Fatalf("snapshot restore warning code drifted: %q", engine.SnapshotRestoreWarningMetadata)
 	}
