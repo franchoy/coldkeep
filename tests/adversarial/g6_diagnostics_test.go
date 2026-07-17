@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func TestWriteConcurrentInvariantManifestG6WritesExpectedIdentifiers(t *testing.
 		t.Fatalf("expected one manifest file, got %d", len(entries))
 	}
 
-	data, err := os.ReadFile(diagDir + "/" + entries[0].Name())
+	data, err := os.ReadFile(filepath.Join(diagDir, entries[0].Name()))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}

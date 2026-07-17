@@ -43,7 +43,7 @@ func WriteDiagnosticJSON(prefix string, payload any) (string, error) {
 		return "", fmt.Errorf("stat %s=%q: %w", diagnosticDirEnv, dir, err)
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("mkdir %s=%q: %w", diagnosticDirEnv, dir, err)
 	}
 
@@ -57,7 +57,7 @@ func WriteDiagnosticJSON(prefix string, payload any) (string, error) {
 	}
 	data = append(data, '\n')
 
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", fmt.Errorf("write diagnostic manifest %s: %w", path, err)
 	}
 

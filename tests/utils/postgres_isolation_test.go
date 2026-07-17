@@ -75,7 +75,7 @@ func TestFinalizeIsolatedPostgresDBDropsSuccessfulDatabase(t *testing.T) {
 
 func TestFinalizeIsolatedPostgresDBManifestWarningDoesNotChangeFailureExitCode(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "not-a-dir")
-	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write diagnostic dir fixture: %v", err)
 	}
 	t.Setenv(preserveFailureStateEnv, "1")

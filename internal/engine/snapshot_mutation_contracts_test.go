@@ -345,7 +345,7 @@ func assertExactStructFields(t *testing.T, rt reflect.Type, want []fieldExpectat
 func assertStructOmitsFields(t *testing.T, rt reflect.Type, forbidden []string) {
 	t.Helper()
 	for _, name := range forbidden {
-		if _, ok := rt.FieldByName(name); ok {
+		if _, ok := structFieldByName(rt, name); ok {
 			t.Fatalf("%s unexpectedly exposes field %s", rt.Name(), name)
 		}
 	}
@@ -353,13 +353,23 @@ func assertStructOmitsFields(t *testing.T, rt reflect.Type, forbidden []string) 
 
 func assertFieldType(t *testing.T, rt reflect.Type, fieldName string, want reflect.Type) {
 	t.Helper()
-	field, ok := rt.FieldByName(fieldName)
+	field, ok := structFieldByName(rt, fieldName)
 	if !ok {
 		t.Fatalf("%s missing field %s", rt.Name(), fieldName)
 	}
 	if field.Type != want {
 		t.Fatalf("%s.%s type mismatch: got %v want %v", rt.Name(), fieldName, field.Type, want)
 	}
+}
+
+func structFieldByName(rt reflect.Type, name string) (reflect.StructField, bool) {
+	for index := 0; index < rt.NumField(); index++ {
+		field := rt.Field(index)
+		if field.Name == name {
+			return field, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 func int64Ptr(v int64) *int64 {
