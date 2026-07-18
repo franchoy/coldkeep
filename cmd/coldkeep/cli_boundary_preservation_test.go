@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
@@ -15,12 +16,14 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-func TestRunSnapshotCommandCreatePreservesDirectSnapshotOwnership(t *testing.T) {
+func TestRunSnapshotCommandCreateUsesEngineOwnership(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -31,19 +34,30 @@ func TestRunSnapshotCommandCreatePreservesDirectSnapshotOwnership(t *testing.T) 
 		return storage.StorageContext{DB: dbconn}, nil
 	}
 
-	called := false
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		called = true
-		if opts.ID != "snap-cli-owned" {
-			t.Fatalf("expected forwarded snapshot ID, got %q", opts.ID)
-		}
-		if opts.Type != "partial" {
-			t.Fatalf("expected partial snapshot type, got %q", opts.Type)
-		}
-		if len(opts.Paths) != 1 || opts.Paths[0] != "docs/" {
-			t.Fatalf("expected direct snapshot create paths, got %v", opts.Paths)
-		}
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotCreateOptions) error {
+		t.Fatal("expected snapshot create to avoid direct CLI/snapshot ownership")
 		return nil
+	}
+
+	called := false
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				called = true
+				if req.ID != "snap-cli-owned" {
+					t.Fatalf("expected forwarded snapshot ID, got %q", req.ID)
+				}
+				if len(req.Paths) != 1 || req.Paths[0] != "docs/" {
+					t.Fatalf("expected engine-routed snapshot create paths, got %v", req.Paths)
+				}
+				return engine.SnapshotCreateResult{
+					SnapshotID:    "snap-cli-owned",
+					Type:          engine.SnapshotTypePartial,
+					PathsCount:    1,
+					FilesInserted: 1,
+				}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -61,7 +75,7 @@ func TestRunSnapshotCommandCreatePreservesDirectSnapshotOwnership(t *testing.T) 
 	})
 
 	if !called {
-		t.Fatal("expected snapshot create to preserve direct CLI/snapshot ownership")
+		t.Fatal("expected snapshot create to route through engine ownership")
 	}
 
 	var payload map[string]any
@@ -80,12 +94,14 @@ func TestRunSnapshotCommandCreatePreservesDirectSnapshotOwnership(t *testing.T) 
 	}
 }
 
-func TestRunSnapshotCommandDeletePreservesDirectSnapshotOwnership(t *testing.T) {
+func TestRunSnapshotCommandDeleteUsesEngineOwnership(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDelete := deleteSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		deleteSnapshotPhase = originalDelete
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -98,11 +114,23 @@ func TestRunSnapshotCommandDeletePreservesDirectSnapshotOwnership(t *testing.T) 
 
 	called := false
 	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
-		called = true
-		if snapshotID != "snap-delete-owned" {
-			t.Fatalf("expected forwarded snapshot ID, got %q", snapshotID)
-		}
+		t.Fatalf("expected snapshot delete to avoid direct snapshot delete seam for %q", snapshotID)
 		return nil
+	}
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotDeleteFunc: func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+				called = true
+				if req.SnapshotID != "snap-delete-owned" || req.Mode != engine.SnapshotDeleteModeExecute {
+					t.Fatalf("unexpected snapshot delete request: %+v", req)
+				}
+				return engine.SnapshotDeleteResult{
+					SnapshotID: req.SnapshotID,
+					Mode:       engine.SnapshotDeleteModeExecute,
+					Deleted:    true,
+				}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -120,7 +148,7 @@ func TestRunSnapshotCommandDeletePreservesDirectSnapshotOwnership(t *testing.T) 
 	})
 
 	if !called {
-		t.Fatal("expected snapshot delete to preserve direct CLI/snapshot ownership")
+		t.Fatal("expected snapshot delete to route through engine ownership")
 	}
 
 	var payload map[string]any
@@ -136,12 +164,14 @@ func TestRunSnapshotCommandDeletePreservesDirectSnapshotOwnership(t *testing.T) 
 	}
 }
 
-func TestRunSnapshotCommandRestorePreservesDirectSnapshotOwnership(t *testing.T) {
+func TestRunSnapshotCommandRestoreUsesEngineOwnership(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalRestore := restoreSnapshotPhase
+	originalEngine := newSnapshotRestoreCommandEngine
+	originalCWD := currentWorkingDirectoryPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		restoreSnapshotPhase = originalRestore
+		newSnapshotRestoreCommandEngine = originalEngine
+		currentWorkingDirectoryPhase = originalCWD
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -151,26 +181,35 @@ func TestRunSnapshotCommandRestorePreservesDirectSnapshotOwnership(t *testing.T)
 		}
 		return storage.StorageContext{DB: dbconn}, nil
 	}
+	currentWorkingDirectoryPhase = func() (string, error) {
+		return "/cli/root", nil
+	}
 
 	called := false
-	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string, paths []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
-		called = true
-		if snapshotID != "snap-restore-owned" {
-			t.Fatalf("expected forwarded snapshot ID, got %q", snapshotID)
-		}
-		if len(paths) != 1 || paths[0] != "docs/" {
-			t.Fatalf("expected direct snapshot restore paths, got %v", paths)
-		}
-		if opts.Query == nil || len(opts.Query.ExactPaths) != 1 {
-			t.Fatalf("expected snapshot restore query to stay CLI/snapshot-owned, got %+v", opts.Query)
-		}
-		if _, ok := opts.Query.ExactPaths["docs/a.txt"]; !ok {
-			t.Fatalf("expected normalized exact path docs/a.txt, got %+v", opts.Query.ExactPaths)
-		}
-		return &snapshot.RestoreSnapshotResult{
-			SnapshotID:     snapshotID,
-			RestoredFiles:  1,
-			RequestedPaths: int64(len(paths)),
+	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+				called = true
+				if req.SnapshotID != "snap-restore-owned" {
+					t.Fatalf("expected forwarded snapshot ID, got %q", req.SnapshotID)
+				}
+				if len(req.Paths) != 1 || req.Paths[0] != "docs/" {
+					t.Fatalf("expected engine-routed snapshot restore paths, got %v", req.Paths)
+				}
+				if len(req.Selection.ExactPaths) != 1 || req.Selection.ExactPaths[0] != "docs/a.txt" {
+					t.Fatalf("expected exact path preservation, got %+v", req.Selection)
+				}
+				if req.Destination.Mode != engine.SnapshotRestoreDestinationOriginal || req.Destination.Path != "/cli/root" {
+					t.Fatalf("expected explicit original root, got %+v", req.Destination)
+				}
+				return engine.SnapshotRestoreResult{
+					SnapshotID:          req.SnapshotID,
+					DestinationMode:     req.Destination.Mode,
+					RequestedPathsCount: len(req.Paths),
+					RestoredFiles:       1,
+					OutputTarget:        req.Destination.Path,
+				}, nil
+			},
 		}, nil
 	}
 
@@ -189,7 +228,7 @@ func TestRunSnapshotCommandRestorePreservesDirectSnapshotOwnership(t *testing.T)
 	})
 
 	if !called {
-		t.Fatal("expected snapshot restore to preserve direct CLI/snapshot ownership")
+		t.Fatal("expected snapshot restore to route through engine ownership")
 	}
 
 	var payload map[string]any
@@ -254,6 +293,40 @@ func TestRunRepairCommandPreservesDirectMaintenanceOwnership(t *testing.T) {
 	}
 }
 
+func TestRunRepairCommandDoesNotConstructEngine(t *testing.T) {
+	originalLogical := repairLogicalRefCountsPhase
+	originalEngine := newCommandEngine
+	t.Cleanup(func() {
+		repairLogicalRefCountsPhase = originalLogical
+		newCommandEngine = originalEngine
+	})
+
+	engineConstructed := false
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		engineConstructed = true
+		t.Fatal("repair should not construct an engine repair/recovery API")
+		return nil, nil
+	}
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{
+			ScannedLogicalFiles: 2,
+			UpdatedLogicalFiles: 1,
+		}, nil
+	}
+
+	err := runRepairCommand(parsedCommandLine{
+		method:      "repair",
+		positionals: []string{"ref-counts"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runRepairCommand: %v", err)
+	}
+	if engineConstructed {
+		t.Fatal("repair unexpectedly constructed an engine")
+	}
+}
+
 func TestRunDoctorCommandPreservesDirectRecoveryOwnership(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase
@@ -295,5 +368,50 @@ func TestRunDoctorCommandPreservesDirectRecoveryOwnership(t *testing.T) {
 	}
 	if verifyCalled {
 		t.Fatal("verify phase should not run after recovery failure")
+	}
+}
+
+func TestRunDoctorCommandDoesNotConstructEngine(t *testing.T) {
+	originalRecovery := doctorRecoveryPhase
+	originalSchema := doctorSchemaVersionPhase
+	originalVerify := doctorVerifyPhase
+	originalAudit := doctorSystemAuditPhase
+	originalEngine := newCommandEngine
+	t.Cleanup(func() {
+		doctorRecoveryPhase = originalRecovery
+		doctorSchemaVersionPhase = originalSchema
+		doctorVerifyPhase = originalVerify
+		doctorSystemAuditPhase = originalAudit
+		newCommandEngine = originalEngine
+	})
+
+	engineConstructed := false
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		engineConstructed = true
+		t.Fatal("doctor should not construct an engine repair/recovery API")
+		return nil, nil
+	}
+	doctorRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+	doctorSchemaVersionPhase = func() (int64, error) {
+		return 5, nil
+	}
+	doctorVerifyPhase = func(string, string, int, verify.VerifyLevel) error {
+		return nil
+	}
+	doctorSystemAuditPhase = func() (maintenance.SystemAuditSummary, error) {
+		return maintenance.SystemAuditSummary{}, nil
+	}
+
+	err := runDoctorCommand(parsedCommandLine{
+		method: "doctor",
+		flags:  map[string][]string{},
+	}, outputModeJSON)
+	if err != nil {
+		t.Fatalf("runDoctorCommand: %v", err)
+	}
+	if engineConstructed {
+		t.Fatal("doctor unexpectedly constructed an engine")
 	}
 }

@@ -75,7 +75,7 @@ type BatchSummary struct {
 }
 
 // SnapshotQuery represents the renderer-neutral file-selection filters shared by
-// snapshot show, diff, and restore. All fields are optional; zero values mean
+// snapshot show and diff. All fields are optional; zero values mean
 // "no filter on this dimension". Size and time fields use pointers so that a
 // zero value can be distinguished from "unset".
 //
@@ -419,12 +419,8 @@ type SnapshotMeta struct {
 	FileCount int
 }
 
-// SnapshotCreateRequest is a candidate request for a future SnapshotCreate
-// operation. Not part of the active v1.12 Engine interface.
-//
-// Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Snapshot create/delete/restore remain CLI/domain
-// owned until the explicit snapshot-mutation follow-up in v1.13.9.
+// SnapshotCreateRequest is the frozen active v1.13.9 Engine snapshot-create
+// request surface.
 //
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics.
@@ -439,8 +435,8 @@ type SnapshotCreateRequest struct {
 	Paths []string
 }
 
-// SnapshotCreateResult is a candidate result for a future SnapshotCreate
-// operation. Not part of the active v1.12 Engine interface.
+// SnapshotCreateResult is the frozen active v1.13.9 Engine snapshot-create
+// result surface.
 type SnapshotCreateResult struct {
 	SnapshotID    string
 	Type          SnapshotType
@@ -448,7 +444,6 @@ type SnapshotCreateResult struct {
 	FilesInserted int
 	Label         string
 	ParentID      string
-	Warnings      []OperationWarning
 }
 
 // SnapshotListRequest is a candidate request for a future SnapshotList
@@ -626,77 +621,150 @@ type SnapshotDiffResult struct {
 	TotalEntryCount   int
 }
 
-// SnapshotRestoreRequest is a candidate request for a future SnapshotRestore
-// operation. Not part of the active v1.12 Engine interface.
-//
-// Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Snapshot create/delete/restore remain CLI/domain
-// owned until the explicit snapshot-mutation follow-up in v1.13.9.
+// SnapshotRestoreDestinationMode is the frozen v1.13.9 snapshot-restore
+// destination enum. It is candidate-only and distinct from the active
+// stored-path RestoreDestinationMode contract.
+type SnapshotRestoreDestinationMode string
+
+const (
+	SnapshotRestoreDestinationOriginal SnapshotRestoreDestinationMode = "original"
+	SnapshotRestoreDestinationPrefix   SnapshotRestoreDestinationMode = "prefix"
+	SnapshotRestoreDestinationOverride SnapshotRestoreDestinationMode = "override"
+)
+
+// SnapshotRestoreDestination is the explicit snapshot-restore destination
+// contract frozen in v1.13.9 Phase 4.
+type SnapshotRestoreDestination struct {
+	Mode SnapshotRestoreDestinationMode
+	Path string
+}
+
+// SnapshotRestoreMetadataMode is the frozen snapshot-restore metadata policy
+// contract. Zero value means best-effort metadata application.
+type SnapshotRestoreMetadataMode string
+
+const (
+	SnapshotRestoreMetadataBestEffort SnapshotRestoreMetadataMode = ""
+	SnapshotRestoreMetadataStrict     SnapshotRestoreMetadataMode = "strict"
+	SnapshotRestoreMetadataNone       SnapshotRestoreMetadataMode = "none"
+)
+
+// SnapshotRestoreWarningCode is the stable machine-readable restore warning
+// code surface frozen in v1.13.9 Phase 4.
+type SnapshotRestoreWarningCode string
+
+const (
+	SnapshotRestoreWarningMetadata SnapshotRestoreWarningCode = "metadata_apply_failed"
+)
+
+// SnapshotRestoreWarning is the renderer-neutral structured restore warning
+// shape frozen in v1.13.9 Phase 4.
+type SnapshotRestoreWarning struct {
+	Code      SnapshotRestoreWarningCode
+	Path      string
+	Operation string
+	Detail    string
+}
+
+// SnapshotRestoreSelection is the frozen snapshot-restore selection contract.
+// It intentionally differs from the active read-side SnapshotQuery:
+// repeated exact paths and prefixes remain representable as slices, regex
+// crosses the boundary as a string, and no Limit field exists here.
+type SnapshotRestoreSelection struct {
+	ExactPaths     []string
+	Prefixes       []string
+	Pattern        string
+	Regex          string
+	MinSize        *int64
+	MaxSize        *int64
+	ModifiedAfter  *time.Time
+	ModifiedBefore *time.Time
+}
+
+// SnapshotRestoreRequest is the frozen v1.13.9 active request for
+// Engine.SnapshotRestore.
 //
 // Safety invariant: Restore must never write outside the intended destination.
 type SnapshotRestoreRequest struct {
 	SnapshotID string
 	// Paths scopes a partial restore; empty means restore all snapshot files.
 	Paths []string
-	// DestinationMode controls output location derivation.
-	DestinationMode RestoreDestinationMode
-	// Destination is the prefix or override target.
-	Destination string
+	// Selection applies query-style restore filters without narrowing repeated
+	// exact paths or repeated prefixes to a single value.
+	Selection SnapshotRestoreSelection
+	// Destination is the explicit restore destination contract.
+	Destination SnapshotRestoreDestination
 	// Overwrite permits overwriting existing files.
 	Overwrite bool
-	// Strict enforces strict metadata application.
-	Strict bool
-	// NoMetadata disables metadata application.
-	NoMetadata bool
-	// Query filters which snapshot files are restored.
-	Query SnapshotQuery
+	// Metadata controls best-effort, strict, or disabled metadata behavior.
+	Metadata SnapshotRestoreMetadataMode
 }
 
-// SnapshotRestoreResult is a candidate result for a future SnapshotRestore
-// operation. Not part of the active v1.12 Engine interface.
+// SnapshotRestoreResult is the frozen v1.13.9 active result for
+// Engine.SnapshotRestore.
 type SnapshotRestoreResult struct {
-	SnapshotID string
-	Type       SnapshotType
-	// RestoredFiles is the number of files restored (or that would be).
-	RestoredFiles int
-	// OutputRoot is the effective destination root.
-	OutputRoot string
-	Warnings   []OperationWarning
+	SnapshotID          string
+	DestinationMode     SnapshotRestoreDestinationMode
+	RequestedPathsCount int
+	RestoredFiles       int64
+	OutputTarget        string
+	OutputPaths         []string
+	Warnings            []SnapshotRestoreWarning
 }
 
-// SnapshotDeleteRequest is a candidate request for a future SnapshotDelete
-// operation. Not part of the active v1.12 Engine interface.
-//
-// Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Snapshot create/delete/restore remain CLI/domain
-// owned until the explicit snapshot-mutation follow-up in v1.13.9.
+// SnapshotDeleteMode is the frozen v1.13.9 snapshot-delete mode enum.
+type SnapshotDeleteMode string
+
+const (
+	SnapshotDeleteModePreview SnapshotDeleteMode = "preview"
+	SnapshotDeleteModeExecute SnapshotDeleteMode = "execute"
+)
+
+// SnapshotDeleteParentState distinguishes no parent, present parent, and
+// recorded-but-missing parent in the frozen v1.13.9 delete contract.
+type SnapshotDeleteParentState string
+
+const (
+	SnapshotDeleteParentNone    SnapshotDeleteParentState = "none"
+	SnapshotDeleteParentPresent SnapshotDeleteParentState = "present"
+	SnapshotDeleteParentMissing SnapshotDeleteParentState = "missing"
+)
+
+// SnapshotDeleteParent is the renderer-neutral parent-state surface frozen in
+// v1.13.9 Phase 3.
+type SnapshotDeleteParent struct {
+	ID    string
+	State SnapshotDeleteParentState
+}
+
+// SnapshotDeletePreviewResult is the renderer-neutral delete-preview shape
+// frozen in v1.13.9 Phase 3.
+type SnapshotDeletePreviewResult struct {
+	Parent      SnapshotDeleteParent
+	Children    []string
+	TotalFiles  int64
+	UniqueFiles int64
+	SharedFiles int64
+}
+
+// SnapshotDeleteRequest is the frozen v1.13.9 active request for
+// Engine.SnapshotDelete.
 //
 // Safety invariant: Snapshot operations must preserve immutability and
 // retention semantics. Deleting a snapshot removes only its metadata; content
 // referenced by other snapshots or the current state must be retained.
 type SnapshotDeleteRequest struct {
 	SnapshotID string
-	// Force performs a live delete (mutually exclusive with DryRun).
-	Force bool
-	// DryRun simulates the delete.
-	DryRun bool
+	Mode       SnapshotDeleteMode
 }
 
-// SnapshotDeleteResult is a candidate result for a future SnapshotDelete
-// operation. Not part of the active v1.12 Engine interface.
+// SnapshotDeleteResult is the frozen v1.13.9 active result for
+// Engine.SnapshotDelete.
 type SnapshotDeleteResult struct {
 	SnapshotID string
-	DryRun     bool
-	ParentID   string
-	// ParentMissing indicates the recorded parent no longer exists.
-	ParentMissing bool
-	// Children lists snapshot IDs whose lineage references this snapshot.
-	Children []string
-	// TotalFiles, UniqueFiles, and SharedFiles describe content impact.
-	TotalFiles  int
-	UniqueFiles int
-	SharedFiles int
-	Warnings    []OperationWarning
+	Mode       SnapshotDeleteMode
+	Deleted    bool
+	Preview    *SnapshotDeletePreviewResult
 }
 
 // ---------------------------------------------------------------------------
@@ -717,8 +785,9 @@ const (
 // Not part of the active v1.12 Engine interface.
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Repair and recover remain CLI/domain owned until
-// the explicit corrective-integrity follow-up in v1.13.10.
+// active engine ownership. Repair and recover remain CLI/domain owned after
+// the v1.13.9 Phase 14 boundary decision and the Phase 16 honesty proof; any
+// future activation must be explicit.
 type RepairRequest struct {
 	// Target selects the single-target repair (when Batch is false).
 	Target RepairTarget
@@ -770,8 +839,9 @@ type RepairResult struct {
 // operation. Not part of the active v1.12 Engine interface.
 //
 // Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Repair and recover remain CLI/domain owned until
-// the explicit corrective-integrity follow-up in v1.13.10.
+// active engine ownership. Repair and recover remain CLI/domain owned after
+// the v1.13.9 Phase 14 boundary decision and the Phase 16 honesty proof; any
+// future activation must be explicit.
 //
 // Safety invariant: Recovery must not legitimize corrupt mappings. Recovery is
 // a corrective integrity pass (abort dangling writes, clear stale sealing

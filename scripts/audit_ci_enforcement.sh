@@ -60,15 +60,16 @@ fi
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
-WORKFLOW_FILE="$REPO_ROOT/.github/workflows/ci.yml"
-VALIDATION_MATRIX_FILE="$REPO_ROOT/VALIDATION_MATRIX.md"
+WORKFLOW_FILE="${COLDKEEP_CI_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/ci.yml}"
+CODEQL_WORKFLOW_FILE="${COLDKEEP_CODEQL_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/codeql.yml}"
+VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
 
 require_pattern() {
   local file="$1"
   local pattern="$2"
   local description="$3"
 
-  if grep -Eq "$pattern" "$file"; then
+  if grep -Eq -- "$pattern" "$file"; then
     echo "[audit] ok: $description"
   else
     echo "[audit] ERROR: missing $description" >&2
@@ -76,16 +77,76 @@ require_pattern() {
   fi
 }
 
+require_content_pattern() {
+  local content="$1"
+  local pattern="$2"
+  local description="$3"
+
+  if grep -Eq -- "$pattern" <<<"$content"; then
+    echo "[audit] ok: $description"
+  else
+    echo "[audit] ERROR: missing $description" >&2
+    return 1
+  fi
+}
+
+extract_job_block() {
+  local job_name="$1"
+  awk -v job_name="$job_name" '
+    $0 ~ ("^  " job_name ":$") {
+      in_job = 1
+    }
+    in_job && $0 ~ "^  [A-Za-z0-9_-]+:$" && $0 !~ ("^  " job_name ":$") {
+      exit
+    }
+    in_job {
+      print
+    }
+  ' "$WORKFLOW_FILE"
+}
+
+extract_step_block_from_content() {
+  local content="$1"
+  local step_name="$2"
+  awk -v step_name="$step_name" '
+    $0 == "      - name: " step_name {
+      in_step = 1
+    }
+    in_step && $0 ~ "^      - name: " && $0 != "      - name: " step_name {
+      exit
+    }
+    in_step {
+      print
+    }
+  ' <<<"$content"
+}
+
 check_local_workflow() {
   local check_status=0
+  local adversarial_block=""
+  local deterministic_g6_block=""
 
   echo "[audit] checking local workflow invariants"
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^  push:$' 'CI push trigger' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^\s+- main$' 'CI push branch retains main' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^\s+- release/\*\*$' 'CI push branch includes release/**' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'tags:\s*\[\s*"v\*"\s*\]' 'release tag trigger (v*)' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'merge_group:' 'merge queue trigger' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CI workflow_dispatch trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix\]' 'required gate depends on all upstream jobs including long-run, adversarial, legacy compatibility, and benchmark matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^  cross-platform:$' 'cross-platform job exists' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run path safety cross-platform tests' 'cross-platform path safety step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/pathsafe/\\.\\.\\. -run 'TrustedRoot\\|Symlink\\|Alias\\|WritePath' -count=1" 'cross-platform path safety command covers trusted-root and alias checks' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run storage restore cross-platform tests' 'cross-platform storage restore step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/storage/\\.\\.\\. -run 'TestRestore\\(FileByStoredPath\\(UsesPhysicalPathIdentity\\|UsesLexicalPhysicalPathIdentityAboveAlias\\|PrefixMode\\|PrefixModeCreatesMissingParents\\|OverrideMode\\|RejectsSymlinkedPrefixRoot\\)\\|WithTrustedRootAllowsOuterAliasForExactOutputPath\\|StoredPath\\(PrefixAllowsOuterAliasAboveTrustedRoot\\|OverrideAllowsOuterAliasAboveDerivedRoot\\|PrefixRejectsSymlinkedTargetInTrustedRoot\\|OverrideRejectsSymlinkedTargetInTrustedRoot\\|OriginalRejectsInjectedSymlinkBelowDerivedTrustedRoot\\)\\|RejectsSymlinkedTargetInTrustedRoot\\)' -count=1" 'cross-platform storage restore command scopes to trusted restore paths' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run engine restore cross-platform tests' 'cross-platform engine restore step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/engine/\\.\\.\\. -run '\\^TestRestore' -count=1" 'cross-platform engine restore command scopes to restore tests' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run snapshot restore cross-platform tests' 'cross-platform snapshot restore step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test ./internal/snapshot/\\.\\.\\. -run '\\^TestRestoreSnapshot' -count=1" 'cross-platform snapshot restore command scopes to snapshot restore tests' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform\]' 'required gate depends on all upstream jobs including long-run, adversarial, legacy compatibility, benchmark matrix, and cross-platform' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_smart_quotes\.sh' 'smart-quote guard command' || check_status=1
@@ -105,6 +166,28 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G17\)' 'adversarial workflow step names batch coverage through G17' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14\\|TestAdversarialG15\\|TestAdversarialG16\\|TestAdversarialG17'" 'explicit G14-G17 adversarial gate command' || check_status=1
+  adversarial_block="$(extract_job_block adversarial)"
+  if [[ -z "$adversarial_block" ]]; then
+    echo "[audit] ERROR: missing adversarial job block content" >&2
+    check_status=1
+  else
+    require_content_pattern "$adversarial_block" '^    services:$' 'adversarial job declares services' || check_status=1
+    require_content_pattern "$adversarial_block" '^      postgres:$' 'adversarial job provisions postgres service' || check_status=1
+    require_content_pattern "$adversarial_block" 'image:\s*postgres:16' 'adversarial job pins postgres service image' || check_status=1
+    deterministic_g6_block="$(extract_step_block_from_content "$adversarial_block" "Run deterministic G6 PostgreSQL interleaving regression")"
+    if [[ -z "$deterministic_g6_block" ]]; then
+      echo "[audit] ERROR: missing deterministic G6 PostgreSQL regression step block" >&2
+      check_status=1
+    else
+      require_content_pattern "$deterministic_g6_block" '^      - name: Run deterministic G6 PostgreSQL interleaving regression$' 'deterministic G6 PostgreSQL regression step' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'COLDKEEP_TEST_DB:\s*1' 'deterministic G6 PostgreSQL regression enables DB gate' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'COLDKEEP_DB_AUTO_BOOTSTRAP:\s*true' 'deterministic G6 PostgreSQL regression enables DB bootstrap' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'COLDKEEP_REQUIRE_DETERMINISTIC_G6_POSTGRES:\s*1' 'deterministic G6 PostgreSQL regression forbids DB skip' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'COLDKEEP_REQUIRE_DETERMINISTIC_G6_RETRY_CASE:\s*1' 'deterministic G6 PostgreSQL regression requires retry-case execution' || check_status=1
+      require_content_pattern "$deterministic_g6_block" 'go test -v -race -count=1 ./tests/adversarial/\.\.\.' 'deterministic G6 PostgreSQL regression targets adversarial package explicitly' || check_status=1
+      require_content_pattern "$deterministic_g6_block" "-run '\\^TestAdversarialG6DeterministicStoreInterleavingPostgres\\$'" 'deterministic G6 PostgreSQL regression uses exact selector' || check_status=1
+    fi
+  fi
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ failure\(\) \}\}' 'smoke artifact upload is failure-only' || check_status=1
@@ -119,6 +202,23 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'ADVERSARIAL_RESULT.*!= "success"' 'required gate rejects skipped adversarial job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'BENCHMARK_RESULT.*!= "success"' 'required gate rejects skipped benchmark job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'CROSS_PLATFORM_RESULT.*!= "success"' 'required gate rejects skipped cross-platform job' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" 'name:\s*CodeQL' 'CodeQL workflow file' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^  push:$' 'CodeQL push trigger' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- main$' 'CodeQL push branch retains main' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- release/\*\*$' 'CodeQL push branch includes release/**' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CodeQL workflow_dispatch trigger' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" 'language:\s*actions' 'CodeQL retains actions analysis' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" 'language:\s*go' 'CodeQL retains Go analysis' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" 'language:\s*python' 'CodeQL retains Python analysis' || check_status=1
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^  schedule:$' 'CodeQL weekly schedule trigger' || check_status=1
+  require_pattern "$REPO_ROOT/internal/pathsafe/pathsafe_test.go" 'filepath\.EvalSymlinks\(t\.TempDir\(\)\)' 'generic symlink-component test retains canonical-path-specific coverage outside restore enforcement' || check_status=1
+  if grep -Eq 'filepath\.EvalSymlinks\(t\.TempDir\(\)\)' "$REPO_ROOT/internal/storage/"*test.go 2>/dev/null; then
+    echo "[audit] ERROR: storage restore tests must not canonicalize t.TempDir() with filepath.EvalSymlinks" >&2
+    check_status=1
+  else
+    echo "[audit] ok: storage restore tests preserve native lexical temp paths"
+  fi
   require_pattern "$VALIDATION_MATRIX_FILE" '^# (v1\.0 )?Validation Matrix$' 'validation matrix artifact (legacy or current style)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G1 \|' 'validation matrix deterministic restore row (G1)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G2 \|' 'validation matrix repeat store does not drift chunk graph row (G2)' || check_status=1

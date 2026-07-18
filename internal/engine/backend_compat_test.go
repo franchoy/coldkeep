@@ -38,54 +38,16 @@ func backendSpecificFieldTerms() []string {
 }
 
 func enginePublicTypesForBackendCompatibility() []enginePublicTypeCase {
-	return []enginePublicTypeCase{
+	types := []enginePublicTypeCase{
 		{"Config", engine.Config{}},
 		{"StatsRequest", engine.StatsRequest{}},
 		{"InspectRequest", engine.InspectRequest{}},
 		{"VerifyRequest", engine.VerifyRequest{}},
-		// Operation candidates (inactive; expanded in v1.12 Phase 2).
-		{"OperationWarning", engine.OperationWarning{}},
-		{"BatchSummary", engine.BatchSummary{}},
-		{"SnapshotQuery", engine.SnapshotQuery{}},
-		{"StoreRequest", engine.StoreRequest{}},
-		{"StoreResult", engine.StoreResult{}},
-		{"RestoreRequest", engine.RestoreRequest{}},
-		{"RestoreItemResult", engine.RestoreItemResult{}},
-		{"RestoreResult", engine.RestoreResult{}},
-		{"RestoreStoredPathRequest", engine.RestoreStoredPathRequest{}},
-		{"RestoreStoredPathResult", engine.RestoreStoredPathResult{}},
-		{"RemoveRequest", engine.RemoveRequest{}},
-		{"RemoveItemResult", engine.RemoveItemResult{}},
-		{"RemoveResult", engine.RemoveResult{}},
-		{"RemoveStoredPathsRequest", engine.RemoveStoredPathsRequest{}},
-		{"RemoveStoredPathItemResult", engine.RemoveStoredPathItemResult{}},
-		{"RemoveStoredPathsResult", engine.RemoveStoredPathsResult{}},
-		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
-		{"GarbageCollectResult", engine.GarbageCollectResult{}},
-		{"SnapshotMeta", engine.SnapshotMeta{}},
-		{"SnapshotCreateRequest", engine.SnapshotCreateRequest{}},
-		{"SnapshotCreateResult", engine.SnapshotCreateResult{}},
-		{"SnapshotListRequest", engine.SnapshotListRequest{}},
-		{"SnapshotListResult", engine.SnapshotListResult{}},
-		{"SnapshotFile", engine.SnapshotFile{}},
-		{"SnapshotShowRequest", engine.SnapshotShowRequest{}},
-		{"SnapshotShowResult", engine.SnapshotShowResult{}},
-		{"SnapshotStatsRequest", engine.SnapshotStatsRequest{}},
-		{"SnapshotStatsResult", engine.SnapshotStatsResult{}},
-		{"SnapshotDiffEntry", engine.SnapshotDiffEntry{}},
-		{"SnapshotDiffRequest", engine.SnapshotDiffRequest{}},
-		{"SnapshotDiffSummary", engine.SnapshotDiffSummary{}},
-		{"SnapshotDiffResult", engine.SnapshotDiffResult{}},
-		{"SnapshotRestoreRequest", engine.SnapshotRestoreRequest{}},
-		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
-		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
-		{"SnapshotDeleteResult", engine.SnapshotDeleteResult{}},
-		{"RepairRequest", engine.RepairRequest{}},
-		{"RepairTargetResult", engine.RepairTargetResult{}},
-		{"RepairResult", engine.RepairResult{}},
-		{"RecoverRequest", engine.RecoverRequest{}},
-		{"RecoverResult", engine.RecoverResult{}},
 	}
+	for _, tc := range allCandidateTypes() {
+		types = append(types, enginePublicTypeCase{name: tc.name, val: tc.val})
+	}
+	return types
 }
 
 func assertEngineTypeHasNoBackendSpecificFields(t *testing.T, typeName string, rt reflect.Type) {

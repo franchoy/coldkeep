@@ -20,14 +20,28 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.8 - Unreleased — Restore / Remove Contract Split and Stored-Path Boundary
+## v1.13.9 - Unreleased — Snapshot Mutation Boundary: Create / Delete / Restore
 
 In progress.
 
-Current work includes the inherited corrective baseline, by-ID restore/remove
-contract narrowing, dedicated stored-path restore/remove engine boundaries, CLI
-stored-path routing migration, restore destination-safety hardening, and remove
-reachability / verification / GC boundary proof.
+Current work is limited to release-state closure for the published `v1.13.8`
+records, activation of the `v1.13.9` release frame, creation of the
+`v1.13.9` planning documents, and the source version change to `1.13.9`.
+
+------------------------------------------------------------------------
+
+## v1.13.8 - 2026-06-28 — Restore / Remove Contract Split and Stored-Path Boundary
+
+- Preserved valid zero-reference logical-file state across SQLite reopen and
+  PostgreSQL schema rerun without altering schema version `16`.
+- Separated by-ID restore from stored-path restore and by-ID logical removal
+  from stored-path mapping removal.
+- Added dedicated engine-owned stored-path restore and remove boundaries and
+  routed the production CLI through them without changing observable behavior.
+- Hardened restore destination safety and expanded remove, reachability,
+  verification, GC, and backend invariants.
+- Preserved PostgreSQL as the current normal local runtime backend and did not
+  add a normal SQLite local runtime mode.
 
 ------------------------------------------------------------------------
 

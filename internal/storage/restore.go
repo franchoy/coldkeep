@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -36,6 +37,7 @@ type RestoreOptions struct {
 	Overwrite       bool
 	DestinationMode RestoreDestinationMode
 	Destination     string
+	TrustedRoot     string
 	StrictMetadata  bool
 	NoMetadata      bool
 	fs              fsx.FS
@@ -740,9 +742,39 @@ func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int
 	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
 }
 
-func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPath string) (RestoreDescriptor, error) {
+func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPaths []string, notFoundPath string) (RestoreDescriptor, error) {
+	if len(storedPaths) == 0 {
+		return RestoreDescriptor{}, fmt.Errorf("physical file path cannot be empty")
+	}
+
 	var descriptor RestoreDescriptor
-	err := dbconn.QueryRowContext(
+
+	for _, storedPath := range storedPaths {
+		err := scanRestoreDescriptorByPhysicalPath(ctx, dbconn, storedPath, &descriptor)
+		if err == nil {
+			return descriptor, nil
+		}
+		if err != sql.ErrNoRows {
+			return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor for path %q: %w", storedPath, err)
+		}
+	}
+
+	descriptor, err := buildRestoreDescriptorFromCanonicalIdentity(ctx, dbconn, storedPaths[0])
+	if err == nil {
+		return descriptor, nil
+	}
+	if err != sql.ErrNoRows {
+		return RestoreDescriptor{}, err
+	}
+
+	if strings.TrimSpace(notFoundPath) == "" {
+		notFoundPath = storedPaths[0]
+	}
+	return RestoreDescriptor{}, fmt.Errorf("physical file path %q not found", notFoundPath)
+}
+
+func scanRestoreDescriptorByPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPath string, descriptor *RestoreDescriptor) error {
+	return dbconn.QueryRowContext(
 		ctx,
 		`SELECT
 			pf.path,
@@ -766,14 +798,232 @@ func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB,
 		&descriptor.GID,
 		&descriptor.IsMetadataComplete,
 	)
+}
+
+func buildRestoreDescriptorFromCanonicalIdentity(ctx context.Context, dbconn *sql.DB, normalizedStoredPath string) (RestoreDescriptor, error) {
+	rows, err := dbconn.QueryContext(
+		ctx,
+		`SELECT
+			pf.path,
+			pf.logical_file_id,
+			pf.mode,
+			pf.mtime,
+			pf.uid,
+			pf.gid,
+			pf.is_metadata_complete
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.status = $1`,
+		filestate.LogicalFileCompleted,
+	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return RestoreDescriptor{}, fmt.Errorf("physical file path %q not found", storedPath)
+		return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor by canonical identity: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		var descriptor RestoreDescriptor
+		if err := rows.Scan(
+			&descriptor.Path,
+			&descriptor.LogicalFileID,
+			&descriptor.Mode,
+			&descriptor.MTime,
+			&descriptor.UID,
+			&descriptor.GID,
+			&descriptor.IsMetadataComplete,
+		); err != nil {
+			return RestoreDescriptor{}, fmt.Errorf("scan canonical restore descriptor candidate: %w", err)
 		}
-		return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor for path %q: %w", storedPath, err)
+
+		candidatePath, err := normalizeRestorePhysicalPathIdentity(descriptor.Path)
+		if err != nil {
+			continue
+		}
+		if candidatePath == normalizedStoredPath {
+			return descriptor, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return RestoreDescriptor{}, fmt.Errorf("iterate canonical restore descriptor candidates: %w", err)
+	}
+	return RestoreDescriptor{}, sql.ErrNoRows
+}
+
+func restoreDescriptorLookupPaths(storedPath string) ([]string, string, error) {
+	requestedPath := strings.TrimSpace(storedPath)
+	normalizedPath, err := normalizeRestorePhysicalPathIdentity(storedPath)
+	if err != nil {
+		return nil, "", err
 	}
 
-	return descriptor, nil
+	lookupPaths := []string{normalizedPath}
+	absPath, err := filepath.Abs(requestedPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve absolute physical file path: %w", err)
+	}
+	lexicalPath := filepath.Clean(absPath)
+	if lexicalPath != normalizedPath {
+		lookupPaths = append(lookupPaths, lexicalPath)
+	}
+	return lookupPaths, requestedPath, nil
+}
+
+func normalizeRestorePhysicalPathIdentity(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("physical file path cannot be empty")
+	}
+
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute physical file path: %w", err)
+	}
+	return canonicalizeRestorePhysicalPath(filepath.Clean(absPath))
+}
+
+func canonicalizeRestorePhysicalPath(cleaned string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err == nil {
+		return cleanResolvedRestorePhysicalPath(resolved)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("canonicalize physical file path: %w", err)
+	}
+	return canonicalizeMissingRestorePhysicalPath(cleaned)
+}
+
+func cleanResolvedRestorePhysicalPath(resolved string) (string, error) {
+	resolvedAbs, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute canonical physical file path: %w", err)
+	}
+	return filepath.Clean(resolvedAbs), nil
+}
+
+func canonicalizeMissingRestorePhysicalPath(cleaned string) (string, error) {
+	ancestor, err := pathsafe.NearestExistingAncestorDir(cleaned)
+	if err != nil {
+		return cleaned, nil
+	}
+	resolvedAncestor, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return cleaned, nil
+		}
+		return "", fmt.Errorf("canonicalize physical file ancestor: %w", err)
+	}
+	resolvedAncestorAbs, err := cleanResolvedRestorePhysicalPath(resolvedAncestor)
+	if err != nil {
+		return "", err
+	}
+	relativeSuffix, err := filepath.Rel(ancestor, cleaned)
+	if err != nil {
+		return "", fmt.Errorf("derive physical file relative suffix: %w", err)
+	}
+	return filepath.Clean(filepath.Join(resolvedAncestorAbs, relativeSuffix)), nil
+}
+
+func deriveRestorePrefixRelativePath(storedPath string) (string, error) {
+	trimmed := strings.TrimSpace(storedPath)
+	if trimmed == "" || containsRestorePrefixTraversal(trimmed) {
+		return "", invalidRestorePrefixPathError(storedPath)
+	}
+
+	relativePath, err := projectRestorePrefixRelativePath(trimmed)
+	if err != nil {
+		return "", invalidRestorePrefixPathError(storedPath)
+	}
+	return relativePath, nil
+}
+
+func projectRestorePrefixRelativePath(path string) (string, error) {
+	switch {
+	case isCanonicalWindowsUNCPath(path):
+		return deriveCanonicalWindowsUNCRelativePath(path)
+	case isWindowsDriveAbsolutePath(path):
+		return deriveWindowsDriveRelativePath(path)
+	case runtime.GOOS != "windows" && filepath.IsAbs(path):
+		return deriveNativeAbsoluteRestorePrefixPath(path)
+	default:
+		return "", fmt.Errorf("unsupported restore prefix path")
+	}
+}
+
+func deriveNativeAbsoluteRestorePrefixPath(path string) (string, error) {
+	relativePath, err := filepath.Rel(string(filepath.Separator), filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	if err := validateRestorePrefixRelativePath(relativePath); err != nil {
+		return "", err
+	}
+	return relativePath, nil
+}
+
+func invalidRestorePrefixPathError(storedPath string) error {
+	return fmt.Errorf("cannot derive relative path from stored path %q", storedPath)
+}
+
+func containsRestorePrefixTraversal(path string) bool {
+	for _, segment := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func isWindowsDriveLikePath(path string) bool {
+	return len(path) >= 2 && isWindowsDriveLetter(path[0]) && path[1] == ':'
+}
+
+func isWindowsDriveAbsolutePath(path string) bool {
+	if !isWindowsDriveLikePath(path) || len(path) < 3 {
+		return false
+	}
+	if strings.Contains(path, "/") {
+		return false
+	}
+	return path[2] == '\\'
+}
+
+func isCanonicalWindowsUNCPath(path string) bool {
+	return strings.HasPrefix(path, `\\`) && !strings.Contains(path, "/")
+}
+
+func deriveWindowsDriveRelativePath(path string) (string, error) {
+	if !isWindowsDriveAbsolutePath(path) {
+		return "", fmt.Errorf("unsupported drive path")
+	}
+	relativePath := strings.TrimPrefix(path[2:], `\`)
+	if err := validateRestorePrefixRelativePath(relativePath); err != nil {
+		return "", err
+	}
+	return relativePath, nil
+}
+
+func deriveCanonicalWindowsUNCRelativePath(path string) (string, error) {
+	parts := strings.Split(strings.TrimPrefix(path, `\\`), `\`)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("malformed UNC path")
+	}
+	relativePath := strings.Join(parts[2:], `\`)
+	if err := validateRestorePrefixRelativePath(relativePath); err != nil {
+		return "", err
+	}
+	return relativePath, nil
+}
+
+func isWindowsDriveLetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+func validateRestorePrefixRelativePath(relativePath string) error {
+	return pathsafe.ValidateStoredRelativePath(relativePath)
 }
 
 // RestoreFileByStoredPathWithStorageContextResultOptions restores a file using the
@@ -784,7 +1034,7 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
 	}
 
-	normalizedPath, err := normalizePhysicalFilePath(storedPath)
+	lookupPaths, notFoundPath, err := restoreDescriptorLookupPaths(storedPath)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
@@ -792,7 +1042,7 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, normalizedPath)
+	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, lookupPaths, notFoundPath)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
@@ -815,11 +1065,12 @@ func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, 
 		return RestoreFileResult{}, fmt.Errorf("metadata is incomplete for %q (use --no-metadata to bypass)", descriptor.Path)
 	}
 
-	resolvedOutputPath, err := resolveRestoreOutputPath(descriptor, opts)
+	resolvedOutputPath, resolvedTrustedRoot, err := resolveRestoreOutputPath(descriptor, opts)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
 
+	opts.TrustedRoot = resolvedTrustedRoot
 	result, err := restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
 	if err != nil {
 		return RestoreFileResult{}, err
@@ -847,15 +1098,25 @@ func RestoreFileByStoredPathWithStorageContext(sgctx StorageContext, storedPath 
 	return err
 }
 
-func validateRestoreWritePath(path string) error {
+func validateRestoreWritePath(path string, trustedRoot string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("resolve restore write path: %w", err)
 	}
-	if err := pathsafe.ValidatePathHasNoSymlinkComponents(absPath); err != nil {
-		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
+
+	root := strings.TrimSpace(trustedRoot)
+	if root == "" {
+		root, err = pathsafe.NearestExistingAncestorDir(absPath)
+		if err != nil {
+			return fmt.Errorf("derive restore trusted root: %w", err)
+		}
+	} else {
+		root, err = pathsafe.ValidateTrustedRootPath(root)
+		if err != nil {
+			return fmt.Errorf("validate restore trusted root: %w", err)
+		}
 	}
-	if err := pathsafe.ValidateWritePathUnderTrustedRoot(filepath.Dir(absPath), absPath); err != nil {
+	if err := pathsafe.ValidateWritePathUnderTrustedRoot(root, absPath); err != nil {
 		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
 	}
 	return nil
@@ -879,7 +1140,7 @@ func syncRestoredFileDir(fsys fsx.FS, outputPath string) error {
 	return dir.Close()
 }
 
-func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, error) {
+func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, string, error) {
 	mode := opts.DestinationMode
 	if mode == "" {
 		mode = RestoreDestinationOriginal
@@ -887,55 +1148,75 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 
 	switch mode {
 	case RestoreDestinationOriginal:
-		if err := validateRestoreWritePath(descriptor.Path); err != nil {
-			return "", fmt.Errorf("resolve restore original destination: %w", err)
-		}
-		return descriptor.Path, nil
+		return resolveOriginalRestoreOutputPath(descriptor, opts)
 	case RestoreDestinationPrefix:
-		prefix := strings.TrimSpace(opts.Destination)
-		if prefix == "" {
-			return "", fmt.Errorf("restore prefix destination is required for mode %q", RestoreDestinationPrefix)
-		}
-		absPrefix, err := filepath.Abs(prefix)
-		if err != nil {
-			return "", fmt.Errorf("resolve restore prefix destination: %w", err)
-		}
-		// Reject a destination root that is itself a symlink: following it could
-		// redirect all writes to an unexpected location.
-		if prefixInfo, lstatErr := os.Lstat(absPrefix); lstatErr == nil && prefixInfo.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("restore prefix destination is a symlink: %q", absPrefix)
-		}
-
-		relativePath := descriptor.Path
-		if vol := filepath.VolumeName(relativePath); vol != "" {
-			relativePath = strings.TrimPrefix(relativePath, vol)
-		}
-		relativePath = strings.TrimLeft(relativePath, `/\`)
-		if relativePath == "" {
-			return "", fmt.Errorf("cannot derive relative path from stored path %q", descriptor.Path)
-		}
-
-		joinedPath, err := pathsafe.SafeJoin(absPrefix, relativePath)
-		if err != nil {
-			return "", fmt.Errorf("resolve restore prefix destination: %w", err)
-		}
-		return joinedPath, nil
+		return resolvePrefixRestoreOutputPath(descriptor, opts)
 	case RestoreDestinationOverride:
-		overridePath := strings.TrimSpace(opts.Destination)
-		if overridePath == "" {
-			return "", fmt.Errorf("restore override destination is required for mode %q", RestoreDestinationOverride)
-		}
-		absOverridePath, err := filepath.Abs(overridePath)
-		if err != nil {
-			return "", fmt.Errorf("resolve restore override destination: %w", err)
-		}
-		if err := validateRestoreWritePath(absOverridePath); err != nil {
-			return "", fmt.Errorf("resolve restore override destination: %w", err)
-		}
-		return filepath.Clean(absOverridePath), nil
+		return resolveOverrideRestoreOutputPath(opts)
 	default:
-		return "", fmt.Errorf("unsupported restore destination mode: %s", mode)
+		return "", "", fmt.Errorf("unsupported restore destination mode: %s", mode)
 	}
+}
+
+func resolveOriginalRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, string, error) {
+	trustedRoot := strings.TrimSpace(opts.TrustedRoot)
+	if trustedRoot == "" {
+		var err error
+		trustedRoot, err = pathsafe.NearestExistingAncestorDir(descriptor.Path)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve restore original trusted root: %w", err)
+		}
+	}
+	if err := validateRestoreWritePath(descriptor.Path, trustedRoot); err != nil {
+		return "", "", fmt.Errorf("resolve restore original destination: %w", err)
+	}
+	return descriptor.Path, trustedRoot, nil
+}
+
+func resolvePrefixRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, string, error) {
+	prefix := strings.TrimSpace(opts.Destination)
+	if prefix == "" {
+		return "", "", fmt.Errorf("restore prefix destination is required for mode %q", RestoreDestinationPrefix)
+	}
+	trustedRoot, err := pathsafe.ValidateTrustedRootPath(prefix)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve restore prefix destination: %w", err)
+	}
+
+	relativePath, err := deriveRestorePrefixRelativePath(descriptor.Path)
+	if err != nil {
+		return "", "", err
+	}
+	joinedPath, err := pathsafe.SafeJoin(trustedRoot, relativePath)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve restore prefix destination: %w", err)
+	}
+	if err := validateRestoreWritePath(joinedPath, trustedRoot); err != nil {
+		return "", "", fmt.Errorf("resolve restore prefix destination: %w", err)
+	}
+	return joinedPath, trustedRoot, nil
+}
+
+func resolveOverrideRestoreOutputPath(opts RestoreOptions) (string, string, error) {
+	overridePath := strings.TrimSpace(opts.Destination)
+	if overridePath == "" {
+		return "", "", fmt.Errorf("restore override destination is required for mode %q", RestoreDestinationOverride)
+	}
+	absOverridePath, err := filepath.Abs(overridePath)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve restore override destination: %w", err)
+	}
+	trustedRoot := strings.TrimSpace(opts.TrustedRoot)
+	if trustedRoot == "" {
+		trustedRoot, err = pathsafe.NearestExistingAncestorDir(absOverridePath)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve restore override trusted root: %w", err)
+		}
+	}
+	if err := validateRestoreWritePath(absOverridePath, trustedRoot); err != nil {
+		return "", "", fmt.Errorf("resolve restore override destination: %w", err)
+	}
+	return filepath.Clean(absOverridePath), trustedRoot, nil
 }
 
 func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
@@ -995,7 +1276,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 		outputPath = filepath.Join(outputPath, originalName)
 	}
-	if err := validateRestoreWritePath(outputPath); err != nil {
+	if err := validateRestoreWritePath(outputPath, opts.TrustedRoot); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("validate output path %s: %w", outputPath, err)
 	}
 	result.OutputPath = outputPath

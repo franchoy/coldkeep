@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
@@ -69,10 +70,12 @@ func installSnapshotDeletePreviewFailure(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDelete := deleteSnapshotPhase
 	originalPreview := snapshotDeleteLineagePreviewPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		deleteSnapshotPhase = originalDelete
 		snapshotDeleteLineagePreviewPhase = originalPreview
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -87,7 +90,18 @@ func installSnapshotDeletePreviewFailure(t *testing.T) {
 		return nil
 	}
 	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-		return nil, fmt.Errorf("snapshot %q not found", snapshotID)
+		t.Fatalf("snapshotDeleteLineagePreviewPhase must not run when delete is engine-routed for %q", snapshotID)
+		return nil, nil
+	}
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotDeleteFunc: func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+				if req.Mode != engine.SnapshotDeleteModePreview {
+					t.Fatalf("expected preview mode, got %+v", req)
+				}
+				return engine.SnapshotDeleteResult{}, fmt.Errorf("snapshot %q not found", req.SnapshotID)
+			},
+		}, nil
 	}
 }
 

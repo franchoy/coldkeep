@@ -23,7 +23,7 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "GarbageCollect", "Store", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "SnapshotRestore", "GarbageCollect", "Store", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)
@@ -39,11 +39,10 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 	}
 }
 
-// TestEngineActiveInterfaceExcludesCandidateOnlyOperations proves the active
-// Engine interface still excludes future-only snapshot mutation and corrective
-// integrity operations. Their request/result types are intentionally present as
-// candidate contracts, but they are not active engine-owned methods.
-func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
+// TestEngineActiveInterfaceExcludesStillInactiveOperations proves the active
+// Engine interface still excludes corrective integrity operations that remain
+// future-only.
+func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
 
 	got := make([]string, 0, typ.NumMethod())
@@ -52,11 +51,12 @@ func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"SnapshotCreate",
-		"SnapshotDelete",
-		"SnapshotRestore",
 		"Repair",
+		"SnapshotRepair",
+		"RepairPlan",
 		"Recover",
+		"SnapshotRecover",
+		"RecoveryPlan",
 	} {
 		if slices.Contains(got, forbidden) {
 			t.Fatalf("Engine interface unexpectedly exposes candidate-only method %q; active methods=%v", forbidden, got)
@@ -69,52 +69,7 @@ func TestEngineActiveInterfaceExcludesCandidateOnlyOperations(t *testing.T) {
 // ties them to the approved active engine method set.
 func TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership(t *testing.T) {
 	activeMethods := activeEngineMethodSet()
-
-	cases := []struct {
-		name              string
-		requestType       any
-		resultType        any
-		forbiddenMethod   string
-		laterOwnerRelease string
-	}{
-		{
-			name:              "snapshot create",
-			requestType:       engine.SnapshotCreateRequest{},
-			resultType:        engine.SnapshotCreateResult{},
-			forbiddenMethod:   "SnapshotCreate",
-			laterOwnerRelease: "v1.13.9",
-		},
-		{
-			name:              "snapshot delete",
-			requestType:       engine.SnapshotDeleteRequest{},
-			resultType:        engine.SnapshotDeleteResult{},
-			forbiddenMethod:   "SnapshotDelete",
-			laterOwnerRelease: "v1.13.9",
-		},
-		{
-			name:              "snapshot restore",
-			requestType:       engine.SnapshotRestoreRequest{},
-			resultType:        engine.SnapshotRestoreResult{},
-			forbiddenMethod:   "SnapshotRestore",
-			laterOwnerRelease: "v1.13.9",
-		},
-		{
-			name:              "repair",
-			requestType:       engine.RepairRequest{},
-			resultType:        engine.RepairResult{},
-			forbiddenMethod:   "Repair",
-			laterOwnerRelease: "v1.13.10",
-		},
-		{
-			name:              "recover",
-			requestType:       engine.RecoverRequest{},
-			resultType:        engine.RecoverResult{},
-			forbiddenMethod:   "Recover",
-			laterOwnerRelease: "v1.13.10",
-		},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range candidateOnlyOperationCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			if activeMethods[tc.forbiddenMethod] {
 				t.Fatalf("candidate-only contract %q unexpectedly has active engine method %q", tc.name, tc.forbiddenMethod)
@@ -135,6 +90,33 @@ func TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership(t *te
 	}
 }
 
+type candidateOnlyOperationCase struct {
+	name              string
+	requestType       any
+	resultType        any
+	forbiddenMethod   string
+	laterOwnerRelease string
+}
+
+func candidateOnlyOperationCases() []candidateOnlyOperationCase {
+	return []candidateOnlyOperationCase{
+		{
+			name:              "repair",
+			requestType:       engine.RepairRequest{},
+			resultType:        engine.RepairResult{},
+			forbiddenMethod:   "Repair",
+			laterOwnerRelease: "v1.13.9 Phase 14+",
+		},
+		{
+			name:              "recover",
+			requestType:       engine.RecoverRequest{},
+			resultType:        engine.RecoverResult{},
+			forbiddenMethod:   "Recover",
+			laterOwnerRelease: "v1.13.9 Phase 14+",
+		},
+	}
+}
+
 func activeEngineMethodSet() map[string]bool {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
 	methods := make(map[string]bool, typ.NumMethod())
@@ -151,50 +133,7 @@ func TestCandidateContractsAreRendererNeutral(t *testing.T) {
 	forbidden := []string{
 		"cobra", "command", "renderer", "writer", "stdout", "stderr",
 	}
-
-	typesToCheck := []struct {
-		name string
-		val  any
-	}{
-		{"OperationWarning", engine.OperationWarning{}},
-		{"BatchSummary", engine.BatchSummary{}},
-		{"SnapshotQuery", engine.SnapshotQuery{}},
-		{"StoreRequest", engine.StoreRequest{}},
-		{"StoreResult", engine.StoreResult{}},
-		{"RestoreRequest", engine.RestoreRequest{}},
-		{"RestoreItemResult", engine.RestoreItemResult{}},
-		{"RestoreResult", engine.RestoreResult{}},
-		{"RemoveRequest", engine.RemoveRequest{}},
-		{"RemoveItemResult", engine.RemoveItemResult{}},
-		{"RemoveResult", engine.RemoveResult{}},
-		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
-		{"GarbageCollectResult", engine.GarbageCollectResult{}},
-		{"SnapshotMeta", engine.SnapshotMeta{}},
-		{"SnapshotCreateRequest", engine.SnapshotCreateRequest{}},
-		{"SnapshotCreateResult", engine.SnapshotCreateResult{}},
-		{"SnapshotListRequest", engine.SnapshotListRequest{}},
-		{"SnapshotListResult", engine.SnapshotListResult{}},
-		{"SnapshotFile", engine.SnapshotFile{}},
-		{"SnapshotShowRequest", engine.SnapshotShowRequest{}},
-		{"SnapshotShowResult", engine.SnapshotShowResult{}},
-		{"SnapshotStatsRequest", engine.SnapshotStatsRequest{}},
-		{"SnapshotStatsResult", engine.SnapshotStatsResult{}},
-		{"SnapshotDiffEntry", engine.SnapshotDiffEntry{}},
-		{"SnapshotDiffRequest", engine.SnapshotDiffRequest{}},
-		{"SnapshotDiffSummary", engine.SnapshotDiffSummary{}},
-		{"SnapshotDiffResult", engine.SnapshotDiffResult{}},
-		{"SnapshotRestoreRequest", engine.SnapshotRestoreRequest{}},
-		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
-		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
-		{"SnapshotDeleteResult", engine.SnapshotDeleteResult{}},
-		{"RepairRequest", engine.RepairRequest{}},
-		{"RepairTargetResult", engine.RepairTargetResult{}},
-		{"RepairResult", engine.RepairResult{}},
-		{"RecoverRequest", engine.RecoverRequest{}},
-		{"RecoverResult", engine.RecoverResult{}},
-	}
-
-	for _, tc := range typesToCheck {
+	for _, tc := range allCandidateTypes() {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := reflect.TypeOf(tc.val)
 			for i := 0; i < rt.NumField(); i++ {

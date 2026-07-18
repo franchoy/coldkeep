@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -31,6 +32,103 @@ import (
 type payloadStatefulWriter interface {
 	AppendPayload(tx db.DBTX, payload []byte) (container.LocalPlacement, error)
 	FinalizeContainer() error
+}
+
+type storeInterleavingEvent string
+
+const (
+	storeInterleavingEventAfterChunkClaim            storeInterleavingEvent = "after_chunk_claim"
+	storeInterleavingEventBeforePackedFlush          storeInterleavingEvent = "before_packed_flush"
+	storeInterleavingEventAfterPackedMetadata        storeInterleavingEvent = "after_packed_metadata"
+	storeInterleavingEventAfterChunkCompleted        storeInterleavingEvent = "after_chunk_completed"
+	storeInterleavingEventAfterLegacyCompanionInsert storeInterleavingEvent = "after_legacy_companion_insert"
+	storeInterleavingEventBeforePackedCommit         storeInterleavingEvent = "before_packed_commit"
+	storeInterleavingEventAfterPackedCommit          storeInterleavingEvent = "after_packed_commit"
+	storeInterleavingEventBeforeChunkRetryCAS        storeInterleavingEvent = "before_chunk_retry_cas"
+	storeInterleavingEventBeforeMarkChunkForRebuild  storeInterleavingEvent = "before_mark_chunk_for_rebuild"
+	storeInterleavingEventAfterMarkChunkForRebuild   storeInterleavingEvent = "after_mark_chunk_for_rebuild"
+)
+
+type storeInterleavingHookEvent struct {
+	StoreOpID string
+	ChunkID   int64
+	ChunkHash string
+	Codec     string
+	Event     storeInterleavingEvent
+	BlockID   int64
+	TxAttempt int
+}
+
+type storeInterleavingHooks struct {
+	onEvent func(context.Context, storeInterleavingHookEvent) error
+}
+
+type storeInterleavingState struct {
+	hooks     *storeInterleavingHooks
+	storeOpID string
+	codec     string
+	fileHash  string
+}
+
+type storeInterleavingContextKey string
+
+const (
+	storeInterleavingContextKeyState storeInterleavingContextKey = "store_interleaving_state"
+)
+
+func withStoreInterleavingState(ctx context.Context, state *storeInterleavingState) context.Context {
+	if state == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, storeInterleavingContextKeyState, state)
+}
+
+func storeInterleavingStateFromContext(ctx context.Context) *storeInterleavingState {
+	state, _ := ctx.Value(storeInterleavingContextKeyState).(*storeInterleavingState)
+	return state
+}
+
+func fireStoreInterleavingHook(ctx context.Context, event storeInterleavingHookEvent) error {
+	state := storeInterleavingStateFromContext(ctx)
+	if state == nil || state.hooks == nil || state.hooks.onEvent == nil {
+		return nil
+	}
+	return state.hooks.onEvent(ctx, event)
+}
+
+type TestStoreInterleavingEvent = storeInterleavingEvent
+type TestStoreInterleavingHookEvent = storeInterleavingHookEvent
+
+const (
+	TestStoreInterleavingEventAfterChunkClaim            = storeInterleavingEventAfterChunkClaim
+	TestStoreInterleavingEventBeforePackedFlush          = storeInterleavingEventBeforePackedFlush
+	TestStoreInterleavingEventAfterPackedMetadata        = storeInterleavingEventAfterPackedMetadata
+	TestStoreInterleavingEventAfterChunkCompleted        = storeInterleavingEventAfterChunkCompleted
+	TestStoreInterleavingEventAfterLegacyCompanionInsert = storeInterleavingEventAfterLegacyCompanionInsert
+	TestStoreInterleavingEventBeforePackedCommit         = storeInterleavingEventBeforePackedCommit
+	TestStoreInterleavingEventAfterPackedCommit          = storeInterleavingEventAfterPackedCommit
+	TestStoreInterleavingEventBeforeChunkRetryCAS        = storeInterleavingEventBeforeChunkRetryCAS
+	TestStoreInterleavingEventBeforeMarkChunkForRebuild  = storeInterleavingEventBeforeMarkChunkForRebuild
+	TestStoreInterleavingEventAfterMarkChunkForRebuild   = storeInterleavingEventAfterMarkChunkForRebuild
+)
+
+func InstallTestStoreInterleavingHooks(
+	sgctx *StorageContext,
+	onEvent func(context.Context, TestStoreInterleavingHookEvent) error,
+) func() {
+	if sgctx == nil {
+		return func() {}
+	}
+	prevHooks := sgctx.interleavingHooks
+	prevSeq := sgctx.interleavingSeq
+	sgctx.interleavingHooks = &storeInterleavingHooks{onEvent: onEvent}
+	if sgctx.interleavingSeq == nil {
+		sgctx.interleavingSeq = &atomic.Uint64{}
+	}
+	return func() {
+		sgctx.interleavingHooks = prevHooks
+		sgctx.interleavingSeq = prevSeq
+	}
 }
 
 const defaultPackedBlockTargetSizeBytes int64 = 1 << 20
@@ -236,6 +334,13 @@ func commitPreparedChunksWithContext(
 	builder := blocks.NewBlockBuilder(packedBlockTargetSizeBytesFromEnv())
 	pendingPacked := make([]pendingPackedChunk, 0, 8)
 	pendingPackedHashes := make(map[string]struct{})
+	interleavingState := storeInterleavingStateFromContext(ctx)
+	storeOpID := ""
+	storeCodec := ""
+	if interleavingState != nil {
+		storeOpID = interleavingState.storeOpID
+		storeCodec = interleavingState.codec
+	}
 
 	flushPackedPending := func() error {
 		if builder.Empty() {
@@ -249,6 +354,14 @@ func commitPreparedChunksWithContext(
 
 			tx, err := dbconn.BeginTx(ctx, nil)
 			if err != nil {
+				return err
+			}
+			if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+				StoreOpID: storeOpID,
+				Codec:     storeCodec,
+				Event:     storeInterleavingEventBeforePackedFlush,
+			}); err != nil {
+				_ = tx.Rollback()
 				return err
 			}
 
@@ -294,6 +407,20 @@ func commitPreparedChunksWithContext(
 					}
 					return fmt.Errorf("missing packed segment metadata for chunk %d", pending.chunkID)
 				}
+				if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+					StoreOpID: storeOpID,
+					ChunkID:   pending.chunkID,
+					ChunkHash: pending.hash,
+					Codec:     storeCodec,
+					Event:     storeInterleavingEventAfterPackedMetadata,
+					BlockID:   persisted.BlockID,
+				}); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
 
 				if _, err := tx.ExecContext(
 					ctx,
@@ -301,6 +428,20 @@ func commitPreparedChunksWithContext(
 					filestate.ChunkCompleted,
 					pending.chunkID,
 				); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+				if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+					StoreOpID: storeOpID,
+					ChunkID:   pending.chunkID,
+					ChunkHash: pending.hash,
+					Codec:     storeCodec,
+					Event:     storeInterleavingEventAfterChunkCompleted,
+					BlockID:   persisted.BlockID,
+				}); err != nil {
 					_ = tx.Rollback()
 					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return errors.Join(err, rbErr)
@@ -333,6 +474,20 @@ func commitPreparedChunksWithContext(
 					segment.Size,
 					legacyStoredSize,
 				); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+				if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+					StoreOpID: storeOpID,
+					ChunkID:   pending.chunkID,
+					ChunkHash: pending.hash,
+					Codec:     storeCodec,
+					Event:     storeInterleavingEventAfterLegacyCompanionInsert,
+					BlockID:   persisted.BlockID,
+				}); err != nil {
 					_ = tx.Rollback()
 					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return errors.Join(err, rbErr)
@@ -407,10 +562,31 @@ func commitPreparedChunksWithContext(
 				}
 			}
 
+			if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+				StoreOpID: storeOpID,
+				Codec:     storeCodec,
+				Event:     storeInterleavingEventBeforePackedCommit,
+				BlockID:   persisted.BlockID,
+			}); err != nil {
+				_ = tx.Rollback()
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return errors.Join(err, rbErr)
+				}
+				return err
+			}
+
 			if err = tx.Commit(); err != nil {
 				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 					return errors.Join(err, rbErr)
 				}
+				return err
+			}
+			if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+				StoreOpID: storeOpID,
+				Codec:     storeCodec,
+				Event:     storeInterleavingEventAfterPackedCommit,
+				BlockID:   persisted.BlockID,
+			}); err != nil {
 				return err
 			}
 			acknowledgeWriterAppendCommitted(writer)
@@ -442,6 +618,15 @@ func commitPreparedChunksWithContext(
 		// Try to claim chunk for this hash (concurrency-safe)
 		claimedChunkID, chunkStatus, isNewChunkClaim, err := claimChunkWithContext(ctx, dbconn, prepared.Hash, int64(prepared.Size), activeVersionString, commitInfo.validationContainerDir)
 		if err != nil {
+			return StoreFileResult{}, err
+		}
+		if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+			StoreOpID: storeOpID,
+			ChunkID:   claimedChunkID,
+			ChunkHash: prepared.Hash,
+			Codec:     storeCodec,
+			Event:     storeInterleavingEventAfterChunkClaim,
+		}); err != nil {
 			return StoreFileResult{}, err
 		}
 
@@ -743,11 +928,14 @@ type StoreFileResult struct {
 // storeFileRuntime captures immutable per-operation dependencies reused across
 // many file stores (for example StoreFolder with many small files).
 type storeFileRuntime struct {
+	codec                  blocks.Codec
 	transformer            blocks.Transformer
 	compression            storeRuntimeCompression
 	blockRepo              *blocks.Repository
 	storeService           *StoreService
 	validationContainerDir string
+	interleavingHooks      *storeInterleavingHooks
+	interleavingSeq        *atomic.Uint64
 }
 
 // storeRuntimeCompression groups the optional compression transform and its codec name.
@@ -826,11 +1014,14 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 	}
 
 	return &storeFileRuntime{
+		codec:                  codec,
 		transformer:            transformer,
 		compression:            compressionRuntime,
 		blockRepo:              &blocks.Repository{DB: sgctx.DB},
 		storeService:           NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker),
 		validationContainerDir: validationContainerDir,
+		interleavingHooks:      sgctx.interleavingHooks,
+		interleavingSeq:        sgctx.interleavingSeq,
 	}, nil
 }
 
@@ -1324,11 +1515,50 @@ func validateReusableChunkCompanionMappingWithContext(ctx context.Context, dbcon
 }
 
 func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
+	state := storeInterleavingStateFromContext(ctx)
+	storeOpID := ""
+	codec := ""
+	chunkHash := ""
+	if state != nil {
+		storeOpID = state.storeOpID
+		codec = state.codec
+		chunkHash = state.fileHash
+	}
+	if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+		StoreOpID: storeOpID,
+		ChunkID:   chunkID,
+		ChunkHash: chunkHash,
+		Codec:     codec,
+		Event:     storeInterleavingEventBeforeMarkChunkForRebuild,
+	}); err != nil {
+		return err
+	}
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction while marking chunk %d for rebuild: %w", chunkID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `SELECT block_id FROM chunk_block_refs WHERE chunk_id = $1`, chunkID)
+	if err != nil {
+		return fmt.Errorf("query storage_blocks for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	var candidateBlockIDs []int64
+	for rows.Next() {
+		var blockID int64
+		if err := rows.Scan(&blockID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan storage_block id for chunk %d rebuild cleanup: %w", chunkID, err)
+		}
+		candidateBlockIDs = append(candidateBlockIDs, blockID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate storage_block ids for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close storage_block ids rows for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
 
 	result, err := tx.ExecContext(ctx,
 		`UPDATE chunk SET status = $1 WHERE id = $2 AND status = $3`,
@@ -1353,9 +1583,28 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 	if _, err := tx.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
 		return fmt.Errorf("delete stale blocks while marking chunk %d for rebuild: %w", chunkID, err)
 	}
+	for _, blockID := range candidateBlockIDs {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM storage_blocks
+			 WHERE id = $1
+			   AND NOT EXISTS (SELECT 1 FROM chunk_block_refs WHERE block_id = $1)`,
+			blockID,
+		); err != nil {
+			return fmt.Errorf("delete orphan storage_block %d while marking chunk %d for rebuild: %w", blockID, chunkID, err)
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit while marking chunk %d for rebuild: %w", chunkID, err)
+	}
+	if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+		StoreOpID: storeOpID,
+		ChunkID:   chunkID,
+		ChunkHash: chunkHash,
+		Codec:     codec,
+		Event:     storeInterleavingEventAfterMarkChunkForRebuild,
+	}); err != nil {
+		return err
 	}
 	return nil
 }
@@ -2144,6 +2393,23 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 		// If we reach here, it means the previous attempt was aborted while we were waiting: we can try to store again
 		if chunkstatus == filestate.ChunkAborted {
 			for casAttempt := 0; casAttempt < 3; casAttempt++ {
+				state := storeInterleavingStateFromContext(ctx)
+				storeOpID := ""
+				codec := ""
+				if state != nil {
+					storeOpID = state.storeOpID
+					codec = state.codec
+				}
+				if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+					StoreOpID: storeOpID,
+					ChunkID:   chunkID,
+					ChunkHash: chunkHash,
+					Codec:     codec,
+					Event:     storeInterleavingEventBeforeChunkRetryCAS,
+					TxAttempt: casAttempt,
+				}); err != nil {
+					return 0, chunkstatus, false, err
+				}
 				tx2, beginErr := dbconn.BeginTx(ctx, nil)
 				if beginErr != nil {
 					return 0, "", false, beginErr
@@ -2543,6 +2809,17 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		return StoreFileResult{}, err
 	}
 	fileHash := prepared.LogicalHash
+	if runtime.interleavingHooks != nil {
+		if runtime.interleavingSeq == nil {
+			runtime.interleavingSeq = &atomic.Uint64{}
+		}
+		ctx = withStoreInterleavingState(ctx, &storeInterleavingState{
+			hooks:     runtime.interleavingHooks,
+			storeOpID: fmt.Sprintf("store-op-%d", runtime.interleavingSeq.Add(1)),
+			codec:     string(runtime.codec),
+			fileHash:  fileHash,
+		})
+	}
 	result.FileHash = fileHash
 
 	// Try to claim logical file for this hash (concurrency-safe)

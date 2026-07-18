@@ -281,7 +281,14 @@ func (e *DefaultEngine) dryRunRestoreFileID(req RestoreRequest, fileID int64) Re
 
 func (e *DefaultEngine) liveRestoreFileID(req RestoreRequest, fileID int64) RestoreItemResult {
 	sgctx := storage.StorageContext{DB: e.config.DB, ContainerDir: e.config.ContainerDir}
-	r, err := storage.RestoreFileWithStorageContextResultOptions(sgctx, fileID, req.DestinationRoot, storage.RestoreOptions{Overwrite: req.Overwrite})
+	out, err := restoreByIDOutputPath(e.config.DB, fileID, req.DestinationRoot)
+	if err != nil {
+		return failedRestoreItem(fileID, err.Error())
+	}
+	r, err := storage.RestoreFileWithStorageContextResultOptions(sgctx, fileID, out, storage.RestoreOptions{
+		Overwrite:   req.Overwrite,
+		TrustedRoot: req.DestinationRoot,
+	})
 	if err != nil {
 		return failedRestoreItem(fileID, err.Error())
 	}
@@ -315,14 +322,10 @@ func finalizeBatchSummary(summary *BatchSummary, requested int) {
 
 func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) (RestoreItemResult, error) {
 	item := RestoreItemResult{FileID: fileID, Status: BatchItemOK}
-	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+	out, err := restoreByIDOutputPath(dbconn, fileID, outputDir)
 	if err != nil {
 		return item, err
 	}
-	if info.Status != filestate.LogicalFileCompleted {
-		return item, fmt.Errorf("file ID %d is not COMPLETED", fileID)
-	}
-	out := filepath.Join(outputDir, info.OriginalName)
 	item.DestinationPath = out
 	if !overwrite {
 		if _, statErr := os.Stat(out); statErr == nil {
@@ -332,6 +335,17 @@ func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite
 		}
 	}
 	return item, nil
+}
+
+func restoreByIDOutputPath(dbconn *sql.DB, fileID int64, outputDir string) (string, error) {
+	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+	if err != nil {
+		return "", err
+	}
+	if info.Status != filestate.LogicalFileCompleted {
+		return "", fmt.Errorf("file ID %d is not COMPLETED", fileID)
+	}
+	return filepath.Join(outputDir, info.OriginalName), nil
 }
 
 func dryRunRemoveByID(dbconn *sql.DB, fileID int64) error {

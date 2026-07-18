@@ -284,6 +284,59 @@ func TestRestoreStoredPathOverrideMode(t *testing.T) {
 	assertRestoredBytes(t, result.DestinationPath, fixture.payload)
 }
 
+func TestRestoreStoredPathPrefixModeAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-prefix-outer-alias")
+	realParent := t.TempDir()
+	aliasLink := filepath.Join(t.TempDir(), "outer-link")
+	requireSymlink(t, realParent, aliasLink)
+
+	realRoot, err := os.MkdirTemp(realParent, "trusted-root-")
+	if err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	aliasRoot := filepath.Join(aliasLink, filepath.Base(realRoot))
+	expectedPath := expectedPrefixModeOutputPath(aliasRoot, fixture.stored.Path)
+
+	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+		StoredPath:      fixture.stored.Path,
+		DestinationMode: engine.RestoreDestinationPrefix,
+		DestinationRoot: aliasRoot,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("RestoreStoredPath prefix outer alias: %v", err)
+	}
+
+	assertRestoreStoredPathResult(t, result, fixture.stored.Path, fixture.stored.FileID, engine.RestoreDestinationPrefix, expectedPath, fixture.stored.FileHash)
+	assertRestoredBytes(t, result.DestinationPath, fixture.payload)
+}
+
+func TestRestoreStoredPathOverrideModeAllowsOuterAliasAboveDerivedRoot(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-override-outer-alias")
+	realParent := t.TempDir()
+	aliasLink := filepath.Join(t.TempDir(), "outer-link")
+	requireSymlink(t, realParent, aliasLink)
+
+	realRoot, err := os.MkdirTemp(realParent, "override-root-")
+	if err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	overridePath := filepath.Join(aliasLink, filepath.Base(realRoot), "restore-target.bin")
+
+	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+		StoredPath:      fixture.stored.Path,
+		DestinationMode: engine.RestoreDestinationOverride,
+		DestinationPath: overridePath,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("RestoreStoredPath override outer alias: %v", err)
+	}
+
+	assertRestoreStoredPathResult(t, result, fixture.stored.Path, fixture.stored.FileID, engine.RestoreDestinationOverride, overridePath, fixture.stored.FileHash)
+	assertRestoredBytes(t, result.DestinationPath, fixture.payload)
+}
+
 func TestRestoreStoredPathPreservesExistingDestinationWithoutOverwrite(t *testing.T) {
 	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-no-overwrite")
 
@@ -428,18 +481,28 @@ func TestRestoreStoredPathReleasesPinsAfterFailure(t *testing.T) {
 func TestRestoreStoredPathReturnsMissingMappingErrorUnchanged(t *testing.T) {
 	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-missing-mapping")
 
-	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
-		StoredPath: "/missing/path.bin",
-		Overwrite:  true,
-	})
-	if err == nil || !strings.Contains(err.Error(), `physical file path "/missing/path.bin" not found`) {
-		t.Fatalf("expected missing mapping error, got result=%+v err=%v", result, err)
+	cases := []string{
+		"/missing/path.bin",
+		`D:\missing\path.bin`,
 	}
-	if engine.IsUnsupported(err) {
-		t.Fatalf("missing mapping error must not classify as unsupported: %v", err)
-	}
-	if result != (engine.RestoreStoredPathResult{}) {
-		t.Fatalf("expected zero result on missing mapping error, got %+v", result)
+
+	for _, storedPath := range cases {
+		t.Run(strings.ReplaceAll(strings.ReplaceAll(storedPath, `\`, "_"), "/", "_"), func(t *testing.T) {
+			result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+				StoredPath: storedPath,
+				Overwrite:  true,
+			})
+			wantErr := fmt.Sprintf("physical file path %q not found", storedPath)
+			if err == nil || !strings.Contains(err.Error(), wantErr) {
+				t.Fatalf("expected missing mapping error %q, got result=%+v err=%v", wantErr, result, err)
+			}
+			if engine.IsUnsupported(err) {
+				t.Fatalf("missing mapping error must not classify as unsupported: %v", err)
+			}
+			if result != (engine.RestoreStoredPathResult{}) {
+				t.Fatalf("expected zero result on missing mapping error, got %+v", result)
+			}
+		})
 	}
 }
 
@@ -507,6 +570,7 @@ func newStoredPathRestoreFixtureFromDB(t *testing.T, db *sql.DB, payload []byte,
 		Writer:       container.NewLocalWriterWithDirAndDB(containerDir, container.GetContainerMaxSize(), db),
 		ContainerDir: containerDir,
 	}
+	t.Cleanup(func() { _ = sgctx.Close() })
 
 	inputPath := filepath.Join(t.TempDir(), "restore-stored-path-postgres.txt")
 	if err := os.WriteFile(inputPath, payload, 0o600); err != nil {
@@ -515,6 +579,9 @@ func newStoredPathRestoreFixtureFromDB(t *testing.T, db *sql.DB, payload []byte,
 	stored, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inputPath, blocks.CodecPlain)
 	if err != nil {
 		t.Fatalf("store fixture: %v", err)
+	}
+	if err := sgctx.Writer.FinalizeContainer(); err != nil {
+		t.Fatalf("finalize fixture container: %v", err)
 	}
 	return newStoredPathRestoreFixtureFromExistingStore(t, db, sgctx, stored, payload)
 }
@@ -565,4 +632,47 @@ func assertRestoreStoredPathResult(t *testing.T, got engine.RestoreStoredPathRes
 	if got.RestoredHash != wantHash {
 		t.Fatalf("RestoredHash: got %q want %q", got.RestoredHash, wantHash)
 	}
+}
+
+func TestNewStoredPathRestoreFixtureFinalizesContainerWriter(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-stored-path-fixture-lifecycle")
+
+	writer, ok := fixture.sgctx.Writer.(*container.LocalWriter)
+	if !ok {
+		t.Fatalf("expected LocalWriter fixture, got %T", fixture.sgctx.Writer)
+	}
+	if _, _, active := writer.ActiveContainerState(); active {
+		t.Fatal("expected fixture writer to have no active container after setup")
+	}
+
+	containerPath := singleFixtureContainerPath(t, fixture.sgctx.ContainerDir)
+	renamedPath := containerPath + ".renamed"
+
+	if err := os.Rename(containerPath, renamedPath); err != nil {
+		t.Fatalf("rename fixture container after setup: %v", err)
+	}
+	if err := os.Rename(renamedPath, containerPath); err != nil {
+		t.Fatalf("rename fixture container back after setup: %v", err)
+	}
+}
+
+func singleFixtureContainerPath(t *testing.T, containerDir string) string {
+	t.Helper()
+
+	entries, err := os.ReadDir(containerDir)
+	if err != nil {
+		t.Fatalf("read fixture container dir: %v", err)
+	}
+
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		files = append(files, filepath.Join(containerDir, entry.Name()))
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected exactly one fixture container payload, found %d (%v)", len(files), files)
+	}
+	return files[0]
 }

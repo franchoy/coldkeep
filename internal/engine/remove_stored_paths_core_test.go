@@ -46,6 +46,57 @@ func TestRemoveStoredPathsRejectsMissingDatabase(t *testing.T) {
 	assertRemoveStoredPathsValidationError(t, result, err, "engine: remove stored paths database is required")
 }
 
+func TestRemoveStoredPathsAllInvalidTargetsDoNotRequireDatabase(t *testing.T) {
+	result, err := (&engine.DefaultEngine{}).RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+		StoredPaths: []string{"   ", "\t"},
+	})
+	if err != nil {
+		t.Fatalf("RemoveStoredPaths all-invalid without db: %v", err)
+	}
+	assertStoredPathStatuses(t, result.Items, []engine.BatchItemStatus{
+		engine.BatchItemFailed,
+		engine.BatchItemFailed,
+	})
+	assertRemoveStoredPathsBatchSummary(t, result.Summary, 0, 2, 0)
+}
+
+func TestPreflightRemoveStoredPathsReturnsTerminalResultWhenNothingExecutable(t *testing.T) {
+	result, requiresRepository, err := engine.PreflightRemoveStoredPaths(engine.RemoveStoredPathsRequest{
+		StoredPaths: []string{"   ", "\n"},
+		DryRun:      true,
+	})
+	if err != nil {
+		t.Fatalf("PreflightRemoveStoredPaths no executable: %v", err)
+	}
+	if requiresRepository {
+		t.Fatal("expected no repository requirement for invalid-only targets")
+	}
+	if !result.DryRun || result.ExecutionMode != engine.ExecutionModeSequential {
+		t.Fatalf("unexpected preflight envelope: %+v", result)
+	}
+	assertStoredPathStatuses(t, result.Items, []engine.BatchItemStatus{
+		engine.BatchItemFailed,
+		engine.BatchItemFailed,
+	})
+	assertRemoveStoredPathsBatchSummary(t, result.Summary, 0, 2, 0)
+}
+
+func TestPreflightRemoveStoredPathsDefersRepositoryWorkWhenExecutableTargetsExist(t *testing.T) {
+	result, requiresRepository, err := engine.PreflightRemoveStoredPaths(engine.RemoveStoredPathsRequest{
+		StoredPaths: []string{"   ", "/docs/a.txt"},
+	})
+	if err != nil {
+		t.Fatalf("PreflightRemoveStoredPaths executable present: %v", err)
+	}
+	if !requiresRepository {
+		t.Fatal("expected repository requirement when executable targets remain")
+	}
+	if len(result.Items) != 1 || result.Items[0].Status != engine.BatchItemFailed {
+		t.Fatalf("unexpected preflight partial result: %+v", result)
+	}
+	assertRemoveStoredPathsBatchSummary(t, result.Summary, 0, 1, 0)
+}
+
 func TestRemoveStoredPathsPreservesInputOrder(t *testing.T) {
 	fixture := newRemoveStoredPathFixture(t, []string{"ordered.txt"}, 1)
 	other := addStoredPathMapping(t, fixture.db, fixture.logicalID, "ordered-b.txt")

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -209,6 +210,130 @@ func TestRestoreCrossPlatformBytesRemainDeterministic(t *testing.T) {
 			if !bytes.Equal(got, p.content) {
 				t.Fatalf("restored bytes mismatch: got len=%d want len=%d; notes: %s",
 					len(got), len(p.content), p.notes)
+			}
+		})
+	}
+}
+
+func TestValidateRestorePrefixRelativePath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{name: "normal child path", path: "child.bin"},
+		{name: "nested child path", path: filepath.Join("nested", "child.bin")},
+		{name: "dot", path: ".", wantErr: true},
+		{name: "parent", path: "..", wantErr: true},
+		{name: "parent child", path: filepath.Join("..", "child"), wantErr: true},
+		{name: "platform native parent traversal", path: filepath.Clean(filepath.Join("nested", "..", "..", "child")), wantErr: true},
+		{name: "absolute path", path: filepath.Join(string(filepath.Separator), "abs", "child.bin"), wantErr: true},
+		{name: "empty", path: "", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRestorePrefixRelativePath(tc.path)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %q", tc.path)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for %q: %v", tc.path, err)
+			}
+		})
+	}
+}
+
+func TestDeriveRestorePrefixRelativePathUsesPlatformProjection(t *testing.T) {
+	t.Parallel()
+
+	storedPath := filepath.Join(t.TempDir(), "nested", "child.bin")
+	got, err := deriveRestorePrefixRelativePath(storedPath)
+	if err != nil {
+		t.Fatalf("deriveRestorePrefixRelativePath: %v", err)
+	}
+
+	want, err := filepath.Rel(string(filepath.Separator), filepath.Clean(storedPath))
+	if err != nil {
+		t.Fatalf("filepath.Rel expected path: %v", err)
+	}
+	if got != want {
+		t.Fatalf("relative path mismatch: got=%q want=%q", got, want)
+	}
+	if runtime.GOOS == "windows" && strings.HasPrefix(got, filepath.VolumeName(storedPath)) {
+		t.Fatalf("relative path retained volume prefix on windows: %q", got)
+	}
+}
+
+func TestResolvePrefixRestoreOutputPathPreservesLexicalRoot(t *testing.T) {
+	t.Parallel()
+
+	descriptor := RestoreDescriptor{Path: filepath.Join(t.TempDir(), "nested", "child.bin"), LogicalFileID: 1}
+	prefixRoot := t.TempDir()
+
+	outputPath, trustedRoot, err := resolvePrefixRestoreOutputPath(descriptor, RestoreOptions{
+		DestinationMode: RestoreDestinationPrefix,
+		Destination:     prefixRoot,
+		TrustedRoot:     prefixRoot,
+	})
+	if err != nil {
+		t.Fatalf("resolvePrefixRestoreOutputPath: %v", err)
+	}
+
+	want := expectedPrefixModeOutputPath(prefixRoot, descriptor.Path)
+	if outputPath != want {
+		t.Fatalf("output path mismatch: got=%q want=%q", outputPath, want)
+	}
+	if trustedRoot != filepath.Clean(prefixRoot) {
+		t.Fatalf("trusted root mismatch: got=%q want=%q", trustedRoot, filepath.Clean(prefixRoot))
+	}
+}
+
+func TestDeriveRestorePrefixRelativePathWindowsCanonicalMatrix(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		path    string
+		want    string
+		wantErr bool
+	}{
+		{name: "canonical drive absolute C", path: `C:\data\file.bin`, want: `data\file.bin`},
+		{name: "canonical drive absolute D", path: `D:\data\file.bin`, want: `data\file.bin`},
+		{name: "canonical UNC absolute", path: `\\server\share\data\file.bin`, want: `data\file.bin`},
+		{name: "slash drive absolute", path: `C:/data/file.bin`, wantErr: true},
+		{name: "slash UNC absolute", path: `//server/share/data/file.bin`, want: `server/share/data/file.bin`, wantErr: runtime.GOOS == "windows"},
+		{name: "backslash root-relative", path: `\data\file.bin`, wantErr: true},
+		{name: "slash root-relative", path: `/data/file.bin`, want: `data/file.bin`, wantErr: runtime.GOOS == "windows"},
+		{name: "drive-relative", path: `C:drive-relative\file.bin`, wantErr: true},
+		{name: "relative backslash", path: `relative\file.bin`, wantErr: true},
+		{name: "relative slash", path: `relative/file.bin`, wantErr: true},
+		{name: "traversal", path: `..\escape.bin`, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := deriveRestorePrefixRelativePath(tc.path)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected rejection for %q, got %q", tc.path, got)
+				}
+				if !strings.Contains(err.Error(), "cannot derive relative path") {
+					t.Fatalf("expected derive rejection for %q, got %v", tc.path, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("deriveRestorePrefixRelativePath(%q): %v", tc.path, err)
+			}
+			if got != tc.want {
+				t.Fatalf("relative path mismatch for %q: got=%q want=%q", tc.path, got, tc.want)
 			}
 		})
 	}

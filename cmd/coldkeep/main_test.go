@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -4683,10 +4685,10 @@ func TestRunStoreCommandAllowsCrossVersionReuseJSON(t *testing.T) {
 
 func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -4700,23 +4702,36 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	var (
 		called       bool
 		gotID        string
-		gotType      string
-		gotLabel     *string
-		gotParentID  *string
+		gotLabel     string
+		gotParentID  string
 		gotPaths     []string
-		gotDBNonNil  bool
-		gotCtxNonNil bool
+		gotResultReq engine.SnapshotCreateRequest
 	)
-	createSnapshotPhase = func(ctx context.Context, db *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		called = true
-		gotID = opts.ID
-		gotType = opts.Type
-		gotLabel = opts.Label
-		gotParentID = opts.ParentID
-		gotPaths = append([]string(nil), opts.Paths...)
-		gotDBNonNil = db != nil
-		gotCtxNonNil = ctx != nil
-		return nil
+	newCommandEngine = func(db *sql.DB, _ string) (engine.Engine, error) {
+		if db == nil {
+			t.Fatal("expected non-nil db")
+		}
+		return stubCommandEngine{
+			snapshotCreateFunc: func(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				called = true
+				gotID = req.ID
+				gotLabel = req.Label
+				gotParentID = req.ParentID
+				gotPaths = append([]string(nil), req.Paths...)
+				gotResultReq = req
+				if ctx == nil {
+					t.Fatal("expected non-nil ctx")
+				}
+				return engine.SnapshotCreateResult{
+					SnapshotID:    req.ID,
+					Type:          engine.SnapshotTypePartial,
+					PathsCount:    len(req.Paths),
+					FilesInserted: 2,
+					Label:         req.Label,
+					ParentID:      req.ParentID,
+				}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -4735,25 +4750,22 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	})
 
 	if !called {
-		t.Fatal("expected createSnapshotPhase to be called")
-	}
-	if !gotCtxNonNil || !gotDBNonNil {
-		t.Fatalf("expected non-nil ctx and db, got ctx=%v db=%v", gotCtxNonNil, gotDBNonNil)
+		t.Fatal("expected engine SnapshotCreate to be called")
 	}
 	if gotID != "snap-phase2" {
 		t.Fatalf("snapshot ID mismatch: got=%q", gotID)
 	}
-	if gotType != "partial" {
-		t.Fatalf("snapshot type mismatch: got=%q", gotType)
-	}
-	if gotLabel == nil || *gotLabel != "release-candidate" {
+	if gotLabel != "release-candidate" {
 		t.Fatalf("snapshot label mismatch: got=%v", gotLabel)
 	}
-	if gotParentID != nil {
+	if gotParentID != "" {
 		t.Fatalf("expected nil parentID when --from is not provided, got=%v", gotParentID)
 	}
 	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
 		t.Fatalf("snapshot paths mismatch: got=%v", gotPaths)
+	}
+	if !reflect.DeepEqual(gotResultReq.Paths, []string{"docs/", "a.txt"}) {
+		t.Fatalf("expected raw paths preserved, got=%v", gotResultReq.Paths)
 	}
 
 	var payload map[string]any
@@ -4770,14 +4782,17 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	if _, ok := data["duration_ms"]; !ok {
 		t.Fatalf("expected duration_ms in snapshot payload data, got=%v", data)
 	}
+	if got, _ := data["files_inserted"].(float64); int(got) != 2 {
+		t.Fatalf("expected files_inserted=2, got=%v", data["files_inserted"])
+	}
 }
 
 func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -4788,12 +4803,21 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
 
-	gotType := ""
+	gotType := engine.SnapshotType("")
 	gotPathCount := -1
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		gotType = opts.Type
-		gotPathCount = len(opts.Paths)
-		return nil
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				gotPathCount = len(req.Paths)
+				gotType = engine.SnapshotTypeFull
+				return engine.SnapshotCreateResult{
+					SnapshotID:    "snap-full",
+					Type:          engine.SnapshotTypeFull,
+					PathsCount:    0,
+					FilesInserted: 0,
+				}, nil
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -4805,7 +4829,7 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 		t.Fatalf("runSnapshotCommand returned error: %v", err)
 	}
 
-	if gotType != "full" {
+	if gotType != engine.SnapshotTypeFull {
 		t.Fatalf("expected full snapshot type, got %q", gotType)
 	}
 	if gotPathCount != 0 {
@@ -4815,10 +4839,10 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 
 func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -4829,10 +4853,20 @@ func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
 
-	var gotParentID *string
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		gotParentID = opts.ParentID
-		return nil
+	gotParentID := ""
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				gotParentID = req.ParentID
+				return engine.SnapshotCreateResult{
+					SnapshotID:    "snap-child",
+					Type:          engine.SnapshotTypeFull,
+					PathsCount:    0,
+					FilesInserted: 0,
+					ParentID:      req.ParentID,
+				}, nil
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -4847,7 +4881,7 @@ func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
 		t.Fatalf("runSnapshotCommand returned error: %v", err)
 	}
 
-	if gotParentID == nil || *gotParentID != "snap-parent" {
+	if gotParentID != "snap-parent" {
 		t.Fatalf("expected forwarded parentID snap-parent, got=%v", gotParentID)
 	}
 }
@@ -5047,10 +5081,10 @@ func TestRunSnapshotCommandRejectsUnknownSubcommand(t *testing.T) {
 
 func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalRestore := restoreSnapshotPhase
+	originalEngine := newSnapshotRestoreCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		restoreSnapshotPhase = originalRestore
+		newSnapshotRestoreCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -5065,16 +5099,18 @@ func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 		called        bool
 		gotSnapshotID string
 		gotPaths      []string
-		gotOpts       snapshot.RestoreSnapshotOptions
+		gotReq        engine.SnapshotRestoreRequest
 	)
-	restoreSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, paths []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
-		called = true
-		_ = ctx
-		_ = db
-		gotSnapshotID = snapshotID
-		gotPaths = append([]string(nil), paths...)
-		gotOpts = opts
-		return &snapshot.RestoreSnapshotResult{SnapshotID: snapshotID, RestoredFiles: 2, RequestedPaths: int64(len(paths))}, nil
+	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+				called = true
+				gotSnapshotID = req.SnapshotID
+				gotPaths = append([]string(nil), req.Paths...)
+				gotReq = req
+				return engine.SnapshotRestoreResult{SnapshotID: req.SnapshotID, RestoredFiles: 2, RequestedPathsCount: len(req.Paths)}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -5094,7 +5130,7 @@ func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 	})
 
 	if !called {
-		t.Fatal("expected restoreSnapshotPhase to be called")
+		t.Fatal("expected snapshot restore to route through engine")
 	}
 	if gotSnapshotID != "snap-restore-1" {
 		t.Fatalf("snapshot ID mismatch: got=%q", gotSnapshotID)
@@ -5102,13 +5138,13 @@ func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
 		t.Fatalf("snapshot restore paths mismatch: got=%v", gotPaths)
 	}
-	if gotOpts.DestinationMode != storage.RestoreDestinationPrefix {
-		t.Fatalf("destination mode mismatch: got=%q", gotOpts.DestinationMode)
+	if gotReq.Destination.Mode != engine.SnapshotRestoreDestinationPrefix {
+		t.Fatalf("destination mode mismatch: got=%q", gotReq.Destination.Mode)
 	}
-	if gotOpts.Destination != "./restored" {
-		t.Fatalf("destination mismatch: got=%q", gotOpts.Destination)
+	if gotReq.Destination.Path != "./restored" {
+		t.Fatalf("destination mismatch: got=%q", gotReq.Destination.Path)
 	}
-	if !gotOpts.Overwrite {
+	if !gotReq.Overwrite {
 		t.Fatal("expected overwrite=true")
 	}
 
@@ -5127,10 +5163,10 @@ func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
 
 func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalRestore := restoreSnapshotPhase
+	originalEngine := newSnapshotRestoreCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		restoreSnapshotPhase = originalRestore
+		newSnapshotRestoreCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -5142,9 +5178,13 @@ func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
 	}
 
 	gotPathCount := -1
-	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, paths []string, _ snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
-		gotPathCount = len(paths)
-		return &snapshot.RestoreSnapshotResult{SnapshotID: "snap-full-restore", RestoredFiles: 0}, nil
+	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+				gotPathCount = len(req.Paths)
+				return engine.SnapshotRestoreResult{SnapshotID: "snap-full-restore", RestoredFiles: 0}, nil
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -5163,10 +5203,10 @@ func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
 
 func TestRunSnapshotCommandRestoreForwardsSnapshotQuery(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalRestore := restoreSnapshotPhase
+	originalEngine := newSnapshotRestoreCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		restoreSnapshotPhase = originalRestore
+		newSnapshotRestoreCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -5177,10 +5217,14 @@ func TestRunSnapshotCommandRestoreForwardsSnapshotQuery(t *testing.T) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
 
-	var gotQuery *snapshot.SnapshotQuery
-	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, _ []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
-		gotQuery = opts.Query
-		return &snapshot.RestoreSnapshotResult{SnapshotID: "snap-query", RestoredFiles: 1}, nil
+	var gotSelection engine.SnapshotRestoreSelection
+	newSnapshotRestoreCommandEngine = func(_ storage.StorageContext) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotRestoreFunc: func(_ context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+				gotSelection = req.Selection
+				return engine.SnapshotRestoreResult{SnapshotID: "snap-query", RestoredFiles: 1}, nil
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -5200,38 +5244,32 @@ func TestRunSnapshotCommandRestoreForwardsSnapshotQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runSnapshotCommand restore returned error: %v", err)
 	}
-	if gotQuery == nil {
-		t.Fatal("expected restore query to be forwarded")
+	if len(gotSelection.ExactPaths) != 2 {
+		t.Fatalf("expected 2 exact paths, got %#v", gotSelection.ExactPaths)
 	}
-	if len(gotQuery.ExactPaths) != 2 {
-		t.Fatalf("expected 2 exact paths, got %#v", gotQuery.ExactPaths)
+	if gotSelection.ExactPaths[0] != "docs/a.txt" || gotSelection.ExactPaths[1] != "docs/b.txt" {
+		t.Fatalf("expected normalized exact paths, got %#v", gotSelection.ExactPaths)
 	}
-	if _, ok := gotQuery.ExactPaths["docs/a.txt"]; !ok {
-		t.Fatalf("expected normalized path docs/a.txt, got %#v", gotQuery.ExactPaths)
+	if len(gotSelection.Prefixes) != 2 || gotSelection.Prefixes[0] != "docs/" || gotSelection.Prefixes[1] != "images/" {
+		t.Fatalf("expected normalized prefixes [docs/ images/], got %#v", gotSelection.Prefixes)
 	}
-	if _, ok := gotQuery.ExactPaths["docs/b.txt"]; !ok {
-		t.Fatalf("expected exact path docs/b.txt, got %#v", gotQuery.ExactPaths)
+	if gotSelection.Pattern != "*.txt" {
+		t.Fatalf("expected pattern '*.txt', got %q", gotSelection.Pattern)
 	}
-	if len(gotQuery.Prefixes) != 2 || gotQuery.Prefixes[0] != "docs/" || gotQuery.Prefixes[1] != "images/" {
-		t.Fatalf("expected normalized prefixes [docs/ images/], got %#v", gotQuery.Prefixes)
+	if gotSelection.Regex != "^docs/" {
+		t.Fatalf("expected regex '^docs/', got %#v", gotSelection.Regex)
 	}
-	if gotQuery.Pattern != "*.txt" {
-		t.Fatalf("expected pattern '*.txt', got %q", gotQuery.Pattern)
+	if gotSelection.MinSize == nil || *gotSelection.MinSize != 10 {
+		t.Fatalf("expected min size 10, got %#v", gotSelection.MinSize)
 	}
-	if gotQuery.Regex == nil || gotQuery.Regex.String() != "^docs/" {
-		t.Fatalf("expected regex '^docs/', got %#v", gotQuery.Regex)
+	if gotSelection.MaxSize == nil || *gotSelection.MaxSize != 20 {
+		t.Fatalf("expected max size 20, got %#v", gotSelection.MaxSize)
 	}
-	if gotQuery.MinSize == nil || *gotQuery.MinSize != 10 {
-		t.Fatalf("expected min size 10, got %#v", gotQuery.MinSize)
+	if gotSelection.ModifiedAfter == nil || gotSelection.ModifiedAfter.UTC().Format("2006-01-02") != "2026-01-01" {
+		t.Fatalf("expected modified-after date, got %#v", gotSelection.ModifiedAfter)
 	}
-	if gotQuery.MaxSize == nil || *gotQuery.MaxSize != 20 {
-		t.Fatalf("expected max size 20, got %#v", gotQuery.MaxSize)
-	}
-	if gotQuery.ModifiedAfter == nil || gotQuery.ModifiedAfter.UTC().Format("2006-01-02") != "2026-01-01" {
-		t.Fatalf("expected modified-after date, got %#v", gotQuery.ModifiedAfter)
-	}
-	if gotQuery.ModifiedBefore == nil || gotQuery.ModifiedBefore.UTC().Format("2006-01-02") != "2026-01-31" {
-		t.Fatalf("expected modified-before date, got %#v", gotQuery.ModifiedBefore)
+	if gotSelection.ModifiedBefore == nil || gotSelection.ModifiedBefore.UTC().Format("2006-01-02") != "2026-01-31" {
+		t.Fatalf("expected modified-before date, got %#v", gotSelection.ModifiedBefore)
 	}
 }
 
@@ -6676,26 +6714,18 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 		t.Fatalf("expected requirement error for --dry-run=false, got: %v", err)
 	}
 
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
 	calledWith := ""
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
-		calledWith = snapshotID
-		return nil
-	}
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		if req.Mode != engine.SnapshotDeleteModeExecute {
+			t.Fatalf("expected execute mode, got %+v", req)
+		}
+		calledWith = req.SnapshotID
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModeExecute,
+			Deleted:    true,
+		}, nil
+	})
 
 	output := captureStdout(t, func() {
 		err := runSnapshotCommand(parsedCommandLine{
@@ -6728,32 +6758,20 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 }
 
 func TestRunSnapshotCommandDeleteDryRunOverridesForce(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	originalPreview := snapshotDeleteLineagePreviewPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-		snapshotDeleteLineagePreviewPhase = originalPreview
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
 	deleteCalled := false
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		if req.Mode != engine.SnapshotDeleteModePreview {
+			t.Fatalf("expected preview mode when both flags are set, got %+v", req)
+		}
 		deleteCalled = true
-		return nil
-	}
-
-	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-		return &snapshotDeleteLineagePreview{SnapshotID: snapshotID}, nil
-	}
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModePreview,
+			Preview: &engine.SnapshotDeletePreviewResult{
+				Parent: engine.SnapshotDeleteParent{State: engine.SnapshotDeleteParentNone},
+			},
+		}, nil
+	})
 
 	output := captureStdout(t, func() {
 		err := runSnapshotCommand(parsedCommandLine{
@@ -6770,8 +6788,8 @@ func TestRunSnapshotCommandDeleteDryRunOverridesForce(t *testing.T) {
 		}
 	})
 
-	if deleteCalled {
-		t.Fatal("expected delete phase not to run when --dry-run is present")
+	if !deleteCalled {
+		t.Fatal("expected preview request to route through engine when both flags are set")
 	}
 
 	var payload map[string]any
@@ -6982,37 +7000,22 @@ func TestPreviewWarningsEmptyWhenNoChildren(t *testing.T) {
 }
 
 func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	originalPreview := snapshotDeleteLineagePreviewPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-		snapshotDeleteLineagePreviewPhase = originalPreview
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		if req.Mode != engine.SnapshotDeleteModePreview {
+			t.Fatalf("expected preview mode, got %+v", req)
 		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
-		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
-		return nil
-	}
-	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-		return &snapshotDeleteLineagePreview{
-			SnapshotID:       snapshotID,
-			ParentID:         sql.NullString{String: "snap-parent", Valid: true},
-			ChildSnapshotIDs: []string{"snap-child-1", "snap-child-2"},
-			TotalFiles:       10,
-			UniqueFiles:      3,
-			SharedFiles:      7,
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModePreview,
+			Preview: &engine.SnapshotDeletePreviewResult{
+				Parent:      engine.SnapshotDeleteParent{ID: "snap-parent", State: engine.SnapshotDeleteParentPresent},
+				Children:    []string{"snap-child-1", "snap-child-2"},
+				TotalFiles:  10,
+				UniqueFiles: 3,
+				SharedFiles: 7,
+			},
 		}, nil
-	}
+	})
 
 	output := captureStdout(t, func() {
 		err := runSnapshotCommand(parsedCommandLine{
@@ -7078,37 +7081,15 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 }
 
 func TestRunSnapshotCommandDeleteDryRunJSONNoChildrenHasNoWarnings(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	originalPreview := snapshotDeleteLineagePreviewPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-		snapshotDeleteLineagePreviewPhase = originalPreview
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
-		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
-		return nil
-	}
-	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-		return &snapshotDeleteLineagePreview{
-			SnapshotID:       snapshotID,
-			ParentID:         sql.NullString{Valid: false},
-			ChildSnapshotIDs: []string{},
-			TotalFiles:       0,
-			UniqueFiles:      0,
-			SharedFiles:      0,
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModePreview,
+			Preview: &engine.SnapshotDeletePreviewResult{
+				Parent: engine.SnapshotDeleteParent{State: engine.SnapshotDeleteParentNone},
+			},
 		}, nil
-	}
+	})
 
 	output := captureStdout(t, func() {
 		err := runSnapshotCommand(parsedCommandLine{
@@ -7137,30 +7118,9 @@ func TestRunSnapshotCommandDeleteDryRunJSONNoChildrenHasNoWarnings(t *testing.T)
 }
 
 func TestRunSnapshotCommandDeleteDryRunSnapshotNotFound(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	originalPreview := snapshotDeleteLineagePreviewPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-		snapshotDeleteLineagePreviewPhase = originalPreview
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		return engine.SnapshotDeleteResult{}, fmt.Errorf("snapshot %q not found", req.SnapshotID)
 	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
-		t.Fatal("deleteSnapshotPhase must not be called when preview fails")
-		return nil
-	}
-	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-		return nil, fmt.Errorf("snapshot %q not found", snapshotID)
-	}
 
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
@@ -7178,37 +7138,19 @@ func TestRunSnapshotCommandDeleteDryRunSnapshotNotFound(t *testing.T) {
 }
 
 func TestRunSnapshotCommandDeleteDryRunTextOutput(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	originalPreview := snapshotDeleteLineagePreviewPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-		snapshotDeleteLineagePreviewPhase = originalPreview
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
-		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
-		return nil
-	}
-	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-		return &snapshotDeleteLineagePreview{
-			SnapshotID:       snapshotID,
-			ParentID:         sql.NullString{String: "day1-parent", Valid: true},
-			ChildSnapshotIDs: []string{"day2", "exp1"},
-			TotalFiles:       100000,
-			UniqueFiles:      500,
-			SharedFiles:      99500,
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModePreview,
+			Preview: &engine.SnapshotDeletePreviewResult{
+				Parent:      engine.SnapshotDeleteParent{ID: "day1-parent", State: engine.SnapshotDeleteParentPresent},
+				Children:    []string{"day2", "exp1"},
+				TotalFiles:  100000,
+				UniqueFiles: 500,
+				SharedFiles: 99500,
+			},
 		}, nil
-	}
+	})
 
 	output := captureStdout(t, func() {
 		err := runSnapshotCommand(parsedCommandLine{
@@ -7286,37 +7228,18 @@ func TestRunSnapshotCommandDeleteDryRunTextOutput(t *testing.T) {
 }
 
 func TestRunSnapshotCommandDeleteDryRunTextOutputNoChildren(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	originalPreview := snapshotDeleteLineagePreviewPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-		snapshotDeleteLineagePreviewPhase = originalPreview
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
-		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
-		return nil
-	}
-	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-		return &snapshotDeleteLineagePreview{
-			SnapshotID:       snapshotID,
-			ParentID:         sql.NullString{Valid: false},
-			ChildSnapshotIDs: []string{}, // No children
-			TotalFiles:       50,
-			UniqueFiles:      50,
-			SharedFiles:      0,
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModePreview,
+			Preview: &engine.SnapshotDeletePreviewResult{
+				Parent:      engine.SnapshotDeleteParent{State: engine.SnapshotDeleteParentNone},
+				TotalFiles:  50,
+				UniqueFiles: 50,
+				SharedFiles: 0,
+			},
 		}, nil
-	}
+	})
 
 	output := captureStdout(t, func() {
 		err := runSnapshotCommand(parsedCommandLine{
@@ -7630,29 +7553,21 @@ func TestRunSnapshotCommandDeleteWithForceExecutesImmediately(t *testing.T) {
 	// --force must execute deletion immediately without confirmation or blocking.
 	// This test ensures Phase 7 dry-run feature doesn't change actual delete behavior.
 
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
 	// Track if delete was called and when
 	deleteCallOrder := []string{}
 	deleteCalled := false
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
-		deleteCallOrder = append(deleteCallOrder, "delete:"+snapshotID)
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		if req.Mode != engine.SnapshotDeleteModeExecute {
+			t.Fatalf("expected execute mode for --force, got %+v", req)
+		}
+		deleteCallOrder = append(deleteCallOrder, "delete:"+req.SnapshotID)
 		deleteCalled = true
-		return nil
-	}
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModeExecute,
+			Deleted:    true,
+		}, nil
+	})
 
 	// Execute delete with --force (no --dry-run)
 	output := captureStdout(t, func() {
@@ -7671,7 +7586,7 @@ func TestRunSnapshotCommandDeleteWithForceExecutesImmediately(t *testing.T) {
 
 	// VERIFY: Delete must be called immediately without any prompts or delays
 	if !deleteCalled {
-		t.Fatalf("expected deleteSnapshotPhase to be called with --force, but it wasn't")
+		t.Fatalf("expected engine snapshot delete to be called with --force, but it wasn't")
 	}
 
 	// VERIFY: Delete must be the only operation
@@ -7702,26 +7617,18 @@ func TestRunSnapshotCommandDeleteWithForceExecutesImmediately(t *testing.T) {
 }
 
 func TestRunSnapshotCommandDeleteForceExplicitTrueExecutes(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
 	calledWith := ""
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
-		calledWith = snapshotID
-		return nil
-	}
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		if req.Mode != engine.SnapshotDeleteModeExecute {
+			t.Fatalf("expected execute mode for --force=true, got %+v", req)
+		}
+		calledWith = req.SnapshotID
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModeExecute,
+			Deleted:    true,
+		}, nil
+	})
 
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
@@ -7739,32 +7646,20 @@ func TestRunSnapshotCommandDeleteForceExplicitTrueExecutes(t *testing.T) {
 }
 
 func TestRunSnapshotCommandDeleteDryRunExplicitTruePreviews(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	originalPreview := snapshotDeleteLineagePreviewPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-		snapshotDeleteLineagePreviewPhase = originalPreview
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
-		t.Fatal("deleteSnapshotPhase must not be called for --dry-run=true")
-		return nil
-	}
 	previewed := false
-	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		if req.Mode != engine.SnapshotDeleteModePreview {
+			t.Fatalf("expected preview mode for --dry-run=true, got %+v", req)
+		}
 		previewed = true
-		return &snapshotDeleteLineagePreview{SnapshotID: snapshotID}, nil
-	}
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModePreview,
+			Preview: &engine.SnapshotDeletePreviewResult{
+				Parent: engine.SnapshotDeleteParent{State: engine.SnapshotDeleteParentNone},
+			},
+		}, nil
+	})
 
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
@@ -7786,27 +7681,19 @@ func TestRunSnapshotCommandDeleteWithForceNoCascadeDelete(t *testing.T) {
 	// Deleting a parent snapshot must NOT cascade-delete children.
 	// Children remain fully usable with null parent_id.
 
-	originalLoad := loadDefaultStorageContextPhase
-	originalDelete := deleteSnapshotPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		deleteSnapshotPhase = originalDelete
-	})
-
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
 	// Track what gets deleted
 	deletedSnapshots := []string{}
-	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
-		deletedSnapshots = append(deletedSnapshots, snapshotID)
-		return nil
-	}
+	installSnapshotDeleteCommandEngine(t, func(_ context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+		if req.Mode != engine.SnapshotDeleteModeExecute {
+			t.Fatalf("expected execute mode for parent delete, got %+v", req)
+		}
+		deletedSnapshots = append(deletedSnapshots, req.SnapshotID)
+		return engine.SnapshotDeleteResult{
+			SnapshotID: req.SnapshotID,
+			Mode:       engine.SnapshotDeleteModeExecute,
+			Deleted:    true,
+		}, nil
+	})
 
 	// Execute delete of parent snapshot with --force
 	_ = captureStdout(t, func() {
@@ -9174,10 +9061,10 @@ func TestRepairBatchPreStatefulRejectsMissingInputBeforeRepairExecution(t *testi
 
 func TestSnapshotCreateFromMissingParentStateDependentDeterministicError(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -9189,12 +9076,16 @@ func TestSnapshotCreateFromMissingParentStateDependentDeterministicError(t *test
 	}
 
 	createSnapshotCalls := 0
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		createSnapshotCalls++
-		if opts.ParentID == nil || *opts.ParentID != "missing-parent" {
-			t.Fatalf("expected parent id missing-parent, got %+v", opts.ParentID)
-		}
-		return fmt.Errorf(`snapshot %q does not exist`, *opts.ParentID)
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		return stubCommandEngine{
+			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				createSnapshotCalls++
+				if req.ParentID != "missing-parent" {
+					t.Fatalf("expected parent id missing-parent, got %+v", req.ParentID)
+				}
+				return engine.SnapshotCreateResult{}, fmt.Errorf(`snapshot %q does not exist`, req.ParentID)
+			},
+		}, nil
 	}
 
 	err := runSnapshotCommand(parsedCommandLine{
@@ -10413,10 +10304,10 @@ func TestRunGCCommandJSONIncludesPerfSpans(t *testing.T) {
 
 func TestRunSnapshotCreateCommandJSONIncludesPerfSpans(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
-	originalCreate := createSnapshotPhase
+	originalEngine := newCommandEngine
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
-		createSnapshotPhase = originalCreate
+		newCommandEngine = originalEngine
 	})
 
 	dbconn, err := sql.Open("sqlite3", ":memory:")
@@ -10432,14 +10323,26 @@ func TestRunSnapshotCreateCommandJSONIncludesPerfSpans(t *testing.T) {
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
-	createSnapshotPhase = func(ctx context.Context, db *sql.DB, opts snapshot.SnapshotCreateOptions) error {
-		if opts.ID != "phase1-perf-test" {
-			t.Fatalf("unexpected snapshot id: %q", opts.ID)
-		}
+	newCommandEngine = func(db *sql.DB, _ string) (engine.Engine, error) {
 		if db == nil {
 			t.Fatal("expected non-nil db")
 		}
-		return nil
+		return stubCommandEngine{
+			snapshotCreateFunc: func(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				if req.ID != "phase1-perf-test" {
+					t.Fatalf("unexpected snapshot id: %q", req.ID)
+				}
+				if ctx == nil {
+					t.Fatal("expected non-nil ctx")
+				}
+				return engine.SnapshotCreateResult{
+					SnapshotID:    req.ID,
+					Type:          engine.SnapshotTypeFull,
+					PathsCount:    0,
+					FilesInserted: 0,
+				}, nil
+			},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {

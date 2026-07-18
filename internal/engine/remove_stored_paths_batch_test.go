@@ -134,7 +134,7 @@ func TestRemoveStoredPathsFailFastStopsAfterExecutionFailure(t *testing.T) {
 		engine.BatchItemOK,
 		engine.BatchItemFailed,
 	})
-	assertRemoveStoredPathsBatchSummary(t, result.Summary, 1, 1, 1)
+	assertRemoveStoredPathsBatchSummary(t, result.Summary, 1, 1, 0)
 }
 
 func TestRemoveStoredPathsFailFastIgnoresBlankAndDuplicatePreparedItems(t *testing.T) {
@@ -155,7 +155,7 @@ func TestRemoveStoredPathsFailFastIgnoresBlankAndDuplicatePreparedItems(t *testi
 		engine.BatchItemSkipped,
 		engine.BatchItemFailed,
 	})
-	assertRemoveStoredPathsBatchSummary(t, result.Summary, 1, 2, 2)
+	assertRemoveStoredPathsBatchSummary(t, result.Summary, 1, 2, 1)
 }
 
 func TestRemoveStoredPathsSummaryMatchesItemOutcomes(t *testing.T) {

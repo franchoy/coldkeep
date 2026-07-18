@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -40,8 +42,9 @@ type Config struct {
 // It preserves existing command behavior while routing supported operations
 // through typed engine methods and lower domain packages.
 type DefaultEngine struct {
-	config Config
-	obs    *observability.Service
+	config              Config
+	obs                 *observability.Service
+	snapshotIDGenerator snapshotIDGenerator
 }
 
 // New returns a new DefaultEngine with the given configuration.
@@ -55,7 +58,21 @@ func New(cfg Config) (*DefaultEngine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: observability service: %w", err)
 	}
-	return &DefaultEngine{config: cfg, obs: obs}, nil
+	return &DefaultEngine{
+		config:              cfg,
+		obs:                 obs,
+		snapshotIDGenerator: secureSnapshotIDGenerator,
+	}, nil
+}
+
+type snapshotIDGenerator func() (string, error)
+
+func secureSnapshotIDGenerator() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate snapshot id entropy: %w", err)
+	}
+	return "snap-" + hex.EncodeToString(b), nil
 }
 
 func (e *DefaultEngine) Stats(ctx context.Context, req StatsRequest) (StatsResult, error) {
@@ -283,13 +300,17 @@ func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredP
 	if err := ctx.Err(); err != nil {
 		return RemoveStoredPathsResult{}, err
 	}
-	if err := validateRemoveStoredPathsRequest(req); err != nil {
+	preflight, err := preflightRemoveStoredPaths(req)
+	if err != nil {
 		return RemoveStoredPathsResult{}, err
+	}
+	if !preflight.requiresRepository {
+		return preflight.terminalResult, nil
 	}
 	if err := e.validateRemoveStoredPathsDependencies(); err != nil {
 		return RemoveStoredPathsResult{}, err
 	}
-	return e.removeStoredPaths(req), nil
+	return e.removeStoredPaths(req, preflight.prepared), nil
 }
 
 func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error) {

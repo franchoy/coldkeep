@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -613,7 +616,7 @@ func TestBuildRestoreDescriptorFromPhysicalPathNotFound(t *testing.T) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	_, err = buildRestoreDescriptorFromPhysicalPath(ctx, dbconn, "/missing/path.bin")
+	_, err = buildRestoreDescriptorFromPhysicalPath(ctx, dbconn, []string{"/missing/path.bin"}, "/missing/path.bin")
 	if err == nil || !strings.Contains(err.Error(), "physical file path \"/missing/path.bin\" not found") {
 		t.Fatalf("expected physical path not found error, got: %v", err)
 	}
@@ -751,6 +754,193 @@ func TestRestoreFileByStoredPathUsesPhysicalPathIdentity(t *testing.T) {
 	if refCountAfter != refCountBefore {
 		t.Fatalf("expected restore to keep ref_count unchanged, before=%d after=%d", refCountBefore, refCountAfter)
 	}
+}
+
+func TestRestoreFileByStoredPathUsesLexicalPhysicalPathIdentityAboveAlias(t *testing.T) {
+	fixture := setupStoredPathLexicalAliasRestoreFixture(t)
+	defer func() { _ = fixture.db.Close() }()
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(originalWD) }()
+	if err := os.Chdir(fixture.aliasRoot); err != nil {
+		t.Fatalf("chdir alias root: %v", err)
+	}
+
+	relativeStoredPath := filepath.Join(fixture.nestedDir, "restored-from-lexical-alias.bin")
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(fixture.sgctx, relativeStoredPath, RestoreOptions{Overwrite: true})
+	if err != nil {
+		t.Fatalf("restore by stored path through lexical alias: %v", err)
+	}
+	if result.OutputPath != fixture.storedPath {
+		t.Fatalf("expected restore output path %q, got %q", fixture.storedPath, result.OutputPath)
+	}
+
+	restored, err := readTrustedRestoreTestFileBytes(fixture.storedPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != string(fixture.payload) {
+		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(fixture.payload))
+	}
+}
+
+type storedPathLexicalAliasRestoreFixture struct {
+	db         *sql.DB
+	sgctx      StorageContext
+	aliasRoot  string
+	nestedDir  string
+	storedPath string
+	payload    []byte
+}
+
+func setupStoredPathLexicalAliasRestoreFixture(t *testing.T) storedPathLexicalAliasRestoreFixture {
+	t.Helper()
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("restore-by-physical-path-alias")
+	hash := sha256.Sum256(payload)
+	containerFilename := "restore-by-path-alias.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	fileID := seedStoredPathLexicalAliasRestoreRows(t, dbconn, containerFilename, hex.EncodeToString(hash[:]), payload)
+	aliasRoot, nestedDirName := makeStoredPathLexicalAliasRoot(t)
+	storedPath := filepath.Join(aliasRoot, nestedDirName, "restored-from-lexical-alias.bin")
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		storedPath,
+		fileID,
+		nil,
+		nil,
+		nil,
+		nil,
+		0,
+	); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
+	return storedPathLexicalAliasRestoreFixture{
+		db:         dbconn,
+		sgctx:      StorageContext{DB: dbconn, ContainerDir: containersDir},
+		aliasRoot:  aliasRoot,
+		nestedDir:  nestedDirName,
+		storedPath: storedPath,
+		payload:    payload,
+	}
+}
+
+func seedStoredPathLexicalAliasRestoreRows(t *testing.T, dbconn *sql.DB, containerFilename string, hash string, payload []byte) int64 {
+	t.Helper()
+
+	containerID := insertStoredPathLexicalAliasContainer(t, dbconn, containerFilename, payload)
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
+		hash,
+		int64(len(payload)),
+		filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
+		"legacy-alias-name.bin",
+		int64(len(payload)),
+		hash,
+		filestate.LogicalFileCompleted,
+		1,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID,
+		chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	return fileID
+}
+
+func insertStoredPathLexicalAliasContainer(t *testing.T, dbconn *sql.DB, containerFilename string, payload []byte) int64 {
+	t.Helper()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	return containerID
+}
+
+func makeStoredPathLexicalAliasRoot(t *testing.T) (string, string) {
+	t.Helper()
+
+	realParent := t.TempDir()
+	aliasParent := filepath.Join(t.TempDir(), "restore-root-alias")
+	requireSymlink(t, realParent, aliasParent)
+
+	realRoot, err := os.MkdirTemp(realParent, "restore-root-")
+	if err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	nestedDir, err := os.MkdirTemp(realRoot, "nested-")
+	if err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	return filepath.Join(aliasParent, filepath.Base(realRoot)), filepath.Base(nestedDir)
+}
+
+func readTrustedRestoreTestFileBytes(path string) ([]byte, error) {
+	root, err := pathsafe.NearestExistingAncestorDir(path)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	return fs.ReadFile(os.DirFS(root), filepath.ToSlash(rel))
 }
 
 func TestRestoreIgnoresConfiguredRuntimeChunker(t *testing.T) {
@@ -927,7 +1117,7 @@ func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 		t.Fatalf("insert file_chunk: %v", err)
 	}
 
-	storedPath := filepath.Join(string(os.PathSeparator), "home", "tester", "docs", "prefix-file.bin")
+	storedPath := storedPathPrefixFixturePath()
 	if _, err := dbconn.Exec(
 		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -965,6 +1155,13 @@ func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 	if string(restored) != string(payload) {
 		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
 	}
+}
+
+func storedPathPrefixFixturePath() string {
+	if runtime.GOOS == "windows" {
+		return `C:\home\tester\docs\prefix-file.bin`
+	}
+	return filepath.Join(string(os.PathSeparator), "home", "tester", "docs", "prefix-file.bin")
 }
 
 func TestRestoreFileByStoredPathPrefixModeCreatesMissingParents(t *testing.T) {
@@ -1323,7 +1520,7 @@ func TestRestoreFileByStoredPathNoMetadataBypassesStrictIncompleteCheck(t *testi
 
 func TestRestoreFileByStoredPathRejectsInvalidDestinationMode(t *testing.T) {
 	descriptor := RestoreDescriptor{Path: "/a/b/c.bin"}
-	_, err := resolveRestoreOutputPath(descriptor, RestoreOptions{DestinationMode: RestoreDestinationMode("unsupported")})
+	_, _, err := resolveRestoreOutputPath(descriptor, RestoreOptions{DestinationMode: RestoreDestinationMode("unsupported")})
 	if err == nil || !strings.Contains(err.Error(), "unsupported restore destination mode") {
 		t.Fatalf("expected unsupported destination mode error, got: %v", err)
 	}

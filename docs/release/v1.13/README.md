@@ -63,3 +63,12 @@ The v1.13.0 baseline is defined by:
 - `docs/release/v1.13/v1.13.0-validation-checklist.md`
 
 All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is green.
+
+## Current Release State
+
+- `v1.13.8` is released.
+- `v1.13.9` is active on `release/v1.13.9`.
+- `v1.13.9` Phase 0 is complete.
+- `v1.13.9` executable Phase 0 baseline is
+  `c3a5a537d9dfad197f35c258ab78a75526bad788`.
+- `v1.13.9` Phase 1 is authorized and next.

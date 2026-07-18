@@ -17,8 +17,32 @@ import (
 
 type stubCommandEngine struct {
 	engine.Engine
+	snapshotCreateFunc    func(context.Context, engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error)
+	snapshotDeleteFunc    func(context.Context, engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error)
+	snapshotRestoreFunc   func(context.Context, engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error)
 	restoreStoredPathFunc func(context.Context, engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error)
 	removeStoredPathsFunc func(context.Context, engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error)
+}
+
+func (s stubCommandEngine) SnapshotCreate(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+	if s.snapshotCreateFunc != nil {
+		return s.snapshotCreateFunc(ctx, req)
+	}
+	return engine.SnapshotCreateResult{}, errors.New("unexpected SnapshotCreate call")
+}
+
+func (s stubCommandEngine) SnapshotDelete(ctx context.Context, req engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error) {
+	if s.snapshotDeleteFunc != nil {
+		return s.snapshotDeleteFunc(ctx, req)
+	}
+	return engine.SnapshotDeleteResult{}, errors.New("unexpected SnapshotDelete call")
+}
+
+func (s stubCommandEngine) SnapshotRestore(ctx context.Context, req engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error) {
+	if s.snapshotRestoreFunc != nil {
+		return s.snapshotRestoreFunc(ctx, req)
+	}
+	return engine.SnapshotRestoreResult{}, errors.New("unexpected SnapshotRestore call")
 }
 
 func (s stubCommandEngine) RestoreStoredPath(ctx context.Context, req engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error) {
@@ -260,6 +284,58 @@ func TestRunRemoveCommandStoredPathsInputFileRemainsCLIOwned(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected CLI to load input file and route targets to Engine.RemoveStoredPaths")
+	}
+}
+
+func TestRunRemoveCommandStoredPathsAllInvalidSkipsRepositoryInitialization(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalNewEngine := newCommandEngine
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		newCommandEngine = originalNewEngine
+	})
+
+	loadCalls := 0
+	engineCalls := 0
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		loadCalls++
+		return storage.StorageContext{}, errors.New("repository should not be loaded")
+	}
+	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
+		engineCalls++
+		return stubCommandEngine{}, errors.New("engine should not be constructed")
+	}
+
+	output := captureStdout(t, func() {
+		err := runRemoveCommand(parsedCommandLine{
+			method:      "remove",
+			positionals: []string{"   ", "\t"},
+			flags: map[string][]string{
+				"stored-paths": {""},
+				"dry-run":      {""},
+				"output":       {"json"},
+			},
+		}, outputModeJSON)
+		if err == nil {
+			t.Fatal("expected non-nil batch error due to invalid items")
+		}
+	})
+
+	if loadCalls != 0 {
+		t.Fatalf("expected no repository load, got %d", loadCalls)
+	}
+	if engineCalls != 0 {
+		t.Fatalf("expected no engine construction, got %d", engineCalls)
+	}
+
+	payload := assertSingleJSONObjectLine(t, output)
+	summary, _ := payload["summary"].(map[string]any)
+	if summary["total"] != float64(2) || summary["failed"] != float64(2) {
+		t.Fatalf("unexpected summary: %v", summary)
+	}
+	results := payload["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("expected two results, got %d", len(results))
 	}
 }
 

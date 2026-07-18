@@ -48,6 +48,36 @@ func TestRestoreFailFastStopsOnFirstFailure(t *testing.T) {
 	}
 }
 
+func TestRestoreByIDAllowsOuterAliasAboveTrustedRoot(t *testing.T) {
+	fixture := newStoredPathRestoreFixture(t, "restore-by-id-outer-alias")
+	realParent := t.TempDir()
+	aliasLink := filepath.Join(t.TempDir(), "outer-link")
+	requireSymlink(t, realParent, aliasLink)
+
+	realRoot, err := os.MkdirTemp(realParent, "trusted-root-")
+	if err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	aliasRoot := filepath.Join(aliasLink, filepath.Base(realRoot))
+
+	res, err := fixture.engine.Restore(context.Background(), engine.RestoreRequest{
+		FileIDs:         []int64{fixture.stored.FileID},
+		DestinationRoot: aliasRoot,
+	})
+	if err != nil {
+		t.Fatalf("Restore by ID through outer alias: %v", err)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("expected one result item, got %d", len(res.Items))
+	}
+
+	wantPath := filepath.Join(aliasRoot, filepath.Base(fixture.stored.Path))
+	if res.Items[0].DestinationPath != wantPath {
+		t.Fatalf("destination path mismatch: got=%q want=%q", res.Items[0].DestinationPath, wantPath)
+	}
+	assertRestoredBytes(t, wantPath, fixture.payload)
+}
+
 func seedRestoreDryRunLogicalFile(t *testing.T, db *sql.DB) int64 {
 	t.Helper()
 
