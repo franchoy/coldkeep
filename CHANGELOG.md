@@ -31,8 +31,14 @@ project, do not start here; start with [README.md](README.md).
 - Corrected two PostgreSQL release-gate test fixtures in `43ae85f` without
   changing runtime, schema, migration, storage, repository, or backend
   behavior.
-- Completed the local pre-release gate and authorized one release pull request;
-  merge, tag, publication, and external CI evidence remain pending.
+- Corrected benchmark scratch-database cleanup in `eb38a58` after the first
+  documentation candidate exposed an operational release-gate failure. The
+  bounded benchmark-infrastructure change preserves workloads, thresholds,
+  baselines, schemas, migrations, and normal runtime behavior.
+- Completed a fresh local pre-release gate on the cleanup commit. The final
+  evidence-restoration commit requires its own clean exact-head gate before
+  one release pull request is authorized; merge, tag, publication, and
+  external CI evidence remain pending.
 
 ------------------------------------------------------------------------
 

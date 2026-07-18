@@ -85,6 +85,9 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   upload-artifact v7 migration and semantic-preservation evidence.
 - `v1.13.10-v1x-closure-summary-and-v2.0-handoff-freeze.md` freezes the final
   v1.x baseline, explicit v2.0 inputs, and v2/v3 scope boundary.
-- The canonical v1.13.10 release gate is passed awaiting publication, and one
-  pull request from `release/v1.13.10` to `main` is authorized. External PR,
-  merge, tag, and publication evidence remains unavailable.
+- The release gate records the initial benchmark blocker, its bounded
+  benchmark-infrastructure correction, and a fresh passed Profile A gate on
+  the cleanup commit. The evidence-restoration candidate remains ready for its
+  required clean exact-head gate before one pull request from
+  `release/v1.13.10` to `main` is authorized. External PR, merge, tag, and
+  publication evidence remains unavailable.
