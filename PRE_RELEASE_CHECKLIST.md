@@ -277,7 +277,7 @@ scripts/audit_ci_enforcement.sh --local-only
 
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.9"
+expected_version="1.13.10"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -305,7 +305,7 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.9 in both human and JSON modes.
+Expected: the built CLI reports exactly 1.13.10 in both human and JSON modes.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
