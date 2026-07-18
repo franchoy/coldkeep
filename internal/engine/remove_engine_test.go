@@ -212,9 +212,10 @@ func cloneSharedChunkPeer(t *testing.T, db *sql.DB, sourceFileID, sharedChunkID 
 		t.Fatalf("increment shared chunk live_ref_count: %v", err)
 	}
 	if _, err := db.Exec(
-		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`,
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, $3)`,
 		peerStoredPath,
 		peerFileID,
+		false,
 	); err != nil {
 		t.Fatalf("insert peer physical mapping: %v", err)
 	}
