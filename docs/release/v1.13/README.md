@@ -74,4 +74,6 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is active.
 - `v1.13.10-release-train-reconciliation.md` is the canonical disposition of
   retired historical v1.13.10–v1.13.13 allocations.
-- v1.13.10 Phase 2 is complete; Phase 3 is the next bounded work.
+- `v1.13.10-engine-contract-documentation-truthfulness.md` records the active
+  Engine contract boundary and its intentional limitations.
+- v1.13.10 Phase 3 is complete; Phase 4 is the next bounded work.

@@ -14,7 +14,8 @@ import (
 // accidentally activated future-only methods.
 //
 // This test is a guardrail: it must fail if a candidate method is
-// accidentally added to the interface without explicit phase approval.
+// accidentally added to the interface without explicit contract activation,
+// implementation, and guardrail update.
 func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
 
@@ -83,8 +84,8 @@ func TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership(t *te
 			if reqType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" || resType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" {
 				t.Fatalf("candidate-only contract %q moved outside engine package unexpectedly", tc.name)
 			}
-			if tc.laterOwnerRelease == "" {
-				t.Fatalf("candidate-only contract %q must record a later owner release", tc.name)
+			if tc.futureDisposition == "" {
+				t.Fatalf("candidate-only contract %q must record a future disposition", tc.name)
 			}
 		})
 	}
@@ -95,7 +96,7 @@ type candidateOnlyOperationCase struct {
 	requestType       any
 	resultType        any
 	forbiddenMethod   string
-	laterOwnerRelease string
+	futureDisposition string
 }
 
 func candidateOnlyOperationCases() []candidateOnlyOperationCase {
@@ -105,14 +106,14 @@ func candidateOnlyOperationCases() []candidateOnlyOperationCase {
 			requestType:       engine.RepairRequest{},
 			resultType:        engine.RepairResult{},
 			forbiddenMethod:   "Repair",
-			laterOwnerRelease: "v1.13.9 Phase 14+",
+			futureDisposition: "early v2.0 activation-design decision",
 		},
 		{
 			name:              "recover",
 			requestType:       engine.RecoverRequest{},
 			resultType:        engine.RecoverResult{},
 			forbiddenMethod:   "Recover",
-			laterOwnerRelease: "v1.13.9 Phase 14+",
+			futureDisposition: "early v2.0 activation-design decision",
 		},
 	}
 }
@@ -126,14 +127,14 @@ func activeEngineMethodSet() map[string]bool {
 	return methods
 }
 
-// TestCandidateContractsAreRendererNeutral verifies that mutating operation
-// candidate request/result types do not expose renderer-specific or
+// TestEngineContractTypesAreRendererNeutral verifies that engine contract
+// request/result types do not expose renderer-specific or
 // CLI-specific concepts (cobra, command, renderer, writer, stdout, stderr).
-func TestCandidateContractsAreRendererNeutral(t *testing.T) {
+func TestEngineContractTypesAreRendererNeutral(t *testing.T) {
 	forbidden := []string{
 		"cobra", "command", "renderer", "writer", "stdout", "stderr",
 	}
-	for _, tc := range allCandidateTypes() {
+	for _, tc := range allEngineContractTypes() {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := reflect.TypeOf(tc.val)
 			for i := 0; i < rt.NumField(); i++ {

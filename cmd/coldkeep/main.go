@@ -180,25 +180,26 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
-// Transitional but intentional CLI ownership in v1.13.9: doctor still owns
-// corrective recovery orchestration directly through lower-layer recovery and
-// verify hooks. Phase 14 decided this boundary, Phase 15 defined the honesty
-// proof scope, and Phase 16 proves the seam remains CLI-owned rather than an
-// active engine repair/recovery API.
+// Current intentional CLI/domain ownership: doctor owns corrective recovery
+// orchestration directly through lower-layer recovery and verify hooks. Phase
+// 14 made this boundary decision, and the Phase 16 honesty proof confirmed the
+// seam remains outside active engine ownership. Any future activation belongs
+// to an explicit early-v2.0 design; these direct hooks are intentional.
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 
-// Transitional but intentional CLI ownership in v1.13.9: repair remains
-// direct maintenance execution rather than active engine ownership. The
-// checked-in repair/recovery boundary decision keeps this seam CLI-owned until
-// an explicit future activation phase says otherwise.
+// Current intentional CLI/domain ownership: repair remains direct maintenance
+// execution rather than active engine ownership. Phase 14 made this boundary
+// decision, and the Phase 16 honesty proof confirmed it. Any future activation
+// belongs to an explicit early-v2.0 design; this direct hook is intentional.
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 
-// Transitional but intentional CLI ownership in v1.13.9: chunk live-ref-count
-// repair remains a direct maintenance phase hook, not an engine-routed
-// workflow. Any future boundary change must be explicit and behavior-preserving.
+// Current intentional CLI/domain ownership: chunk live-ref-count repair remains
+// a direct maintenance hook, not an engine-routed workflow. Phase 14 made this
+// boundary decision, and the Phase 16 honesty proof confirmed it. Any future
+// early-v2.0 activation design must be explicit and behavior-preserving.
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
@@ -379,9 +380,10 @@ var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.S
 	return items, nil
 }
 var getSnapshotPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.Snapshot, error) {
-	// Mixed route in v1.13.1: snapshot show still assembles metadata, file
-	// listing, and counts across multiple seams. Engine ownership is not yet a
-	// complete read workflow; v1.13.3 owns that cleanup.
+	// Engine.SnapshotShow is active, but the CLI workflow may still combine
+	// engine metadata with direct snapshot-domain listing, counting, or
+	// rendering. Active method presence does not prove complete read-side
+	// workflow ownership; early v2.0 owns the remaining ownership decision.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -394,13 +396,16 @@ var getSnapshotPhase = func(ctx context.Context, db *sql.DB, id string) (*snapsh
 	return &s, nil
 }
 
-// Mixed route in v1.13.1: snapshot show file listing remains direct snapshot
-// package work even when snapshot metadata comes from engine-backed lookup.
+// Engine.SnapshotShow is active, while snapshot show file listing remains
+// direct snapshot-domain work in this mixed CLI workflow. Active method
+// presence does not prove complete read-side workflow ownership; early v2.0
+// owns the remaining ownership decision.
 var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
 var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.SnapshotStats, error) {
-	// Mixed route in v1.13.1: snapshot show and snapshot stats still depend on
-	// direct snapshot stats helpers even when adjacent metadata comes from
-	// engine-backed seams. v1.13.3 owns full read-side cleanup.
+	// Engine.SnapshotStats is active, but snapshot show and stats workflows may
+	// still use direct snapshot-domain helpers alongside engine-backed seams.
+	// Active method presence does not prove complete read-side workflow
+	// ownership; early v2.0 owns the remaining ownership decision.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -430,10 +435,11 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
-	// Partial route in v1.13.1: snapshot diff adapts richer CLI/query semantics
-	// into the narrower engine request surface. Only one exact path and one
-	// prefix can cross this seam today; v1.13.3 owns the broader read-side
-	// contract cleanup.
+	// Engine.SnapshotDiff is active, but this CLI workflow adapts richer query
+	// semantics into the narrower engine request surface. Only one exact path
+	// and one prefix can cross this seam. Active method presence does not prove
+	// complete read-side workflow ownership; early v2.0 owns the remaining
+	// ownership decision.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -539,9 +545,10 @@ var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observa
 	return result.Raw, nil
 }
 var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
-	// Direct CLI bypass in v1.13.1: inspect production calls still use the
-	// observability service directly even though engine.Inspect exists. v1.13.3
-	// owns any future read-side routing cleanup.
+	// Engine.Inspect is active, while this production CLI path intentionally
+	// still calls the observability service directly. Active method presence does
+	// not prove complete read-side workflow ownership; early v2.0 owns any
+	// remaining ownership decision.
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return nil, err

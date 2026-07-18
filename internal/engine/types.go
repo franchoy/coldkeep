@@ -45,13 +45,9 @@ type VerifyRequest struct {
 	FileID int
 }
 
-// VerifyResult carries the result of the Verify operation.
-// Verify is pass-or-fail; a nil error from Engine.Verify means the repository
-// passed at the requested level. Non-nil errors preserve the underlying
-// verify.VerifyFailure chain.
-//
-// v1.13.1 intentionally keeps this result empty: it is a minimal success-only
-// placeholder, not a stable rich verification payload. Error taxonomy cleanup
-// belongs to v1.13.2, and deeper verification/invariant ownership work belongs
-// to v1.13.5.
+// VerifyResult is the active result type for Engine.Verify. It is intentionally
+// empty and success-only: a nil error means verification passed at the
+// requested level, while non-nil errors preserve the verification failure
+// chain. No rich verification payload is frozen; any future result expansion
+// requires an explicit contract change.
 type VerifyResult struct{}
