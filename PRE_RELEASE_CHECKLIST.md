@@ -275,6 +275,12 @@ go test -race -count=1 ./internal/chunk/benchmark -run 'TestFastCDCBetterThanV1_
 go build ./...
 scripts/audit_ci_enforcement.sh --local-only
 
+# The fixture suite is valid from any branch. The real repository check is
+# release-lifecycle aware: run it from the active release branch, a main
+# candidate, or an annotated tag checkout. Neither command performs network calls.
+python3 scripts/test_validate_release_state.py
+python3 scripts/validate_release_state.py --state auto
+
 go build -o coldkeep ./cmd/coldkeep
 
 expected_version="1.13.10"

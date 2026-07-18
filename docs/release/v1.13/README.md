@@ -78,4 +78,6 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   Engine contract boundary and its intentional limitations.
 - `v1.13.10-release-state-validator-contract.md` freezes the lifecycle,
   evidence, parsing, CKRS rule, output, fixture, and CI integration contract.
-- v1.13.10 Phase 4 is complete; Phase 5 is the next bounded work.
+- `v1.13.10-release-state-validator-implementation.md` records its
+  deterministic implementation, isolated tests, and blocking CI enforcement.
+- v1.13.10 Phase 5 is complete; Phase 6 is the next bounded work.

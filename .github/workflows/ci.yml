@@ -32,6 +32,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Test release-state validator
+        run: python3 scripts/test_validate_release_state.py
+
+      - name: Validate repository release state
+        if: ${{ startsWith(github.ref, 'refs/heads/release/') || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')) }}
+        run: python3 scripts/validate_release_state.py --state auto
 
       - name: Clean test storage
         run: bash scripts/clean_test_storage.sh
