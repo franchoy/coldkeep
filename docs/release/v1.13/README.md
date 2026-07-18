@@ -66,9 +66,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-- `v1.13.8` is released.
-- `v1.13.9` is active on `release/v1.13.9`.
-- `v1.13.9` Phase 0 is complete.
-- `v1.13.9` executable Phase 0 baseline is
-  `c3a5a537d9dfad197f35c258ab78a75526bad788`.
-- `v1.13.9` Phase 1 is authorized and next.
+- `v1.13.9` is complete, merged, tagged, published, and operationally closed.
+- Phase 24 is complete; PR #104 merged, `v1.13.9` was tagged and released,
+  and release/tag CI passed.
+- `release/v1.13.9` was deleted locally and remotely. No Phase 25 was
+  required, and no mandatory v1.x runtime remediation remained.
+- `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is active.
+- v1.13.10 Phase 0 is the current bounded documentation-closure work.

@@ -20,13 +20,33 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.9 - Unreleased — Snapshot Mutation Boundary: Create / Delete / Restore
+## v1.13.10 - Unreleased — v1.x Closure Integrity and CI Runtime Hygiene
 
-In progress.
+Planned scope is limited to release-state consistency, release-train
+reconciliation, truthful engine-contract documentation, release-state
+validator work, GitHub Actions runtime maintenance, and the v1.x/v2.0 handoff
+freeze. It does not introduce runtime features or change schemas, storage
+formats, repository formats, or backend defaults.
 
-Current work is limited to release-state closure for the published `v1.13.8`
-records, activation of the `v1.13.9` release frame, creation of the
-`v1.13.9` planning documents, and the source version change to `1.13.9`.
+------------------------------------------------------------------------
+
+## v1.13.9 - 2026-07-18 — Snapshot Mutation Boundary: Create / Delete / Restore
+
+- Closed the inherited correctness and CI baseline, including trusted restore
+  destinations, stored-path batch compatibility, and required cross-platform
+  enforcement.
+- Activated snapshot create, delete, and restore at the engine boundary and
+  routed the production CLI through those engine methods while preserving
+  established CLI contracts.
+- Stabilized snapshot mutation request/result ownership, completed routing and
+  boundary hardening, and recorded the repair/recovery boundary decision.
+- Hardened SQLite/PostgreSQL compatibility evidence; completed CLI thin-wrapper
+  and coupling review; and completed the v1.x/v2.0 handoff review.
+- Released with verdict `READY WITH NON-BLOCKING DEFERRALS`; no mandatory v1.x
+  runtime remediation remained.
+- Deferred active `StoreRequest` narrowing, read-side coupling decisions, and
+  repair/recovery activation design to early v2.0; deferred daemon, API, UI,
+  and broader productization/architectural work to later v2.x.
 
 ------------------------------------------------------------------------
 
