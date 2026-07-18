@@ -80,4 +80,6 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   evidence, parsing, CKRS rule, output, fixture, and CI integration contract.
 - `v1.13.10-release-state-validator-implementation.md` records its
   deterministic implementation, isolated tests, and blocking CI enforcement.
-- v1.13.10 Phase 5 is complete; Phase 6 is the next bounded work.
+- `v1.13.10-github-actions-node24-artifact-migration.md` records the five-step
+  upload-artifact v7 migration and semantic-preservation evidence.
+- v1.13.10 Phase 6 is complete; Phase 7 is the next bounded work.

@@ -130,6 +130,8 @@ check_local_workflow() {
   local validator_test_block=""
   local validator_real_block=""
   local upload_v5_count=0
+  local upload_v6_count=0
+  local upload_v7_count=0
 
   echo "[audit] checking local workflow invariants"
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
@@ -141,11 +143,13 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CI workflow_dispatch trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
   upload_v5_count=$(grep -c 'actions/upload-artifact@v5' "$WORKFLOW_FILE" || true)
-  if [[ "$upload_v5_count" -ne 5 ]] || grep -Fq 'actions/upload-artifact@v6' "$WORKFLOW_FILE"; then
-    echo "[audit] ERROR: Phase 5 must preserve the five upload-artifact@v5 uses" >&2
+  upload_v6_count=$(grep -c 'actions/upload-artifact@v6' "$WORKFLOW_FILE" || true)
+  upload_v7_count=$(grep -c 'actions/upload-artifact@v7' "$WORKFLOW_FILE" || true)
+  if [[ "$upload_v7_count" -ne 5 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
+    echo "[audit] ERROR: Phase 6 requires exactly five upload-artifact@v7 uses and zero v5/v6 uses" >&2
     check_status=1
   else
-    echo "[audit] ok: Phase 5 preserves five upload-artifact@v5 uses"
+    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly five times"
   fi
   quality_block="$(extract_job_block quality)"
   if [[ -z "$quality_block" ]]; then
@@ -229,7 +233,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ failure\(\) \}\}' 'smoke artifact upload is failure-only' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'uses:\s*actions/upload-artifact@v[45]' 'smoke artifact upload action' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'uses:\s*actions/upload-artifact@v7' 'smoke artifact upload action' || check_status=1
   require_pattern "$WORKFLOW_FILE" './tests/integration/\.\.\.' 'integration stress race run (integration only)' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_LONG_RUN:\s*1' 'long-run env gate in CI' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability\\|TestRandomizedLongRunLifecycleSoak\\|TestSnapshotRetentionChurnLongRun'" 'dedicated long-run test command' || check_status=1
