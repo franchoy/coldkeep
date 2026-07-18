@@ -20,13 +20,19 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.10 - Unreleased — v1.x Closure Integrity and CI Runtime Hygiene
+## v1.13.10 - 2026-07-18 — v1.x Closure Integrity and CI Runtime Hygiene
 
-Planned scope is limited to release-state consistency, release-train
-reconciliation, truthful engine-contract documentation, release-state
-validator work, GitHub Actions runtime maintenance, and the v1.x/v2.0 handoff
-freeze. It does not introduce runtime features or change schemas, storage
-formats, repository formats, or backend defaults.
+- Closed v1.13.9 post-release documentation truth, release-train
+  reconciliation, engine-contract ownership documentation, and the v1.x/v2.0
+  handoff freeze without adding runtime features.
+- Added the deterministic release-state validator, its isolated fixture suite,
+  blocking CI enforcement, and CI-audit coverage; maintained the Node 24
+  artifact runtime with `actions/upload-artifact@v7`.
+- Corrected two PostgreSQL release-gate test fixtures in `43ae85f` without
+  changing runtime, schema, migration, storage, repository, or backend
+  behavior.
+- Completed the local pre-release gate and authorized one release pull request;
+  merge, tag, publication, and external CI evidence remain pending.
 
 ------------------------------------------------------------------------
 

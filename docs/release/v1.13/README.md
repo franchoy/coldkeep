@@ -71,7 +71,8 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   and release/tag CI passed.
 - `release/v1.13.9` was deleted locally and remotely. No Phase 25 was
   required, and no mandatory v1.x runtime remediation remained.
-- `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is active.
+- `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is ready for
+  release after completing all eight phases and the local pre-release gate.
 - `v1.13.10-release-train-reconciliation.md` is the canonical disposition of
   retired historical v1.13.10–v1.13.13 allocations.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the active
@@ -84,4 +85,6 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   upload-artifact v7 migration and semantic-preservation evidence.
 - `v1.13.10-v1x-closure-summary-and-v2.0-handoff-freeze.md` freezes the final
   v1.x baseline, explicit v2.0 inputs, and v2/v3 scope boundary.
-- v1.13.10 Phase 7 is complete; Phase 8 is the next bounded work.
+- The canonical v1.13.10 release gate is passed awaiting publication, and one
+  pull request from `release/v1.13.10` to `main` is authorized. External PR,
+  merge, tag, and publication evidence remains unavailable.

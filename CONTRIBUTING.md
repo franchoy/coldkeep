@@ -152,7 +152,7 @@ export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 
 Missing PostgreSQL schema requires manual schema application or
 `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
-the required v15 schema at startup.
+the required v16 schema at startup.
 
 Build:
 
@@ -229,12 +229,12 @@ batch orchestration, or CLI contracts are expected to pass the full GitHub Actio
 - integration-correctness
 - integration-stress
 - smoke
+- integration-long-run
 - the aggregate `CI Required Gate`
 
-The repository also has a separate `integration-long-run` soak job for extended
-stability coverage. It is intentionally isolated from the required gate so it
-can be enabled, tuned, or temporarily disabled without changing the standard
-correctness/stress merge path.
+`integration-long-run` is a required-gate soak job for extended stability
+coverage. It remains separately named and tuned, but must stay green for the
+aggregate required gate.
 
 If adding storage logic, include at least one restore verification test.
 
@@ -283,7 +283,9 @@ Maintainers preparing a release should also run the
 ### New Contributor Path: Before You Open a PR
 
 Most CI failures for first-time contributors come from only running a subset of checks locally.
-Use the flow below to mirror the required GitHub CI jobs before opening a PR.
+Use the abbreviated flow below to mirror common GitHub CI jobs before opening a
+PR. It does not replace the canonical Profile A validation in
+[`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md).
 
 1. Start PostgreSQL and clean local test artifacts:
 
@@ -312,7 +314,7 @@ simulation loop sets it per run (`plain` then `aes-gcm`).
 
 Missing PostgreSQL schema requires manual schema application or
 `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
-the required v15 schema at startup.
+the required v16 schema at startup.
 
 1. Run the quality job equivalent (same intent as CI `quality`):
 
@@ -346,7 +348,7 @@ bash scripts/audit_ci_enforcement.sh --local-only
 go build -o coldkeep ./cmd/coldkeep
 ```
 
-1. Run full required CI matrix locally (all required gate jobs, both codecs):
+1. Run a representative required CI matrix locally (both codecs):
 
 ``` bash
 for codec in plain aes-gcm; do
@@ -377,7 +379,9 @@ for codec in plain aes-gcm; do
 done
 ```
 
-This is the closest local approximation of what must pass for `CI Required Gate`.
+For release-sensitive work, use the complete Profile A gate in
+[`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md); this abbreviated
+contributor loop is not a substitute for canonical CI parity.
 
 For the snapshot contract gate, run the focused integration suite after the matrix loop:
 

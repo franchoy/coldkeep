@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.10%20active%20%2F%20closure%20integrity-blue)
+![Status](https://img.shields.io/badge/status-v1.13.10%20ready%20for%20release%20%2F%20closure%20integrity-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -34,10 +34,11 @@ activation and production CLI routing, then completed the v1.x/v2.0 handoff
 review with no mandatory v1.x runtime remediation remaining. Snapshot mutation
 routing is no longer deferred.
 
-The active release is v1.13.10, a closure-integrity and CI-maintenance train;
-it is not a new runtime feature train. SQLite-first remains the future local
-product direction, PostgreSQL compatibility remains protected, and v2.0
-architectural implementation has not started.
+v1.13.10 completes the closure-integrity and CI-maintenance train and is ready
+for one release pull request. It is not a new runtime feature train.
+SQLite-first remains the future local-product direction, PostgreSQL
+compatibility remains protected, and v2.0 architectural implementation has not
+started. Merge, tag, publication, and external CI evidence are not yet claimed.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
