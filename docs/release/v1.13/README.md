@@ -82,4 +82,6 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   deterministic implementation, isolated tests, and blocking CI enforcement.
 - `v1.13.10-github-actions-node24-artifact-migration.md` records the five-step
   upload-artifact v7 migration and semantic-preservation evidence.
-- v1.13.10 Phase 6 is complete; Phase 7 is the next bounded work.
+- `v1.13.10-v1x-closure-summary-and-v2.0-handoff-freeze.md` freezes the final
+  v1.x baseline, explicit v2.0 inputs, and v2/v3 scope boundary.
+- v1.13.10 Phase 7 is complete; Phase 8 is the next bounded work.
