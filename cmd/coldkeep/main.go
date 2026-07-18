@@ -3658,12 +3658,12 @@ func validateBenchmarkDeterminism(preset corebenchmark.DatasetPreset, opts execu
 // digest for all files in the restored output directory. The same fixed seed
 // and file size are used on every call so that two independent invocations
 // should produce identical maps.
-func runRestoreDeterminismCheck(runLabel string) (map[string]string, error) {
+func runRestoreDeterminismCheck(runLabel string) (result map[string]string, err error) {
 	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = cleanup() }()
+	defer func() { err = finishBenchmarkDatabaseCleanup(err, cleanup) }()
 
 	workDir, err := os.MkdirTemp("", "coldkeep-restore-det-*")
 	if err != nil {
@@ -3785,14 +3785,14 @@ func runPresetInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int
 	return report, err
 }
 
-func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options, runLabel string) (corebenchmark.RunReport, benchmarkStateSnapshot, error) {
+func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options, runLabel string) (report corebenchmark.RunReport, state benchmarkStateSnapshot, err error) {
 	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
 	if err != nil {
 		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
 	}
-	defer func() { _ = cleanup() }()
+	defer func() { err = finishBenchmarkDatabaseCleanup(err, cleanup) }()
 
-	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
+	report, err = corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
 		ColdkeepExecutable: resolveSelfExecutable(),
 		Codec:              strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")),
 		Compression:        strings.TrimSpace(os.Getenv("COLDKEEP_COMPRESSION")),
@@ -3807,13 +3807,30 @@ func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPre
 		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
 	}
 
-	state, err := captureBenchmarkState(dbName)
+	state, err = captureBenchmarkState(dbName)
 	if err != nil {
 		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
 	}
 
 	return report, state, nil
 }
+
+// finishBenchmarkDatabaseCleanup preserves an operation failure while making a
+// cleanup failure observable to the caller. Both errors remain discoverable
+// through errors.Is when the operation and cleanup fail together.
+func finishBenchmarkDatabaseCleanup(operationErr error, cleanup func() error) error {
+	cleanupErr := cleanup()
+	if cleanupErr == nil {
+		return operationErr
+	}
+	cleanupErr = fmt.Errorf("cleanup benchmark database: %w", cleanupErr)
+	if operationErr == nil {
+		return cleanupErr
+	}
+	return errors.Join(operationErr, cleanupErr)
+}
+
+var dropTemporaryBenchmarkDatabase = dropTemporaryBenchmarkDatabaseByName
 
 func createTemporaryBenchmarkDatabase(label string) (string, func() error, error) {
 	host := strings.TrimSpace(os.Getenv("DB_HOST"))
@@ -3837,7 +3854,12 @@ func createTemporaryBenchmarkDatabase(label string) (string, func() error, error
 	if err != nil {
 		return "", nil, fmt.Errorf("open maintenance DB: %w", err)
 	}
-	defer func() { _ = adminDB.Close() }()
+	closeAdminOnReturn := true
+	defer func() {
+		if closeAdminOnReturn {
+			_ = adminDB.Close()
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -3848,17 +3870,38 @@ func createTemporaryBenchmarkDatabase(label string) (string, func() error, error
 		return "", nil, fmt.Errorf("create benchmark DB %q: %w", name, err)
 	}
 
+	closeAdminOnReturn = false
+	var cleanupOnce sync.Once
+	var cleanupErr error
 	cleanup := func() error {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		_, _ = adminDB.ExecContext(cleanupCtx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name)
-		if _, err := adminDB.ExecContext(cleanupCtx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", name)); err != nil {
-			return fmt.Errorf("drop benchmark DB %q: %w", name, err)
-		}
-		return nil
+		cleanupOnce.Do(func() {
+			cleanupErr = dropTemporaryBenchmarkDatabase(adminDB, name)
+			if err := adminDB.Close(); err != nil {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("close maintenance DB for benchmark %q: %w", name, err))
+			}
+		})
+		return cleanupErr
 	}
 
 	return name, cleanup, nil
+}
+
+func dropTemporaryBenchmarkDatabaseByName(adminDB *sql.DB, name string) error {
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cleanupCancel()
+
+	var errs []error
+	if _, err := adminDB.ExecContext(cleanupCtx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name); err != nil {
+		errs = append(errs, fmt.Errorf("terminate sessions for benchmark DB %q: %w", name, err))
+	}
+	if _, err := adminDB.ExecContext(cleanupCtx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteBenchmarkDatabaseIdentifier(name))); err != nil {
+		errs = append(errs, fmt.Errorf("drop benchmark DB %q: %w", name, err))
+	}
+	return errors.Join(errs...)
+}
+
+func quoteBenchmarkDatabaseIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
 func sanitizeDBNamePart(label string) string {
