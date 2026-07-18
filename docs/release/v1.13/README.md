@@ -72,4 +72,6 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - `release/v1.13.9` was deleted locally and remotely. No Phase 25 was
   required, and no mandatory v1.x runtime remediation remained.
 - `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is active.
-- v1.13.10 Phase 0 is the current bounded documentation-closure work.
+- `v1.13.10-release-train-reconciliation.md` is the canonical disposition of
+  retired historical v1.13.10–v1.13.13 allocations.
+- v1.13.10 Phase 2 is complete; Phase 3 is the next bounded work.
