@@ -7,219 +7,33 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
-from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Iterable, Optional
+
+from release_state_support import (
+    Document,
+    InternalError,
+    ValidationResult,
+    active_docs,
+    field_from_lines,
+    heading_versions,
+    normalized,
+    parse_phase_states,
+    parse_source_version,
+    phase_blocks,
+    read_document,
+    release_paths,
+    run_git,
+    safe_relative_artifact,
+    validate_root,
+    version_from_release,
+)
 
 
 VALIDATOR = "coldkeep-release-state"
 STATES = ("development", "pre-release", "merged-not-tagged", "released")
-SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
-CHANGELOG_HEADING = re.compile(r"^## (?:v|\[)(\d+\.\d+\.\d+)(?:\]|\b)(.*)$")
-PHASE_HEADING = re.compile(r"^## Phase (\d+)\b")
 METADATA = re.compile(r"^\*\*(Release|Status|Branch|Phase status):\*\*\s*(.*)$")
-
-
-@dataclass(frozen=True)
-class Violation:
-    rule: str
-    path: str
-    line: int
-    message: str
-
-
-@dataclass
-class ValidationResult:
-    state: Optional[str]
-    active_version: Optional[str]
-    violations: list[Violation] = field(default_factory=list)
-
-    def add(self, rule: str, path: str, line: int, message: str) -> None:
-        self.violations.append(Violation(rule, path, line, message))
-
-    def ordered(self) -> list[Violation]:
-        return sorted(self.violations, key=lambda item: (item.rule, item.path, item.line, item.message))
-
-
-class InternalError(Exception):
-    def __init__(self, kind: str, message: str) -> None:
-        super().__init__(message)
-        self.kind = kind
-        self.message = message
-
-
-@dataclass
-class Document:
-    root: Path
-    path: str
-    lines: list[str]
-
-    @classmethod
-    def load(cls, root: Path, path: str) -> "Document":
-        target = root / path
-        if not target.is_file():
-            raise FileNotFoundError(path)
-        return cls(root, path, target.read_text(encoding="utf-8").splitlines())
-
-    def section(self, heading: str) -> Optional[tuple[int, list[str]]]:
-        marker = None
-        level = 0
-        for index, line in enumerate(self.lines):
-            if line == heading:
-                marker = index
-                level = len(heading) - len(heading.lstrip("#"))
-                break
-        if marker is None:
-            return None
-        end = len(self.lines)
-        for index in range(marker + 1, len(self.lines)):
-            line = self.lines[index]
-            if line.startswith("#") and len(line) - len(line.lstrip("#")) <= level and line.startswith("#" * level + " "):
-                end = index
-                break
-        return marker + 1, self.lines[marker:end]
-
-    def metadata(self, name: str) -> list[tuple[int, str]]:
-        values = []
-        for index, line in enumerate(self.lines, 1):
-            match = METADATA.match(line)
-            if match and match.group(1) == name:
-                values.append((index, match.group(2).strip()))
-        return values
-
-
-def normalized(path: Path, root: Path) -> str:
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def run_git(root: Path, args: list[str], allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(root), *args],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except OSError as exc:
-        raise InternalError("git", f"unable to execute git: {exc}") from exc
-    if completed.returncode and not allow_failure:
-        detail = completed.stderr.strip() or completed.stdout.strip() or "git command failed"
-        raise InternalError("git", detail)
-    return completed
-
-
-def validate_root(value: Optional[str]) -> Path:
-    root = Path(value).resolve() if value else Path(__file__).resolve().parents[1]
-    if not root.is_dir() or not (root / ".git").exists() or not (root / "internal/version/version.go").is_file() or not (root / "CHANGELOG.md").is_file():
-        raise InternalError("repository-layout", "repository root is missing required anchors")
-    top = run_git(root, ["rev-parse", "--show-toplevel"]).stdout.strip()
-    if Path(top).resolve() != root:
-        raise InternalError("repository-layout", "repository root is not the Git worktree root")
-    return root
-
-
-def read_document(root: Path, path: str, result: ValidationResult, required: bool = True) -> Optional[Document]:
-    try:
-        return Document.load(root, path)
-    except FileNotFoundError:
-        if required:
-            result.add("CKRS019", path, 0, f"required release-state input {path} is missing or structurally ambiguous: file is missing")
-        return None
-    except UnicodeDecodeError as exc:
-        raise InternalError("parser", f"cannot decode {path}: {exc}") from exc
-
-
-def parse_source_version(root: Path, result: ValidationResult) -> Optional[str]:
-    path = "internal/version/version.go"
-    text = (root / path).read_text(encoding="utf-8")
-    parts: list[str] = []
-    for name in ("Major", "Minor", "Patch"):
-        matches = re.findall(rf"(?m)^\s*{name}\s*=\s*([^\s/]+)", text)
-        if len(matches) != 1 or not re.fullmatch(r"\d+", matches[0]) or int(matches[0]) < 0:
-            result.add("CKRS001", path, 0, "source version must contain exactly one integer Major, Minor, and Patch declaration")
-            return None
-        parts.append(matches[0])
-    version = ".".join(parts)
-    if not SEMVER.fullmatch(version):
-        result.add("CKRS001", path, 0, "source version must contain exactly one integer Major, Minor, and Patch declaration")
-        return None
-    return version
-
-
-def version_from_release(value: str) -> Optional[tuple[str, str]]:
-    match = re.search(r"`?(v\d+\.\d+\.\d+)\s+—\s+([^`]+?)`?$", value)
-    if not match:
-        return None
-    return match.group(1)[1:], match.group(2).strip()
-
-
-def heading_versions(doc: Document) -> list[tuple[int, str, str]]:
-    values = []
-    for index, line in enumerate(doc.lines, 1):
-        match = CHANGELOG_HEADING.match(line)
-        if match:
-            values.append((index, match.group(1), match.group(2).strip()))
-    return values
-
-
-def phase_blocks(doc: Document) -> list[tuple[int, int, list[str]]]:
-    starts = [(index, int(match.group(1))) for index, line in enumerate(doc.lines) if (match := PHASE_HEADING.match(line))]
-    blocks = []
-    for offset, (start, number) in enumerate(starts):
-        end = starts[offset + 1][0] if offset + 1 < len(starts) else len(doc.lines)
-        blocks.append((number, start, doc.lines[start:end]))
-    return blocks
-
-
-def field_from_lines(lines: Iterable[str], name: str) -> Optional[str]:
-    pattern = re.compile(rf"^\*\*{re.escape(name)}:\*\*\s*(.+)$")
-    values = [match.group(1).strip() for line in lines if (match := pattern.match(line))]
-    return values[0] if len(values) == 1 else None
-
-
-def parse_phase_states(doc: Document, field: str) -> tuple[list[int], dict[int, tuple[str, int]]]:
-    numbers: list[int] = []
-    states: dict[int, tuple[str, int]] = {}
-    for number, start, block in phase_blocks(doc):
-        numbers.append(number)
-        values = []
-        for relative, line in enumerate(block, 1):
-            match = re.match(rf"^\*\*{re.escape(field)}:\*\*\s*(.+)$", line)
-            if match:
-                values.append((match.group(1).strip(), start + relative + 1))
-        if len(values) == 1:
-            states[number] = values[0]
-    return numbers, states
-
-
-def release_paths(version: str) -> tuple[str, str]:
-    major, minor, _ = version.split(".")
-    directory = f"docs/release/v{major}.{minor}"
-    return directory, f"v{version}"
-
-
-def active_docs(root: Path, version: str, result: ValidationResult) -> dict[str, Optional[Document]]:
-    directory, stem = release_paths(version)
-    major, minor, _ = version.split(".")
-    return {
-        "version_test": read_document(root, "internal/version/version_test.go", result),
-        "checklist": read_document(root, "PRE_RELEASE_CHECKLIST.md", result),
-        "changelog": read_document(root, "CHANGELOG.md", result),
-        "readme": read_document(root, "README.md", result),
-        "release_readme": read_document(root, f"{directory}/README.md", result),
-        "scope": read_document(root, f"{directory}/{stem}-scope.md", result),
-        "phase_list": read_document(root, f"{directory}/{stem}-phase-list.md", result),
-        "phase_checklist": read_document(root, f"{directory}/{stem}-validation-checklist.md", result),
-        "train": read_document(root, f"{directory}/v{major}.{minor}.x-release-train.md", result),
-        "reconciliation": read_document(root, f"{directory}/{stem}-release-train-reconciliation.md", result),
-        "contract": read_document(root, f"{directory}/{stem}-release-state-validator-contract.md", result),
-    }
 
 
 def check_ckrs002(version: str, doc: Optional[Document], result: ValidationResult) -> None:
@@ -316,9 +130,10 @@ def check_ckrs007(version: str, docs: dict[str, Optional[Document]], state: Opti
     values = [tracker_metadata(docs[key], result) for key in ("scope", "phase_list", "phase_checklist")]
     if any(value is None for value in values):
         return
+    tracker_values = [value for value in values if value is not None]
     expected_status = "Active" if state == "development" else "Ready for release"
-    if any(value != values[0] for value in values) or values[0][0] != version or values[0][2] != expected_status:
-        rendered = "; ".join(f"{key}={value}" for key, value in zip(("scope", "phase_list", "phase_checklist"), values))
+    if any(value != tracker_values[0] for value in tracker_values) or tracker_values[0][0] != version or tracker_values[0][2] != expected_status:
+        rendered = "; ".join(f"{key}={value}" for key, value in zip(("scope", "phase_list", "phase_checklist"), tracker_values))
         result.add("CKRS007", "docs/release/v1.13", 0, f"active tracker identity/title/status disagree: {rendered}")
 
 
@@ -326,7 +141,6 @@ def check_ckrs008(version: str, title: Optional[str], doc: Optional[Document], r
     if not doc:
         return
     marker = "## Historical proposed continuation and final disposition"
-    section = doc.section(marker)
     marker_index = next((index for index, line in enumerate(doc.lines) if line == marker), None)
     if marker_index is None:
         result.add("CKRS019", doc.path, 0, f"required release-state input {doc.path} is missing or structurally ambiguous: historical boundary is missing")
@@ -444,19 +258,11 @@ def artifact_targets(root: Path, containing: str, lines: Iterable[str]) -> list[
         raw.extend(re.findall(r"\[[^\]]+\]\(([^)]+\.md(?:#[^)]+)?)\)", line))
         raw.extend(re.findall(r"`([^`\n]+\.md(?:#[^`\n]+)?)`", line))
     targets = []
-    root_names = {item.name for item in root.iterdir()}
     for value in raw:
         value = value.split("#", 1)[0]
         if not value or re.match(r"https?://", value) or value.startswith("/"):
             continue
-        first = PurePosixPath(value).parts[0] if PurePosixPath(value).parts else ""
-        candidate = root / value if first in root_names else (root / containing).parent / value
-        try:
-            relative = candidate.resolve().relative_to(root.resolve()).as_posix()
-        except ValueError:
-            targets.append("../" + value)
-            continue
-        targets.append(relative)
+        targets.append(safe_relative_artifact(root, containing, value))
     return sorted(set(targets))
 
 
@@ -560,7 +366,7 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
     check_ckrs003(version, docs["checklist"], result)
     previous_from_changelog = check_ckrs004(version, docs["changelog"], state, result)
     check_ckrs005(version, docs["readme"], state, result)
-    release_section = check_ckrs006(version, docs["release_readme"], state, result)
+    check_ckrs006(version, docs["release_readme"], state, result)
     scope = tracker_metadata(docs["scope"], result)
     check_ckrs007(version, docs, state, result)
     check_ckrs008(version, scope[1] if scope else None, docs["train"], result)

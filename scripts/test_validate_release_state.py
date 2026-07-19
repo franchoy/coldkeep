@@ -4,12 +4,18 @@
 from __future__ import annotations
 
 import json
+import io
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
+
+import release_state_support
+import validate_release_state
+from release_state_support import ProcessResult, resolved_executable, run_process
 
 
 SCRIPT = Path(__file__).with_name("validate_release_state.py").resolve()
@@ -23,7 +29,30 @@ def write(root: Path, relative: str, content: str) -> None:
 
 
 def git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    run_process(
+        [resolved_executable("git"), "-C", str(root), *args],
+        check=True,
+    )
+
+
+def run_validator(
+    root: Path,
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> ProcessResult:
+    """Run the validator through the reviewed isolated process boundary."""
+    actual_env = os.environ.copy()
+    for key in GITHUB_KEYS:
+        actual_env.pop(key, None)
+    if env:
+        actual_env.update(env)
+    return run_process(
+        [sys.executable, str(SCRIPT), "--repo-root", str(root), *args],
+        cwd=cwd or (root if root.is_dir() else SCRIPT.parent),
+        env=actual_env,
+        check=False,
+    )
 
 
 def replace(root: Path, relative: str, old: str, new: str) -> None:
@@ -36,6 +65,7 @@ def replace(root: Path, relative: str, old: str, new: str) -> None:
 
 class Fixture:
     def __init__(self) -> None:
+        """Create one minimal, isolated Git release-state repository."""
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "repo"
         self.root.mkdir()
@@ -84,13 +114,13 @@ class Fixture:
         if with_gate:
             write(self.root, "docs/release/v1.13/v1.13.10-release-gate.md", "# Gate\n\n**Status:** Passed — awaiting publication\n\n## Final verdict\n\nREADY\n")
 
-    def run(self, *args: str, env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-        actual_env = os.environ.copy()
-        for key in GITHUB_KEYS:
-            actual_env.pop(key, None)
-        if env:
-            actual_env.update(env)
-        return subprocess.run([sys.executable, str(SCRIPT), "--repo-root", str(self.root), *args], cwd=str(cwd or self.root), env=actual_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    def run(
+        self,
+        *args: str,
+        env: dict[str, str] | None = None,
+        cwd: Path | None = None,
+    ) -> ProcessResult:
+        return run_validator(self.root, *args, env=env, cwd=cwd)
 
 
 class ReleaseStateValidatorTests(unittest.TestCase):
@@ -99,12 +129,12 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.addCleanup(fixture.close)
         return fixture
 
-    def assert_rules(self, process: subprocess.CompletedProcess[str], expected: list[str], code: int = 1) -> None:
+    def assert_rules(self, process: ProcessResult, expected: list[str], code: int = 1) -> None:
         self.assertEqual(process.returncode, code, process.stdout + process.stderr)
         found = [line[1:8] for line in process.stdout.splitlines() if line.startswith("[CKRS")]
         self.assertEqual(found, expected, process.stdout)
 
-    def assert_ok(self, process: subprocess.CompletedProcess[str]) -> None:
+    def assert_ok(self, process: ProcessResult) -> None:
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         self.assertIn("[release-state] OK", process.stdout)
         self.assertEqual(process.stderr, "")
@@ -213,7 +243,7 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assert_rules(fixture.run("--state", "released"), ["CKRS017"])
 
     def test_27_wrong_annotated_target(self) -> None:
-        fixture = self.fixture(); fixture.complete_release(); fixture.commit(); old = subprocess.check_output(["git", "-C", str(fixture.root), "rev-parse", "HEAD"], text=True).strip(); git(fixture.root, "tag", "-a", "v1.13.10", old, "-m", "tag"); write(fixture.root, "x", "x\n"); fixture.commit()
+        fixture = self.fixture(); fixture.complete_release(); fixture.commit(); old = run_process([resolved_executable("git"), "-C", str(fixture.root), "rev-parse", "HEAD"], check=True).stdout.strip(); git(fixture.root, "tag", "-a", "v1.13.10", old, "-m", "tag"); write(fixture.root, "x", "x\n"); fixture.commit()
         self.assert_rules(fixture.run("--state", "released"), ["CKRS017"])
 
     def test_28_missing_pre_release_gate(self) -> None:
@@ -273,7 +303,43 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         fixture = self.fixture(); process = fixture.run("--json"); self.assertEqual(len(process.stdout.splitlines()), 1); self.assertEqual(process.stderr, "")
 
     def test_44_internal_error_stderr(self) -> None:
-        fixture = self.fixture(); process = subprocess.run([sys.executable, str(SCRIPT), "--repo-root", str(fixture.root / "missing")], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE); self.assertEqual(process.returncode, 2); self.assertEqual(process.stdout, ""); self.assertIn("[release-state] ERROR repository-layout", process.stderr)
+        fixture = self.fixture(); process = run_validator(fixture.root / "missing"); self.assertEqual(process.returncode, 2); self.assertEqual(process.stdout, ""); self.assertIn("[release-state] ERROR repository-layout", process.stderr)
+
+    def test_45_missing_git_executable(self) -> None:
+        fixture = self.fixture()
+        process = fixture.run(env={"PATH": ""})
+        self.assertEqual(process.returncode, 2)
+        self.assertIn("[release-state] ERROR git", process.stderr)
+
+    def test_46_git_executable_is_absolute(self) -> None:
+        self.assertTrue(Path(resolved_executable("git")).is_absolute())
+
+    def test_47_process_helper_disables_shell(self) -> None:
+        completed = ProcessResult(["command"], 0, "", "")
+        with mock.patch.object(
+            release_state_support.subprocess,
+            "run",
+            return_value=completed,
+        ) as process_run:
+            run_process(["command"], check=False)
+        self.assertIs(process_run.call_args.kwargs["shell"], False)
+
+    def test_48_unexpected_exception_is_deterministic(self) -> None:
+        first = io.StringIO()
+        second = io.StringIO()
+        with mock.patch.object(
+            validate_release_state,
+            "validate_root",
+            side_effect=RuntimeError("fixture failure"),
+        ):
+            with redirect_stderr(first):
+                first_status = validate_release_state.main([])
+            with redirect_stderr(second):
+                second_status = validate_release_state.main([])
+        self.assertEqual(first_status, 2)
+        self.assertEqual(second_status, 2)
+        self.assertEqual(first.getvalue(), second.getvalue())
+        self.assertIn("[release-state] ERROR internal: fixture failure", first.getvalue())
 
 
 if __name__ == "__main__":
