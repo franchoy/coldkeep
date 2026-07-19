@@ -20,6 +20,7 @@ ProcessResult = subprocess.CompletedProcess[str]
 
 @dataclass(frozen=True)
 class Violation:
+
     """One deterministic release-state contract violation."""
 
     rule: str
@@ -30,6 +31,7 @@ class Violation:
 
 @dataclass
 class ValidationResult:
+
     """Accumulated validator state and violations."""
 
     state: Optional[str]
@@ -47,6 +49,7 @@ class ValidationResult:
 
 
 class InternalError(Exception):
+
     """A deterministic validator failure outside the CKRS rule catalogue."""
 
     def __init__(self, kind: str, message: str) -> None:
@@ -58,6 +61,7 @@ class InternalError(Exception):
 
 @dataclass
 class Document:
+
     """A UTF-8 repository document with bounded Markdown helpers."""
 
     root: Path
@@ -104,6 +108,23 @@ def heading_closes_section(line: str, level: int) -> bool:
         return False
     candidate_level = len(line) - len(line.lstrip("#"))
     return candidate_level <= level and line.startswith("#" * candidate_level + " ")
+
+
+def metadata_named(
+    header: list[tuple[int, str, str]],
+    name: str,
+) -> list[tuple[int, str]]:
+    """Select one kind of bounded tracker metadata."""
+    return [(index, value) for index, field_name, value in header if field_name == name]
+
+
+def present_tracker_values(
+    values: list[Optional[tuple[str, str, str]]],
+) -> Optional[list[tuple[str, str, str]]]:
+    """Narrow optional tracker replicas after proving all are present."""
+    if any(value is None for value in values):
+        return None
+    return [value for value in values if value is not None]
 
 
 def resolved_executable(name: str) -> str:

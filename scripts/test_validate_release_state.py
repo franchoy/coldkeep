@@ -94,6 +94,10 @@ class Fixture:
         )
         write(self.root, "docs/release/v1.13/README.md", "# v1.13\n\n## Current Release State\n\nv1.13.10 is active. Phase 1 is next.\n")
         header = "# Fixture\n\n**Release:** `v1.13.10 — Fixture Release`\n**Status:** Active\n**Branch:** `release/v1.13.10`\n"
+        self.write_active_trackers(header)
+        self.write_prior_release()
+
+    def write_active_trackers(self, header: str) -> None:
         write(
             self.root,
             "docs/release/v1.13/v1.13.10-scope.md",
@@ -131,6 +135,8 @@ class Fixture:
         )
         write(self.root, "docs/release/v1.13/v1.13.10-release-train-reconciliation.md", "# Reconciliation\n")
         write(self.root, "docs/release/v1.13/v1.13.10-release-state-validator-contract.md", "# Contract\n")
+
+    def write_prior_release(self) -> None:
         prior_header = "# Prior\n\n**Release:** `v1.13.8 — Previous`\n**Status:** Released and operationally closed\n"
         write(self.root, "docs/release/v1.13/v1.13.8-scope.md", prior_header)
         write(

@@ -29,11 +29,13 @@ from release_state_support import (
     git_context_matches,
     github_context,
     main_context,
+    metadata_named,
     parse_phase_states,
     parse_source_version,
     phase_blocks,
     phases_complete,
     previous_closure_detail,
+    present_tracker_values,
     prior_is_active,
     readme_current_state_valid,
     run_git,
@@ -50,13 +52,6 @@ from release_state_support import (
 
 VALIDATOR = "coldkeep-release-state"
 STATES = ("development", "pre-release", "merged-not-tagged", "released")
-
-
-def normalized(path: Path, root: Path) -> str:
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
 
 
 def read_document(
@@ -102,13 +97,9 @@ def active_docs(
     directory, stem = release_paths(version)
     major, minor, _ = version.split(".")
     paths = {
-        "version_test": "internal/version/version_test.go",
-        "checklist": "PRE_RELEASE_CHECKLIST.md",
-        "changelog": "CHANGELOG.md",
-        "readme": "README.md",
-        "release_readme": f"{directory}/README.md",
-        "scope": f"{directory}/{stem}-scope.md",
-        "phase_list": f"{directory}/{stem}-phase-list.md",
+        "version_test": "internal/version/version_test.go", "checklist": "PRE_RELEASE_CHECKLIST.md",
+        "changelog": "CHANGELOG.md", "readme": "README.md", "release_readme": f"{directory}/README.md",
+        "scope": f"{directory}/{stem}-scope.md", "phase_list": f"{directory}/{stem}-phase-list.md",
         "phase_checklist": f"{directory}/{stem}-validation-checklist.md",
         "train": f"{directory}/v{major}.{minor}.x-release-train.md",
         "reconciliation": f"{directory}/{stem}-release-train-reconciliation.md",
@@ -198,8 +189,8 @@ def tracker_metadata(
     if not doc:
         return None
     header = tracker_header(doc)
-    release = [(index, value) for index, name, value in header if name == "Release"]
-    status = [(index, value) for index, name, value in header if name == "Status"]
+    release = metadata_named(header, "Release")
+    status = metadata_named(header, "Status")
     if len(release) != 1 or len(status) != 1:
         result.add("CKRS007", doc.path, 0, f"active tracker metadata is missing or ambiguous in {doc.path}")
         return None
@@ -217,10 +208,11 @@ def check_ckrs007(
     result: ValidationResult,
 ) -> None:
     values = [tracker_metadata(docs[key], result) for key in ("scope", "phase_list", "phase_checklist")]
-    if any(value is None for value in values):
+    tracker_values = present_tracker_values(values)
+    if tracker_values is None:
         return
-    tracker_values = [value for value in values if value is not None]
-    expected_status = "Active" if state == "development" else "Ready for release"
+    statuses = {"development": "Active"}
+    expected_status = statuses.get(state, "Ready for release")
     if tracker_values_disagree(tracker_values, version, expected_status):
         rendered = "; ".join(f"{key}={value}" for key, value in zip(("scope", "phase_list", "phase_checklist"), tracker_values))
         result.add("CKRS007", "docs/release/v1.13", 0, f"active tracker identity/title/status disagree: {rendered}")
