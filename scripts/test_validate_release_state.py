@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import json
 import io
+import json
 import os
 import sys
 import tempfile
@@ -85,25 +85,71 @@ class Fixture:
         write(self.root, "internal/version/version_test.go", "package version\nfunc TestStringReturnsSemverFromConstants() { _ = \"1.13.10\" }\n")
         write(self.root, "PRE_RELEASE_CHECKLIST.md", "# Pre-release Checklist\nexpected_version=\"1.13.10\"\n")
         write(self.root, "CHANGELOG.md", "# Changelog\n\n## v1.13.10 - Unreleased — Fixture\n\n## v1.13.8 - 2026-01-01 — Previous\n")
-        write(self.root, "README.md", "# Coldkeep\n![Status](https://img.shields.io/badge/status-v1.13.10%20active-blue)\n\n## Current release state\n\nv1.13.10 is active.\n")
+        write(
+            self.root,
+            "README.md",
+            "# Coldkeep\n"
+            "![Status](https://img.shields.io/badge/status-v1.13.10%20active-blue)\n\n"
+            "## Current release state\n\nv1.13.10 is active.\n",
+        )
         write(self.root, "docs/release/v1.13/README.md", "# v1.13\n\n## Current Release State\n\nv1.13.10 is active. Phase 1 is next.\n")
         header = "# Fixture\n\n**Release:** `v1.13.10 — Fixture Release`\n**Status:** Active\n**Branch:** `release/v1.13.10`\n"
-        write(self.root, "docs/release/v1.13/v1.13.10-scope.md", header + "\n## Phase summary\n\n- Phase 0: Complete\n- Phase 1: Next\n- Phase 2: Not started\n")
-        write(self.root, "docs/release/v1.13/v1.13.10-phase-list.md", header + "\n## Phase 0 — Setup\n\n**Status:** Complete\n\n[contract](v1.13.10-release-state-validator-contract.md)\n\n## Phase 1 — Work\n\n**Status:** Next\n\n## Phase 2 — Later\n\n**Status:** Not started\n")
-        write(self.root, "docs/release/v1.13/v1.13.10-validation-checklist.md", header + "\n## Phase 0\n\n**Phase status:** Complete\n\n## Phase 1\n\n**Phase status:** Next\n\n## Phase 2\n\n**Phase status:** Not started\n")
-        write(self.root, "docs/release/v1.13/v1.13.x-release-train.md", "# Train\n\n### `v1.13.8 — Previous`\n\n**Status:** Released and operationally closed\n\n### `v1.13.10 — Fixture Release`\n\n**Status:** Active\n\nCurrent definition.\n\n## Historical proposed continuation and final disposition\n\n### Historical proposed `v1.13.10 — Old Proposal`\n\nPending historical planning.\n")
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-scope.md",
+            header
+            + "\n## Phase summary\n\n- Phase 0: Complete\n- Phase 1: Next\n"
+            "- Phase 2: Not started\n",
+        )
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            header
+            + "\n## Phase 0 — Setup\n\n**Status:** Complete\n\n"
+            "[contract](v1.13.10-release-state-validator-contract.md)\n\n"
+            "## Phase 1 — Work\n\n**Status:** Next\n\n"
+            "## Phase 2 — Later\n\n**Status:** Not started\n",
+        )
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+            header
+            + "\n## Phase 0\n\n**Phase status:** Complete\n\n"
+            "## Phase 1\n\n**Phase status:** Next\n\n"
+            "## Phase 2\n\n**Phase status:** Not started\n",
+        )
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.x-release-train.md",
+            "# Train\n\n### `v1.13.8 — Previous`\n\n"
+            "**Status:** Released and operationally closed\n\n"
+            "### `v1.13.10 — Fixture Release`\n\n**Status:** Active\n\n"
+            "Current definition.\n\n"
+            "## Historical proposed continuation and final disposition\n\n"
+            "### Historical proposed `v1.13.10 — Old Proposal`\n\n"
+            "Pending historical planning.\n",
+        )
         write(self.root, "docs/release/v1.13/v1.13.10-release-train-reconciliation.md", "# Reconciliation\n")
         write(self.root, "docs/release/v1.13/v1.13.10-release-state-validator-contract.md", "# Contract\n")
         prior_header = "# Prior\n\n**Release:** `v1.13.8 — Previous`\n**Status:** Released and operationally closed\n"
         write(self.root, "docs/release/v1.13/v1.13.8-scope.md", prior_header)
-        write(self.root, "docs/release/v1.13/v1.13.8-release-gate.md", "# Gate\n\n**Release:** `v1.13.8 — Previous`\n**Status:** Passed and released\n\n## Final verdict\n\nREADY\n")
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.8-release-gate.md",
+            "# Gate\n\n**Release:** `v1.13.8 — Previous`\n"
+            "**Status:** Passed and released\n\n## Final verdict\n\nREADY\n",
+        )
 
     def commit(self) -> None:
         git(self.root, "add", ".")
         git(self.root, "commit", "-m", "mutate")
 
     def complete_release(self, with_gate: bool = True) -> None:
-        for relative in ("docs/release/v1.13/v1.13.10-scope.md", "docs/release/v1.13/v1.13.10-phase-list.md", "docs/release/v1.13/v1.13.10-validation-checklist.md"):
+        for relative in (
+            "docs/release/v1.13/v1.13.10-scope.md",
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+        ):
             replace(self.root, relative, "**Status:** Active", "**Status:** Ready for release")
         for relative in ("docs/release/v1.13/v1.13.10-phase-list.md", "docs/release/v1.13/v1.13.10-validation-checklist.md"):
             replace(self.root, relative, "Next", "Complete")
@@ -112,7 +158,12 @@ class Fixture:
         replace(self.root, "README.md", "v1.13.10 is active", "v1.13.10 is ready for release")
         replace(self.root, "docs/release/v1.13/README.md", "v1.13.10 is active", "v1.13.10 is ready for release")
         if with_gate:
-            write(self.root, "docs/release/v1.13/v1.13.10-release-gate.md", "# Gate\n\n**Status:** Passed — awaiting publication\n\n## Final verdict\n\nREADY\n")
+            write(
+                self.root,
+                "docs/release/v1.13/v1.13.10-release-gate.md",
+                "# Gate\n\n**Status:** Passed — awaiting publication\n\n"
+                "## Final verdict\n\nREADY\n",
+            )
 
     def run(
         self,
@@ -151,7 +202,9 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assert_rules(fixture.run(), ["CKRS001"])
 
     def test_04_duplicate_source_component(self) -> None:
-        fixture = self.fixture(); write(fixture.root, "internal/version/version.go", (fixture.root / "internal/version/version.go").read_text() + "Major = 1\n")
+        fixture = self.fixture()
+        path = fixture.root / "internal/version/version.go"
+        write(fixture.root, "internal/version/version.go", path.read_text() + "Major = 1\n")
         self.assert_rules(fixture.run(), ["CKRS001"])
 
     def test_05_version_test_mismatch(self) -> None:
@@ -167,11 +220,16 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assert_rules(fixture.run(), ["CKRS004"])
 
     def test_08_changelog_lifecycle_mismatch(self) -> None:
-        fixture = self.fixture(); fixture.complete_release(); self.assert_ok(fixture.run("--state", "pre-release")); replace(fixture.root, "CHANGELOG.md", "2026-01-02", "Unreleased")
+        fixture = self.fixture()
+        fixture.complete_release()
+        self.assert_ok(fixture.run("--state", "pre-release"))
+        replace(fixture.root, "CHANGELOG.md", "2026-01-02", "Unreleased")
         self.assert_rules(fixture.run("--state", "pre-release"), ["CKRS004"])
 
     def test_09_root_readme_mismatch(self) -> None:
-        fixture = self.fixture(); replace(fixture.root, "README.md", "v1.13.10 is active", "v1.13.9 is active"); replace(fixture.root, "README.md", "v1.13.10%20active", "v1.13.9%20active")
+        fixture = self.fixture()
+        replace(fixture.root, "README.md", "v1.13.10 is active", "v1.13.9 is active")
+        replace(fixture.root, "README.md", "v1.13.10%20active", "v1.13.9%20active")
         self.assert_rules(fixture.run(), ["CKRS005"])
 
     def test_10_release_readme_mismatch(self) -> None:
@@ -183,7 +241,13 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assert_rules(fixture.run(), ["CKRS007", "CKRS008"])
 
     def test_12_duplicate_train_definition(self) -> None:
-        fixture = self.fixture(); replace(fixture.root, "docs/release/v1.13/v1.13.x-release-train.md", "Current definition.", "Current definition.\n\n### `v1.13.10 — Fixture Release`\n")
+        fixture = self.fixture()
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.x-release-train.md",
+            "Current definition.",
+            "Current definition.\n\n### `v1.13.10 — Fixture Release`\n",
+        )
         self.assert_rules(fixture.run(), ["CKRS008"])
 
     def test_13_previous_unreleased(self) -> None:
@@ -203,11 +267,30 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assert_rules(fixture.run(), ["CKRS012"])
 
     def test_17_duplicate_phase(self) -> None:
-        fixture = self.fixture(); write(fixture.root, "docs/release/v1.13/v1.13.10-phase-list.md", (fixture.root / "docs/release/v1.13/v1.13.10-phase-list.md").read_text() + "\n## Phase 2 — Duplicate\n\n**Status:** Not started\n")
+        fixture = self.fixture()
+        relative = "docs/release/v1.13/v1.13.10-phase-list.md"
+        content = (fixture.root / relative).read_text()
+        write(
+            fixture.root,
+            relative,
+            content + "\n## Phase 2 — Duplicate\n\n**Status:** Not started\n",
+        )
         self.assert_rules(fixture.run(), ["CKRS012"])
 
     def test_18_phase_gap(self) -> None:
-        fixture = self.fixture(); replace(fixture.root, "docs/release/v1.13/v1.13.10-phase-list.md", "Phase 2 — Later", "Phase 3 — Later"); replace(fixture.root, "docs/release/v1.13/v1.13.10-validation-checklist.md", "Phase 2\n", "Phase 3\n")
+        fixture = self.fixture()
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "Phase 2 — Later",
+            "Phase 3 — Later",
+        )
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+            "Phase 2\n",
+            "Phase 3\n",
+        )
         self.assert_rules(fixture.run(), ["CKRS012"])
 
     def test_19_invalid_progression(self) -> None:
@@ -223,11 +306,23 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assert_rules(fixture.run(), ["CKRS014"])
 
     def test_22_missing_artifact(self) -> None:
-        fixture = self.fixture(); replace(fixture.root, "docs/release/v1.13/v1.13.10-phase-list.md", "v1.13.10-release-state-validator-contract.md", "missing.md")
+        fixture = self.fixture()
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "v1.13.10-release-state-validator-contract.md",
+            "missing.md",
+        )
         self.assert_rules(fixture.run(), ["CKRS015"])
 
     def test_23_escape_artifact(self) -> None:
-        fixture = self.fixture(); replace(fixture.root, "docs/release/v1.13/v1.13.10-phase-list.md", "v1.13.10-release-state-validator-contract.md", "../../escape.md")
+        fixture = self.fixture()
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "v1.13.10-release-state-validator-contract.md",
+            "../../escape.md",
+        )
         self.assert_rules(fixture.run(), ["CKRS015"])
 
     def test_24_wrong_branch(self) -> None:
@@ -243,7 +338,16 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assert_rules(fixture.run("--state", "released"), ["CKRS017"])
 
     def test_27_wrong_annotated_target(self) -> None:
-        fixture = self.fixture(); fixture.complete_release(); fixture.commit(); old = run_process([resolved_executable("git"), "-C", str(fixture.root), "rev-parse", "HEAD"], check=True).stdout.strip(); git(fixture.root, "tag", "-a", "v1.13.10", old, "-m", "tag"); write(fixture.root, "x", "x\n"); fixture.commit()
+        fixture = self.fixture()
+        fixture.complete_release()
+        fixture.commit()
+        old = run_process(
+            [resolved_executable("git"), "-C", str(fixture.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        git(fixture.root, "tag", "-a", "v1.13.10", old, "-m", "tag")
+        write(fixture.root, "x", "x\n")
+        fixture.commit()
         self.assert_rules(fixture.run("--state", "released"), ["CKRS017"])
 
     def test_28_missing_pre_release_gate(self) -> None:
@@ -259,7 +363,10 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assert_rules(fixture.run(), ["CKRS019"])
 
     def test_31_historical_branch_accepted(self) -> None:
-        fixture = self.fixture(); write(fixture.root, "docs/release/v1.13/v1.13.x-release-train.md", (fixture.root / "docs/release/v1.13/v1.13.x-release-train.md").read_text() + "release/v1.13.8 is active historically\n")
+        fixture = self.fixture()
+        relative = "docs/release/v1.13/v1.13.x-release-train.md"
+        content = (fixture.root / relative).read_text()
+        write(fixture.root, relative, content + "release/v1.13.8 is active historically\n")
         self.assert_ok(fixture.run())
 
     def test_32_historical_pending_accepted(self) -> None:
@@ -270,18 +377,38 @@ class ReleaseStateValidatorTests(unittest.TestCase):
 
     def test_34_pr_merge_ref_accepted(self) -> None:
         fixture = self.fixture(); git(fixture.root, "checkout", "--detach")
-        self.assert_ok(fixture.run(env={"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/7/merge", "GITHUB_REF_NAME": "7/merge", "GITHUB_HEAD_REF": "release/v1.13.10"}))
+        self.assert_ok(
+            fixture.run(
+                env={
+                    "GITHUB_EVENT_NAME": "pull_request",
+                    "GITHUB_REF": "refs/pull/7/merge",
+                    "GITHUB_REF_NAME": "7/merge",
+                    "GITHUB_HEAD_REF": "release/v1.13.10",
+                },
+            ),
+        )
 
     def test_35_pr_wrong_head_rejected(self) -> None:
         fixture = self.fixture(); git(fixture.root, "checkout", "--detach")
-        process = fixture.run(env={"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/7/merge", "GITHUB_HEAD_REF": "release/v1.13.9"}); self.assertEqual(process.returncode, 2)
+        process = fixture.run(
+            env={
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_REF": "refs/pull/7/merge",
+                "GITHUB_HEAD_REF": "release/v1.13.9",
+            },
+        )
+        self.assertEqual(process.returncode, 2)
 
     def test_36_main_merged_not_tagged(self) -> None:
         fixture = self.fixture(); fixture.complete_release(); fixture.commit(); git(fixture.root, "branch", "-M", "main")
         self.assert_ok(fixture.run())
 
     def test_37_detached_annotated_tag(self) -> None:
-        fixture = self.fixture(); fixture.complete_release(); fixture.commit(); git(fixture.root, "tag", "-a", "v1.13.10", "-m", "tag"); git(fixture.root, "checkout", "--detach")
+        fixture = self.fixture()
+        fixture.complete_release()
+        fixture.commit()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        git(fixture.root, "checkout", "--detach")
         self.assert_ok(fixture.run())
 
     def test_38_skipped_previous_patch(self) -> None:
@@ -294,16 +421,26 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         fixture = self.fixture(); self.assert_ok(fixture.run("--state", "development"))
 
     def test_41_human_deterministic(self) -> None:
-        fixture = self.fixture(); replace(fixture.root, "PRE_RELEASE_CHECKLIST.md", "1.13.10", "1.13.9"); first, second = fixture.run(), fixture.run(); self.assertEqual(first.stdout, second.stdout)
+        fixture = self.fixture()
+        replace(fixture.root, "PRE_RELEASE_CHECKLIST.md", "1.13.10", "1.13.9")
+        first, second = fixture.run(), fixture.run()
+        self.assertEqual(first.stdout, second.stdout)
 
     def test_42_json_deterministic(self) -> None:
-        fixture = self.fixture(); first, second = fixture.run("--json"), fixture.run("--json"); self.assertEqual(first.stdout, second.stdout); self.assertEqual(json.loads(first.stdout)["status"], "ok")
+        fixture = self.fixture()
+        first, second = fixture.run("--json"), fixture.run("--json")
+        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual(json.loads(first.stdout)["status"], "ok")
 
     def test_43_json_one_object_no_stderr(self) -> None:
         fixture = self.fixture(); process = fixture.run("--json"); self.assertEqual(len(process.stdout.splitlines()), 1); self.assertEqual(process.stderr, "")
 
     def test_44_internal_error_stderr(self) -> None:
-        fixture = self.fixture(); process = run_validator(fixture.root / "missing"); self.assertEqual(process.returncode, 2); self.assertEqual(process.stdout, ""); self.assertIn("[release-state] ERROR repository-layout", process.stderr)
+        fixture = self.fixture()
+        process = run_validator(fixture.root / "missing")
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(process.stdout, "")
+        self.assertIn("[release-state] ERROR repository-layout", process.stderr)
 
     def test_45_missing_git_executable(self) -> None:
         fixture = self.fixture()

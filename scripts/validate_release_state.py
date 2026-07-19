@@ -267,7 +267,13 @@ def check_ckrs010(root: Path, previous: Optional[str], result: ValidationResult)
         result.add("CKRS010", gate_path, 0, f"previous release {previous} lacks closed canonical release evidence: {detail}")
 
 
-def check_ckrs011(previous: Optional[str], readme: Optional[Document], release_readme: Optional[Document], train: Optional[Document], result: ValidationResult) -> None:
+def check_ckrs011(
+    previous: Optional[str],
+    readme: Optional[Document],
+    release_readme: Optional[Document],
+    train: Optional[Document],
+    result: ValidationResult,
+) -> None:
     if not previous:
         return
     targets: list[tuple[Optional[Document], Optional[tuple[int, list[str]]]]] = [
@@ -535,7 +541,14 @@ def emit(result: ValidationResult, as_json: bool) -> int:
 
 def emit_error(error: InternalError, as_json: bool) -> int:
     if as_json:
-        payload = {"status": "error", "validator": VALIDATOR, "state": None, "active_version": None, "violations": [], "error": {"kind": error.kind, "message": error.message}}
+        payload = {
+            "status": "error",
+            "validator": VALIDATOR,
+            "state": None,
+            "active_version": None,
+            "violations": [],
+            "error": {"kind": error.kind, "message": error.message},
+        }
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     else:
         print(f"[release-state] ERROR {error.kind}: {error.message}", file=sys.stderr)
