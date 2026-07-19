@@ -20,9 +20,6 @@ ProcessResult = subprocess.CompletedProcess[str]
 
 @dataclass(frozen=True)
 class Violation:
-
-    """One deterministic release-state contract violation."""
-
     rule: str
     path: str
     line: int
@@ -31,9 +28,6 @@ class Violation:
 
 @dataclass
 class ValidationResult:
-
-    """Accumulated validator state and violations."""
-
     state: Optional[str]
     active_version: Optional[str]
     violations: list[Violation] = field(default_factory=list)
@@ -49,9 +43,6 @@ class ValidationResult:
 
 
 class InternalError(Exception):
-
-    """A deterministic validator failure outside the CKRS rule catalogue."""
-
     def __init__(self, kind: str, message: str) -> None:
         """Create an internal error with a stable machine-readable kind."""
         super().__init__(message)
@@ -61,9 +52,6 @@ class InternalError(Exception):
 
 @dataclass
 class Document:
-
-    """A UTF-8 repository document with bounded Markdown helpers."""
-
     root: Path
     path: str
     lines: list[str]

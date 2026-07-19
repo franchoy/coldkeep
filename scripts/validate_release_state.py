@@ -211,8 +211,7 @@ def check_ckrs007(
     tracker_values = present_tracker_values(values)
     if tracker_values is None:
         return
-    statuses = {"development": "Active"}
-    expected_status = statuses.get(state, "Ready for release")
+    expected_status = "Active" if state == "development" else "Ready for release"
     if tracker_values_disagree(tracker_values, version, expected_status):
         rendered = "; ".join(f"{key}={value}" for key, value in zip(("scope", "phase_list", "phase_checklist"), tracker_values))
         result.add("CKRS007", "docs/release/v1.13", 0, f"active tracker identity/title/status disagree: {rendered}")
