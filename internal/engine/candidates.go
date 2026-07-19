@@ -2,13 +2,14 @@ package engine
 
 import "time"
 
-// Mutating and read-side operation candidates.
+// Engine operation contracts.
 //
-// This file holds both active engine contract shapes and future-only request
-// and result types that are not yet part of the active Engine interface.
-// Active restore/remove shapes below describe the implemented v1.13.8
-// boundaries. Snapshot mutation, repair, recovery, and other future-only
-// shapes remain candidate-only until explicitly activated.
+// This historically named file contains both active Engine request/result
+// contracts and the candidate-only corrective Repair and Recover contracts.
+// Active method ownership is defined by the Engine interface, not by this file
+// name. Some active read-side contracts remain provisional and may still
+// participate in mixed CLI/domain workflows; active does not imply a frozen
+// daemon/API-ready contract.
 //
 // Contract rules (see docs/release/v1.12/engine-baseline.md):
 //   - Requests represent operation intent, not CLI syntax.
@@ -19,7 +20,8 @@ import "time"
 //   - Contracts must be rich enough to preserve existing CLI behavior before
 //     any routing happens.
 //
-// Safety invariants that any future activating phase must preserve:
+// Safety invariants that active contracts and any future activation must
+// preserve:
 //   - GC must never delete reachable data.
 //   - Restore must never write outside the intended destination.
 //   - Recovery must not legitimize corrupt mappings.
@@ -79,17 +81,16 @@ type BatchSummary struct {
 // "no filter on this dimension". Size and time fields use pointers so that a
 // zero value can be distinguished from "unset".
 //
-// Support limitation in v1.13.1: only one exact Path and one Prefix can cross
-// the current engine seam, even though CLI parsing may accept richer repeated
-// path/prefix inputs before narrowing. Query-shape cleanup belongs to v1.13.3.
+// Only one exact Path and one Prefix can cross the current read-side seam,
+// even though CLI parsing may accept richer repeated path/prefix inputs before
+// narrowing. Broader read-side shape and ownership decisions are deferred to
+// early v2.0.
 type SnapshotQuery struct {
 	// Path matches an exact stored path.
-	// Support limitation in v1.13.1: only one exact path is preserved at the
-	// current engine seam.
+	// Only one exact path is preserved at the current engine seam.
 	Path string
 	// Prefix matches stored paths by prefix.
-	// Support limitation in v1.13.1: only one prefix is preserved at the
-	// current engine seam.
+	// Only one prefix is preserved at the current engine seam.
 	Prefix string
 	// Pattern is a glob-style match against stored paths.
 	Pattern string
@@ -111,13 +112,12 @@ type SnapshotQuery struct {
 // Store / store-folder
 // ---------------------------------------------------------------------------
 
-// StoreRequest is a candidate request for a future Store / store-folder
-// operation. Not part of the active v1.12 Engine interface.
+// StoreRequest is the active request contract for Engine.Store.
 //
-// Support limitation in v1.13.1: the active Engine.Store path owns only
-// single-file store. Recursive/folder semantics remain deferred, and
-// Engine.Store returns ErrNotImplemented when Recursive is true. Full folder
-// store cleanup remains outside engine scope in v2.x.
+// Active semantics are single-file only. Recursive/folder-store ownership
+// remains outside the active route, and Engine.Store returns ErrNotImplemented
+// when Recursive is true. Any future contract split or narrowing requires an
+// explicit v2.0 design.
 type StoreRequest struct {
 	// SourcePath is the file or folder to store.
 	SourcePath string
@@ -125,19 +125,18 @@ type StoreRequest struct {
 	// the repository default.
 	Codec string
 	// Recursive requests folder store semantics (store-folder).
-	// Support limitation in v1.13.1: active Engine.Store callers must leave
-	// this false; true returns ErrNotImplemented.
+	// Active Engine.Store callers must leave this false; true returns
+	// ErrNotImplemented.
 	Recursive bool
 	// Workers is the parallelism for folder store; zero means the default.
-	// Support limitation in v1.13.1: this is candidate-only until recursive
-	// folder store is activated outside the current engine route.
+	// This remains outside the active route until an explicit v2.0 contract
+	// decision addresses recursive folder-store ownership.
 	Workers int
 	// Tags carries optional caller-supplied tags.
 	Tags []string
 }
 
-// StoreResult is a candidate result for a future Store operation.
-// Not part of the active v1.12 Engine interface.
+// StoreResult is the active result contract for Engine.Store.
 type StoreResult struct {
 	// SourcePath echoes the stored source path.
 	SourcePath string
@@ -355,10 +354,11 @@ type RemoveStoredPathsResult struct {
 // Garbage collection
 // ---------------------------------------------------------------------------
 
-// GarbageCollectRequest is a candidate request for a future GarbageCollect
-// operation. Not part of the active v1.12 Engine interface.
+// GarbageCollectRequest is the active request contract for
+// Engine.GarbageCollect.
 //
-// Safety invariant: GC must never delete reachable data.
+// Safety invariant: GC must never delete reachable data. Dry-run is supported
+// on SQLite and PostgreSQL; live collection is supported on PostgreSQL only.
 type GarbageCollectRequest struct {
 	// DryRun simulates the collection without deleting.
 	DryRun bool
@@ -366,8 +366,8 @@ type GarbageCollectRequest struct {
 	Workers int
 }
 
-// GarbageCollectResult is a candidate result for a future GarbageCollect
-// operation. Not part of the active v1.12 Engine interface.
+// GarbageCollectResult is the active result contract for
+// Engine.GarbageCollect.
 //
 // The retention fields represent both packed and legacy roots so that GC plan
 // reporting can stay backend- and storage-format-neutral.
@@ -446,8 +446,8 @@ type SnapshotCreateResult struct {
 	ParentID      string
 }
 
-// SnapshotListRequest is a candidate request for a future SnapshotList
-// operation. Not part of the active v1.12 Engine interface.
+// SnapshotListRequest is the active but provisional request contract for
+// Engine.SnapshotList.
 type SnapshotListRequest struct {
 	// Type filters by snapshot type; empty means all.
 	Type SnapshotType
@@ -459,18 +459,18 @@ type SnapshotListRequest struct {
 	// Limit caps the number of results when greater than zero.
 	Limit int
 	// Tree requests lineage-tree ordering/visualization data.
-	// Support limitation in v1.13.1: this is a provisional view-shaping flag
-	// and does not prove engine ownership of lineage presentation semantics.
-	// Read-side cleanup belongs to v1.13.3 / v1.13.12.
+	// This provisional view-shaping flag does not prove engine ownership of
+	// lineage presentation semantics. Read-side ownership and shape decisions are
+	// deferred to early v2.0.
 	Tree bool
 }
 
-// SnapshotListResult is a candidate result for a future SnapshotList operation.
-// Not part of the active v1.12 Engine interface.
+// SnapshotListResult is the active but provisional result contract for
+// Engine.SnapshotList.
 //
-// Support limitation in v1.13.1: TreeMode and TreeLines are provisional
-// view-shaping fields. They do not prove engine ownership of lineage
-// presentation semantics; read-side cleanup belongs to v1.13.3 / v1.13.12.
+// TreeMode and TreeLines are provisional view-shaping fields. They do not
+// prove engine ownership of lineage presentation semantics; read-side
+// ownership and shape decisions are deferred to early v2.0.
 type SnapshotListResult struct {
 	Snapshots []SnapshotMeta
 	Count     int
@@ -489,21 +489,20 @@ type SnapshotFile struct {
 	ModTime       time.Time
 }
 
-// SnapshotShowRequest is a candidate request for a future SnapshotShow (files)
-// operation. Not part of the active v1.12 Engine interface.
+// SnapshotShowRequest is the active but provisional request contract for
+// Engine.SnapshotShow.
 type SnapshotShowRequest struct {
 	SnapshotID string
 	// Query filters which files are returned.
 	Query SnapshotQuery
 }
 
-// SnapshotShowResult is a candidate result for a future SnapshotShow operation.
-// Not part of the active v1.12 Engine interface.
+// SnapshotShowResult is the active but provisional result contract for
+// Engine.SnapshotShow.
 //
-// Support limitation in v1.13.1: this coherent result shape is still
-// provisional and does not prove fully unified engine ownership. Metadata,
-// listing, and counts still come from mixed seams; read-side cleanup belongs
-// to v1.13.3.
+// This coherent result shape does not prove fully unified engine ownership.
+// Metadata, listing, and counts may still come from mixed seams; read-side
+// ownership and shape decisions are deferred to early v2.0.
 type SnapshotShowResult struct {
 	Snapshot SnapshotMeta
 	Files    []SnapshotFile
@@ -513,18 +512,20 @@ type SnapshotShowResult struct {
 	TotalFileCount int
 }
 
-// SnapshotStatsRequest is a candidate request for a future SnapshotStats
-// operation. Not part of the active v1.12 Engine interface.
+// SnapshotStatsRequest is the active but provisional request contract for
+// Engine.SnapshotStats.
 //
 // SnapshotID is optional; empty means aggregate stats across all snapshots.
 type SnapshotStatsRequest struct {
 	SnapshotID string
 }
 
-// SnapshotStatsResult is a candidate result for a future SnapshotStats
-// operation. Not part of the active v1.12 Engine interface.
+// SnapshotStatsResult is the active but provisional result contract for
+// Engine.SnapshotStats.
 //
 // Reuse fields are populated only for a specific snapshot that has a parent.
+// Aggregate, metadata, and rendering workflows may still use mixed seams;
+// read-side ownership and shape decisions are deferred to early v2.0.
 type SnapshotStatsResult struct {
 	SnapshotCount     int
 	SnapshotFileCount int
@@ -572,23 +573,23 @@ type SnapshotDiffEntry struct {
 	Change     SnapshotDiffChange
 }
 
-// SnapshotDiffRequest is a candidate request for a future SnapshotDiff
-// operation. Not part of the active v1.12 Engine interface.
+// SnapshotDiffRequest is the active but provisional request contract for
+// Engine.SnapshotDiff.
 //
-// Support limitation in v1.13.1: summary fast-path behavior and query/filter
-// semantics remain provisional. The CLI can parse richer repeated path/prefix
-// inputs than the current engine seam preserves, and full read-side cleanup
-// belongs to v1.13.3.
+// Summary fast-path behavior and query/filter semantics remain provisional.
+// The CLI can parse richer repeated path/prefix inputs than the current engine
+// seam preserves; read-side ownership and shape decisions are deferred to
+// early v2.0.
 type SnapshotDiffRequest struct {
 	BaseID   string
 	TargetID string
 	// Summary requests the summary-only fast path (no per-entry list).
-	// Support limitation in v1.13.1: when this fast path is used, the current
-	// engine result reports summary-only semantics rather than a full entry list.
+	// When this fast path is used, the current engine result reports summary-only
+	// semantics rather than a full entry list.
 	Summary bool
 	// Filter narrows the diff to a single change class.
-	// Support limitation in v1.13.1: filter behavior is layered on top of a
-	// provisional diff seam and is not yet a frozen contract.
+	// Filter behavior is layered on top of a provisional diff seam and is not yet
+	// a frozen daemon/API-ready contract.
 	Filter SnapshotDiffFilter
 	// Query filters which entries are considered.
 	Query SnapshotQuery
@@ -601,13 +602,13 @@ type SnapshotDiffSummary struct {
 	Modified int
 }
 
-// SnapshotDiffResult is a candidate result for a future SnapshotDiff operation.
-// Not part of the active v1.12 Engine interface.
+// SnapshotDiffResult is the active but provisional result contract for
+// Engine.SnapshotDiff.
 //
-// Support limitation in v1.13.1: SummaryMode, MatchedEntryCount, and
-// TotalEntryCount are provisional read-side semantics. They reflect the
-// current summary-versus-detailed seam and filtering behavior, not a frozen
-// daemon/API-ready diff contract. Read-side cleanup belongs to v1.13.3.
+// SummaryMode, MatchedEntryCount, and TotalEntryCount are provisional
+// read-side semantics. They reflect the current summary-versus-detailed seam
+// and filtering behavior, not a frozen daemon/API-ready diff contract.
+// Read-side ownership and shape decisions are deferred to early v2.0.
 type SnapshotDiffResult struct {
 	BaseID   string
 	TargetID string
@@ -621,8 +622,8 @@ type SnapshotDiffResult struct {
 	TotalEntryCount   int
 }
 
-// SnapshotRestoreDestinationMode is the frozen v1.13.9 snapshot-restore
-// destination enum. It is candidate-only and distinct from the active
+// SnapshotRestoreDestinationMode is part of the frozen v1.13.9 active
+// Engine.SnapshotRestore contract. It remains intentionally distinct from the
 // stored-path RestoreDestinationMode contract.
 type SnapshotRestoreDestinationMode string
 
@@ -781,13 +782,13 @@ const (
 	RepairTargetChunkLiveRefCounts RepairTarget = "chunk-live-ref-counts"
 )
 
-// RepairRequest is a candidate request for a future Repair operation.
-// Not part of the active v1.12 Engine interface.
+// RepairRequest is a candidate-only request contract for a future Repair
+// operation. Repair is not a method on the current Engine interface.
 //
-// Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Repair and recover remain CLI/domain owned after
-// the v1.13.9 Phase 14 boundary decision and the Phase 16 honesty proof; any
-// future activation must be explicit.
+// Request/result presence must not be mistaken for active engine ownership.
+// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
+// ownership. Any early-v2.0 activation design must be explicit and
+// behavior-preserving.
 type RepairRequest struct {
 	// Target selects the single-target repair (when Batch is false).
 	Target RepairTarget
@@ -799,8 +800,8 @@ type RepairRequest struct {
 	FailFast bool
 	// InputPath is an optional batch-input source.
 	//
-	// Deferred: batch input parsing ownership is decided in Phase 9; it may
-	// remain a CLI-level concern rather than an engine input.
+	// Batch-input parsing remains caller-side under current ownership and would
+	// require an explicit decision if Repair were activated.
 	InputPath string
 	// DryRun simulates without mutating, where supported.
 	DryRun bool
@@ -821,8 +822,11 @@ type RepairTargetResult struct {
 	Error      string
 }
 
-// RepairResult is a candidate result for a future Repair operation.
-// Not part of the active v1.12 Engine interface.
+// RepairResult is a candidate-only result contract for a future Repair
+// operation. Repair is not a method on the current Engine interface.
+// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
+// ownership; any early-v2.0 activation design must be explicit and
+// behavior-preserving.
 type RepairResult struct {
 	// Targets holds per-target outcomes.
 	Targets []RepairTargetResult
@@ -835,13 +839,13 @@ type RepairResult struct {
 // Recovery
 // ---------------------------------------------------------------------------
 
-// RecoverRequest is a candidate request for a future corrective Recover
-// operation. Not part of the active v1.12 Engine interface.
+// RecoverRequest is a candidate-only request contract for a future corrective
+// Recover operation. Recover is not a method on the current Engine interface.
 //
-// Candidate-only in v1.13.1: request/result presence must not be mistaken for
-// active engine ownership. Repair and recover remain CLI/domain owned after
-// the v1.13.9 Phase 14 boundary decision and the Phase 16 honesty proof; any
-// future activation must be explicit.
+// Request/result presence must not be mistaken for active engine ownership.
+// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
+// ownership. Any early-v2.0 activation design must be explicit and
+// behavior-preserving.
 //
 // Safety invariant: Recovery must not legitimize corrupt mappings. Recovery is
 // a corrective integrity pass (abort dangling writes, clear stale sealing
@@ -852,8 +856,11 @@ type RecoverRequest struct {
 	DryRun bool
 }
 
-// RecoverResult is a candidate result for a future Recover operation.
-// Not part of the active v1.12 Engine interface.
+// RecoverResult is a candidate-only result contract for a future Recover
+// operation. Recover is not a method on the current Engine interface.
+// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
+// ownership; any early-v2.0 activation design must be explicit and
+// behavior-preserving.
 //
 // Fields mirror the existing recovery report so the corrective outcome can be
 // represented without CLI rendering.

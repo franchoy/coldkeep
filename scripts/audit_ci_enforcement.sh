@@ -125,6 +125,13 @@ check_local_workflow() {
   local check_status=0
   local adversarial_block=""
   local deterministic_g6_block=""
+  local quality_block=""
+  local quality_checkout_block=""
+  local validator_test_block=""
+  local validator_real_block=""
+  local upload_v5_count=0
+  local upload_v6_count=0
+  local upload_v7_count=0
 
   echo "[audit] checking local workflow invariants"
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
@@ -135,6 +142,41 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'merge_group:' 'merge queue trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CI workflow_dispatch trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
+  upload_v5_count=$(grep -c 'actions/upload-artifact@v5' "$WORKFLOW_FILE" || true)
+  upload_v6_count=$(grep -c 'actions/upload-artifact@v6' "$WORKFLOW_FILE" || true)
+  upload_v7_count=$(grep -c 'actions/upload-artifact@v7' "$WORKFLOW_FILE" || true)
+  if [[ "$upload_v7_count" -ne 5 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
+    echo "[audit] ERROR: Phase 6 requires exactly five upload-artifact@v7 uses and zero v5/v6 uses" >&2
+    check_status=1
+  else
+    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly five times"
+  fi
+  quality_block="$(extract_job_block quality)"
+  if [[ -z "$quality_block" ]]; then
+    echo "[audit] ERROR: missing quality job block content" >&2
+    check_status=1
+  else
+    quality_checkout_block="$(extract_step_block_from_content "$quality_block" "Checkout")"
+    validator_test_block="$(extract_step_block_from_content "$quality_block" "Test release-state validator")"
+    validator_real_block="$(extract_step_block_from_content "$quality_block" "Validate repository release state")"
+    require_content_pattern "$quality_checkout_block" '^        uses: actions/checkout@v6$' 'quality checkout uses actions/checkout@v6' || check_status=1
+    require_content_pattern "$quality_checkout_block" '^          fetch-depth: 0$' 'quality checkout fetch-depth is 0' || check_status=1
+    require_content_pattern "$validator_test_block" '^      - name: Test release-state validator$' 'release-state validator test step' || check_status=1
+    require_content_pattern "$validator_test_block" '^        run: python3 scripts/test_validate_release_state\.py$' 'release-state validator test command' || check_status=1
+    require_content_pattern "$validator_real_block" '^      - name: Validate repository release state$' 'release-state validator real-state step' || check_status=1
+    require_content_pattern "$validator_real_block" '^        run: python3 scripts/validate_release_state\.py --state auto$' 'release-state validator real-state command' || check_status=1
+    require_content_pattern "$validator_real_block" 'refs/heads/release/' 'release-state validator release branch condition' || check_status=1
+    require_content_pattern "$validator_real_block" 'refs/heads/main' 'release-state validator main condition' || check_status=1
+    require_content_pattern "$validator_real_block" 'refs/tags/v' 'release-state validator tag condition' || check_status=1
+    require_content_pattern "$validator_real_block" 'github\.event_name == .pull_request.' 'release-state validator pull-request condition' || check_status=1
+    require_content_pattern "$validator_real_block" 'github\.head_ref' 'release-state validator pull-request head condition' || check_status=1
+    if grep -Eq 'continue-on-error|\|\| true' <<<"$validator_test_block$validator_real_block"; then
+      echo "[audit] ERROR: release-state validator steps must remain blocking" >&2
+      check_status=1
+    else
+      echo "[audit] ok: release-state validator steps are blocking"
+    fi
+  fi
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^  cross-platform:$' 'cross-platform job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
@@ -191,7 +233,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ failure\(\) \}\}' 'smoke artifact upload is failure-only' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'uses:\s*actions/upload-artifact@v[45]' 'smoke artifact upload action' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'uses:\s*actions/upload-artifact@v7' 'smoke artifact upload action' || check_status=1
   require_pattern "$WORKFLOW_FILE" './tests/integration/\.\.\.' 'integration stress race run (integration only)' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_LONG_RUN:\s*1' 'long-run env gate in CI' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability\\|TestRandomizedLongRunLifecycleSoak\\|TestSnapshotRetentionChurnLongRun'" 'dedicated long-run test command' || check_status=1

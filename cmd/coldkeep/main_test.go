@@ -10450,6 +10450,139 @@ func TestCreateTemporaryBenchmarkDatabaseRejectsMalformedPort(t *testing.T) {
 	}
 }
 
+func TestTemporaryBenchmarkDatabaseCleanupSuccessRepeated(t *testing.T) {
+	adminDB := openBenchmarkTestAdminDB(t)
+	defer func() { _ = adminDB.Close() }()
+
+	for run := 0; run < 2; run++ {
+		name, cleanup, err := createTemporaryBenchmarkDatabase(fmt.Sprintf("cleanup-success-%d", run))
+		if err != nil {
+			t.Fatalf("create temporary benchmark database for run %d: %v", run, err)
+		}
+		t.Cleanup(func() { cleanupExactBenchmarkDatabaseForTest(t, name) })
+		if !benchmarkScratchDatabaseExists(t, adminDB, name) {
+			t.Fatalf("created benchmark database %q is missing", name)
+		}
+
+		if err := finishBenchmarkDatabaseCleanup(nil, cleanup); err != nil {
+			t.Fatalf("cleanup benchmark database for run %d: %v", run, err)
+		}
+		if err := cleanup(); err != nil {
+			t.Fatalf("idempotent cleanup benchmark database for run %d: %v", run, err)
+		}
+		assertBenchmarkScratchDatabaseAbsent(t, adminDB, name)
+	}
+}
+
+func TestTemporaryBenchmarkDatabaseCleanupAfterOperationFailure(t *testing.T) {
+	adminDB := openBenchmarkTestAdminDB(t)
+	defer func() { _ = adminDB.Close() }()
+
+	name, cleanup, err := createTemporaryBenchmarkDatabase("cleanup-operation-failure")
+	if err != nil {
+		t.Fatalf("create temporary benchmark database: %v", err)
+	}
+	t.Cleanup(func() { cleanupExactBenchmarkDatabaseForTest(t, name) })
+
+	operationErr := errors.New("benchmark operation failed")
+	got := finishBenchmarkDatabaseCleanup(operationErr, cleanup)
+	if !errors.Is(got, operationErr) {
+		t.Fatalf("expected operation error to remain discoverable, got %v", got)
+	}
+	assertBenchmarkScratchDatabaseAbsent(t, adminDB, name)
+}
+
+func TestTemporaryBenchmarkDatabaseCleanupErrorPropagation(t *testing.T) {
+	adminDB := openBenchmarkTestAdminDB(t)
+	defer func() { _ = adminDB.Close() }()
+
+	originalDrop := dropTemporaryBenchmarkDatabase
+	cleanupErr := errors.New("benchmark database cleanup failed")
+	dropTemporaryBenchmarkDatabase = func(_ *sql.DB, _ string) error { return cleanupErr }
+	t.Cleanup(func() { dropTemporaryBenchmarkDatabase = originalDrop })
+
+	t.Run("operation succeeds", func(t *testing.T) {
+		name, cleanup, err := createTemporaryBenchmarkDatabase("cleanup-error-success")
+		if err != nil {
+			t.Fatalf("create temporary benchmark database: %v", err)
+		}
+		t.Cleanup(func() { cleanupExactBenchmarkDatabaseForTest(t, name) })
+
+		got := finishBenchmarkDatabaseCleanup(nil, cleanup)
+		if !errors.Is(got, cleanupErr) {
+			t.Fatalf("expected cleanup error to be returned, got %v", got)
+		}
+		cleanupExactBenchmarkDatabaseForTest(t, name)
+		assertBenchmarkScratchDatabaseAbsent(t, adminDB, name)
+	})
+
+	t.Run("operation also fails", func(t *testing.T) {
+		name, cleanup, err := createTemporaryBenchmarkDatabase("cleanup-error-operation")
+		if err != nil {
+			t.Fatalf("create temporary benchmark database: %v", err)
+		}
+		t.Cleanup(func() { cleanupExactBenchmarkDatabaseForTest(t, name) })
+
+		operationErr := errors.New("benchmark operation failed")
+		got := finishBenchmarkDatabaseCleanup(operationErr, cleanup)
+		if !errors.Is(got, operationErr) || !errors.Is(got, cleanupErr) {
+			t.Fatalf("expected joined operation and cleanup errors, got %v", got)
+		}
+		cleanupExactBenchmarkDatabaseForTest(t, name)
+		assertBenchmarkScratchDatabaseAbsent(t, adminDB, name)
+	})
+}
+
+func openBenchmarkTestAdminDB(t *testing.T) *sql.DB {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB")) == "" {
+		t.Skip("set COLDKEEP_TEST_DB=1 with PostgreSQL DB_* variables to run benchmark database lifecycle tests")
+	}
+
+	maintenanceDB := strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB_MAINTENANCE"))
+	if maintenanceDB == "" {
+		maintenanceDB = "postgres"
+	}
+	connStr, err := dbpkg.BuildPostgresConnStringFromEnv(maintenanceDB)
+	if err != nil {
+		t.Fatalf("build benchmark test maintenance connection string: %v", err)
+	}
+	adminDB, err := sql.Open("postgres", connStr)
+	if err != nil {
+		t.Fatalf("open benchmark test maintenance database: %v", err)
+	}
+	if err := adminDB.Ping(); err != nil {
+		_ = adminDB.Close()
+		t.Fatalf("ping benchmark test maintenance database: %v", err)
+	}
+	return adminDB
+}
+
+func benchmarkScratchDatabaseExists(t *testing.T, adminDB *sql.DB, name string) bool {
+	t.Helper()
+	var exists bool
+	if err := adminDB.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); err != nil {
+		t.Fatalf("check benchmark scratch database %q: %v", name, err)
+	}
+	return exists
+}
+
+func assertBenchmarkScratchDatabaseAbsent(t *testing.T, adminDB *sql.DB, name string) {
+	t.Helper()
+	if benchmarkScratchDatabaseExists(t, adminDB, name) {
+		t.Fatalf("benchmark scratch database %q still exists", name)
+	}
+}
+
+func cleanupExactBenchmarkDatabaseForTest(t *testing.T, name string) {
+	t.Helper()
+	adminDB := openBenchmarkTestAdminDB(t)
+	defer func() { _ = adminDB.Close() }()
+	if err := dropTemporaryBenchmarkDatabaseByName(adminDB, name); err != nil {
+		t.Errorf("cleanup exact benchmark test database %q: %v", name, err)
+	}
+}
+
 func TestCaptureBenchmarkStateRejectsInvalidSSLMode(t *testing.T) {
 	t.Setenv("DB_HOST", "127.0.0.1")
 	t.Setenv("DB_PORT", "5432")

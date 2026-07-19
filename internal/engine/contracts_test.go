@@ -8,9 +8,9 @@ import (
 	"github.com/franchoy/coldkeep/internal/engine"
 )
 
-// allCandidateTypes returns one zero value per candidate request/result type so
-// that the contract tests can exercise every Phase 2 contract uniformly.
-func allCandidateTypes() []struct {
+// allEngineContractTypes returns one zero value per engine request/result type
+// so that the contract tests can exercise every contract uniformly.
+func allEngineContractTypes() []struct {
 	name string
 	val  any
 } {
@@ -18,13 +18,13 @@ func allCandidateTypes() []struct {
 		name string
 		val  any
 	}{},
-		coreCandidateTypes()...,
+		activeCoreContractTypes()...,
 	)
-	types = append(types, snapshotMutationCandidateTypes()...)
-	return append(types, correctiveCandidateTypes()...)
+	types = append(types, activeSnapshotMutationContractTypes()...)
+	return append(types, candidateCorrectiveContractTypes()...)
 }
 
-func coreCandidateTypes() []struct {
+func activeCoreContractTypes() []struct {
 	name string
 	val  any
 } {
@@ -65,7 +65,7 @@ func coreCandidateTypes() []struct {
 	}
 }
 
-func snapshotMutationCandidateTypes() []struct {
+func activeSnapshotMutationContractTypes() []struct {
 	name string
 	val  any
 } {
@@ -87,7 +87,7 @@ func snapshotMutationCandidateTypes() []struct {
 	}
 }
 
-func correctiveCandidateTypes() []struct {
+func candidateCorrectiveContractTypes() []struct {
 	name string
 	val  any
 } {
@@ -114,13 +114,13 @@ var allowedFieldPackages = map[string]bool{
 	"github.com/franchoy/coldkeep/internal/engine": true,
 }
 
-// TestCandidateContractFieldTypesAreNeutral walks every candidate contract type
+// TestEngineContractFieldTypesAreNeutral walks every engine contract type
 // and asserts that each field's underlying type comes only from an allowed
 // package. This is stronger than the name-based check in candidates_test.go: it
 // catches an io.Writer, *sql.DB, or *cobra.Command field even if the field were
 // named innocuously.
-func TestCandidateContractFieldTypesAreNeutral(t *testing.T) {
-	for _, tc := range allCandidateTypes() {
+func TestEngineContractFieldTypesAreNeutral(t *testing.T) {
+	for _, tc := range allEngineContractTypes() {
 		t.Run(tc.name, func(t *testing.T) {
 			assertNeutralStruct(t, reflect.TypeOf(tc.val), tc.name, map[reflect.Type]bool{})
 		})

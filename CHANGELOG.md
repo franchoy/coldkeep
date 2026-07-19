@@ -20,13 +20,49 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.9 - Unreleased — Snapshot Mutation Boundary: Create / Delete / Restore
+## v1.13.10 - 2026-07-18 — v1.x Closure Integrity and CI Runtime Hygiene
 
-In progress.
+- Closed v1.13.9 post-release documentation truth, release-train
+  reconciliation, engine-contract ownership documentation, and the v1.x/v2.0
+  handoff freeze without adding runtime features.
+- Added the deterministic release-state validator, its isolated fixture suite,
+  blocking CI enforcement, and CI-audit coverage; maintained the Node 24
+  artifact runtime with `actions/upload-artifact@v7`.
+- Corrected two PostgreSQL release-gate test fixtures in `43ae85f` without
+  changing runtime, schema, migration, storage, repository, or backend
+  behavior.
+- Corrected benchmark scratch-database cleanup in `eb38a58` after the first
+  documentation candidate exposed an operational release-gate failure. The
+  bounded benchmark-infrastructure change preserves workloads, thresholds,
+  baselines, schemas, migrations, and normal runtime behavior.
+- Corrected the subsequent package-interaction test isolation in `53b66dda`:
+  benchmark lifecycle tests now assert cleanup of their own exact scratch
+  database names rather than a cluster-global set. No production behavior
+  changed, and the complete local pre-release gate passed on that remediation
+  commit with no residual benchmark scratch databases.
+- The final evidence-restoration commit requires its own clean exact-head gate
+  before one release pull request is authorized; merge, tag, publication, and
+  external CI evidence remain pending.
 
-Current work is limited to release-state closure for the published `v1.13.8`
-records, activation of the `v1.13.9` release frame, creation of the
-`v1.13.9` planning documents, and the source version change to `1.13.9`.
+------------------------------------------------------------------------
+
+## v1.13.9 - 2026-07-18 — Snapshot Mutation Boundary: Create / Delete / Restore
+
+- Closed the inherited correctness and CI baseline, including trusted restore
+  destinations, stored-path batch compatibility, and required cross-platform
+  enforcement.
+- Activated snapshot create, delete, and restore at the engine boundary and
+  routed the production CLI through those engine methods while preserving
+  established CLI contracts.
+- Stabilized snapshot mutation request/result ownership, completed routing and
+  boundary hardening, and recorded the repair/recovery boundary decision.
+- Hardened SQLite/PostgreSQL compatibility evidence; completed CLI thin-wrapper
+  and coupling review; and completed the v1.x/v2.0 handoff review.
+- Released with verdict `READY WITH NON-BLOCKING DEFERRALS`; no mandatory v1.x
+  runtime remediation remained.
+- Deferred active `StoreRequest` narrowing, read-side coupling decisions, and
+  repair/recovery activation design to early v2.0; deferred daemon, API, UI,
+  and broader productization/architectural work to later v2.x.
 
 ------------------------------------------------------------------------
 

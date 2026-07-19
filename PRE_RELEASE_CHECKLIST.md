@@ -275,9 +275,15 @@ go test -race -count=1 ./internal/chunk/benchmark -run 'TestFastCDCBetterThanV1_
 go build ./...
 scripts/audit_ci_enforcement.sh --local-only
 
+# The fixture suite is valid from any branch. The real repository check is
+# release-lifecycle aware: run it from the active release branch, a main
+# candidate, or an annotated tag checkout. Neither command performs network calls.
+python3 scripts/test_validate_release_state.py
+python3 scripts/validate_release_state.py --state auto
+
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.9"
+expected_version="1.13.10"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -305,7 +311,7 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.9 in both human and JSON modes.
+Expected: the built CLI reports exactly 1.13.10 in both human and JSON modes.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and

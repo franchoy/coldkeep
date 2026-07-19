@@ -180,25 +180,26 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
-// Transitional but intentional CLI ownership in v1.13.9: doctor still owns
-// corrective recovery orchestration directly through lower-layer recovery and
-// verify hooks. Phase 14 decided this boundary, Phase 15 defined the honesty
-// proof scope, and Phase 16 proves the seam remains CLI-owned rather than an
-// active engine repair/recovery API.
+// Current intentional CLI/domain ownership: doctor owns corrective recovery
+// orchestration directly through lower-layer recovery and verify hooks. Phase
+// 14 made this boundary decision, and the Phase 16 honesty proof confirmed the
+// seam remains outside active engine ownership. Any future activation belongs
+// to an explicit early-v2.0 design; these direct hooks are intentional.
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 
-// Transitional but intentional CLI ownership in v1.13.9: repair remains
-// direct maintenance execution rather than active engine ownership. The
-// checked-in repair/recovery boundary decision keeps this seam CLI-owned until
-// an explicit future activation phase says otherwise.
+// Current intentional CLI/domain ownership: repair remains direct maintenance
+// execution rather than active engine ownership. Phase 14 made this boundary
+// decision, and the Phase 16 honesty proof confirmed it. Any future activation
+// belongs to an explicit early-v2.0 design; this direct hook is intentional.
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 
-// Transitional but intentional CLI ownership in v1.13.9: chunk live-ref-count
-// repair remains a direct maintenance phase hook, not an engine-routed
-// workflow. Any future boundary change must be explicit and behavior-preserving.
+// Current intentional CLI/domain ownership: chunk live-ref-count repair remains
+// a direct maintenance hook, not an engine-routed workflow. Phase 14 made this
+// boundary decision, and the Phase 16 honesty proof confirmed it. Any future
+// early-v2.0 activation design must be explicit and behavior-preserving.
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
@@ -379,9 +380,10 @@ var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.S
 	return items, nil
 }
 var getSnapshotPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.Snapshot, error) {
-	// Mixed route in v1.13.1: snapshot show still assembles metadata, file
-	// listing, and counts across multiple seams. Engine ownership is not yet a
-	// complete read workflow; v1.13.3 owns that cleanup.
+	// Engine.SnapshotShow is active, but the CLI workflow may still combine
+	// engine metadata with direct snapshot-domain listing, counting, or
+	// rendering. Active method presence does not prove complete read-side
+	// workflow ownership; early v2.0 owns the remaining ownership decision.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -394,13 +396,16 @@ var getSnapshotPhase = func(ctx context.Context, db *sql.DB, id string) (*snapsh
 	return &s, nil
 }
 
-// Mixed route in v1.13.1: snapshot show file listing remains direct snapshot
-// package work even when snapshot metadata comes from engine-backed lookup.
+// Engine.SnapshotShow is active, while snapshot show file listing remains
+// direct snapshot-domain work in this mixed CLI workflow. Active method
+// presence does not prove complete read-side workflow ownership; early v2.0
+// owns the remaining ownership decision.
 var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
 var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.SnapshotStats, error) {
-	// Mixed route in v1.13.1: snapshot show and snapshot stats still depend on
-	// direct snapshot stats helpers even when adjacent metadata comes from
-	// engine-backed seams. v1.13.3 owns full read-side cleanup.
+	// Engine.SnapshotStats is active, but snapshot show and stats workflows may
+	// still use direct snapshot-domain helpers alongside engine-backed seams.
+	// Active method presence does not prove complete read-side workflow
+	// ownership; early v2.0 owns the remaining ownership decision.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -430,10 +435,11 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
-	// Partial route in v1.13.1: snapshot diff adapts richer CLI/query semantics
-	// into the narrower engine request surface. Only one exact path and one
-	// prefix can cross this seam today; v1.13.3 owns the broader read-side
-	// contract cleanup.
+	// Engine.SnapshotDiff is active, but this CLI workflow adapts richer query
+	// semantics into the narrower engine request surface. Only one exact path
+	// and one prefix can cross this seam. Active method presence does not prove
+	// complete read-side workflow ownership; early v2.0 owns the remaining
+	// ownership decision.
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
 		return nil, err
@@ -539,9 +545,10 @@ var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observa
 	return result.Raw, nil
 }
 var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
-	// Direct CLI bypass in v1.13.1: inspect production calls still use the
-	// observability service directly even though engine.Inspect exists. v1.13.3
-	// owns any future read-side routing cleanup.
+	// Engine.Inspect is active, while this production CLI path intentionally
+	// still calls the observability service directly. Active method presence does
+	// not prove complete read-side workflow ownership; early v2.0 owns any
+	// remaining ownership decision.
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return nil, err
@@ -3651,12 +3658,12 @@ func validateBenchmarkDeterminism(preset corebenchmark.DatasetPreset, opts execu
 // digest for all files in the restored output directory. The same fixed seed
 // and file size are used on every call so that two independent invocations
 // should produce identical maps.
-func runRestoreDeterminismCheck(runLabel string) (map[string]string, error) {
+func runRestoreDeterminismCheck(runLabel string) (result map[string]string, err error) {
 	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = cleanup() }()
+	defer func() { err = finishBenchmarkDatabaseCleanup(err, cleanup) }()
 
 	workDir, err := os.MkdirTemp("", "coldkeep-restore-det-*")
 	if err != nil {
@@ -3778,14 +3785,14 @@ func runPresetInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int
 	return report, err
 }
 
-func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options, runLabel string) (corebenchmark.RunReport, benchmarkStateSnapshot, error) {
+func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options, runLabel string) (report corebenchmark.RunReport, state benchmarkStateSnapshot, err error) {
 	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
 	if err != nil {
 		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
 	}
-	defer func() { _ = cleanup() }()
+	defer func() { err = finishBenchmarkDatabaseCleanup(err, cleanup) }()
 
-	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
+	report, err = corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
 		ColdkeepExecutable: resolveSelfExecutable(),
 		Codec:              strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")),
 		Compression:        strings.TrimSpace(os.Getenv("COLDKEEP_COMPRESSION")),
@@ -3800,13 +3807,30 @@ func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPre
 		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
 	}
 
-	state, err := captureBenchmarkState(dbName)
+	state, err = captureBenchmarkState(dbName)
 	if err != nil {
 		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
 	}
 
 	return report, state, nil
 }
+
+// finishBenchmarkDatabaseCleanup preserves an operation failure while making a
+// cleanup failure observable to the caller. Both errors remain discoverable
+// through errors.Is when the operation and cleanup fail together.
+func finishBenchmarkDatabaseCleanup(operationErr error, cleanup func() error) error {
+	cleanupErr := cleanup()
+	if cleanupErr == nil {
+		return operationErr
+	}
+	cleanupErr = fmt.Errorf("cleanup benchmark database: %w", cleanupErr)
+	if operationErr == nil {
+		return cleanupErr
+	}
+	return errors.Join(operationErr, cleanupErr)
+}
+
+var dropTemporaryBenchmarkDatabase = dropTemporaryBenchmarkDatabaseByName
 
 func createTemporaryBenchmarkDatabase(label string) (string, func() error, error) {
 	host := strings.TrimSpace(os.Getenv("DB_HOST"))
@@ -3830,7 +3854,12 @@ func createTemporaryBenchmarkDatabase(label string) (string, func() error, error
 	if err != nil {
 		return "", nil, fmt.Errorf("open maintenance DB: %w", err)
 	}
-	defer func() { _ = adminDB.Close() }()
+	closeAdminOnReturn := true
+	defer func() {
+		if closeAdminOnReturn {
+			_ = adminDB.Close()
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -3841,17 +3870,38 @@ func createTemporaryBenchmarkDatabase(label string) (string, func() error, error
 		return "", nil, fmt.Errorf("create benchmark DB %q: %w", name, err)
 	}
 
+	closeAdminOnReturn = false
+	var cleanupOnce sync.Once
+	var cleanupErr error
 	cleanup := func() error {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		_, _ = adminDB.ExecContext(cleanupCtx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name)
-		if _, err := adminDB.ExecContext(cleanupCtx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", name)); err != nil {
-			return fmt.Errorf("drop benchmark DB %q: %w", name, err)
-		}
-		return nil
+		cleanupOnce.Do(func() {
+			cleanupErr = dropTemporaryBenchmarkDatabase(adminDB, name)
+			if err := adminDB.Close(); err != nil {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("close maintenance DB for benchmark %q: %w", name, err))
+			}
+		})
+		return cleanupErr
 	}
 
 	return name, cleanup, nil
+}
+
+func dropTemporaryBenchmarkDatabaseByName(adminDB *sql.DB, name string) error {
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cleanupCancel()
+
+	var errs []error
+	if _, err := adminDB.ExecContext(cleanupCtx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name); err != nil {
+		errs = append(errs, fmt.Errorf("terminate sessions for benchmark DB %q: %w", name, err))
+	}
+	if _, err := adminDB.ExecContext(cleanupCtx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteBenchmarkDatabaseIdentifier(name))); err != nil {
+		errs = append(errs, fmt.Errorf("drop benchmark DB %q: %w", name, err))
+	}
+	return errors.Join(errs...)
+}
+
+func quoteBenchmarkDatabaseIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
 func sanitizeDBNamePart(label string) string {

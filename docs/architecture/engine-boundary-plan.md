@@ -26,6 +26,9 @@ The active engine interface now owns these routed operations:
 - `SnapshotShow`
 - `SnapshotStats`
 - `SnapshotDiff`
+- `SnapshotCreate`
+- `SnapshotDelete`
+- `SnapshotRestore`
 - `GarbageCollect`
 - `Store`
 - `Restore`
@@ -33,7 +36,7 @@ The active engine interface now owns these routed operations:
 - `Remove`
 - `RemoveStoredPaths`
 
-The final `v1.13.8` restore/remove topology is:
+The active restore/remove topology established in v1.13.8 is:
 
 - by-ID restore:
   `CLI -> Engine.Restore -> storage restore by logical file ID`
@@ -76,19 +79,28 @@ restore/remove request still uses an addressing-mode enum.
   - temporary chunk pinning
 - GC alone owns physical payload reclamation.
 
+## Active snapshot-mutation boundary
+
+v1.13.9 activated snapshot mutation at the production CLI boundary:
+
+- `CLI -> Engine.SnapshotCreate -> snapshot domain`
+- `CLI -> Engine.SnapshotDelete -> snapshot domain`
+- `CLI -> Engine.SnapshotRestore -> restore/domain seams`
+
+Snapshot create is atomic, snapshot delete is metadata-only and preserves
+retained content, and snapshot restore retains explicit destination and
+selection semantics. This activation does not make every snapshot read-side
+workflow or the daemon/API contract complete.
+
 ## Current deferred boundaries
 
-The next unresolved mutating boundary is snapshot mutation:
-
-- `SnapshotCreate`
-- `SnapshotDelete`
-- `SnapshotRestore`
-
-These request/result shapes remain candidate-only until a later release
-activates them as real engine methods.
-
-Repair and recovery remain later boundary work after snapshot mutation rather
-than active engine-owned operations in `v1.13.8`.
+- `Engine.Store` remains single-file only; recursive/folder store is outside
+  the active route and returns `ErrNotImplemented` when requested there.
+- Snapshot list/show/stats/diff remain active but provisional mixed read-side
+  seams whose ownership and shape require an explicit v2.0 decision.
+- Repair and recovery remain CLI/domain-owned corrective work; their
+  request/result types are candidate-only and neither is an active Engine
+  method.
 
 ## Migration rule
 

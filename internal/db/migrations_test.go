@@ -1530,6 +1530,7 @@ func TestPostgresSchemaMigratesLegacyPreV6LogicalFileMapping(t *testing.T) {
 	assertPostgresPhysicalFileState(t, dbconn, logicalID, postgresPhysicalFileState{
 		refCount:     1,
 		physicalRows: 1,
+		migratedRows: 1,
 	})
 	assertPostgresSchemaVersion(t, dbconn, 16)
 

@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.9%20active%20%2F%20snapshot%20mutation%20boundary-blue)
+![Status](https://img.shields.io/badge/status-v1.13.10%20ready%20for%20release%20%2F%20closure%20integrity-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -29,22 +29,16 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 ## Current release state
 
-Coldkeep v1.13.8 completed the restore/remove contract split, routed
-stored-path restore and remove through dedicated engine boundaries, and
-preserved the existing CLI, JSON, exit-code, storage-format, and
-repository-format behavior.
+Coldkeep v1.13.9 completed snapshot create, delete, and restore engine
+activation and production CLI routing, then completed the v1.x/v2.0 handoff
+review with no mandatory v1.x runtime remediation remaining. Snapshot mutation
+routing is no longer deferred.
 
-The active release is v1.13.9:
-
-- close the published v1.13.8 release records truthfully;
-- activate the snapshot mutation boundary release frame;
-- create the v1.13.9 planning documents;
-- preserve restore/remove behavior exactly as released in v1.13.8;
-- defer snapshot create/delete/restore routing and runtime behavior changes to
-  later v1.13.9 phases.
-
-SQLite-first remains the future local product direction. v1.13.9 does not
-switch the normal runtime backend and does not add a normal SQLite local mode.
+v1.13.10 completes the closure-integrity and CI-maintenance train and is ready
+for one release pull request. It is not a new runtime feature train.
+SQLite-first remains the future local-product direction, PostgreSQL
+compatibility remains protected, and v2.0 architectural implementation has not
+started. Merge, tag, publication, and external CI evidence are not yet claimed.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.

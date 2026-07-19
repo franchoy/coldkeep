@@ -44,7 +44,7 @@ func enginePublicTypesForBackendCompatibility() []enginePublicTypeCase {
 		{"InspectRequest", engine.InspectRequest{}},
 		{"VerifyRequest", engine.VerifyRequest{}},
 	}
-	for _, tc := range allCandidateTypes() {
+	for _, tc := range allEngineContractTypes() {
 		types = append(types, enginePublicTypeCase{name: tc.name, val: tc.val})
 	}
 	return types
