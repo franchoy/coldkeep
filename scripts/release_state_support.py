@@ -106,14 +106,6 @@ def heading_closes_section(line: str, level: int) -> bool:
     return candidate_level <= level and line.startswith("#" * candidate_level + " ")
 
 
-def normalized(path: Path, root: Path) -> str:
-    """Normalize a path to a repository-relative POSIX representation."""
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
 def resolved_executable(name: str) -> str:
     """Resolve an executable to an absolute path or fail deterministically."""
     executable = shutil.which(name)
@@ -188,27 +180,6 @@ def validate_root(value: Optional[str]) -> Path:
     return root
 
 
-def read_document(
-    root: Path,
-    path: str,
-    result: ValidationResult,
-    required: bool = True,
-) -> Optional[Document]:
-    """Read a release document and map missing inputs to CKRS019."""
-    try:
-        return Document.load(root, path)
-    except FileNotFoundError:
-        if required:
-            message = (
-                f"required release-state input {path} is missing or structurally "
-                "ambiguous: file is missing"
-            )
-            result.add("CKRS019", path, 0, message)
-        return None
-    except UnicodeDecodeError as exc:
-        raise InternalError("parser", f"cannot decode {path}: {exc}") from exc
-
-
 def parse_source_version(root: Path, result: ValidationResult) -> Optional[str]:
     """Parse the three authoritative Go version constants."""
     path = "internal/version/version.go"
@@ -248,16 +219,6 @@ def version_from_release(value: str) -> Optional[tuple[str, str]]:
     if not match:
         return None
     return match.group(1)[1:], match.group(2).strip()
-
-
-def heading_versions(doc: Document) -> list[tuple[int, str, str]]:
-    """Return recognized changelog version headings."""
-    values = []
-    for index, line in enumerate(doc.lines, 1):
-        match = CHANGELOG_HEADING.match(line)
-        if match:
-            values.append((index, match.group(1), match.group(2).strip()))
-    return values
 
 
 def phase_blocks(doc: Document) -> list[tuple[int, int, list[str]]]:
@@ -307,56 +268,6 @@ def parse_phase_states(
     return numbers, states
 
 
-def release_paths(version: str) -> tuple[str, str]:
-    """Return the release directory and versioned filename stem."""
-    major, minor, _ = version.split(".")
-    directory = f"docs/release/v{major}.{minor}"
-    return directory, f"v{version}"
-
-
-def active_docs(
-    root: Path,
-    version: str,
-    result: ValidationResult,
-) -> dict[str, Optional[Document]]:
-    """Load the bounded current release-state document set."""
-    directory, stem = release_paths(version)
-    major, minor, _ = version.split(".")
-    return {
-        "version_test": read_document(root, "internal/version/version_test.go", result),
-        "checklist": read_document(root, "PRE_RELEASE_CHECKLIST.md", result),
-        "changelog": read_document(root, "CHANGELOG.md", result),
-        "readme": read_document(root, "README.md", result),
-        "release_readme": read_document(root, f"{directory}/README.md", result),
-        "scope": read_document(root, f"{directory}/{stem}-scope.md", result),
-        "phase_list": read_document(
-            root,
-            f"{directory}/{stem}-phase-list.md",
-            result,
-        ),
-        "phase_checklist": read_document(
-            root,
-            f"{directory}/{stem}-validation-checklist.md",
-            result,
-        ),
-        "train": read_document(
-            root,
-            f"{directory}/v{major}.{minor}.x-release-train.md",
-            result,
-        ),
-        "reconciliation": read_document(
-            root,
-            f"{directory}/{stem}-release-train-reconciliation.md",
-            result,
-        ),
-        "contract": read_document(
-            root,
-            f"{directory}/{stem}-release-state-validator-contract.md",
-            result,
-        ),
-    }
-
-
 def safe_relative_artifact(root: Path, containing: str, value: str) -> str:
     """Resolve one relative Markdown artifact without escaping the root."""
     first = PurePosixPath(value).parts[0] if PurePosixPath(value).parts else ""
@@ -366,3 +277,298 @@ def safe_relative_artifact(root: Path, containing: str, value: str) -> str:
         return candidate.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return "../" + value
+
+
+def artifact_targets(root: Path, containing: str, lines: Iterable[str]) -> list[str]:
+    """Return unique repository-relative Markdown artifacts from bounded lines."""
+    raw: list[str] = []
+    for line in lines:
+        raw.extend(re.findall(r"\[[^\]]+\]\(([^)]+\.md(?:#[^)]+)?)\)", line))
+        raw.extend(re.findall(r"`([^`\n]+\.md(?:#[^`\n]+)?)`", line))
+    values = (value.split("#", 1)[0] for value in raw)
+    relevant = (
+        value
+        for value in values
+        if value and not re.match(r"https?://", value) and not value.startswith("/")
+    )
+    return sorted(
+        {safe_relative_artifact(root, containing, value) for value in relevant},
+    )
+
+
+def changelog_entry_valid(
+    found: str,
+    suffix: str,
+    version: str,
+    state: Optional[str],
+) -> bool:
+    """Return whether the active changelog entry matches its lifecycle."""
+    expected_dated = state in ("pre-release", "merged-not-tagged", "released")
+    dated = bool(re.search(r"-\s+\d{4}-\d{2}-\d{2}\b", suffix))
+    if found != version:
+        return False
+    if expected_dated:
+        return dated and "Unreleased" not in suffix
+    return "Unreleased" in suffix
+
+
+def readme_current_state_valid(
+    version: str,
+    state: Optional[str],
+    badge: list[str],
+    content: str,
+) -> bool:
+    """Return whether README badge and current block agree on lifecycle."""
+    expected_word = "active" if state == "development" else "ready"
+    return (
+        len(badge) == 1
+        and f"v{version}" in badge[0]
+        and f"v{version}" in content
+        and expected_word in content.lower()
+    )
+
+
+def tracker_header(doc: Document) -> list[tuple[int, str, str]]:
+    """Return bounded metadata found before a tracker's first level-two heading."""
+    header = []
+    for index, line in enumerate(doc.lines, 1):
+        if line.startswith("## "):
+            break
+        match = METADATA.match(line)
+        if match:
+            header.append((index, match.group(1), match.group(2).strip()))
+    return header
+
+
+def tracker_values_disagree(
+    values: list[tuple[str, str, str]],
+    version: str,
+    expected_status: str,
+) -> bool:
+    """Return whether active tracker identity replicas disagree."""
+    return (
+        any(value != values[0] for value in values)
+        or values[0][0] != version
+        or values[0][2] != expected_status
+    )
+
+
+def gate_verdict_missing(verdict: Optional[tuple[int, list[str]]]) -> bool:
+    """Return whether a bounded verdict is empty or pending."""
+    if verdict is None:
+        return True
+    text = "\n".join(verdict[1])
+    return not text.strip() or re.search(r"\bpending\b", text, re.I) is not None
+
+
+def previous_closure_detail(
+    previous: str,
+    scope: Optional[Document],
+    gate: Optional[Document],
+    train: Optional[Document],
+) -> Optional[str]:
+    """Return the first missing prior-release closure fact."""
+    if scope is None:
+        return "scope is missing"
+    statuses = [value for _, value in scope.metadata("Status")]
+    if "Released and operationally closed" not in statuses:
+        return "scope is not operationally closed"
+    if gate is None:
+        return "canonical gate is missing"
+    if train is None:
+        return "release train is missing"
+    pattern = rf"^### `v{re.escape(previous)}\s+—.*?`$[\s\S]*?^\*\*Status:\*\* Released and operationally closed$"
+    if not re.search(pattern, "\n".join(train.lines), re.M):
+        return "release train is not operationally closed"
+    return gate_closure_detail(gate)
+
+
+def gate_closure_detail(gate: Document) -> Optional[str]:
+    """Return the first missing canonical gate closure fact."""
+    statuses = [value for _, value in gate.metadata("Status")]
+    if "Passed and released" not in statuses:
+        return "gate is not passed and released"
+    if gate_verdict_missing(gate.section("## Final verdict")):
+        return "gate verdict is missing or pending"
+    return None
+
+
+def current_train_section(train: Document) -> tuple[int, list[str]]:
+    """Return the nonhistorical release-train prefix."""
+    marker = "## Historical proposed continuation and final disposition"
+    end = next(
+        (index for index, line in enumerate(train.lines) if line == marker),
+        len(train.lines),
+    )
+    return 1, train.lines[:end]
+
+
+def prior_is_active(previous: str, branch: str, lines: list[str]) -> bool:
+    """Return whether bounded current text calls the prior release active."""
+    text = "\n".join(lines)
+    version_pattern = rf"v{re.escape(previous)}[^\n]*(?:is\s+)?active"
+    branch_pattern = rf"{re.escape(branch)}[^\n]*(?:is\s+)?active"
+    return bool(
+        re.search(version_pattern, text, re.I)
+        or re.search(branch_pattern, text, re.I)
+    )
+
+
+def topology_valid(phase_numbers: list[int], checklist_numbers: list[int]) -> bool:
+    """Return whether phase replicas share one contiguous ordered topology."""
+    expected = list(range(len(phase_numbers)))
+    return (
+        phase_numbers == expected
+        and len(set(phase_numbers)) == len(phase_numbers)
+        and checklist_numbers == expected
+        and len(set(checklist_numbers)) == len(checklist_numbers)
+    )
+
+
+def first_invalid_phase(
+    phase_numbers: list[int],
+    phase_states: dict[int, tuple[str, int]],
+) -> Optional[int]:
+    """Return the first phase whose aggregate status is unsupported."""
+    allowed = {"Complete", "Next", "Not started"}
+    return next(
+        (
+            number
+            for number in phase_numbers
+            if phase_states.get(number, ("missing", 0))[0] not in allowed
+        ),
+        None,
+    )
+
+
+def development_progression_valid(ordered: list[str]) -> bool:
+    """Return whether statuses follow Complete*, Next, Not-started*."""
+    next_positions = [index for index, value in enumerate(ordered) if value == "Next"]
+    if len(next_positions) != 1:
+        return False
+    position = next_positions[0]
+    return (
+        all(value == "Complete" for value in ordered[:position])
+        and all(value == "Not started" for value in ordered[position + 1 :])
+    )
+
+
+def github_context() -> dict[str, str]:
+    """Return only GitHub environment fields used by lifecycle inference."""
+    keys = ("GITHUB_EVENT_NAME", "GITHUB_REF", "GITHUB_REF_NAME", "GITHUB_HEAD_REF")
+    return {key: os.environ.get(key, "") for key in keys}
+
+
+def accepted_release_pr(version: str, env: dict[str, str]) -> bool:
+    """Return whether GitHub describes a PR merge ref for this release."""
+    return (
+        env["GITHUB_EVENT_NAME"] == "pull_request"
+        and env["GITHUB_REF"].startswith("refs/pull/")
+        and env["GITHUB_HEAD_REF"] == f"release/v{version}"
+    )
+
+
+def phases_complete(phase_doc: Optional[Document]) -> bool:
+    """Return whether all recognized phases are explicitly complete."""
+    if phase_doc is None:
+        return False
+    numbers, states = parse_phase_states(phase_doc, "Status")
+    return bool(numbers) and all(
+        states.get(number, (None, 0))[0] == "Complete" for number in numbers
+    )
+
+
+def git_context_matches(
+    version: str,
+    state: str,
+    branch: str,
+    env: dict[str, str],
+) -> bool:
+    """Return whether branch and GitHub refs are compatible with lifecycle."""
+    release_branch = f"release/v{version}"
+    if state in ("development", "pre-release"):
+        return branch == release_branch or accepted_release_pr(version, env)
+    if state == "merged-not-tagged":
+        return branch == "main" or env["GITHUB_REF"] == "refs/heads/main"
+    return state == "released"
+
+
+def passed_gate(gate: Document) -> bool:
+    """Return whether any unambiguous gate status is passed."""
+    return any("Passed" in value for _, value in gate.metadata("Status"))
+
+
+def train_marker_index(doc: Document) -> Optional[int]:
+    """Locate the exact release-train historical boundary."""
+    marker = "## Historical proposed continuation and final disposition"
+    return next(
+        (index for index, line in enumerate(doc.lines) if line == marker),
+        None,
+    )
+
+
+def current_train_definitions(
+    doc: Document,
+    version: str,
+    marker_index: int,
+) -> list[tuple[int, str]]:
+    """Return current definitions of one version above the boundary."""
+    pattern = re.compile(rf"^### `v{re.escape(version)}\s+—\s+(.+)`$")
+    return [
+        (index + 1, match.group(1))
+        for index, line in enumerate(doc.lines[:marker_index])
+        if (match := pattern.match(line))
+    ]
+
+
+def train_definition_invalid(
+    current: list[tuple[int, str]],
+    title: Optional[str],
+) -> bool:
+    """Return whether one current definition with the expected title is absent."""
+    return len(current) != 1 or bool(title and current and current[0][1] != title)
+
+
+def unlabeled_historical_definitions(
+    doc: Document,
+    version: str,
+    marker_index: int,
+) -> list[int]:
+    """Return lines of retired definitions missing their historical label."""
+    pattern = re.compile(rf"^### `v{re.escape(version)}\s+—")
+    return [
+        index
+        for index, line in enumerate(
+            doc.lines[marker_index + 1 :],
+            marker_index + 2,
+        )
+        if pattern.match(line) and "Historical proposed" not in line
+    ]
+
+
+def exact_tag_matches_head(
+    head: str,
+    exists: bool,
+    annotated: bool,
+    target: Optional[str],
+) -> bool:
+    """Return whether the exact annotated tag peels to HEAD."""
+    return exists and annotated and target == head
+
+
+def main_context(branch: str, env: dict[str, str]) -> bool:
+    """Return whether local or GitHub context identifies main."""
+    return branch == "main" or env["GITHUB_REF"] == "refs/heads/main"
+
+
+def development_gate_invalid(
+    gate: Optional[Document],
+    complete: bool,
+) -> bool:
+    """Return whether a development gate claims a premature pass."""
+    return gate is not None and passed_gate(gate) and not complete
+
+
+def candidate_gate_valid(gate: Document, complete: bool) -> bool:
+    """Return whether a release candidate has bounded passed evidence."""
+    return complete and passed_gate(gate) and gate.section("## Final verdict") is not None
