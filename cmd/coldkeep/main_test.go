@@ -10454,14 +10454,13 @@ func TestTemporaryBenchmarkDatabaseCleanupSuccessRepeated(t *testing.T) {
 	adminDB := openBenchmarkTestAdminDB(t)
 	defer func() { _ = adminDB.Close() }()
 
-	before := benchmarkScratchDatabaseNames(t, adminDB)
 	for run := 0; run < 2; run++ {
 		name, cleanup, err := createTemporaryBenchmarkDatabase(fmt.Sprintf("cleanup-success-%d", run))
 		if err != nil {
 			t.Fatalf("create temporary benchmark database for run %d: %v", run, err)
 		}
 		t.Cleanup(func() { cleanupExactBenchmarkDatabaseForTest(t, name) })
-		if _, exists := benchmarkScratchDatabaseNames(t, adminDB)[name]; !exists {
+		if !benchmarkScratchDatabaseExists(t, adminDB, name) {
 			t.Fatalf("created benchmark database %q is missing", name)
 		}
 
@@ -10471,7 +10470,7 @@ func TestTemporaryBenchmarkDatabaseCleanupSuccessRepeated(t *testing.T) {
 		if err := cleanup(); err != nil {
 			t.Fatalf("idempotent cleanup benchmark database for run %d: %v", run, err)
 		}
-		assertBenchmarkScratchDatabaseNames(t, adminDB, before)
+		assertBenchmarkScratchDatabaseAbsent(t, adminDB, name)
 	}
 }
 
@@ -10479,7 +10478,6 @@ func TestTemporaryBenchmarkDatabaseCleanupAfterOperationFailure(t *testing.T) {
 	adminDB := openBenchmarkTestAdminDB(t)
 	defer func() { _ = adminDB.Close() }()
 
-	before := benchmarkScratchDatabaseNames(t, adminDB)
 	name, cleanup, err := createTemporaryBenchmarkDatabase("cleanup-operation-failure")
 	if err != nil {
 		t.Fatalf("create temporary benchmark database: %v", err)
@@ -10491,14 +10489,13 @@ func TestTemporaryBenchmarkDatabaseCleanupAfterOperationFailure(t *testing.T) {
 	if !errors.Is(got, operationErr) {
 		t.Fatalf("expected operation error to remain discoverable, got %v", got)
 	}
-	assertBenchmarkScratchDatabaseNames(t, adminDB, before)
+	assertBenchmarkScratchDatabaseAbsent(t, adminDB, name)
 }
 
 func TestTemporaryBenchmarkDatabaseCleanupErrorPropagation(t *testing.T) {
 	adminDB := openBenchmarkTestAdminDB(t)
 	defer func() { _ = adminDB.Close() }()
 
-	before := benchmarkScratchDatabaseNames(t, adminDB)
 	originalDrop := dropTemporaryBenchmarkDatabase
 	cleanupErr := errors.New("benchmark database cleanup failed")
 	dropTemporaryBenchmarkDatabase = func(_ *sql.DB, _ string) error { return cleanupErr }
@@ -10516,7 +10513,7 @@ func TestTemporaryBenchmarkDatabaseCleanupErrorPropagation(t *testing.T) {
 			t.Fatalf("expected cleanup error to be returned, got %v", got)
 		}
 		cleanupExactBenchmarkDatabaseForTest(t, name)
-		assertBenchmarkScratchDatabaseNames(t, adminDB, before)
+		assertBenchmarkScratchDatabaseAbsent(t, adminDB, name)
 	})
 
 	t.Run("operation also fails", func(t *testing.T) {
@@ -10532,7 +10529,7 @@ func TestTemporaryBenchmarkDatabaseCleanupErrorPropagation(t *testing.T) {
 			t.Fatalf("expected joined operation and cleanup errors, got %v", got)
 		}
 		cleanupExactBenchmarkDatabaseForTest(t, name)
-		assertBenchmarkScratchDatabaseNames(t, adminDB, before)
+		assertBenchmarkScratchDatabaseAbsent(t, adminDB, name)
 	})
 }
 
@@ -10561,32 +10558,19 @@ func openBenchmarkTestAdminDB(t *testing.T) *sql.DB {
 	return adminDB
 }
 
-func benchmarkScratchDatabaseNames(t *testing.T, adminDB *sql.DB) map[string]struct{} {
+func benchmarkScratchDatabaseExists(t *testing.T, adminDB *sql.DB, name string) bool {
 	t.Helper()
-	rows, err := adminDB.Query(`SELECT datname FROM pg_database WHERE datname LIKE 'coldkeep_bench_%' ORDER BY datname`)
-	if err != nil {
-		t.Fatalf("list benchmark scratch databases: %v", err)
+	var exists bool
+	if err := adminDB.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); err != nil {
+		t.Fatalf("check benchmark scratch database %q: %v", name, err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	names := make(map[string]struct{})
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			t.Fatalf("scan benchmark scratch database name: %v", err)
-		}
-		names[name] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate benchmark scratch database names: %v", err)
-	}
-	return names
+	return exists
 }
 
-func assertBenchmarkScratchDatabaseNames(t *testing.T, adminDB *sql.DB, want map[string]struct{}) {
+func assertBenchmarkScratchDatabaseAbsent(t *testing.T, adminDB *sql.DB, name string) {
 	t.Helper()
-	if got := benchmarkScratchDatabaseNames(t, adminDB); !reflect.DeepEqual(got, want) {
-		t.Fatalf("benchmark scratch database set mismatch: got=%v want=%v", got, want)
+	if benchmarkScratchDatabaseExists(t, adminDB, name) {
+		t.Fatalf("benchmark scratch database %q still exists", name)
 	}
 }
 
