@@ -86,8 +86,9 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - `v1.13.10-v1x-closure-summary-and-v2.0-handoff-freeze.md` freezes the final
   v1.x baseline, explicit v2.0 inputs, and v2/v3 scope boundary.
 - The release gate records the initial benchmark blocker, its bounded
-  benchmark-infrastructure correction, and a fresh passed Profile A gate on
-  the cleanup commit. The evidence-restoration candidate remains ready for its
-  required clean exact-head gate before one pull request from
-  `release/v1.13.10` to `main` is authorized. External PR, merge, tag, and
-  publication evidence remains unavailable.
+  benchmark-infrastructure correction, the later package-interaction test
+  isolation correction, and a fresh passed Profile A gate on `53b66dda`.
+  The evidence-restoration candidate remains subject to its required clean
+  exact-head gate before one pull request from `release/v1.13.10` to `main` is
+  authorized. External PR, merge, tag, and publication evidence remains
+  unavailable.

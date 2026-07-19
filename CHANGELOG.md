@@ -35,9 +35,13 @@ project, do not start here; start with [README.md](README.md).
   documentation candidate exposed an operational release-gate failure. The
   bounded benchmark-infrastructure change preserves workloads, thresholds,
   baselines, schemas, migrations, and normal runtime behavior.
-- Completed a fresh local pre-release gate on the cleanup commit. The final
-  evidence-restoration commit requires its own clean exact-head gate before
-  one release pull request is authorized; merge, tag, publication, and
+- Corrected the subsequent package-interaction test isolation in `53b66dda`:
+  benchmark lifecycle tests now assert cleanup of their own exact scratch
+  database names rather than a cluster-global set. No production behavior
+  changed, and the complete local pre-release gate passed on that remediation
+  commit with no residual benchmark scratch databases.
+- The final evidence-restoration commit requires its own clean exact-head gate
+  before one release pull request is authorized; merge, tag, publication, and
   external CI evidence remain pending.
 
 ------------------------------------------------------------------------
