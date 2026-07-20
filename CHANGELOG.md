@@ -33,8 +33,8 @@ project, do not start here; start with [README.md](README.md).
   cleanup reporting, and catalog-suite adoption.
 - Implemented Phase 4 required-CI activation for PostgreSQL-gated internal
   package contracts in the plain correctness-matrix codec leg, with JSON
-  execution-proof enforcement. The first remote proof remains pending; no
-  backend parity claim has been added.
+  execution-proof enforcement; run `29729981751` confirmed it. Phase 5
+  schema/bootstrap/migration parity is Next; no backend parity claim is added.
 
 ------------------------------------------------------------------------
 
