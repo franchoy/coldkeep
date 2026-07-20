@@ -20,7 +20,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.10 - 2026-07-18 — v1.x Closure Integrity and CI Runtime Hygiene
+## v1.13.10 - 2026-07-19 — v1.x Closure Integrity and CI Runtime Hygiene
 
 - Closed v1.13.9 post-release documentation truth, release-train
   reconciliation, engine-contract ownership documentation, and the v1.x/v2.0
@@ -40,9 +40,16 @@ project, do not start here; start with [README.md](README.md).
   database names rather than a cluster-global set. No production behavior
   changed, and the complete local pre-release gate passed on that remediation
   commit with no residual benchmark scratch databases.
-- The final evidence-restoration commit requires its own clean exact-head gate
-  before one release pull request is authorized; merge, tag, publication, and
-  external CI evidence remain pending.
+- Public GitHub evidence confirms stable release `Coldkeep v1.13.10 — v1.x
+  Closure Integrity and CI Runtime Hygiene`, published July 19, 2026 at 18:01;
+  tag `v1.13.10` targets `423c57815580c39bee4f79ecd81570e9cfa9d273`, the merge
+  of PR #105. Tag-triggered CI run #502 succeeded with 19 jobs in 18m26s, and
+  `release/v1.13.10` is absent from the public branch list. The local GitHub
+  CLI token was invalid; public GitHub pages supplied the independent evidence.
+- This remains a valid released closure-integrity and CI-runtime-hygiene
+  baseline. Its prior final-v1.x conclusion was superseded after release by a
+  roadmap-to-code audit that found remaining must-before-v2 work; the active
+  release train is now v1.13.11–v1.13.13.
 
 ------------------------------------------------------------------------
 

@@ -71,10 +71,19 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   and release/tag CI passed.
 - `release/v1.13.9` was deleted locally and remotely. No Phase 25 was
   required, and no mandatory v1.x runtime remediation remained.
-- `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is ready for
-  release after completing all eight phases and the local pre-release gate.
-- `v1.13.10-release-train-reconciliation.md` is the canonical disposition of
-  retired historical v1.13.10–v1.13.13 allocations.
+- `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is released and
+  operationally closed. It is a valid closure-integrity and CI-runtime-hygiene
+  baseline, not the final v1.x release.
+- A post-release roadmap-to-code audit superseded the narrower final-v1.x
+  conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
+- `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
+  active release. Its canonical trackers are
+  `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
+  `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
+  `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.
+- The updated `v1.13.x-release-train.md` is the authoritative current plan;
+  final v1.x completion is gated by v1.13.11–v1.13.13. v2.0 implementation has
+  not started.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the active
   Engine contract boundary and its intentional limitations.
 - `v1.13.10-release-state-validator-contract.md` freezes the lifecycle,
@@ -85,10 +94,5 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   upload-artifact v7 migration and semantic-preservation evidence.
 - `v1.13.10-v1x-closure-summary-and-v2.0-handoff-freeze.md` freezes the final
   v1.x baseline, explicit v2.0 inputs, and v2/v3 scope boundary.
-- The release gate records the initial benchmark blocker, its bounded
-  benchmark-infrastructure correction, the later package-interaction test
-  isolation correction, and a fresh passed Profile A gate on `53b66dda`.
-  The evidence-restoration candidate remains subject to its required clean
-  exact-head gate before one pull request from `release/v1.13.10` to `main` is
-  authorized. External PR, merge, tag, and publication evidence remains
-  unavailable.
+- v1.13.10's public release, tag, merge, tag-CI, and deleted-release-branch
+  evidence is recorded separately from its historical pre-release gate narrative.
