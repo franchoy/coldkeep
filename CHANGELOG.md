@@ -26,7 +26,9 @@ project, do not start here; start with [README.md](README.md).
 
 - Recorded the Phase 0 post-release correction that restored the v1.13.11–v1.13.13 release train.
 - Activated executable and reusable release-checklist identity to `1.13.11`.
-- Identified the Phase 2 Backend Compatibility Claim Matrix as the next phase.
+- Completed the Phase 2 backend compatibility claim matrix, distinguishing
+  separate evidence from proven parity and recording required-CI gaps.
+- Identified the Phase 3 Reusable Dual-Backend Test Harness as the next phase.
 
 ------------------------------------------------------------------------
 

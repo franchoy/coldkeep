@@ -77,8 +77,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phase 0 and Phase 1 are complete; Phase 2 — Backend Compatibility Claim Matrix is Next. No implementation beyond release identity
-  has started. Its canonical trackers are
+  active release. Phases 0–2 are complete; Phase 3 — Reusable Dual-Backend Test Harness is Next. Phase 2 classified existing backend evidence only; no parity implementation has started. Its canonical trackers are
   `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
   `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
   `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.
