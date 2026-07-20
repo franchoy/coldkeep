@@ -28,7 +28,11 @@ project, do not start here; start with [README.md](README.md).
 - Activated executable and reusable release-checklist identity to `1.13.11`.
 - Completed the Phase 2 backend compatibility claim matrix, distinguishing
   separate evidence from proven parity and recording required-CI gaps.
-- Identified the Phase 3 Reusable Dual-Backend Test Harness as the next phase.
+- Completed the Phase 3 reusable dual-backend test harness with file-backed
+  SQLite fixtures, optional isolated PostgreSQL scratch databases, strict
+  cleanup reporting, and catalog-suite adoption.
+- Identified Phase 4 required-CI activation of PostgreSQL-gated package tests
+  as the next phase; no backend parity claim has been added.
 
 ------------------------------------------------------------------------
 

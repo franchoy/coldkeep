@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
 )
 
 // catalogFixtureBase is the fixed UTC base timestamp used by the fixture so that
@@ -131,13 +132,11 @@ type logicalFileFinder interface {
 // TestCatalogContractFindLogicalFileAcrossBackends verifies FindLogicalFile
 // returns identical results on every backend.
 func TestCatalogContractFindLogicalFileAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogFindLogicalFile(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		dbconn := backend.DB
+		seedCatalogFixture(t, dbconn)
+		assertCatalogFindLogicalFile(t, catalog.NewServiceFromSQL(dbconn))
+	})
 }
 
 func assertCatalogFindLogicalFile(t *testing.T, svc logicalFileFinder) {
@@ -213,13 +212,11 @@ func assertLogicalFileFields(t *testing.T, got *catalog.LogicalFileRef, want cat
 // metadata, and boolean handling (the most common SQLite/PostgreSQL trap) are
 // consistent across backends.
 func TestCatalogContractFindPhysicalFilesAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogFindPhysicalFiles(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		dbconn := backend.DB
+		seedCatalogFixture(t, dbconn)
+		assertCatalogFindPhysicalFiles(t, catalog.NewServiceFromSQL(dbconn))
+	})
 }
 
 type physicalFileFinder interface {
@@ -294,13 +291,11 @@ func assertIncompletePhysicalFile(t *testing.T, ref catalog.PhysicalFileRef) {
 // TestCatalogContractFindSnapshotAcrossBackends verifies snapshot identity,
 // nullable parent/label, and timestamp parsing are consistent across backends.
 func TestCatalogContractFindSnapshotAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogFindSnapshot(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		dbconn := backend.DB
+		seedCatalogFixture(t, dbconn)
+		assertCatalogFindSnapshot(t, catalog.NewServiceFromSQL(dbconn))
+	})
 }
 
 type snapshotFinder interface {
@@ -366,13 +361,11 @@ type snapshotLister interface {
 // first), type filtering, label substring matching (LIKE), Since/Until bounds,
 // and Limit are consistent across backends.
 func TestCatalogContractListSnapshotsAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogListSnapshots(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		dbconn := backend.DB
+		seedCatalogFixture(t, dbconn)
+		assertCatalogListSnapshots(t, catalog.NewServiceFromSQL(dbconn))
+	})
 }
 
 func assertCatalogListSnapshots(t *testing.T, svc snapshotLister) {
@@ -439,13 +432,11 @@ func requireSnapshots(
 // and snapshot reachability sets are populated from the correct sources and
 // remain separate. This boundary is safety-critical for Phase 6 GC planning.
 func TestCatalogContractLoadReachabilityRootsAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogReachabilityRoots(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		dbconn := backend.DB
+		seedCatalogFixture(t, dbconn)
+		assertCatalogReachabilityRoots(t, catalog.NewServiceFromSQL(dbconn))
+	})
 }
 
 type reachabilityRootLoader interface {
@@ -510,63 +501,61 @@ func assertCatalogReachabilitySize(t *testing.T, set map[int64]struct{}, want in
 // catalog method returns ErrNotImplemented consistently on both backends, making
 // the incomplete boundary explicit rather than silently succeeding.
 func TestCatalogContractDeferredMethodsAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			svc := catalog.NewServiceFromSQL(dbconn)
-			ctx := context.Background()
-			before := countCatalogLogicalFilesBackend(t, dbconn)
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		dbconn := backend.DB
+		svc := catalog.NewServiceFromSQL(dbconn)
+		ctx := context.Background()
+		before := countCatalogLogicalFilesBackend(t, dbconn)
 
-			graph, err := svc.LoadSnapshotGraph(ctx)
-			if !errors.Is(err, catalog.ErrNotImplemented) {
-				t.Errorf("LoadSnapshotGraph: want ErrNotImplemented via errors.Is, got %v", err)
-			}
-			if !catalog.IsDeferred(err) {
-				t.Errorf("LoadSnapshotGraph: want catalog.IsDeferred=true, got %v", err)
-			}
-			if graph != nil {
-				t.Errorf("LoadSnapshotGraph: want nil graph on deferred path, got %+v", graph)
-			}
+		graph, err := svc.LoadSnapshotGraph(ctx)
+		if !errors.Is(err, catalog.ErrNotImplemented) {
+			t.Errorf("LoadSnapshotGraph: want ErrNotImplemented via errors.Is, got %v", err)
+		}
+		if !catalog.IsDeferred(err) {
+			t.Errorf("LoadSnapshotGraph: want catalog.IsDeferred=true, got %v", err)
+		}
+		if graph != nil {
+			t.Errorf("LoadSnapshotGraph: want nil graph on deferred path, got %+v", graph)
+		}
 
-			placements, err := svc.LoadChunkPlacements(ctx, 1)
-			if !errors.Is(err, catalog.ErrNotImplemented) {
-				t.Errorf("LoadChunkPlacements: want ErrNotImplemented via errors.Is, got %v", err)
-			}
-			if !catalog.IsDeferred(err) {
-				t.Errorf("LoadChunkPlacements: want catalog.IsDeferred=true, got %v", err)
-			}
-			if placements != nil {
-				t.Errorf("LoadChunkPlacements: want nil placements on deferred path, got %+v", placements)
-			}
+		placements, err := svc.LoadChunkPlacements(ctx, 1)
+		if !errors.Is(err, catalog.ErrNotImplemented) {
+			t.Errorf("LoadChunkPlacements: want ErrNotImplemented via errors.Is, got %v", err)
+		}
+		if !catalog.IsDeferred(err) {
+			t.Errorf("LoadChunkPlacements: want catalog.IsDeferred=true, got %v", err)
+		}
+		if placements != nil {
+			t.Errorf("LoadChunkPlacements: want nil placements on deferred path, got %+v", placements)
+		}
 
-			restorePlan, err := svc.LoadRestorePlanMetadata(ctx, catalog.RestorePlanInput{FileID: 1})
-			if !errors.Is(err, catalog.ErrNotImplemented) {
-				t.Errorf("LoadRestorePlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
-			}
-			if !catalog.IsDeferred(err) {
-				t.Errorf("LoadRestorePlanMetadata: want catalog.IsDeferred=true, got %v", err)
-			}
-			if restorePlan != nil {
-				t.Errorf("LoadRestorePlanMetadata: want nil metadata on deferred path, got %+v", restorePlan)
-			}
+		restorePlan, err := svc.LoadRestorePlanMetadata(ctx, catalog.RestorePlanInput{FileID: 1})
+		if !errors.Is(err, catalog.ErrNotImplemented) {
+			t.Errorf("LoadRestorePlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
+		}
+		if !catalog.IsDeferred(err) {
+			t.Errorf("LoadRestorePlanMetadata: want catalog.IsDeferred=true, got %v", err)
+		}
+		if restorePlan != nil {
+			t.Errorf("LoadRestorePlanMetadata: want nil metadata on deferred path, got %+v", restorePlan)
+		}
 
-			gcPlan, err := svc.LoadGCPlanMetadata(ctx, catalog.GCPlanInput{})
-			if !errors.Is(err, catalog.ErrNotImplemented) {
-				t.Errorf("LoadGCPlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
-			}
-			if !catalog.IsDeferred(err) {
-				t.Errorf("LoadGCPlanMetadata: want catalog.IsDeferred=true, got %v", err)
-			}
-			if gcPlan != nil {
-				t.Errorf("LoadGCPlanMetadata: want nil metadata on deferred path, got %+v", gcPlan)
-			}
+		gcPlan, err := svc.LoadGCPlanMetadata(ctx, catalog.GCPlanInput{})
+		if !errors.Is(err, catalog.ErrNotImplemented) {
+			t.Errorf("LoadGCPlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
+		}
+		if !catalog.IsDeferred(err) {
+			t.Errorf("LoadGCPlanMetadata: want catalog.IsDeferred=true, got %v", err)
+		}
+		if gcPlan != nil {
+			t.Errorf("LoadGCPlanMetadata: want nil metadata on deferred path, got %+v", gcPlan)
+		}
 
-			after := countCatalogLogicalFilesBackend(t, dbconn)
-			if after != before {
-				t.Fatalf("deferred catalog methods should not mutate logical_file rows: before=%d after=%d", before, after)
-			}
-		})
-	}
+		after := countCatalogLogicalFilesBackend(t, dbconn)
+		if after != before {
+			t.Fatalf("deferred catalog methods should not mutate logical_file rows: before=%d after=%d", before, after)
+		}
+	})
 }
 
 func countCatalogLogicalFilesBackend(t *testing.T, dbconn *sql.DB) int {
