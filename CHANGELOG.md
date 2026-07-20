@@ -31,8 +31,10 @@ project, do not start here; start with [README.md](README.md).
 - Completed the Phase 3 reusable dual-backend test harness with file-backed
   SQLite fixtures, optional isolated PostgreSQL scratch databases, strict
   cleanup reporting, and catalog-suite adoption.
-- Identified Phase 4 required-CI activation of PostgreSQL-gated package tests
-  as the next phase; no backend parity claim has been added.
+- Implemented Phase 4 required-CI activation for PostgreSQL-gated internal
+  package contracts in the plain correctness-matrix codec leg, with JSON
+  execution-proof enforcement. The first remote proof remains pending; no
+  backend parity claim has been added.
 
 ------------------------------------------------------------------------
 

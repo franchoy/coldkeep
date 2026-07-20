@@ -202,6 +202,119 @@ jobs:
 
           exit "$status"
 
+      - name: Run required PostgreSQL internal package contracts
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_TEST_DB: 1
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          set -o pipefail
+          output_file="${RUNNER_TEMP}/postgres-internal-contracts.json"
+
+          go test -race -count=1 -json \
+            ./internal/testutil/backendtest \
+            ./internal/catalog \
+            ./internal/db \
+            ./internal/engine \
+            ./internal/maintenance \
+            | tee "$output_file"
+
+          python3 - "$output_file" <<'PY'
+          import json
+          import re
+          import sys
+
+          output_file = sys.argv[1]
+          expected = {
+              "github.com/franchoy/coldkeep/internal/testutil/backendtest": [
+                  r"^TestForEachSQLiteFixture/postgres$",
+              ],
+              "github.com/franchoy/coldkeep/internal/catalog": [
+                  r"^TestCatalogContractFindLogicalFileAcrossBackends/postgres$",
+                  r"^TestCatalogContractFindPhysicalFilesAcrossBackends/postgres$",
+                  r"^TestCatalogContractFindSnapshotAcrossBackends/postgres$",
+                  r"^TestCatalogContractListSnapshotsAcrossBackends/postgres$",
+                  r"^TestCatalogContractLoadReachabilityRootsAcrossBackends/postgres$",
+                  r"^TestCatalogContractDeferredMethodsAcrossBackends/postgres$",
+              ],
+              "github.com/franchoy/coldkeep/internal/db": [
+                  r"^TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve$",
+              ],
+              "github.com/franchoy/coldkeep/internal/engine": [
+                  r"^TestRemoveByIDPostgresPreservesSharedChunks$",
+              ],
+              "github.com/franchoy/coldkeep/internal/maintenance": [
+                  r"^TestRunGCWithAdvisoryUnlockFailureStillSucceeds$",
+              ],
+          }
+
+          raw_lines = []
+          events = []
+          malformed = []
+          try:
+              with open(output_file, encoding="utf-8") as handle:
+                  for line_number, raw_line in enumerate(handle, start=1):
+                      raw_lines.append(raw_line.rstrip("\n"))
+                      try:
+                          events.append(json.loads(raw_line))
+                      except json.JSONDecodeError as exc:
+                          malformed.append(f"line {line_number}: {exc}")
+          except OSError as exc:
+              print(f"PostgreSQL execution-proof failure: cannot read {output_file}: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          failures = []
+          if not events:
+              failures.append("JSON evidence file contained no events")
+          if malformed:
+              failures.append("malformed JSON evidence: " + "; ".join(malformed[:3]))
+
+          observed = {}
+          skipped = {}
+          for event in events:
+              package = event.get("Package", "")
+              test = event.get("Test", "")
+              action = event.get("Action", "")
+              if package in expected and test:
+                  if re.search("postgres", test, re.IGNORECASE):
+                      observed.setdefault(package, []).append(f"{action}:{test}")
+                  if action == "skip":
+                      skipped.setdefault(package, []).append(test)
+
+          for package, patterns in expected.items():
+              package_events = [event for event in events if event.get("Package") == package]
+              if not package_events:
+                  failures.append(f"expected package produced no JSON events: {package}")
+                  continue
+              for pattern in patterns:
+                  passes = [
+                      event.get("Test", "") for event in package_events
+                      if event.get("Action") == "pass" and re.search(pattern, event.get("Test", ""))
+                  ]
+                  if not passes:
+                      failures.append(f"expected PostgreSQL pass missing: package={package} selector={pattern}")
+
+          if failures:
+              print("PostgreSQL execution-proof failure:", file=sys.stderr)
+              for failure in failures:
+                  print(f"- {failure}", file=sys.stderr)
+              for package, patterns in expected.items():
+                  print(f"expected package: {package}", file=sys.stderr)
+                  print(f"expected selectors: {', '.join(patterns)}", file=sys.stderr)
+                  print(f"observed PostgreSQL-related tests: {observed.get(package, [])}", file=sys.stderr)
+                  print(f"skipped tests: {skipped.get(package, [])}", file=sys.stderr)
+              print("last 80 JSON lines:", file=sys.stderr)
+              for line in raw_lines[-80:]:
+                  print(line, file=sys.stderr)
+              sys.exit(1)
+          PY
+
       - name: Upload correctness-matrix diagnostic JSON
         if: failure()
         uses: actions/upload-artifact@v7

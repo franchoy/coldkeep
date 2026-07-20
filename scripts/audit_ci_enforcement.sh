@@ -129,6 +129,8 @@ check_local_workflow() {
   local quality_checkout_block=""
   local validator_test_block=""
   local validator_real_block=""
+	local correctness_matrix_block=""
+	local postgres_internal_contracts_block=""
   local upload_v5_count=0
   local upload_v6_count=0
   local upload_v7_count=0
@@ -178,6 +180,42 @@ check_local_workflow() {
     fi
   fi
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
+	correctness_matrix_block="$(extract_job_block correctness-matrix)"
+	if [[ -z "$correctness_matrix_block" ]]; then
+	  echo "[audit] ERROR: missing correctness-matrix job block content" >&2
+	  check_status=1
+	else
+	  postgres_internal_contracts_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run required PostgreSQL internal package contracts")"
+	  if [[ -z "$postgres_internal_contracts_block" ]]; then
+	    echo "[audit] ERROR: missing required PostgreSQL internal package contracts step block" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$postgres_internal_contracts_block" "^      - name: Run required PostgreSQL internal package contracts$" 'required PostgreSQL internal package contracts step' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" "if: \\$\\{\\{ matrix\.codec == 'plain' \\}\\}" 'PostgreSQL internal package contracts run only for plain codec' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'COLDKEEP_TEST_DB:\s*1' 'PostgreSQL internal package contracts enable DB gate' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'COLDKEEP_DB_AUTO_BOOTSTRAP:\s*true' 'PostgreSQL internal package contracts enable auto-bootstrap' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'DB_HOST:\s*127\.0\.0\.1' 'PostgreSQL internal package contracts set DB host' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'DB_PORT:\s*5432' 'PostgreSQL internal package contracts set DB port' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'DB_USER:\s*coldkeep' 'PostgreSQL internal package contracts set DB user' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'DB_PASSWORD:\s*coldkeep' 'PostgreSQL internal package contracts set DB password' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'DB_NAME:\s*coldkeep' 'PostgreSQL internal package contracts set DB name' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'DB_SSLMODE:\s*disable' 'PostgreSQL internal package contracts set DB SSL mode' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'go test -race -count=1 -json' 'PostgreSQL internal package contracts use race JSON test execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" './internal/testutil/backendtest' 'PostgreSQL internal package contracts include harness package' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" './internal/catalog' 'PostgreSQL internal package contracts include catalog package' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" './internal/db' 'PostgreSQL internal package contracts include DB package' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" './internal/engine' 'PostgreSQL internal package contracts include engine package' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" './internal/maintenance' 'PostgreSQL internal package contracts include maintenance package' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'python3 - .*output_file' 'PostgreSQL internal package contracts parse JSON execution evidence' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'expected PostgreSQL pass missing' 'PostgreSQL internal package contracts require PostgreSQL test pass events' || check_status=1
+	    if grep -Eq 'continue-on-error|\|\| true' <<<"$postgres_internal_contracts_block"; then
+	      echo "[audit] ERROR: PostgreSQL internal package contracts step must remain blocking" >&2
+	      check_status=1
+	    else
+	      echo "[audit] ok: PostgreSQL internal package contracts step is blocking"
+	    fi
+	  fi
+	fi
   require_pattern "$WORKFLOW_FILE" '^  cross-platform:$' 'cross-platform job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run path safety cross-platform tests' 'cross-platform path safety step' || check_status=1
