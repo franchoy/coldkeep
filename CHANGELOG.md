@@ -20,6 +20,16 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
+
+### In progress
+
+- Recorded the Phase 0 post-release correction that restored the v1.13.11–v1.13.13 release train.
+- Activated executable and reusable release-checklist identity to `1.13.11`.
+- Identified the Phase 2 Backend Compatibility Claim Matrix as the next phase.
+
+------------------------------------------------------------------------
+
 ## v1.13.10 - 2026-07-19 — v1.x Closure Integrity and CI Runtime Hygiene
 
 - Closed v1.13.9 post-release documentation truth, release-train

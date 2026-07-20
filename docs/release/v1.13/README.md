@@ -77,14 +77,15 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Its canonical trackers are
+  active release. Phase 0 and Phase 1 are complete; Phase 2 — Backend Compatibility Claim Matrix is Next. No implementation beyond release identity
+  has started. Its canonical trackers are
   `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
   `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
   `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan;
   final v1.x completion is gated by v1.13.11–v1.13.13. v2.0 implementation has
   not started.
-- `v1.13.10-engine-contract-documentation-truthfulness.md` records the active
+- `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
 - `v1.13.10-release-state-validator-contract.md` freezes the lifecycle,
   evidence, parsing, CKRS rule, output, fixture, and CI integration contract.
