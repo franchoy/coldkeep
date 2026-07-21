@@ -523,26 +523,84 @@ func storeFileWithCodecCLIG6(t *testing.T, repoRoot, binPath string, env map[str
 // storeFileWithCodecCLIG6Async is safe to call from goroutines because it
 // returns an error instead of calling t.Fatal/t.FailNow.
 func storeFileWithCodecCLIG6Async(repoRoot, binPath string, env map[string]string, codec, path string) (int64, error) {
+	result, err := storeFileWithCodecCLIG6AsyncDiagnostics(repoRoot, binPath, env, codec, path)
+	return result.FileID, err
+}
+
+type g6CLIStoreCommandResult struct {
+	FileID         int64
+	LifecycleTrace []string
+	StartedUTC     time.Time
+	FinishedUTC    time.Time
+}
+
+func storeFileWithCodecCLIG6AsyncDiagnostics(repoRoot, binPath string, env map[string]string, codec, path string) (g6CLIStoreCommandResult, error) {
+	result := g6CLIStoreCommandResult{StartedUTC: time.Now().UTC()}
 	cmd := exec.Command(binPath, "store", "--codec", codec, path, "--output", "json")
 	cmd.Dir = repoRoot
 	cmd.Env = testutils.BuildCommandEnv(env)
 	out, err := cmd.CombinedOutput()
+	result.FinishedUTC = time.Now().UTC()
+	result.LifecycleTrace = filterG6LifecycleTrace(string(out), env)
 	if err != nil {
-		return 0, fmt.Errorf("store command: %w; output=%s", err, out)
+		return result, fmt.Errorf("store command: %w; output=%s", err, sanitizeG6DiagnosticText(string(out), env))
 	}
 	payload, ok := testutils.TryParseLastJSONLine(string(out))
 	if !ok {
-		return 0, fmt.Errorf("no JSON in store output: %s", out)
+		return result, fmt.Errorf("no JSON in store output: %s", sanitizeG6DiagnosticText(string(out), env))
 	}
 	data, ok := payload["data"].(map[string]any)
 	if !ok {
-		return 0, fmt.Errorf("store payload missing data: %v", payload)
+		return result, fmt.Errorf("store payload missing data: %v", payload)
 	}
 	idF, ok := data["file_id"].(float64)
 	if !ok {
-		return 0, fmt.Errorf("store payload missing file_id: %v", data)
+		return result, fmt.Errorf("store payload missing file_id: %v", data)
 	}
-	return int64(idF), nil
+	result.FileID = int64(idF)
+	return result, nil
+}
+
+var g6LifecycleEventMarkers = []string{
+	"event=store_reuse_claim_graph_invalid",
+	"event=store_reuse_validation_failed",
+	"event=chunk_reuse_validation_failed",
+	"event=store_chunk_reclaim",
+}
+
+func filterG6LifecycleTrace(output string, env map[string]string) []string {
+	const maxTraceLines = 256
+	trace := make([]string, 0)
+	for _, raw := range strings.Split(output, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || !containsG6LifecycleMarker(line) {
+			continue
+		}
+		trace = append(trace, sanitizeG6DiagnosticText(line, env))
+		if len(trace) == maxTraceLines {
+			break
+		}
+	}
+	return trace
+}
+
+func containsG6LifecycleMarker(line string) bool {
+	for _, marker := range g6LifecycleEventMarkers {
+		if strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeG6DiagnosticText(value string, env map[string]string) string {
+	for _, key := range []string{"COLDKEEP_KEY", "DB_PASSWORD"} {
+		secret := strings.TrimSpace(env[key])
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return value
 }
 
 func restoreMustMatchHashG6(t *testing.T, dbconn *sql.DB, fileID int64, outPath, wantHash string) {
@@ -587,7 +645,7 @@ func verifyConcurrentInvariantsG6(t *testing.T, dbconn *sql.DB, diag *g6FailureD
 	}
 }
 
-var g6ChunkIDPattern = regexp.MustCompile(`chunk (\d+)`)
+var g6ChunkIDPattern = regexp.MustCompile(`chunk(?:[ =])(\d+)`)
 
 type g6FailureDiagnosticContext struct {
 	TestName      string
@@ -602,9 +660,12 @@ type g6FailureDiagnosticContext struct {
 }
 
 type g6StoreOperationResult struct {
-	Worker int    `json:"worker"`
-	FileID int64  `json:"file_id,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Worker         int       `json:"worker"`
+	FileID         int64     `json:"file_id,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	LifecycleTrace []string  `json:"lifecycle_trace,omitempty"`
+	StartedUTC     time.Time `json:"started_utc"`
+	FinishedUTC    time.Time `json:"finished_utc"`
 }
 
 type g6ChunkFailureDiagnosticManifest struct {
@@ -625,6 +686,58 @@ type g6ChunkFailureDiagnosticManifest struct {
 	StoreResults            []g6StoreOperationResult `json:"store_results"`
 	RelevantConfiguration   map[string]string        `json:"relevant_configuration,omitempty"`
 	MigrationCompanionState g6ChunkMetadataRecord    `json:"migration_companion_state"`
+	PackedBlocks            []g6PackedBlockRecord    `json:"packed_blocks,omitempty"`
+	PhysicalFiles           []g6PhysicalFileRecord   `json:"physical_files,omitempty"`
+}
+
+type g6PackedBlockRecord struct {
+	BlockID                 int64                  `json:"block_id"`
+	FormatVersion           int64                  `json:"format_version"`
+	Codec                   string                 `json:"codec"`
+	CompressionCodec        string                 `json:"compression_codec"`
+	CompressionLevel        *int64                 `json:"compression_level,omitempty"`
+	PlaintextSize           int64                  `json:"plaintext_size"`
+	CompressedSize          *int64                 `json:"compressed_size,omitempty"`
+	StoredSize              int64                  `json:"stored_size"`
+	ContainerID             int64                  `json:"container_id"`
+	ContainerFilename       string                 `json:"container_filename"`
+	ContainerMaxSize        int64                  `json:"container_max_size"`
+	ContainerOffset         int64                  `json:"container_offset"`
+	BlockHash               string                 `json:"block_hash,omitempty"`
+	PayloadHash             string                 `json:"payload_hash,omitempty"`
+	CompressedHash          string                 `json:"compressed_hash,omitempty"`
+	PhysicalHash            string                 `json:"physical_hash,omitempty"`
+	ActualPhysicalHash      string                 `json:"actual_physical_hash,omitempty"`
+	ActualPhysicalHashError string                 `json:"actual_physical_hash_error,omitempty"`
+	Members                 []g6PackedBlockMember  `json:"members"`
+	EncodedMembers          []g6EncodedBlockMember `json:"encoded_members,omitempty"`
+	EncodedMembersError     string                 `json:"encoded_members_error,omitempty"`
+}
+
+type g6PackedBlockMember struct {
+	ChunkID           int64  `json:"chunk_id"`
+	ChunkHash         string `json:"chunk_hash"`
+	ChunkStatus       string `json:"chunk_status"`
+	OffsetInBlock     int64  `json:"offset_in_block"`
+	SizeInBlock       int64  `json:"size_in_block"`
+	LegacyMappingID   *int64 `json:"legacy_mapping_id,omitempty"`
+	LegacyCodec       string `json:"legacy_codec,omitempty"`
+	LegacyContainerID *int64 `json:"legacy_container_id,omitempty"`
+	LegacyOffset      *int64 `json:"legacy_offset,omitempty"`
+	LegacyStoredSize  *int64 `json:"legacy_stored_size,omitempty"`
+	LegacyNonceLength *int64 `json:"legacy_nonce_length,omitempty"`
+}
+
+type g6EncodedBlockMember struct {
+	ChunkID uint64 `json:"chunk_id"`
+	Offset  uint64 `json:"offset"`
+	Size    uint64 `json:"size"`
+}
+
+type g6PhysicalFileRecord struct {
+	ID            int64  `json:"id"`
+	Path          string `json:"path"`
+	LogicalFileID int64  `json:"logical_file_id"`
 }
 
 type g6ChunkMetadataRecord struct {
@@ -654,6 +767,7 @@ func logConcurrentInvariantFailureG6(t *testing.T, dbconn *sql.DB, verifyErr err
 	manifest := buildG6FailureManifest(t, verifyErr, diag)
 	loadG6FailureSchemaVersion(t, dbconn, &manifest)
 	attachG6OffendingChunkMetadata(t, dbconn, verifyErr, &manifest)
+	attachG6RepositoryState(t, dbconn, &manifest)
 	writeConcurrentInvariantManifestG6(t, manifest)
 }
 
@@ -935,6 +1049,260 @@ func logContainerMetadataG6(t *testing.T, dbconn *sql.DB, label string, containe
 	return filename
 }
 
+func attachG6RepositoryState(t *testing.T, dbconn *sql.DB, manifest *g6ChunkFailureDiagnosticManifest) {
+	t.Helper()
+	blocks, err := loadG6PackedBlocks(dbconn)
+	if err != nil {
+		t.Logf("G6 verify diagnostics: collect packed-block state: %v", err)
+	} else {
+		for i := range blocks {
+			attachG6ActualPhysicalHash(&blocks[i])
+			attachG6EncodedBlockMembers(&blocks[i])
+		}
+		manifest.PackedBlocks = blocks
+	}
+
+	physicalFiles, err := loadG6PhysicalFiles(dbconn)
+	if err != nil {
+		t.Logf("G6 verify diagnostics: collect physical-file state: %v", err)
+	} else {
+		manifest.PhysicalFiles = physicalFiles
+	}
+}
+
+func loadG6PackedBlocks(dbconn *sql.DB) ([]g6PackedBlockRecord, error) {
+	rows, err := dbconn.Query(`
+		SELECT sb.id, sb.format_version, sb.codec, sb.compression_codec,
+		       sb.compression_level, sb.plaintext_size, sb.compressed_size,
+		       sb.stored_size, sb.container_id, c.filename, c.max_size, sb.container_offset,
+		       sb.block_hash, sb.payload_hash, sb.compressed_hash, sb.physical_hash
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		ORDER BY sb.id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	records := make([]g6PackedBlockRecord, 0)
+	for rows.Next() {
+		var record g6PackedBlockRecord
+		var compressionLevel sql.NullInt64
+		var compressedSize sql.NullInt64
+		var payloadHash sql.NullString
+		var blockHash []byte
+		var compressedHash []byte
+		var physicalHash []byte
+		if err := rows.Scan(
+			&record.BlockID,
+			&record.FormatVersion,
+			&record.Codec,
+			&record.CompressionCodec,
+			&compressionLevel,
+			&record.PlaintextSize,
+			&compressedSize,
+			&record.StoredSize,
+			&record.ContainerID,
+			&record.ContainerFilename,
+			&record.ContainerMaxSize,
+			&record.ContainerOffset,
+			&blockHash,
+			&payloadHash,
+			&compressedHash,
+			&physicalHash,
+		); err != nil {
+			return nil, err
+		}
+		record.CompressionLevel = nullInt64PointerG6(compressionLevel)
+		record.CompressedSize = nullInt64PointerG6(compressedSize)
+		record.BlockHash = hex.EncodeToString(blockHash)
+		record.PayloadHash = nullStringPlainG6(payloadHash)
+		record.CompressedHash = hex.EncodeToString(compressedHash)
+		record.PhysicalHash = hex.EncodeToString(physicalHash)
+		record.Members, err = loadG6PackedBlockMembers(dbconn, record.BlockID)
+		if err != nil {
+			return nil, fmt.Errorf("load members for block %d: %w", record.BlockID, err)
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+func loadG6PackedBlockMembers(dbconn *sql.DB, blockID int64) ([]g6PackedBlockMember, error) {
+	rows, err := dbconn.Query(`
+		SELECT r.chunk_id, c.chunk_hash, c.status, r.offset_in_block, r.size_in_block,
+		       b.id, b.codec, b.container_id, b.block_offset, b.stored_size,
+		       OCTET_LENGTH(b.nonce)
+		FROM chunk_block_refs r
+		JOIN chunk c ON c.id = r.chunk_id
+		LEFT JOIN blocks b ON b.chunk_id = r.chunk_id
+		WHERE r.block_id = $1
+		ORDER BY r.offset_in_block, r.chunk_id
+	`, blockID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	members := make([]g6PackedBlockMember, 0)
+	for rows.Next() {
+		var member g6PackedBlockMember
+		var legacyMappingID sql.NullInt64
+		var legacyCodec sql.NullString
+		var legacyContainerID sql.NullInt64
+		var legacyOffset sql.NullInt64
+		var legacyStoredSize sql.NullInt64
+		var legacyNonceLength sql.NullInt64
+		if err := rows.Scan(
+			&member.ChunkID,
+			&member.ChunkHash,
+			&member.ChunkStatus,
+			&member.OffsetInBlock,
+			&member.SizeInBlock,
+			&legacyMappingID,
+			&legacyCodec,
+			&legacyContainerID,
+			&legacyOffset,
+			&legacyStoredSize,
+			&legacyNonceLength,
+		); err != nil {
+			return nil, err
+		}
+		member.LegacyMappingID = nullInt64PointerG6(legacyMappingID)
+		member.LegacyCodec = nullStringPlainG6(legacyCodec)
+		member.LegacyContainerID = nullInt64PointerG6(legacyContainerID)
+		member.LegacyOffset = nullInt64PointerG6(legacyOffset)
+		member.LegacyStoredSize = nullInt64PointerG6(legacyStoredSize)
+		member.LegacyNonceLength = nullInt64PointerG6(legacyNonceLength)
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+func attachG6ActualPhysicalHash(record *g6PackedBlockRecord) {
+	if record.StoredSize < 0 || record.ContainerOffset < 0 {
+		record.ActualPhysicalHashError = fmt.Sprintf(
+			"invalid stored payload bounds: offset=%d size=%d",
+			record.ContainerOffset,
+			record.StoredSize,
+		)
+		return
+	}
+	if record.ContainerMaxSize > 0 && (record.ContainerOffset > record.ContainerMaxSize || record.StoredSize > record.ContainerMaxSize-record.ContainerOffset) {
+		record.ActualPhysicalHashError = fmt.Sprintf(
+			"stored payload exceeds container bounds: offset=%d size=%d max=%d",
+			record.ContainerOffset,
+			record.StoredSize,
+			record.ContainerMaxSize,
+		)
+		return
+	}
+
+	path, err := container.SafeContainerPath(container.ContainersDir, record.ContainerFilename)
+	if err != nil {
+		record.ActualPhysicalHashError = err.Error()
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		record.ActualPhysicalHashError = err.Error()
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	payload := make([]byte, record.StoredSize)
+	n, err := f.ReadAt(payload, record.ContainerOffset)
+	if err != nil {
+		record.ActualPhysicalHashError = fmt.Sprintf("read stored payload: read=%d expected=%d: %v", n, record.StoredSize, err)
+		return
+	}
+	sum := sha256.Sum256(payload)
+	record.ActualPhysicalHash = hex.EncodeToString(sum[:])
+}
+
+func attachG6EncodedBlockMembers(record *g6PackedBlockRecord) {
+	logicalHash, err := hex.DecodeString(record.BlockHash)
+	if err != nil {
+		record.EncodedMembersError = fmt.Sprintf("decode block hash: %v", err)
+		return
+	}
+	compressedHash, err := hex.DecodeString(record.CompressedHash)
+	if err != nil {
+		record.EncodedMembersError = fmt.Sprintf("decode compressed hash: %v", err)
+		return
+	}
+	physicalHash, err := hex.DecodeString(record.PhysicalHash)
+	if err != nil {
+		record.EncodedMembersError = fmt.Sprintf("decode physical hash: %v", err)
+		return
+	}
+	var compressionLevel *int
+	if record.CompressionLevel != nil {
+		value := int(*record.CompressionLevel)
+		compressionLevel = &value
+	}
+	verified, err := verify.VerifyStoredBlock(context.Background(), verify.BlockStorageMetadata{
+		BlockID:          record.BlockID,
+		ContainerID:      record.ContainerID,
+		ContainerOffset:  record.ContainerOffset,
+		ContainerName:    record.ContainerFilename,
+		ContainerMaxSize: record.ContainerMaxSize,
+		FormatVersion:    record.FormatVersion,
+		Codec:            record.Codec,
+		PlaintextSize:    record.PlaintextSize,
+		CompressedSize:   record.CompressedSize,
+		StoredSize:       record.StoredSize,
+		CompressionCodec: record.CompressionCodec,
+		CompressionLevel: compressionLevel,
+		LogicalHash:      logicalHash,
+		CompressedHash:   compressedHash,
+		PhysicalHash:     physicalHash,
+	}, verify.FilesystemContainerReader{ContainersDir: container.ContainersDir})
+	if err != nil {
+		record.EncodedMembersError = err.Error()
+		return
+	}
+	if verified == nil || verified.DecodedBlock == nil {
+		record.EncodedMembersError = "verified block did not include decoded membership"
+		return
+	}
+	for _, entry := range verified.DecodedBlock.Entries {
+		record.EncodedMembers = append(record.EncodedMembers, g6EncodedBlockMember{
+			ChunkID: entry.ChunkID,
+			Offset:  entry.Offset,
+			Size:    entry.Size,
+		})
+	}
+}
+
+func loadG6PhysicalFiles(dbconn *sql.DB) ([]g6PhysicalFileRecord, error) {
+	rows, err := dbconn.Query(`SELECT id, path, logical_file_id FROM physical_file ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	records := make([]g6PhysicalFileRecord, 0)
+	for rows.Next() {
+		var record g6PhysicalFileRecord
+		if err := rows.Scan(&record.ID, &record.Path, &record.LogicalFileID); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
 func nullInt64ValueG6(v sql.NullInt64) any {
 	if !v.Valid {
 		return nil
@@ -1061,16 +1429,26 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 
 			const workers = 6
 			type g6storeResult struct {
-				idx int
-				id  int64
-				err error
+				idx         int
+				id          int64
+				trace       []string
+				startedUTC  time.Time
+				finishedUTC time.Time
+				err         error
 			}
 			resultCh := make(chan g6storeResult, workers)
 			for i := 0; i < workers; i++ {
 				i := i
 				go func() {
-					id, err := storeFileWithCodecCLIG6Async(repoRoot, binPath, env, codec, inPath)
-					resultCh <- g6storeResult{idx: i, id: id, err: err}
+					storeResult, err := storeFileWithCodecCLIG6AsyncDiagnostics(repoRoot, binPath, env, codec, inPath)
+					resultCh <- g6storeResult{
+						idx:         i,
+						id:          storeResult.FileID,
+						trace:       storeResult.LifecycleTrace,
+						startedUTC:  storeResult.StartedUTC,
+						finishedUTC: storeResult.FinishedUTC,
+						err:         err,
+					}
 				}()
 			}
 			ids := make([]int64, workers)
@@ -1078,8 +1456,11 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 			for i := 0; i < workers; i++ {
 				res := <-resultCh
 				storeResults[res.idx] = g6StoreOperationResult{
-					Worker: res.idx,
-					FileID: res.id,
+					Worker:         res.idx,
+					FileID:         res.id,
+					LifecycleTrace: append([]string(nil), res.trace...),
+					StartedUTC:     res.startedUTC,
+					FinishedUTC:    res.finishedUTC,
 				}
 				if res.err != nil {
 					storeResults[res.idx].Error = res.err.Error()
