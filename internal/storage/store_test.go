@@ -2651,16 +2651,6 @@ func setupCrossVersionSharedChunkScenario(t *testing.T) crossVersionSharedChunkS
 		t.Fatalf("run migrations: %v", err)
 	}
 
-	if _, err := dbconn.Exec(
-		`INSERT INTO container (id, filename, current_size, max_size, sealed)
-		 VALUES (1, $1, $2, $3, FALSE)`,
-		"ack_test_container.bin",
-		container.ContainerHdrLen,
-		container.GetContainerMaxSize(),
-	); err != nil {
-		t.Fatalf("insert container row: %v", err)
-	}
-
 	tmpDir := t.TempDir()
 	pathA := filepath.Join(tmpDir, "reuse-a.bin")
 	pathB := filepath.Join(tmpDir, "reuse-b.bin")
@@ -2675,7 +2665,7 @@ func setupCrossVersionSharedChunkScenario(t *testing.T) crossVersionSharedChunkS
 		t.Fatalf("write second file: %v", err)
 	}
 
-	writer := &commitAckWriter{}
+	writer := container.NewLocalWriterWithDirAndDB(tmpDir, container.GetContainerMaxSize(), dbconn)
 	firstChunker := fixedBoundaryChunker{version: chunk.VersionV1SimpleRolling, boundary: 32}
 	secondChunker := fixedBoundaryChunker{version: chunk.VersionV2FastCDC, boundary: 32}
 

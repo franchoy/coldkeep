@@ -36,6 +36,8 @@ type payloadStatefulWriter interface {
 
 type storeInterleavingEvent string
 
+var errSharedPackedBlockPartialRebuild = errors.New("partial rebuild of shared packed block refused")
+
 const (
 	storeInterleavingEventAfterChunkClaim            storeInterleavingEvent = "after_chunk_claim"
 	storeInterleavingEventBeforePackedFlush          storeInterleavingEvent = "before_packed_flush"
@@ -1514,6 +1516,80 @@ func validateReusableChunkCompanionMappingWithContext(ctx context.Context, dbcon
 	}
 }
 
+func lockAndValidateChunkRebuildCandidatesWithContext(
+	ctx context.Context,
+	dbconn *sql.DB,
+	tx *sql.Tx,
+	chunkID int64,
+) ([]int64, error) {
+	candidateQuery := db.QueryWithOptionalForUpdate(dbconn, `
+		SELECT sb.id
+		FROM storage_blocks sb
+		JOIN chunk_block_refs target ON target.block_id = sb.id
+		WHERE target.chunk_id = $1
+		ORDER BY sb.id
+	`)
+	rows, err := tx.QueryContext(ctx, candidateQuery, chunkID)
+	if err != nil {
+		return nil, fmt.Errorf("query and lock storage_blocks for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	var candidateBlockIDs []int64
+	for rows.Next() {
+		var blockID int64
+		if err := rows.Scan(&blockID); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan storage_block id for chunk %d rebuild cleanup: %w", chunkID, err)
+		}
+		candidateBlockIDs = append(candidateBlockIDs, blockID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate storage_block ids for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close storage_block ids rows for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+
+	memberQuery := db.QueryWithOptionalForUpdate(dbconn, `
+		SELECT chunk_id
+		FROM chunk_block_refs
+		WHERE block_id = $1
+		ORDER BY chunk_id
+	`)
+	for _, blockID := range candidateBlockIDs {
+		memberRows, err := tx.QueryContext(ctx, memberQuery, blockID)
+		if err != nil {
+			return nil, fmt.Errorf("query and lock members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+		}
+		memberCount := 0
+		for memberRows.Next() {
+			var memberChunkID int64
+			if err := memberRows.Scan(&memberChunkID); err != nil {
+				_ = memberRows.Close()
+				return nil, fmt.Errorf("scan member for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+			}
+			memberCount++
+		}
+		if err := memberRows.Err(); err != nil {
+			_ = memberRows.Close()
+			return nil, fmt.Errorf("iterate members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+		}
+		if err := memberRows.Close(); err != nil {
+			return nil, fmt.Errorf("close members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+		}
+		if memberCount > 1 {
+			return nil, fmt.Errorf(
+				"cannot rebuild chunk %d independently: packed block %d has %d active members: %w",
+				chunkID,
+				blockID,
+				memberCount,
+				errSharedPackedBlockPartialRebuild,
+			)
+		}
+	}
+	return candidateBlockIDs, nil
+}
+
 func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
 	state := storeInterleavingStateFromContext(ctx)
 	storeOpID := ""
@@ -1539,25 +1615,9 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.QueryContext(ctx, `SELECT block_id FROM chunk_block_refs WHERE chunk_id = $1`, chunkID)
+	candidateBlockIDs, err := lockAndValidateChunkRebuildCandidatesWithContext(ctx, dbconn, tx, chunkID)
 	if err != nil {
-		return fmt.Errorf("query storage_blocks for chunk %d rebuild cleanup: %w", chunkID, err)
-	}
-	var candidateBlockIDs []int64
-	for rows.Next() {
-		var blockID int64
-		if err := rows.Scan(&blockID); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan storage_block id for chunk %d rebuild cleanup: %w", chunkID, err)
-		}
-		candidateBlockIDs = append(candidateBlockIDs, blockID)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("iterate storage_block ids for chunk %d rebuild cleanup: %w", chunkID, err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close storage_block ids rows for chunk %d rebuild cleanup: %w", chunkID, err)
+		return err
 	}
 
 	result, err := tx.ExecContext(ctx,
