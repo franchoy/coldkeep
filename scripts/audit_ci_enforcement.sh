@@ -208,6 +208,8 @@ check_local_workflow() {
 	    require_content_pattern "$postgres_internal_contracts_block" './internal/maintenance' 'PostgreSQL internal package contracts include maintenance package' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'python3 - .*output_file' 'PostgreSQL internal package contracts parse JSON execution evidence' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'expected PostgreSQL pass missing' 'PostgreSQL internal package contracts require PostgreSQL test pass events' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestSCH001AndSCH002BootstrapVersionAndIdempotency/postgres' 'PostgreSQL internal package contracts prove Phase 5 bootstrap execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestSCH009PostgresVersionElevenAutoMigration/postgres' 'PostgreSQL internal package contracts prove Phase 5 migration execution' || check_status=1
 	    if grep -Eq 'continue-on-error|\|\| true' <<<"$postgres_internal_contracts_block"; then
 	      echo "[audit] ERROR: PostgreSQL internal package contracts step must remain blocking" >&2
 	      check_status=1

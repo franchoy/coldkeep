@@ -245,6 +245,14 @@ jobs:
               ],
               "github.com/franchoy/coldkeep/internal/db": [
                   r"^TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve$",
+                  r"^TestSCH001AndSCH002BootstrapVersionAndIdempotency/postgres$",
+                  r"^TestSCH003CurrentSchemaMetadata/postgres$",
+                  r"^TestSCH004MinimalCatalogUsability/postgres$",
+                  r"^TestSCH005CriticalUniqueness/postgres$",
+                  r"^TestSCH006CriticalForeignKeys/postgres$",
+                  r"^TestSCH007NullableAndDefaultSemantics/postgres$",
+                  r"^TestSCH009PostgresVersionElevenAutoMigration/postgres$",
+                  r"^TestSCH010AndSCH011MetadataBoundaries/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/engine": [
                   r"^TestRemoveByIDPostgresPreservesSharedChunks$",

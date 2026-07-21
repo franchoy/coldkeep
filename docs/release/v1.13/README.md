@@ -77,7 +77,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phases 0–4 are complete; Phase 5 — Schema, Bootstrap, and Migration Parity is Next. Phase 4 required-CI execution proof is complete, but v1.13.11 is not ready for release and backend parity proof has not started. Its canonical trackers are
+  active release. Phases 0–4 are complete; Phase 5 remains Next, with schema/bootstrap/migration
+  contract implementation local-complete and required PostgreSQL CI proof
+  pending. Phase 6 remains blocked until that proof; v1.13.11 is not ready for
+  release and no broad backend-parity conclusion is claimed. Its canonical trackers are
   `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
   `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
   `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.

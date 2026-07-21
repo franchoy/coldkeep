@@ -35,6 +35,9 @@ project, do not start here; start with [README.md](README.md).
   package contracts in the plain correctness-matrix codec leg, with JSON
   execution-proof enforcement; run `29729981751` confirmed it. Phase 5
   schema/bootstrap/migration parity is Next; no backend parity claim is added.
+- Implemented Phase 5 schema/bootstrap/migration contract tests and explicit
+  PostgreSQL CI JSON selectors. Local SQLite evidence is complete; required
+  PostgreSQL execution remains pending, so no broad schema-parity claim is added.
 
 ------------------------------------------------------------------------
 
