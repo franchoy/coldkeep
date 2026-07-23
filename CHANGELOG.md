@@ -22,7 +22,7 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
-### Phase 6 catalog parity evidence complete
+### Phase 7 engine read-side parity evidence complete
 
 - Recorded the Phase 0 post-release correction that restored the v1.13.11–v1.13.13 release train.
 - Activated executable and reusable release-checklist identity to `1.13.11`.
@@ -47,11 +47,18 @@ project, do not start here; start with [README.md](README.md).
 - Completed exact-head catalog contract evidence in CI run `29983479388` at
   `db12c3d2`: all six PostgreSQL catalog contract selectors passed, including
   CAT-004 after its deterministic `created_at DESC, id DESC` ordering fix, and
-  the aggregate required gate succeeded. Phase 6 is complete; Phase 7 is Next.
-- Added Phase 7 local engine read-side contract coverage for Stats, Inspect,
-  Verify, and explicit-ID snapshot views, plus a pre-cancelled `Verify`
-  correction and required-CI PostgreSQL JSON selectors. PostgreSQL evidence is
-  pending, so no engine parity claim or Phase 8 work is authorized.
+  the aggregate required gate succeeded. Phase 6 is complete.
+- Completed Phase 7 exact-head engine read-side evidence in CI run
+  `29993172886` at `313d0069`: all four required PostgreSQL engine selectors,
+  quality, both correctness legs, adversarial validation, and the aggregate
+  required gate passed.
+- Corrected deep verification for a single-connection SQLite handle by fully
+  materializing and closing eligible-container rows before querying packed
+  blocks. The bounded regression retains `MaxOpenConns(1)` and the production
+  packed-storage writer; byte-level verification is unchanged.
+- BKC-010 is now equivalently proven for the tested Stats, Inspect, Verify,
+  context/error, and non-mutation contracts. BKC-011 remains separate evidence
+  because selector/query behavior is Phase 8 work, which is Next.
 
 ------------------------------------------------------------------------
 
