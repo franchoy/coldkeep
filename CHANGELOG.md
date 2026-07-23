@@ -22,7 +22,7 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
-### In progress
+### Phase 5 evidence closed; Phase 6 next
 
 - Recorded the Phase 0 post-release correction that restored the v1.13.11–v1.13.13 release train.
 - Activated executable and reusable release-checklist identity to `1.13.11`.
@@ -35,9 +35,16 @@ project, do not start here; start with [README.md](README.md).
   package contracts in the plain correctness-matrix codec leg, with JSON
   execution-proof enforcement; run `29729981751` confirmed it. Phase 5
   schema/bootstrap/migration parity is Next; no backend parity claim is added.
-- Implemented Phase 5 schema/bootstrap/migration contract tests and explicit
-  PostgreSQL CI JSON selectors. Local SQLite evidence is complete; required
-  PostgreSQL execution remains pending, so no broad schema-parity claim is added.
+- Closed Phase 5 schema/bootstrap/migration contract evidence: required
+  PostgreSQL SCH execution, canonical lint/vet, and selected schema contracts
+  are recorded without claiming broad schema parity.
+- Recorded deterministic G6 shared packed-block corruption reproduction and
+  added fail-closed protection that refuses partial rebuild of a shared
+  immutable block while preserving single-member cleanup.
+- Recorded final green exact-head CI after one authorized same-SHA retry of a
+  transient workers=4 uncompressed benchmark anomaly; no benchmark baseline,
+  workflow, or configuration changed between attempts.
+- Phase 6 catalog contract parity is Next.
 
 ------------------------------------------------------------------------
 
