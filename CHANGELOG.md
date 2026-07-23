@@ -22,7 +22,7 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
-### Phase 5 evidence closed; Phase 6 next
+### Phase 6 catalog implementation awaiting required-CI proof
 
 - Recorded the Phase 0 post-release correction that restored the v1.13.11–v1.13.13 release train.
 - Activated executable and reusable release-checklist identity to `1.13.11`.
@@ -44,7 +44,9 @@ project, do not start here; start with [README.md](README.md).
 - Recorded final green exact-head CI after one authorized same-SHA retry of a
   transient workers=4 uncompressed benchmark anomaly; no benchmark baseline,
   workflow, or configuration changed between attempts.
-- Phase 6 catalog contract parity is Next.
+- Implemented CAT-001–007 catalog contracts with one shared fixture for
+  SQLite/PostgreSQL; required-CI PostgreSQL execution remains pending, so no
+  catalog-parity claim is added and Phase 6 remains Next.
 
 ------------------------------------------------------------------------
 

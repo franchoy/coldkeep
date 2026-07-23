@@ -78,7 +78,8 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
   active release. Phases 0–5 are complete; Phase 6 is Next: Implemented
-  Catalog Contract Parity. Selected schema/bootstrap/migration contracts and
+  Catalog Contract Parity is locally implemented and awaits required-CI
+  PostgreSQL execution. Selected schema/bootstrap/migration contracts and
   the G6 fail-closed remediation have exact-head CI evidence, while broad
   backend parity remains intentionally unclaimed. v1.13.11 is not ready for
   release; the latest released version remains v1.13.10. Its canonical trackers are
