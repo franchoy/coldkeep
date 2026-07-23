@@ -48,6 +48,10 @@ project, do not start here; start with [README.md](README.md).
   `db12c3d2`: all six PostgreSQL catalog contract selectors passed, including
   CAT-004 after its deterministic `created_at DESC, id DESC` ordering fix, and
   the aggregate required gate succeeded. Phase 6 is complete; Phase 7 is Next.
+- Added Phase 7 local engine read-side contract coverage for Stats, Inspect,
+  Verify, and explicit-ID snapshot views, plus a pre-cancelled `Verify`
+  correction and required-CI PostgreSQL JSON selectors. PostgreSQL evidence is
+  pending, so no engine parity claim or Phase 8 work is authorized.
 
 ------------------------------------------------------------------------
 

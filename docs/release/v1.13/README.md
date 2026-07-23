@@ -78,7 +78,8 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
   active release. Phases 0–6 are complete; Phase 7 is Next: Engine Read-Side
-  Backend Parity. Phase 6 exact-head CI run `29983479388` proved the scoped
+  Backend Parity. Its local implementation is complete, but required-CI
+  PostgreSQL execution remains pending, so Phase 8 is blocked. Phase 6 exact-head CI run `29983479388` proved the scoped
   implemented catalog contracts across SQLite and PostgreSQL, including
   deterministic snapshot ordering. Selected schema/bootstrap/migration
   contracts and the G6 fail-closed remediation also have exact-head CI

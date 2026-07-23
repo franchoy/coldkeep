@@ -98,6 +98,9 @@ func (e *DefaultEngine) Inspect(ctx context.Context, req InspectRequest) (Inspec
 }
 
 func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return VerifyResult{}, err
+	}
 	level, err := verifyLevelFromString(req.Level)
 	if err != nil {
 		return VerifyResult{}, err

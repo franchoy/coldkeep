@@ -256,6 +256,10 @@ jobs:
               ],
               "github.com/franchoy/coldkeep/internal/engine": [
                   r"^TestRemoveByIDPostgresPreservesSharedChunks$",
+                  r"^TestEngineReadStatsAndInspectAcrossBackends/postgres$",
+                  r"^TestEngineReadSnapshotViewsAcrossBackends/postgres$",
+                  r"^TestEngineReadVerifyAcrossBackends/postgres$",
+                  r"^TestEngineReadContextAndErrorsAcrossBackends/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/maintenance": [
                   r"^TestRunGCWithAdvisoryUnlockFailureStillSucceeds$",
