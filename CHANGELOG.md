@@ -22,16 +22,16 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
-### Phase 9 engine mutation parity implementation pending exact-head CI
+### Phase 9 engine mutation parity complete
 
 - Added five shared SQLite/PostgreSQL Engine mutation contracts covering
   single-file Store, by-ID and stored-path Remove/Restore, snapshot
   create/delete/restore, deterministic failures and partial batches, semantic
   repository/container fingerprints, and GC dry-run planning/non-mutation.
-- Focused SQLite execution passes once, ten repeated runs, and the race
-  profile. PostgreSQL is unavailable locally, so BKC-012 and BKC-013 retain
-  `Separate evidence — no parity proof` until exact-head required CI records
-  all five new `/postgres` pass events and the aggregate gate succeeds.
+- Exact-head CI run `30114444798` at `848e579b` passed quality, all five new
+  `/postgres` events in plain correctness job `89551564893`, and aggregate
+  required-gate job `89555865026`. BKC-012/013 are equivalently proven only
+  for the documented active, uncontended mutation and GC dry-run contracts.
 - Extended only the existing plain-codec internal-package JSON event parser and
   matching CI audit. No production code, workflow job, package invocation,
   codec leg, schema, storage format, or lock behavior changed.
