@@ -22,13 +22,20 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
-### Phase 7 engine read-side parity evidence complete
+### Phase 8 snapshot selector determinism closure complete
 
+- Completed Phase 8 exact-head CI evidence in run `30109561344` at `bcae3576`:
+  quality, both correctness codecs, required PostgreSQL selector events,
+  adversarial, stress, long-run, smoke, compatibility, benchmark,
+  cross-platform, and `CI Required Gate` all passed. BKC-011 is equivalently
+  proven only for the scoped snapshot list/show/stats/diff selector and
+  tree-presentation contracts.
 - Implemented Phase 8 snapshot selector contracts for deterministic equal-time
   list ordering, file-query filtering, invalid direct-engine regex rejection,
   pre-cancelled selection, and read non-mutation. CLI diff now preserves
   repeated path/prefix query selectors rather than narrowing an unordered map
-  into one engine path. Required PostgreSQL CI evidence is pending.
+  into one engine path. The direct-engine invalid-regex silent-ignore defect is
+  corrected by fallible query conversion and propagation through show/diff.
 
 - Recorded the Phase 0 post-release correction that restored the v1.13.11–v1.13.13 release train.
 - Activated executable and reusable release-checklist identity to `1.13.11`.
