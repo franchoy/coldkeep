@@ -262,6 +262,11 @@ jobs:
                   r"^TestEngineReadContextAndErrorsAcrossBackends/postgres$",
                   r"^TestEngineSnapshotSelectorsAcrossBackends/postgres$",
                   r"^TestEngineSnapshotSelectorErrorsAcrossBackends/postgres$",
+                  r"^TestEngineMutationStoreRemoveAcrossBackends/postgres$",
+                  r"^TestEngineMutationSnapshotLifecycleAcrossBackends/postgres$",
+                  r"^TestEngineMutationRestoreAcrossBackends/postgres$",
+                  r"^TestEngineMutationErrorsAcrossBackends/postgres$",
+                  r"^TestEngineGCDryRunAcrossBackends/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/maintenance": [
                   r"^TestRunGCWithAdvisoryUnlockFailureStillSucceeds$",

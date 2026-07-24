@@ -216,6 +216,11 @@ check_local_workflow() {
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineReadContextAndErrorsAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 7 context and error execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineSnapshotSelectorsAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 8 selector execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineSnapshotSelectorErrorsAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 8 selector error execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineMutationStoreRemoveAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 9 store/remove execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineMutationSnapshotLifecycleAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 9 snapshot lifecycle execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineMutationRestoreAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 9 restore execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineMutationErrorsAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 9 error and rollback execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineGCDryRunAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 9 GC dry-run execution' || check_status=1
 	    if grep -Eq 'continue-on-error|\|\| true' <<<"$postgres_internal_contracts_block"; then
 	      echo "[audit] ERROR: PostgreSQL internal package contracts step must remain blocking" >&2
 	      check_status=1

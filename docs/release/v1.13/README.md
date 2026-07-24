@@ -77,8 +77,9 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phases 0–8 are complete; Phase 9 is Next: Engine Mutation
-  Backend Parity. Phase 8 exact-head CI run `30109561344` at `bcae3576` proved
+  active release. Phases 0–8 are complete; Phase 9 remains Next with its
+  shared Engine mutation contracts implemented and exact-head PostgreSQL CI
+  proof pending. Phase 8 exact-head CI run `30109561344` at `bcae3576` proved
   its scoped snapshot selector and tree-presentation contracts, including both
   required PostgreSQL selector events and the aggregate required gate. Phase 7 exact-head CI run `29993172886` at `313d0069`
   proved the scoped engine read-side contracts across SQLite and PostgreSQL,
