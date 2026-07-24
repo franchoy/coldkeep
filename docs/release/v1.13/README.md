@@ -78,7 +78,8 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
   active release. Phases 0–7 are complete; Phase 8 is Next: Snapshot Selector
-  Determinism Closure. Phase 7 exact-head CI run `29993172886` at `313d0069`
+  Determinism Closure. Its selector-contract implementation is pending required
+  exact-head PostgreSQL CI evidence. Phase 7 exact-head CI run `29993172886` at `313d0069`
   proved the scoped engine read-side contracts across SQLite and PostgreSQL,
   including the SQLite deep-verification single-connection correction. Phase 6
   exact-head CI run `29983479388` proved the scoped

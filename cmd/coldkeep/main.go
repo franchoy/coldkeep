@@ -435,57 +435,10 @@ var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snap
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
-	// Engine.SnapshotDiff is active, but this CLI workflow adapts richer query
-	// semantics into the narrower engine request surface. Only one exact path
-	// and one prefix can cross this seam. Active method presence does not prove
-	// complete read-side workflow ownership; early v2.0 owns the remaining
-	// ownership decision.
-	eng, err := engine.New(engine.Config{DB: db})
-	if err != nil {
-		return nil, err
-	}
-	req := engine.SnapshotDiffRequest{BaseID: baseID, TargetID: targetID}
-	if query != nil {
-		eq := engine.SnapshotQuery{
-			Pattern:        query.Pattern,
-			MinSize:        query.MinSize,
-			MaxSize:        query.MaxSize,
-			ModifiedAfter:  query.ModifiedAfter,
-			ModifiedBefore: query.ModifiedBefore,
-		}
-		for p := range query.ExactPaths {
-			eq.Path = p
-			break // engine.SnapshotQuery.Path is a single exact path
-		}
-		if len(query.Prefixes) > 0 {
-			eq.Prefix = query.Prefixes[0]
-		}
-		if query.Regex != nil {
-			eq.Regex = query.Regex.String()
-		}
-		req.Query = eq
-	}
-	result, err := eng.SnapshotDiff(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	entries := make([]snapshot.SnapshotDiffEntry, len(result.Entries))
-	for i, e := range result.Entries {
-		entries[i] = snapshot.SnapshotDiffEntry{
-			Path: e.StoredPath,
-			Type: snapshot.DiffType(e.Change),
-		}
-	}
-	return &snapshot.SnapshotDiffResult{
-		BaseSnapshotID:   result.BaseID,
-		TargetSnapshotID: result.TargetID,
-		Entries:          entries,
-		Summary: snapshot.SnapshotDiffSummary{
-			Added:    int64(result.Summary.Added),
-			Removed:  int64(result.Summary.Removed),
-			Modified: int64(result.Summary.Modified),
-		},
-	}, nil
+	// The CLI accepts repeated path and prefix selectors. Keep that full
+	// snapshot-domain query shape instead of narrowing it through the current
+	// single-path engine seam.
+	return snapshot.DiffSnapshots(ctx, db, baseID, targetID, query)
 }
 var diffSnapshotSummaryPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string) (*snapshot.SnapshotDiffSummary, error) {
 	eng, err := engine.New(engine.Config{DB: db})
@@ -4614,6 +4567,9 @@ func renderSnapshotTreeLines(items []snapshot.Snapshot) []string {
 	}
 
 	emitTopLevel := func(node snapshot.Snapshot) {
+		if _, seen := visited[node.ID]; seen {
+			return
+		}
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}

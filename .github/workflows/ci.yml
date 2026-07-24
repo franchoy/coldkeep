@@ -260,6 +260,8 @@ jobs:
                   r"^TestEngineReadSnapshotViewsAcrossBackends/postgres$",
                   r"^TestEngineReadVerifyAcrossBackends/postgres$",
                   r"^TestEngineReadContextAndErrorsAcrossBackends/postgres$",
+                  r"^TestEngineSnapshotSelectorsAcrossBackends/postgres$",
+                  r"^TestEngineSnapshotSelectorErrorsAcrossBackends/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/maintenance": [
                   r"^TestRunGCWithAdvisoryUnlockFailureStillSucceeds$",

@@ -42,7 +42,11 @@ func (e *DefaultEngine) snapshotDiffSummaryFastPath(ctx context.Context, req Sna
 }
 
 func (e *DefaultEngine) snapshotDiffDetailed(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error) {
-	raw, err := snapshot.DiffSnapshots(ctx, e.config.DB, req.BaseID, req.TargetID, snapshotQueryOrNil(req.Query))
+	query, err := snapshotQueryOrNil(req.Query)
+	if err != nil {
+		return SnapshotDiffResult{}, err
+	}
+	raw, err := snapshot.DiffSnapshots(ctx, e.config.DB, req.BaseID, req.TargetID, query)
 	if err != nil {
 		return SnapshotDiffResult{}, err
 	}
@@ -59,9 +63,9 @@ func (e *DefaultEngine) snapshotDiffDetailed(ctx context.Context, req SnapshotDi
 	return buildSnapshotDiffResult(req, entries, summary, len(raw.Entries)), nil
 }
 
-func snapshotQueryOrNil(q SnapshotQuery) *snapshot.SnapshotQuery {
+func snapshotQueryOrNil(q SnapshotQuery) (*snapshot.SnapshotQuery, error) {
 	if q == (SnapshotQuery{}) {
-		return nil
+		return nil, nil
 	}
 	return engineQueryToSnapshotQuery(q)
 }

@@ -111,7 +111,7 @@ func TestRunSnapshotCommandShowPreservesMixedOwnershipSeams(t *testing.T) {
 	}
 }
 
-func TestDiffSnapshotsPhaseNarrowsPrefixesBeforeEngineSeam(t *testing.T) {
+func TestDiffSnapshotsPhasePreservesRepeatedPathsAndPrefixes(t *testing.T) {
 	dbconn := openSnapshotRoutingDB(t)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -134,12 +134,25 @@ func TestDiffSnapshotsPhaseNarrowsPrefixesBeforeEngineSeam(t *testing.T) {
 	paths := make([]string, 0, len(result.Entries))
 	for _, entry := range result.Entries {
 		paths = append(paths, entry.Path)
-		if strings.HasPrefix(entry.Path, "images/") {
-			t.Fatalf("expected diff seam to narrow to first prefix only, got image entry %q", entry.Path)
-		}
 	}
-	if len(paths) != 2 {
-		t.Fatalf("expected only docs/ entries after narrowing, got %v", paths)
+	if got, want := strings.Join(paths, ","), "docs/added.txt,docs/removed.txt,images/added.png,images/removed.png"; got != want {
+		t.Fatalf("expected repeated prefixes to preserve all matching entries, got %v", paths)
+	}
+
+	query = &snapshot.SnapshotQuery{ExactPaths: map[string]struct{}{
+		"docs/added.txt":     {},
+		"images/removed.png": {},
+	}}
+	result, err = diffSnapshotsPhase(context.Background(), dbconn, "diff-narrow-base", "diff-narrow-target", query)
+	if err != nil {
+		t.Fatalf("diffSnapshotsPhase repeated paths: %v", err)
+	}
+	paths = paths[:0]
+	for _, entry := range result.Entries {
+		paths = append(paths, entry.Path)
+	}
+	if got, want := strings.Join(paths, ","), "docs/added.txt,images/removed.png"; got != want {
+		t.Fatalf("expected repeated paths to preserve both matching entries, got %v", paths)
 	}
 }
 

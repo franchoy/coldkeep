@@ -6082,6 +6082,16 @@ func TestRenderSnapshotTreeLinesDeterministicAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestRenderSnapshotTreeLinesDeduplicatesDuplicateIDs(t *testing.T) {
+	lines := renderSnapshotTreeLines([]snapshot.Snapshot{
+		{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+	})
+	if got := strings.Join(lines, "\n"); got != "root" {
+		t.Fatalf("expected duplicate metadata records to render once, got %q", got)
+	}
+}
+
 func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalGet := getSnapshotPhase

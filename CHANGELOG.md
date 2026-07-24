@@ -24,6 +24,12 @@ project, do not start here; start with [README.md](README.md).
 
 ### Phase 7 engine read-side parity evidence complete
 
+- Implemented Phase 8 snapshot selector contracts for deterministic equal-time
+  list ordering, file-query filtering, invalid direct-engine regex rejection,
+  pre-cancelled selection, and read non-mutation. CLI diff now preserves
+  repeated path/prefix query selectors rather than narrowing an unordered map
+  into one engine path. Required PostgreSQL CI evidence is pending.
+
 - Recorded the Phase 0 post-release correction that restored the v1.13.11–v1.13.13 release train.
 - Activated executable and reusable release-checklist identity to `1.13.11`.
 - Completed the Phase 2 backend compatibility claim matrix, distinguishing
