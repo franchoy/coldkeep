@@ -223,6 +223,7 @@ jobs:
             ./internal/db \
             ./internal/engine \
             ./internal/maintenance \
+            ./internal/container \
             | tee "$output_file"
 
           python3 - "$output_file" <<'PY'
@@ -253,6 +254,10 @@ jobs:
                   r"^TestSCH007NullableAndDefaultSemantics/postgres$",
                   r"^TestSCH009PostgresVersionElevenAutoMigration/postgres$",
                   r"^TestSCH010AndSCH011MetadataBoundaries/postgres$",
+                  r"^TestBackendTransactionCommitRollbackAcrossBackends/postgres$",
+                  r"^TestBackendForUpdateLockReleaseAcrossBackends/postgres$",
+                  r"^TestBackendNowaitAndSkipLockedAcrossBackends/postgres$",
+                  r"^TestBackendBlockedLockCancellationAcrossBackends/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/engine": [
                   r"^TestRemoveByIDPostgresPreservesSharedChunks$",
@@ -270,6 +275,9 @@ jobs:
               ],
               "github.com/franchoy/coldkeep/internal/maintenance": [
                   r"^TestRunGCWithAdvisoryUnlockFailureStillSucceeds$",
+              ],
+              "github.com/franchoy/coldkeep/internal/container": [
+                  r"^TestContainerRowLockIntegrationAcrossBackends/postgres$",
               ],
           }
 

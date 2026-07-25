@@ -22,6 +22,19 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
+### Phase 10 transaction and row-lock contracts implemented
+
+- Added shared SQLite/PostgreSQL transaction contracts for backend detection,
+  commit/rollback, read-own-writes, constraint rollback, affected rows,
+  PostgreSQL `FOR UPDATE`, `NOWAIT`, `SKIP LOCKED`, server-observed blocked-lock
+  cancellation, and SQLite's intentional clause-omission boundary.
+- Added a production-helper integration contract for container NOWAIT
+  contention/savepoint recovery and deterministic SKIP LOCKED allocation.
+- Extended the existing plain-codec internal-package run with
+  `./internal/container` and five exact PostgreSQL pass-event requirements.
+  Local SQLite, repeat, and race profiles pass; exact-head PostgreSQL CI proof
+  and final BKC classification remain pending. No production code changed.
+
 ### Phase 9 engine mutation parity complete
 
 - Added five shared SQLite/PostgreSQL Engine mutation contracts covering
