@@ -77,12 +77,13 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phases 0–9 are complete; Phase 10 is Next, with implementation
-  complete locally and exact-head CI pending. Its five transaction/row-lock contracts
-  pass SQLite, repeat, and race profiles; local PostgreSQL execution is
-  unavailable because `COLDKEEP_TEST_DB` is unset. BKC-003 and BKC-015 retain
-  their pre-Phase-10 classifications until required CI records all five exact
-  PostgreSQL events. Phase 9 exact-head
+  active release. Phases 0–10 are complete; Phase 11 is Next but not started.
+  Phase 10 implementation `ad82c959` passed exact-head CI run `30148670910`,
+  including all five PostgreSQL events in plain job `89655223183` and required
+  gate `89656972706`. A first benchmark variance was resolved by successful
+  same-head rerun `89656813012` without any benchmark accommodation. BKC-003
+  and BKC-015 are backend-specific — proven within their documented bounds.
+  Phase 9 exact-head
   CI run `30114444798` at `848e579b` proved scoped active, uncontended Engine
   mutation and GC dry-run parity, including all five required PostgreSQL events
   in plain job `89551564893` and required-gate job `89555865026`. Phase 8 exact-head CI run `30109561344` at `bcae3576` proved

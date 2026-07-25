@@ -22,7 +22,7 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
-### Phase 10 transaction and row-lock contracts implemented
+### Phase 10 transaction and row-lock contracts complete
 
 - Added shared SQLite/PostgreSQL transaction contracts for backend detection,
   commit/rollback, read-own-writes, constraint rollback, affected rows,
@@ -32,8 +32,10 @@ project, do not start here; start with [README.md](README.md).
   contention/savepoint recovery and deterministic SKIP LOCKED allocation.
 - Extended the existing plain-codec internal-package run with
   `./internal/container` and five exact PostgreSQL pass-event requirements.
-  Local SQLite, repeat, and race profiles pass; exact-head PostgreSQL CI proof
-  and final BKC classification remain pending. No production code changed.
+  Exact-head CI run `30148670910` at `ad82c959` passed all five events in plain
+  job `89655223183` and required gate `89656972706`. The initial uncompressed
+  benchmark variance was resolved by successful same-head rerun `89656813012`;
+  no benchmark accommodation or production code change was made.
 
 ### Phase 9 engine mutation parity complete
 
