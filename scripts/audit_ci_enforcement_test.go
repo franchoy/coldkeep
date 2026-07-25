@@ -27,6 +27,98 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 	}
 }
 
+func TestAuditCIEnforcementRequiresPinnedBenchmarkCalibrationToolchain(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	baselineWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "benchmark-baseline.yml"))
+	baselineWorkflow = strings.Replace(baselineWorkflow, "go-version: '1.25.12'", "go-version: '1.25.x'", 1)
+
+	stderr := runAuditLocalOnlyWithBaseline(t, workflow, codeqlWorkflow, baselineWorkflow, true)
+	if !strings.Contains(stderr, "benchmark calibration pins the Go patch") {
+		t.Fatalf("expected benchmark calibration toolchain error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementRejectsUnsafeBenchmarkCalibrationWorkflow(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	baselineWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "benchmark-baseline.yml"))
+	tests := []struct {
+		name        string
+		mutate      func(string) string
+		wantMessage string
+	}{
+		{
+			name: "automatic schedule",
+			mutate: func(value string) string {
+				return strings.Replace(value, "  workflow_dispatch:", "  schedule:\n  workflow_dispatch:", 1)
+			},
+			wantMessage: "benchmark calibration workflow must remain manual-only",
+		},
+		{
+			name: "write permission",
+			mutate: func(value string) string {
+				return strings.Replace(value, "  contents: read", "  contents: write", 1)
+			},
+			wantMessage: "benchmark calibration workflow must not receive write permission",
+		},
+		{
+			name: "adaptive sample count",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          sample_count=10", "          sample_count=11", 1)
+			},
+			wantMessage: "benchmark calibration fixes ten measured samples",
+		},
+		{
+			name: "fixture drift",
+			mutate: func(value string) string {
+				return strings.Replace(value, "            --dataset ci-stable-v1", "            --dataset small", 1)
+			},
+			wantMessage: "benchmark calibration fixes the fixture identity",
+		},
+		{
+			name: "push step",
+			mutate: func(value string) string {
+				return value + "\n# git push origin HEAD\n"
+			},
+			wantMessage: "benchmark calibration workflow must remain artifact-only",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stderr := runAuditLocalOnlyWithBaseline(
+				t,
+				workflow,
+				codeqlWorkflow,
+				tt.mutate(baselineWorkflow),
+				true,
+			)
+			if !strings.Contains(stderr, tt.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", tt.wantMessage, stderr)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRejectsPrematureRequiredBenchmarkGateSwitch(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	workflow = strings.Replace(
+		workflow,
+		"python3 scripts/validate_regression_thresholds.py check",
+		"python3 scripts/benchmark_gate.py compare",
+		1,
+	)
+	stderr := runAuditLocalOnly(
+		t,
+		workflow,
+		readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml")),
+		true,
+	)
+	if !strings.Contains(stderr, "required CI switched to the schema-v2 benchmark gate") {
+		t.Fatalf("expected premature gate-switch error, got:\n%s", stderr)
+	}
+}
+
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformSuccessAssertion(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
@@ -131,10 +223,28 @@ func TestAuditCIEnforcementLocalWorkflowRequiresDeterministicG6DBGate(t *testing
 
 func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wantFailure bool) string {
 	t.Helper()
+	return runAuditLocalOnlyWithBaseline(
+		t,
+		workflow,
+		codeqlWorkflow,
+		readRepoFile(t, filepath.Join(".github", "workflows", "benchmark-baseline.yml")),
+		wantFailure,
+	)
+}
+
+func runAuditLocalOnlyWithBaseline(
+	t *testing.T,
+	workflow string,
+	codeqlWorkflow string,
+	baselineWorkflow string,
+	wantFailure bool,
+) string {
+	t.Helper()
 
 	tmpDir := t.TempDir()
 	workflowPath := filepath.Join(tmpDir, "ci.yml")
 	codeqlWorkflowPath := filepath.Join(tmpDir, "codeql.yml")
+	baselineWorkflowPath := filepath.Join(tmpDir, "benchmark-baseline.yml")
 	matrixPath := filepath.Join(tmpDir, "VALIDATION_MATRIX.md")
 
 	if err := os.WriteFile(workflowPath, []byte(workflow), 0o600); err != nil {
@@ -142,6 +252,9 @@ func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wan
 	}
 	if err := os.WriteFile(codeqlWorkflowPath, []byte(codeqlWorkflow), 0o600); err != nil {
 		t.Fatalf("write codeql workflow fixture: %v", err)
+	}
+	if err := os.WriteFile(baselineWorkflowPath, []byte(baselineWorkflow), 0o600); err != nil {
+		t.Fatalf("write benchmark baseline workflow fixture: %v", err)
 	}
 	if err := os.WriteFile(matrixPath, []byte(readRepoFile(t, "VALIDATION_MATRIX.md")), 0o600); err != nil {
 		t.Fatalf("write validation matrix fixture: %v", err)
@@ -152,6 +265,7 @@ func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wan
 	cmd.Env = append(os.Environ(),
 		"COLDKEEP_CI_WORKFLOW_FILE="+workflowPath,
 		"COLDKEEP_CODEQL_WORKFLOW_FILE="+codeqlWorkflowPath,
+		"COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE="+baselineWorkflowPath,
 		"COLDKEEP_VALIDATION_MATRIX_FILE="+matrixPath,
 	)
 	output, err := cmd.CombinedOutput()

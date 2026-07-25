@@ -25,6 +25,30 @@ evaluation in v1.7.
 
 ## Running benchmarks
 
+### v1.13.11 release-gate diagnostic
+
+The `ci-stable-v1` preset is reserved for the Phase 11 release-gate
+calibration. It uses fixed larger fixtures and one isolated PostgreSQL database
+per case. It requires `--repeat 1`; independent repetitions are captured by:
+
+```bash
+python3 scripts/benchmark_gate.py sample \
+  --binary ./coldkeep \
+  --output-dir /tmp/coldkeep-gate-none-w4 \
+  --compression none \
+  --workers 4 \
+  --warmups 1 \
+  --samples 5 \
+  --postgres-version "PostgreSQL 16.14" \
+  --database-image-digest "sha256:<reviewed-digest>"
+```
+
+The sampler rejects malformed, repeated, trailing, incomplete, reordered, or
+fixture-inconsistent reports and preserves every raw sample. Duration median is
+the proposed failing endpoint; derived throughput is informational. The
+manual-only calibration workflow must pass before this harness replaces the
+historical required-CI comparison.
+
 Phase 8 benchmark execution is script-only for v1.8 release hardening.
 
 The `coldkeep benchmark` command is available in the shipped CLI for ad-hoc

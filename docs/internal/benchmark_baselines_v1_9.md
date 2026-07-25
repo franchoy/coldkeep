@@ -1,6 +1,6 @@
 # Benchmark Baselines v1.9 (Internal)
 
-Status: Frozen
+Status: Frozen historical single-observation evidence; manifest repair pending
 Date: 2026-05-09
 Scope: Official benchmark reference point for post-v1.9 work
 
@@ -8,6 +8,13 @@ Scope: Official benchmark reference point for post-v1.9 work
 
 This document freezes the official v1.9 benchmark baselines and the policy used
 to compare future results against them.
+
+The Phase 11 benchmark-gate investigation found that these files do not contain
+distribution or resolved-environment provenance and that the active and
+worker-specific manifests contain stale hashes. Their measurement content and
+3%/5% thresholds remain frozen, but they must not be treated as schema-v2
+aggregate evidence. A deterministic manifest repair and governed replacement
+baseline require successful `ci-stable-v1` calibration first.
 
 The goal is to ensure that v1.10+ architectural work measures regressions
 against one stable reference point instead of silently moving the floor.

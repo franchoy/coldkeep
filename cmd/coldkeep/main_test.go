@@ -2323,6 +2323,7 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 			t.Fatalf("unexpected default workers: %d", opts.StoreFolderWorkers)
 		}
 		return BenchmarkRunReport{
+			SchemaVersion:  2,
 			GeneratedAtUTC: "2026-04-29T00:00:00Z",
 			Dataset:        "small",
 			Repeat:         2,
@@ -2386,6 +2387,9 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	if got, _ := data["dataset"].(string); got != "small" {
 		t.Fatalf("dataset mismatch: got=%v data=%v", data["dataset"], data)
 	}
+	if got, _ := data["schema_version"].(float64); int(got) != 2 {
+		t.Fatalf("schema_version mismatch: got=%v data=%v", data["schema_version"], data)
+	}
 	if got, _ := data["repeat"].(float64); int(got) != 2 {
 		t.Fatalf("repeat mismatch: got=%v data=%v", data["repeat"], data)
 	}
@@ -2442,6 +2446,78 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	}
 	if got, _ := rowStats["workers_used"].(float64); int(got) != 1 {
 		t.Fatalf("row workers_used mismatch: got=%v stats=%v", rowStats["workers_used"], rowStats)
+	}
+}
+
+func TestRunCLIBenchmarkJSONEmitsExactlyOneEnvelope(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	runCoreBenchmarkPhase = func(
+		preset corebenchmark.DatasetPreset,
+		repeat int,
+		opts execution.Options,
+	) (BenchmarkRunReport, error) {
+		return BenchmarkRunReport{
+			SchemaVersion: 2,
+			Dataset:       string(preset),
+			Repeat:        repeat,
+			Execution: BenchmarkExecution{
+				StoreFolderWorkers: opts.StoreFolderWorkers,
+				PipelineDepth:      opts.PipelineDepth,
+				Deterministic:      opts.Deterministic,
+			},
+			Rows: []BenchmarkRunCaseRow{{
+				Case:           "store-large-file",
+				DurationMs:     1000,
+				ThroughputMBps: 1,
+			}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if code := runCLI([]string{"benchmark", "run", "--output", "json"}); code != exitSuccess {
+			t.Fatalf("runCLI exit=%d", code)
+		}
+	})
+	decoder := json.NewDecoder(strings.NewReader(output))
+	var envelope map[string]any
+	if err := decoder.Decode(&envelope); err != nil {
+		t.Fatalf("decode benchmark envelope: %v; output=%q", err, output)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected exactly one JSON envelope, got trailing=%v err=%v output=%q", trailing, err, output)
+	}
+}
+
+func TestRunCLIBenchmarkJSONFailureDoesNotEmitSuccess(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	runCoreBenchmarkPhase = func(
+		corebenchmark.DatasetPreset,
+		int,
+		execution.Options,
+	) (BenchmarkRunReport, error) {
+		return BenchmarkRunReport{}, errors.New("benchmark failed")
+	}
+
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			if code := runCLI([]string{"benchmark", "run", "--output", "json"}); code != exitGeneral {
+				t.Fatalf("runCLI exit=%d", code)
+			}
+		})
+	})
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatalf("benchmark failure emitted success output: %q", stdout)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stderr)), &envelope); err != nil {
+		t.Fatalf("decode benchmark error envelope: %v; stderr=%q", err, stderr)
+	}
+	if envelope["status"] != "error" {
+		t.Fatalf("expected error envelope, got=%v", envelope)
 	}
 }
 
@@ -3309,7 +3385,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version", "verify"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version", "verify"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -10167,7 +10243,7 @@ func TestCompareWithBaselineThroughputRegression(t *testing.T) {
 	}
 }
 
-func TestCompareWithBaselineNewCaseIgnored(t *testing.T) {
+func TestCompareWithBaselineRejectsUnexpectedCase(t *testing.T) {
 	baseline := BenchmarkRunReport{
 		Rows: []BenchmarkRunCaseRow{
 			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
@@ -10181,8 +10257,41 @@ func TestCompareWithBaselineNewCaseIgnored(t *testing.T) {
 	}
 
 	baselineFile := writeBaselineJSON(t, baseline)
-	if err := compareWithBaseline(current, baselineFile, 20.0); err != nil {
-		t.Fatalf("expected no regression for new cases, got: %v", err)
+	if err := compareWithBaseline(current, baselineFile, 20.0); err == nil || !strings.Contains(err.Error(), "case set mismatch") {
+		t.Fatalf("expected case-set validation error, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineRejectsDuplicateCase(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+			{Case: "store-large", DurationMs: 1001, ThroughputMBps: 199},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+			{Case: "restore-large", DurationMs: 1000, ThroughputMBps: 200},
+		},
+	}
+	err := compareWithBaseline(current, writeBaselineJSON(t, baseline), 20)
+	if err == nil || !strings.Contains(err.Error(), "duplicate case") {
+		t.Fatalf("expected duplicate-case validation error, got: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandRejectsRepeatForCIStableFixture(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags: map[string][]string{
+			"dataset": {"ci-stable-v1"},
+			"repeat":  {"2"},
+		},
+	}, outputModeJSON)
+	if err == nil || !strings.Contains(err.Error(), "requires --repeat 1") {
+		t.Fatalf("expected ci-stable repeat error, got: %v", err)
 	}
 }
 

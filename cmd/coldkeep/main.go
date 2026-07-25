@@ -985,7 +985,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version", "verify":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version", "verify":
 		return
 	}
 
@@ -3179,12 +3179,14 @@ func (p *perfTimer) Spans() []perfSpan { return p.spans }
 
 // BenchmarkRunReport is the output payload for `coldkeep benchmark run`.
 type BenchmarkRunReport struct {
-	GeneratedAtUTC string                  `json:"generated_at_utc"`
-	Dataset        string                  `json:"dataset"`
-	Repeat         int                     `json:"repeat"`
-	Execution      BenchmarkExecution      `json:"execution"`
-	ExecutionStats BenchmarkExecutionStats `json:"execution_stats"`
-	Rows           []BenchmarkRunCaseRow   `json:"rows"`
+	SchemaVersion  int                             `json:"schema_version"`
+	GeneratedAtUTC string                          `json:"generated_at_utc"`
+	Dataset        string                          `json:"dataset"`
+	Repeat         int                             `json:"repeat"`
+	Fixture        corebenchmark.FixtureDescriptor `json:"fixture"`
+	Execution      BenchmarkExecution              `json:"execution"`
+	ExecutionStats BenchmarkExecutionStats         `json:"execution_stats"`
+	Rows           []BenchmarkRunCaseRow           `json:"rows"`
 }
 
 // BenchmarkExecution captures execution policy knobs used for this run.
@@ -3321,6 +3323,9 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 			return usageErrorf("invalid --repeat value %q (must be integer > 0)", rawRepeat)
 		}
 	}
+	if preset == corebenchmark.DatasetPresetCIStableV1 && repeat != 1 {
+		return usageErrorf("ci-stable-v1 requires --repeat 1; independent sampling is owned by scripts/benchmark_gate.py")
+	}
 
 	report, err := runCoreBenchmarkPhase(preset, repeat, opts)
 	if err != nil {
@@ -3397,12 +3402,20 @@ func compareWithBaseline(current BenchmarkRunReport, baselinePath string, thresh
 
 	// The baseline file is the full JSON envelope written by --output json.
 	var envelope struct {
-		Data BenchmarkRunReport `json:"data"`
+		Status  string             `json:"status"`
+		Command string             `json:"command"`
+		Data    BenchmarkRunReport `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("parse baseline %q: %w", baselinePath, err)
 	}
+	if envelope.Status != "ok" || envelope.Command != "benchmark" {
+		return fmt.Errorf("parse baseline %q: expected successful benchmark envelope", baselinePath)
+	}
 	baseline := envelope.Data
+	if err := validateLegacyBenchmarkComparisonInputs(baseline, current); err != nil {
+		return fmt.Errorf("validate baseline %q: %w", baselinePath, err)
+	}
 
 	baselineByCase := make(map[string]BenchmarkRunCaseRow, len(baseline.Rows))
 	for _, row := range baseline.Rows {
@@ -3419,10 +3432,7 @@ func compareWithBaseline(current BenchmarkRunReport, baselinePath string, thresh
 	var regressions []regressionEntry
 
 	for _, row := range current.Rows {
-		base, ok := baselineByCase[row.Case]
-		if !ok {
-			continue // new case added since baseline was captured; skip
-		}
+		base := baselineByCase[row.Case]
 		if base.DurationMs > 0 {
 			delta := float64(row.DurationMs-base.DurationMs) / float64(base.DurationMs) * 100.0
 			if delta > thresholdPct {
@@ -3464,20 +3474,85 @@ func compareWithBaseline(current BenchmarkRunReport, baselinePath string, thresh
 	return fmt.Errorf("benchmark regression: %d case(s) exceeded the %.0f%% degradation threshold", len(regressions), thresholdPct)
 }
 
-func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
-	if err := runBenchmarkDeterminismPhase(preset, opts); err != nil {
-		return BenchmarkRunReport{}, err
+func validateLegacyBenchmarkComparisonInputs(baseline, current BenchmarkRunReport) error {
+	if len(baseline.Rows) == 0 || len(current.Rows) == 0 {
+		return fmt.Errorf("benchmark reports must contain at least one case")
+	}
+	if baseline.Dataset != "" && current.Dataset != "" && baseline.Dataset != current.Dataset {
+		return fmt.Errorf("dataset mismatch: baseline=%q current=%q", baseline.Dataset, current.Dataset)
+	}
+	if baseline.Repeat > 0 && current.Repeat > 0 && baseline.Repeat != current.Repeat {
+		return fmt.Errorf("repeat mismatch: baseline=%d current=%d", baseline.Repeat, current.Repeat)
+	}
+	if baseline.Execution.StoreFolderWorkers > 0 &&
+		current.Execution.StoreFolderWorkers > 0 &&
+		baseline.Execution != current.Execution {
+		return fmt.Errorf("execution policy mismatch")
 	}
 
-	report, err := runPresetInTemporaryDatabase(preset, repeat, opts, "report")
+	validateRows := func(label string, rows []BenchmarkRunCaseRow) (map[string]struct{}, error) {
+		seen := make(map[string]struct{}, len(rows))
+		for index, row := range rows {
+			if strings.TrimSpace(row.Case) == "" {
+				return nil, fmt.Errorf("%s case at index %d has empty name", label, index)
+			}
+			if _, exists := seen[row.Case]; exists {
+				return nil, fmt.Errorf("%s contains duplicate case %q", label, row.Case)
+			}
+			if row.DurationMs <= 0 {
+				return nil, fmt.Errorf("%s case %q has non-positive duration", label, row.Case)
+			}
+			if math.IsNaN(row.ThroughputMBps) || math.IsInf(row.ThroughputMBps, 0) || row.ThroughputMBps <= 0 {
+				return nil, fmt.Errorf("%s case %q has invalid throughput", label, row.Case)
+			}
+			seen[row.Case] = struct{}{}
+		}
+		return seen, nil
+	}
+
+	baselineCases, err := validateRows("baseline", baseline.Rows)
+	if err != nil {
+		return err
+	}
+	currentCases, err := validateRows("current", current.Rows)
+	if err != nil {
+		return err
+	}
+	if len(baselineCases) != len(currentCases) {
+		return fmt.Errorf("case set mismatch")
+	}
+	for index, row := range baseline.Rows {
+		if _, ok := currentCases[row.Case]; !ok {
+			return fmt.Errorf("current report is missing case %q", row.Case)
+		}
+		if current.Rows[index].Case != row.Case {
+			return fmt.Errorf("case order mismatch at index %d", index)
+		}
+	}
+	return nil
+}
+
+func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+	var report corebenchmark.RunReport
+	var err error
+	if preset == corebenchmark.DatasetPresetCIStableV1 {
+		report, err = runGatePresetWithIsolatedDatabases(preset, repeat, opts)
+	} else {
+		if err := runBenchmarkDeterminismPhase(preset, opts); err != nil {
+			return BenchmarkRunReport{}, err
+		}
+		report, err = runPresetInTemporaryDatabase(preset, repeat, opts, "report")
+	}
 	if err != nil {
 		return BenchmarkRunReport{}, err
 	}
 
 	out := BenchmarkRunReport{
+		SchemaVersion:  2,
 		GeneratedAtUTC: report.GeneratedAtUTC,
 		Dataset:        string(report.Dataset),
 		Repeat:         report.Repeat,
+		Fixture:        report.Fixture,
 		Execution: BenchmarkExecution{
 			StoreFolderWorkers: opts.StoreFolderWorkers,
 			PipelineDepth:      opts.PipelineDepth,
@@ -3558,6 +3633,30 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 	}
 
 	return out, nil
+}
+
+func runGatePresetWithIsolatedDatabases(
+	preset corebenchmark.DatasetPreset,
+	repeat int,
+	opts execution.Options,
+) (corebenchmark.RunReport, error) {
+	return corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
+		ColdkeepExecutable: resolveSelfExecutable(),
+		Codec:              strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")),
+		Compression:        strings.TrimSpace(os.Getenv("COLDKEEP_COMPRESSION")),
+		Execution:          opts,
+		CaseEnvironmentFactory: func(caseName string) (map[string]string, func() error, error) {
+			dbName, cleanup, err := createTemporaryBenchmarkDatabase("gate-" + caseName)
+			if err != nil {
+				return nil, nil, err
+			}
+			return map[string]string{
+				"DB_NAME":                       dbName,
+				"COLDKEEP_DB_AUTO_BOOTSTRAP":    "true",
+				"COLDKEEP_STORE_FOLDER_WORKERS": strconv.Itoa(opts.StoreFolderWorkers),
+			}, cleanup, nil
+		},
+	})
 }
 
 type benchmarkStateSnapshot struct {

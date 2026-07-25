@@ -62,6 +62,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 WORKFLOW_FILE="${COLDKEEP_CI_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/ci.yml}"
 CODEQL_WORKFLOW_FILE="${COLDKEEP_CODEQL_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/codeql.yml}"
+BENCHMARK_BASELINE_WORKFLOW_FILE="${COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/benchmark-baseline.yml}"
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
 
 require_pattern() {
@@ -137,6 +138,49 @@ check_local_workflow() {
 
   echo "[audit] checking local workflow invariants"
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^name: Benchmark Gate Calibration and Baseline Capture$' 'manual benchmark calibration workflow' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  workflow_dispatch:$' 'benchmark calibration is manually dispatched' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  contents: read$' 'benchmark calibration has read-only repository permission' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'runs-on: ubuntu-24\.04' 'benchmark calibration pins the runner family' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" "go-version: '1\\.25\\.12'" 'benchmark calibration pins the Go patch' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'benchmark calibration pins the PostgreSQL image digest' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+compression: \[none, zstd\]$' 'benchmark calibration fixes compression profiles' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+workers: \[1, 4\]$' 'benchmark calibration fixes worker profiles' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+replicate: \[1, 2\]$' 'benchmark calibration uses two independent matrix jobs' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+sample_count=10$' 'benchmark calibration fixes ten measured samples' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+sample_count=5$' 'benchmark capture fixes five measured samples' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'python3 scripts/benchmark_gate\.py sample' 'benchmark calibration uses the strict sampler' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+--dataset ci-stable-v1 \\$' 'benchmark calibration fixes the fixture identity' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+--warmups 1 \\$' 'benchmark calibration fixes one excluded warmup' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'python3 scripts/benchmark_gate\.py calibrate' 'benchmark calibration evaluates the fixed matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'benchmark run --dataset small --workers 1 --output json' 'required CI retains the historical workers=1 benchmark command' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'benchmark run --dataset small --workers 4 --output json' 'required CI retains the historical workers=4 benchmark command' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'scripts/validate_regression_thresholds\.py check' 'required CI retains the historical comparator' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'benchmarks/v1\.9/baselines/benchmark-baseline-v1\.9-packed-aes-gcm-none-small-w4-r1\.json' 'required CI retains historical baseline authority' || check_status=1
+  if grep -Eq '^  (push|pull_request|merge_group|schedule):' "$BENCHMARK_BASELINE_WORKFLOW_FILE"; then
+    echo "[audit] ERROR: benchmark calibration workflow must remain manual-only" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark calibration workflow has no automatic trigger"
+  fi
+  if grep -Eq '^\s+(contents|actions|checks|issues|pull-requests):\s*write|^\s*write-all\s*$' "$BENCHMARK_BASELINE_WORKFLOW_FILE"; then
+    echo "[audit] ERROR: benchmark calibration workflow must not receive write permission" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark calibration workflow has no repository write permission"
+  fi
+  if grep -Eqi 'git (commit|push)|gh (pr|release)|create-pull-request' "$BENCHMARK_BASELINE_WORKFLOW_FILE"; then
+    echo "[audit] ERROR: benchmark calibration workflow must remain artifact-only" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark calibration workflow cannot commit, push, release, or open a pull request"
+  fi
+  if grep -Eq 'scripts/benchmark_gate\.py (sample|compare)' "$WORKFLOW_FILE"; then
+    echo "[audit] ERROR: required CI switched to the schema-v2 benchmark gate before calibration" >&2
+    check_status=1
+  else
+    echo "[audit] ok: required CI has not switched to the schema-v2 benchmark gate"
+  fi
   require_pattern "$WORKFLOW_FILE" '^  push:$' 'CI push trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^\s+- main$' 'CI push branch retains main' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^\s+- release/\*\*$' 'CI push branch includes release/**' || check_status=1

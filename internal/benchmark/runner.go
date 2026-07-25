@@ -3,6 +3,7 @@ package benchmark
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +24,12 @@ type BenchmarkCase struct {
 type BenchmarkContext struct {
 	RepoPath string
 	DataPath string
+	ExtraEnv map[string]string
 }
+
+// CaseEnvironmentFactory creates per-case environment overrides and cleanup.
+// It runs before the case timer starts.
+type CaseEnvironmentFactory func(caseName string) (map[string]string, func() error, error)
 
 // Result captures one benchmark case execution outcome.
 type Result struct {
@@ -48,6 +54,19 @@ type ioDebugProcessRecord struct {
 
 // RunBenchmark executes benchmark cases sequentially with isolated temp paths.
 func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
+	return runBenchmark(cases, nil)
+}
+
+// RunBenchmarkWithEnvironmentFactory executes cases with per-case external
+// resources, such as isolated benchmark databases.
+func RunBenchmarkWithEnvironmentFactory(cases []BenchmarkCase, factory CaseEnvironmentFactory) ([]Result, error) {
+	if factory == nil {
+		return nil, fmt.Errorf("case environment factory cannot be nil")
+	}
+	return runBenchmark(cases, factory)
+}
+
+func runBenchmark(cases []BenchmarkCase, factory CaseEnvironmentFactory) ([]Result, error) {
 	results := make([]Result, 0, len(cases))
 	for index, bc := range cases {
 		if strings.TrimSpace(bc.Name) == "" {
@@ -60,6 +79,18 @@ func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
 		ctx, cleanup, err := newBenchmarkContext()
 		if err != nil {
 			return results, fmt.Errorf("create context for benchmark case %q: %w", bc.Name, err)
+		}
+		externalCleanup := func() error { return nil }
+		if factory != nil {
+			extraEnv, cleanupExternal, factoryErr := factory(bc.Name)
+			if factoryErr != nil {
+				_ = cleanup()
+				return results, fmt.Errorf("create environment for benchmark case %q: %w", bc.Name, factoryErr)
+			}
+			ctx.ExtraEnv = extraEnv
+			if cleanupExternal != nil {
+				externalCleanup = cleanupExternal
+			}
 		}
 
 		ioCountersPath := filepath.Join(ctx.RepoPath, fmt.Sprintf(".io-debug-%s.jsonl", strings.ReplaceAll(bc.Name, " ", "_")))
@@ -82,11 +113,23 @@ func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
 		})
 
 		ioStats, ioErr := readAggregatedIOCounters(ioCountersPath)
+		externalCleanupErr := externalCleanup()
+		cleanupErr := cleanup()
+		if externalCleanupErr != nil && cleanupErr != nil {
+			cleanupErr = errors.Join(externalCleanupErr, cleanupErr)
+		} else if externalCleanupErr != nil {
+			cleanupErr = externalCleanupErr
+		}
 		if ioErr != nil {
+			if cleanupErr != nil {
+				return results, fmt.Errorf(
+					"read io counters for benchmark case %q: %w",
+					bc.Name,
+					errors.Join(ioErr, cleanupErr),
+				)
+			}
 			return results, fmt.Errorf("read io counters for benchmark case %q: %w", bc.Name, ioErr)
 		}
-
-		cleanupErr := cleanup()
 
 		result := Result{
 			Name:      bc.Name,

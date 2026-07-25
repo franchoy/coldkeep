@@ -51,6 +51,8 @@ type ScenarioConfig struct {
 	RunTag                 string
 	ExtraEnv               map[string]string
 	Runner                 CommandRunner
+	CaseEnvironmentFactory CaseEnvironmentFactory
+	CaseDatabaseIsolation  bool
 }
 
 // CoreScenarios returns the v1.7 Step 4 real-world benchmark cases.
@@ -418,11 +420,18 @@ func runColdkeep(ctx BenchmarkContext, cfg ScenarioConfig, args ...string) error
 		return fmt.Errorf("coldkeep executable cannot be empty")
 	}
 
+	extraEnv := make(map[string]string, len(cfg.ExtraEnv)+len(ctx.ExtraEnv))
+	for key, value := range cfg.ExtraEnv {
+		extraEnv[key] = value
+	}
+	for key, value := range ctx.ExtraEnv {
+		extraEnv[key] = value
+	}
 	env := withScenarioEnv(os.Environ(), map[string]string{
 		"COLDKEEP_STORAGE_DIR": filepath.Join(ctx.RepoPath, "storage", "containers"),
 		"COLDKEEP_CODEC":       cfg.Codec,
 		"COLDKEEP_COMPRESSION": cfg.Compression,
-	}, cfg.ExtraEnv)
+	}, extraEnv)
 
 	spec := CommandSpec{
 		Executable: cfg.ColdkeepExecutable,

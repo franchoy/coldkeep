@@ -78,7 +78,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
   active release. Phases 0–10 are complete; Phase 11 remains Next with its
-  contract implemented locally and exact-head CI closure pending. Its
+  contract implemented locally and benchmark calibration/exact-head CI closure
+  pending. The diagnostic benchmark-gate bootstrap is recorded in
+  [v1.13.11-phase11-benchmark-gate-integrity-remediation.md](v1.13.11-phase11-benchmark-gate-integrity-remediation.md).
+  Its
   exclusive-only coordination contract
   defines canonical container-namespace identity, a recovery-safe control
   directory, stable errors, diagnostic owner metadata, lease lifecycle, and

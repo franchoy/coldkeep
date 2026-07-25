@@ -22,6 +22,17 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
+### Phase 11 benchmark gate diagnostic bootstrap
+
+- Added a fixed, release-gate-only `ci-stable-v1` calibration fixture, strict
+  single-envelope schema-v2 reports, per-case database isolation, and an
+  external sampler with median/MAD statistics and fail-closed evidence checks.
+- Added a manual-only, read-only calibration/baseline-capture workflow pinned
+  to Go 1.25.12, Ubuntu 24.04, and the reviewed PostgreSQL 16 image digest.
+- Required CI still uses the historical benchmark gate. No baseline,
+  threshold, repository runtime, or Phase 12 change is included; Phase 11
+  remains blocked on the predetermined calibration.
+
 ### Phase 11 repository coordination contract implemented
 
 - Added the internal exclusive-only repository coordination contract, stable

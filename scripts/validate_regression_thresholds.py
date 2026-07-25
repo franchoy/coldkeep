@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""
-Coldkeep Benchmark Regression Threshold Validator
+"""Coldkeep legacy single-observation benchmark threshold validator.
 
 Validates threshold configuration realism and applies thresholds to benchmark runs.
 Supports mode-specific (uncompressed/compressed) and case-specific thresholds.
+The required aggregate v2 release gate is owned by scripts/benchmark_gate.py.
 
 Usage:
   # Validate that thresholds are realistic against baselines
@@ -43,6 +43,10 @@ def load_benchmark_envelope(path: pathlib.Path) -> Dict[str, Any]:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(obj, dict) and obj.get('report_kind') == 'benchmark_gate_aggregate':
+            raise RuntimeError(
+                f"Aggregate v2 evidence must be validated with scripts/benchmark_gate.py: {path}"
+            )
         if isinstance(obj, dict) and 'data' in obj:
             return obj
     raise RuntimeError(f"No valid benchmark envelope found in {path}")

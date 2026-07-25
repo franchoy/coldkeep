@@ -9,9 +9,10 @@ import (
 type DatasetPreset string
 
 const (
-	DatasetPresetSmall  DatasetPreset = "small"
-	DatasetPresetMedium DatasetPreset = "medium"
-	DatasetPresetLarge  DatasetPreset = "large"
+	DatasetPresetSmall      DatasetPreset = "small"
+	DatasetPresetMedium     DatasetPreset = "medium"
+	DatasetPresetLarge      DatasetPreset = "large"
+	DatasetPresetCIStableV1 DatasetPreset = CIStableV1FixtureID
 )
 
 type IterationReport struct {
@@ -23,6 +24,7 @@ type RunReport struct {
 	GeneratedAtUTC string            `json:"generated_at_utc"`
 	Dataset        DatasetPreset     `json:"dataset"`
 	Repeat         int               `json:"repeat"`
+	Fixture        FixtureDescriptor `json:"fixture"`
 	Iterations     []IterationReport `json:"iterations"`
 }
 
@@ -33,10 +35,10 @@ func ParseDatasetPreset(raw string) (DatasetPreset, error) {
 	}
 
 	switch DatasetPreset(normalized) {
-	case DatasetPresetSmall, DatasetPresetMedium, DatasetPresetLarge:
+	case DatasetPresetSmall, DatasetPresetMedium, DatasetPresetLarge, DatasetPresetCIStableV1:
 		return DatasetPreset(normalized), nil
 	default:
-		return "", fmt.Errorf("invalid dataset preset %q (allowed: small, medium, large)", raw)
+		return "", fmt.Errorf("invalid dataset preset %q (allowed: small, medium, large, ci-stable-v1)", raw)
 	}
 }
 
@@ -72,6 +74,8 @@ func PresetScenarioConfig(preset DatasetPreset) (ScenarioConfig, error) {
 			MixedMaxFileSizeBytes:  defaultMixedMaxFileSizeBytes,
 			RemoveEvery:            defaultRemoveEvery,
 		}, nil
+	case DatasetPresetCIStableV1:
+		return CIStableV1ScenarioConfig(), nil
 	default:
 		return ScenarioConfig{}, fmt.Errorf("unsupported dataset preset %q", preset)
 	}
@@ -95,18 +99,29 @@ func RunPreset(preset DatasetPreset, repeat int, base ScenarioConfig) (RunReport
 	cfg.MixedMinFileSizeBytes = presetCfg.MixedMinFileSizeBytes
 	cfg.MixedMaxFileSizeBytes = presetCfg.MixedMaxFileSizeBytes
 	cfg.RemoveEvery = presetCfg.RemoveEvery
+	cfg.CaseDatabaseIsolation = presetCfg.CaseDatabaseIsolation
+	if cfg.CaseDatabaseIsolation && cfg.CaseEnvironmentFactory == nil {
+		return RunReport{}, fmt.Errorf("preset %q requires a per-case environment factory", preset)
+	}
 
 	report := RunReport{
 		GeneratedAtUTC: time.Now().UTC().Format(time.RFC3339),
 		Dataset:        preset,
 		Repeat:         repeat,
+		Fixture:        FixtureDescriptorFor(preset, cfg),
 		Iterations:     make([]IterationReport, 0, repeat),
 	}
 
 	for i := 1; i <= repeat; i++ {
 		iterCfg := cfg
 		iterCfg.RunTag = fmt.Sprintf("iter-%02d", i)
-		results, runErr := RunBenchmark(CoreScenarios(iterCfg))
+		var results []Result
+		var runErr error
+		if iterCfg.CaseEnvironmentFactory != nil {
+			results, runErr = RunBenchmarkWithEnvironmentFactory(CoreScenarios(iterCfg), iterCfg.CaseEnvironmentFactory)
+		} else {
+			results, runErr = RunBenchmark(CoreScenarios(iterCfg))
+		}
 		report.Iterations = append(report.Iterations, IterationReport{
 			Iteration: i,
 			Results:   results,
