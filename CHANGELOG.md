@@ -22,6 +22,21 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
 
+### Phase 11 repository coordination contract implemented
+
+- Added the internal exclusive-only repository coordination contract, stable
+  error sentinels, non-mutating canonical container-namespace identity,
+  recovery-safe `.coldkeep-control` namespace, versioned diagnostic owner
+  metadata, and explicit lease lifecycle helper.
+- Added fake-based contract tests for identity aliases, operation policy,
+  owner metadata, cancellation/deadlines, release errors, nested acquisition,
+  and independent repositories. Added a pure CLI policy seam that classifies
+  participating commands without acquiring a lock.
+- BKC-016 remains `Deferred — documented`: native Linux/macOS/Windows locking,
+  CLI acquisition, subprocess contention, crash release, live-GC barriers, and
+  PostgreSQL advisory session ownership remain Phases 12–13 work. No workflow,
+  schema, Engine behavior, OS lock, or advisory-lock behavior changed.
+
 ### Phase 10 transaction and row-lock contracts complete
 
 - Added shared SQLite/PostgreSQL transaction contracts for backend detection,

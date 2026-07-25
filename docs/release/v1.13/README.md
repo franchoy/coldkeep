@@ -77,7 +77,14 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phases 0–10 are complete; Phase 11 is Next but not started.
+  active release. Phases 0–10 are complete; Phase 11 remains Next with its
+  contract implemented locally and exact-head CI closure pending. Its
+  exclusive-only coordination contract
+  defines canonical container-namespace identity, a recovery-safe control
+  directory, stable errors, diagnostic owner metadata, lease lifecycle, and
+  command policy without implementing an OS lock or changing runtime behavior.
+  BKC-016 remains deferred until Phases 12–13 implement and prove native
+  coordination.
   Phase 10 implementation `ad82c959` passed exact-head CI run `30148670910`,
   including all five PostgreSQL events in plain job `89655223183` and required
   gate `89656972706`. A first benchmark variance was resolved by successful
