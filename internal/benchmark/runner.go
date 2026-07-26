@@ -31,6 +31,11 @@ type BenchmarkContext struct {
 // It runs before the case timer starts.
 type CaseEnvironmentFactory func(caseName string) (map[string]string, func() error, error)
 
+// FinalStateObserver captures benchmark-only evidence after a case finishes and
+// before its external resources and temporary paths are cleaned up. The raw
+// message must encode one sanitized JSON object.
+type FinalStateObserver func(caseName string, ctx BenchmarkContext) (json.RawMessage, error)
+
 // Result captures one benchmark case execution outcome.
 type Result struct {
 	Name      string
@@ -38,8 +43,11 @@ type Result struct {
 	Metrics   Metrics
 	Execution execution.Options
 	ExecStats execution.ExecutionStats
-	Success   bool
-	Error     string
+	// DiagnosticFinalState is separately versioned diagnostic evidence. It does
+	// not change the surrounding benchmark report schema.
+	DiagnosticFinalState json.RawMessage
+	Success              bool
+	Error                string
 }
 
 type ioDebugProcessRecord struct {
@@ -54,7 +62,7 @@ type ioDebugProcessRecord struct {
 
 // RunBenchmark executes benchmark cases sequentially with isolated temp paths.
 func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
-	return runBenchmark(cases, nil)
+	return runBenchmark(cases, nil, nil)
 }
 
 // RunBenchmarkWithEnvironmentFactory executes cases with per-case external
@@ -63,10 +71,26 @@ func RunBenchmarkWithEnvironmentFactory(cases []BenchmarkCase, factory CaseEnvir
 	if factory == nil {
 		return nil, fmt.Errorf("case environment factory cannot be nil")
 	}
-	return runBenchmark(cases, factory)
+	return runBenchmark(cases, factory, nil)
 }
 
-func runBenchmark(cases []BenchmarkCase, factory CaseEnvironmentFactory) ([]Result, error) {
+// RunBenchmarkWithEnvironmentFactoryAndObserver executes cases with per-case
+// external resources and captures final state before any cleanup runs.
+func RunBenchmarkWithEnvironmentFactoryAndObserver(
+	cases []BenchmarkCase,
+	factory CaseEnvironmentFactory,
+	observer FinalStateObserver,
+) ([]Result, error) {
+	if factory == nil {
+		return nil, fmt.Errorf("case environment factory cannot be nil")
+	}
+	if observer == nil {
+		return nil, fmt.Errorf("final state observer cannot be nil")
+	}
+	return runBenchmark(cases, factory, observer)
+}
+
+func runBenchmark(cases []BenchmarkCase, factory CaseEnvironmentFactory, observer FinalStateObserver) ([]Result, error) {
 	results := make([]Result, 0, len(cases))
 	for index, bc := range cases {
 		if strings.TrimSpace(bc.Name) == "" {
@@ -113,6 +137,20 @@ func runBenchmark(cases []BenchmarkCase, factory CaseEnvironmentFactory) ([]Resu
 		})
 
 		ioStats, ioErr := readAggregatedIOCounters(ioCountersPath)
+		var diagnosticFinalState json.RawMessage
+		var observerErr error
+		if observer != nil {
+			diagnosticFinalState, observerErr = observer(bc.Name, ctx)
+			if observerErr == nil && !json.Valid(diagnosticFinalState) {
+				observerErr = fmt.Errorf("observer returned invalid JSON")
+			}
+			if observerErr == nil {
+				var object map[string]any
+				if err := json.Unmarshal(diagnosticFinalState, &object); err != nil || object == nil {
+					observerErr = fmt.Errorf("observer must return a JSON object")
+				}
+			}
+		}
 		externalCleanupErr := externalCleanup()
 		cleanupErr := cleanup()
 		if externalCleanupErr != nil && cleanupErr != nil {
@@ -131,6 +169,8 @@ func runBenchmark(cases []BenchmarkCase, factory CaseEnvironmentFactory) ([]Resu
 			return results, fmt.Errorf("read io counters for benchmark case %q: %w", bc.Name, ioErr)
 		}
 
+		operationErr := errors.Join(runErr, observerErr)
+
 		result := Result{
 			Name:      bc.Name,
 			Duration:  metrics.Duration,
@@ -148,10 +188,11 @@ func runBenchmark(cases []BenchmarkCase, factory CaseEnvironmentFactory) ([]Resu
 				BytesRead:              ioStats.BytesRead,
 				SnapshotMetadataWrites: ioStats.SnapshotMetadataWrites,
 			},
-			Success: runErr == nil && cleanupErr == nil,
+			DiagnosticFinalState: diagnosticFinalState,
+			Success:              operationErr == nil && cleanupErr == nil,
 		}
-		if runErr != nil {
-			result.Error = runErr.Error()
+		if operationErr != nil {
+			result.Error = operationErr.Error()
 		}
 		if cleanupErr != nil {
 			if result.Error == "" {
@@ -162,8 +203,8 @@ func runBenchmark(cases []BenchmarkCase, factory CaseEnvironmentFactory) ([]Resu
 		}
 		results = append(results, result)
 
-		if runErr != nil {
-			return results, fmt.Errorf("run benchmark case %q: %w", bc.Name, runErr)
+		if operationErr != nil {
+			return results, fmt.Errorf("run benchmark case %q: %w", bc.Name, operationErr)
 		}
 		if cleanupErr != nil {
 			return results, fmt.Errorf("cleanup benchmark case %q context: %w", bc.Name, cleanupErr)

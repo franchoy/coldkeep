@@ -10,6 +10,7 @@ import math
 import pathlib
 import tempfile
 import unittest
+from copy import deepcopy
 
 MODULE_PATH = pathlib.Path(__file__).with_name("benchmark_gate.py")
 SPEC = importlib.util.spec_from_file_location("benchmark_gate", MODULE_PATH)
@@ -25,6 +26,51 @@ def fixture() -> dict:
             {"name": name, "seed": 1712 + index * 10}
             for index, name in enumerate(gate.EXPECTED_CASES)
         ],
+    }
+
+
+def diagnostic_final_state() -> dict:
+    digest = "d" * 64
+    return {
+        "schema_version": 1,
+        "logical_files": {"count": 1, "total_bytes": 1024, "sha256": digest},
+        "logical_statuses": {"completed": 1, "processing": 0, "aborted": 0},
+        "chunk_graph": {"count": 1, "total_bytes": 1024, "sha256": digest},
+        "restored_tree": {"count": 0, "total_bytes": 0, "sha256": digest},
+        "snapshots": {"count": 0, "total_bytes": 0, "sha256": digest},
+        "snapshot_count": 0,
+        "gc": {
+            "total_chunks": 1,
+            "reachable_chunks": 1,
+            "unreachable_chunks": 0,
+            "logically_reclaimable_bytes": 0,
+            "physically_reclaimable_bytes": 0,
+            "packed_blocks_live": 1,
+            "packed_blocks_dead": 0,
+            "packed_bytes_live": 1024,
+            "packed_bytes_reclaimable": 0,
+            "retained_dead_bytes": 0,
+        },
+        "verification": {
+            "blocks_checked": 1,
+            "physical_hashes_checked": 1,
+            "compressed_hashes_checked": 0,
+            "logical_hashes_checked": 1,
+            "compressed_blocks_checked": 0,
+            "physical_file_issues": 0,
+            "snapshot_membership_rows": 0,
+            "snapshot_reachability_issues": 0,
+        },
+        "physical": {
+            "container_count": 1,
+            "storage_block_count": 1,
+            "legacy_block_count": 0,
+            "chunk_reference_count": 1,
+            "payload_bytes": 1024,
+            "container_bytes": 1088,
+            "canonical_sha256": digest,
+        },
+        "physical_layout_sha256": "e" * 64,
     }
 
 
@@ -46,6 +92,7 @@ def aggregate(
                 "logical_files": index + 1,
                 "logical_bytes": logical_bytes,
                 "sample_durations_ms": list(durations),
+                "diagnostic_final_state": diagnostic_final_state(),
                 "fixture_stats": {
                     "execution": {
                         "store_folder_workers": 4,
@@ -140,6 +187,38 @@ class StatisticsTests(unittest.TestCase):
 
 
 class StrictEvidenceTests(unittest.TestCase):
+    def test_diagnostic_schema_excludes_sensitive_fields(self) -> None:
+        state = diagnostic_final_state()
+        gate.validate_diagnostic_final_state(state, "test")
+        for forbidden in ("dsn", "password", "username", "database_name", "temporary_path"):
+            mutated = deepcopy(state)
+            mutated[forbidden] = "secret"
+            with self.assertRaisesRegex(gate.GateError, "fields mismatch"):
+                gate.validate_diagnostic_final_state(mutated, "test")
+
+    def test_hard_final_state_is_separate_from_operational_counters(self) -> None:
+        row = aggregate()["cases"][0]
+        as_raw_row = {
+            "case": row["case"],
+            "diagnostic_final_state": deepcopy(row["diagnostic_final_state"]),
+            **deepcopy(row["fixture_stats"]),
+        }
+        counter_variant = deepcopy(as_raw_row)
+        counter_variant["execution_stats"]["fsync_count"] = 1
+        self.assertEqual(gate.hard_final_state(as_raw_row), gate.hard_final_state(counter_variant))
+        self.assertNotEqual(gate.fixture_stats(as_raw_row), gate.fixture_stats(counter_variant))
+
+        layout_variant = deepcopy(as_raw_row)
+        layout_variant["diagnostic_final_state"]["physical"]["container_count"] += 1
+        layout_variant["diagnostic_final_state"]["physical"]["container_bytes"] += 64
+        layout_variant["diagnostic_final_state"]["physical_layout_sha256"] = "a" * 64
+        self.assertEqual(gate.hard_final_state(as_raw_row), gate.hard_final_state(layout_variant))
+
+        state_variant = deepcopy(as_raw_row)
+        state_variant["diagnostic_final_state"]["logical_files"]["sha256"] = "f" * 64
+        self.assertNotEqual(gate.hard_final_state(as_raw_row), gate.hard_final_state(state_variant))
+        self.assertEqual(gate.fixture_stats(as_raw_row), gate.fixture_stats(state_variant))
+
     def test_trailing_and_repeated_json_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory, "input.json")

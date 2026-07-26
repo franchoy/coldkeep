@@ -1,6 +1,7 @@
 package benchmark
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -204,5 +205,76 @@ func TestRunBenchmarkWithEnvironmentFactoryCleansAfterCaseFailure(t *testing.T) 
 	}
 	if !cleaned {
 		t.Fatal("expected external cleanup after case failure")
+	}
+}
+
+func TestRunBenchmarkObserverRunsBeforeCleanup(t *testing.T) {
+	var observedPath string
+	cleaned := false
+	cases := []BenchmarkCase{{
+		Name: "observed",
+		Run: func(ctx BenchmarkContext) error {
+			observedPath = filepath.Join(ctx.DataPath, "final-state.txt")
+			return os.WriteFile(observedPath, []byte("present"), 0o600)
+		},
+	}}
+
+	results, err := RunBenchmarkWithEnvironmentFactoryAndObserver(
+		cases,
+		func(string) (map[string]string, func() error, error) {
+			return map[string]string{"DB_NAME": "ephemeral"}, func() error {
+				cleaned = true
+				return nil
+			}, nil
+		},
+		func(_ string, ctx BenchmarkContext) (json.RawMessage, error) {
+			if cleaned {
+				t.Fatal("observer ran after external cleanup")
+			}
+			if _, err := os.Stat(observedPath); err != nil {
+				t.Fatalf("observer could not read pre-cleanup state: %v", err)
+			}
+			if _, err := os.Stat(ctx.RepoPath); err != nil {
+				t.Fatalf("observer could not read benchmark context: %v", err)
+			}
+			return []byte(`{"schema_version":1,"digest":"abc"}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("RunBenchmarkWithEnvironmentFactoryAndObserver: %v", err)
+	}
+	if !cleaned {
+		t.Fatal("external cleanup did not run")
+	}
+	if len(results) != 1 || string(results[0].DiagnosticFinalState) != `{"schema_version":1,"digest":"abc"}` {
+		t.Fatalf("unexpected diagnostic result: %+v", results)
+	}
+	if _, err := os.Stat(observedPath); !os.IsNotExist(err) {
+		t.Fatalf("benchmark context survived cleanup: %v", err)
+	}
+}
+
+func TestRunBenchmarkCleanupRunsAfterObserverFailure(t *testing.T) {
+	cleaned := false
+	results, err := RunBenchmarkWithEnvironmentFactoryAndObserver(
+		[]BenchmarkCase{{Name: "observed", Run: func(BenchmarkContext) error { return nil }}},
+		func(string) (map[string]string, func() error, error) {
+			return nil, func() error {
+				cleaned = true
+				return nil
+			}, nil
+		},
+		func(string, BenchmarkContext) (json.RawMessage, error) {
+			return nil, errors.New("capture failed")
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "capture failed") {
+		t.Fatalf("expected observer failure, got results=%+v err=%v", results, err)
+	}
+	if !cleaned {
+		t.Fatal("external cleanup did not run after observer failure")
+	}
+	if len(results) != 1 || results[0].Success || !strings.Contains(results[0].Error, "capture failed") {
+		t.Fatalf("observer failure missing from result: %+v", results)
 	}
 }

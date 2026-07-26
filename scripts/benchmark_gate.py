@@ -75,6 +75,7 @@ MANIFEST_PROFILES = {
     "zstd-w1": ("zstd", 1),
     "zstd-w4": ("zstd", 4),
 }
+DIAGNOSTIC_SCHEMA_VERSION = 1
 
 
 class GateError(RuntimeError):
@@ -166,6 +167,101 @@ def fixture_stats(row: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(stats, dict) or not isinstance(execution, dict):
         raise GateError(f"case {row.get('case')!r} lacks execution metadata")
     return {"execution": execution, "execution_stats": stats}
+
+
+def require_nonnegative_integer(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise GateError(f"{label} must be a non-negative integer")
+    return value
+
+
+def require_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise GateError(f"{label} must be lowercase SHA-256")
+    return value
+
+
+def validate_diagnostic_final_state(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("schema_version") != DIAGNOSTIC_SCHEMA_VERSION:
+        raise GateError(f"{label} diagnostic final state schema mismatch")
+    expected_keys = {
+        "schema_version", "logical_files", "logical_statuses", "chunk_graph",
+        "restored_tree", "snapshots", "snapshot_count", "gc", "verification",
+        "physical", "physical_layout_sha256",
+    }
+    if set(value) != expected_keys:
+        raise GateError(f"{label} diagnostic final state fields mismatch")
+    for section_name in ("logical_files", "chunk_graph", "restored_tree", "snapshots"):
+        section = value.get(section_name)
+        if not isinstance(section, dict) or set(section) != {"count", "total_bytes", "sha256"}:
+            raise GateError(f"{label} diagnostic {section_name} fields mismatch")
+        require_nonnegative_integer(section["count"], f"{label} diagnostic {section_name} count")
+        require_nonnegative_integer(
+            section["total_bytes"], f"{label} diagnostic {section_name} total_bytes"
+        )
+        require_sha256(section["sha256"], f"{label} diagnostic {section_name} digest")
+    statuses = value.get("logical_statuses")
+    if not isinstance(statuses, dict) or set(statuses) != {"completed", "processing", "aborted"}:
+        raise GateError(f"{label} diagnostic logical status fields mismatch")
+    for field in statuses:
+        require_nonnegative_integer(statuses[field], f"{label} diagnostic logical status {field}")
+    require_nonnegative_integer(value["snapshot_count"], f"{label} diagnostic snapshot_count")
+    gc_totals = value.get("gc")
+    expected_gc = {
+        "total_chunks", "reachable_chunks", "unreachable_chunks",
+        "logically_reclaimable_bytes", "physically_reclaimable_bytes",
+        "packed_blocks_live", "packed_blocks_dead", "packed_bytes_live",
+        "packed_bytes_reclaimable", "retained_dead_bytes",
+    }
+    if not isinstance(gc_totals, dict) or set(gc_totals) != expected_gc:
+        raise GateError(f"{label} diagnostic GC fields mismatch")
+    for field in gc_totals:
+        require_nonnegative_integer(gc_totals[field], f"{label} diagnostic GC {field}")
+    verification = value.get("verification")
+    expected_verification = {
+        "blocks_checked", "physical_hashes_checked", "compressed_hashes_checked",
+        "logical_hashes_checked", "compressed_blocks_checked", "physical_file_issues",
+        "snapshot_membership_rows", "snapshot_reachability_issues",
+    }
+    if not isinstance(verification, dict) or set(verification) != expected_verification:
+        raise GateError(f"{label} diagnostic verification fields mismatch")
+    for field in verification:
+        require_nonnegative_integer(
+            verification[field], f"{label} diagnostic verification {field}"
+        )
+    physical = value.get("physical")
+    expected_physical = {
+        "container_count", "storage_block_count", "legacy_block_count",
+        "chunk_reference_count", "payload_bytes", "container_bytes", "canonical_sha256",
+    }
+    if not isinstance(physical, dict) or set(physical) != expected_physical:
+        raise GateError(f"{label} diagnostic physical fields mismatch")
+    for field in expected_physical - {"canonical_sha256"}:
+        require_nonnegative_integer(physical[field], f"{label} diagnostic physical {field}")
+    require_sha256(physical["canonical_sha256"], f"{label} diagnostic canonical physical digest")
+    require_sha256(value["physical_layout_sha256"], f"{label} diagnostic physical layout digest")
+    return value
+
+
+def hard_final_state(row: dict[str, Any]) -> dict[str, Any]:
+    state = validate_diagnostic_final_state(
+        row.get("diagnostic_final_state"), f"case {row.get('case')!r}"
+    )
+    physical = state["physical"]
+    return {
+        "logical_files": state["logical_files"],
+        "logical_statuses": state["logical_statuses"],
+        "chunk_graph": state["chunk_graph"],
+        "restored_tree": state["restored_tree"],
+        "snapshots": state["snapshots"],
+        "snapshot_count": state["snapshot_count"],
+        "gc": state["gc"],
+        "verification": state["verification"],
+        "physical_content": {
+            "chunk_reference_count": physical["chunk_reference_count"],
+            "canonical_sha256": physical["canonical_sha256"],
+        },
+    }
 
 
 def validate_fixture(fixture: Any) -> list[dict[str, Any]]:
@@ -284,6 +380,7 @@ def validate_raw_report(
             raise GateError(f"{row.get('case')} I/O counters must be an object")
         for field in ("container_opens", "container_appends", "fsyncs", "bytes_written", "bytes_read"):
             require_number(io_stats.get(field), f"{row.get('case')} I/O counter {field}")
+        hard_final_state(row)
 
     # Compression is supplied by the controlled environment rather than the v2
     # raw payload. Recording it here makes that ownership explicit.
@@ -419,13 +516,21 @@ def sample_command(args: argparse.Namespace) -> int:
     for case_index, first_row in enumerate(first_rows):
         case_name = first_row["case"]
         expected_stats = fixture_stats(first_row)
+        expected_final_state = hard_final_state(first_row)
+        diagnostic_final_state = first_row["diagnostic_final_state"]
         durations = []
         for sample_index, envelope in enumerate(raw_reports):
             _, rows = validate_raw_report(
                 envelope, workers=args.workers, compression=args.compression
             )
             row = rows[case_index]
-            if row["case"] != case_name or fixture_stats(row) != expected_stats:
+            if row["case"] != case_name:
+                raise GateError(f"case order changed in sample {sample_index + 1}")
+            if hard_final_state(row) != expected_final_state:
+                raise GateError(
+                    f"hard final state changed for {case_name} in sample {sample_index + 1}"
+                )
+            if fixture_stats(row) != expected_stats:
                 raise GateError(
                     f"fixture counters changed for {case_name} in sample {sample_index + 1}"
                 )
@@ -442,6 +547,7 @@ def sample_command(args: argparse.Namespace) -> int:
                 "logical_files": first_row["execution_stats"]["total_files"],
                 "logical_bytes": logical_bytes,
                 "sample_durations_ms": durations,
+                "diagnostic_final_state": diagnostic_final_state,
                 "fixture_stats": expected_stats,
                 **summary,
             }
@@ -546,6 +652,9 @@ def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> N
                 raise GateError(f"{case.get('case')} statistic {field} is inconsistent")
         logical_bytes = require_number(
             case.get("logical_bytes"), f"{case.get('case')} logical_bytes", positive=True
+        )
+        validate_diagnostic_final_state(
+            case.get("diagnostic_final_state"), f"aggregate case {case.get('case')!r}"
         )
         stats = case.get("fixture_stats")
         if not isinstance(stats, dict) or stats.get("execution") != expected_execution:
@@ -660,6 +769,8 @@ def compare_command(args: argparse.Namespace) -> int:
     has_hard_regression = False
     for baseline_case, candidate_case in zip(baseline["cases"], candidate["cases"]):
         case_name = baseline_case["case"]
+        if hard_final_state(candidate_case) != hard_final_state(baseline_case):
+            raise GateError(f"hard final state differs for {case_name}")
         if candidate_case["fixture_stats"] != baseline_case["fixture_stats"]:
             raise GateError(f"fixture counters differ for {case_name}")
         threshold = overrides.get(case_name, default_threshold)
@@ -759,6 +870,8 @@ def calibration_command(args: argparse.Namespace) -> int:
                 case_name = first_case["case"]
                 threshold = overrides.get(case_name, default_threshold)
                 variability_limit = float(min(Decimal("2"), threshold / Decimal("2")))
+                if hard_final_state(first_case) != hard_final_state(second_case):
+                    failures.append(f"{compression}-w{workers}/{case_name}: replica hard final-state mismatch")
                 if first_case["fixture_stats"] != second_case["fixture_stats"]:
                     failures.append(f"{compression}-w{workers}/{case_name}: replica fixture mismatch")
                 replica_medians = []

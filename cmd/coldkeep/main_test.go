@@ -37,6 +37,108 @@ import (
 
 type singleChunkV2CLITestChunker struct{}
 
+func TestBenchmarkDiagnosticFingerprintsIgnoreRowOrderAndGeneratedIDs(t *testing.T) {
+	dataRoot := t.TempDir()
+	logicalA := []benchmarkLogicalRawRow{
+		{ID: 1001, Path: filepath.Join(dataRoot, "b.txt"), FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc"},
+		{ID: 1000, Path: filepath.Join(dataRoot, "a.txt"), FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc"},
+	}
+	logicalB := []benchmarkLogicalRawRow{
+		{ID: 9000, Path: filepath.Join(dataRoot, "a.txt"), FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc"},
+		{ID: 9001, Path: filepath.Join(dataRoot, "b.txt"), FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc"},
+	}
+	canonicalA, err := canonicalizeBenchmarkLogicalRows(logicalA, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize logical rows A: %v", err)
+	}
+	canonicalB, err := canonicalizeBenchmarkLogicalRows(logicalB, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize logical rows B: %v", err)
+	}
+	digestA, _ := benchmarkCanonicalDigest(canonicalA)
+	digestB, _ := benchmarkCanonicalDigest(canonicalB)
+	if digestA != digestB {
+		t.Fatalf("logical digest changed with row order/IDs: %s != %s", digestA, digestB)
+	}
+
+	graphA := []benchmarkChunkGraphRawRow{
+		{LogicalID: 1, ChunkID: 20, FileHash: "file", FileSize: 3, ChunkOrder: 1, ChunkHash: "chunk-b", ChunkSize: 2, Status: "COMPLETED", LiveRefCount: 1, ChunkerVersion: "v2-fastcdc"},
+		{LogicalID: 1, ChunkID: 10, FileHash: "file", FileSize: 3, ChunkOrder: 0, ChunkHash: "chunk-a", ChunkSize: 1, Status: "COMPLETED", LiveRefCount: 1, ChunkerVersion: "v2-fastcdc"},
+	}
+	graphB := []benchmarkChunkGraphRawRow{
+		{LogicalID: 800, ChunkID: 700, FileHash: "file", FileSize: 3, ChunkOrder: 0, ChunkHash: "chunk-a", ChunkSize: 1, Status: "COMPLETED", LiveRefCount: 1, ChunkerVersion: "v2-fastcdc"},
+		{LogicalID: 800, ChunkID: 701, FileHash: "file", FileSize: 3, ChunkOrder: 1, ChunkHash: "chunk-b", ChunkSize: 2, Status: "COMPLETED", LiveRefCount: 1, ChunkerVersion: "v2-fastcdc"},
+	}
+	graphDigestA, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkChunkGraphRows(graphA))
+	graphDigestB, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkChunkGraphRows(graphB))
+	if graphDigestA != graphDigestB {
+		t.Fatalf("chunk graph digest changed with row order/IDs: %s != %s", graphDigestA, graphDigestB)
+	}
+
+	physicalA := []benchmarkPhysicalRawRow{
+		{BlockID: 10, ContainerID: 20, FormatVersion: 1, Codec: "aes-gcm", CompressionCodec: "none", BlockHash: "packed-a", ChunkHash: "chunk-a", SizeInBlock: sql.NullInt64{Int64: 1, Valid: true}},
+		{BlockID: 11, ContainerID: 21, FormatVersion: 1, Codec: "aes-gcm", CompressionCodec: "none", BlockHash: "packed-b", ChunkHash: "chunk-b", SizeInBlock: sql.NullInt64{Int64: 2, Valid: true}},
+	}
+	physicalB := []benchmarkPhysicalRawRow{
+		{BlockID: 901, ContainerID: 801, FormatVersion: 1, Codec: "aes-gcm", CompressionCodec: "none", BlockHash: "different-packing-b", ChunkHash: "chunk-b", SizeInBlock: sql.NullInt64{Int64: 2, Valid: true}},
+		{BlockID: 900, ContainerID: 800, FormatVersion: 1, Codec: "aes-gcm", CompressionCodec: "none", BlockHash: "different-packing-a", ChunkHash: "chunk-a", SizeInBlock: sql.NullInt64{Int64: 1, Valid: true}},
+	}
+	physicalDigestA, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkPhysicalRows(physicalA))
+	physicalDigestB, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkPhysicalRows(physicalB))
+	if physicalDigestA != physicalDigestB {
+		t.Fatalf("canonical physical digest changed with IDs/packing: %s != %s", physicalDigestA, physicalDigestB)
+	}
+}
+
+func TestBenchmarkDiagnosticReportContainsNoSensitiveSourceValues(t *testing.T) {
+	dataRoot := t.TempDir()
+	sensitivePath := filepath.Join(dataRoot, "random-secret-name.txt")
+	canonical, err := canonicalizeBenchmarkLogicalRows([]benchmarkLogicalRawRow{{
+		ID: 8675309, Path: sensitivePath, FileHash: "semantic-hash", TotalSize: 10,
+		Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc",
+	}}, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize sensitive logical row: %v", err)
+	}
+	digest, err := benchmarkCanonicalDigest(canonical)
+	if err != nil {
+		t.Fatalf("digest sensitive logical row: %v", err)
+	}
+	encoded, err := json.Marshal(benchmarkDiagnosticFinalState{
+		SchemaVersion: benchmarkDiagnosticFinalStateSchemaVersion,
+		LogicalFiles:  benchmarkDiagnosticDigest{Count: 1, TotalBytes: 10, SHA256: digest},
+	})
+	if err != nil {
+		t.Fatalf("marshal diagnostic final state: %v", err)
+	}
+	for _, forbidden := range []string{
+		dataRoot,
+		"random-secret-name.txt",
+		"8675309",
+		"postgres://benchmark_user:benchmark_password@localhost/benchmark_database",
+	} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("diagnostic report leaked sensitive value %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestCanonicalBenchmarkSnapshotPathAcceptsRelativeAndRejectsTraversal(t *testing.T) {
+	dataRoot := t.TempDir()
+	got, err := canonicalBenchmarkSnapshotPath(dataRoot, "snapshot/nested/file.bin")
+	if err != nil || got != "snapshot/nested/file.bin" {
+		t.Fatalf("canonical relative snapshot path: got=%q err=%v", got, err)
+	}
+	if _, err := canonicalBenchmarkSnapshotPath(dataRoot, "../outside.txt"); err == nil {
+		t.Fatal("expected snapshot traversal to be rejected")
+	}
+	normalizedAbsolute := strings.TrimPrefix(filepath.ToSlash(filepath.Join(dataRoot, "snapshot", "file.bin")), "/")
+	got, err = canonicalBenchmarkSnapshotPath(dataRoot, normalizedAbsolute)
+	if err != nil || got != "snapshot/file.bin" {
+		t.Fatalf("canonical normalized absolute snapshot path: got=%q err=%v", got, err)
+	}
+}
+
 func (singleChunkV2CLITestChunker) Version() chunk.Version {
 	return chunk.VersionV2FastCDC
 }

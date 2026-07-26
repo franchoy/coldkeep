@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +36,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/execution"
+	internalgc "github.com/franchoy/coldkeep/internal/gc"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/iodebug"
 	"github.com/franchoy/coldkeep/internal/listing"
@@ -3218,11 +3221,12 @@ type BenchmarkIOMetrics struct {
 
 // BenchmarkRunCaseRow is one per-case benchmark summary row.
 type BenchmarkRunCaseRow struct {
-	Case           string                  `json:"case"`
-	DurationMs     int64                   `json:"duration_ms"`
-	ThroughputMBps float64                 `json:"throughput_mbps"`
-	Execution      BenchmarkExecution      `json:"execution"`
-	ExecutionStats BenchmarkExecutionStats `json:"execution_stats"`
+	Case                 string                  `json:"case"`
+	DurationMs           int64                   `json:"duration_ms"`
+	ThroughputMBps       float64                 `json:"throughput_mbps"`
+	Execution            BenchmarkExecution      `json:"execution"`
+	ExecutionStats       BenchmarkExecutionStats `json:"execution_stats"`
+	DiagnosticFinalState json.RawMessage         `json:"diagnostic_final_state,omitempty"`
 }
 
 func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -3562,11 +3566,12 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 	}
 
 	type runAgg struct {
-		durationMs int64
-		bytes      int64
-		files      int
-		execution  BenchmarkExecution
-		stats      BenchmarkExecutionStats
+		durationMs           int64
+		bytes                int64
+		files                int
+		execution            BenchmarkExecution
+		stats                BenchmarkExecutionStats
+		diagnosticFinalState json.RawMessage
 	}
 	caseAgg := make(map[string]runAgg)
 	caseOrder := make([]string, 0)
@@ -3581,6 +3586,9 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 					Deterministic:      result.Execution.Deterministic,
 				}
 				agg.stats.WorkersUsed = result.ExecStats.WorkersUsed
+				agg.diagnosticFinalState = append(json.RawMessage(nil), result.DiagnosticFinalState...)
+			} else if !bytes.Equal(agg.diagnosticFinalState, result.DiagnosticFinalState) {
+				return BenchmarkRunReport{}, fmt.Errorf("diagnostic final state changed across repeats for case %q", result.Name)
 			}
 			agg.durationMs += result.Metrics.Duration.Milliseconds()
 			agg.bytes += result.Metrics.BytesProcessed
@@ -3609,11 +3617,12 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 			throughput = (float64(agg.bytes) / (1024.0 * 1024.0)) / seconds
 		}
 		out.Rows = append(out.Rows, BenchmarkRunCaseRow{
-			Case:           caseName,
-			DurationMs:     agg.durationMs,
-			ThroughputMBps: throughput,
-			Execution:      agg.execution,
-			ExecutionStats: agg.stats,
+			Case:                 caseName,
+			DurationMs:           agg.durationMs,
+			ThroughputMBps:       throughput,
+			Execution:            agg.execution,
+			ExecutionStats:       agg.stats,
+			DiagnosticFinalState: agg.diagnosticFinalState,
 		})
 		out.ExecutionStats.TotalFiles += agg.stats.TotalFiles
 		out.ExecutionStats.TotalBytes += agg.stats.TotalBytes
@@ -3640,23 +3649,795 @@ func runGatePresetWithIsolatedDatabases(
 	repeat int,
 	opts execution.Options,
 ) (corebenchmark.RunReport, error) {
-	return corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
-		ColdkeepExecutable: resolveSelfExecutable(),
-		Codec:              strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")),
-		Compression:        strings.TrimSpace(os.Getenv("COLDKEEP_COMPRESSION")),
-		Execution:          opts,
-		CaseEnvironmentFactory: func(caseName string) (map[string]string, func() error, error) {
-			dbName, cleanup, err := createTemporaryBenchmarkDatabase("gate-" + caseName)
-			if err != nil {
-				return nil, nil, err
-			}
-			return map[string]string{
-				"DB_NAME":                       dbName,
-				"COLDKEEP_DB_AUTO_BOOTSTRAP":    "true",
-				"COLDKEEP_STORE_FOLDER_WORKERS": strconv.Itoa(opts.StoreFolderWorkers),
-			}, cleanup, nil
-		},
+	if repeat <= 0 {
+		return corebenchmark.RunReport{}, fmt.Errorf("repeat must be > 0")
+	}
+	cfg := corebenchmark.CIStableV1ScenarioConfig()
+	cfg.ColdkeepExecutable = resolveSelfExecutable()
+	cfg.Codec = strings.TrimSpace(os.Getenv("COLDKEEP_CODEC"))
+	cfg.Compression = strings.TrimSpace(os.Getenv("COLDKEEP_COMPRESSION"))
+	cfg.Execution = opts
+	cfg.CaseEnvironmentFactory = func(caseName string) (map[string]string, func() error, error) {
+		dbName, cleanup, err := createTemporaryBenchmarkDatabase("gate-" + caseName)
+		if err != nil {
+			return nil, nil, err
+		}
+		return map[string]string{
+			"DB_NAME":                       dbName,
+			"COLDKEEP_DB_AUTO_BOOTSTRAP":    "true",
+			"COLDKEEP_STORE_FOLDER_WORKERS": strconv.Itoa(opts.StoreFolderWorkers),
+		}, cleanup, nil
+	}
+	report := corebenchmark.RunReport{
+		GeneratedAtUTC: time.Now().UTC().Format(time.RFC3339),
+		Dataset:        preset,
+		Repeat:         repeat,
+		Fixture:        corebenchmark.FixtureDescriptorFor(preset, cfg),
+		Iterations:     make([]corebenchmark.IterationReport, 0, repeat),
+	}
+	for iteration := 1; iteration <= repeat; iteration++ {
+		iterCfg := cfg
+		iterCfg.RunTag = fmt.Sprintf("iter-%02d", iteration)
+		results, err := corebenchmark.RunBenchmarkWithEnvironmentFactoryAndObserver(
+			corebenchmark.CoreScenarios(iterCfg),
+			iterCfg.CaseEnvironmentFactory,
+			captureBenchmarkDiagnosticFinalState,
+		)
+		report.Iterations = append(report.Iterations, corebenchmark.IterationReport{
+			Iteration: iteration,
+			Results:   results,
+		})
+		if err != nil {
+			return report, err
+		}
+	}
+	return report, nil
+}
+
+const benchmarkDiagnosticFinalStateSchemaVersion = 1
+
+type benchmarkDiagnosticDigest struct {
+	Count      int64  `json:"count"`
+	TotalBytes int64  `json:"total_bytes"`
+	SHA256     string `json:"sha256"`
+}
+
+type benchmarkDiagnosticStatusTotals struct {
+	Completed  int64 `json:"completed"`
+	Processing int64 `json:"processing"`
+	Aborted    int64 `json:"aborted"`
+}
+
+type benchmarkDiagnosticGC struct {
+	TotalChunks                int64 `json:"total_chunks"`
+	ReachableChunks            int64 `json:"reachable_chunks"`
+	UnreachableChunks          int64 `json:"unreachable_chunks"`
+	LogicallyReclaimableBytes  int64 `json:"logically_reclaimable_bytes"`
+	PhysicallyReclaimableBytes int64 `json:"physically_reclaimable_bytes"`
+	PackedBlocksLive           int64 `json:"packed_blocks_live"`
+	PackedBlocksDead           int64 `json:"packed_blocks_dead"`
+	PackedBytesLive            int64 `json:"packed_bytes_live"`
+	PackedBytesReclaimable     int64 `json:"packed_bytes_reclaimable"`
+	RetainedDeadBytes          int64 `json:"retained_dead_bytes"`
+}
+
+type benchmarkDiagnosticVerification struct {
+	BlocksChecked              int64 `json:"blocks_checked"`
+	PhysicalHashesChecked      int64 `json:"physical_hashes_checked"`
+	CompressedHashesChecked    int64 `json:"compressed_hashes_checked"`
+	LogicalHashesChecked       int64 `json:"logical_hashes_checked"`
+	CompressedBlocksChecked    int64 `json:"compressed_blocks_checked"`
+	PhysicalFileIssues         int64 `json:"physical_file_issues"`
+	SnapshotMembershipRows     int64 `json:"snapshot_membership_rows"`
+	SnapshotReachabilityIssues int64 `json:"snapshot_reachability_issues"`
+}
+
+type benchmarkDiagnosticPhysical struct {
+	ContainerCount      int64  `json:"container_count"`
+	StorageBlockCount   int64  `json:"storage_block_count"`
+	LegacyBlockCount    int64  `json:"legacy_block_count"`
+	ChunkReferenceCount int64  `json:"chunk_reference_count"`
+	PayloadBytes        int64  `json:"payload_bytes"`
+	ContainerBytes      int64  `json:"container_bytes"`
+	CanonicalSHA256     string `json:"canonical_sha256"`
+}
+
+type benchmarkDiagnosticFinalState struct {
+	SchemaVersion        int                             `json:"schema_version"`
+	LogicalFiles         benchmarkDiagnosticDigest       `json:"logical_files"`
+	LogicalStatuses      benchmarkDiagnosticStatusTotals `json:"logical_statuses"`
+	ChunkGraph           benchmarkDiagnosticDigest       `json:"chunk_graph"`
+	RestoredTree         benchmarkDiagnosticDigest       `json:"restored_tree"`
+	Snapshots            benchmarkDiagnosticDigest       `json:"snapshots"`
+	SnapshotCount        int64                           `json:"snapshot_count"`
+	GC                   benchmarkDiagnosticGC           `json:"gc"`
+	Verification         benchmarkDiagnosticVerification `json:"verification"`
+	Physical             benchmarkDiagnosticPhysical     `json:"physical"`
+	PhysicalLayoutSHA256 string                          `json:"physical_layout_sha256"`
+}
+
+type benchmarkLogicalRawRow struct {
+	ID             int64
+	Path           string
+	FileHash       string
+	TotalSize      int64
+	Status         string
+	RefCount       int64
+	ChunkerVersion string
+}
+
+type benchmarkLogicalCanonicalRow struct {
+	Path           string `json:"path"`
+	FileHash       string `json:"file_hash"`
+	TotalSize      int64  `json:"total_size"`
+	Status         string `json:"status"`
+	RefCount       int64  `json:"ref_count"`
+	ChunkerVersion string `json:"chunker_version"`
+}
+
+type benchmarkChunkGraphRawRow struct {
+	LogicalID      int64
+	ChunkID        int64
+	FileHash       string
+	FileSize       int64
+	ChunkOrder     int64
+	ChunkHash      string
+	ChunkSize      int64
+	Status         string
+	LiveRefCount   int64
+	PinCount       int64
+	ChunkerVersion string
+}
+
+type benchmarkChunkGraphCanonicalRow struct {
+	FileHash       string `json:"file_hash"`
+	FileSize       int64  `json:"file_size"`
+	ChunkOrder     int64  `json:"chunk_order"`
+	ChunkHash      string `json:"chunk_hash"`
+	ChunkSize      int64  `json:"chunk_size"`
+	Status         string `json:"status"`
+	LiveRefCount   int64  `json:"live_ref_count"`
+	PinCount       int64  `json:"pin_count"`
+	ChunkerVersion string `json:"chunker_version"`
+}
+
+type benchmarkSnapshotRawRow struct {
+	SnapshotID string
+	Type       string
+	Label      string
+	ParentID   string
+	Path       string
+	FileHash   string
+	Size       int64
+}
+
+type benchmarkSnapshotCanonicalRow struct {
+	Type      string `json:"type"`
+	Label     string `json:"label"`
+	HasParent bool   `json:"has_parent"`
+	Path      string `json:"path"`
+	FileHash  string `json:"file_hash"`
+	Size      int64  `json:"size"`
+}
+
+type benchmarkPhysicalRawRow struct {
+	BlockID          int64
+	ContainerID      int64
+	FormatVersion    int
+	Codec            string
+	PlaintextSize    int64
+	CompressionCodec string
+	CompressionLevel sql.NullInt64
+	CompressedSize   sql.NullInt64
+	StoredSize       int64
+	BlockHash        string
+	CompressedHash   string
+	PhysicalHash     string
+	ContainerOffset  int64
+	ChunkHash        string
+	OffsetInBlock    sql.NullInt64
+	SizeInBlock      sql.NullInt64
+}
+
+type benchmarkPhysicalCanonicalRow struct {
+	FormatVersion         int    `json:"format_version"`
+	Codec                 string `json:"codec"`
+	CompressionCodec      string `json:"compression_codec"`
+	CompressionLevel      *int64 `json:"compression_level"`
+	ChunkHash             string `json:"chunk_hash"`
+	ChunkSize             *int64 `json:"chunk_size"`
+	UnreferencedBlockHash string `json:"unreferenced_block_hash,omitempty"`
+}
+
+type benchmarkPhysicalLayoutRow struct {
+	Canonical       benchmarkPhysicalCanonicalRow `json:"canonical"`
+	PlaintextSize   int64                         `json:"plaintext_size"`
+	CompressedSize  *int64                        `json:"compressed_size"`
+	StoredSize      int64                         `json:"stored_size"`
+	BlockHash       string                        `json:"block_hash"`
+	CompressedHash  string                        `json:"compressed_hash"`
+	PhysicalHash    string                        `json:"physical_hash"`
+	ContainerOffset int64                         `json:"container_offset"`
+	OffsetInBlock   *int64                        `json:"offset_in_block"`
+}
+
+type benchmarkContainerRawRow struct {
+	ID            int64
+	Sealed        bool
+	Sealing       bool
+	Quarantine    bool
+	CurrentSize   int64
+	MaxSize       int64
+	ContainerHash string
+}
+
+type benchmarkContainerLayout struct {
+	Sealed        bool                         `json:"sealed"`
+	Sealing       bool                         `json:"sealing"`
+	Quarantine    bool                         `json:"quarantine"`
+	CurrentSize   int64                        `json:"current_size"`
+	MaxSize       int64                        `json:"max_size"`
+	ContainerHash string                       `json:"container_hash"`
+	Rows          []benchmarkPhysicalLayoutRow `json:"rows"`
+}
+
+func captureBenchmarkDiagnosticFinalState(_ string, benchmarkContext corebenchmark.BenchmarkContext) (json.RawMessage, error) {
+	dbName := strings.TrimSpace(benchmarkContext.ExtraEnv["DB_NAME"])
+	if dbName == "" {
+		return nil, fmt.Errorf("diagnostic observer requires an isolated database")
+	}
+	connStr, err := db.BuildPostgresConnStringFromEnv(dbName)
+	if err != nil {
+		return nil, fmt.Errorf("build diagnostic database connection: %w", err)
+	}
+	dbconn, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return nil, fmt.Errorf("open diagnostic database: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := dbconn.PingContext(ctx); err != nil {
+		return nil, fmt.Errorf("ping diagnostic database: %w", err)
+	}
+
+	state, err := buildBenchmarkDiagnosticFinalState(ctx, dbconn, benchmarkContext)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return nil, fmt.Errorf("encode diagnostic final state: %w", err)
+	}
+	return encoded, nil
+}
+
+func benchmarkCanonicalDigest(value any) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func canonicalBenchmarkPath(root, rawPath string) (string, error) {
+	if strings.TrimSpace(rawPath) == "" {
+		return "", nil
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve benchmark data root: %w", err)
+	}
+	absPath, err := filepath.Abs(rawPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve benchmark path: %w", err)
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return "", fmt.Errorf("relativize benchmark path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("benchmark path is outside the isolated data root")
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+func canonicalBenchmarkSnapshotPath(dataRoot, rawPath string) (string, error) {
+	if strings.TrimSpace(rawPath) == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(rawPath) {
+		return canonicalBenchmarkPath(dataRoot, rawPath)
+	}
+	normalizedRaw := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rawPath)))
+	absDataRoot, err := filepath.Abs(dataRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve benchmark data root: %w", err)
+	}
+	normalizedRoot := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(absDataRoot)), "/")
+	if normalizedRaw == normalizedRoot {
+		return ".", nil
+	}
+	if strings.HasPrefix(normalizedRaw, normalizedRoot+"/") {
+		return strings.TrimPrefix(normalizedRaw, normalizedRoot+"/"), nil
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(normalizedRaw))
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) || filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("snapshot path escapes the isolated data root")
+	}
+	return filepath.ToSlash(cleaned), nil
+}
+
+func canonicalizeBenchmarkLogicalRows(rows []benchmarkLogicalRawRow, dataRoot string) ([]benchmarkLogicalCanonicalRow, error) {
+	out := make([]benchmarkLogicalCanonicalRow, 0, len(rows))
+	for _, row := range rows {
+		pathValue, err := canonicalBenchmarkPath(dataRoot, row.Path)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, benchmarkLogicalCanonicalRow{
+			Path: pathValue, FileHash: row.FileHash, TotalSize: row.TotalSize,
+			Status: row.Status, RefCount: row.RefCount, ChunkerVersion: row.ChunkerVersion,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left, _ := json.Marshal(out[i])
+		right, _ := json.Marshal(out[j])
+		return bytes.Compare(left, right) < 0
 	})
+	return out, nil
+}
+
+func canonicalizeBenchmarkChunkGraphRows(rows []benchmarkChunkGraphRawRow) []benchmarkChunkGraphCanonicalRow {
+	out := make([]benchmarkChunkGraphCanonicalRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, benchmarkChunkGraphCanonicalRow{
+			FileHash: row.FileHash, FileSize: row.FileSize, ChunkOrder: row.ChunkOrder,
+			ChunkHash: row.ChunkHash, ChunkSize: row.ChunkSize, Status: row.Status,
+			LiveRefCount: row.LiveRefCount, PinCount: row.PinCount, ChunkerVersion: row.ChunkerVersion,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left, _ := json.Marshal(out[i])
+		right, _ := json.Marshal(out[j])
+		return bytes.Compare(left, right) < 0
+	})
+	return out
+}
+
+func nullableInt64Pointer(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	v := value.Int64
+	return &v
+}
+
+func canonicalizeBenchmarkPhysicalRows(rows []benchmarkPhysicalRawRow) []benchmarkPhysicalCanonicalRow {
+	out := make([]benchmarkPhysicalCanonicalRow, 0, len(rows))
+	for _, row := range rows {
+		unreferencedBlockHash := ""
+		if row.ChunkHash == "" {
+			unreferencedBlockHash = row.BlockHash
+		}
+		out = append(out, benchmarkPhysicalCanonicalRow{
+			FormatVersion: row.FormatVersion, Codec: row.Codec,
+			CompressionCodec: row.CompressionCodec, CompressionLevel: nullableInt64Pointer(row.CompressionLevel),
+			ChunkHash: row.ChunkHash, ChunkSize: nullableInt64Pointer(row.SizeInBlock),
+			UnreferencedBlockHash: unreferencedBlockHash,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left, _ := json.Marshal(out[i])
+		right, _ := json.Marshal(out[j])
+		return bytes.Compare(left, right) < 0
+	})
+	return out
+}
+
+func buildBenchmarkDiagnosticFinalState(
+	ctx context.Context,
+	dbconn *sql.DB,
+	benchmarkContext corebenchmark.BenchmarkContext,
+) (benchmarkDiagnosticFinalState, error) {
+	logicalRaw, logicalCount, logicalBytes, statuses, err := readBenchmarkLogicalState(ctx, dbconn)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, err
+	}
+	logicalRows, err := canonicalizeBenchmarkLogicalRows(logicalRaw, benchmarkContext.DataPath)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("canonicalize logical files: %w", err)
+	}
+	logicalDigest, err := benchmarkCanonicalDigest(logicalRows)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("digest logical files: %w", err)
+	}
+
+	chunkRaw, chunkBytes, err := readBenchmarkChunkGraph(ctx, dbconn)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, err
+	}
+	chunkRows := canonicalizeBenchmarkChunkGraphRows(chunkRaw)
+	chunkDigest, err := benchmarkCanonicalDigest(chunkRows)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("digest chunk graph: %w", err)
+	}
+
+	restoredRows, restoredBytes, err := readBenchmarkRestoredTree(filepath.Join(benchmarkContext.RepoPath, "restore-output"))
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, err
+	}
+	restoredDigest, err := benchmarkCanonicalDigest(restoredRows)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("digest restored tree: %w", err)
+	}
+
+	snapshotRows, snapshotCount, snapshotBytes, err := readBenchmarkSnapshotState(ctx, dbconn, benchmarkContext.DataPath)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, err
+	}
+	snapshotDigest, err := benchmarkCanonicalDigest(snapshotRows)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("digest snapshot membership: %w", err)
+	}
+
+	gcPlan, err := internalgc.BuildPlan(ctx, dbconn, internalgc.PlanOptions{})
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("capture GC reachability totals: %w", err)
+	}
+	verifyTotals, err := countVerifySummaryForSystem(dbconn)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("capture verification totals: %w", err)
+	}
+	physicalAudit, err := verify.CheckPhysicalFileGraphIntegrity(dbconn)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("capture physical-file verification totals: %w", err)
+	}
+	snapshotAudit, err := verify.CheckSnapshotReachabilityIntegrity(dbconn)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("capture snapshot verification totals: %w", err)
+	}
+
+	physical, layoutDigest, err := readBenchmarkPhysicalState(ctx, dbconn)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, err
+	}
+
+	return benchmarkDiagnosticFinalState{
+		SchemaVersion:   benchmarkDiagnosticFinalStateSchemaVersion,
+		LogicalFiles:    benchmarkDiagnosticDigest{Count: logicalCount, TotalBytes: logicalBytes, SHA256: logicalDigest},
+		LogicalStatuses: statuses,
+		ChunkGraph:      benchmarkDiagnosticDigest{Count: int64(len(chunkRows)), TotalBytes: chunkBytes, SHA256: chunkDigest},
+		RestoredTree:    benchmarkDiagnosticDigest{Count: int64(len(restoredRows)), TotalBytes: restoredBytes, SHA256: restoredDigest},
+		Snapshots:       benchmarkDiagnosticDigest{Count: int64(len(snapshotRows)), TotalBytes: snapshotBytes, SHA256: snapshotDigest},
+		SnapshotCount:   snapshotCount,
+		GC: benchmarkDiagnosticGC{
+			TotalChunks: gcPlan.TotalChunks, ReachableChunks: gcPlan.ReachableChunks,
+			UnreachableChunks: gcPlan.UnreachableChunks, LogicallyReclaimableBytes: gcPlan.ReclaimableBytes,
+			PhysicallyReclaimableBytes: gcPlan.PhysicallyReclaimableBytes,
+			PackedBlocksLive:           gcPlan.Summary.PackedBlocksLive, PackedBlocksDead: gcPlan.Summary.PackedBlocksDead,
+			PackedBytesLive: gcPlan.Summary.PackedBytesLive, PackedBytesReclaimable: gcPlan.Summary.PackedBytesReclaimable,
+			RetainedDeadBytes: gcPlan.Summary.RetainedDeadBytesDueToPackedBlocks,
+		},
+		Verification: benchmarkDiagnosticVerification{
+			BlocksChecked: verifyTotals.BlocksChecked, PhysicalHashesChecked: verifyTotals.PhysicalHashChecked,
+			CompressedHashesChecked: verifyTotals.CompressedHashChecked, LogicalHashesChecked: verifyTotals.LogicalHashChecked,
+			CompressedBlocksChecked: verifyTotals.CompressedBlocksChecked,
+			PhysicalFileIssues:      physicalAudit.OrphanPhysicalFileRows + physicalAudit.LogicalRefCountMismatches + physicalAudit.NegativeLogicalRefCounts,
+			SnapshotMembershipRows:  snapshotAudit.SnapshotFileRows,
+			SnapshotReachabilityIssues: snapshotAudit.OrphanSnapshotPathRefs + snapshotAudit.DuplicateSnapshotPathPairs +
+				snapshotAudit.OrphanSnapshotLogicalRefs + snapshotAudit.InvalidSnapshotLifecycleStates + snapshotAudit.RetainedMissingChunkGraph,
+		},
+		Physical:             physical,
+		PhysicalLayoutSHA256: layoutDigest,
+	}, nil
+}
+
+func readBenchmarkLogicalState(
+	ctx context.Context,
+	dbconn *sql.DB,
+) ([]benchmarkLogicalRawRow, int64, int64, benchmarkDiagnosticStatusTotals, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT lf.id, COALESCE(pf.path, ''), lf.file_hash, lf.total_size,
+		       lf.status, lf.ref_count, lf.chunker_version
+		FROM logical_file lf
+		LEFT JOIN physical_file pf ON pf.logical_file_id = lf.id
+	`)
+	if err != nil {
+		return nil, 0, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("query diagnostic logical files: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []benchmarkLogicalRawRow
+	for rows.Next() {
+		var row benchmarkLogicalRawRow
+		if err := rows.Scan(&row.ID, &row.Path, &row.FileHash, &row.TotalSize, &row.Status, &row.RefCount, &row.ChunkerVersion); err != nil {
+			return nil, 0, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("scan diagnostic logical file: %w", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("iterate diagnostic logical files: %w", err)
+	}
+	var count, totalBytes int64
+	var statuses benchmarkDiagnosticStatusTotals
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(total_size), 0),
+		       COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN status = 'PROCESSING' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN status = 'ABORTED' THEN 1 ELSE 0 END), 0)
+		FROM logical_file
+	`).Scan(&count, &totalBytes, &statuses.Completed, &statuses.Processing, &statuses.Aborted); err != nil {
+		return nil, 0, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("query diagnostic logical totals: %w", err)
+	}
+	return out, count, totalBytes, statuses, nil
+}
+
+func readBenchmarkChunkGraph(ctx context.Context, dbconn *sql.DB) ([]benchmarkChunkGraphRawRow, int64, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT lf.id, c.id, lf.file_hash, lf.total_size, fc.chunk_order,
+		       c.chunk_hash, c.size, c.status, c.live_ref_count, c.pin_count, c.chunker_version
+		FROM file_chunk fc
+		JOIN logical_file lf ON lf.id = fc.logical_file_id
+		JOIN chunk c ON c.id = fc.chunk_id
+	`)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query diagnostic chunk graph: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []benchmarkChunkGraphRawRow
+	var totalBytes int64
+	for rows.Next() {
+		var row benchmarkChunkGraphRawRow
+		if err := rows.Scan(&row.LogicalID, &row.ChunkID, &row.FileHash, &row.FileSize, &row.ChunkOrder,
+			&row.ChunkHash, &row.ChunkSize, &row.Status, &row.LiveRefCount, &row.PinCount, &row.ChunkerVersion); err != nil {
+			return nil, 0, fmt.Errorf("scan diagnostic chunk graph: %w", err)
+		}
+		out = append(out, row)
+		totalBytes += row.ChunkSize
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate diagnostic chunk graph: %w", err)
+	}
+	return out, totalBytes, nil
+}
+
+type benchmarkRestoredCanonicalRow struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+func readBenchmarkRestoredTree(root string) ([]benchmarkRestoredCanonicalRow, int64, error) {
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			return make([]benchmarkRestoredCanonicalRow, 0), 0, nil
+		}
+		return nil, 0, fmt.Errorf("inspect restored tree: %w", err)
+	}
+	hashes, err := corebenchmark.HashRestoredTree(root)
+	if err != nil {
+		return nil, 0, fmt.Errorf("capture restored tree: %w", err)
+	}
+	paths := make([]string, 0, len(hashes))
+	for relativePath := range hashes {
+		paths = append(paths, relativePath)
+	}
+	sort.Strings(paths)
+	out := make([]benchmarkRestoredCanonicalRow, 0, len(paths))
+	var totalBytes int64
+	for _, relativePath := range paths {
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(relativePath)))
+		if err != nil {
+			return nil, 0, fmt.Errorf("stat restored tree file: %w", err)
+		}
+		out = append(out, benchmarkRestoredCanonicalRow{Path: relativePath, SHA256: hashes[relativePath], Size: info.Size()})
+		totalBytes += info.Size()
+	}
+	return out, totalBytes, nil
+}
+
+func readBenchmarkSnapshotState(
+	ctx context.Context,
+	dbconn *sql.DB,
+	dataRoot string,
+) ([]benchmarkSnapshotCanonicalRow, int64, int64, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT s.id, s.type, COALESCE(s.label, ''), COALESCE(s.parent_id, ''),
+		       COALESCE(sp.path, ''), COALESCE(lf.file_hash, ''), COALESCE(sf.size, 0)
+		FROM snapshot s
+		LEFT JOIN snapshot_file sf ON sf.snapshot_id = s.id
+		LEFT JOIN snapshot_path sp ON sp.id = sf.path_id
+		LEFT JOIN logical_file lf ON lf.id = sf.logical_file_id
+	`)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("query diagnostic snapshot membership: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var rawRows []benchmarkSnapshotRawRow
+	snapshotIDs := make(map[string]struct{})
+	for rows.Next() {
+		var row benchmarkSnapshotRawRow
+		if err := rows.Scan(&row.SnapshotID, &row.Type, &row.Label, &row.ParentID, &row.Path, &row.FileHash, &row.Size); err != nil {
+			return nil, 0, 0, fmt.Errorf("scan diagnostic snapshot membership: %w", err)
+		}
+		rawRows = append(rawRows, row)
+		snapshotIDs[row.SnapshotID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, fmt.Errorf("iterate diagnostic snapshot membership: %w", err)
+	}
+	out := make([]benchmarkSnapshotCanonicalRow, 0, len(rawRows))
+	var totalBytes int64
+	for _, row := range rawRows {
+		pathValue, err := canonicalBenchmarkSnapshotPath(dataRoot, row.Path)
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("canonicalize snapshot path: %w", err)
+		}
+		out = append(out, benchmarkSnapshotCanonicalRow{
+			Type: row.Type, Label: row.Label, HasParent: row.ParentID != "",
+			Path: pathValue, FileHash: row.FileHash, Size: row.Size,
+		})
+		totalBytes += row.Size
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left, _ := json.Marshal(out[i])
+		right, _ := json.Marshal(out[j])
+		return bytes.Compare(left, right) < 0
+	})
+	return out, int64(len(snapshotIDs)), totalBytes, nil
+}
+
+func readBenchmarkPhysicalState(
+	ctx context.Context,
+	dbconn *sql.DB,
+) (benchmarkDiagnosticPhysical, string, error) {
+	storageRows, err := dbconn.QueryContext(ctx, `
+		SELECT sb.id, sb.container_id, sb.format_version, sb.codec, sb.plaintext_size,
+		       sb.compression_codec, sb.compression_level, sb.compressed_size, sb.stored_size,
+		       encode(sb.block_hash, 'hex'), COALESCE(encode(sb.compressed_hash, 'hex'), ''),
+		       COALESCE(encode(sb.physical_hash, 'hex'), ''), sb.container_offset,
+		       COALESCE(ch.chunk_hash, ''), cbr.offset_in_block, cbr.size_in_block
+		FROM storage_blocks sb
+		LEFT JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+		LEFT JOIN chunk ch ON ch.id = cbr.chunk_id
+	`)
+	if err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("query diagnostic storage blocks: %w", err)
+	}
+	var rawRows []benchmarkPhysicalRawRow
+	for storageRows.Next() {
+		var row benchmarkPhysicalRawRow
+		if err := storageRows.Scan(
+			&row.BlockID, &row.ContainerID, &row.FormatVersion, &row.Codec, &row.PlaintextSize,
+			&row.CompressionCodec, &row.CompressionLevel, &row.CompressedSize, &row.StoredSize,
+			&row.BlockHash, &row.CompressedHash, &row.PhysicalHash, &row.ContainerOffset,
+			&row.ChunkHash, &row.OffsetInBlock, &row.SizeInBlock,
+		); err != nil {
+			_ = storageRows.Close()
+			return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("scan diagnostic storage block: %w", err)
+		}
+		rawRows = append(rawRows, row)
+	}
+	if err := storageRows.Close(); err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("close diagnostic storage block rows: %w", err)
+	}
+	if err := storageRows.Err(); err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("iterate diagnostic storage blocks: %w", err)
+	}
+
+	legacyRows, err := dbconn.QueryContext(ctx, `
+		SELECT b.id, b.container_id, b.format_version, b.codec, b.plaintext_size,
+		       b.stored_size, b.block_offset, c.chunk_hash
+		FROM blocks b
+		JOIN chunk c ON c.id = b.chunk_id
+	`)
+	if err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("query diagnostic legacy blocks: %w", err)
+	}
+	for legacyRows.Next() {
+		var row benchmarkPhysicalRawRow
+		if err := legacyRows.Scan(
+			&row.BlockID, &row.ContainerID, &row.FormatVersion, &row.Codec,
+			&row.PlaintextSize, &row.StoredSize, &row.ContainerOffset, &row.ChunkHash,
+		); err != nil {
+			_ = legacyRows.Close()
+			return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("scan diagnostic legacy block: %w", err)
+		}
+		row.CompressionCodec = "none"
+		row.BlockHash = row.ChunkHash
+		row.OffsetInBlock = sql.NullInt64{Int64: 0, Valid: true}
+		row.SizeInBlock = sql.NullInt64{Int64: row.PlaintextSize, Valid: true}
+		rawRows = append(rawRows, row)
+	}
+	if err := legacyRows.Close(); err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("close diagnostic legacy block rows: %w", err)
+	}
+	if err := legacyRows.Err(); err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("iterate diagnostic legacy blocks: %w", err)
+	}
+
+	var physical benchmarkDiagnosticPhysical
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM container),
+			(SELECT COUNT(*) FROM storage_blocks),
+			(SELECT COUNT(*) FROM blocks),
+			(SELECT COUNT(*) FROM chunk_block_refs),
+			COALESCE((SELECT SUM(stored_size) FROM storage_blocks), 0) +
+				COALESCE((SELECT SUM(stored_size) FROM blocks), 0),
+			COALESCE((SELECT SUM(current_size) FROM container), 0)
+	`).Scan(
+		&physical.ContainerCount, &physical.StorageBlockCount, &physical.LegacyBlockCount,
+		&physical.ChunkReferenceCount, &physical.PayloadBytes, &physical.ContainerBytes,
+	); err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("query diagnostic physical totals: %w", err)
+	}
+	canonicalRows := canonicalizeBenchmarkPhysicalRows(rawRows)
+	physical.CanonicalSHA256, err = benchmarkCanonicalDigest(canonicalRows)
+	if err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("digest canonical physical content: %w", err)
+	}
+
+	containerRows, err := dbconn.QueryContext(ctx, `
+		SELECT id, sealed, sealing, quarantine, current_size, max_size, COALESCE(container_hash, '')
+		FROM container
+	`)
+	if err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("query diagnostic containers: %w", err)
+	}
+	containers := make(map[int64]*benchmarkContainerLayout)
+	for containerRows.Next() {
+		var row benchmarkContainerRawRow
+		if err := containerRows.Scan(&row.ID, &row.Sealed, &row.Sealing, &row.Quarantine, &row.CurrentSize, &row.MaxSize, &row.ContainerHash); err != nil {
+			_ = containerRows.Close()
+			return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("scan diagnostic container: %w", err)
+		}
+		containers[row.ID] = &benchmarkContainerLayout{
+			Sealed: row.Sealed, Sealing: row.Sealing, Quarantine: row.Quarantine,
+			CurrentSize: row.CurrentSize, MaxSize: row.MaxSize, ContainerHash: row.ContainerHash,
+			Rows: make([]benchmarkPhysicalLayoutRow, 0),
+		}
+	}
+	if err := containerRows.Close(); err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("close diagnostic container rows: %w", err)
+	}
+	if err := containerRows.Err(); err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("iterate diagnostic containers: %w", err)
+	}
+	for _, raw := range rawRows {
+		containerLayout, ok := containers[raw.ContainerID]
+		if !ok {
+			return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("diagnostic block references a missing container")
+		}
+		canonical := canonicalizeBenchmarkPhysicalRows([]benchmarkPhysicalRawRow{raw})[0]
+		containerLayout.Rows = append(containerLayout.Rows, benchmarkPhysicalLayoutRow{
+			Canonical: canonical, PlaintextSize: raw.PlaintextSize,
+			CompressedSize: nullableInt64Pointer(raw.CompressedSize), StoredSize: raw.StoredSize,
+			BlockHash: raw.BlockHash, CompressedHash: raw.CompressedHash, PhysicalHash: raw.PhysicalHash,
+			ContainerOffset: raw.ContainerOffset, OffsetInBlock: nullableInt64Pointer(raw.OffsetInBlock),
+		})
+	}
+	layouts := make([]benchmarkContainerLayout, 0, len(containers))
+	for _, layout := range containers {
+		sort.Slice(layout.Rows, func(i, j int) bool {
+			left, _ := json.Marshal(layout.Rows[i])
+			right, _ := json.Marshal(layout.Rows[j])
+			return bytes.Compare(left, right) < 0
+		})
+		layouts = append(layouts, *layout)
+	}
+	sort.Slice(layouts, func(i, j int) bool {
+		left, _ := json.Marshal(layouts[i])
+		right, _ := json.Marshal(layouts[j])
+		return bytes.Compare(left, right) < 0
+	})
+	layoutDigest, err := benchmarkCanonicalDigest(layouts)
+	if err != nil {
+		return benchmarkDiagnosticPhysical{}, "", fmt.Errorf("digest physical layout: %w", err)
+	}
+	return physical, layoutDigest, nil
 }
 
 type benchmarkStateSnapshot struct {
