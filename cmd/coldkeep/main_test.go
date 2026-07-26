@@ -88,6 +88,23 @@ func TestBenchmarkDiagnosticFingerprintsIgnoreRowOrderAndGeneratedIDs(t *testing
 	if physicalDigestA != physicalDigestB {
 		t.Fatalf("canonical physical digest changed with IDs/packing: %s != %s", physicalDigestA, physicalDigestB)
 	}
+	physicalContentChanged := append([]benchmarkPhysicalRawRow(nil), physicalB...)
+	physicalContentChanged[0].ChunkHash = "changed-chunk-content"
+	changedDigest, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkPhysicalRows(physicalContentChanged))
+	if physicalDigestA == changedDigest {
+		t.Fatal("canonical physical digest did not change with payload content")
+	}
+}
+
+func TestBenchmarkDiagnosticRejectsDuplicateCanonicalLogicalPaths(t *testing.T) {
+	dataRoot := t.TempDir()
+	rows := []benchmarkLogicalRawRow{
+		{ID: 1, Path: filepath.Join(dataRoot, "duplicate.txt"), FileHash: "hash-a"},
+		{ID: 2, Path: filepath.Join(dataRoot, "duplicate.txt"), FileHash: "hash-b"},
+	}
+	if _, err := canonicalizeBenchmarkLogicalRows(rows, dataRoot); err == nil {
+		t.Fatal("expected duplicate canonical logical path to fail")
+	}
 }
 
 func TestBenchmarkDiagnosticReportContainsNoSensitiveSourceValues(t *testing.T) {

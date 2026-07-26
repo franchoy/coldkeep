@@ -45,9 +45,50 @@ python3 scripts/benchmark_gate.py sample \
 
 The sampler rejects malformed, repeated, trailing, incomplete, reordered, or
 fixture-inconsistent reports and preserves every raw sample. Duration median is
-the proposed failing endpoint; derived throughput is informational. The
-manual-only calibration workflow must pass before this harness replaces the
-historical required-CI comparison.
+the proposed failing endpoint. The manual-only calibration workflow must pass
+before this harness replaces the historical required-CI comparison.
+
+#### Outcome E evidence contract
+
+Preserved calibration run `30176935742` showed stable workers=1 counters and
+scheduling-sensitive workers=4 container open, close, and fsync counts. A
+bounded local final-state diagnostic then showed exact fixture, logical-file,
+ordered chunk-graph, restored-tree, snapshot-membership, GC, verification, and
+canonical physical-content evidence. Only execution allocation and physical
+layout observations varied. This is Outcome E: the former all-counters-equal
+calibration rule was over-constrained; it is not evidence of a product,
+fixture, isolation, or aggregation correctness defect.
+
+Raw benchmark schema remains version 2. Every corrected-contract raw report
+must contain `diagnostic_final_state` schema version 1. Schema-v2 reports that
+omit that object, including the preserved GitHub workers=4 artifacts, remain
+useful historical diagnostics but cannot enter corrected calibration or a
+governed baseline. Schema-v1 evidence is historical only. Unknown fields in
+validated sections fail closed until a schema and policy update classifies
+them.
+
+Evidence policy version 1 assigns fields by semantics:
+
+| Policy | Fields and validation |
+| --- | --- |
+| `hard_equal` | Raw and aggregate schema/kind/status; capture source/binary and hard environment identity; codec, compression, dataset, workers, pipeline depth, and deterministic mode; every fixture constant and ordered case seed; warmup/sample counts; per-case processed file/byte totals; operation success/failure/skipped totals; expected restored totals; logical/status, ordered chunk-graph, restored-tree, snapshot, GC, verification, and placement-independent physical-content fingerprints/totals; cleanup success and zero leaked databases, processes, or temporary resources. |
+| `derived_equal` | Throughput; aggregate execution totals; median, mean, min/max, sample standard deviation, MAD, MAD ratio, CV, sample order/count relationships, command p95, duplicated outer/I/O counters, snapshot-write sums, open/close balance, and applicable artifact/manifest hashes. Each value is recomputed from its source fields. |
+| `bounded_nonnegative` | Mandatory signed-64-bit nonnegative per-case container opens, appends, fsyncs, bytes written, bytes read, and container closes. Values remain present and retained; append/read/write contradictions and open/close imbalance fail. No unsupported percentage bound is imposed. Raw-v2 zero-valued snapshot-write fields are omitted by the established schema, normalized to zero, retained operationally, and checked through their operation-specific and aggregate-sum relationships. |
+| `informational` | Raw timings, retained operational samples and distributions, container/block allocation counts, container bytes, physical-layout digest, host load, free disk, hosted-runner image warning, and command timing distributions. These remain well-formed and sanitized but are not exact across samples. |
+| `excluded_sensitive` | Credentials, passwords, encryption keys, DSNs, usernames, database names, repository or temporary paths, sensitive command arguments, environment dumps, and raw internal identifiers. Names and values are rejected before report acceptance. |
+
+The canonical physical-content digest is hard evidence. It includes logical
+chunk identity, payload size, codec/compression transforms, and unreferenced
+payload identity without database IDs, container IDs, or placement. Payload
+bytes and chunk-reference totals are also hard. Container/block allocation and
+the separate layout digest are informational only after every semantic and
+canonical physical-content field matches.
+
+`revalidate-raw` applies the policy to preserved diagnostic samples and writes
+a separately identified revalidation report. It retains every operational
+sample and distribution and always records
+`performance_calibration_status: not_evaluated`; it does not create a baseline
+or claim calibration acceptance.
 
 Phase 8 benchmark execution is script-only for v1.8 release hardening.
 

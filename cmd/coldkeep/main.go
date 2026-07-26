@@ -3972,11 +3972,16 @@ func canonicalBenchmarkSnapshotPath(dataRoot, rawPath string) (string, error) {
 
 func canonicalizeBenchmarkLogicalRows(rows []benchmarkLogicalRawRow, dataRoot string) ([]benchmarkLogicalCanonicalRow, error) {
 	out := make([]benchmarkLogicalCanonicalRow, 0, len(rows))
+	seenPaths := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
 		pathValue, err := canonicalBenchmarkPath(dataRoot, row.Path)
 		if err != nil {
 			return nil, err
 		}
+		if _, exists := seenPaths[pathValue]; exists {
+			return nil, fmt.Errorf("duplicate canonical logical path")
+		}
+		seenPaths[pathValue] = struct{}{}
 		out = append(out, benchmarkLogicalCanonicalRow{
 			Path: pathValue, FileHash: row.FileHash, TotalSize: row.TotalSize,
 			Status: row.Status, RefCount: row.RefCount, ChunkerVersion: row.ChunkerVersion,

@@ -21,6 +21,7 @@ from typing import Any, Iterable
 
 SCHEMA_VERSION = 2
 REPORT_KIND = "benchmark_gate_aggregate"
+REVALIDATION_KIND = "benchmark_evidence_contract_revalidation"
 MANIFEST_KIND = "benchmark_gate_manifest"
 FIXTURE_ID = "ci-stable-v1"
 FIXTURE_FIELDS = {
@@ -54,6 +55,7 @@ HARD_ENV_FIELDS = (
     "postgres_version",
     "database_image_digest",
 )
+CALIBRATION_IDENTITY_FIELDS = ("source_commit", "binary_sha256", *HARD_ENV_FIELDS)
 REQUIRED_PROVENANCE_FIELDS = (
     "source_commit",
     "generated_at_utc",
@@ -76,6 +78,176 @@ MANIFEST_PROFILES = {
     "zstd-w4": ("zstd", 4),
 }
 DIAGNOSTIC_SCHEMA_VERSION = 1
+EVIDENCE_POLICY_VERSION = 1
+INT64_MAX = (1 << 63) - 1
+
+# Outcome E evidence policy. Paths use [] for repeated case/sample records.
+# Unknown fields in validated sections fail closed; adding a field requires an
+# explicit schema/policy update rather than inheriting an informational policy.
+FIELD_POLICY = {
+    "hard_equal": (
+        "raw.schema_version",
+        "aggregate.schema_version",
+        "aggregate.evidence_policy_version",
+        "aggregate.report_kind",
+        "aggregate.status",
+        "raw.status",
+        "raw.command",
+        "raw.dataset",
+        "raw.repeat",
+        "aggregate.provenance.source_commit",
+        "aggregate.provenance.binary_sha256",
+        "aggregate.provenance.runner_os",
+        "aggregate.provenance.runner_arch",
+        "aggregate.provenance.cpu_count",
+        "aggregate.provenance.go_version",
+        "aggregate.provenance.postgres_version",
+        "aggregate.provenance.database_image_digest",
+        "profile.codec",
+        "profile.compression",
+        "profile.dataset",
+        "profile.workers",
+        "profile.pipeline_depth",
+        "profile.deterministic",
+        "fixture.*",
+        "warmup_count",
+        "sample_count",
+        "cases[].case",
+        "cases[].seed",
+        "cases[].logical_files",
+        "cases[].logical_bytes",
+        "cases[].workers_used",
+        "cases[].diagnostic.logical_files.*",
+        "cases[].diagnostic.logical_statuses.*",
+        "cases[].diagnostic.chunk_graph.*",
+        "cases[].diagnostic.restored_tree.*",
+        "cases[].diagnostic.snapshots.*",
+        "cases[].diagnostic.snapshot_count",
+        "cases[].diagnostic.gc.*",
+        "cases[].diagnostic.verification.*",
+        "cases[].diagnostic.physical.chunk_reference_count",
+        "cases[].diagnostic.physical.payload_bytes",
+        "cases[].diagnostic.physical.canonical_sha256",
+        "operation_totals.*",
+        "cleanup_totals.*",
+    ),
+    "derived_equal": (
+        "raw.execution_stats totals recomputed from rows",
+        "rows[].throughput_mbps",
+        "rows[].execution_stats.container_append_count",
+        "rows[].execution_stats.container_open_count",
+        "rows[].execution_stats.fsync_count",
+        "rows[].execution_stats.snapshot_metadata_write_count when emitted",
+        "aggregate.execution_stats.snapshot_metadata_write_count",
+        "cases[].median_duration_ms",
+        "cases[].mean_duration_ms",
+        "cases[].min_duration_ms",
+        "cases[].max_duration_ms",
+        "cases[].sample_stddev_ms",
+        "cases[].mad_ms",
+        "cases[].mad_ratio_pct",
+        "cases[].coefficient_of_variation_pct",
+        "sample_order",
+        "command_p95_ms",
+        "manifest.*.sha256",
+    ),
+    "bounded_nonnegative": (
+        "rows[].execution_stats.container_close_count",
+        "rows[].execution_stats.io.container_opens",
+        "rows[].execution_stats.io.container_appends",
+        "rows[].execution_stats.io.fsyncs",
+        "rows[].execution_stats.io.bytes_written",
+        "rows[].execution_stats.io.bytes_read",
+    ),
+    "informational": (
+        "rows[].duration_ms",
+        "cases[].sample_durations_ms",
+        "cases[].operational_samples",
+        "cases[].operational_counter_distributions",
+        "cases[].diagnostic_samples[].physical.container_count",
+        "cases[].diagnostic_samples[].physical.storage_block_count",
+        "cases[].diagnostic_samples[].physical.legacy_block_count",
+        "cases[].diagnostic_samples[].physical.container_bytes",
+        "cases[].diagnostic_samples[].physical_layout_sha256",
+        "command_durations_ms",
+        "host_observations",
+        "provenance.generated_at_utc",
+        "provenance.workflow_run_id",
+        "provenance.workflow_job_id",
+        "provenance.workflow_run_attempt",
+        "provenance.runner_image",
+    ),
+    "excluded_sensitive": (
+        "credentials",
+        "passwords",
+        "encryption_keys",
+        "dsns",
+        "usernames",
+        "database_names",
+        "repository_paths",
+        "temporary_roots",
+        "sensitive_command_arguments",
+        "environment_dumps",
+        "raw_internal_ids",
+    ),
+}
+
+RAW_ENVELOPE_FIELDS = {"status", "command", "data"}
+RAW_DATA_FIELDS = {
+    "schema_version", "generated_at_utc", "dataset", "repeat", "fixture",
+    "execution", "execution_stats", "rows",
+}
+EXECUTION_FIELDS = {"store_folder_workers", "pipeline_depth", "deterministic"}
+RAW_ROW_FIELDS = {
+    "case", "duration_ms", "throughput_mbps", "execution", "execution_stats",
+    "diagnostic_final_state",
+}
+IO_COUNTER_FIELDS = {
+    "container_opens", "container_appends", "fsyncs", "bytes_written", "bytes_read",
+}
+ROW_EXECUTION_STATS_REQUIRED_FIELDS = {
+    "total_files", "total_bytes", "workers_used", "container_append_count",
+    "fsync_count", "container_open_count", "container_close_count", "io",
+}
+ROW_EXECUTION_STATS_OPTIONAL_FIELDS = {"snapshot_metadata_write_count"}
+TOP_EXECUTION_STATS_FIELDS = ROW_EXECUTION_STATS_REQUIRED_FIELDS | {
+    "snapshot_metadata_write_count",
+}
+PROVENANCE_FIELDS = set(REQUIRED_PROVENANCE_FIELDS) | {"source_tag"}
+PROFILE_FIELDS = {"codec", "compression", "dataset", "workers", "pipeline_depth", "deterministic"}
+AGGREGATE_FIELDS = {
+    "schema_version", "evidence_policy_version", "report_kind", "status", "provenance",
+    "profile", "fixture", "warmup_count", "sample_count", "sample_order",
+    "command_durations_ms", "command_p95_ms", "host_observations", "operation_totals",
+    "cleanup_totals", "cases",
+}
+AGGREGATE_CASE_FIELDS = {
+    "case", "seed", "logical_files", "logical_bytes", "workers_used",
+    "sample_durations_ms", "diagnostic_final_state", "diagnostic_samples",
+    "operational_samples", "operational_counter_distributions",
+    "median_duration_ms", "mean_duration_ms", "min_duration_ms", "max_duration_ms",
+    "sample_stddev_ms", "mad_ms", "mad_ratio_pct", "coefficient_of_variation_pct",
+    "throughput_mbps",
+}
+REVALIDATION_FIELDS = {
+    "schema_version", "evidence_policy_version", "report_kind", "status",
+    "performance_calibration_status", "profile", "fixture", "warmup_count",
+    "sample_count", "sample_order", "operation_totals", "cleanup_totals", "cases",
+}
+SENSITIVE_KEY_PARTS = (
+    "password", "credential", "encryption_key", "dsn", "username", "user_name",
+    "database_name", "db_name", "repository_path", "temporary_root", "temp_root",
+    "environment_dump", "command_arguments", "command_args",
+)
+OPERATIONAL_COUNTER_FIELDS = (
+    "container_append_count",
+    "container_open_count",
+    "container_close_count",
+    "fsync_count",
+    "bytes_written",
+    "bytes_read",
+    "snapshot_metadata_write_count",
+)
 
 
 class GateError(RuntimeError):
@@ -116,6 +288,43 @@ def write_json(path: pathlib.Path, value: Any) -> None:
         json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def require_exact_fields(value: Any, expected: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise GateError(f"{label} must be an object")
+    actual = set(value)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        unknown = sorted(actual - expected)
+        raise GateError(f"{label} fields mismatch: missing={missing} unknown={unknown}")
+    return value
+
+
+def validate_no_sensitive_evidence(value: Any, label: str = "evidence") -> None:
+    def visit(item: Any, path: str) -> None:
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                normalized = str(key).lower().replace("-", "_")
+                if any(part in normalized for part in SENSITIVE_KEY_PARTS):
+                    raise GateError(f"{label} contains prohibited sensitive field at {path}.{key}")
+                visit(nested, f"{path}.{key}")
+        elif isinstance(item, list):
+            for index, nested in enumerate(item):
+                visit(nested, f"{path}[{index}]")
+        elif isinstance(item, str):
+            lowered = item.lower()
+            if (
+                re.match(r"^[a-z][a-z0-9+.-]*://", item, re.IGNORECASE)
+                or item.startswith("/")
+                or re.match(r"^[A-Za-z]:[\\/]", item)
+                or "coldkeep_bench_" in lowered
+                or "coldkeep-benchmark-" in lowered
+                or re.search(r"(?:password|dbname|user)\s*=", lowered)
+            ):
+                raise GateError(f"{label} contains prohibited sensitive value at {path}")
+
+    visit(value, label)
 
 
 def require_number(value: Any, label: str, *, positive: bool = False) -> float:
@@ -161,17 +370,9 @@ def summarize(values: Iterable[float]) -> dict[str, float]:
     }
 
 
-def fixture_stats(row: dict[str, Any]) -> dict[str, Any]:
-    stats = row.get("execution_stats")
-    execution = row.get("execution")
-    if not isinstance(stats, dict) or not isinstance(execution, dict):
-        raise GateError(f"case {row.get('case')!r} lacks execution metadata")
-    return {"execution": execution, "execution_stats": stats}
-
-
 def require_nonnegative_integer(value: Any, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise GateError(f"{label} must be a non-negative integer")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > INT64_MAX:
+        raise GateError(f"{label} must be a non-negative signed 64-bit integer")
     return value
 
 
@@ -205,6 +406,8 @@ def validate_diagnostic_final_state(value: Any, label: str) -> dict[str, Any]:
         raise GateError(f"{label} diagnostic logical status fields mismatch")
     for field in statuses:
         require_nonnegative_integer(statuses[field], f"{label} diagnostic logical status {field}")
+    if sum(statuses.values()) != value["logical_files"]["count"]:
+        raise GateError(f"{label} diagnostic logical statuses do not match logical file count")
     require_nonnegative_integer(value["snapshot_count"], f"{label} diagnostic snapshot_count")
     gc_totals = value.get("gc")
     expected_gc = {
@@ -217,6 +420,8 @@ def validate_diagnostic_final_state(value: Any, label: str) -> dict[str, Any]:
         raise GateError(f"{label} diagnostic GC fields mismatch")
     for field in gc_totals:
         require_nonnegative_integer(gc_totals[field], f"{label} diagnostic GC {field}")
+    if gc_totals["reachable_chunks"] + gc_totals["unreachable_chunks"] != gc_totals["total_chunks"]:
+        raise GateError(f"{label} diagnostic GC reachability totals are inconsistent")
     verification = value.get("verification")
     expected_verification = {
         "blocks_checked", "physical_hashes_checked", "compressed_hashes_checked",
@@ -229,6 +434,10 @@ def validate_diagnostic_final_state(value: Any, label: str) -> dict[str, Any]:
         require_nonnegative_integer(
             verification[field], f"{label} diagnostic verification {field}"
         )
+    if verification["physical_file_issues"] != 0 or verification["snapshot_reachability_issues"] != 0:
+        raise GateError(f"{label} diagnostic verification reports integrity issues")
+    if verification["snapshot_membership_rows"] != value["snapshots"]["count"]:
+        raise GateError(f"{label} diagnostic snapshot membership totals are inconsistent")
     physical = value.get("physical")
     expected_physical = {
         "container_count", "storage_block_count", "legacy_block_count",
@@ -240,6 +449,7 @@ def validate_diagnostic_final_state(value: Any, label: str) -> dict[str, Any]:
         require_nonnegative_integer(physical[field], f"{label} diagnostic physical {field}")
     require_sha256(physical["canonical_sha256"], f"{label} diagnostic canonical physical digest")
     require_sha256(value["physical_layout_sha256"], f"{label} diagnostic physical layout digest")
+    validate_no_sensitive_evidence(value, label)
     return value
 
 
@@ -259,14 +469,190 @@ def hard_final_state(row: dict[str, Any]) -> dict[str, Any]:
         "verification": state["verification"],
         "physical_content": {
             "chunk_reference_count": physical["chunk_reference_count"],
+            "payload_bytes": physical["payload_bytes"],
             "canonical_sha256": physical["canonical_sha256"],
         },
     }
 
 
+def validate_execution(value: Any, *, workers: int, label: str) -> dict[str, Any]:
+    value = require_exact_fields(value, EXECUTION_FIELDS, label)
+    if (
+        value["store_folder_workers"] != workers
+        or value["pipeline_depth"] != 1
+        or value["deterministic"] is not True
+    ):
+        raise GateError(f"{label} policy mismatch")
+    return value
+
+
+def validate_operational_counters(row: dict[str, Any], *, workers: int) -> dict[str, int]:
+    case_name = row.get("case")
+    stats = row.get("execution_stats")
+    if not isinstance(stats, dict):
+        raise GateError(f"{case_name} execution_stats must be an object")
+    fields = set(stats)
+    if not ROW_EXECUTION_STATS_REQUIRED_FIELDS <= fields:
+        missing = sorted(ROW_EXECUTION_STATS_REQUIRED_FIELDS - fields)
+        raise GateError(f"{case_name} execution_stats missing mandatory counters: {missing}")
+    unknown = fields - ROW_EXECUTION_STATS_REQUIRED_FIELDS - ROW_EXECUTION_STATS_OPTIONAL_FIELDS
+    if unknown:
+        raise GateError(f"{case_name} execution_stats has unknown fields: {sorted(unknown)}")
+    io_stats = require_exact_fields(stats["io"], IO_COUNTER_FIELDS, f"{case_name} I/O counters")
+
+    logical_files = require_nonnegative_integer(stats["total_files"], f"{case_name} logical files")
+    logical_bytes = require_nonnegative_integer(stats["total_bytes"], f"{case_name} logical bytes")
+    workers_used = require_nonnegative_integer(stats["workers_used"], f"{case_name} workers_used")
+    if logical_files <= 0 or logical_bytes <= 0:
+        raise GateError(f"{case_name} logical totals must be positive")
+    if workers_used != workers:
+        raise GateError(f"{case_name} workers_used mismatch")
+
+    outer_append = require_nonnegative_integer(
+        stats["container_append_count"], f"{case_name} container_append_count"
+    )
+    outer_open = require_nonnegative_integer(
+        stats["container_open_count"], f"{case_name} container_open_count"
+    )
+    outer_close = require_nonnegative_integer(
+        stats["container_close_count"], f"{case_name} container_close_count"
+    )
+    outer_fsync = require_nonnegative_integer(stats["fsync_count"], f"{case_name} fsync_count")
+    io_values = {
+        field: require_nonnegative_integer(io_stats[field], f"{case_name} I/O counter {field}")
+        for field in IO_COUNTER_FIELDS
+    }
+    snapshot_writes = require_nonnegative_integer(
+        stats.get("snapshot_metadata_write_count", 0),
+        f"{case_name} snapshot_metadata_write_count",
+    )
+
+    if outer_append != io_values["container_appends"]:
+        raise GateError(f"{case_name} duplicated container append counters differ")
+    if outer_open != io_values["container_opens"]:
+        raise GateError(f"{case_name} duplicated container open counters differ")
+    if outer_fsync != io_values["fsyncs"]:
+        raise GateError(f"{case_name} duplicated fsync counters differ")
+    if outer_open != outer_close:
+        raise GateError(f"{case_name} container open/close counters are unbalanced")
+    if outer_append > 0 and (
+        outer_open == 0 or outer_fsync == 0 or io_values["bytes_written"] == 0
+    ):
+        raise GateError(f"{case_name} append counters contradict execution I/O")
+    if io_values["bytes_read"] > 0 and outer_open == 0:
+        raise GateError(f"{case_name} read counters contradict container opens")
+    if snapshot_writes > 0 and case_name not in {"snapshot-creation", "gc-after-churn"}:
+        raise GateError(f"{case_name} snapshot writes contradict the operation type")
+
+    return {
+        "container_append_count": outer_append,
+        "container_open_count": outer_open,
+        "container_close_count": outer_close,
+        "fsync_count": outer_fsync,
+        "bytes_written": io_values["bytes_written"],
+        "bytes_read": io_values["bytes_read"],
+        "snapshot_metadata_write_count": snapshot_writes,
+    }
+
+
+def hard_row_contract(row: dict[str, Any], *, workers: int) -> dict[str, Any]:
+    validate_execution(row.get("execution"), workers=workers, label=f"{row.get('case')} execution")
+    validate_operational_counters(row, workers=workers)
+    stats = row["execution_stats"]
+    return {
+        "case": row["case"],
+        "execution": row["execution"],
+        "logical_files": stats["total_files"],
+        "logical_bytes": stats["total_bytes"],
+        "workers_used": stats["workers_used"],
+        "diagnostic_final_state": hard_final_state(row),
+    }
+
+
+def hard_aggregate_case_contract(case: dict[str, Any]) -> dict[str, Any]:
+    """Fields that must remain exact when aggregate cases are compared."""
+    return {
+        "case": case["case"],
+        "seed": case["seed"],
+        "logical_files": case["logical_files"],
+        "logical_bytes": case["logical_bytes"],
+        "workers_used": case["workers_used"],
+        "diagnostic_final_state": hard_final_state(case),
+    }
+
+
+def summarize_operational_counters(samples: list[dict[str, int]]) -> dict[str, dict[str, Any]]:
+    if not samples:
+        raise GateError("cannot summarize empty operational counter samples")
+    return {
+        field: {
+            "min": min(sample[field] for sample in samples),
+            "max": max(sample[field] for sample in samples),
+            "values": sorted({sample[field] for sample in samples}),
+        }
+        for field in OPERATIONAL_COUNTER_FIELDS
+    }
+
+
+def validate_operational_distributions(
+    samples: Any,
+    distributions: Any,
+    *,
+    sample_count: int,
+    label: str,
+) -> None:
+    if not isinstance(samples, list) or len(samples) != sample_count:
+        raise GateError(f"{label} operational sample count mismatch")
+    normalized: list[dict[str, int]] = []
+    for index, sample in enumerate(samples):
+        sample = require_exact_fields(sample, set(OPERATIONAL_COUNTER_FIELDS), f"{label} operational sample {index + 1}")
+        normalized.append({
+            field: require_nonnegative_integer(sample[field], f"{label} operational {field}")
+            for field in OPERATIONAL_COUNTER_FIELDS
+        })
+        if normalized[-1]["container_open_count"] != normalized[-1]["container_close_count"]:
+            raise GateError(f"{label} operational sample {index + 1} is unbalanced")
+    if distributions != summarize_operational_counters(normalized):
+        raise GateError(f"{label} operational counter distributions are inconsistent")
+
+
+def validate_top_execution_stats(value: Any, rows: list[dict[str, Any]], *, workers: int) -> None:
+    value = require_exact_fields(value, TOP_EXECUTION_STATS_FIELDS, "raw aggregate execution_stats")
+    io_stats = require_exact_fields(value["io"], IO_COUNTER_FIELDS, "raw aggregate I/O counters")
+    expected = {
+        "total_files": sum(row["execution_stats"]["total_files"] for row in rows),
+        "total_bytes": sum(row["execution_stats"]["total_bytes"] for row in rows),
+        "workers_used": max(row["execution_stats"]["workers_used"] for row in rows),
+        "container_append_count": sum(row["execution_stats"]["container_append_count"] for row in rows),
+        "fsync_count": sum(row["execution_stats"]["fsync_count"] for row in rows),
+        "container_open_count": sum(row["execution_stats"]["container_open_count"] for row in rows),
+        "container_close_count": sum(row["execution_stats"]["container_close_count"] for row in rows),
+        "snapshot_metadata_write_count": sum(
+            row["execution_stats"].get("snapshot_metadata_write_count", 0) for row in rows
+        ),
+    }
+    for field, expected_value in expected.items():
+        actual = require_nonnegative_integer(value[field], f"raw aggregate {field}")
+        if actual != expected_value:
+            raise GateError(f"raw aggregate {field} does not match case rows")
+    if value["workers_used"] != workers:
+        raise GateError("raw aggregate workers_used mismatch")
+    expected_io = {
+        field: sum(row["execution_stats"]["io"][field] for row in rows)
+        for field in IO_COUNTER_FIELDS
+    }
+    for field, expected_value in expected_io.items():
+        actual = require_nonnegative_integer(io_stats[field], f"raw aggregate I/O {field}")
+        if actual != expected_value:
+            raise GateError(f"raw aggregate I/O {field} does not match case rows")
+
+
 def validate_fixture(fixture: Any) -> list[dict[str, Any]]:
-    if not isinstance(fixture, dict):
-        raise GateError("fixture must be an object")
+    fixture = require_exact_fields(
+        fixture,
+        set(FIXTURE_FIELDS) | {"ordered_cases"},
+        "fixture",
+    )
     for field, expected in FIXTURE_FIELDS.items():
         if fixture.get(field) != expected:
             raise GateError(f"fixture field {field!r} does not match {FIXTURE_ID}")
@@ -276,6 +662,7 @@ def validate_fixture(fixture: Any) -> list[dict[str, Any]]:
     for index, (descriptor, expected_name) in enumerate(zip(ordered, EXPECTED_CASES)):
         if not isinstance(descriptor, dict):
             raise GateError(f"fixture case at index {index} must be an object")
+        require_exact_fields(descriptor, {"name", "seed"}, f"fixture case at index {index}")
         expected_seed = 1712 + index * 10
         if descriptor.get("name") != expected_name or descriptor.get("seed") != expected_seed:
             raise GateError(f"fixture case descriptor mismatch at index {index}")
@@ -283,8 +670,7 @@ def validate_fixture(fixture: Any) -> list[dict[str, Any]]:
 
 
 def validate_provenance(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise GateError("aggregate provenance must be an object")
+    value = require_exact_fields(value, PROVENANCE_FIELDS, "aggregate provenance")
     for field in REQUIRED_PROVENANCE_FIELDS:
         if value.get(field) in (None, "", "unknown"):
             raise GateError(f"aggregate provenance field {field!r} is missing")
@@ -307,6 +693,7 @@ def validate_provenance(value: Any) -> dict[str, Any]:
         dt.datetime.fromisoformat(generated[:-1] + "+00:00")
     except ValueError as exc:
         raise GateError("aggregate generated_at_utc must be RFC3339") from exc
+    validate_no_sensitive_evidence(value, "aggregate provenance")
     return value
 
 
@@ -316,25 +703,16 @@ def validate_raw_report(
     workers: int,
     compression: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    require_exact_fields(envelope, RAW_ENVELOPE_FIELDS, "raw report envelope")
     if envelope.get("status") != "ok" or envelope.get("command") != "benchmark":
         raise GateError("raw report must be a successful benchmark envelope")
-    data = envelope.get("data")
-    if not isinstance(data, dict):
-        raise GateError("raw report data must be an object")
+    data = require_exact_fields(envelope.get("data"), RAW_DATA_FIELDS, "raw report data")
     if data.get("schema_version") != SCHEMA_VERSION:
         raise GateError(f"raw report schema must be {SCHEMA_VERSION}")
     if data.get("dataset") != FIXTURE_ID or data.get("repeat") != 1:
         raise GateError("raw report has the wrong dataset or repeat count")
 
-    execution = data.get("execution")
-    if not isinstance(execution, dict):
-        raise GateError("raw report execution must be an object")
-    if (
-        execution.get("store_folder_workers") != workers
-        or execution.get("pipeline_depth") != 1
-        or execution.get("deterministic") is not True
-    ):
-        raise GateError("raw report execution policy mismatch")
+    execution = validate_execution(data.get("execution"), workers=workers, label="raw report execution")
 
     validate_fixture(data.get("fixture"))
 
@@ -350,42 +728,33 @@ def validate_raw_report(
     for row in rows:
         if not isinstance(row, dict):
             raise GateError("raw report row must be an object")
+        require_exact_fields(row, RAW_ROW_FIELDS, f"raw report row {row.get('case')!r}")
         duration = require_number(row.get("duration_ms"), f"{row.get('case')} duration", positive=True)
         throughput = require_number(
             row.get("throughput_mbps"),
             f"{row.get('case')} throughput",
             positive=True,
         )
-        row_execution = row.get("execution")
+        row_execution = validate_execution(
+            row.get("execution"), workers=workers, label=f"{row.get('case')} execution"
+        )
         if row_execution != execution:
             raise GateError(f"{row.get('case')} execution policy mismatch")
-        stats = row.get("execution_stats")
-        if not isinstance(stats, dict):
-            raise GateError(f"{row.get('case')} execution_stats must be an object")
-        logical_files = stats.get("total_files")
-        if isinstance(logical_files, bool) or not isinstance(logical_files, int) or logical_files <= 0:
-            raise GateError(f"{row.get('case')} logical files must be a positive integer")
-        logical_bytes = require_number(
-            stats.get("total_bytes"),
-            f"{row.get('case')} logical bytes",
-            positive=True,
-        )
+        validate_operational_counters(row, workers=workers)
+        stats = row["execution_stats"]
+        logical_bytes = stats["total_bytes"]
         expected_throughput = logical_bytes / (1024.0 * 1024.0) / (duration / 1000.0)
         if not math.isclose(throughput, expected_throughput, rel_tol=1e-12, abs_tol=1e-12):
             raise GateError(f"{row.get('case')} derived throughput is inconsistent")
-        if stats.get("workers_used") != workers:
-            raise GateError(f"{row.get('case')} workers_used mismatch")
-        io_stats = stats.get("io")
-        if not isinstance(io_stats, dict):
-            raise GateError(f"{row.get('case')} I/O counters must be an object")
-        for field in ("container_opens", "container_appends", "fsyncs", "bytes_written", "bytes_read"):
-            require_number(io_stats.get(field), f"{row.get('case')} I/O counter {field}")
         hard_final_state(row)
+
+    validate_top_execution_stats(data.get("execution_stats"), rows, workers=workers)
 
     # Compression is supplied by the controlled environment rather than the v2
     # raw payload. Recording it here makes that ownership explicit.
     if compression not in {"none", "zstd"}:
         raise GateError(f"unsupported compression profile {compression!r}")
+    validate_no_sensitive_evidence(envelope, "raw report")
     return data, rows
 
 
@@ -469,6 +838,132 @@ def capture_sample(
     return envelope, elapsed_ms, {"before": before, "after": host_load()}
 
 
+def build_contract_cases(
+    raw_reports: list[dict[str, Any]],
+    *,
+    workers: int,
+    compression: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not raw_reports:
+        raise GateError("cannot aggregate an empty raw report set")
+    first_data, first_rows = validate_raw_report(
+        raw_reports[0], workers=workers, compression=compression
+    )
+    fixture_cases = first_data["fixture"]["ordered_cases"]
+    cases: list[dict[str, Any]] = []
+    for case_index, first_row in enumerate(first_rows):
+        case_name = first_row["case"]
+        expected_hard = hard_row_contract(first_row, workers=workers)
+        first_diagnostic = first_row["diagnostic_final_state"]
+        expected_restored_files = (
+            first_row["execution_stats"]["total_files"]
+            if case_name in {"restore-large-file", "restore-many-files"}
+            else 0
+        )
+        if first_diagnostic["restored_tree"]["count"] != expected_restored_files:
+            raise GateError(f"{case_name} restored file total mismatch")
+        durations: list[float] = []
+        diagnostic_samples: list[dict[str, Any]] = []
+        operational_samples: list[dict[str, int]] = []
+        for sample_index, envelope in enumerate(raw_reports):
+            data, rows = validate_raw_report(
+                envelope, workers=workers, compression=compression
+            )
+            if data["fixture"] != first_data["fixture"] or data["execution"] != first_data["execution"]:
+                raise GateError(f"fixture/profile changed in sample {sample_index + 1}")
+            row = rows[case_index]
+            if row["case"] != case_name:
+                raise GateError(f"case order changed in sample {sample_index + 1}")
+            if hard_row_contract(row, workers=workers) != expected_hard:
+                raise GateError(
+                    f"hard evidence changed for {case_name} in sample {sample_index + 1}"
+                )
+            durations.append(float(row["duration_ms"]))
+            diagnostic_samples.append(row["diagnostic_final_state"])
+            operational_samples.append(validate_operational_counters(row, workers=workers))
+
+        summary = summarize(durations)
+        logical_bytes = first_row["execution_stats"]["total_bytes"]
+        summary["throughput_mbps"] = (
+            logical_bytes / (1024.0 * 1024.0) / (summary["median_duration_ms"] / 1000.0)
+        )
+        cases.append(
+            {
+                "case": case_name,
+                "seed": fixture_cases[case_index]["seed"],
+                "logical_files": first_row["execution_stats"]["total_files"],
+                "logical_bytes": logical_bytes,
+                "workers_used": first_row["execution_stats"]["workers_used"],
+                "sample_durations_ms": durations,
+                "diagnostic_final_state": diagnostic_samples[0],
+                "diagnostic_samples": diagnostic_samples,
+                "operational_samples": operational_samples,
+                "operational_counter_distributions": summarize_operational_counters(
+                    operational_samples
+                ),
+                **summary,
+            }
+        )
+    return first_data, cases
+
+
+def operation_totals(sample_count: int) -> dict[str, int]:
+    total = sample_count * len(EXPECTED_CASES)
+    return {"success": total, "failure": 0, "skipped": 0}
+
+
+def cleanup_totals(sample_count: int) -> dict[str, int]:
+    total = sample_count * len(EXPECTED_CASES)
+    return {
+        "attempted": total,
+        "succeeded": total,
+        "failed": 0,
+        "leaked_databases": 0,
+        "leaked_processes": 0,
+        "leaked_temporary_resources": 0,
+    }
+
+
+def validate_host_observations(value: Any, *, sample_count: int) -> None:
+    if not isinstance(value, list) or len(value) != sample_count:
+        raise GateError("aggregate host observation count mismatch")
+    host_fields = {"load_1m", "load_5m", "load_15m", "free_disk_bytes"}
+    for sample_index, observation in enumerate(value):
+        observation = require_exact_fields(
+            observation,
+            {"before", "after"},
+            f"host observation {sample_index + 1}",
+        )
+        for point in ("before", "after"):
+            values = require_exact_fields(
+                observation[point],
+                host_fields,
+                f"host observation {sample_index + 1} {point}",
+            )
+            for field in host_fields:
+                require_number(values[field], f"host observation {sample_index + 1} {point} {field}")
+
+
+def validate_operation_and_cleanup_totals(report: dict[str, Any], *, sample_count: int) -> None:
+    expected_operations = operation_totals(sample_count)
+    operations = require_exact_fields(
+        report.get("operation_totals"), set(expected_operations), "aggregate operation_totals"
+    )
+    for field, expected in expected_operations.items():
+        actual = require_nonnegative_integer(operations[field], f"operation total {field}")
+        if actual != expected:
+            raise GateError(f"operation total {field} mismatch")
+
+    expected_cleanup = cleanup_totals(sample_count)
+    cleanup = require_exact_fields(
+        report.get("cleanup_totals"), set(expected_cleanup), "aggregate cleanup_totals"
+    )
+    for field, expected in expected_cleanup.items():
+        actual = require_nonnegative_integer(cleanup[field], f"cleanup total {field}")
+        if actual != expected:
+            raise GateError(f"cleanup total {field} mismatch")
+
+
 def sample_command(args: argparse.Namespace) -> int:
     if args.dataset != FIXTURE_ID:
         raise GateError(f"gate sampling requires dataset {FIXTURE_ID!r}")
@@ -508,53 +1003,15 @@ def sample_command(args: argparse.Namespace) -> int:
         command_durations.append(elapsed_ms)
         loads.append(load)
 
-    first_data, first_rows = validate_raw_report(
-        raw_reports[0], workers=args.workers, compression=args.compression
+    first_data, cases = build_contract_cases(
+        raw_reports,
+        workers=args.workers,
+        compression=args.compression,
     )
-    cases = []
-    fixture_cases = first_data["fixture"]["ordered_cases"]
-    for case_index, first_row in enumerate(first_rows):
-        case_name = first_row["case"]
-        expected_stats = fixture_stats(first_row)
-        expected_final_state = hard_final_state(first_row)
-        diagnostic_final_state = first_row["diagnostic_final_state"]
-        durations = []
-        for sample_index, envelope in enumerate(raw_reports):
-            _, rows = validate_raw_report(
-                envelope, workers=args.workers, compression=args.compression
-            )
-            row = rows[case_index]
-            if row["case"] != case_name:
-                raise GateError(f"case order changed in sample {sample_index + 1}")
-            if hard_final_state(row) != expected_final_state:
-                raise GateError(
-                    f"hard final state changed for {case_name} in sample {sample_index + 1}"
-                )
-            if fixture_stats(row) != expected_stats:
-                raise GateError(
-                    f"fixture counters changed for {case_name} in sample {sample_index + 1}"
-                )
-            durations.append(float(row["duration_ms"]))
-        summary = summarize(durations)
-        logical_bytes = first_row["execution_stats"]["total_bytes"]
-        summary["throughput_mbps"] = (
-            logical_bytes / (1024.0 * 1024.0) / (summary["median_duration_ms"] / 1000.0)
-        )
-        cases.append(
-            {
-                "case": case_name,
-                "seed": fixture_cases[case_index]["seed"],
-                "logical_files": first_row["execution_stats"]["total_files"],
-                "logical_bytes": logical_bytes,
-                "sample_durations_ms": durations,
-                "diagnostic_final_state": diagnostic_final_state,
-                "fixture_stats": expected_stats,
-                **summary,
-            }
-        )
 
     aggregate = {
         "schema_version": SCHEMA_VERSION,
+        "evidence_policy_version": EVIDENCE_POLICY_VERSION,
         "report_kind": REPORT_KIND,
         "status": "ok",
         "provenance": provenance(args, binary_hash),
@@ -573,6 +1030,8 @@ def sample_command(args: argparse.Namespace) -> int:
         "command_durations_ms": command_durations,
         "command_p95_ms": percentile_nearest_rank(command_durations, 0.95),
         "host_observations": loads,
+        "operation_totals": operation_totals(args.samples),
+        "cleanup_totals": cleanup_totals(args.samples),
         "cases": cases,
     }
     write_json(args.output_dir / "aggregate.json", aggregate)
@@ -581,25 +1040,23 @@ def sample_command(args: argparse.Namespace) -> int:
 
 
 def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> None:
+    require_exact_fields(report, AGGREGATE_FIELDS, "aggregate")
     if (
         report.get("schema_version") != SCHEMA_VERSION
+        or report.get("evidence_policy_version") != EVIDENCE_POLICY_VERSION
         or report.get("report_kind") != REPORT_KIND
         or report.get("status") != "ok"
     ):
-        raise GateError("aggregate schema/report kind/status mismatch")
-    sample_count = report.get("sample_count")
-    warmup_count = report.get("warmup_count")
-    if not isinstance(sample_count, int) or sample_count <= 0:
+        raise GateError("aggregate schema/policy/report kind/status mismatch")
+    sample_count = require_nonnegative_integer(report.get("sample_count"), "aggregate sample_count")
+    warmup_count = require_nonnegative_integer(report.get("warmup_count"), "aggregate warmup_count")
+    if sample_count <= 0:
         raise GateError("aggregate sample_count must be a positive integer")
-    if not isinstance(warmup_count, int) or warmup_count < 0:
-        raise GateError("aggregate warmup_count must be a non-negative integer")
     if require_gate_count and (sample_count != 5 or warmup_count != 1):
         raise GateError("required gate expects one warmup and five samples")
     if report.get("sample_order") != list(range(1, sample_count + 1)):
         raise GateError("aggregate sample order mismatch")
-    profile = report.get("profile")
-    if not isinstance(profile, dict):
-        raise GateError("aggregate profile must be an object")
+    profile = require_exact_fields(report.get("profile"), PROFILE_FIELDS, "aggregate profile")
     fixture_cases = validate_fixture(report.get("fixture"))
     validate_provenance(report.get("provenance"))
     if (
@@ -622,8 +1079,8 @@ def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> N
     actual_p95 = require_number(report.get("command_p95_ms"), "aggregate command p95", positive=True)
     if not math.isclose(actual_p95, expected_p95, rel_tol=1e-12, abs_tol=1e-9):
         raise GateError("aggregate command p95 is inconsistent")
-    if not isinstance(report.get("host_observations"), list):
-        raise GateError("aggregate host_observations must be an array")
+    validate_host_observations(report.get("host_observations"), sample_count=sample_count)
+    validate_operation_and_cleanup_totals(report, sample_count=sample_count)
 
     cases = report.get("cases")
     if not isinstance(cases, list) or not cases:
@@ -637,10 +1094,17 @@ def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> N
         "deterministic": True,
     }
     for index, case in enumerate(cases):
+        case = require_exact_fields(
+            case,
+            AGGREGATE_CASE_FIELDS,
+            f"aggregate case at index {index}",
+        )
         if case.get("seed") != fixture_cases[index]["seed"]:
             raise GateError(f"{case.get('case')} seed mismatch")
-        logical_files = case.get("logical_files")
-        if isinstance(logical_files, bool) or not isinstance(logical_files, int) or logical_files <= 0:
+        logical_files = require_nonnegative_integer(
+            case.get("logical_files"), f"{case.get('case')} logical_files"
+        )
+        if logical_files <= 0:
             raise GateError(f"{case.get('case')} logical_files must be a positive integer")
         durations = case.get("sample_durations_ms")
         if not isinstance(durations, list) or len(durations) != sample_count:
@@ -650,28 +1114,46 @@ def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> N
             actual = require_number(case.get(field), f"{case.get('case')} {field}")
             if not math.isclose(actual, value, rel_tol=1e-12, abs_tol=1e-9):
                 raise GateError(f"{case.get('case')} statistic {field} is inconsistent")
-        logical_bytes = require_number(
-            case.get("logical_bytes"), f"{case.get('case')} logical_bytes", positive=True
+        logical_bytes = require_nonnegative_integer(
+            case.get("logical_bytes"), f"{case.get('case')} logical_bytes"
         )
-        validate_diagnostic_final_state(
+        if logical_bytes <= 0:
+            raise GateError(f"{case.get('case')} logical_bytes must be a positive integer")
+        if case.get("workers_used") != expected_execution["store_folder_workers"]:
+            raise GateError(f"{case.get('case')} workers_used mismatch")
+        first_diagnostic = validate_diagnostic_final_state(
             case.get("diagnostic_final_state"), f"aggregate case {case.get('case')!r}"
         )
-        stats = case.get("fixture_stats")
-        if not isinstance(stats, dict) or stats.get("execution") != expected_execution:
-            raise GateError(f"{case.get('case')} fixture execution mismatch")
-        execution_stats = stats.get("execution_stats")
-        if not isinstance(execution_stats, dict):
-            raise GateError(f"{case.get('case')} fixture counters must be an object")
-        if (
-            execution_stats.get("total_files") != logical_files
-            or execution_stats.get("total_bytes") != case.get("logical_bytes")
-        ):
-            raise GateError(f"{case.get('case')} logical totals do not match fixture counters")
-        io_stats = execution_stats.get("io")
-        if not isinstance(io_stats, dict):
-            raise GateError(f"{case.get('case')} fixture I/O counters must be an object")
-        for field in ("container_opens", "container_appends", "fsyncs", "bytes_written", "bytes_read"):
-            require_number(io_stats.get(field), f"{case.get('case')} fixture I/O counter {field}")
+        diagnostics = case.get("diagnostic_samples")
+        if not isinstance(diagnostics, list) or len(diagnostics) != sample_count:
+            raise GateError(f"{case.get('case')} diagnostic sample count mismatch")
+        expected_hard_state = hard_final_state({
+            "case": case["case"],
+            "diagnostic_final_state": first_diagnostic,
+        })
+        for sample_index, diagnostic in enumerate(diagnostics):
+            diagnostic = validate_diagnostic_final_state(
+                diagnostic,
+                f"aggregate case {case.get('case')!r} diagnostic sample {sample_index + 1}",
+            )
+            if hard_final_state({
+                "case": case["case"],
+                "diagnostic_final_state": diagnostic,
+            }) != expected_hard_state:
+                raise GateError(f"{case.get('case')} hard diagnostic sample mismatch")
+        if diagnostics[0] != first_diagnostic:
+            raise GateError(f"{case.get('case')} first diagnostic sample mismatch")
+        expected_restored_files = logical_files if case["case"] in {
+            "restore-large-file", "restore-many-files"
+        } else 0
+        if first_diagnostic["restored_tree"]["count"] != expected_restored_files:
+            raise GateError(f"{case.get('case')} restored file total mismatch")
+        validate_operational_distributions(
+            case.get("operational_samples"),
+            case.get("operational_counter_distributions"),
+            sample_count=sample_count,
+            label=str(case.get("case")),
+        )
         expected_throughput = (
             logical_bytes
             / (1024.0 * 1024.0)
@@ -684,6 +1166,105 @@ def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> N
         )
         if not math.isclose(actual_throughput, expected_throughput, rel_tol=1e-12, abs_tol=1e-12):
             raise GateError(f"{case.get('case')} aggregate throughput is inconsistent")
+    validate_no_sensitive_evidence(report, "aggregate")
+
+
+def revalidate_raw_command(args: argparse.Namespace) -> int:
+    raw_paths = sorted(args.raw_dir.glob("sample-*.json"))
+    if not raw_paths:
+        raise GateError("revalidation raw directory contains no sample reports")
+    expected_names = [f"sample-{index:02d}.json" for index in range(1, len(raw_paths) + 1)]
+    if [path.name for path in raw_paths] != expected_names:
+        raise GateError("revalidation raw sample ordering is incomplete or non-contiguous")
+    raw_reports = [load_json_strict(path) for path in raw_paths]
+    first_data, cases = build_contract_cases(
+        raw_reports,
+        workers=args.workers,
+        compression=args.compression,
+    )
+    report = {
+        "schema_version": SCHEMA_VERSION,
+        "evidence_policy_version": EVIDENCE_POLICY_VERSION,
+        "report_kind": REVALIDATION_KIND,
+        "status": "ok",
+        "performance_calibration_status": "not_evaluated",
+        "profile": {
+            "codec": "aes-gcm",
+            "compression": args.compression,
+            "dataset": FIXTURE_ID,
+            "workers": args.workers,
+            "pipeline_depth": 1,
+            "deterministic": True,
+        },
+        "fixture": first_data["fixture"],
+        "warmup_count": 0,
+        "sample_count": len(raw_reports),
+        "sample_order": list(range(1, len(raw_reports) + 1)),
+        "operation_totals": operation_totals(len(raw_reports)),
+        "cleanup_totals": cleanup_totals(len(raw_reports)),
+        "cases": cases,
+    }
+    validate_revalidation_report(report)
+    write_json(args.output, report)
+    print(args.output)
+    return 0
+
+
+def validate_revalidation_report(report: dict[str, Any]) -> None:
+    """Validate a preserved-raw contract report without claiming calibration."""
+    require_exact_fields(report, REVALIDATION_FIELDS, "revalidation report")
+    if (
+        report.get("schema_version") != SCHEMA_VERSION
+        or report.get("evidence_policy_version") != EVIDENCE_POLICY_VERSION
+        or report.get("report_kind") != REVALIDATION_KIND
+        or report.get("status") != "ok"
+        or report.get("performance_calibration_status") != "not_evaluated"
+    ):
+        raise GateError("revalidation schema/policy/kind/status mismatch")
+    sample_count = require_nonnegative_integer(
+        report.get("sample_count"), "revalidation sample_count"
+    )
+    if sample_count <= 0 or report.get("warmup_count") != 0:
+        raise GateError("revalidation requires measured samples and no inferred warmups")
+    if report.get("sample_order") != list(range(1, sample_count + 1)):
+        raise GateError("revalidation sample order mismatch")
+    profile = require_exact_fields(report.get("profile"), PROFILE_FIELDS, "revalidation profile")
+    if (
+        profile.get("codec") != "aes-gcm"
+        or profile.get("compression") not in {"none", "zstd"}
+        or profile.get("dataset") != FIXTURE_ID
+        or profile.get("workers") not in {1, 4}
+        or profile.get("pipeline_depth") != 1
+        or profile.get("deterministic") is not True
+    ):
+        raise GateError("revalidation profile mismatch")
+    validate_fixture(report.get("fixture"))
+    validate_operation_and_cleanup_totals(report, sample_count=sample_count)
+    cases = report.get("cases")
+    if not isinstance(cases, list) or [case.get("case") for case in cases] != EXPECTED_CASES:
+        raise GateError("revalidation case set/order mismatch")
+    for case in cases:
+        require_exact_fields(case, AGGREGATE_CASE_FIELDS, f"revalidation case {case.get('case')!r}")
+        diagnostics = case.get("diagnostic_samples")
+        if not isinstance(diagnostics, list) or len(diagnostics) != sample_count:
+            raise GateError(f"{case.get('case')} revalidation diagnostic sample count mismatch")
+        first_hard = hard_final_state({
+            "case": case.get("case"),
+            "diagnostic_final_state": case.get("diagnostic_final_state"),
+        })
+        for diagnostic in diagnostics:
+            if hard_final_state({
+                "case": case.get("case"),
+                "diagnostic_final_state": diagnostic,
+            }) != first_hard:
+                raise GateError(f"{case.get('case')} revalidation hard diagnostic mismatch")
+        validate_operational_distributions(
+            case.get("operational_samples"),
+            case.get("operational_counter_distributions"),
+            sample_count=sample_count,
+            label=f"{case.get('case')} revalidation",
+        )
+    validate_no_sensitive_evidence(report, "revalidation report")
 
 
 def threshold_policy(path: pathlib.Path, mode: str) -> tuple[Decimal, dict[str, Decimal], bool]:
@@ -769,10 +1350,8 @@ def compare_command(args: argparse.Namespace) -> int:
     has_hard_regression = False
     for baseline_case, candidate_case in zip(baseline["cases"], candidate["cases"]):
         case_name = baseline_case["case"]
-        if hard_final_state(candidate_case) != hard_final_state(baseline_case):
-            raise GateError(f"hard final state differs for {case_name}")
-        if candidate_case["fixture_stats"] != baseline_case["fixture_stats"]:
-            raise GateError(f"fixture counters differ for {case_name}")
+        if hard_aggregate_case_contract(candidate_case) != hard_aggregate_case_contract(baseline_case):
+            raise GateError(f"hard case evidence differs for {case_name}")
         threshold = overrides.get(case_name, default_threshold)
         variability_limit = min(Decimal("2"), threshold / Decimal("2"))
         base_median = Decimal(str(baseline_case["median_duration_ms"]))
@@ -798,6 +1377,8 @@ def compare_command(args: argparse.Namespace) -> int:
                 "delta_pct": float(delta),
                 "threshold_pct": float(threshold),
                 "variability_limit_pct": float(variability_limit),
+                "baseline_operational_counters": baseline_case["operational_counter_distributions"],
+                "candidate_operational_counters": candidate_case["operational_counter_distributions"],
             }
         )
 
@@ -858,7 +1439,7 @@ def calibration_command(args: argparse.Namespace) -> int:
         for workers in (1, 4):
             first = reports[(compression, workers, 1)]
             second = reports[(compression, workers, 2)]
-            for field in HARD_ENV_FIELDS:
+            for field in CALIBRATION_IDENTITY_FIELDS:
                 if first["provenance"][field] != second["provenance"][field]:
                     failures.append(
                         f"{compression}-w{workers}: replica environment mismatch for {field}"
@@ -870,10 +1451,8 @@ def calibration_command(args: argparse.Namespace) -> int:
                 case_name = first_case["case"]
                 threshold = overrides.get(case_name, default_threshold)
                 variability_limit = float(min(Decimal("2"), threshold / Decimal("2")))
-                if hard_final_state(first_case) != hard_final_state(second_case):
-                    failures.append(f"{compression}-w{workers}/{case_name}: replica hard final-state mismatch")
-                if first_case["fixture_stats"] != second_case["fixture_stats"]:
-                    failures.append(f"{compression}-w{workers}/{case_name}: replica fixture mismatch")
+                if hard_aggregate_case_contract(first_case) != hard_aggregate_case_contract(second_case):
+                    failures.append(f"{compression}-w{workers}/{case_name}: replica hard evidence mismatch")
                 replica_medians = []
                 for replicate, case in ((1, first_case), (2, second_case)):
                     median = float(case["median_duration_ms"])
@@ -1038,6 +1617,16 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--postgres-version", required=True)
     sample.add_argument("--database-image-digest", required=True)
     sample.set_defaults(handler=sample_command)
+
+    revalidate = subparsers.add_parser(
+        "revalidate-raw",
+        help="validate preserved raw diagnostic reports without claiming calibration acceptance",
+    )
+    revalidate.add_argument("--raw-dir", type=pathlib.Path, required=True)
+    revalidate.add_argument("--compression", choices=("none", "zstd"), required=True)
+    revalidate.add_argument("--workers", type=int, choices=(1, 4), required=True)
+    revalidate.add_argument("--output", type=pathlib.Path, required=True)
+    revalidate.set_defaults(handler=revalidate_raw_command)
 
     compare = subparsers.add_parser("compare", help="compare aggregate evidence")
     compare.add_argument("--candidate", type=pathlib.Path, required=True)

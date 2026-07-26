@@ -29,19 +29,28 @@ def fixture() -> dict:
     }
 
 
-def diagnostic_final_state() -> dict:
+def diagnostic_final_state(
+    *,
+    logical_files: int = 1,
+    logical_bytes: int = 1024,
+    restored_files: int = 0,
+) -> dict:
     digest = "d" * 64
     return {
         "schema_version": 1,
-        "logical_files": {"count": 1, "total_bytes": 1024, "sha256": digest},
-        "logical_statuses": {"completed": 1, "processing": 0, "aborted": 0},
-        "chunk_graph": {"count": 1, "total_bytes": 1024, "sha256": digest},
-        "restored_tree": {"count": 0, "total_bytes": 0, "sha256": digest},
+        "logical_files": {"count": logical_files, "total_bytes": logical_bytes, "sha256": digest},
+        "logical_statuses": {"completed": logical_files, "processing": 0, "aborted": 0},
+        "chunk_graph": {"count": logical_files, "total_bytes": logical_bytes, "sha256": digest},
+        "restored_tree": {
+            "count": restored_files,
+            "total_bytes": logical_bytes if restored_files else 0,
+            "sha256": digest,
+        },
         "snapshots": {"count": 0, "total_bytes": 0, "sha256": digest},
         "snapshot_count": 0,
         "gc": {
-            "total_chunks": 1,
-            "reachable_chunks": 1,
+            "total_chunks": logical_files,
+            "reachable_chunks": logical_files,
             "unreachable_chunks": 0,
             "logically_reclaimable_bytes": 0,
             "physically_reclaimable_bytes": 0,
@@ -65,13 +74,100 @@ def diagnostic_final_state() -> dict:
             "container_count": 1,
             "storage_block_count": 1,
             "legacy_block_count": 0,
-            "chunk_reference_count": 1,
-            "payload_bytes": 1024,
-            "container_bytes": 1088,
+            "chunk_reference_count": logical_files,
+            "payload_bytes": logical_bytes,
+            "container_bytes": logical_bytes + 64,
             "canonical_sha256": digest,
         },
         "physical_layout_sha256": "e" * 64,
     }
+
+
+def operational_sample(index: int = 0) -> dict[str, int]:
+    opens = index + 1
+    return {
+        "container_append_count": index + 1,
+        "container_open_count": opens,
+        "container_close_count": opens,
+        "fsync_count": index + 1,
+        "bytes_written": 1024 * (index + 1),
+        "bytes_read": 0,
+        "snapshot_metadata_write_count": 0,
+    }
+
+
+def raw_row(case: str = "store-large-file", *, workers: int = 4) -> dict:
+    counters = operational_sample()
+    return {
+        "case": case,
+        "duration_ms": 1000,
+        "throughput_mbps": 1024 / (1024 * 1024),
+        "execution": {
+            "store_folder_workers": workers,
+            "pipeline_depth": 1,
+            "deterministic": True,
+        },
+        "execution_stats": {
+            "total_files": 1,
+            "total_bytes": 1024,
+            "workers_used": workers,
+            "container_append_count": counters["container_append_count"],
+            "container_open_count": counters["container_open_count"],
+            "container_close_count": counters["container_close_count"],
+            "fsync_count": counters["fsync_count"],
+            "io": {
+                "container_opens": counters["container_open_count"],
+                "container_appends": counters["container_append_count"],
+                "fsyncs": counters["fsync_count"],
+                "bytes_written": counters["bytes_written"],
+                "bytes_read": counters["bytes_read"],
+            },
+        },
+        "diagnostic_final_state": diagnostic_final_state(
+            restored_files=1 if case in {"restore-large-file", "restore-many-files"} else 0
+        ),
+    }
+
+
+def raw_report(*, workers: int = 4, compression: str = "none") -> dict:
+    rows = [raw_row(case, workers=workers) for case in gate.EXPECTED_CASES]
+    total_io = {
+        field: sum(row["execution_stats"]["io"][field] for row in rows)
+        for field in gate.IO_COUNTER_FIELDS
+    }
+    data = {
+        "schema_version": gate.SCHEMA_VERSION,
+        "generated_at_utc": "2026-07-25T00:00:00Z",
+        "dataset": gate.FIXTURE_ID,
+        "repeat": 1,
+        "fixture": fixture(),
+        "execution": {
+            "store_folder_workers": workers,
+            "pipeline_depth": 1,
+            "deterministic": True,
+        },
+        "execution_stats": {
+            "total_files": sum(row["execution_stats"]["total_files"] for row in rows),
+            "total_bytes": sum(row["execution_stats"]["total_bytes"] for row in rows),
+            "workers_used": workers,
+            "container_append_count": sum(
+                row["execution_stats"]["container_append_count"] for row in rows
+            ),
+            "container_open_count": sum(
+                row["execution_stats"]["container_open_count"] for row in rows
+            ),
+            "container_close_count": sum(
+                row["execution_stats"]["container_close_count"] for row in rows
+            ),
+            "fsync_count": sum(row["execution_stats"]["fsync_count"] for row in rows),
+            "snapshot_metadata_write_count": 0,
+            "io": total_io,
+        },
+        "rows": rows,
+    }
+    report = {"status": "ok", "command": "benchmark", "data": data}
+    gate.validate_raw_report(report, workers=workers, compression=compression)
+    return report
 
 
 def aggregate(
@@ -85,33 +181,28 @@ def aggregate(
     for index, name in enumerate(gate.EXPECTED_CASES):
         summary = gate.summarize(durations)
         logical_bytes = 1024 * (index + 1)
+        logical_files = index + 1
+        restored_files = logical_files if name in {"restore-large-file", "restore-many-files"} else 0
+        diagnostic = diagnostic_final_state(
+            logical_files=logical_files,
+            logical_bytes=logical_bytes,
+            restored_files=restored_files,
+        )
+        operational_samples = [operational_sample(index) for _ in durations]
         cases.append(
             {
                 "case": name,
                 "seed": 1712 + index * 10,
-                "logical_files": index + 1,
+                "logical_files": logical_files,
                 "logical_bytes": logical_bytes,
+                "workers_used": 4,
                 "sample_durations_ms": list(durations),
-                "diagnostic_final_state": diagnostic_final_state(),
-                "fixture_stats": {
-                    "execution": {
-                        "store_folder_workers": 4,
-                        "pipeline_depth": 1,
-                        "deterministic": True,
-                    },
-                    "execution_stats": {
-                        "total_files": index + 1,
-                        "total_bytes": logical_bytes,
-                        "workers_used": 4,
-                        "io": {
-                            "container_opens": index,
-                            "container_appends": index,
-                            "fsyncs": index,
-                            "bytes_written": logical_bytes,
-                            "bytes_read": 0,
-                        },
-                    },
-                },
+                "diagnostic_final_state": diagnostic,
+                "diagnostic_samples": [deepcopy(diagnostic) for _ in durations],
+                "operational_samples": operational_samples,
+                "operational_counter_distributions": gate.summarize_operational_counters(
+                    operational_samples
+                ),
                 **summary,
                 "throughput_mbps": logical_bytes
                 / (1024 * 1024)
@@ -120,6 +211,7 @@ def aggregate(
         )
     return {
         "schema_version": 2,
+        "evidence_policy_version": gate.EVIDENCE_POLICY_VERSION,
         "report_kind": gate.REPORT_KIND,
         "status": "ok",
         "provenance": {
@@ -152,7 +244,15 @@ def aggregate(
         "sample_order": list(range(1, len(durations) + 1)),
         "command_durations_ms": [10000] * len(durations),
         "command_p95_ms": 10000,
-        "host_observations": [],
+        "host_observations": [
+            {
+                "before": {"load_1m": 0, "load_5m": 0, "load_15m": 0, "free_disk_bytes": 1},
+                "after": {"load_1m": 0, "load_5m": 0, "load_15m": 0, "free_disk_bytes": 1},
+            }
+            for _ in durations
+        ],
+        "operation_totals": gate.operation_totals(len(durations)),
+        "cleanup_totals": gate.cleanup_totals(len(durations)),
         "cases": cases,
     }
 
@@ -197,16 +297,15 @@ class StrictEvidenceTests(unittest.TestCase):
                 gate.validate_diagnostic_final_state(mutated, "test")
 
     def test_hard_final_state_is_separate_from_operational_counters(self) -> None:
-        row = aggregate()["cases"][0]
-        as_raw_row = {
-            "case": row["case"],
-            "diagnostic_final_state": deepcopy(row["diagnostic_final_state"]),
-            **deepcopy(row["fixture_stats"]),
-        }
+        as_raw_row = raw_row()
         counter_variant = deepcopy(as_raw_row)
-        counter_variant["execution_stats"]["fsync_count"] = 1
+        counter_variant["execution_stats"]["fsync_count"] = 2
+        counter_variant["execution_stats"]["io"]["fsyncs"] = 2
         self.assertEqual(gate.hard_final_state(as_raw_row), gate.hard_final_state(counter_variant))
-        self.assertNotEqual(gate.fixture_stats(as_raw_row), gate.fixture_stats(counter_variant))
+        self.assertNotEqual(
+            gate.validate_operational_counters(as_raw_row, workers=4),
+            gate.validate_operational_counters(counter_variant, workers=4),
+        )
 
         layout_variant = deepcopy(as_raw_row)
         layout_variant["diagnostic_final_state"]["physical"]["container_count"] += 1
@@ -217,7 +316,10 @@ class StrictEvidenceTests(unittest.TestCase):
         state_variant = deepcopy(as_raw_row)
         state_variant["diagnostic_final_state"]["logical_files"]["sha256"] = "f" * 64
         self.assertNotEqual(gate.hard_final_state(as_raw_row), gate.hard_final_state(state_variant))
-        self.assertEqual(gate.fixture_stats(as_raw_row), gate.fixture_stats(state_variant))
+        self.assertEqual(
+            gate.validate_operational_counters(as_raw_row, workers=4),
+            gate.validate_operational_counters(state_variant, workers=4),
+        )
 
     def test_trailing_and_repeated_json_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -250,7 +352,7 @@ class StrictEvidenceTests(unittest.TestCase):
         ):
             report = aggregate()
             report[field] = value
-            with self.assertRaisesRegex(gate.GateError, "schema/report kind/status"):
+            with self.assertRaisesRegex(gate.GateError, "schema/policy/report kind/status"):
                 gate.validate_aggregate(report, require_gate_count=True)
 
     def test_duplicate_missing_and_wrong_order_fail(self) -> None:
@@ -293,8 +395,8 @@ class StrictEvidenceTests(unittest.TestCase):
             gate.validate_aggregate(report, require_gate_count=True)
 
         report = aggregate()
-        report["cases"][0]["logical_files"] += 1
-        with self.assertRaisesRegex(gate.GateError, "logical totals"):
+        report["cases"][0]["logical_files"] = 0
+        with self.assertRaisesRegex(gate.GateError, "logical_files"):
             gate.validate_aggregate(report, require_gate_count=True)
 
         report = aggregate()
@@ -330,6 +432,145 @@ class StrictEvidenceTests(unittest.TestCase):
         report["cases"][0]["median_duration_ms"] += 1
         with self.assertRaisesRegex(gate.GateError, "statistic"):
             gate.validate_aggregate(report, require_gate_count=True)
+
+
+class OutcomeEPolicyTests(unittest.TestCase):
+    def test_policy_categories_are_explicit_and_nonempty(self) -> None:
+        self.assertEqual(
+            set(gate.FIELD_POLICY),
+            {"hard_equal", "derived_equal", "bounded_nonnegative", "informational", "excluded_sensitive"},
+        )
+        self.assertTrue(all(gate.FIELD_POLICY[category] for category in gate.FIELD_POLICY))
+
+    def test_hard_equal_mutations_fail_closed(self) -> None:
+        def diagnostic_mutator(section: str, field: str, value: object):
+            def mutate(report: dict) -> None:
+                report["cases"][0]["diagnostic_final_state"][section][field] = value
+            return mutate
+
+        mutations = [
+            ("fixture identity", lambda report: report["fixture"].__setitem__("id", "wrong")),
+            ("seed", lambda report: report["cases"][0].__setitem__("seed", 9999)),
+            ("logical totals", diagnostic_mutator("logical_files", "count", 2)),
+            ("logical digest", diagnostic_mutator("logical_files", "sha256", "a" * 64)),
+            ("chunk graph", diagnostic_mutator("chunk_graph", "sha256", "a" * 64)),
+            ("restored tree", diagnostic_mutator("restored_tree", "sha256", "a" * 64)),
+            ("snapshot membership", diagnostic_mutator("snapshots", "sha256", "a" * 64)),
+            ("GC state", diagnostic_mutator("gc", "reachable_chunks", 0)),
+            ("verification", diagnostic_mutator("verification", "blocks_checked", 2)),
+            ("physical content", diagnostic_mutator("physical", "canonical_sha256", "a" * 64)),
+            ("physical payload bytes", diagnostic_mutator("physical", "payload_bytes", 2)),
+            ("operation result", lambda report: report["operation_totals"].__setitem__("failure", 1)),
+            ("cleanup", lambda report: report["cleanup_totals"].__setitem__("failed", 1)),
+        ]
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                report = aggregate()
+                mutate(report)
+                with self.assertRaises(gate.GateError):
+                    gate.validate_aggregate(report, require_gate_count=True)
+
+    def test_valid_scheduling_counter_variation_is_retained(self) -> None:
+        report = aggregate()
+        case = report["cases"][4]
+        varied = deepcopy(case["operational_samples"][1])
+        varied["container_open_count"] += 1
+        varied["container_close_count"] += 1
+        varied["fsync_count"] += 1
+        case["operational_samples"][1] = varied
+        case["operational_counter_distributions"] = gate.summarize_operational_counters(
+            case["operational_samples"]
+        )
+        gate.validate_aggregate(report, require_gate_count=True)
+        self.assertEqual(
+            case["operational_counter_distributions"]["container_open_count"]["values"],
+            [5, 6],
+        )
+
+    def test_invalid_operational_counters_fail_closed(self) -> None:
+        mutations = [
+            ("missing", lambda row: row["execution_stats"]["io"].pop("fsyncs")),
+            ("negative", lambda row: row["execution_stats"]["io"].__setitem__("bytes_read", -1)),
+            ("wrong type", lambda row: row["execution_stats"]["io"].__setitem__("bytes_read", "0")),
+            ("non-finite", lambda row: row["execution_stats"]["io"].__setitem__("bytes_read", math.inf)),
+            ("unbalanced", lambda row: row["execution_stats"].__setitem__("container_close_count", 0)),
+            ("contradiction", lambda row: (
+                row["execution_stats"].__setitem__("container_open_count", 0),
+                row["execution_stats"].__setitem__("container_close_count", 0),
+                row["execution_stats"]["io"].__setitem__("container_opens", 0),
+            )),
+        ]
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                row = raw_row()
+                mutate(row)
+                with self.assertRaises(gate.GateError):
+                    gate.validate_operational_counters(row, workers=4)
+
+    def test_layout_may_differ_but_canonical_content_may_not(self) -> None:
+        report = aggregate()
+        case = report["cases"][0]
+        case["diagnostic_samples"][1]["physical_layout_sha256"] = "a" * 64
+        case["diagnostic_samples"][1]["physical"]["container_count"] += 1
+        gate.validate_aggregate(report, require_gate_count=True)
+
+        report = aggregate()
+        report["cases"][0]["diagnostic_samples"][1]["physical"]["canonical_sha256"] = "a" * 64
+        with self.assertRaisesRegex(gate.GateError, "hard diagnostic"):
+            gate.validate_aggregate(report, require_gate_count=True)
+
+    def test_unknown_and_sensitive_extensions_fail_closed(self) -> None:
+        mutations = [
+            lambda report: report["cases"][0].__setitem__("new_correctness_field", 1),
+            lambda report: report["cases"][0]["diagnostic_final_state"].__setitem__("new_info", 1),
+            lambda report: report["provenance"].__setitem__("password", "secret"),
+            lambda report: report["provenance"].__setitem__("runner_image", "/tmp/private-runner"),
+        ]
+        for mutate in mutations:
+            report = aggregate()
+            mutate(report)
+            with self.assertRaises(gate.GateError):
+                gate.validate_aggregate(report, require_gate_count=True)
+
+    def test_raw_schema_v2_requires_diagnostic_evidence(self) -> None:
+        report = raw_report()
+        del report["data"]["rows"][0]["diagnostic_final_state"]
+        with self.assertRaisesRegex(gate.GateError, "fields mismatch"):
+            gate.validate_raw_report(report, workers=4, compression="none")
+
+    def test_revalidation_retains_every_sample_without_calibration_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            raw_dir = root / "raw"
+            gate.write_json(raw_dir / "sample-01.json", raw_report())
+            second = raw_report()
+            second["data"]["rows"][4]["execution_stats"]["container_open_count"] += 1
+            second["data"]["rows"][4]["execution_stats"]["container_close_count"] += 1
+            second["data"]["rows"][4]["execution_stats"]["fsync_count"] += 1
+            second["data"]["rows"][4]["execution_stats"]["io"]["container_opens"] += 1
+            second["data"]["rows"][4]["execution_stats"]["io"]["fsyncs"] += 1
+            second["data"]["execution_stats"]["container_open_count"] += 1
+            second["data"]["execution_stats"]["container_close_count"] += 1
+            second["data"]["execution_stats"]["fsync_count"] += 1
+            second["data"]["execution_stats"]["io"]["container_opens"] += 1
+            second["data"]["execution_stats"]["io"]["fsyncs"] += 1
+            gate.write_json(raw_dir / "sample-02.json", second)
+            output = root / "revalidation.json"
+            code = gate.revalidate_raw_command(argparse.Namespace(
+                raw_dir=raw_dir,
+                compression="none",
+                workers=4,
+                output=output,
+            ))
+            self.assertEqual(code, 0)
+            result = gate.load_json_strict(output)
+            gate.validate_revalidation_report(result)
+            self.assertEqual(result["sample_count"], 2)
+            self.assertEqual(result["performance_calibration_status"], "not_evaluated")
+            self.assertEqual(
+                result["cases"][4]["operational_counter_distributions"]["fsync_count"]["values"],
+                [1, 2],
+            )
 
 
 class ComparisonTests(unittest.TestCase):
@@ -412,7 +653,7 @@ per_case_overrides:
             self.run_compare(baseline, candidate)
 
         candidate = aggregate()
-        candidate["cases"][0]["fixture_stats"]["execution_stats"]["total_files"] += 1
+        candidate["cases"][0]["logical_files"] += 1
         with self.assertRaises(gate.GateError):
             self.run_compare(baseline, candidate)
 
@@ -438,8 +679,7 @@ class ManifestTests(unittest.TestCase):
                 report["profile"]["compression"] = compression
                 report["profile"]["workers"] = workers
                 for case in report["cases"]:
-                    case["fixture_stats"]["execution"]["store_folder_workers"] = workers
-                    case["fixture_stats"]["execution_stats"]["workers_used"] = workers
+                    case["workers_used"] = workers
                 gate.write_json(path, report)
                 baselines.append(
                     f"{profile}={path.relative_to(pathlib.Path.cwd())}"
@@ -492,8 +732,7 @@ per_case_overrides:
                         report["profile"]["compression"] = compression
                         report["profile"]["workers"] = workers
                         for case in report["cases"]:
-                            case["fixture_stats"]["execution"]["store_folder_workers"] = workers
-                            case["fixture_stats"]["execution_stats"]["workers_used"] = workers
+                            case["workers_used"] = workers
                         path = root / f"{compression}-w{workers}-r{replicate}.json"
                         gate.write_json(path, report)
                         inputs.append(f"{compression}-w{workers}-r{replicate}={path}")
