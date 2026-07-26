@@ -37,8 +37,13 @@ def diagnostic_final_state(
 ) -> dict:
     digest = "d" * 64
     return {
-        "schema_version": 1,
-        "logical_files": {"count": logical_files, "total_bytes": logical_bytes, "sha256": digest},
+        "schema_version": gate.DIAGNOSTIC_SCHEMA_VERSION,
+        "active_logical_namespace": {
+            "count": logical_files,
+            "total_bytes": logical_bytes,
+            "sha256": digest,
+        },
+        "logical_catalog": {"count": logical_files, "total_bytes": logical_bytes, "sha256": digest},
         "logical_statuses": {"completed": logical_files, "processing": 0, "aborted": 0},
         "chunk_graph": {"count": logical_files, "total_bytes": logical_bytes, "sha256": digest},
         "restored_tree": {
@@ -314,12 +319,25 @@ class StrictEvidenceTests(unittest.TestCase):
         self.assertEqual(gate.hard_final_state(as_raw_row), gate.hard_final_state(layout_variant))
 
         state_variant = deepcopy(as_raw_row)
-        state_variant["diagnostic_final_state"]["logical_files"]["sha256"] = "f" * 64
+        state_variant["diagnostic_final_state"]["active_logical_namespace"]["sha256"] = "f" * 64
         self.assertNotEqual(gate.hard_final_state(as_raw_row), gate.hard_final_state(state_variant))
         self.assertEqual(
             gate.validate_operational_counters(as_raw_row, workers=4),
             gate.validate_operational_counters(state_variant, workers=4),
         )
+
+        catalog_variant = deepcopy(as_raw_row)
+        catalog_variant["diagnostic_final_state"]["logical_catalog"]["sha256"] = "a" * 64
+        self.assertNotEqual(gate.hard_final_state(as_raw_row), gate.hard_final_state(catalog_variant))
+
+    def test_logical_status_totals_are_tied_to_catalog_not_namespace(self) -> None:
+        state = diagnostic_final_state(logical_files=2)
+        state["active_logical_namespace"]["count"] = 1
+        gate.validate_diagnostic_final_state(state, "test")
+
+        state["logical_catalog"]["count"] = 3
+        with self.assertRaisesRegex(gate.GateError, "logical catalog count"):
+            gate.validate_diagnostic_final_state(state, "test")
 
     def test_trailing_and_repeated_json_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -451,8 +469,10 @@ class OutcomeEPolicyTests(unittest.TestCase):
         mutations = [
             ("fixture identity", lambda report: report["fixture"].__setitem__("id", "wrong")),
             ("seed", lambda report: report["cases"][0].__setitem__("seed", 9999)),
-            ("logical totals", diagnostic_mutator("logical_files", "count", 2)),
-            ("logical digest", diagnostic_mutator("logical_files", "sha256", "a" * 64)),
+            ("active namespace totals", diagnostic_mutator("active_logical_namespace", "count", 2)),
+            ("active namespace digest", diagnostic_mutator("active_logical_namespace", "sha256", "a" * 64)),
+            ("logical catalog totals", diagnostic_mutator("logical_catalog", "count", 2)),
+            ("logical catalog digest", diagnostic_mutator("logical_catalog", "sha256", "a" * 64)),
             ("chunk graph", diagnostic_mutator("chunk_graph", "sha256", "a" * 64)),
             ("restored tree", diagnostic_mutator("restored_tree", "sha256", "a" * 64)),
             ("snapshot membership", diagnostic_mutator("snapshots", "sha256", "a" * 64)),

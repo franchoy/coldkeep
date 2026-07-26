@@ -39,26 +39,40 @@ type singleChunkV2CLITestChunker struct{}
 
 func TestBenchmarkDiagnosticFingerprintsIgnoreRowOrderAndGeneratedIDs(t *testing.T) {
 	dataRoot := t.TempDir()
-	logicalA := []benchmarkLogicalRawRow{
-		{ID: 1001, Path: filepath.Join(dataRoot, "b.txt"), FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc"},
-		{ID: 1000, Path: filepath.Join(dataRoot, "a.txt"), FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc"},
+	activeA := []benchmarkActiveLogicalRawRow{
+		{ID: 1001, Path: filepath.Join(dataRoot, "b.txt"), FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+		{ID: 1000, Path: filepath.Join(dataRoot, "a.txt"), FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
 	}
-	logicalB := []benchmarkLogicalRawRow{
-		{ID: 9000, Path: filepath.Join(dataRoot, "a.txt"), FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc"},
-		{ID: 9001, Path: filepath.Join(dataRoot, "b.txt"), FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc"},
+	activeB := []benchmarkActiveLogicalRawRow{
+		{ID: 9000, Path: filepath.Join(dataRoot, "a.txt"), FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+		{ID: 9001, Path: filepath.Join(dataRoot, "b.txt"), FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
 	}
-	canonicalA, err := canonicalizeBenchmarkLogicalRows(logicalA, dataRoot)
+	canonicalA, err := canonicalizeBenchmarkActiveLogicalRows(activeA, dataRoot)
 	if err != nil {
-		t.Fatalf("canonicalize logical rows A: %v", err)
+		t.Fatalf("canonicalize active logical rows A: %v", err)
 	}
-	canonicalB, err := canonicalizeBenchmarkLogicalRows(logicalB, dataRoot)
+	canonicalB, err := canonicalizeBenchmarkActiveLogicalRows(activeB, dataRoot)
 	if err != nil {
-		t.Fatalf("canonicalize logical rows B: %v", err)
+		t.Fatalf("canonicalize active logical rows B: %v", err)
 	}
 	digestA, _ := benchmarkCanonicalDigest(canonicalA)
 	digestB, _ := benchmarkCanonicalDigest(canonicalB)
 	if digestA != digestB {
-		t.Fatalf("logical digest changed with row order/IDs: %s != %s", digestA, digestB)
+		t.Fatalf("active namespace digest changed with row order/IDs: %s != %s", digestA, digestB)
+	}
+
+	catalogA := []benchmarkLogicalCatalogRawRow{
+		{ID: 101, FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", RefCount: 0, ChunkerVersion: "v2-fastcdc", SnapshotReferenceCount: 1},
+		{ID: 100, FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc", ActivePathCount: 1},
+	}
+	catalogB := []benchmarkLogicalCatalogRawRow{
+		{ID: 900, FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc", ActivePathCount: 1},
+		{ID: 901, FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", RefCount: 0, ChunkerVersion: "v2-fastcdc", SnapshotReferenceCount: 1},
+	}
+	catalogDigestA, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkLogicalCatalogRows(catalogA))
+	catalogDigestB, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkLogicalCatalogRows(catalogB))
+	if catalogDigestA != catalogDigestB {
+		t.Fatalf("logical catalog digest changed with row order/IDs: %s != %s", catalogDigestA, catalogDigestB)
 	}
 
 	graphA := []benchmarkChunkGraphRawRow{
@@ -98,21 +112,240 @@ func TestBenchmarkDiagnosticFingerprintsIgnoreRowOrderAndGeneratedIDs(t *testing
 
 func TestBenchmarkDiagnosticRejectsDuplicateCanonicalLogicalPaths(t *testing.T) {
 	dataRoot := t.TempDir()
-	rows := []benchmarkLogicalRawRow{
+	rows := []benchmarkActiveLogicalRawRow{
 		{ID: 1, Path: filepath.Join(dataRoot, "duplicate.txt"), FileHash: "hash-a"},
 		{ID: 2, Path: filepath.Join(dataRoot, "duplicate.txt"), FileHash: "hash-b"},
 	}
-	if _, err := canonicalizeBenchmarkLogicalRows(rows, dataRoot); err == nil {
+	if _, err := canonicalizeBenchmarkActiveLogicalRows(rows, dataRoot); err == nil {
 		t.Fatal("expected duplicate canonical logical path to fail")
+	}
+}
+
+func TestBenchmarkDiagnosticSeparatesActiveNamespaceFromCatalogHistory(t *testing.T) {
+	dataRoot := t.TempDir()
+	active, err := canonicalizeBenchmarkActiveLogicalRows([]benchmarkActiveLogicalRawRow{
+		{ID: 1, Path: filepath.Join(dataRoot, "active-a.txt"), FileHash: "hash-active", TotalSize: 10, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+		{ID: 1, Path: filepath.Join(dataRoot, "active-b.txt"), FileHash: "hash-active", TotalSize: 10, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+	}, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize active namespace: %v", err)
+	}
+	if len(active) != 2 {
+		t.Fatalf("expected two active paths for one logical object, got %+v", active)
+	}
+
+	catalog := canonicalizeBenchmarkLogicalCatalogRows([]benchmarkLogicalCatalogRawRow{
+		{ID: 1, FileHash: "hash-active", TotalSize: 10, Status: "COMPLETED", RefCount: 2, ChunkerVersion: "v2-fastcdc", ActivePathCount: 2, SnapshotReferenceCount: 1},
+		{ID: 2, FileHash: "hash-history", TotalSize: 20, Status: "COMPLETED", RefCount: 0, ChunkerVersion: "v2-fastcdc"},
+		{ID: 3, FileHash: "hash-snapshot", TotalSize: 30, Status: "COMPLETED", RefCount: 0, ChunkerVersion: "v2-fastcdc", SnapshotReferenceCount: 2},
+	})
+	classes := make(map[string]string, len(catalog))
+	for _, row := range catalog {
+		classes[row.FileHash] = row.ReachabilityClass
+	}
+	if classes["hash-active"] != "shared" || classes["hash-history"] != "unreachable_history" || classes["hash-snapshot"] != "snapshot_only" {
+		t.Fatalf("unexpected logical catalog reachability classes: %+v", classes)
+	}
+}
+
+func TestBenchmarkDiagnosticLogicalQueriesSeparateNamespaceAndCatalog(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open logical diagnostic fixture: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	dbconn.SetMaxOpenConns(1)
+
+	for _, statement := range []string{
+		`CREATE TABLE logical_file (
+			id INTEGER PRIMARY KEY, original_name TEXT NOT NULL, file_hash TEXT NOT NULL,
+			total_size INTEGER NOT NULL, status TEXT NOT NULL, ref_count INTEGER NOT NULL,
+			chunker_version TEXT NOT NULL
+		)`,
+		`CREATE TABLE physical_file (path TEXT PRIMARY KEY, logical_file_id INTEGER NOT NULL)`,
+		`CREATE TABLE snapshot_file (snapshot_id TEXT NOT NULL, logical_file_id INTEGER NOT NULL)`,
+		`INSERT INTO logical_file VALUES
+			(101, 'sensitive-active-name', 'hash-active', 10, 'COMPLETED', 2, 'v2-fastcdc'),
+			(102, 'sensitive-history-name', 'hash-history', 20, 'COMPLETED', 0, 'v2-fastcdc'),
+			(103, 'sensitive-snapshot-name', 'hash-snapshot', 30, 'COMPLETED', 0, 'v2-fastcdc')`,
+	} {
+		if _, err := dbconn.Exec(statement); err != nil {
+			t.Fatalf("apply logical diagnostic fixture: %v", err)
+		}
+	}
+	dataRoot := t.TempDir()
+	if _, err := dbconn.Exec(`INSERT INTO physical_file VALUES (?, 101), (?, 101)`,
+		filepath.Join(dataRoot, "active-a.txt"), filepath.Join(dataRoot, "active-b.txt")); err != nil {
+		t.Fatalf("insert active namespace fixture: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file VALUES ('snapshot-a', 101), ('snapshot-a', 103)`); err != nil {
+		t.Fatalf("insert snapshot fixture: %v", err)
+	}
+
+	activeRaw, activeBytes, err := readBenchmarkActiveLogicalNamespace(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("read active logical namespace: %v", err)
+	}
+	active, err := canonicalizeBenchmarkActiveLogicalRows(activeRaw, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize active logical namespace: %v", err)
+	}
+	if len(active) != 2 || activeBytes != 20 {
+		t.Fatalf("unexpected active namespace: rows=%+v bytes=%d", active, activeBytes)
+	}
+
+	catalogRaw, catalogBytes, statuses, err := readBenchmarkLogicalCatalog(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("read logical catalog: %v", err)
+	}
+	if len(catalogRaw) != 3 || catalogBytes != 60 || statuses.Completed != 3 {
+		t.Fatalf("unexpected logical catalog totals: rows=%+v bytes=%d statuses=%+v", catalogRaw, catalogBytes, statuses)
+	}
+	catalog := canonicalizeBenchmarkLogicalCatalogRows(catalogRaw)
+	classes := make(map[string]string, len(catalog))
+	for _, row := range catalog {
+		classes[row.FileHash] = row.ReachabilityClass
+	}
+	if classes["hash-active"] != "shared" || classes["hash-history"] != "unreachable_history" || classes["hash-snapshot"] != "snapshot_only" {
+		t.Fatalf("unexpected query-backed catalog classes: %+v", classes)
+	}
+}
+
+func TestBenchmarkDiagnosticGCAfterChurnPostgresEmitsCompleteV2State(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB")) == "" {
+		t.Skip("set COLDKEEP_TEST_DB=1 with PostgreSQL DB_* variables to run the reduced gc-after-churn diagnostic test")
+	}
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+	databaseName, cleanup, err := createTemporaryBenchmarkDatabase("diagnostic-gc-after-churn")
+	if err != nil {
+		t.Fatalf("create reduced churn database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup reduced churn database: %v", err)
+		}
+	})
+
+	connString, err := dbpkg.BuildPostgresConnStringFromEnv(databaseName)
+	if err != nil {
+		t.Fatalf("build reduced churn connection string: %v", err)
+	}
+	dbconn, err := sql.Open("postgres", connString)
+	if err != nil {
+		t.Fatalf("open reduced churn database: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := dbpkg.EnsureSchema(dbconn); err != nil {
+		t.Fatalf("bootstrap reduced churn schema: %v", err)
+	}
+
+	insertLogical := func(name, fileHash string, refCount int64) int64 {
+		t.Helper()
+		var logicalID int64
+		if err := dbconn.QueryRow(`
+			INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+			VALUES ($1, 1024, $2, 'COMPLETED', $3, 'v2-fastcdc')
+			RETURNING id
+		`, name, fileHash, refCount).Scan(&logicalID); err != nil {
+			t.Fatalf("insert reduced churn logical file: %v", err)
+		}
+		var chunkID int64
+		if err := dbconn.QueryRow(`
+			INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+			VALUES ($1, 1024, 'COMPLETED', 1, 0, 'v2-fastcdc')
+			RETURNING id
+		`, fileHash).Scan(&chunkID); err != nil {
+			t.Fatalf("insert reduced churn chunk: %v", err)
+		}
+		if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`, logicalID, chunkID); err != nil {
+			t.Fatalf("insert reduced churn chunk graph: %v", err)
+		}
+		return logicalID
+	}
+
+	dataRoot := t.TempDir()
+	activeID := insertLogical("sensitive-active-name", "active-content-hash", 1)
+	_ = insertLogical("sensitive-unreachable-history-name", "history-content-hash", 0)
+	activePath := filepath.Join(dataRoot, "churn", "active.bin")
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES ($1, $2)`, activePath, activeID); err != nil {
+		t.Fatalf("insert reduced churn active path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('reduced-churn', NOW(), 'full')`); err != nil {
+		t.Fatalf("insert reduced churn snapshot: %v", err)
+	}
+	var snapshotPathID int64
+	if err := dbconn.QueryRow(`INSERT INTO snapshot_path (path) VALUES ('churn/active.bin') RETURNING id`).Scan(&snapshotPathID); err != nil {
+		t.Fatalf("insert reduced churn snapshot path: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size)
+		VALUES ('reduced-churn', $1, $2, 1024)
+	`, snapshotPathID, activeID); err != nil {
+		t.Fatalf("insert reduced churn snapshot membership: %v", err)
+	}
+
+	state, err := buildBenchmarkDiagnosticFinalState(context.Background(), dbconn, corebenchmark.BenchmarkContext{
+		DataPath: dataRoot,
+		RepoPath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("build reduced gc-after-churn diagnostic state: %v", err)
+	}
+	if state.SchemaVersion != 2 || state.ActiveLogicalNamespace.Count != 1 || state.LogicalCatalog.Count != 2 ||
+		state.LogicalStatuses.Completed != 2 || state.SnapshotCount != 1 || state.Snapshots.Count != 1 {
+		t.Fatalf("unexpected reduced gc-after-churn diagnostic state: %+v", state)
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("encode reduced gc-after-churn diagnostic state: %v", err)
+	}
+	for _, forbidden := range []string{databaseName, dataRoot, "sensitive-active-name", "sensitive-unreachable-history-name"} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("reduced gc-after-churn diagnostic leaked sensitive value %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestBenchmarkDiagnosticLogicalDigestsChangeWithSemanticContent(t *testing.T) {
+	dataRoot := t.TempDir()
+	active := []benchmarkActiveLogicalRawRow{{
+		ID: 1, Path: filepath.Join(dataRoot, "file.txt"), FileHash: "hash-a", TotalSize: 10,
+		Status: "COMPLETED", ChunkerVersion: "v2-fastcdc",
+	}}
+	firstActive, err := canonicalizeBenchmarkActiveLogicalRows(active, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize active namespace: %v", err)
+	}
+	firstActiveDigest, _ := benchmarkCanonicalDigest(firstActive)
+	active[0].FileHash = "hash-b"
+	secondActive, err := canonicalizeBenchmarkActiveLogicalRows(active, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize changed active namespace: %v", err)
+	}
+	secondActiveDigest, _ := benchmarkCanonicalDigest(secondActive)
+	if firstActiveDigest == secondActiveDigest {
+		t.Fatal("active namespace digest did not change with content")
+	}
+
+	catalog := []benchmarkLogicalCatalogRawRow{{
+		ID: 1, FileHash: "hash-a", TotalSize: 10, Status: "COMPLETED", RefCount: 1,
+		ChunkerVersion: "v2-fastcdc", ActivePathCount: 1,
+	}}
+	firstCatalogDigest, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkLogicalCatalogRows(catalog))
+	catalog[0].ActivePathCount = 0
+	catalog[0].RefCount = 0
+	secondCatalogDigest, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkLogicalCatalogRows(catalog))
+	if firstCatalogDigest == secondCatalogDigest {
+		t.Fatal("logical catalog digest did not change with lifecycle state")
 	}
 }
 
 func TestBenchmarkDiagnosticReportContainsNoSensitiveSourceValues(t *testing.T) {
 	dataRoot := t.TempDir()
 	sensitivePath := filepath.Join(dataRoot, "random-secret-name.txt")
-	canonical, err := canonicalizeBenchmarkLogicalRows([]benchmarkLogicalRawRow{{
+	canonical, err := canonicalizeBenchmarkActiveLogicalRows([]benchmarkActiveLogicalRawRow{{
 		ID: 8675309, Path: sensitivePath, FileHash: "semantic-hash", TotalSize: 10,
-		Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc",
+		Status: "COMPLETED", ChunkerVersion: "v2-fastcdc",
 	}}, dataRoot)
 	if err != nil {
 		t.Fatalf("canonicalize sensitive logical row: %v", err)
@@ -122,8 +355,9 @@ func TestBenchmarkDiagnosticReportContainsNoSensitiveSourceValues(t *testing.T) 
 		t.Fatalf("digest sensitive logical row: %v", err)
 	}
 	encoded, err := json.Marshal(benchmarkDiagnosticFinalState{
-		SchemaVersion: benchmarkDiagnosticFinalStateSchemaVersion,
-		LogicalFiles:  benchmarkDiagnosticDigest{Count: 1, TotalBytes: 10, SHA256: digest},
+		SchemaVersion:          benchmarkDiagnosticFinalStateSchemaVersion,
+		ActiveLogicalNamespace: benchmarkDiagnosticDigest{Count: 1, TotalBytes: 10, SHA256: digest},
+		LogicalCatalog:         benchmarkDiagnosticDigest{Count: 1, TotalBytes: 10, SHA256: digest},
 	})
 	if err != nil {
 		t.Fatalf("marshal diagnostic final state: %v", err)
@@ -137,6 +371,17 @@ func TestBenchmarkDiagnosticReportContainsNoSensitiveSourceValues(t *testing.T) 
 		if bytes.Contains(encoded, []byte(forbidden)) {
 			t.Fatalf("diagnostic report leaked sensitive value %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestCanonicalBenchmarkActivePathRejectsEmptyAndTraversal(t *testing.T) {
+	dataRoot := t.TempDir()
+	if _, err := canonicalizeBenchmarkActiveLogicalRows([]benchmarkActiveLogicalRawRow{{Path: ""}}, dataRoot); err == nil {
+		t.Fatal("expected empty active path to fail")
+	}
+	outside := filepath.Join(filepath.Dir(dataRoot), "outside.txt")
+	if _, err := canonicalizeBenchmarkActiveLogicalRows([]benchmarkActiveLogicalRawRow{{Path: outside}}, dataRoot); err == nil {
+		t.Fatal("expected active path traversal to fail")
 	}
 }
 

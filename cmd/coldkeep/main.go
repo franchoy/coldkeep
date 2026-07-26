@@ -3694,7 +3694,7 @@ func runGatePresetWithIsolatedDatabases(
 	return report, nil
 }
 
-const benchmarkDiagnosticFinalStateSchemaVersion = 1
+const benchmarkDiagnosticFinalStateSchemaVersion = 2
 
 type benchmarkDiagnosticDigest struct {
 	Count      int64  `json:"count"`
@@ -3743,36 +3743,57 @@ type benchmarkDiagnosticPhysical struct {
 }
 
 type benchmarkDiagnosticFinalState struct {
-	SchemaVersion        int                             `json:"schema_version"`
-	LogicalFiles         benchmarkDiagnosticDigest       `json:"logical_files"`
-	LogicalStatuses      benchmarkDiagnosticStatusTotals `json:"logical_statuses"`
-	ChunkGraph           benchmarkDiagnosticDigest       `json:"chunk_graph"`
-	RestoredTree         benchmarkDiagnosticDigest       `json:"restored_tree"`
-	Snapshots            benchmarkDiagnosticDigest       `json:"snapshots"`
-	SnapshotCount        int64                           `json:"snapshot_count"`
-	GC                   benchmarkDiagnosticGC           `json:"gc"`
-	Verification         benchmarkDiagnosticVerification `json:"verification"`
-	Physical             benchmarkDiagnosticPhysical     `json:"physical"`
-	PhysicalLayoutSHA256 string                          `json:"physical_layout_sha256"`
+	SchemaVersion          int                             `json:"schema_version"`
+	ActiveLogicalNamespace benchmarkDiagnosticDigest       `json:"active_logical_namespace"`
+	LogicalCatalog         benchmarkDiagnosticDigest       `json:"logical_catalog"`
+	LogicalStatuses        benchmarkDiagnosticStatusTotals `json:"logical_statuses"`
+	ChunkGraph             benchmarkDiagnosticDigest       `json:"chunk_graph"`
+	RestoredTree           benchmarkDiagnosticDigest       `json:"restored_tree"`
+	Snapshots              benchmarkDiagnosticDigest       `json:"snapshots"`
+	SnapshotCount          int64                           `json:"snapshot_count"`
+	GC                     benchmarkDiagnosticGC           `json:"gc"`
+	Verification           benchmarkDiagnosticVerification `json:"verification"`
+	Physical               benchmarkDiagnosticPhysical     `json:"physical"`
+	PhysicalLayoutSHA256   string                          `json:"physical_layout_sha256"`
 }
 
-type benchmarkLogicalRawRow struct {
+type benchmarkActiveLogicalRawRow struct {
 	ID             int64
 	Path           string
 	FileHash       string
 	TotalSize      int64
 	Status         string
-	RefCount       int64
 	ChunkerVersion string
 }
 
-type benchmarkLogicalCanonicalRow struct {
+type benchmarkActiveLogicalCanonicalRow struct {
 	Path           string `json:"path"`
 	FileHash       string `json:"file_hash"`
 	TotalSize      int64  `json:"total_size"`
 	Status         string `json:"status"`
-	RefCount       int64  `json:"ref_count"`
 	ChunkerVersion string `json:"chunker_version"`
+}
+
+type benchmarkLogicalCatalogRawRow struct {
+	ID                     int64
+	FileHash               string
+	TotalSize              int64
+	Status                 string
+	RefCount               int64
+	ChunkerVersion         string
+	ActivePathCount        int64
+	SnapshotReferenceCount int64
+}
+
+type benchmarkLogicalCatalogCanonicalRow struct {
+	FileHash               string `json:"file_hash"`
+	TotalSize              int64  `json:"total_size"`
+	Status                 string `json:"status"`
+	RefCount               int64  `json:"ref_count"`
+	ChunkerVersion         string `json:"chunker_version"`
+	ActivePathCount        int64  `json:"active_path_count"`
+	SnapshotReferenceCount int64  `json:"snapshot_reference_count"`
+	ReachabilityClass      string `json:"reachability_class"`
 }
 
 type benchmarkChunkGraphRawRow struct {
@@ -3970,21 +3991,24 @@ func canonicalBenchmarkSnapshotPath(dataRoot, rawPath string) (string, error) {
 	return filepath.ToSlash(cleaned), nil
 }
 
-func canonicalizeBenchmarkLogicalRows(rows []benchmarkLogicalRawRow, dataRoot string) ([]benchmarkLogicalCanonicalRow, error) {
-	out := make([]benchmarkLogicalCanonicalRow, 0, len(rows))
+func canonicalizeBenchmarkActiveLogicalRows(rows []benchmarkActiveLogicalRawRow, dataRoot string) ([]benchmarkActiveLogicalCanonicalRow, error) {
+	out := make([]benchmarkActiveLogicalCanonicalRow, 0, len(rows))
 	seenPaths := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
 		pathValue, err := canonicalBenchmarkPath(dataRoot, row.Path)
 		if err != nil {
 			return nil, err
 		}
+		if pathValue == "" {
+			return nil, fmt.Errorf("active logical path is empty")
+		}
 		if _, exists := seenPaths[pathValue]; exists {
-			return nil, fmt.Errorf("duplicate canonical logical path")
+			return nil, fmt.Errorf("duplicate canonical active logical path")
 		}
 		seenPaths[pathValue] = struct{}{}
-		out = append(out, benchmarkLogicalCanonicalRow{
+		out = append(out, benchmarkActiveLogicalCanonicalRow{
 			Path: pathValue, FileHash: row.FileHash, TotalSize: row.TotalSize,
-			Status: row.Status, RefCount: row.RefCount, ChunkerVersion: row.ChunkerVersion,
+			Status: row.Status, ChunkerVersion: row.ChunkerVersion,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -3993,6 +4017,37 @@ func canonicalizeBenchmarkLogicalRows(rows []benchmarkLogicalRawRow, dataRoot st
 		return bytes.Compare(left, right) < 0
 	})
 	return out, nil
+}
+
+func benchmarkLogicalReachabilityClass(activePathCount, snapshotReferenceCount int64) string {
+	switch {
+	case activePathCount > 0 && snapshotReferenceCount > 0:
+		return "shared"
+	case activePathCount > 0:
+		return "current_only"
+	case snapshotReferenceCount > 0:
+		return "snapshot_only"
+	default:
+		return "unreachable_history"
+	}
+}
+
+func canonicalizeBenchmarkLogicalCatalogRows(rows []benchmarkLogicalCatalogRawRow) []benchmarkLogicalCatalogCanonicalRow {
+	out := make([]benchmarkLogicalCatalogCanonicalRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, benchmarkLogicalCatalogCanonicalRow{
+			FileHash: row.FileHash, TotalSize: row.TotalSize, Status: row.Status,
+			RefCount: row.RefCount, ChunkerVersion: row.ChunkerVersion,
+			ActivePathCount: row.ActivePathCount, SnapshotReferenceCount: row.SnapshotReferenceCount,
+			ReachabilityClass: benchmarkLogicalReachabilityClass(row.ActivePathCount, row.SnapshotReferenceCount),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left, _ := json.Marshal(out[i])
+		right, _ := json.Marshal(out[j])
+		return bytes.Compare(left, right) < 0
+	})
+	return out
 }
 
 func canonicalizeBenchmarkChunkGraphRows(rows []benchmarkChunkGraphRawRow) []benchmarkChunkGraphCanonicalRow {
@@ -4047,17 +4102,27 @@ func buildBenchmarkDiagnosticFinalState(
 	dbconn *sql.DB,
 	benchmarkContext corebenchmark.BenchmarkContext,
 ) (benchmarkDiagnosticFinalState, error) {
-	logicalRaw, logicalCount, logicalBytes, statuses, err := readBenchmarkLogicalState(ctx, dbconn)
+	activeRaw, activeBytes, err := readBenchmarkActiveLogicalNamespace(ctx, dbconn)
 	if err != nil {
 		return benchmarkDiagnosticFinalState{}, err
 	}
-	logicalRows, err := canonicalizeBenchmarkLogicalRows(logicalRaw, benchmarkContext.DataPath)
+	activeRows, err := canonicalizeBenchmarkActiveLogicalRows(activeRaw, benchmarkContext.DataPath)
 	if err != nil {
-		return benchmarkDiagnosticFinalState{}, fmt.Errorf("canonicalize logical files: %w", err)
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("canonicalize active logical namespace: %w", err)
 	}
-	logicalDigest, err := benchmarkCanonicalDigest(logicalRows)
+	activeDigest, err := benchmarkCanonicalDigest(activeRows)
 	if err != nil {
-		return benchmarkDiagnosticFinalState{}, fmt.Errorf("digest logical files: %w", err)
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("digest active logical namespace: %w", err)
+	}
+
+	catalogRaw, catalogBytes, statuses, err := readBenchmarkLogicalCatalog(ctx, dbconn)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, err
+	}
+	catalogRows := canonicalizeBenchmarkLogicalCatalogRows(catalogRaw)
+	catalogDigest, err := benchmarkCanonicalDigest(catalogRows)
+	if err != nil {
+		return benchmarkDiagnosticFinalState{}, fmt.Errorf("digest logical catalog: %w", err)
 	}
 
 	chunkRaw, chunkBytes, err := readBenchmarkChunkGraph(ctx, dbconn)
@@ -4111,13 +4176,14 @@ func buildBenchmarkDiagnosticFinalState(
 	}
 
 	return benchmarkDiagnosticFinalState{
-		SchemaVersion:   benchmarkDiagnosticFinalStateSchemaVersion,
-		LogicalFiles:    benchmarkDiagnosticDigest{Count: logicalCount, TotalBytes: logicalBytes, SHA256: logicalDigest},
-		LogicalStatuses: statuses,
-		ChunkGraph:      benchmarkDiagnosticDigest{Count: int64(len(chunkRows)), TotalBytes: chunkBytes, SHA256: chunkDigest},
-		RestoredTree:    benchmarkDiagnosticDigest{Count: int64(len(restoredRows)), TotalBytes: restoredBytes, SHA256: restoredDigest},
-		Snapshots:       benchmarkDiagnosticDigest{Count: int64(len(snapshotRows)), TotalBytes: snapshotBytes, SHA256: snapshotDigest},
-		SnapshotCount:   snapshotCount,
+		SchemaVersion:          benchmarkDiagnosticFinalStateSchemaVersion,
+		ActiveLogicalNamespace: benchmarkDiagnosticDigest{Count: int64(len(activeRows)), TotalBytes: activeBytes, SHA256: activeDigest},
+		LogicalCatalog:         benchmarkDiagnosticDigest{Count: int64(len(catalogRows)), TotalBytes: catalogBytes, SHA256: catalogDigest},
+		LogicalStatuses:        statuses,
+		ChunkGraph:             benchmarkDiagnosticDigest{Count: int64(len(chunkRows)), TotalBytes: chunkBytes, SHA256: chunkDigest},
+		RestoredTree:           benchmarkDiagnosticDigest{Count: int64(len(restoredRows)), TotalBytes: restoredBytes, SHA256: restoredDigest},
+		Snapshots:              benchmarkDiagnosticDigest{Count: int64(len(snapshotRows)), TotalBytes: snapshotBytes, SHA256: snapshotDigest},
+		SnapshotCount:          snapshotCount,
 		GC: benchmarkDiagnosticGC{
 			TotalChunks: gcPlan.TotalChunks, ReachableChunks: gcPlan.ReachableChunks,
 			UnreachableChunks: gcPlan.UnreachableChunks, LogicallyReclaimableBytes: gcPlan.ReclaimableBytes,
@@ -4140,43 +4206,85 @@ func buildBenchmarkDiagnosticFinalState(
 	}, nil
 }
 
-func readBenchmarkLogicalState(
+func readBenchmarkActiveLogicalNamespace(
 	ctx context.Context,
 	dbconn *sql.DB,
-) ([]benchmarkLogicalRawRow, int64, int64, benchmarkDiagnosticStatusTotals, error) {
+) ([]benchmarkActiveLogicalRawRow, int64, error) {
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT lf.id, COALESCE(pf.path, ''), lf.file_hash, lf.total_size,
-		       lf.status, lf.ref_count, lf.chunker_version
-		FROM logical_file lf
-		LEFT JOIN physical_file pf ON pf.logical_file_id = lf.id
+		SELECT lf.id, pf.path, lf.file_hash, lf.total_size, lf.status, lf.chunker_version
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
 	`)
 	if err != nil {
-		return nil, 0, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("query diagnostic logical files: %w", err)
+		return nil, 0, fmt.Errorf("query diagnostic active logical namespace: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []benchmarkLogicalRawRow
+	var out []benchmarkActiveLogicalRawRow
+	var totalBytes int64
 	for rows.Next() {
-		var row benchmarkLogicalRawRow
-		if err := rows.Scan(&row.ID, &row.Path, &row.FileHash, &row.TotalSize, &row.Status, &row.RefCount, &row.ChunkerVersion); err != nil {
-			return nil, 0, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("scan diagnostic logical file: %w", err)
+		var row benchmarkActiveLogicalRawRow
+		if err := rows.Scan(&row.ID, &row.Path, &row.FileHash, &row.TotalSize, &row.Status, &row.ChunkerVersion); err != nil {
+			return nil, 0, fmt.Errorf("scan diagnostic active logical namespace: %w", err)
 		}
 		out = append(out, row)
+		totalBytes += row.TotalSize
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("iterate diagnostic logical files: %w", err)
+		return nil, 0, fmt.Errorf("iterate diagnostic active logical namespace: %w", err)
 	}
-	var count, totalBytes int64
+	return out, totalBytes, nil
+}
+
+func readBenchmarkLogicalCatalog(
+	ctx context.Context,
+	dbconn *sql.DB,
+) ([]benchmarkLogicalCatalogRawRow, int64, benchmarkDiagnosticStatusTotals, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		WITH active_paths AS (
+			SELECT logical_file_id, COUNT(*) AS active_path_count
+			FROM physical_file
+			GROUP BY logical_file_id
+		), snapshot_references AS (
+			SELECT logical_file_id, COUNT(*) AS snapshot_reference_count
+			FROM snapshot_file
+			GROUP BY logical_file_id
+		)
+		SELECT lf.id, lf.file_hash, lf.total_size, lf.status, lf.ref_count, lf.chunker_version,
+		       COALESCE(ap.active_path_count, 0), COALESCE(sr.snapshot_reference_count, 0)
+		FROM logical_file lf
+		LEFT JOIN active_paths ap ON ap.logical_file_id = lf.id
+		LEFT JOIN snapshot_references sr ON sr.logical_file_id = lf.id
+	`)
+	if err != nil {
+		return nil, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("query diagnostic logical catalog: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []benchmarkLogicalCatalogRawRow
+	var totalBytes int64
 	var statuses benchmarkDiagnosticStatusTotals
-	if err := dbconn.QueryRowContext(ctx, `
-		SELECT COUNT(*), COALESCE(SUM(total_size), 0),
-		       COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN status = 'PROCESSING' THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN status = 'ABORTED' THEN 1 ELSE 0 END), 0)
-		FROM logical_file
-	`).Scan(&count, &totalBytes, &statuses.Completed, &statuses.Processing, &statuses.Aborted); err != nil {
-		return nil, 0, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("query diagnostic logical totals: %w", err)
+	for rows.Next() {
+		var row benchmarkLogicalCatalogRawRow
+		if err := rows.Scan(
+			&row.ID, &row.FileHash, &row.TotalSize, &row.Status, &row.RefCount, &row.ChunkerVersion,
+			&row.ActivePathCount, &row.SnapshotReferenceCount,
+		); err != nil {
+			return nil, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("scan diagnostic logical catalog: %w", err)
+		}
+		out = append(out, row)
+		totalBytes += row.TotalSize
+		switch row.Status {
+		case "COMPLETED":
+			statuses.Completed++
+		case "PROCESSING":
+			statuses.Processing++
+		case "ABORTED":
+			statuses.Aborted++
+		}
 	}
-	return out, count, totalBytes, statuses, nil
+	if err := rows.Err(); err != nil {
+		return nil, 0, benchmarkDiagnosticStatusTotals{}, fmt.Errorf("iterate diagnostic logical catalog: %w", err)
+	}
+	return out, totalBytes, statuses, nil
 }
 
 func readBenchmarkChunkGraph(ctx context.Context, dbconn *sql.DB) ([]benchmarkChunkGraphRawRow, int64, error) {

@@ -77,8 +77,8 @@ MANIFEST_PROFILES = {
     "zstd-w1": ("zstd", 1),
     "zstd-w4": ("zstd", 4),
 }
-DIAGNOSTIC_SCHEMA_VERSION = 1
-EVIDENCE_POLICY_VERSION = 1
+DIAGNOSTIC_SCHEMA_VERSION = 2
+EVIDENCE_POLICY_VERSION = 2
 INT64_MAX = (1 << 63) - 1
 
 # Outcome E evidence policy. Paths use [] for repeated case/sample records.
@@ -117,7 +117,8 @@ FIELD_POLICY = {
         "cases[].logical_files",
         "cases[].logical_bytes",
         "cases[].workers_used",
-        "cases[].diagnostic.logical_files.*",
+        "cases[].diagnostic.active_logical_namespace.*",
+        "cases[].diagnostic.logical_catalog.*",
         "cases[].diagnostic.logical_statuses.*",
         "cases[].diagnostic.chunk_graph.*",
         "cases[].diagnostic.restored_tree.*",
@@ -386,13 +387,16 @@ def validate_diagnostic_final_state(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("schema_version") != DIAGNOSTIC_SCHEMA_VERSION:
         raise GateError(f"{label} diagnostic final state schema mismatch")
     expected_keys = {
-        "schema_version", "logical_files", "logical_statuses", "chunk_graph",
+        "schema_version", "active_logical_namespace", "logical_catalog",
+        "logical_statuses", "chunk_graph",
         "restored_tree", "snapshots", "snapshot_count", "gc", "verification",
         "physical", "physical_layout_sha256",
     }
     if set(value) != expected_keys:
         raise GateError(f"{label} diagnostic final state fields mismatch")
-    for section_name in ("logical_files", "chunk_graph", "restored_tree", "snapshots"):
+    for section_name in (
+        "active_logical_namespace", "logical_catalog", "chunk_graph", "restored_tree", "snapshots"
+    ):
         section = value.get(section_name)
         if not isinstance(section, dict) or set(section) != {"count", "total_bytes", "sha256"}:
             raise GateError(f"{label} diagnostic {section_name} fields mismatch")
@@ -406,8 +410,8 @@ def validate_diagnostic_final_state(value: Any, label: str) -> dict[str, Any]:
         raise GateError(f"{label} diagnostic logical status fields mismatch")
     for field in statuses:
         require_nonnegative_integer(statuses[field], f"{label} diagnostic logical status {field}")
-    if sum(statuses.values()) != value["logical_files"]["count"]:
-        raise GateError(f"{label} diagnostic logical statuses do not match logical file count")
+    if sum(statuses.values()) != value["logical_catalog"]["count"]:
+        raise GateError(f"{label} diagnostic logical statuses do not match logical catalog count")
     require_nonnegative_integer(value["snapshot_count"], f"{label} diagnostic snapshot_count")
     gc_totals = value.get("gc")
     expected_gc = {
@@ -459,7 +463,8 @@ def hard_final_state(row: dict[str, Any]) -> dict[str, Any]:
     )
     physical = state["physical"]
     return {
-        "logical_files": state["logical_files"],
+        "active_logical_namespace": state["active_logical_namespace"],
+        "logical_catalog": state["logical_catalog"],
         "logical_statuses": state["logical_statuses"],
         "chunk_graph": state["chunk_graph"],
         "restored_tree": state["restored_tree"],
