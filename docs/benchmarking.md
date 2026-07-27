@@ -27,9 +27,55 @@ evaluation in v1.7.
 
 ### v1.13.11 release-gate diagnostic
 
-The `ci-stable-v1` preset is reserved for the Phase 11 release-gate
-calibration. It uses fixed larger fixtures and one isolated PostgreSQL database
-per case. It requires `--repeat 1`; independent repetitions are captured by:
+The current Phase 11 design is the same-run paired contract in
+`docs/release/v1.13/v1.13.11-phase11-paired-benchmark-gate-contract.md`.
+The provisional diagnostic fixture candidates `ci-paired-w1-v1` and
+`ci-paired-w4-v1` execute the complete ordered nine-case schema-v2 suite with
+per-case isolation. `scripts/paired_benchmark_gate.py`
+owns the fixed `C R` warmups, fixed five-pair production or ten-pair diagnostic
+inventory, paired ratio/MAD comparison, hard-state equivalence, checksums, and
+four-profile decision aggregation.
+
+No production reference manifest or numeric paired threshold is authorized.
+The harness contract requires production sampling and production decisions to
+remain hard-disabled even if ungoverned files appear; enabling them requires a
+later authorized governance and trusted-base integration change. Diagnostic
+mode qualifies the architecture only. A future separately authorized launcher
+will use this command shape:
+
+```bash
+COLDKEEP_CODEC=aes-gcm python3 scripts/paired_benchmark_gate.py sample \
+  --reference-binary /controlled/reference/coldkeep \
+  --candidate-binary /controlled/candidate/coldkeep \
+  --reference-sha <40-character-sha> \
+  --candidate-sha <40-character-sha> \
+  --output-dir /controlled/artifact \
+  --dataset ci-paired-w4-v1 \
+  --compression none \
+  --workers 4 \
+  --mode diagnostic \
+  --pairs 10 \
+  --go-version '<pinned-version>' \
+  --postgres-version '<pinned-version>' \
+  --database-image-digest 'sha256:<pinned-digest>'
+```
+
+The command timeout is fixed at 600 seconds. Qualification requires all ten
+pairs, median ratios within 0.95–1.05, paired MAD no greater than 2.5%, exact
+hard state, valid counters and cleanup, no timeout, and completion within the
+governed workflow limit. Samples cannot be discarded or extended.
+
+The stopped local A/A probe completed only its two excluded warmups and is
+non-authoritative, non-PASS partial evidence. It is not qualification evidence
+and made no reference or threshold decision. The four-profile remote ten-pair
+A/A qualification remains required.
+
+The legacy `ci-stable-v1` material below remains historical diagnostic
+compatibility and has no paired performance authority.
+
+The superseded `ci-stable-v1` proposal used fixed larger fixtures and one
+isolated PostgreSQL database per case. It still requires `--repeat 1` and can
+be captured for historical diagnostics by:
 
 ```bash
 python3 scripts/benchmark_gate.py sample \
@@ -43,10 +89,9 @@ python3 scripts/benchmark_gate.py sample \
   --database-image-digest "sha256:<reviewed-digest>"
 ```
 
-The sampler rejects malformed, repeated, trailing, incomplete, reordered, or
-fixture-inconsistent reports and preserves every raw sample. Duration median is
-the proposed failing endpoint. The manual-only calibration workflow must pass
-before this harness replaces the historical required-CI comparison.
+The legacy sampler rejects malformed, repeated, trailing, incomplete,
+reordered, or fixture-inconsistent reports and preserves every raw sample. Its
+absolute duration median is not a Phase 11 performance endpoint.
 
 #### Outcome E evidence contract
 
@@ -60,14 +105,14 @@ calibration rule was over-constrained; it is not evidence of a product,
 fixture, isolation, or aggregation correctness defect.
 
 Raw benchmark schema remains version 2. Every corrected-contract raw report
-must contain `diagnostic_final_state` schema version 1. Schema-v2 reports that
-omit that object, including the preserved GitHub workers=4 artifacts, remain
-useful historical diagnostics but cannot enter corrected calibration or a
-governed baseline. Schema-v1 evidence is historical only. Unknown fields in
+must contain `diagnostic_final_state` schema version 2. Reports that omit that
+object, including the preserved GitHub workers=4 artifacts, remain useful
+historical diagnostics but cannot enter paired comparison evidence.
+Diagnostic-final-state schema-v1 evidence is historical only. Unknown fields in
 validated sections fail closed until a schema and policy update classifies
 them.
 
-Evidence policy version 1 assigns fields by semantics:
+Evidence policy version 2 assigns fields by semantics:
 
 | Policy | Fields and validation |
 | --- | --- |
@@ -200,19 +245,18 @@ JSON output exposes both per-case worker usage and an aggregate
 }
 ```
 
-## Current baseline
+## Historical v1.9 baseline
 
-The repository now maintains an official v1.9 baseline set for the
-recommended packed production family (`aes-gcm` encryption):
+The repository retains the v1.9 baseline set for historical interpretation of
+the recommended packed production family (`aes-gcm` encryption):
 
 - compression modes: `none`, `zstd`
 - worker profiles: `w1`, `w4`
 - contract shape: `none/zstd × w1/w4` (four baseline JSON artifacts total)
 
-These artifacts are now the frozen performance reference point for v1.10+
-architectural work. Future releases may reorganize benchmark runners or CI
-gates, but they must compare against this frozen set unless an explicit
-baseline-refresh decision is documented.
+These artifacts preserve earlier release decisions. They have no performance
+authority for the v1.13.11 paired gate, cannot be reused as paired samples, and
+their absolute thresholds cannot be reinterpreted as ratio thresholds.
 
 Official v1.9 baseline files:
 
@@ -335,18 +379,17 @@ retained for historical v1.6/v1.7 context.
    an identical `relative-path → digest` map across isolated runs, proving that
    user-visible restore output is byte-for-bit stable.
 
-## Regression Thresholds (v1.9)
+## Historical Regression Thresholds (v1.9)
 
 Benchmarks are now actionable through defined regression thresholds. Thresholds are
 mode-specific (uncompressed vs. compressed) and case-specific, balancing detection
 sensitivity with normal run-to-run variance.
 
-**Official policy:** See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
-for the authoritative threshold definition.
+**Historical policy:** See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
+for the frozen v1.9 threshold definition.
 
-These thresholds are frozen for the v1.9 baseline set and are the reference
-policy for v1.10+ regression detection until an explicit threshold-refresh
-decision is approved.
+These thresholds are frozen with the v1.9 baseline set. They do not define
+paired-regression sensitivity.
 
 ### Uncompressed mode (packed + aes-gcm + none)
 
@@ -359,7 +402,8 @@ decision is approved.
 | Metadata operation regression | > 3% | snapshot-creation, gc-after-churn, stats-inspect |
 | Memory increase | > 10% | Not yet enforced via CLI but monitored |
 
-Any regression exceeding these thresholds **fails CI** and must be investigated or reverted.
+Under the historical gate, a regression exceeding these thresholds failed CI
+and required investigation.
 
 ### Compressed mode (packed + aes-gcm + zstd)
 
@@ -778,16 +822,19 @@ Key assertions include:
 - ✓ **New blocks coexist safely:** new compressed packed blocks store/restore/verify alongside old legacy data
 - ✓ **Migration only additive:** old metadata path remains intact while new packed metadata is added for new chunks
 
-## CI policy
+## Historical absolute CI policy
 
-CI now separates correctness checks from benchmark measurement:
+The legacy workflow separates correctness checks from benchmark measurement:
 
 1. The correctness matrix runs independently from benchmarks and covers the supported codec combinations.
 2. The benchmark matrix runs the small dataset only for the recommended packed `aes-gcm` production modes with `COLDKEEP_COMPRESSION=none` and `COLDKEEP_COMPRESSION=zstd`.
-3. Benchmark outputs are captured as artifacts for inspection. Threshold-based regression comparison is enforced via `--compare` with mode-specific thresholds; violations are reported per the v1.9 regression thresholds policy above.
+3. Benchmark outputs are captured as artifacts for inspection. The active
+   legacy comparison still executes `--compare`, but its absolute result cannot
+   close Phase 11. Replacement requires the separately authorized paired
+   diagnostic, reference manifest, threshold policy, and required-CI switch.
 
 See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
-and CI workflow for authoritative threshold application.
+and the CI workflow for historical implementation detail.
 
 ## Phase 4 implementation order
 
