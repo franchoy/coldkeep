@@ -114,8 +114,76 @@ func TestAuditCIEnforcementRejectsPrematureRequiredBenchmarkGateSwitch(t *testin
 		readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml")),
 		true,
 	)
-	if !strings.Contains(stderr, "required CI switched to the schema-v2 benchmark gate") {
+	if !strings.Contains(stderr, "required CI switched to a replacement benchmark gate") {
 		t.Fatalf("expected premature gate-switch error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementRejectsPrematurePairedBenchmarkGateSwitch(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	workflow = strings.Replace(
+		workflow,
+		"python3 scripts/validate_regression_thresholds.py check",
+		"python3 scripts/paired_benchmark_gate.py sample",
+		1,
+	)
+	stderr := runAuditLocalOnly(
+		t,
+		workflow,
+		readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml")),
+		true,
+	)
+	if !strings.Contains(stderr, "required CI switched to a replacement benchmark gate") {
+		t.Fatalf("expected premature paired gate-switch error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementRejectsPrematurePairedBenchmarkDependency(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	workflow = strings.Replace(
+		workflow,
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, benchmark-paired-decision, cross-platform]",
+		1,
+	)
+	stderr := runAuditLocalOnly(
+		t,
+		workflow,
+		readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml")),
+		true,
+	)
+	if !strings.Contains(stderr, "required CI contains a premature paired benchmark job or dependency") {
+		t.Fatalf("expected premature paired dependency error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementRejectsPrematurePairedGovernanceFiles(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	baselineWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "benchmark-baseline.yml"))
+	for _, test := range []struct {
+		name      string
+		reference bool
+		threshold bool
+		message   string
+	}{
+		{name: "reference", reference: true, message: "paired reference manifest exists before governance authorization"},
+		{name: "threshold", threshold: true, message: "paired threshold policy exists before threshold authorization"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stderr := runAuditFixture(
+				t,
+				workflow,
+				codeqlWorkflow,
+				baselineWorkflow,
+				true,
+				test.reference,
+				test.threshold,
+			)
+			if !strings.Contains(stderr, test.message) {
+				t.Fatalf("expected %q, got:\n%s", test.message, stderr)
+			}
+		})
 	}
 }
 
@@ -240,12 +308,35 @@ func runAuditLocalOnlyWithBaseline(
 	wantFailure bool,
 ) string {
 	t.Helper()
+	return runAuditFixture(
+		t,
+		workflow,
+		codeqlWorkflow,
+		baselineWorkflow,
+		wantFailure,
+		false,
+		false,
+	)
+}
+
+func runAuditFixture(
+	t *testing.T,
+	workflow string,
+	codeqlWorkflow string,
+	baselineWorkflow string,
+	wantFailure bool,
+	createPairedReference bool,
+	createPairedThreshold bool,
+) string {
+	t.Helper()
 
 	tmpDir := t.TempDir()
 	workflowPath := filepath.Join(tmpDir, "ci.yml")
 	codeqlWorkflowPath := filepath.Join(tmpDir, "codeql.yml")
 	baselineWorkflowPath := filepath.Join(tmpDir, "benchmark-baseline.yml")
 	matrixPath := filepath.Join(tmpDir, "VALIDATION_MATRIX.md")
+	pairedReferencePath := filepath.Join(tmpDir, "reference-v1.13.json")
+	pairedThresholdPath := filepath.Join(tmpDir, "threshold-policy-v1.13.json")
 
 	if err := os.WriteFile(workflowPath, []byte(workflow), 0o600); err != nil {
 		t.Fatalf("write workflow fixture: %v", err)
@@ -259,6 +350,16 @@ func runAuditLocalOnlyWithBaseline(
 	if err := os.WriteFile(matrixPath, []byte(readRepoFile(t, "VALIDATION_MATRIX.md")), 0o600); err != nil {
 		t.Fatalf("write validation matrix fixture: %v", err)
 	}
+	if createPairedReference {
+		if err := os.WriteFile(pairedReferencePath, []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("write paired reference fixture: %v", err)
+		}
+	}
+	if createPairedThreshold {
+		if err := os.WriteFile(pairedThresholdPath, []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("write paired threshold fixture: %v", err)
+		}
+	}
 
 	cmd := exec.Command("bash", "scripts/audit_ci_enforcement.sh", "--local-only")
 	cmd.Dir = repoRoot(t)
@@ -267,6 +368,8 @@ func runAuditLocalOnlyWithBaseline(
 		"COLDKEEP_CODEQL_WORKFLOW_FILE="+codeqlWorkflowPath,
 		"COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE="+baselineWorkflowPath,
 		"COLDKEEP_VALIDATION_MATRIX_FILE="+matrixPath,
+		"COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE="+pairedReferencePath,
+		"COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE="+pairedThresholdPath,
 	)
 	output, err := cmd.CombinedOutput()
 	if wantFailure {

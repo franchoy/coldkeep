@@ -3327,8 +3327,8 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 			return usageErrorf("invalid --repeat value %q (must be integer > 0)", rawRepeat)
 		}
 	}
-	if preset == corebenchmark.DatasetPresetCIStableV1 && repeat != 1 {
-		return usageErrorf("ci-stable-v1 requires --repeat 1; independent sampling is owned by scripts/benchmark_gate.py")
+	if corebenchmark.RequiresCaseDatabaseIsolation(preset) && repeat != 1 {
+		return usageErrorf("%s requires --repeat 1; independent sampling is owned by the benchmark gate scripts", preset)
 	}
 
 	report, err := runCoreBenchmarkPhase(preset, repeat, opts)
@@ -3539,7 +3539,7 @@ func validateLegacyBenchmarkComparisonInputs(baseline, current BenchmarkRunRepor
 func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
 	var report corebenchmark.RunReport
 	var err error
-	if preset == corebenchmark.DatasetPresetCIStableV1 {
+	if corebenchmark.RequiresCaseDatabaseIsolation(preset) {
 		report, err = runGatePresetWithIsolatedDatabases(preset, repeat, opts)
 	} else {
 		if err := runBenchmarkDeterminismPhase(preset, opts); err != nil {
@@ -3652,7 +3652,10 @@ func runGatePresetWithIsolatedDatabases(
 	if repeat <= 0 {
 		return corebenchmark.RunReport{}, fmt.Errorf("repeat must be > 0")
 	}
-	cfg := corebenchmark.CIStableV1ScenarioConfig()
+	cfg, err := corebenchmark.PresetScenarioConfig(preset)
+	if err != nil {
+		return corebenchmark.RunReport{}, err
+	}
 	cfg.ColdkeepExecutable = resolveSelfExecutable()
 	cfg.Codec = strings.TrimSpace(os.Getenv("COLDKEEP_CODEC"))
 	cfg.Compression = strings.TrimSpace(os.Getenv("COLDKEEP_COMPRESSION"))

@@ -9,10 +9,12 @@ import (
 type DatasetPreset string
 
 const (
-	DatasetPresetSmall      DatasetPreset = "small"
-	DatasetPresetMedium     DatasetPreset = "medium"
-	DatasetPresetLarge      DatasetPreset = "large"
-	DatasetPresetCIStableV1 DatasetPreset = CIStableV1FixtureID
+	DatasetPresetSmall        DatasetPreset = "small"
+	DatasetPresetMedium       DatasetPreset = "medium"
+	DatasetPresetLarge        DatasetPreset = "large"
+	DatasetPresetCIStableV1   DatasetPreset = CIStableV1FixtureID
+	DatasetPresetCIPairedW1V1 DatasetPreset = CIPairedW1V1FixtureID
+	DatasetPresetCIPairedW4V1 DatasetPreset = CIPairedW4V1FixtureID
 )
 
 type IterationReport struct {
@@ -35,10 +37,11 @@ func ParseDatasetPreset(raw string) (DatasetPreset, error) {
 	}
 
 	switch DatasetPreset(normalized) {
-	case DatasetPresetSmall, DatasetPresetMedium, DatasetPresetLarge, DatasetPresetCIStableV1:
+	case DatasetPresetSmall, DatasetPresetMedium, DatasetPresetLarge, DatasetPresetCIStableV1,
+		DatasetPresetCIPairedW1V1, DatasetPresetCIPairedW4V1:
 		return DatasetPreset(normalized), nil
 	default:
-		return "", fmt.Errorf("invalid dataset preset %q (allowed: small, medium, large, ci-stable-v1)", raw)
+		return "", fmt.Errorf("invalid dataset preset %q (allowed: small, medium, large, ci-stable-v1, ci-paired-w1-v1, ci-paired-w4-v1)", raw)
 	}
 }
 
@@ -76,6 +79,10 @@ func PresetScenarioConfig(preset DatasetPreset) (ScenarioConfig, error) {
 		}, nil
 	case DatasetPresetCIStableV1:
 		return CIStableV1ScenarioConfig(), nil
+	case DatasetPresetCIPairedW1V1:
+		return CIPairedW1V1ScenarioConfig(), nil
+	case DatasetPresetCIPairedW4V1:
+		return CIPairedW4V1ScenarioConfig(), nil
 	default:
 		return ScenarioConfig{}, fmt.Errorf("unsupported dataset preset %q", preset)
 	}

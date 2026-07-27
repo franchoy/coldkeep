@@ -4,7 +4,11 @@ const (
 	// CIStableV1FixtureID identifies the fixed Phase 11 calibration candidate.
 	// Changing any value in this profile requires a new fixture identifier.
 	CIStableV1FixtureID = "ci-stable-v1"
-	FixtureSeed         = int64(1701)
+	// CIPairedW1V1FixtureID and CIPairedW4V1FixtureID identify the immutable
+	// profile-specific inputs used by the paired Phase 11 benchmark contract.
+	CIPairedW1V1FixtureID = "ci-paired-w1-v1"
+	CIPairedW4V1FixtureID = "ci-paired-w4-v1"
+	FixtureSeed           = int64(1701)
 )
 
 // FixtureCase identifies one ordered benchmark case and its deterministic seed.
@@ -40,6 +44,47 @@ func CIStableV1ScenarioConfig() ScenarioConfig {
 		MixedMaxFileSizeBytes:  256 * 1024,
 		RemoveEvery:            4,
 		CaseDatabaseIsolation:  true,
+	}
+}
+
+// CIPairedW1V1ScenarioConfig is the fixed workers=1 paired-gate fixture.
+func CIPairedW1V1ScenarioConfig() ScenarioConfig {
+	return ScenarioConfig{
+		Seed:                   FixtureSeed,
+		LargeFileSizeBytes:     96 * 1024 * 1024,
+		ManySmallFileCount:     600,
+		ManySmallFileSizeBytes: 1024,
+		MixedFileCount:         400,
+		MixedMinFileSizeBytes:  1024,
+		MixedMaxFileSizeBytes:  256 * 1024,
+		RemoveEvery:            4,
+		CaseDatabaseIsolation:  true,
+	}
+}
+
+// CIPairedW4V1ScenarioConfig is the fixed workers=4 paired-gate fixture.
+func CIPairedW4V1ScenarioConfig() ScenarioConfig {
+	return ScenarioConfig{
+		Seed:                   FixtureSeed,
+		LargeFileSizeBytes:     128 * 1024 * 1024,
+		ManySmallFileCount:     1200,
+		ManySmallFileSizeBytes: 1024,
+		MixedFileCount:         800,
+		MixedMinFileSizeBytes:  1024,
+		MixedMaxFileSizeBytes:  256 * 1024,
+		RemoveEvery:            4,
+		CaseDatabaseIsolation:  true,
+	}
+}
+
+// RequiresCaseDatabaseIsolation reports whether a preset owns a fresh database
+// and filesystem environment for every benchmark case.
+func RequiresCaseDatabaseIsolation(preset DatasetPreset) bool {
+	switch preset {
+	case DatasetPresetCIStableV1, DatasetPresetCIPairedW1V1, DatasetPresetCIPairedW4V1:
+		return true
+	default:
+		return false
 	}
 }
 

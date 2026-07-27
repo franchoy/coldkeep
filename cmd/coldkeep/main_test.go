@@ -10659,6 +10659,22 @@ func TestRunBenchmarkRunCommandRejectsRepeatForCIStableFixture(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkRunCommandRejectsRepeatForPairedFixtures(t *testing.T) {
+	for _, dataset := range []string{"ci-paired-w1-v1", "ci-paired-w4-v1"} {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags: map[string][]string{
+				"dataset": {dataset},
+				"repeat":  {"2"},
+			},
+		}, outputModeJSON)
+		if err == nil || !strings.Contains(err.Error(), "requires --repeat 1") {
+			t.Fatalf("expected paired repeat error for %q, got: %v", dataset, err)
+		}
+	}
+}
+
 func TestCompareWithBaselineMissingFileError(t *testing.T) {
 	current := BenchmarkRunReport{}
 	err := compareWithBaseline(current, "/nonexistent/baseline.json", 20.0)

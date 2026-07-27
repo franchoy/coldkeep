@@ -64,6 +64,8 @@ WORKFLOW_FILE="${COLDKEEP_CI_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/ci.yml}
 CODEQL_WORKFLOW_FILE="${COLDKEEP_CODEQL_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/codeql.yml}"
 BENCHMARK_BASELINE_WORKFLOW_FILE="${COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/benchmark-baseline.yml}"
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
+PAIRED_REFERENCE_MANIFEST_FILE="${COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE:-$REPO_ROOT/benchmarks/paired/reference-v1.13.json}"
+PAIRED_THRESHOLD_POLICY_FILE="${COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE:-$REPO_ROOT/benchmarks/paired/threshold-policy-v1.13.json}"
 
 require_pattern() {
   local file="$1"
@@ -156,7 +158,19 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'benchmark run --dataset small --workers 1 --output json' 'required CI retains the historical workers=1 benchmark command' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'benchmark run --dataset small --workers 4 --output json' 'required CI retains the historical workers=4 benchmark command' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'scripts/validate_regression_thresholds\.py check' 'required CI retains the historical comparator' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'benchmarks/v1\.9/baselines/benchmark-baseline-v1\.9-packed-aes-gcm-none-small-w4-r1\.json' 'required CI retains historical baseline authority' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'benchmarks/v1\.9/baselines/benchmark-baseline-v1\.9-packed-aes-gcm-none-small-w4-r1\.json' 'required CI retains the legacy historical baseline input until the authorized switch' || check_status=1
+  if [[ -e "$PAIRED_REFERENCE_MANIFEST_FILE" ]]; then
+    echo "[audit] ERROR: paired reference manifest exists before governance authorization" >&2
+    check_status=1
+  else
+    echo "[audit] ok: no paired reference manifest exists"
+  fi
+  if [[ -e "$PAIRED_THRESHOLD_POLICY_FILE" ]]; then
+    echo "[audit] ERROR: paired threshold policy exists before threshold authorization" >&2
+    check_status=1
+  else
+    echo "[audit] ok: no paired threshold policy exists"
+  fi
   if grep -Eq '^  (push|pull_request|merge_group|schedule):' "$BENCHMARK_BASELINE_WORKFLOW_FILE"; then
     echo "[audit] ERROR: benchmark calibration workflow must remain manual-only" >&2
     check_status=1
@@ -175,11 +189,17 @@ check_local_workflow() {
   else
     echo "[audit] ok: benchmark calibration workflow cannot commit, push, release, or open a pull request"
   fi
-  if grep -Eq 'scripts/benchmark_gate\.py (sample|compare)' "$WORKFLOW_FILE"; then
-    echo "[audit] ERROR: required CI switched to the schema-v2 benchmark gate before calibration" >&2
+  if grep -Eq 'scripts/(benchmark_gate|paired_benchmark_gate)\.py (sample|compare)' "$WORKFLOW_FILE"; then
+    echo "[audit] ERROR: required CI switched to a replacement benchmark gate before diagnostic and governance authorization" >&2
     check_status=1
   else
-    echo "[audit] ok: required CI has not switched to the schema-v2 benchmark gate"
+    echo "[audit] ok: required CI has not switched to a replacement benchmark gate"
+  fi
+  if grep -Eqi 'paired_benchmark_gate|benchmark-paired|ci-paired|paired[ _-]benchmark' "$WORKFLOW_FILE"; then
+    echo "[audit] ERROR: required CI contains a premature paired benchmark job or dependency" >&2
+    check_status=1
+  else
+    echo "[audit] ok: required CI contains no paired benchmark job or dependency"
   fi
   require_pattern "$WORKFLOW_FILE" '^  push:$' 'CI push trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^\s+- main$' 'CI push branch retains main' || check_status=1

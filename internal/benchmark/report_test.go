@@ -1,6 +1,9 @@
 package benchmark
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestParseDatasetPreset(t *testing.T) {
 	preset, err := ParseDatasetPreset("")
@@ -27,6 +30,16 @@ func TestParseDatasetPreset(t *testing.T) {
 		t.Fatalf("expected ci-stable-v1, got %q", preset)
 	}
 
+	for raw, want := range map[string]DatasetPreset{
+		"CI-PAIRED-W1-V1": DatasetPresetCIPairedW1V1,
+		"ci-paired-w4-v1": DatasetPresetCIPairedW4V1,
+	} {
+		preset, err = ParseDatasetPreset(raw)
+		if err != nil || preset != want {
+			t.Fatalf("ParseDatasetPreset(%q): got=%q err=%v", raw, preset, err)
+		}
+	}
+
 	if _, err := ParseDatasetPreset("xlarge"); err == nil {
 		t.Fatal("expected invalid preset error")
 	}
@@ -43,6 +56,16 @@ func TestRunPresetCIStableV1RequiresCaseEnvironmentFactory(t *testing.T) {
 	_, err := RunPreset(DatasetPresetCIStableV1, 1, ScenarioConfig{})
 	if err == nil || err.Error() != `preset "ci-stable-v1" requires a per-case environment factory` {
 		t.Fatalf("expected case isolation requirement, got: %v", err)
+	}
+}
+
+func TestRunPresetPairedRequiresCaseEnvironmentFactory(t *testing.T) {
+	for _, preset := range []DatasetPreset{DatasetPresetCIPairedW1V1, DatasetPresetCIPairedW4V1} {
+		_, err := RunPreset(preset, 1, ScenarioConfig{})
+		want := fmt.Sprintf("preset %q requires a per-case environment factory", preset)
+		if err == nil || err.Error() != want {
+			t.Fatalf("expected case isolation requirement for %q, got: %v", preset, err)
+		}
 	}
 }
 
