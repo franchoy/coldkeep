@@ -16,13 +16,13 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 	workflow = strings.Replace(
 		workflow,
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform]",
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory]",
 		1,
 	)
 
 	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
-	if !strings.Contains(stderr, "required gate depends on all upstream jobs") {
+	if !strings.Contains(stderr, "required gate depends separately on benchmark integrity") {
 		t.Fatalf("expected missing cross-platform dependency error, got:\n%s", stderr)
 	}
 }
@@ -100,6 +100,70 @@ func TestAuditCIEnforcementRejectsUnsafeBenchmarkCalibrationWorkflow(t *testing.
 	}
 }
 
+func TestAuditCIEnforcementRejectsBenchmarkGovernanceMutations(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	tests := []struct {
+		name        string
+		old         string
+		replacement string
+		message     string
+	}{
+		{
+			name: "missing integrity profile", old: "          - profile: none-w4\n",
+			replacement: "", message: "integrity matrix must contain profile none-w4 exactly once",
+		},
+		{
+			name: "fixture drift", old: "dataset: ci-paired-w4-v2",
+			replacement: "dataset: ci-paired-w4-v1", message: "bounded workers=4 fixture",
+		},
+		{
+			name: "timeout drift", old: "--command-timeout-seconds 600",
+			replacement: "--command-timeout-seconds 601", message: "600-second command timeout",
+		},
+		{
+			name: "integrity downgrade", old: "python3 scripts/benchmark_gate.py integrity",
+			replacement: "python3 scripts/validate_regression_thresholds.py check", message: "hard candidate-only interface",
+		},
+		{
+			name: "advisory made legacy", old: "--policy hosted-advisory",
+			replacement: "--policy legacy", message: "informational authority",
+		},
+		{
+			name: "exit verifier removed", old: "verify-advisory-exit",
+			replacement: "verify-removed-exit", message: "exact classification and exit code",
+		},
+		{
+			name: "broad suppression", old: "          report=\"${evidence_dir}/timing-advisory.json\"\n          set +e\n",
+			replacement: "          report=\"${evidence_dir}/timing-advisory.json\"\n          continue-on-error: true\n          set +e\n", message: "broad failure suppression",
+		},
+		{
+			name: "integrity missing artifact allowed", old: "          if-no-files-found: error\n\n  benchmark-timing-advisory:",
+			replacement: "          if-no-files-found: ignore\n\n  benchmark-timing-advisory:", message: "integrity artifact rejects missing evidence",
+		},
+		{
+			name: "advisory upload not always", old: "      - name: Upload benchmark timing advisory evidence\n        if: ${{ always() }}",
+			replacement: "      - name: Upload benchmark timing advisory evidence\n        if: ${{ success() }}", message: "timing artifact upload always runs",
+		},
+		{
+			name: "required dependency removed", old: "benchmark-integrity, benchmark-timing-advisory, cross-platform",
+			replacement: "benchmark-timing-advisory, cross-platform", message: "depends separately on benchmark integrity",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutated := strings.Replace(workflow, tt.old, tt.replacement, 1)
+			if mutated == workflow {
+				t.Fatalf("mutation target not found: %q", tt.old)
+			}
+			output := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(output, tt.message) {
+				t.Fatalf("expected %q, got:\n%s", tt.message, output)
+			}
+		})
+	}
+}
+
 func TestAuditCIEnforcementRejectsPrematureRequiredBenchmarkGateSwitch(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	workflow = strings.Replace(
@@ -114,7 +178,7 @@ func TestAuditCIEnforcementRejectsPrematureRequiredBenchmarkGateSwitch(t *testin
 		readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml")),
 		true,
 	)
-	if !strings.Contains(stderr, "required CI switched to a replacement benchmark gate") {
+	if !strings.Contains(stderr, "unauthorized benchmark sampler, comparator, or paired gate") {
 		t.Fatalf("expected premature gate-switch error, got:\n%s", stderr)
 	}
 }
@@ -133,7 +197,7 @@ func TestAuditCIEnforcementRejectsPrematurePairedBenchmarkGateSwitch(t *testing.
 		readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml")),
 		true,
 	)
-	if !strings.Contains(stderr, "required CI switched to a replacement benchmark gate") {
+	if !strings.Contains(stderr, "unauthorized benchmark sampler, comparator, or paired gate") {
 		t.Fatalf("expected premature paired gate-switch error, got:\n%s", stderr)
 	}
 }
@@ -142,8 +206,8 @@ func TestAuditCIEnforcementRejectsPrematurePairedBenchmarkDependency(t *testing.
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	workflow = strings.Replace(
 		workflow,
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform]",
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, benchmark-paired-decision, cross-platform]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, benchmark-paired-decision, cross-platform]",
 		1,
 	)
 	stderr := runAuditLocalOnly(
@@ -448,9 +512,9 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformSuccessAssertion(t 
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 	workflow = strings.Replace(
 		workflow,
-		`             [ "${BENCHMARK_RESULT}" != "success" ] || \
+		`             [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ] || \
              [ "${CROSS_PLATFORM_RESULT}" != "success" ]; then`,
-		`             [ "${BENCHMARK_RESULT}" != "success" ]; then`,
+		`             [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ]; then`,
 		1,
 	)
 

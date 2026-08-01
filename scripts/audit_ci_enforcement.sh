@@ -72,6 +72,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 WORKFLOW_FILE="${COLDKEEP_CI_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/ci.yml}"
 CODEQL_WORKFLOW_FILE="${COLDKEEP_CODEQL_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/codeql.yml}"
 BENCHMARK_BASELINE_WORKFLOW_FILE="${COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/benchmark-baseline.yml}"
+BENCHMARK_GATE_FILE="${COLDKEEP_BENCHMARK_GATE_FILE:-$REPO_ROOT/scripts/benchmark_gate.py}"
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
 PAIRED_REFERENCE_MANIFEST_FILE="${COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE:-$REPO_ROOT/benchmarks/paired/reference-v1.13.json}"
 PAIRED_THRESHOLD_POLICY_FILE="${COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE:-$REPO_ROOT/benchmarks/paired/threshold-policy-v1.13.json}"
@@ -409,6 +410,8 @@ check_local_workflow() {
   local quality_checkout_block=""
   local validator_test_block=""
   local validator_real_block=""
+	local benchmark_integrity_block=""
+	local benchmark_timing_block=""
 	local correctness_matrix_block=""
 	local postgres_internal_contracts_block=""
   local upload_v5_count=0
@@ -432,10 +435,64 @@ check_local_workflow() {
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+--dataset ci-stable-v1 \\$' 'benchmark calibration fixes the fixture identity' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+--warmups 1 \\$' 'benchmark calibration fixes one excluded warmup' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'python3 scripts/benchmark_gate\.py calibrate' 'benchmark calibration evaluates the fixed matrix' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'benchmark run --dataset small --workers 1 --output json' 'required CI retains the historical workers=1 benchmark command' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'benchmark run --dataset small --workers 4 --output json' 'required CI retains the historical workers=4 benchmark command' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'scripts/validate_regression_thresholds\.py check' 'required CI retains the historical comparator' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'benchmarks/v1\.9/baselines/benchmark-baseline-v1\.9-packed-aes-gcm-none-small-w4-r1\.json' 'required CI retains the legacy historical baseline input until the authorized switch' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^  benchmark-integrity:$' 'hard benchmark integrity job family' || check_status=1
+  require_pattern "$WORKFLOW_FILE" '^  benchmark-timing-advisory:$' 'hosted benchmark timing advisory job family' || check_status=1
+  benchmark_integrity_block="$(extract_job_block benchmark-integrity)"
+  benchmark_timing_block="$(extract_job_block benchmark-timing-advisory)"
+  require_content_pattern "$benchmark_integrity_block" 'ci-paired-w1-v2' 'integrity matrix selects the bounded workers=1 fixture' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'ci-paired-w4-v2' 'integrity matrix selects the bounded workers=4 fixture' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'python3 scripts/benchmark_gate\.py integrity' 'integrity matrix uses the hard candidate-only interface' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" '--command-timeout-seconds 600' 'integrity matrix fixes the 600-second command timeout' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" "go-version: '1\.25\.12'" 'integrity matrix pins the Go patch version' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'integrity matrix pins PostgreSQL by digest' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'if-no-files-found: error' 'integrity artifact rejects missing evidence' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'if: \$\{\{ always\(\) \}\}' 'integrity artifact finalization and upload always run' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'sha256sum --check checksums\.sha256' 'integrity artifact checksum inventory is verified' || check_status=1
+  require_content_pattern "$benchmark_timing_block" '^\s+--dataset small \\$' 'timing advisory retains the historical small fixture' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'scripts/validate_regression_thresholds\.py check' 'timing advisory retains the historical comparator' || check_status=1
+  require_content_pattern "$benchmark_timing_block" '--policy hosted-advisory' 'timing comparator has informational authority' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'verify-advisory-exit' 'timing advisory verifies exact classification and exit code' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'comparator_exit=\$\?' 'timing advisory captures the comparator exit exactly' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'GITHUB_STEP_SUMMARY' 'timing advisory publishes its classification summary' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'historical_v1\.9|benchmarks/v1\.9/baselines' 'timing advisory alone cites historical v1.9 baselines' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'if-no-files-found: error' 'timing artifact rejects missing evidence' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'if: \$\{\{ always\(\) \}\}' 'timing artifact upload always runs' || check_status=1
+  require_pattern "$BENCHMARK_GATE_FILE" '^INTEGRITY_SAMPLE_COUNT = 2$' 'integrity interface fixes two candidate samples' || check_status=1
+  require_pattern "$BENCHMARK_GATE_FILE" '^INTEGRITY_COMMAND_TIMEOUT_SECONDS = 600$' 'integrity interface fixes the command ceiling' || check_status=1
+  require_pattern "$BENCHMARK_GATE_FILE" '"warmup_count": 0' 'integrity interface has no warmup invocation' || check_status=1
+  require_pattern "$BENCHMARK_GATE_FILE" '"performance_authority": False' 'integrity evidence is ineligible for performance authority' || check_status=1
+  workflow_baseline_count=$(grep -c 'benchmarks/v1\.9/baselines/' "$WORKFLOW_FILE" || true)
+  timing_baseline_count=$(grep -c 'benchmarks/v1\.9/baselines/' <<<"$benchmark_timing_block" || true)
+  if [[ "$workflow_baseline_count" -ne "$timing_baseline_count" ]]; then
+    echo "[audit] ERROR: historical baselines appear outside timing advisory policy" >&2
+    check_status=1
+  else
+    echo "[audit] ok: historical baselines appear only under timing advisory policy"
+  fi
+  if grep -Eq 'continue-on-error|\|\| true' <<<"$benchmark_integrity_block$benchmark_timing_block"; then
+    echo "[audit] ERROR: benchmark integrity or advisory execution uses broad failure suppression" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark execution has no broad failure suppression"
+  fi
+  for profile in none-w1 none-w4 zstd-w1 zstd-w4; do
+    if [[ "$(grep -c -- "profile: $profile" <<<"$benchmark_integrity_block")" -ne 1 ]]; then
+      echo "[audit] ERROR: integrity matrix must contain profile $profile exactly once" >&2
+      check_status=1
+    fi
+    if [[ "$(grep -c -- "profile: $profile" <<<"$benchmark_timing_block")" -ne 1 ]]; then
+      echo "[audit] ERROR: timing advisory matrix must contain profile $profile exactly once" >&2
+      check_status=1
+    fi
+  done
+  if [[ "$(grep -c -- 'dataset: ci-paired-w1-v2' <<<"$benchmark_integrity_block")" -ne 2 ]]; then
+    echo "[audit] ERROR: integrity matrix must bind exactly two profiles to the bounded workers=1 fixture" >&2
+    check_status=1
+  fi
+  if [[ "$(grep -c -- 'dataset: ci-paired-w4-v2' <<<"$benchmark_integrity_block")" -ne 2 ]]; then
+    echo "[audit] ERROR: integrity matrix must bind exactly two profiles to the bounded workers=4 fixture" >&2
+    check_status=1
+  fi
   if [[ -e "$PAIRED_REFERENCE_MANIFEST_FILE" ]]; then
     echo "[audit] ERROR: paired reference manifest exists before governance authorization" >&2
     check_status=1
@@ -466,13 +523,13 @@ check_local_workflow() {
   else
     echo "[audit] ok: benchmark calibration workflow cannot commit, push, release, or open a pull request"
   fi
-  if grep -Eq 'scripts/(benchmark_gate|paired_benchmark_gate)\.py (sample|compare)' "$WORKFLOW_FILE"; then
-    echo "[audit] ERROR: required CI switched to a replacement benchmark gate before diagnostic and governance authorization" >&2
+  if grep -Eq 'scripts/(benchmark_gate\.py (sample|compare)|paired_benchmark_gate\.py)' "$WORKFLOW_FILE"; then
+    echo "[audit] ERROR: required CI contains an unauthorized benchmark sampler, comparator, or paired gate" >&2
     check_status=1
   else
-    echo "[audit] ok: required CI has not switched to a replacement benchmark gate"
+    echo "[audit] ok: required CI uses only the authorized integrity and advisory interfaces"
   fi
-  if grep -Eqi 'paired_benchmark_gate|benchmark-paired|ci-paired|paired[ _-]benchmark' "$WORKFLOW_FILE"; then
+  if grep -Eqi 'paired_benchmark_gate|benchmark-paired|paired[ _-]benchmark' "$WORKFLOW_FILE"; then
     echo "[audit] ERROR: required CI contains a premature paired benchmark job or dependency" >&2
     check_status=1
   else
@@ -488,11 +545,11 @@ check_local_workflow() {
   upload_v5_count=$(grep -c 'actions/upload-artifact@v5' "$WORKFLOW_FILE" || true)
   upload_v6_count=$(grep -c 'actions/upload-artifact@v6' "$WORKFLOW_FILE" || true)
   upload_v7_count=$(grep -c 'actions/upload-artifact@v7' "$WORKFLOW_FILE" || true)
-  if [[ "$upload_v7_count" -ne 5 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
-    echo "[audit] ERROR: Phase 6 requires exactly five upload-artifact@v7 uses and zero v5/v6 uses" >&2
+  if [[ "$upload_v7_count" -ne 6 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
+    echo "[audit] ERROR: required CI expects exactly six upload-artifact@v7 uses and zero v5/v6 uses" >&2
     check_status=1
   else
-    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly five times"
+    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly six times"
   fi
   quality_block="$(extract_job_block quality)"
   if [[ -z "$quality_block" ]]; then
@@ -593,7 +650,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" "go test ./internal/engine/\\.\\.\\. -run '\\^TestRestore' -count=1" 'cross-platform engine restore command scopes to restore tests' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run snapshot restore cross-platform tests' 'cross-platform snapshot restore step' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test ./internal/snapshot/\\.\\.\\. -run '\\^TestRestoreSnapshot' -count=1" 'cross-platform snapshot restore command scopes to snapshot restore tests' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform\]' 'required gate depends on all upstream jobs including long-run, adversarial, legacy compatibility, benchmark matrix, and cross-platform' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform\]' 'required gate depends separately on benchmark integrity and timing advisory evaluation' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_smart_quotes\.sh' 'smart-quote guard command' || check_status=1
@@ -648,7 +705,8 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_LONG_RUN_RESULT.*!= "success"' 'required gate rejects skipped integration long-run job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'ADVERSARIAL_RESULT.*!= "success"' 'required gate rejects skipped adversarial job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'BENCHMARK_RESULT.*!= "success"' 'required gate rejects skipped benchmark job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'BENCHMARK_INTEGRITY_RESULT.*!= "success"' 'required gate rejects skipped benchmark integrity job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'BENCHMARK_TIMING_ADVISORY_RESULT.*!= "success"' 'required gate rejects skipped benchmark timing advisory job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'CROSS_PLATFORM_RESULT.*!= "success"' 'required gate rejects skipped cross-platform job' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" 'name:\s*CodeQL' 'CodeQL workflow file' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" '^  push:$' 'CodeQL push trigger' || check_status=1

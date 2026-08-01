@@ -58,7 +58,8 @@ jobs:
 
       - name: Check formatting
         run: |
-          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          mapfile -t go_files < <(git ls-files '*.go')
+          unformatted=$(gofmt -l "${go_files[@]}")
           if [ -n "$unformatted" ]; then
             echo "Unformatted Go files detected:"
             echo "$unformatted"
@@ -643,7 +644,7 @@ jobs:
 
           export PGPASSWORD="$DB_PASSWORD"
           collection_ok=1
-          while IFS=$'\t' read -r db_name temp_root kind manifest_file; do
+          while IFS=$'\t' read -r db_name temp_root _kind _manifest_file; do
             if [ -n "$db_name" ]; then
               dump_path="${artifact_dir}/db/${db_name}.dump"
               if pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$db_name" --format=custom --no-owner --no-privileges --file "$dump_path"; then
@@ -767,13 +768,14 @@ jobs:
           path: ${{ github.workspace }}/.ci-storage/${{ matrix.codec }}
           if-no-files-found: ignore
 
-  benchmark-matrix:
-    runs-on: ubuntu-latest
+  benchmark-integrity:
+    name: Benchmark integrity (${{ matrix.profile }})
+    runs-on: ubuntu-24.04
     needs: quality
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
         env:
           POSTGRES_USER: coldkeep
           POSTGRES_PASSWORD: coldkeep
@@ -789,7 +791,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        compression: [none, zstd]
+        include:
+          - profile: none-w1
+            compression: none
+            workers: 1
+            dataset: ci-paired-w1-v2
+          - profile: none-w4
+            compression: none
+            workers: 4
+            dataset: ci-paired-w4-v2
+          - profile: zstd-w1
+            compression: zstd
+            workers: 1
+            dataset: ci-paired-w1-v2
+          - profile: zstd-w4
+            compression: zstd
+            workers: 4
+            dataset: ci-paired-w4-v2
 
     steps:
       - name: Checkout
@@ -798,13 +816,13 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version: '1.25.12'
           cache: true
 
       - name: Build CLI
-        run: go build -o coldkeep ./cmd/coldkeep
+        run: go build -trimpath -buildvcs=false -o coldkeep ./cmd/coldkeep
 
-      - name: Run benchmark (small dataset, workers=1) and capture output
+      - name: Run hard benchmark integrity validation
         env:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: aes-gcm
@@ -819,68 +837,155 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: ./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-${{ matrix.compression }}-w1.json
+        run: |
+          output_parent="benchmark-integrity-evidence/${{ matrix.profile }}"
+          output_child="${output_parent}/integrity"
+          mkdir -p "${output_parent}"
+          test ! -e "${output_child}"
+          python3 scripts/benchmark_gate.py integrity \
+            --binary ./coldkeep \
+            --output-dir "${output_child}" \
+            --compression "${{ matrix.compression }}" \
+            --workers "${{ matrix.workers }}" \
+            --dataset "${{ matrix.dataset }}" \
+            --command-timeout-seconds 600 \
+            --source-commit "${GITHUB_SHA}" \
+            --go-version "$(go version)" \
+            --postgres-version "$(psql --version)" \
+            --database-image-digest "sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"
 
-      - name: Run benchmark (small dataset, workers=4) and capture output
-        env:
-          COLDKEEP_DB_AUTO_BOOTSTRAP: true
-          COLDKEEP_CODEC: aes-gcm
-          COLDKEEP_COMPRESSION: ${{ matrix.compression }}
-          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
-          COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
-          COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
-          COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS: 900
-          DB_HOST: 127.0.0.1
-          DB_PORT: 5432
-          DB_USER: coldkeep
-          DB_PASSWORD: coldkeep
-          DB_NAME: coldkeep
-          DB_SSLMODE: disable
-        run: ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-${{ matrix.compression }}-w4.json
+      - name: Verify integrity artifact checksums
+        if: ${{ always() }}
+        run: |
+          cd "benchmark-integrity-evidence/${{ matrix.profile }}/integrity"
+          sha256sum --check checksums.sha256
 
-      - name: Check regression (workers=1, uncompressed mode)
-        if: matrix.compression == 'none'
-        run: >-
-          python3 scripts/validate_regression_thresholds.py check benchmark-none-w1.json
-          --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json
-          --mode uncompressed
-          --json-report regression-report-none-w1.json
-
-      - name: Check regression (workers=1, compressed mode)
-        if: matrix.compression == 'zstd'
-        run: >-
-          python3 scripts/validate_regression_thresholds.py check benchmark-zstd-w1.json
-          --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json
-          --mode compressed
-          --json-report regression-report-zstd-w1.json
-
-      - name: Check regression (workers=4, uncompressed mode)
-        if: matrix.compression == 'none'
-        run: >-
-          python3 scripts/validate_regression_thresholds.py check benchmark-none-w4.json
-          --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json
-          --mode uncompressed
-          --json-report regression-report-none-w4.json
-
-      - name: Check regression (workers=4, compressed mode)
-        if: matrix.compression == 'zstd'
-        run: >-
-          python3 scripts/validate_regression_thresholds.py check benchmark-zstd-w4.json
-          --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json
-          --mode compressed
-          --json-report regression-report-zstd-w4.json
-
-      - name: Upload benchmark outputs
-        if: always()
+      - name: Upload benchmark integrity evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-matrix-${{ matrix.compression }}
-          path: |
-            benchmark-${{ matrix.compression }}-w1.json
-            benchmark-${{ matrix.compression }}-w4.json
-            regression-report-${{ matrix.compression }}-w1.json
-            regression-report-${{ matrix.compression }}-w4.json
-          if-no-files-found: ignore
+          name: benchmark-integrity-${{ matrix.profile }}
+          path: benchmark-integrity-evidence/${{ matrix.profile }}/integrity
+          if-no-files-found: error
+
+  benchmark-timing-advisory:
+    name: Benchmark timing advisory (${{ matrix.profile }})
+    runs-on: ubuntu-24.04
+    needs: quality
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+        env:
+          POSTGRES_USER: coldkeep
+          POSTGRES_PASSWORD: coldkeep
+          POSTGRES_DB: coldkeep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coldkeep -d coldkeep"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: none-w1
+            compression: none
+            workers: 1
+            mode: uncompressed
+            baseline: benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json
+          - profile: none-w4
+            compression: none
+            workers: 4
+            mode: uncompressed
+            baseline: benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json
+          - profile: zstd-w1
+            compression: zstd
+            workers: 1
+            mode: compressed
+            baseline: benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json
+          - profile: zstd-w4
+            compression: zstd
+            workers: 4
+            mode: compressed
+            baseline: benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.12'
+          cache: true
+
+      - name: Build CLI
+        run: go build -trimpath -buildvcs=false -o coldkeep ./cmd/coldkeep
+
+      - name: Run historical timing observation
+        env:
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: aes-gcm
+          COLDKEEP_COMPRESSION: ${{ matrix.compression }}
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
+          COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
+          COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
+          COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS: 900
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          mkdir -p "benchmark-timing-evidence/${{ matrix.profile }}"
+          ./coldkeep benchmark run \
+            --dataset small \
+            --workers "${{ matrix.workers }}" \
+            --repeat 1 \
+            --output json \
+            | tee "benchmark-timing-evidence/${{ matrix.profile }}/benchmark.json"
+
+      - name: Evaluate and verify timing advisory
+        run: |
+          evidence_dir="benchmark-timing-evidence/${{ matrix.profile }}"
+          report="${evidence_dir}/timing-advisory.json"
+          set +e
+          python3 scripts/validate_regression_thresholds.py check \
+            "${evidence_dir}/benchmark.json" \
+            --baseline "benchmarks/v1.9/baselines/${{ matrix.baseline }}" \
+            --mode "${{ matrix.mode }}" \
+            --policy hosted-advisory \
+            --json-report "${report}"
+          comparator_exit=$?
+          set -e
+          python3 scripts/validate_regression_thresholds.py verify-advisory-exit \
+            --report "${report}" \
+            --observed-exit-code "${comparator_exit}"
+          classification="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["classification"])' "${report}")"
+          violations="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["violations_count"])' "${report}")"
+          {
+            echo "### Benchmark timing advisory: ${{ matrix.profile }}"
+            echo
+            echo "Classification: \`${classification}\`"
+            echo
+            echo "Historical threshold crossings: ${violations}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          cd "${evidence_dir}"
+          sha256sum benchmark.json timing-advisory.json > checksums.sha256
+          sha256sum --check checksums.sha256
+
+      - name: Upload benchmark timing advisory evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-timing-advisory-${{ matrix.profile }}
+          path: benchmark-timing-evidence/${{ matrix.profile }}
+          if-no-files-found: error
 
   critical-coverage-report:
     name: critical coverage report
@@ -946,7 +1051,7 @@ jobs:
   ci-required:
     name: CI Required Gate
     runs-on: ubuntu-latest
-    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix, cross-platform]
+    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform]
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
@@ -959,7 +1064,8 @@ jobs:
           ADVERSARIAL_RESULT: ${{ needs.adversarial.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
           LEGACY_COMPATIBILITY_RESULT: ${{ needs['legacy-compatibility'].result }}
-          BENCHMARK_RESULT: ${{ needs['benchmark-matrix'].result }}
+          BENCHMARK_INTEGRITY_RESULT: ${{ needs['benchmark-integrity'].result }}
+          BENCHMARK_TIMING_ADVISORY_RESULT: ${{ needs['benchmark-timing-advisory'].result }}
           CROSS_PLATFORM_RESULT: ${{ needs['cross-platform'].result }}
         run: |
           echo "quality=${QUALITY_RESULT}"
@@ -969,7 +1075,8 @@ jobs:
           echo "adversarial=${ADVERSARIAL_RESULT}"
           echo "smoke=${SMOKE_RESULT}"
           echo "legacy-compatibility=${LEGACY_COMPATIBILITY_RESULT}"
-          echo "benchmark=${BENCHMARK_RESULT}"
+          echo "benchmark-integrity=${BENCHMARK_INTEGRITY_RESULT}"
+          echo "benchmark-timing-advisory=${BENCHMARK_TIMING_ADVISORY_RESULT}"
           echo "cross-platform=${CROSS_PLATFORM_RESULT}"
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
@@ -979,7 +1086,8 @@ jobs:
              [ "${ADVERSARIAL_RESULT}" != "success" ] || \
              [ "${SMOKE_RESULT}" != "success" ] || \
              [ "${LEGACY_COMPATIBILITY_RESULT}" != "success" ] || \
-             [ "${BENCHMARK_RESULT}" != "success" ] || \
+             [ "${BENCHMARK_INTEGRITY_RESULT}" != "success" ] || \
+             [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ] || \
              [ "${CROSS_PLATFORM_RESULT}" != "success" ]; then
             echo "One or more required jobs failed or were skipped."
             exit 1
