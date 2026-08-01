@@ -246,10 +246,12 @@ def invocation(kind: str, ordinal: int | None, position: int, side: str) -> dict
 
 
 def report_summary(
-    *, profile: str = "none-w1", classification: str = "PASS", mode: str = "production"
+    *, profile: str = "none-w1", classification: str | None = None, mode: str = "production"
 ) -> dict:
     compression, workers, dataset = gate.PROFILE_MATRIX[profile]
     pair_count = 5 if mode == "production" else 10
+    if classification is None:
+        classification = "PASS" if mode == "production" else "DIAGNOSTIC_QUALIFIED"
     cases = []
     for case_name in gate.ORDERED_CASES:
         if case_name not in gate.PERFORMANCE_CASES:
@@ -279,6 +281,10 @@ def report_summary(
         }
         for side in ("reference", "candidate")
     }
+    inventory = invocation_inventory(pair_count)
+    if mode == "diagnostic":
+        for item in inventory:
+            item["binary_sha256"] = "c" * 64
     return {
         "schema_version": 1,
         "evidence_policy_version": 2,
@@ -287,11 +293,12 @@ def report_summary(
         "mode": mode,
         "classification": classification,
         "contract_version": gate.CONTRACT_VERSION,
+        "authority": gate.authority_contract(mode),
         "identity": {
             "reference_sha": "a" * 40,
             "candidate_sha": "b" * 40,
             "reference_binary_sha256": "c" * 64,
-            "candidate_binary_sha256": "d" * 64,
+            "candidate_binary_sha256": ("d" if mode == "production" else "c") * 64,
         },
         "governance": (
             {
@@ -320,7 +327,8 @@ def report_summary(
         "warmup_order": list(gate.WARMUP_ORDER),
         "measured_order": [list(pair) for pair in gate.measured_order(pair_count)],
         "pair_count": pair_count,
-        "invocation_inventory": invocation_inventory(pair_count),
+        "profile_elapsed_ms": 1000,
+        "invocation_inventory": inventory,
         "cases": cases,
         "operational_counter_distributions": distributions,
         "hard_state_comparison": {"status": "equal", "case_count": 9},
@@ -429,6 +437,63 @@ def write_complete_profile_artifact(
 
     observations = warmups + measured
     for invocation_record, observation in zip(report["invocation_inventory"], observations):
+        raw_path = directory / invocation_record["raw_file"]
+        stderr_path = directory / invocation_record["stderr_file"]
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        gate.raw_gate.write_json(raw_path, observation["envelope"])
+        stderr_path.write_text("", encoding="utf-8")
+    gate.raw_gate.write_json(directory / "paired-comparison.json", report)
+    gate._write_checksums(directory)
+
+
+def write_complete_diagnostic_profile_artifact(
+    directory: pathlib.Path,
+    *,
+    profile: str = "none-w1",
+    ratios: list[float] | None = None,
+    elapsed_ms: float = 1000,
+) -> None:
+    compression, workers, dataset = gate.PROFILE_MATRIX[profile]
+    measured = records_for_ratios(
+        ratios or [1.0] * 10, dataset=dataset, workers=workers
+    )
+    warmups = [
+        {
+            "kind": "warmup",
+            "pair_ordinal": None,
+            "position": position,
+            "side": side,
+            "envelope": raw_report(dataset=dataset, workers=workers),
+        }
+        for position, side in enumerate(gate.WARMUP_ORDER, start=1)
+    ]
+    comparison = gate.compare_records(
+        measured,
+        pair_count=10,
+        dataset=dataset,
+        workers=workers,
+        compression=compression,
+        mode="diagnostic",
+    )
+    report = report_summary(profile=profile, mode="diagnostic")
+    report["profile_elapsed_ms"] = elapsed_ms
+    report["classification"] = comparison["classification"]
+    if (
+        elapsed_ms > gate.DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS
+        and report["classification"] == "DIAGNOSTIC_QUALIFIED"
+    ):
+        report["classification"] = "DIAGNOSTIC_REJECTED"
+    report["fixture"] = comparison["fixture"]
+    report["cases"] = comparison["cases"]
+    report["operational_counter_distributions"] = comparison[
+        "operational_counter_distributions"
+    ]
+    report["hard_state_comparison"] = comparison["hard_state_comparison"]
+
+    directory.mkdir()
+    for invocation_record, observation in zip(
+        report["invocation_inventory"], warmups + measured
+    ):
         raw_path = directory / invocation_record["raw_file"]
         stderr_path = directory / invocation_record["stderr_file"]
         raw_path.parent.mkdir(parents=True, exist_ok=True)
@@ -635,7 +700,7 @@ class PairedContractTests(unittest.TestCase):
             compression="none",
             mode="diagnostic",
         )
-        self.assertEqual(exact["classification"], "PASS")
+        self.assertEqual(exact["classification"], "DIAGNOSTIC_QUALIFIED")
         self.assertEqual(exact["cases"][0]["paired_mad_ratio_pct"], 2.5)
 
         above_ratios = [0.948, 0.948, 0.974, 0.974, 1.0, 1.0, 1.026, 1.026, 1.052, 1.052]
@@ -668,7 +733,77 @@ class PairedContractTests(unittest.TestCase):
             compression="none",
             mode="diagnostic",
         )
-        self.assertEqual(result["classification"], "BENCHMARK_ENVIRONMENT_UNSTABLE")
+        self.assertEqual(result["classification"], "DIAGNOSTIC_REJECTED")
+        for ratio in (0.95, 1.05):
+            with self.subTest(exact_ratio=ratio):
+                result = gate.compare_records(
+                    records_for_ratios([ratio] * 10),
+                    pair_count=10,
+                    dataset="ci-paired-w1-v1",
+                    workers=1,
+                    compression="none",
+                    mode="diagnostic",
+                )
+                self.assertEqual(result["classification"], "DIAGNOSTIC_QUALIFIED")
+        for ratio in (0.949999, 1.050001):
+            with self.subTest(outside_ratio=ratio):
+                result = gate.compare_records(
+                    records_for_ratios([ratio] * 10),
+                    pair_count=10,
+                    dataset="ci-paired-w1-v1",
+                    workers=1,
+                    compression="none",
+                    mode="diagnostic",
+                )
+                self.assertEqual(result["classification"], "DIAGNOSTIC_REJECTED")
+
+    def test_diagnostic_pair_inventory_rejects_missing_duplicate_and_wrong_order(self) -> None:
+        base = records_for_ratios([1.0] * 10)
+        mutations = (base[:-2], base + base[-2:], base[:2] + list(reversed(base[2:4])) + base[4:])
+        for mutated in mutations:
+            with self.subTest(invocations=len(mutated)):
+                with self.assertRaises(gate.PairedGateError) as caught:
+                    gate.compare_records(
+                        mutated,
+                        pair_count=10,
+                        dataset="ci-paired-w1-v1",
+                        workers=1,
+                        compression="none",
+                        mode="diagnostic",
+                    )
+                self.assertEqual(caught.exception.classification, "PAIR_INVENTORY_INVALID")
+        for pair_count in (9, 11):
+            report = report_summary(mode="diagnostic")
+            report["pair_count"] = pair_count
+            with self.assertRaises(gate.PairedGateError) as caught:
+                gate.validate_report_summary(report, expected_profile="none-w1")
+            self.assertEqual(caught.exception.classification, "PAIR_INVENTORY_INVALID")
+
+    def test_diagnostic_profile_duration_boundary_and_precedence(self) -> None:
+        report = report_summary(mode="diagnostic")
+        report["profile_elapsed_ms"] = gate.DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS
+        gate.validate_report_summary(report, expected_profile="none-w1")
+
+        report = report_summary(mode="diagnostic")
+        report["profile_elapsed_ms"] = gate.DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS + 0.001
+        report["classification"] = "DIAGNOSTIC_REJECTED"
+        gate.validate_report_summary(report, expected_profile="none-w1")
+
+        report["hard_state_comparison"]["status"] = "mismatch"
+        with self.assertRaises(gate.PairedGateError) as caught:
+            gate.validate_report_summary(report, expected_profile="none-w1")
+        self.assertEqual(caught.exception.classification, "CORRECTNESS_REGRESSION")
+
+        report = report_summary(mode="diagnostic")
+        report["cases"][0]["paired_ratios"] = [1.051] * 10
+        report["cases"][0]["median_ratio"] = 1.051
+        report["cases"][0]["regression_pct"] = 5.1
+        report["cases"][0]["status"] = "qualification_rejected"
+        report["classification"] = "DIAGNOSTIC_REJECTED"
+        report["cleanup"]["failed"] = 1
+        with self.assertRaises(gate.PairedGateError) as caught:
+            gate.validate_report_summary(report, expected_profile="none-w1")
+        self.assertEqual(caught.exception.classification, "EVIDENCE_INTEGRITY_FAILURE")
 
     def test_missing_duplicate_and_reordered_pairs_fail_closed(self) -> None:
         base = records_for_ratios([1.0] * 5)
@@ -909,6 +1044,52 @@ class PairedContractTests(unittest.TestCase):
                             timeout_seconds=1,
                         )
                 self.assertEqual(caught.exception.classification, expected)
+
+    def test_diagnostic_binary_mismatch_fails_before_sampling(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            reference = root / "reference"
+            candidate = root / "candidate"
+            reference.write_bytes(b"reference")
+            candidate.write_bytes(b"candidate")
+            output = root / "artifact"
+            argv = [
+                "sample",
+                "--reference-binary",
+                str(reference),
+                "--candidate-binary",
+                str(candidate),
+                "--reference-sha",
+                "a" * 40,
+                "--candidate-sha",
+                "b" * 40,
+                "--output-dir",
+                str(output),
+                "--dataset",
+                "ci-paired-w1-v1",
+                "--compression",
+                "none",
+                "--workers",
+                "1",
+                "--mode",
+                "diagnostic",
+                "--pairs",
+                "10",
+                "--go-version",
+                "go1.25.12",
+                "--postgres-version",
+                "16.14",
+                "--database-image-digest",
+                "sha256:" + "1" * 64,
+            ]
+            with (
+                mock.patch.dict(gate.os.environ, {"COLDKEEP_CODEC": "aes-gcm"}, clear=False),
+                mock.patch.object(gate, "_capture") as capture,
+            ):
+                self.assertEqual(gate.main(argv), 2)
+            capture.assert_not_called()
+            report = gate.load_json_strict(output / "paired-comparison.json")
+            self.assertEqual(report["classification"], "BINARY_IDENTITY_INVALID")
 
     def test_functional_failure_classification_is_side_specific(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1151,22 +1332,143 @@ class PairedContractTests(unittest.TestCase):
             )
             gate._read_artifact_capture(capture, "redacted stderr")
 
-    def test_decision_rejects_diagnostic_only_profiles(self) -> None:
+    def test_decision_requires_explicit_closed_mode(self) -> None:
+        with self.assertRaises(SystemExit):
+            gate.main(
+                [
+                    "decision",
+                    "--profile",
+                    "none-w1=/tmp/profile",
+                    "--output-dir",
+                    "/tmp/decision",
+                ]
+            )
+        with self.assertRaises(SystemExit):
+            gate.main(
+                [
+                    "decision",
+                    "--mode",
+                    "unknown",
+                    "--profile",
+                    "none-w1=/tmp/profile",
+                    "--output-dir",
+                    "/tmp/decision",
+                ]
+            )
+
+    def test_diagnostic_decision_accepts_exact_matrix_and_is_non_authoritative(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
             profiles = []
             for name in gate.PROFILE_MATRIX:
                 directory = root / name
-                write_summary_artifact(
-                    directory, report_summary(profile=name, mode="diagnostic")
-                )
+                write_complete_diagnostic_profile_artifact(directory, profile=name)
                 profiles.append(f"{name}={directory}")
             output = root / "decision"
             exit_code = gate.main(
-                ["decision", *sum((["--profile", value] for value in profiles), []), "--output-dir", str(output)]
+                [
+                    "decision",
+                    "--mode",
+                    "diagnostic",
+                    *sum((["--profile", value] for value in profiles), []),
+                    "--output-dir",
+                    str(output),
+                ]
             )
-            self.assertEqual(exit_code, 2)
-            self.assertFalse(output.exists())
+            self.assertEqual(exit_code, 0)
+            decision = gate.validate_decision_artifact(
+                output, expected_mode="diagnostic"
+            )
+            self.assertEqual(decision["classification"], "DIAGNOSTIC_QUALIFIED")
+            self.assertEqual(decision["decision_scope"], "diagnostic_qualification")
+            self.assertEqual(decision["authority"], "diagnostic_only")
+            self.assertIs(decision["production_authority"], False)
+            self.assertNotEqual(decision["classification"], "PASS")
+            self.assertEqual(decision["matrix_coverage"], sorted(gate.PROFILE_MATRIX))
+            self.assertEqual(decision["identity"]["reference_binary_sha256"], "c" * 64)
+            self.assertEqual(
+                decision["identity"]["reference_binary_sha256"],
+                decision["identity"]["candidate_binary_sha256"],
+            )
+            self.assertTrue(
+                all(profile["raw_reconstruction"] == "verified" for profile in decision["profiles"])
+            )
+
+            unknown = deepcopy(decision)
+            unknown["ignored"] = True
+            with self.assertRaises(gate.PairedGateError) as caught:
+                gate.validate_decision_report(unknown, expected_mode="diagnostic")
+            self.assertEqual(caught.exception.classification, "CONTRACT_INVALID")
+
+            authoritative = deepcopy(decision)
+            authoritative["production_authority"] = True
+            with self.assertRaises(gate.PairedGateError) as caught:
+                gate.validate_decision_report(authoritative, expected_mode="diagnostic")
+            self.assertEqual(caught.exception.classification, "REFERENCE_GOVERNANCE_INVALID")
+
+    def test_mode_isolation_and_production_decisions_remain_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            diagnostic = root / "diagnostic"
+            write_summary_artifact(
+                diagnostic, report_summary(mode="diagnostic")
+            )
+            with self.assertRaises(gate.PairedGateError) as caught:
+                gate.validate_profile_artifact(
+                    diagnostic, expected_profile="none-w1", expected_mode="production"
+                )
+            self.assertEqual(caught.exception.classification, "REFERENCE_GOVERNANCE_INVALID")
+
+            production = root / "production"
+            write_summary_artifact(production, report_summary())
+            with self.assertRaises(gate.PairedGateError) as caught:
+                gate.validate_profile_artifact(
+                    production, expected_profile="none-w1", expected_mode="diagnostic"
+                )
+            self.assertEqual(caught.exception.classification, "REFERENCE_GOVERNANCE_INVALID")
+
+            args = argparse.Namespace(
+                mode="production",
+                profile=[f"{name}={root / name}" for name in gate.PROFILE_MATRIX],
+                output_dir=root / "decision",
+            )
+            with self.assertRaises(gate.PairedGateError) as caught:
+                gate.decision_command(args)
+            self.assertEqual(caught.exception.classification, "REFERENCE_GOVERNANCE_INVALID")
+
+            mixed_profiles = []
+            for name in gate.PROFILE_MATRIX:
+                directory = root / f"mixed-{name}"
+                write_summary_artifact(
+                    directory,
+                    report_summary(
+                        profile=name,
+                        mode="production" if name == "none-w1" else "diagnostic",
+                    ),
+                )
+                mixed_profiles.append(f"{name}={directory}")
+            with self.assertRaises(gate.PairedGateError) as caught:
+                gate.decision_command(
+                    argparse.Namespace(
+                        mode="diagnostic",
+                        profile=mixed_profiles,
+                        output_dir=root / "mixed-decision",
+                    )
+                )
+            self.assertEqual(caught.exception.classification, "REFERENCE_GOVERNANCE_INVALID")
+
+    def test_diagnostic_artifact_binary_identity_and_authority_are_strict(self) -> None:
+        report = report_summary(mode="diagnostic")
+        report["identity"]["candidate_binary_sha256"] = "d" * 64
+        with self.assertRaises(gate.PairedGateError) as caught:
+            gate.validate_report_summary(report, expected_profile="none-w1")
+        self.assertEqual(caught.exception.classification, "BINARY_IDENTITY_INVALID")
+
+        report = report_summary(mode="diagnostic")
+        report["authority"]["production_authority"] = True
+        with self.assertRaises(gate.PairedGateError) as caught:
+            gate.validate_report_summary(report, expected_profile="none-w1")
+        self.assertEqual(caught.exception.classification, "REFERENCE_GOVERNANCE_INVALID")
 
     def test_complete_artifact_is_recomputed_from_raw_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1181,7 +1483,9 @@ class PairedContractTests(unittest.TestCase):
                 mock.patch.object(gate, "_repository_root", return_value=repository),
                 mock.patch.object(gate, "verify_reference_governance"),
             ):
-                gate.validate_profile_artifact(artifact, expected_profile="none-w1")
+                gate.validate_profile_artifact(
+                    artifact, expected_profile="none-w1", expected_mode="production"
+                )
 
                 raw_path = artifact / "raw" / "pair-01" / "02-candidate.json"
                 raw = gate.load_json_strict(raw_path)
@@ -1191,7 +1495,9 @@ class PairedContractTests(unittest.TestCase):
                 gate.raw_gate.write_json(raw_path, raw)
                 gate._write_checksums(artifact)
                 with self.assertRaises(gate.PairedGateError) as caught:
-                    gate.validate_profile_artifact(artifact, expected_profile="none-w1")
+                    gate.validate_profile_artifact(
+                        artifact, expected_profile="none-w1", expected_mode="production"
+                    )
             self.assertEqual(caught.exception.classification, "EVIDENCE_INTEGRITY_FAILURE")
 
     def test_decision_rejects_missing_duplicate_and_cross_profile_identity(self) -> None:
@@ -1199,22 +1505,42 @@ class PairedContractTests(unittest.TestCase):
             root = pathlib.Path(temp)
             with self.assertRaises(gate.PairedGateError):
                 gate.decision_command(
-                    argparse.Namespace(profile=[f"none-w1={root}"], output_dir=root / "out")
+                    argparse.Namespace(
+                        mode="diagnostic",
+                        profile=[f"none-w1={root}"],
+                        output_dir=root / "out",
+                    )
                 )
             with self.assertRaises(gate.PairedGateError):
                 gate.decision_command(
                     argparse.Namespace(
+                        mode="diagnostic",
                         profile=[f"none-w1={root}", f"none-w1={root}"],
                         output_dir=root / "out",
                     )
                 )
+            with self.assertRaises(gate.PairedGateError):
+                gate.decision_command(
+                    argparse.Namespace(
+                        mode="diagnostic",
+                        profile=[
+                            *[f"{name}={root / name}" for name in gate.PROFILE_MATRIX],
+                            f"extra={root / 'extra'}",
+                        ],
+                        output_dir=root / "out",
+                    )
+                )
 
-            reports = [report_summary(profile=name) for name in sorted(gate.PROFILE_MATRIX)]
+            reports = [
+                report_summary(profile=name, mode="diagnostic")
+                for name in sorted(gate.PROFILE_MATRIX)
+            ]
             reports[1]["identity"]["candidate_sha"] = "c" * 40
             with mock.patch.object(gate, "validate_profile_artifact", side_effect=reports):
                 with self.assertRaises(gate.PairedGateError) as caught:
                     gate.decision_command(
                         argparse.Namespace(
+                            mode="diagnostic",
                             profile=[f"{name}={root / name}" for name in sorted(gate.PROFILE_MATRIX)],
                             output_dir=root / "out",
                         )
@@ -1228,7 +1554,7 @@ class PairedContractTests(unittest.TestCase):
             ):
                 with self.subTest(governance_field=field):
                     reports = [
-                        report_summary(profile=name)
+                        report_summary(profile=name, mode="diagnostic")
                         for name in sorted(gate.PROFILE_MATRIX)
                     ]
                     reports[3]["governance"][field] = value
@@ -1238,6 +1564,7 @@ class PairedContractTests(unittest.TestCase):
                         with self.assertRaises(gate.PairedGateError) as caught:
                             gate.decision_command(
                                 argparse.Namespace(
+                                    mode="diagnostic",
                                     profile=[
                                         f"{name}={root / name}"
                                         for name in sorted(gate.PROFILE_MATRIX)
@@ -1250,12 +1577,17 @@ class PairedContractTests(unittest.TestCase):
                         "EXECUTION_CONTRACT_MISMATCH",
                     )
 
-            reports = [report_summary(profile=name) for name in sorted(gate.PROFILE_MATRIX)]
+            reports = [
+                report_summary(profile=name, mode="diagnostic")
+                for name in sorted(gate.PROFILE_MATRIX)
+            ]
+            reports[2]["identity"]["reference_binary_sha256"] = "0" * 64
             reports[2]["identity"]["candidate_binary_sha256"] = "0" * 64
             with mock.patch.object(gate, "validate_profile_artifact", side_effect=reports):
                 with self.assertRaises(gate.PairedGateError) as caught:
                     gate.decision_command(
                         argparse.Namespace(
+                            mode="diagnostic",
                             profile=[
                                 f"{name}={root / name}"
                                 for name in sorted(gate.PROFILE_MATRIX)
@@ -1263,16 +1595,28 @@ class PairedContractTests(unittest.TestCase):
                             output_dir=root / "out",
                         )
                     )
-            self.assertEqual(caught.exception.classification, "EXECUTION_CONTRACT_MISMATCH")
+            self.assertEqual(caught.exception.classification, "BINARY_IDENTITY_INVALID")
 
     def test_decision_precedence_and_matrix_coverage(self) -> None:
         self.assertEqual(
-            gate.decision_classification(["PASS", "PERFORMANCE_REGRESSION", "CORRECTNESS_REGRESSION"]),
+            gate.decision_classification(
+                ["PASS", "PERFORMANCE_REGRESSION", "CORRECTNESS_REGRESSION"],
+                mode="production",
+            ),
             "CORRECTNESS_REGRESSION",
         )
         self.assertEqual(
-            gate.decision_classification(["PERFORMANCE_REGRESSION", "CANDIDATE_TIMEOUT_INCONCLUSIVE"]),
+            gate.decision_classification(
+                ["PERFORMANCE_REGRESSION", "CANDIDATE_TIMEOUT_INCONCLUSIVE"],
+                mode="production",
+            ),
             "CANDIDATE_TIMEOUT_INCONCLUSIVE",
+        )
+        self.assertEqual(
+            gate.decision_classification(
+                ["DIAGNOSTIC_QUALIFIED"] * 4, mode="diagnostic"
+            ),
+            "DIAGNOSTIC_QUALIFIED",
         )
         for profile in gate.PROFILE_MATRIX:
             gate.validate_report_summary(report_summary(profile=profile), expected_profile=profile)

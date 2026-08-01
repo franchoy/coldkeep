@@ -37,6 +37,8 @@ EVIDENCE_POLICY_VERSION = 2
 CONTRACT_VERSION = "coldkeep-paired-v1"
 RAW_SCHEMA_VERSION = 2
 DIAGNOSTIC_SCHEMA_VERSION = 2
+DECISION_MODES = ("diagnostic", "production")
+DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS = 35 * 60 * 1000
 GOVERNED_MANIFEST_RELATIVE = pathlib.PurePosixPath(
     "benchmarks/paired/reference-v1.13.json"
 )
@@ -129,8 +131,11 @@ CLASSIFICATIONS = {
     "PERFORMANCE_REGRESSION",
     "CANDIDATE_TIMEOUT_INCONCLUSIVE",
     "CI_INFRASTRUCTURE_TIMEOUT",
+    "DIAGNOSTIC_QUALIFIED",
+    "DIAGNOSTIC_REJECTED",
     "PASS",
 }
+SUCCESS_CLASSIFICATIONS = {"PASS", "DIAGNOSTIC_QUALIFIED"}
 DECISION_PRECEDENCE = (
     "CONTRACT_INVALID",
     "PAIR_INVENTORY_INVALID",
@@ -145,6 +150,8 @@ DECISION_PRECEDENCE = (
     "EVIDENCE_INTEGRITY_FAILURE",
     "BENCHMARK_ENVIRONMENT_UNSTABLE",
     "PERFORMANCE_REGRESSION",
+    "DIAGNOSTIC_REJECTED",
+    "DIAGNOSTIC_QUALIFIED",
     "PASS",
 )
 
@@ -153,7 +160,7 @@ class PairedGateError(raw_gate.GateError):
     """A fail-closed paired-gate error with a stable classification."""
 
     def __init__(self, classification: str, message: str):
-        if classification not in CLASSIFICATIONS - {"PASS"}:
+        if classification not in CLASSIFICATIONS - SUCCESS_CLASSIFICATIONS:
             raise ValueError(f"invalid paired classification {classification!r}")
         super().__init__(message)
         self.classification = classification
@@ -161,6 +168,23 @@ class PairedGateError(raw_gate.GateError):
 
 def fail(classification: str, message: str) -> None:
     raise PairedGateError(classification, message)
+
+
+def authority_contract(mode: str) -> dict[str, Any]:
+    if mode == "diagnostic":
+        return {
+            "decision_scope": "diagnostic_qualification",
+            "authority": "diagnostic_only",
+            "production_authority": False,
+        }
+    if mode == "production":
+        return {
+            "decision_scope": "production_regression",
+            "authority": "governed_production",
+            "production_authority": True,
+        }
+    fail("CONTRACT_INVALID", f"unknown decision mode {mode!r}")
+    raise AssertionError("unreachable")
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -738,6 +762,7 @@ def compare_records(
     distributions: dict[str, dict[str, Any]] = {"reference": {}, "candidate": {}}
     any_unstable = False
     any_regression = False
+    any_diagnostic_rejection = False
     for case_index, case_name in enumerate(ORDERED_CASES):
         by_side: dict[str, list[dict[str, Any]]] = {"reference": [], "candidate": []}
         for record, (_, rows) in zip(records, validated):
@@ -780,8 +805,10 @@ def compare_records(
         threshold = thresholds.get(case_name) if thresholds is not None else None
         boundary = _stability_boundary(mode, threshold)
         unstable = mad_ratio_value > Decimal(str(boundary))
-        if mode == "diagnostic" and not Decimal("0.95") <= median_ratio_value <= Decimal("1.05"):
-            unstable = True
+        diagnostic_rejection = bool(
+            mode == "diagnostic"
+            and not Decimal("0.95") <= median_ratio_value <= Decimal("1.05")
+        )
         regression = bool(
             mode == "production"
             and not unstable
@@ -790,6 +817,7 @@ def compare_records(
         )
         any_unstable = any_unstable or unstable
         any_regression = any_regression or regression
+        any_diagnostic_rejection = any_diagnostic_rejection or diagnostic_rejection
         logical_bytes = by_side["candidate"][0]["execution_stats"]["total_bytes"]
         candidate_median_ms = float(
             statistics.median(float(row["duration_ms"]) for row in by_side["candidate"])
@@ -807,7 +835,15 @@ def compare_records(
                 "candidate_throughput_mbps": (
                     logical_bytes / (1024.0 * 1024.0) / (candidate_median_ms / 1000.0)
                 ),
-                "status": "unstable" if unstable else "regression" if regression else "pass",
+                "status": (
+                    "unstable"
+                    if unstable
+                    else "qualification_rejected"
+                    if diagnostic_rejection
+                    else "regression"
+                    if regression
+                    else "pass"
+                ),
             }
         )
 
@@ -816,6 +852,10 @@ def compare_records(
         if any_unstable
         else "PERFORMANCE_REGRESSION"
         if any_regression
+        else "DIAGNOSTIC_REJECTED"
+        if any_diagnostic_rejection
+        else "DIAGNOSTIC_QUALIFIED"
+        if mode == "diagnostic"
         else "PASS"
     )
     return {
@@ -973,6 +1013,7 @@ def _provenance(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def sample_command(args: argparse.Namespace) -> int:
+    profile_started = time.monotonic()
     fixture_contract(args.dataset, args.workers)
     if (args.mode, args.pairs) not in {("diagnostic", 10), ("production", 5)}:
         fail("PAIR_INVENTORY_INVALID", "mode and fixed pair count are inconsistent")
@@ -1042,6 +1083,11 @@ def sample_command(args: argparse.Namespace) -> int:
         "reference": _binary_hash(args.reference_binary),
         "candidate": _binary_hash(args.candidate_binary),
     }
+    if args.mode == "diagnostic" and binary_hashes["reference"] != binary_hashes["candidate"]:
+        fail(
+            "BINARY_IDENTITY_INVALID",
+            "diagnostic qualification requires byte-identical reference and candidate binaries",
+        )
     warmup_records: list[dict[str, Any]] = []
     for position, side in enumerate(WARMUP_ORDER, start=1):
         record = _capture(
@@ -1095,6 +1141,14 @@ def sample_command(args: argparse.Namespace) -> int:
         workers=args.workers,
         compression=args.compression,
     )
+    profile_elapsed_ms = (time.monotonic() - profile_started) * 1000.0
+    classification = comparison["classification"]
+    if (
+        args.mode == "diagnostic"
+        and profile_elapsed_ms > DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS
+        and classification == "DIAGNOSTIC_QUALIFIED"
+    ):
+        classification = "DIAGNOSTIC_REJECTED"
     inventory = []
     for record in warmup_records + records:
         inventory.append(
@@ -1119,8 +1173,9 @@ def sample_command(args: argparse.Namespace) -> int:
         "report_kind": REPORT_KIND,
         "status": "complete",
         "mode": args.mode,
-        "classification": comparison["classification"],
+        "classification": classification,
         "contract_version": CONTRACT_VERSION,
+        "authority": authority_contract(args.mode),
         "identity": {
             "reference_sha": reference_sha,
             "candidate_sha": candidate_sha,
@@ -1140,6 +1195,7 @@ def sample_command(args: argparse.Namespace) -> int:
         "warmup_order": list(WARMUP_ORDER),
         "measured_order": [list(pair) for pair in measured_order(args.pairs)],
         "pair_count": args.pairs,
+        "profile_elapsed_ms": profile_elapsed_ms,
         "invocation_inventory": inventory,
         "cases": comparison["cases"],
         "operational_counter_distributions": comparison["operational_counter_distributions"],
@@ -1156,7 +1212,7 @@ def sample_command(args: argparse.Namespace) -> int:
     raw_gate.write_json(args.output_dir / "paired-comparison.json", report)
     _write_checksums(args.output_dir)
     print(json.dumps({"classification": report["classification"], "report": "paired-comparison.json"}))
-    return 0 if report["classification"] == "PASS" else 1
+    return 0 if report["classification"] in SUCCESS_CLASSIFICATIONS else 1
 
 
 REPORT_FIELDS = {
@@ -1167,6 +1223,7 @@ REPORT_FIELDS = {
     "mode",
     "classification",
     "contract_version",
+    "authority",
     "identity",
     "governance",
     "profile",
@@ -1174,6 +1231,7 @@ REPORT_FIELDS = {
     "warmup_order",
     "measured_order",
     "pair_count",
+    "profile_elapsed_ms",
     "invocation_inventory",
     "cases",
     "operational_counter_distributions",
@@ -1190,6 +1248,7 @@ FAILURE_REPORT_FIELDS = {
     "mode",
     "classification",
     "contract_version",
+    "authority",
     "identity",
     "governance_status",
     "profile",
@@ -1228,9 +1287,16 @@ def _validate_failure_report(report: Any, *, expected_profile: str | None) -> di
         or report["report_kind"] != REPORT_KIND
         or report["status"] != "failed"
         or report["contract_version"] != CONTRACT_VERSION
-        or report["classification"] not in CLASSIFICATIONS - {"PASS", "PERFORMANCE_REGRESSION", "BENCHMARK_ENVIRONMENT_UNSTABLE"}
+        or report["classification"]
+        not in CLASSIFICATIONS
+        - SUCCESS_CLASSIFICATIONS
+        - {"PERFORMANCE_REGRESSION", "BENCHMARK_ENVIRONMENT_UNSTABLE"}
     ):
         fail("CONTRACT_INVALID", "paired failure report identity mismatch")
+    if report["mode"] not in DECISION_MODES or report["authority"] != authority_contract(
+        report["mode"]
+    ):
+        fail("REFERENCE_GOVERNANCE_INVALID", "paired failure authority mismatch")
     if expected_profile is not None:
         expected = PROFILE_MATRIX.get(expected_profile)
         if expected is None or (profile["compression"], profile["workers"], profile["dataset"]) != expected:
@@ -1366,6 +1432,10 @@ def validate_report_summary(report: Any, *, expected_profile: str | None = None)
         or report["classification"] not in CLASSIFICATIONS
     ):
         fail("CONTRACT_INVALID", "paired comparison report identity mismatch")
+    if report["mode"] not in DECISION_MODES or report["authority"] != authority_contract(
+        report["mode"]
+    ):
+        fail("REFERENCE_GOVERNANCE_INVALID", "paired report authority mismatch")
     profile = report["profile"]
     try:
         profile = raw_gate.require_exact_fields(
@@ -1406,6 +1476,11 @@ def validate_report_summary(report: Any, *, expected_profile: str | None = None)
     for field in ("reference_sha", "candidate_sha"):
         if not isinstance(identity[field], str) or not re.fullmatch(r"[0-9a-f]{40}", identity[field]):
             fail("CONTRACT_INVALID", f"paired identity {field} is invalid")
+    if (
+        report["mode"] == "diagnostic"
+        and identity["reference_binary_sha256"] != identity["candidate_binary_sha256"]
+    ):
+        fail("BINARY_IDENTITY_INVALID", "diagnostic binaries are not byte-identical")
     try:
         governance = raw_gate.require_exact_fields(
             report["governance"],
@@ -1443,6 +1518,12 @@ def validate_report_summary(report: Any, *, expected_profile: str | None = None)
         fail("PAIR_INVENTORY_INVALID", "warmup order mismatch")
     if (report["mode"], report["pair_count"]) not in {("diagnostic", 10), ("production", 5)}:
         fail("PAIR_INVENTORY_INVALID", "report mode and pair count mismatch")
+    try:
+        profile_elapsed_ms = raw_gate.require_number(
+            report["profile_elapsed_ms"], "profile elapsed duration", positive=True
+        )
+    except raw_gate.GateError as exc:
+        fail("CONTRACT_INVALID", str(exc))
     if report["measured_order"] != [list(pair) for pair in measured_order(report["pair_count"])]:
         fail("PAIR_INVENTORY_INVALID", "measured order mismatch")
     inventory = report["invocation_inventory"]
@@ -1530,6 +1611,7 @@ def validate_report_summary(report: Any, *, expected_profile: str | None = None)
         fail("CONTRACT_INVALID", "paired report case set/order mismatch")
     any_unstable = False
     any_regression = False
+    any_diagnostic_rejection = False
     for case in cases:
         case_name = case["case"]
         if case_name not in PERFORMANCE_CASES:
@@ -1589,7 +1671,8 @@ def validate_report_summary(report: Any, *, expected_profile: str | None = None)
         if report["mode"] == "diagnostic":
             if case["threshold_pct"] is not None or case["stability_boundary_pct"] != 2.5:
                 fail("CONTRACT_INVALID", f"case {case_name} diagnostic threshold fields mismatch")
-            unstable = expected_mad > Decimal("2.5") or not Decimal("0.95") <= median_value <= Decimal("1.05")
+            unstable = expected_mad > Decimal("2.5")
+            diagnostic_rejection = not Decimal("0.95") <= median_value <= Decimal("1.05")
             regression = False
         else:
             try:
@@ -1604,20 +1687,40 @@ def validate_report_summary(report: Any, *, expected_profile: str | None = None)
             if case["stability_boundary_pct"] != expected_boundary:
                 fail("CONTRACT_INVALID", f"case {case_name} stability boundary mismatch")
             unstable = expected_mad > Decimal(str(expected_boundary))
+            diagnostic_rejection = False
             regression = not unstable and expected_regression > Decimal(str(threshold))
-        expected_status = "unstable" if unstable else "regression" if regression else "pass"
+        expected_status = (
+            "unstable"
+            if unstable
+            else "qualification_rejected"
+            if diagnostic_rejection
+            else "regression"
+            if regression
+            else "pass"
+        )
         if case["status"] != expected_status:
             fail("CONTRACT_INVALID", f"case {case_name} status mismatch")
         any_unstable = any_unstable or unstable
         any_regression = any_regression or regression
+        any_diagnostic_rejection = any_diagnostic_rejection or diagnostic_rejection
 
     expected_classification = (
         "BENCHMARK_ENVIRONMENT_UNSTABLE"
         if any_unstable
         else "PERFORMANCE_REGRESSION"
         if any_regression
+        else "DIAGNOSTIC_REJECTED"
+        if any_diagnostic_rejection
+        else "DIAGNOSTIC_QUALIFIED"
+        if report["mode"] == "diagnostic"
         else "PASS"
     )
+    if (
+        report["mode"] == "diagnostic"
+        and profile_elapsed_ms > DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS
+        and expected_classification == "DIAGNOSTIC_QUALIFIED"
+    ):
+        expected_classification = "DIAGNOSTIC_REJECTED"
     if report["classification"] != expected_classification:
         fail("CONTRACT_INVALID", "paired report classification does not match case evidence")
 
@@ -1738,8 +1841,10 @@ def _read_artifact_capture(path: pathlib.Path, label: str) -> None:
 
 
 def validate_profile_artifact(
-    directory: pathlib.Path, *, expected_profile: str
+    directory: pathlib.Path, *, expected_profile: str, expected_mode: str
 ) -> dict[str, Any]:
+    if expected_mode not in DECISION_MODES:
+        fail("CONTRACT_INVALID", f"unknown decision mode {expected_mode!r}")
     validate_checksums(directory)
     report_path = _contained_regular_file(
         directory, pathlib.PurePosixPath("paired-comparison.json"), "paired report"
@@ -1752,6 +1857,11 @@ def validate_profile_artifact(
         if isinstance(exc, PairedGateError):
             raise
         fail("CONTRACT_INVALID", str(exc))
+    if report["mode"] != expected_mode:
+        fail(
+            "REFERENCE_GOVERNANCE_INVALID",
+            f"{expected_mode} decision cannot consume {report['mode']} artifacts",
+        )
     validate_checksums(
         directory, expected_files=_expected_profile_artifact_files(report)
     )
@@ -1766,59 +1876,56 @@ def validate_profile_artifact(
                 )
                 _read_artifact_capture(path, f"failure invocation {index} {field}")
         return report
-    if report["mode"] != "production":
-        fail(
-            "REFERENCE_GOVERNANCE_INVALID",
-            "decision input must be a governed production comparison",
-        )
-    if not PRODUCTION_SAMPLING_AUTHORIZED:
-        fail(
-            "REFERENCE_GOVERNANCE_INVALID",
-            "production paired decisions are not authorized in this repository state",
-        )
+    thresholds: dict[str, float] | None = None
+    if expected_mode == "production":
+        if not PRODUCTION_SAMPLING_AUTHORIZED:
+            fail(
+                "REFERENCE_GOVERNANCE_INVALID",
+                "production paired decisions are not authorized in this repository state",
+            )
 
-    repository = _repository_root()
-    repository_manifest = _governed_repository_file(
-        repository, GOVERNED_MANIFEST_RELATIVE, "governed reference manifest"
-    )
-    repository_thresholds = _governed_repository_file(
-        repository, GOVERNED_THRESHOLD_RELATIVE, "governed threshold policy"
-    )
-    artifact_manifest = _contained_regular_file(
-        directory,
-        pathlib.PurePosixPath("governance/reference-manifest.json"),
-        "artifact reference manifest",
-    )
-    artifact_thresholds = _contained_regular_file(
-        directory,
-        pathlib.PurePosixPath("governance/threshold-policy.json"),
-        "artifact threshold policy",
-    )
-    if (
-        _binary_hash(artifact_manifest) != _binary_hash(repository_manifest)
-        or _binary_hash(artifact_thresholds) != _binary_hash(repository_thresholds)
-    ):
-        fail("REFERENCE_GOVERNANCE_INVALID", "artifact governance differs from repository")
-    manifest = load_json_strict(artifact_manifest)
-    policy = load_json_strict(artifact_thresholds)
-    validate_reference_manifest(manifest)
-    thresholds = validate_threshold_policy(policy)
-    identity = report["identity"]
-    verify_reference_governance(
-        manifest,
-        reference_sha=identity["reference_sha"],
-        candidate_sha=identity["candidate_sha"],
-        repository=repository,
-    )
-    governance = report["governance"]
-    if (
-        governance["manifest_sha256"] != _binary_hash(artifact_manifest)
-        or governance["threshold_policy_id"] != policy["policy_id"]
-        or governance["threshold_policy_sha256"] != _binary_hash(artifact_thresholds)
-        or manifest["threshold_policy_id"] != policy["policy_id"]
-        or manifest["threshold_policy_sha256"] != _binary_hash(artifact_thresholds)
-    ):
-        fail("REFERENCE_GOVERNANCE_INVALID", "artifact governance identity mismatch")
+        repository = _repository_root()
+        repository_manifest = _governed_repository_file(
+            repository, GOVERNED_MANIFEST_RELATIVE, "governed reference manifest"
+        )
+        repository_thresholds = _governed_repository_file(
+            repository, GOVERNED_THRESHOLD_RELATIVE, "governed threshold policy"
+        )
+        artifact_manifest = _contained_regular_file(
+            directory,
+            pathlib.PurePosixPath("governance/reference-manifest.json"),
+            "artifact reference manifest",
+        )
+        artifact_thresholds = _contained_regular_file(
+            directory,
+            pathlib.PurePosixPath("governance/threshold-policy.json"),
+            "artifact threshold policy",
+        )
+        if (
+            _binary_hash(artifact_manifest) != _binary_hash(repository_manifest)
+            or _binary_hash(artifact_thresholds) != _binary_hash(repository_thresholds)
+        ):
+            fail("REFERENCE_GOVERNANCE_INVALID", "artifact governance differs from repository")
+        manifest = load_json_strict(artifact_manifest)
+        policy = load_json_strict(artifact_thresholds)
+        validate_reference_manifest(manifest)
+        thresholds = validate_threshold_policy(policy)
+        identity = report["identity"]
+        verify_reference_governance(
+            manifest,
+            reference_sha=identity["reference_sha"],
+            candidate_sha=identity["candidate_sha"],
+            repository=repository,
+        )
+        governance = report["governance"]
+        if (
+            governance["manifest_sha256"] != _binary_hash(artifact_manifest)
+            or governance["threshold_policy_id"] != policy["policy_id"]
+            or governance["threshold_policy_sha256"] != _binary_hash(artifact_thresholds)
+            or manifest["threshold_policy_id"] != policy["policy_id"]
+            or manifest["threshold_policy_sha256"] != _binary_hash(artifact_thresholds)
+        ):
+            fail("REFERENCE_GOVERNANCE_INVALID", "artifact governance identity mismatch")
 
     warmups: list[dict[str, Any]] = []
     measured: list[dict[str, Any]] = []
@@ -1852,7 +1959,7 @@ def validate_profile_artifact(
         dataset=profile["dataset"],
         workers=profile["workers"],
         compression=profile["compression"],
-        mode="production",
+        mode=expected_mode,
         thresholds=thresholds,
     )
     validate_warmups(
@@ -1862,6 +1969,12 @@ def validate_profile_artifact(
         workers=profile["workers"],
         compression=profile["compression"],
     )
+    if (
+        expected_mode == "diagnostic"
+        and report["profile_elapsed_ms"] > DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS
+        and recomputed["classification"] == "DIAGNOSTIC_QUALIFIED"
+    ):
+        recomputed["classification"] = "DIAGNOSTIC_REJECTED"
     for field in (
         "classification",
         "fixture",
@@ -1874,7 +1987,18 @@ def validate_profile_artifact(
     return report
 
 
-def decision_classification(classifications: list[str]) -> str:
+def decision_classification(classifications: list[str], *, mode: str) -> str:
+    if mode not in DECISION_MODES:
+        fail("CONTRACT_INVALID", f"unknown decision mode {mode!r}")
+    if mode == "diagnostic":
+        if any(value in {"PASS", "PERFORMANCE_REGRESSION"} for value in classifications):
+            fail("CONTRACT_INVALID", "diagnostic decision contains a production classification")
+        if classifications and all(
+            value == "DIAGNOSTIC_QUALIFIED" for value in classifications
+        ):
+            return "DIAGNOSTIC_QUALIFIED"
+    elif any(value in {"DIAGNOSTIC_QUALIFIED", "DIAGNOSTIC_REJECTED"} for value in classifications):
+        fail("REFERENCE_GOVERNANCE_INVALID", "production decision contains diagnostic evidence")
     for classification in DECISION_PRECEDENCE:
         if classification in classifications:
             return classification
@@ -1882,7 +2006,253 @@ def decision_classification(classifications: list[str]) -> str:
     raise AssertionError("unreachable")
 
 
+DECISION_FIELDS = {
+    "schema_version",
+    "evidence_policy_version",
+    "report_kind",
+    "status",
+    "mode",
+    "classification",
+    "contract_version",
+    "decision_scope",
+    "authority",
+    "production_authority",
+    "identity",
+    "profiles",
+    "matrix_coverage",
+    "evidence",
+}
+
+
+def validate_decision_report(report: Any, *, expected_mode: str | None = None) -> dict[str, Any]:
+    try:
+        report = raw_gate.require_exact_fields(report, DECISION_FIELDS, "paired decision report")
+    except raw_gate.GateError as exc:
+        fail("CONTRACT_INVALID", str(exc))
+    mode = report["mode"]
+    if expected_mode is not None and mode != expected_mode:
+        fail("REFERENCE_GOVERNANCE_INVALID", "decision report mode mismatch")
+    if mode not in DECISION_MODES:
+        fail("CONTRACT_INVALID", "paired decision mode is invalid")
+    expected_authority = authority_contract(mode)
+    if any(report[field] != expected_authority[field] for field in expected_authority):
+        fail("REFERENCE_GOVERNANCE_INVALID", "paired decision authority mismatch")
+    if (
+        report["schema_version"] != SCHEMA_VERSION
+        or report["evidence_policy_version"] != EVIDENCE_POLICY_VERSION
+        or report["report_kind"] != DECISION_KIND
+        or report["status"] != "complete"
+        or report["contract_version"] != CONTRACT_VERSION
+    ):
+        fail("CONTRACT_INVALID", "paired decision identity mismatch")
+    try:
+        identity = raw_gate.require_exact_fields(
+            report["identity"],
+            {
+                "reference_sha",
+                "candidate_sha",
+                "reference_binary_sha256",
+                "candidate_binary_sha256",
+            },
+            "paired decision identity",
+        )
+        require_sha(identity["reference_sha"], "decision reference SHA")
+        require_sha(identity["candidate_sha"], "decision candidate SHA")
+        raw_gate.require_sha256(identity["reference_binary_sha256"], "decision reference binary")
+        raw_gate.require_sha256(identity["candidate_binary_sha256"], "decision candidate binary")
+    except raw_gate.GateError as exc:
+        if isinstance(exc, PairedGateError):
+            raise
+        fail("CONTRACT_INVALID", str(exc))
+    if mode == "diagnostic" and identity["reference_binary_sha256"] != identity[
+        "candidate_binary_sha256"
+    ]:
+        fail("BINARY_IDENTITY_INVALID", "diagnostic decision binaries are not byte-identical")
+
+    profiles = report["profiles"]
+    if not isinstance(profiles, list) or len(profiles) != len(PROFILE_MATRIX):
+        fail("CONTRACT_INVALID", "paired decision profile inventory is incomplete")
+    classifications = []
+    for index, summary in enumerate(profiles, start=1):
+        try:
+            summary = raw_gate.require_exact_fields(
+                summary,
+                {
+                    "profile",
+                    "classification",
+                    "profile_elapsed_ms",
+                    "pair_count",
+                    "warmup_order",
+                    "measured_order",
+                    "checksum_verification",
+                    "raw_reconstruction",
+                    "cases",
+                    "hard_state_comparison",
+                    "counter_validation",
+                    "cleanup",
+                },
+                f"decision profile {index}",
+            )
+        except raw_gate.GateError as exc:
+            fail("CONTRACT_INVALID", str(exc))
+        expected_name = sorted(PROFILE_MATRIX)[index - 1]
+        if summary["profile"] != expected_name:
+            fail("EXECUTION_CONTRACT_MISMATCH", "decision profile order or identity mismatch")
+        if summary["classification"] not in CLASSIFICATIONS:
+            fail("CONTRACT_INVALID", "decision profile classification is invalid")
+        classifications.append(summary["classification"])
+        try:
+            raw_gate.require_number(
+                summary["profile_elapsed_ms"], f"{expected_name} elapsed duration", positive=True
+            )
+        except raw_gate.GateError as exc:
+            fail("CONTRACT_INVALID", str(exc))
+        expected_pairs = 10 if mode == "diagnostic" else 5
+        if (
+            summary["pair_count"] != expected_pairs
+            or summary["warmup_order"] != list(WARMUP_ORDER)
+            or summary["measured_order"]
+            != [list(pair) for pair in measured_order(expected_pairs)]
+            or summary["checksum_verification"] != "verified"
+            or summary["raw_reconstruction"] != "verified"
+        ):
+            fail("PAIR_INVENTORY_INVALID", f"{expected_name} decision inventory mismatch")
+        cases = summary["cases"]
+        if not isinstance(cases, list) or len(cases) != len(PERFORMANCE_CASES):
+            fail("CONTRACT_INVALID", f"{expected_name} qualification case inventory mismatch")
+        profile_unstable = False
+        profile_rejected = False
+        for case_index, case in enumerate(cases):
+            try:
+                case = raw_gate.require_exact_fields(
+                    case,
+                    {"case", "median_ratio", "paired_mad_ratio_pct", "status"},
+                    f"{expected_name} decision case {case_index + 1}",
+                )
+                raw_gate.require_number(case["median_ratio"], "decision median ratio", positive=True)
+                raw_gate.require_number(case["paired_mad_ratio_pct"], "decision paired MAD")
+            except raw_gate.GateError as exc:
+                fail("CONTRACT_INVALID", str(exc))
+            if case["case"] != PERFORMANCE_CASES[case_index]:
+                fail("CONTRACT_INVALID", "decision qualification case order mismatch")
+            if mode == "diagnostic":
+                unstable = Decimal(str(case["paired_mad_ratio_pct"])) > Decimal("2.5")
+                rejected = not Decimal("0.95") <= Decimal(
+                    str(case["median_ratio"])
+                ) <= Decimal("1.05")
+                expected_status = (
+                    "unstable" if unstable else "qualification_rejected" if rejected else "pass"
+                )
+                if case["status"] != expected_status:
+                    fail("CONTRACT_INVALID", "decision qualification case status mismatch")
+                profile_unstable = profile_unstable or unstable
+                profile_rejected = profile_rejected or rejected
+        try:
+            hard = raw_gate.require_exact_fields(
+                summary["hard_state_comparison"], {"status", "case_count"}, "decision hard state"
+            )
+            counters = raw_gate.require_exact_fields(
+                summary["counter_validation"], {"status", "case_count"}, "decision counters"
+            )
+            cleanup = raw_gate.require_exact_fields(
+                summary["cleanup"], {"status", "attempted", "succeeded", "failed"}, "decision cleanup"
+            )
+        except raw_gate.GateError as exc:
+            fail("CONTRACT_INVALID", str(exc))
+        if hard != {"status": "equal", "case_count": len(ORDERED_CASES)}:
+            fail("CORRECTNESS_REGRESSION", "decision hard-state evidence is incomplete")
+        if counters != {"status": "valid", "case_count": len(ORDERED_CASES)}:
+            fail("EVIDENCE_INTEGRITY_FAILURE", "decision counter evidence is incomplete")
+        expected_cleanup = (2 + expected_pairs * 2) * len(ORDERED_CASES)
+        if cleanup != {
+            "status": "complete",
+            "attempted": expected_cleanup,
+            "succeeded": expected_cleanup,
+            "failed": 0,
+        }:
+            fail("EVIDENCE_INTEGRITY_FAILURE", "decision cleanup evidence is incomplete")
+        if mode == "diagnostic":
+            expected_profile_classification = (
+                "BENCHMARK_ENVIRONMENT_UNSTABLE"
+                if profile_unstable
+                else "DIAGNOSTIC_REJECTED"
+                if profile_rejected
+                or summary["profile_elapsed_ms"] > DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS
+                else "DIAGNOSTIC_QUALIFIED"
+            )
+            if summary["classification"] != expected_profile_classification:
+                fail("CONTRACT_INVALID", "decision profile classification mismatch")
+    if report["matrix_coverage"] != sorted(PROFILE_MATRIX):
+        fail("CONTRACT_INVALID", "paired decision matrix coverage mismatch")
+
+    try:
+        evidence = raw_gate.require_exact_fields(
+            report["evidence"],
+            {
+                "checksum_verification",
+                "raw_reconstruction",
+                "pair_inventory",
+                "qualification_bounds",
+                "hard_state",
+                "counters",
+                "cleanup",
+            },
+            "paired decision evidence",
+        )
+    except raw_gate.GateError as exc:
+        fail("CONTRACT_INVALID", str(exc))
+    expected_pairs = 10 if mode == "diagnostic" else 5
+    expected_evidence = {
+        "checksum_verification": {"status": "verified", "profile_count": 4},
+        "raw_reconstruction": {
+            "status": "verified",
+            "profile_count": 4,
+            "raw_schema_version": RAW_SCHEMA_VERSION,
+            "diagnostic_schema_version": DIAGNOSTIC_SCHEMA_VERSION,
+        },
+        "pair_inventory": {
+            "status": "complete",
+            "warmup_order": list(WARMUP_ORDER),
+            "pair_count": expected_pairs,
+            "measured_order": [list(pair) for pair in measured_order(expected_pairs)],
+        },
+        "qualification_bounds": {
+            "median_ratio_minimum": 0.95 if mode == "diagnostic" else None,
+            "median_ratio_maximum": 1.05 if mode == "diagnostic" else None,
+            "paired_mad_ratio_maximum_pct": 2.5 if mode == "diagnostic" else None,
+            "profile_elapsed_maximum_ms": (
+                DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS if mode == "diagnostic" else None
+            ),
+        },
+        "hard_state": {"status": "equal", "profile_count": 4},
+        "counters": {"status": "valid", "profile_count": 4},
+        "cleanup": {"status": "complete", "profile_count": 4},
+    }
+    if evidence != expected_evidence:
+        fail("EVIDENCE_INTEGRITY_FAILURE", "paired decision evidence summary mismatch")
+    expected_classification = decision_classification(classifications, mode=mode)
+    if report["classification"] != expected_classification:
+        fail("CONTRACT_INVALID", "paired decision classification mismatch")
+    raw_gate.validate_no_sensitive_evidence(report, "paired decision report")
+    return report
+
+
+def validate_decision_artifact(directory: pathlib.Path, *, expected_mode: str) -> dict[str, Any]:
+    validate_checksums(directory, expected_files={"paired-decision.json"})
+    path = _contained_regular_file(
+        directory, pathlib.PurePosixPath("paired-decision.json"), "paired decision report"
+    )
+    return validate_decision_report(load_json_strict(path), expected_mode=expected_mode)
+
+
 def decision_command(args: argparse.Namespace) -> int:
+    if args.mode not in DECISION_MODES:
+        fail("CONTRACT_INVALID", f"unknown decision mode {args.mode!r}")
+    if args.mode == "production" and not PRODUCTION_SAMPLING_AUTHORIZED:
+        fail(
+            "REFERENCE_GOVERNANCE_INVALID",
+            "production paired decisions are not authorized in this repository state",
+        )
     profile_args: dict[str, pathlib.Path] = {}
     for value in args.profile:
         if "=" not in value:
@@ -1894,20 +2264,28 @@ def decision_command(args: argparse.Namespace) -> int:
     if set(profile_args) != set(PROFILE_MATRIX):
         fail("CONTRACT_INVALID", "decision requires exactly the four paired profiles")
 
-    summaries = []
-    common_identity: tuple[Any, ...] | None = None
+    summaries: list[dict[str, Any]] = []
+    common_source: tuple[Any, ...] | None = None
+    common_hashes: tuple[Any, ...] | None = None
     common_provenance: tuple[Any, ...] | None = None
     common_governance: tuple[Any, ...] | None = None
+    common_inventory: tuple[Any, ...] | None = None
     for name in sorted(profile_args):
         directory = profile_args[name]
-        report = validate_profile_artifact(directory, expected_profile=name)
+        report = validate_profile_artifact(
+            directory, expected_profile=name, expected_mode=args.mode
+        )
+        if report["status"] != "complete":
+            fail(report["classification"], f"profile {name} did not complete")
         identity = report["identity"]
-        identity_key = (
+        source_key = (
             identity["reference_sha"],
             identity["candidate_sha"],
+            report["contract_version"],
+        )
+        hash_key = (
             identity["reference_binary_sha256"],
             identity["candidate_binary_sha256"],
-            report["contract_version"],
         )
         provenance = report["provenance"]
         provenance_key = (
@@ -1922,38 +2300,108 @@ def decision_command(args: argparse.Namespace) -> int:
             governance["threshold_policy_id"],
             governance["threshold_policy_sha256"],
         ) if governance is not None else None
-        if common_identity is None:
-            common_identity = identity_key
+        inventory_key = (
+            report["pair_count"],
+            tuple(report["warmup_order"]),
+            tuple(tuple(pair) for pair in report["measured_order"]),
+        )
+        if common_source is None:
+            common_source = source_key
+            common_hashes = hash_key
             common_provenance = provenance_key
             common_governance = governance_key
-        elif (
-            identity_key != common_identity
-            or provenance_key != common_provenance
-            or governance_key != common_governance
-        ):
+            common_inventory = inventory_key
+        elif source_key != common_source:
+            fail("EXECUTION_CONTRACT_MISMATCH", "profile source or contract identities differ")
+        elif hash_key != common_hashes:
+            fail("BINARY_IDENTITY_INVALID", "profile binary identities differ")
+        elif provenance_key != common_provenance or governance_key != common_governance:
             fail("EXECUTION_CONTRACT_MISMATCH", "profile source or environment pins differ")
-        summaries.append({"profile": name, "classification": report["classification"]})
+        elif inventory_key != common_inventory:
+            fail("PAIR_INVENTORY_INVALID", "profile pair inventories differ")
+        summaries.append(
+            {
+                "profile": name,
+                "classification": report["classification"],
+                "profile_elapsed_ms": report["profile_elapsed_ms"],
+                "pair_count": report["pair_count"],
+                "warmup_order": report["warmup_order"],
+                "measured_order": report["measured_order"],
+                "checksum_verification": "verified",
+                "raw_reconstruction": "verified",
+                "cases": [
+                    {
+                        "case": case["case"],
+                        "median_ratio": case["median_ratio"],
+                        "paired_mad_ratio_pct": case["paired_mad_ratio_pct"],
+                        "status": case["status"],
+                    }
+                    for case in report["cases"]
+                    if case["performance_gated"]
+                ],
+                "hard_state_comparison": report["hard_state_comparison"],
+                "counter_validation": {"status": "valid", "case_count": len(ORDERED_CASES)},
+                "cleanup": report["cleanup"],
+            }
+        )
 
-    classification = decision_classification([item["classification"] for item in summaries])
+    classification = decision_classification(
+        [item["classification"] for item in summaries], mode=args.mode
+    )
+    authority = authority_contract(args.mode)
+    pair_count = 10 if args.mode == "diagnostic" else 5
     decision = {
         "schema_version": 1,
         "evidence_policy_version": 2,
         "report_kind": DECISION_KIND,
         "status": "complete",
+        "mode": args.mode,
         "classification": classification,
         "contract_version": CONTRACT_VERSION,
+        **authority,
         "identity": {
-            "reference_sha": common_identity[0],
-            "candidate_sha": common_identity[1],
+            "reference_sha": common_source[0],
+            "candidate_sha": common_source[1],
+            "reference_binary_sha256": common_hashes[0],
+            "candidate_binary_sha256": common_hashes[1],
         },
         "profiles": summaries,
         "matrix_coverage": sorted(PROFILE_MATRIX),
+        "evidence": {
+            "checksum_verification": {"status": "verified", "profile_count": 4},
+            "raw_reconstruction": {
+                "status": "verified",
+                "profile_count": 4,
+                "raw_schema_version": RAW_SCHEMA_VERSION,
+                "diagnostic_schema_version": DIAGNOSTIC_SCHEMA_VERSION,
+            },
+            "pair_inventory": {
+                "status": "complete",
+                "warmup_order": list(WARMUP_ORDER),
+                "pair_count": pair_count,
+                "measured_order": [list(pair) for pair in measured_order(pair_count)],
+            },
+            "qualification_bounds": {
+                "median_ratio_minimum": 0.95 if args.mode == "diagnostic" else None,
+                "median_ratio_maximum": 1.05 if args.mode == "diagnostic" else None,
+                "paired_mad_ratio_maximum_pct": 2.5 if args.mode == "diagnostic" else None,
+                "profile_elapsed_maximum_ms": (
+                    DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS
+                    if args.mode == "diagnostic"
+                    else None
+                ),
+            },
+            "hard_state": {"status": "equal", "profile_count": 4},
+            "counters": {"status": "valid", "profile_count": 4},
+            "cleanup": {"status": "complete", "profile_count": 4},
+        },
     }
+    validate_decision_report(decision, expected_mode=args.mode)
     _create_output_directory(args.output_dir)
     raw_gate.write_json(args.output_dir / "paired-decision.json", decision)
     _write_checksums(args.output_dir)
     print(json.dumps({"classification": classification, "report": "paired-decision.json"}))
-    return 0 if classification == "PASS" else 1
+    return 0 if classification in SUCCESS_CLASSIFICATIONS else 1
 
 
 def _write_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> None:
@@ -2020,6 +2468,7 @@ def _write_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> N
         "mode": args.mode,
         "classification": exc.classification,
         "contract_version": CONTRACT_VERSION,
+        "authority": authority_contract(args.mode),
         "identity": {
             "reference_sha": args.reference_sha,
             "candidate_sha": args.candidate_sha,
@@ -2073,6 +2522,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample.set_defaults(handler=sample_command)
 
     decision = subparsers.add_parser("decision", help="combine four immutable profile artifacts")
+    decision.add_argument("--mode", choices=DECISION_MODES, required=True)
     decision.add_argument("--profile", action="append", required=True)
     decision.add_argument("--output-dir", type=pathlib.Path, required=True)
     decision.set_defaults(handler=decision_command)

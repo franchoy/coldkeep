@@ -34,14 +34,34 @@ The provisional diagnostic fixture candidates `ci-paired-w1-v1` and
 per-case isolation. `scripts/paired_benchmark_gate.py`
 owns the fixed `C R` warmups, fixed five-pair production or ten-pair diagnostic
 inventory, paired ratio/MAD comparison, hard-state equivalence, checksums, and
-four-profile decision aggregation.
+four-profile decision aggregation. Diagnostic aggregation requires the trusted
+caller to select its authority explicitly:
+
+```bash
+python3 scripts/paired_benchmark_gate.py decision \
+  --mode diagnostic \
+  --profile none-w1=/controlled/none-w1 \
+  --profile none-w4=/controlled/none-w4 \
+  --profile zstd-w1=/controlled/zstd-w1 \
+  --profile zstd-w4=/controlled/zstd-w4 \
+  --output-dir /controlled/decision
+```
+
+A successful diagnostic sample and four-profile decision are classified
+`DIAGNOSTIC_QUALIFIED`, never production `PASS`. The decision reconstructs
+statistics and correctness evidence from checksummed raw reports, requires
+byte-identical reference/candidate binaries, and records diagnostic-only scope,
+authority, and sampler-owned per-profile elapsed time.
 
 No production reference manifest or numeric paired threshold is authorized.
 The harness contract requires production sampling and production decisions to
 remain hard-disabled even if ungoverned files appear; enabling them requires a
 later authorized governance and trusted-base integration change. Diagnostic
-mode qualifies the architecture only. A future separately authorized launcher
-will use this command shape:
+mode qualifies the architecture only and cannot consume production artifacts;
+production decisions cannot consume diagnostic artifacts. Diagnostic sampling
+and aggregation are implemented, but the remote qualification and its launcher
+remain separately authorized after exact-head CI and CodeQL. A future
+separately authorized launcher will use this command shape:
 
 ```bash
 COLDKEEP_CODEC=aes-gcm python3 scripts/paired_benchmark_gate.py sample \
@@ -63,7 +83,9 @@ COLDKEEP_CODEC=aes-gcm python3 scripts/paired_benchmark_gate.py sample \
 The command timeout is fixed at 600 seconds. Qualification requires all ten
 pairs, median ratios within 0.95–1.05, paired MAD no greater than 2.5%, exact
 hard state, valid counters and cleanup, no timeout, and completion within the
-governed workflow limit. Samples cannot be discarded or extended.
+35-minute diagnostic profile limit. Exact bounds pass. Samples cannot be
+discarded or extended. No paired reference manifest or numeric production
+threshold policy exists.
 
 The stopped local A/A probe completed only its two excluded warmups and is
 non-authoritative, non-PASS partial evidence. It is not qualification evidence
