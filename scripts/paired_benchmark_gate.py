@@ -2732,11 +2732,7 @@ def validate_decision_artifact(directory: pathlib.Path, *, expected_mode: str) -
 
 
 def decision_command(args: argparse.Namespace) -> int:
-    if args.output_dir.exists() and not args.output_dir.is_symlink():
-        if not args.output_dir.is_dir() or any(args.output_dir.iterdir()):
-            fail("EVIDENCE_INTEGRITY_FAILURE", "decision output directory is not empty")
-    else:
-        _create_output_directory(args.output_dir)
+    _create_output_directory(args.output_dir)
     args._output_owned = True
     args._decision_state = {
         "profiles": {

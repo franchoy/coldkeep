@@ -48,6 +48,14 @@ python3 scripts/paired_benchmark_gate.py decision \
   --output-dir /controlled/decision
 ```
 
+The exact `/controlled/decision` child must not exist before invocation. The
+caller may create `/controlled`, verifies the child is absent, and then lets
+the harness create and exclusively own the child. The same rule applies to
+every `sample --output-dir`: workflow-owned parent, nonexistent harness-owned
+child, and artifact upload from that exact child after the command returns.
+Pre-creating an empty child is an evidence-integrity failure; deleting and
+recreating a populated child does not repair ownership.
+
 A successful diagnostic sample and four-profile decision are classified
 `DIAGNOSTIC_QUALIFIED`, never production `PASS`. The decision reconstructs
 statistics and correctness evidence from checksummed raw reports, requires
@@ -65,12 +73,17 @@ remain separately authorized after exact-head CI and CodeQL. A future
 separately authorized launcher will use this command shape:
 
 ```bash
+profile_parent=/controlled/profile-parent
+profile_output="${profile_parent}/artifact"
+mkdir -p "${profile_parent}"
+test ! -e "${profile_output}"
+
 COLDKEEP_CODEC=aes-gcm python3 scripts/paired_benchmark_gate.py sample \
   --reference-binary /controlled/reference/coldkeep \
   --candidate-binary /controlled/candidate/coldkeep \
   --reference-sha <40-character-sha> \
   --candidate-sha <40-character-sha> \
-  --output-dir /controlled/artifact \
+  --output-dir "${profile_output}" \
   --dataset ci-paired-w4-v2 \
   --compression none \
   --workers 4 \
@@ -105,7 +118,22 @@ blocks, mask runner roots before checkout, provision its isolated container
 only after masking, generate credentials and fixture material inside a
 tracing-disabled shell, and upload already-finalized evidence with
 `if: always()`. `scripts/audit_ci_enforcement.sh --paired-launcher <path>`
-checks this source contract without adding or authorizing a workflow.
+checks this source contract without adding or authorizing a workflow. Static
+GitHub-managed container aliases such as `/github/workspace`,
+`/github/runner_temp`, `/github/home`, and `/github/workflow` are allowed
+runtime metadata; they are not credentials or benchmark-generated paths.
+Actual host paths, dynamically generated roots and evidence paths, database
+and container identifiers, namespaces, credentials, ports, DSNs, and key
+material remain confidential and must be masked before possible output.
+
+The first bounded-v2 launcher attempt, run `30693345495`, failed before any
+benchmark invocation because it created each exact sample output child before
+calling the harness. It produced no fixture, paired-statistic, hard-state,
+counter, cleanup, or time-budget result. Its decision command correctly
+preserved a checksummed failure-shaped decision after the four profile
+artifacts were absent. Another remote qualification remains separately
+authorized only after this ownership/audit correction has green exact-head CI
+and CodeQL.
 
 The stopped local A/A probe completed only its two excluded warmups and is
 non-authoritative, non-PASS partial evidence. It is not qualification evidence

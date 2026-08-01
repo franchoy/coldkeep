@@ -1514,6 +1514,47 @@ class PairedContractTests(unittest.TestCase):
                 )
             self.assertEqual(caught.exception.classification, "REFERENCE_GOVERNANCE_INVALID")
 
+    def test_sample_and_decision_require_new_harness_owned_output_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            for name in ("sample", "decision"):
+                output = root / name
+                output.mkdir()
+                with self.subTest(command=name):
+                    with self.assertRaises(gate.PairedGateError) as caught:
+                        if name == "sample":
+                            gate._create_output_directory(output)
+                        else:
+                            gate.decision_command(
+                                argparse.Namespace(
+                                    mode="diagnostic",
+                                    profile=[
+                                        f"{profile}={root / profile}"
+                                        for profile in gate.PROFILE_MATRIX
+                                    ],
+                                    output_dir=output,
+                                )
+                            )
+                    self.assertEqual(
+                        caught.exception.classification,
+                        "EVIDENCE_INTEGRITY_FAILURE",
+                    )
+                    self.assertEqual(str(caught.exception), "output directory already exists")
+
+            decision_output = root / "new-decision"
+            args = argparse.Namespace(
+                mode="diagnostic",
+                profile=[
+                    f"{profile}={root / profile}"
+                    for profile in gate.PROFILE_MATRIX
+                ],
+                output_dir=decision_output,
+            )
+            with self.assertRaises(gate.PairedGateError):
+                gate.decision_command(args)
+            self.assertTrue(decision_output.is_dir())
+            self.assertTrue(args._output_owned)
+
     def test_diagnostic_artifact_binary_identity_and_authority_are_strict(self) -> None:
         report = report_summary(mode="diagnostic")
         report["identity"]["candidate_binary_sha256"] = "d" * 64
@@ -1565,7 +1606,7 @@ class PairedContractTests(unittest.TestCase):
                     argparse.Namespace(
                         mode="diagnostic",
                         profile=[f"none-w1={root}"],
-                        output_dir=root / "out",
+                        output_dir=root / "missing-out",
                     )
                 )
             with self.assertRaises(gate.PairedGateError):
@@ -1573,7 +1614,7 @@ class PairedContractTests(unittest.TestCase):
                     argparse.Namespace(
                         mode="diagnostic",
                         profile=[f"none-w1={root}", f"none-w1={root}"],
-                        output_dir=root / "out",
+                        output_dir=root / "duplicate-out",
                     )
                 )
             with self.assertRaises(gate.PairedGateError):
@@ -1584,7 +1625,7 @@ class PairedContractTests(unittest.TestCase):
                             *[f"{name}={root / name}" for name in gate.PROFILE_MATRIX],
                             f"extra={root / 'extra'}",
                         ],
-                        output_dir=root / "out",
+                        output_dir=root / "extra-out",
                     )
                 )
 
@@ -1599,7 +1640,7 @@ class PairedContractTests(unittest.TestCase):
                         argparse.Namespace(
                             mode="diagnostic",
                             profile=[f"{name}={root / name}" for name in sorted(gate.PROFILE_MATRIX)],
-                            output_dir=root / "out",
+                            output_dir=root / "identity-out",
                         )
                     )
             self.assertEqual(caught.exception.classification, "EXECUTION_CONTRACT_MISMATCH")
@@ -1626,7 +1667,7 @@ class PairedContractTests(unittest.TestCase):
                                         f"{name}={root / name}"
                                         for name in sorted(gate.PROFILE_MATRIX)
                                     ],
-                                    output_dir=root / "out",
+                                    output_dir=root / f"governance-{field}-out",
                                 )
                             )
                     self.assertEqual(
@@ -1649,7 +1690,7 @@ class PairedContractTests(unittest.TestCase):
                                 f"{name}={root / name}"
                                 for name in sorted(gate.PROFILE_MATRIX)
                             ],
-                            output_dir=root / "out",
+                            output_dir=root / "binary-out",
                         )
                     )
             self.assertEqual(caught.exception.classification, "BINARY_IDENTITY_INVALID")

@@ -192,6 +192,17 @@ func TestAuditCIEnforcementPairedLauncherConfidentialityAndLifecycle(t *testing.
 jobs:
   sample:
     timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - profile: none-w1
+            dataset: ci-paired-w1-v2
+          - profile: none-w4
+            dataset: ci-paired-w4-v2
+          - profile: zstd-w1
+            dataset: ci-paired-w1-v2
+          - profile: zstd-w4
+            dataset: ci-paired-w4-v2
     steps:
       - name: Mask runner roots
         run: |
@@ -199,15 +210,46 @@ jobs:
           echo "::add-mask::$GITHUB_WORKSPACE"
           echo "::add-mask::$RUNNER_TEMP"
           echo "::add-mask::$HOME"
+          echo '/github/workspace /github/runner_temp'
       - name: Sample
         run: |
-          python3 scripts/paired_benchmark_gate.py sample --dataset ci-paired-w1-v2 --pairs 10 --command-timeout-seconds 600
-          python3 scripts/paired_benchmark_gate.py sample --dataset ci-paired-w4-v2 --pairs 10 --command-timeout-seconds 600
-      - name: Decide
-        run: python3 scripts/paired_benchmark_gate.py decision
-      - name: Upload
+          set +x
+          token="$(openssl rand -hex 12)"
+          echo "::add-mask::${token}"
+          sensitive_root="$(mktemp -d "${RUNNER_TEMP}/paired.XXXXXXXX")"
+          echo "::add-mask::${sensitive_root}"
+          profile_parent="${GITHUB_WORKSPACE}/paired-evidence/${{ matrix.profile }}"
+          profile_output="${profile_parent}/artifact"
+          mkdir -p "${profile_parent}"
+          test ! -e "${profile_output}"
+          python3 scripts/paired_benchmark_gate.py sample \
+            --dataset "${{ matrix.dataset }}" \
+            --pairs 10 \
+            --command-timeout-seconds 600 \
+            --output-dir "${profile_output}"
+      - name: Upload profile
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
+        with:
+          path: paired-evidence/${{ matrix.profile }}/artifact
+  decision:
+    timeout-minutes: 10
+    steps:
+      - name: Decide
+        run: |
+          set +x
+          decision_parent="${GITHUB_WORKSPACE}/paired-decision"
+          decision_output="${decision_parent}/decision"
+          mkdir -p "${decision_parent}"
+          test ! -e "${decision_output}"
+          python3 scripts/paired_benchmark_gate.py decision \
+            --mode diagnostic \
+            --output-dir "${decision_output}"
+      - name: Upload decision
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: paired-decision/decision
 `
 	tests := []struct {
 		name        string
@@ -215,7 +257,127 @@ jobs:
 		wantFailure bool
 		message     string
 	}{
-		{name: "compliant", mutate: func(value string) string { return value }},
+		{name: "parent-only creation", mutate: func(value string) string { return value }},
+		{name: "distinct child per profile", mutate: func(value string) string { return value }},
+		{name: "nonexistent decision child", mutate: func(value string) string { return value }},
+		{name: "exact harness-owned upload", mutate: func(value string) string { return value }},
+		{name: "platform aliases", mutate: func(value string) string { return value }},
+		{name: "generated values masked", mutate: func(value string) string { return value }},
+		{name: "no governance authority", mutate: func(value string) string { return value }},
+		{
+			name: "pre-created sample output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${profile_output}\"", "          touch \"${profile_output}\"\n          test ! -e \"${profile_output}\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must not be created before harness invocation",
+		},
+		{
+			name: "pre-created decision output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${decision_output}\"", "          touch \"${decision_output}\"\n          test ! -e \"${decision_output}\"", 1)
+			},
+			wantFailure: true,
+			message:     "decision output must not be created before harness invocation",
+		},
+		{
+			name: "mkdir sample output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${profile_output}\"", "          mkdir -p \"${profile_output}\"\n          test ! -e \"${profile_output}\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must not be created before harness invocation",
+		},
+		{
+			name: "mkdir decision output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${decision_output}\"", "          mkdir -p \"${decision_output}\"\n          test ! -e \"${decision_output}\"", 1)
+			},
+			wantFailure: true,
+			message:     "decision output must not be created before harness invocation",
+		},
+		{
+			name: "install output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${profile_output}\"", "          install -d \"${profile_output}\"\n          test ! -e \"${profile_output}\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must not be created before harness invocation",
+		},
+		{
+			name: "checkout into output",
+			mutate: func(value string) string {
+				needle := "      - name: Sample\n"
+				checkout := "      - name: Unsafe checkout\n        uses: actions/checkout@v6\n        with:\n          path: paired-evidence/${{ matrix.profile }}/artifact\n"
+				return strings.Replace(value, needle, checkout+needle, 1)
+			},
+			wantFailure: true,
+			message:     "sample output must not be an actions/checkout destination",
+		},
+		{
+			name: "extract into output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${profile_output}\"", "          tar -xf evidence.tar -C \"${profile_output}\"\n          test ! -e \"${profile_output}\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must not be populated, checked out, extracted, or recreated",
+		},
+		{
+			name: "missing nonexistence assertion",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${profile_output}\"\n", "", 1)
+			},
+			wantFailure: true,
+			message:     "sample output requires an exact nonexistence assertion",
+		},
+		{
+			name: "upload mismatch",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          path: paired-evidence/${{ matrix.profile }}/artifact", "          path: paired-evidence/${{ matrix.profile }}/different", 1)
+			},
+			wantFailure: true,
+			message:     "sample upload path must equal the harness-owned output path",
+		},
+		{
+			name: "shared matrix output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "profile_parent=\"${GITHUB_WORKSPACE}/paired-evidence/${{ matrix.profile }}\"", "profile_parent=\"${GITHUB_WORKSPACE}/paired-evidence/shared\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must be distinct for every matrix profile",
+		},
+		{
+			name: "workspace root output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "profile_output=\"${profile_parent}/artifact\"", "profile_output=\"${GITHUB_WORKSPACE}\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must be a nonexistent child below a contained parent",
+		},
+		{
+			name: "traversal output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "profile_output=\"${profile_parent}/artifact\"", "profile_output=\"${profile_parent}/../artifact\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must not use traversal",
+		},
+		{
+			name: "symlink output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${profile_output}\"", "          ln -s elsewhere \"${profile_output}\"\n          test ! -e \"${profile_output}\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must not be populated, checked out, extracted, or recreated",
+		},
+		{
+			name: "delete and recreate output",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          test ! -e \"${profile_output}\"", "          rm -rf \"${profile_output}\"\n          mkdir -p \"${profile_output}\"\n          test ! -e \"${profile_output}\"", 1)
+			},
+			wantFailure: true,
+			message:     "sample output must not be created before harness invocation",
+		},
 		{
 			name: "yaml env exposure",
 			mutate: func(value string) string {
@@ -245,6 +407,30 @@ jobs:
 			mutate:      func(value string) string { return value + "# GITHUB_ENV\n" },
 			wantFailure: true,
 			message:     "persists or traces sensitive runtime values",
+		},
+		{
+			name: "generated path printed before masking",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          echo \"::add-mask::${sensitive_root}\"", "          echo \"${sensitive_root}\"", 1)
+			},
+			wantFailure: true,
+			message:     "generated dynamic paths and identifiers must be masked before printing",
+		},
+		{
+			name: "production authority",
+			mutate: func(value string) string {
+				return strings.Replace(value, "--mode diagnostic", "--mode production", 1)
+			},
+			wantFailure: true,
+			message:     "paired launcher must remain diagnostic-only",
+		},
+		{
+			name: "threshold authority",
+			mutate: func(value string) string {
+				return value + "\n# threshold-policy-v1.13.json\n"
+			},
+			wantFailure: true,
+			message:     "must not create manifest or threshold authority",
 		},
 	}
 	for _, tt := range tests {

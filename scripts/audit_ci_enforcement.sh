@@ -133,6 +133,225 @@ extract_step_block_from_content() {
   ' <<<"$content"
 }
 
+check_paired_launcher_output_ownership() {
+  local file="$1"
+
+  python3 - "$file" <<'PY'
+import pathlib
+import posixpath
+import re
+import shlex
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+assignments = {
+    match.group(1): match.group(3)
+    for match in re.finditer(
+        r"(?m)^[ \t]*([A-Za-z_][A-Za-z0-9_]*)=([\"'])(.*?)\2[ \t]*$", source
+    )
+}
+errors: list[str] = []
+
+
+def error(message: str) -> None:
+    if message not in errors:
+        errors.append(message)
+
+
+def expand(value: str) -> str:
+    value = value.strip().strip("\"'")
+    for _ in range(12):
+        previous = value
+        for name, replacement in assignments.items():
+            value = value.replace("${" + name + "}", replacement)
+            value = re.sub(r"\$" + re.escape(name) + r"\b", replacement, value)
+        if value == previous:
+            break
+    value = value.replace("${GITHUB_WORKSPACE}", "@workspace")
+    value = re.sub(r"\$GITHUB_WORKSPACE\b", "@workspace", value)
+    value = value.replace("${RUNNER_TEMP}", "@runner_temp")
+    value = re.sub(r"\$RUNNER_TEMP\b", "@runner_temp", value)
+    value = value.rstrip("/") or "/"
+    if not value.startswith(("@workspace", "@runner_temp", "/")):
+        value = "@workspace/" + value.lstrip("./")
+    return re.sub(r"/{2,}", "/", value)
+
+
+def shell_tokens(line: str) -> list[str]:
+    try:
+        return shlex.split(line.rstrip(" \\"))
+    except ValueError:
+        return []
+
+
+def command_blocks() -> list[dict[str, object]]:
+    blocks: list[dict[str, object]] = []
+    pattern = re.compile(r"paired_benchmark_gate\.py[ \t]+(sample|decision)\b")
+    for match in pattern.finditer(source):
+        step_start = source.rfind("\n      - name:", 0, match.start())
+        if step_start < 0:
+            step_start = source.rfind("\n    steps:", 0, match.start())
+        if step_start < 0:
+            step_start = 0
+        step_end = source.find("\n      - name:", match.end())
+        if step_end < 0:
+            step_end = len(source)
+        tail = source[match.end():step_end]
+        output = re.search(
+            r"--output-dir[ \t]+(?:\"([^\"\n]+)\"|'([^'\n]+)'|([^\s\\]+))", tail
+        )
+        if output is None:
+            error(f"{match.group(1)} command must pass --output-dir")
+            continue
+        token = next(group for group in output.groups() if group is not None)
+        blocks.append(
+            {
+                "kind": match.group(1),
+                "start": match.start(),
+                "end": step_end,
+                "step_start": step_start,
+                "token": token,
+                "path": expand(token),
+            }
+        )
+    return blocks
+
+
+def creation_targets(text: str) -> tuple[set[str], set[str]]:
+    created: set[str] = set()
+    populated: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        tokens = shell_tokens(line)
+        if not tokens:
+            continue
+        command = tokens[0]
+        operands = [token for token in tokens[1:] if not token.startswith("-")]
+        if command in {"mkdir", "touch"}:
+            created.update(expand(token) for token in operands)
+        elif command == "install" and "-d" in tokens:
+            created.update(expand(token) for token in operands)
+        elif command in {"cp", "mv", "rsync", "git"} and operands:
+            populated.add(expand(operands[-1]))
+        elif command in {"tar", "unzip"}:
+            for option in ("-C", "--directory", "-d"):
+                if option in tokens and tokens.index(option) + 1 < len(tokens):
+                    populated.add(expand(tokens[tokens.index(option) + 1]))
+        elif command == "ln" and "-s" in tokens and operands:
+            populated.add(expand(operands[-1]))
+        elif command == "rm":
+            populated.update(expand(token) for token in operands)
+    return created, populated
+
+
+blocks = command_blocks()
+sample_paths: list[str] = []
+all_output_paths = {str(block["path"]) for block in blocks}
+
+for block in blocks:
+    kind = str(block["kind"])
+    output_path = str(block["path"])
+    token = str(block["token"])
+    start = int(block["start"])
+    step_start = int(block["step_start"])
+    prefix = source[:start]
+    step_prefix = source[step_start:start]
+
+    if kind == "sample":
+        sample_paths.append(output_path)
+
+    if output_path in {".", "/", "@workspace", "@runner_temp"}:
+        error(f"{kind} output must be a nonexistent child below a contained parent")
+    if not output_path.startswith(("@workspace/", "@runner_temp/")):
+        error(f"{kind} output must remain below a permitted contained parent")
+    if any(part == ".." for part in output_path.split("/")):
+        error(f"{kind} output must not use traversal")
+    if output_path.startswith(("@workspace/candidate", "@workspace/reference")):
+        error(f"{kind} output must not reuse a repository checkout path")
+
+    parent = posixpath.dirname(output_path)
+    created, populated = creation_targets(prefix)
+    if parent not in created:
+        error(f"{kind} output parent must exist before harness invocation")
+    if output_path in created:
+        error(f"{kind} output must not be created before harness invocation")
+    if output_path in populated:
+        error(f"{kind} output must not be populated, checked out, extracted, or recreated")
+
+    assertions = re.finditer(
+        r"test[ \t]+![ \t]+-e[ \t]+(?:\"([^\"\n]+)\"|'([^'\n]+)'|([^\s\\]+))",
+        step_prefix,
+    )
+    asserted_paths = {
+        expand(next(group for group in assertion.groups() if group is not None))
+        for assertion in assertions
+    }
+    if output_path not in asserted_paths:
+        error(f"{kind} output requires an exact nonexistence assertion before invocation")
+
+    for checkout in re.finditer(r"uses:[ \t]*actions/checkout@[^\n]+", prefix):
+        checkout_end = source.find("\n      - name:", checkout.end())
+        if checkout_end < 0 or checkout_end > start:
+            checkout_end = start
+        checkout_block = source[checkout.start():checkout_end]
+        path_match = re.search(r"(?m)^[ \t]*path:[ \t]*([^\n#]+)", checkout_block)
+        if path_match and expand(path_match.group(1)) == output_path:
+            error(f"{kind} output must not be an actions/checkout destination")
+
+    upload = re.search(r"uses:[ \t]*actions/upload-artifact@[^\n]+", source[int(block["end"]):])
+    if upload is None:
+        error(f"{kind} output must be uploaded after harness execution")
+        continue
+    upload_start = int(block["end"]) + upload.start()
+    upload_end = source.find("\n      - name:", upload_start + 1)
+    if upload_end < 0:
+        upload_end = len(source)
+    upload_block = source[upload_start:upload_end]
+    upload_path = re.search(r"(?m)^[ \t]*path:[ \t]*([^\n#]+)", upload_block)
+    if upload_path is None or expand(upload_path.group(1)) != output_path:
+        error(f"{kind} upload path must equal the harness-owned output path")
+
+if "${{ matrix.profile }}" in source and any(
+    "${{ matrix.profile }}" not in path for path in sample_paths
+):
+    error("sample output must be distinct for every matrix profile")
+if len(sample_paths) != len(set(sample_paths)):
+    error("sample profiles must not reuse an output directory")
+if len(all_output_paths) != len(blocks):
+    error("sample and decision commands must use distinct output directories")
+
+generated: set[str] = set()
+for name, value in assignments.items():
+    if re.search(r"mktemp|openssl[ \t]+rand|uuidgen|\$RANDOM", value):
+        generated.add(name)
+for name in generated:
+    mask = re.search(r"::add-mask::[^\n]*(?:\$\{" + re.escape(name) + r"\}|\$" + re.escape(name) + r"\b)", source)
+    prints = [
+        match
+        for match in re.finditer(
+            r"(?m)^[ \t]*(?:echo|printf)[^\n]*(?:\$\{" + re.escape(name) + r"\}|\$" + re.escape(name) + r"\b)",
+            source,
+        )
+        if "::add-mask::" not in match.group(0)
+    ]
+    if prints and (mask is None or prints[0].start() < mask.start()):
+        error("generated dynamic paths and identifiers must be masked before printing")
+
+if re.search(r"--mode[ \t]+production\b", source):
+    error("paired launcher must remain diagnostic-only")
+if re.search(r"reference-v1\.13\.json|threshold-policy-v1\.13\.json|--manifest|--threshold", source):
+    error("paired launcher must not create manifest or threshold authority")
+
+if errors:
+    for message in errors:
+        print(f"[audit] ERROR: {message}", file=sys.stderr)
+    raise SystemExit(1)
+print("[audit] ok: paired launcher preserves harness-owned nonexistent output children")
+print("[audit] ok: paired launcher uploads the exact sample and decision outputs")
+print("[audit] ok: static GitHub runtime aliases are permitted metadata")
+PY
+}
+
 check_paired_launcher() {
   local file="$1"
   local check_status=0
@@ -178,6 +397,7 @@ check_paired_launcher() {
     echo "[audit] ERROR: paired launcher may print a prohibited path or runtime value" >&2
     check_status=1
   fi
+  check_paired_launcher_output_ownership "$file" || check_status=1
   return "$check_status"
 }
 
