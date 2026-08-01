@@ -33,6 +33,8 @@ func TestParseDatasetPreset(t *testing.T) {
 	for raw, want := range map[string]DatasetPreset{
 		"CI-PAIRED-W1-V1": DatasetPresetCIPairedW1V1,
 		"ci-paired-w4-v1": DatasetPresetCIPairedW4V1,
+		"CI-PAIRED-W1-V2": DatasetPresetCIPairedW1V2,
+		"ci-paired-w4-v2": DatasetPresetCIPairedW4V2,
 	} {
 		preset, err = ParseDatasetPreset(raw)
 		if err != nil || preset != want {
@@ -60,7 +62,10 @@ func TestRunPresetCIStableV1RequiresCaseEnvironmentFactory(t *testing.T) {
 }
 
 func TestRunPresetPairedRequiresCaseEnvironmentFactory(t *testing.T) {
-	for _, preset := range []DatasetPreset{DatasetPresetCIPairedW1V1, DatasetPresetCIPairedW4V1} {
+	for _, preset := range []DatasetPreset{
+		DatasetPresetCIPairedW1V1, DatasetPresetCIPairedW4V1,
+		DatasetPresetCIPairedW1V2, DatasetPresetCIPairedW4V2,
+	} {
 		_, err := RunPreset(preset, 1, ScenarioConfig{})
 		want := fmt.Sprintf("preset %q requires a per-case environment factory", preset)
 		if err == nil || err.Error() != want {

@@ -74,6 +74,24 @@ func TestCIPairedFixtureContracts(t *testing.T) {
 			manyCount:  1200,
 			mixedCount: 800,
 		},
+		{
+			name:       "workers-1-v2",
+			preset:     DatasetPresetCIPairedW1V2,
+			fixtureID:  CIPairedW1V2FixtureID,
+			config:     CIPairedW1V2ScenarioConfig(),
+			largeBytes: 64 * 1024 * 1024,
+			manyCount:  400,
+			mixedCount: 400,
+		},
+		{
+			name:       "workers-4-v2",
+			preset:     DatasetPresetCIPairedW4V2,
+			fixtureID:  CIPairedW4V2FixtureID,
+			config:     CIPairedW4V2ScenarioConfig(),
+			largeBytes: 64 * 1024 * 1024,
+			manyCount:  400,
+			mixedCount: 800,
+		},
 	}
 
 	for _, test := range tests {

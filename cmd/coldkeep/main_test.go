@@ -10660,7 +10660,10 @@ func TestRunBenchmarkRunCommandRejectsRepeatForCIStableFixture(t *testing.T) {
 }
 
 func TestRunBenchmarkRunCommandRejectsRepeatForPairedFixtures(t *testing.T) {
-	for _, dataset := range []string{"ci-paired-w1-v1", "ci-paired-w4-v1"} {
+	for _, dataset := range []string{
+		"ci-paired-w1-v1", "ci-paired-w4-v1",
+		"ci-paired-w1-v2", "ci-paired-w4-v2",
+	} {
 		err := runBenchmarkCommand(parsedCommandLine{
 			method:      "benchmark",
 			positionals: []string{"run"},
