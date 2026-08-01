@@ -1,6 +1,6 @@
 # Benchmark Baselines v1.9 (Internal)
 
-Status: Frozen historical single-observation evidence; manifest repair pending
+Status: Frozen historical single-observation advisory evidence
 Date: 2026-05-09
 Scope: Historical/informational evidence; no Phase 11 performance authority
 
@@ -14,11 +14,14 @@ distribution or resolved-environment provenance and that the active and
 worker-specific manifests contain stale hashes. Their measurement content and
 3%/5% thresholds remain frozen historical policy, but they must not be treated
 as schema-v2 aggregate evidence or reinterpreted as paired-ratio thresholds.
-Phase 11 uses no checked-in absolute timing baseline; a bounded same-run paired
-diagnostic must qualify the replacement architecture first.
+Required CI may read them only as `historical_v1.9_absolute` advisory inputs
+after validating their established legacy shape. A threshold crossing is
+`BENCHMARK_TIMING_WARNING`, not a hard performance failure or pass.
 
-The artifacts continue to document earlier decisions. They no longer select a
-Phase 11 reference or failing performance endpoint.
+The artifacts continue to document earlier decisions. They do not select a
+Phase 11 production reference or hard performance endpoint. Missing or malformed
+baseline evidence remains an advisory-evaluation integrity error and fails the
+job; advisory authority does not weaken evidence validation.
 
 These baselines are the reference for:
 
@@ -87,7 +90,8 @@ Each baseline manifest must continue to prove:
 ## Historical Regression Threshold Contract
 
 Thresholds are frozen in `benchmarks/v1.9/regression-thresholds.yaml` for
-historical interpretation only. They have no paired-gate authority.
+historical advisory interpretation only. They have no paired-gate or hard
+performance authority.
 
 Policy summary:
 
@@ -117,8 +121,9 @@ Requirements:
 
 ## Freeze Statement
 
-These v1.9 artifacts remain immutable historical evidence. They are not the
-reference for the v1.13.11 paired gate, do not authorize absolute checked-in
-timing comparisons, and cannot be reused as paired samples. Future paired
-authority requires a separately reviewed exact-SHA reference manifest and
-threshold policy after the bounded diagnostic.
+These v1.9 artifacts remain immutable historical evidence. Required CI cites
+them only under the hosted timing advisory policy and preserves their content,
+manifests, hashes, and thresholds byte-for-byte. They cannot be reused as paired
+samples. Future hard performance authority requires separately authorized
+controlled infrastructure, qualification, reference governance, and numeric
+threshold policy.

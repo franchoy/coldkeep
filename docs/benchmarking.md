@@ -25,10 +25,32 @@ evaluation in v1.7.
 
 ## Running benchmarks
 
-### v1.13.11 release-gate diagnostic
+### v1.13.11 release-gate policy
 
-The current Phase 11 design is the same-run paired contract in
-`docs/release/v1.13/v1.13.11-phase11-paired-benchmark-gate-contract.md`.
+The final Phase 11 benchmark governance policy is documented in
+`docs/release/v1.13/v1.13.11-phase11-benchmark-governance-policy.md`.
+Required CI treats functional evidence as hard and GitHub-hosted timing as
+advisory:
+
+- `benchmark-integrity` runs the four bounded v2 profiles with exactly two
+  candidate-only samples and no warmup. Schema, fixture, execution, semantic
+  state, counters, cleanup, confidentiality, inventory, and checksums are hard.
+- `benchmark-timing-advisory` retains all four historical `small` observations.
+  Valid threshold crossings are explicit `BENCHMARK_TIMING_WARNING` results,
+  never hard performance failures or passes.
+- `CI Required Gate` requires both families to complete successfully. Missing,
+  malformed, unverified, skipped, or failed evidence remains blocking.
+
+Hard performance enforcement is `deferred_to_controlled_infrastructure`.
+Historical v1.9 inputs are `historical_v1.9_absolute` advisory material only.
+No paired required job, production paired mode, paired manifest, or numeric
+paired threshold policy is active.
+
+### Retained paired diagnostic tooling
+
+The same-run paired contract in
+`docs/release/v1.13/v1.13.11-phase11-paired-benchmark-gate-contract.md` remains
+non-production diagnostic/controlled-runner tooling.
 The rejected oversized candidates `ci-paired-w1-v1` and `ci-paired-w4-v1`
 remain immutable historical inputs. The bounded diagnostic candidates
 `ci-paired-w1-v2` and `ci-paired-w4-v2` execute the same complete ordered
@@ -68,8 +90,9 @@ remain hard-disabled even if ungoverned files appear; enabling them requires a
 later authorized governance and trusted-base integration change. Diagnostic
 mode qualifies the architecture only and cannot consume production artifacts;
 production decisions cannot consume diagnostic artifacts. Diagnostic sampling
-and aggregation are implemented, but the remote qualification and its launcher
-remain separately authorized after exact-head CI and CodeQL. A future
+and aggregation are implemented. Binary-identical run `30696834430` accepted
+the bounded fixtures and functional evidence lifecycle but rejected
+GitHub-hosted paired timing as a 5% hard endpoint. A future
 separately authorized launcher will use this command shape:
 
 ```bash
@@ -131,14 +154,15 @@ benchmark invocation because it created each exact sample output child before
 calling the harness. It produced no fixture, paired-statistic, hard-state,
 counter, cleanup, or time-budget result. Its decision command correctly
 preserved a checksummed failure-shaped decision after the four profile
-artifacts were absent. Another remote qualification remains separately
-authorized only after this ownership/audit correction has green exact-head CI
-and CodeQL.
+artifacts were absent. The corrected run `30696834430` later completed all four
+profiles with valid checksums, equal hard state, valid counters, and complete
+cleanup. Its timing variation rejected hosted performance authority. No
+additional remote performance diagnostic is required by the final policy.
 
 The stopped local A/A probe completed only its two excluded warmups and is
 non-authoritative, non-PASS partial evidence. It is not qualification evidence
-and made no reference or threshold decision. The four-profile remote ten-pair
-A/A qualification remains required.
+and made no reference or threshold decision. The completed four-profile remote
+ten-pair A/A run is diagnostic evidence only.
 
 The legacy `ci-stable-v1` material below remains historical diagnostic
 compatibility and has no paired performance authority.
@@ -892,16 +916,20 @@ Key assertions include:
 - ✓ **New blocks coexist safely:** new compressed packed blocks store/restore/verify alongside old legacy data
 - ✓ **Migration only additive:** old metadata path remains intact while new packed metadata is added for new chunks
 
-## Historical absolute CI policy
+## Historical absolute timing advisory
 
-The legacy workflow separates correctness checks from benchmark measurement:
+Required CI preserves the old observations without granting them hard timing
+authority:
 
-1. The correctness matrix runs independently from benchmarks and covers the supported codec combinations.
-2. The benchmark matrix runs the small dataset only for the recommended packed `aes-gcm` production modes with `COLDKEEP_COMPRESSION=none` and `COLDKEEP_COMPRESSION=zstd`.
-3. Benchmark outputs are captured as artifacts for inspection. The active
-   legacy comparison still executes `--compare`, but its absolute result cannot
-   close Phase 11. Replacement requires the separately authorized paired
-   diagnostic, reference manifest, threshold policy, and required-CI switch.
+1. The correctness matrix and `benchmark-integrity` jobs enforce functional
+   contracts independently from timing.
+2. `benchmark-timing-advisory` runs the `small` dataset for all `none/zstd ×
+   w1/w4` packed `aes-gcm` profiles.
+3. The candidate raw envelope and frozen baseline shape are validated before
+   comparison. Threshold crossings are recorded as
+   `BENCHMARK_TIMING_WARNING`; comparator or evidence defects still fail CI.
+4. Artifacts preserve the raw observation, advisory report, input hashes,
+   violations, and exhaustive checksums.
 
 See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
 and the CI workflow for historical implementation detail.
