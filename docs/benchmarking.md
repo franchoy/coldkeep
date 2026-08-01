@@ -29,9 +29,10 @@ evaluation in v1.7.
 
 The current Phase 11 design is the same-run paired contract in
 `docs/release/v1.13/v1.13.11-phase11-paired-benchmark-gate-contract.md`.
-The provisional diagnostic fixture candidates `ci-paired-w1-v1` and
-`ci-paired-w4-v1` execute the complete ordered nine-case schema-v2 suite with
-per-case isolation. `scripts/paired_benchmark_gate.py`
+The rejected oversized candidates `ci-paired-w1-v1` and `ci-paired-w4-v1`
+remain immutable historical inputs. The bounded diagnostic candidates
+`ci-paired-w1-v2` and `ci-paired-w4-v2` execute the same complete ordered
+nine-case schema-v2 suite with per-case isolation. `scripts/paired_benchmark_gate.py`
 owns the fixed `C R` warmups, fixed five-pair production or ten-pair diagnostic
 inventory, paired ratio/MAD comparison, hard-state equivalence, checksums, and
 four-profile decision aggregation. Diagnostic aggregation requires the trusted
@@ -70,7 +71,7 @@ COLDKEEP_CODEC=aes-gcm python3 scripts/paired_benchmark_gate.py sample \
   --reference-sha <40-character-sha> \
   --candidate-sha <40-character-sha> \
   --output-dir /controlled/artifact \
-  --dataset ci-paired-w4-v1 \
+  --dataset ci-paired-w4-v2 \
   --compression none \
   --workers 4 \
   --mode diagnostic \
@@ -80,12 +81,31 @@ COLDKEEP_CODEC=aes-gcm python3 scripts/paired_benchmark_gate.py sample \
   --database-image-digest 'sha256:<pinned-digest>'
 ```
 
-The command timeout is fixed at 600 seconds. Qualification requires all ten
+The command timeout is fixed at 600 seconds and is capped by the remaining
+35-minute sampler-owned profile budget. The harness terminates and reaps the
+active process group when that budget expires, performs compensating cleanup,
+and emits a checksummed non-authoritative
+`DIAGNOSTIC_TIME_BUDGET_EXCEEDED` artifact. Qualification requires all ten
 pairs, median ratios within 0.95–1.05, paired MAD no greater than 2.5%, exact
 hard state, valid counters and cleanup, no timeout, and completion within the
-35-minute diagnostic profile limit. Exact bounds pass. Samples cannot be
+35-minute diagnostic profile limit. A failure decision is also checksummed and
+records missing, invalid, failed, verified, and not-evaluated profiles without
+claiming absent evidence was verified. Exact bounds pass. Samples cannot be
 discarded or extended. No paired reference manifest or numeric production
 threshold policy exists.
+
+The v2 fixtures retain seed 1701, 1 KiB small files, the 1–256 KiB mixed range,
+`remove_every=4`, all nine cases, and ten diagnostic pairs. Both use a 64 MiB
+large file and 400 small files; w1 retains 400 mixed files and w4 retains 800.
+The earlier v1 definitions remain parseable for historical evidence but are no
+longer selected by the four-profile diagnostic matrix.
+
+Any future temporary launcher must keep sensitive values out of YAML `env:`
+blocks, mask runner roots before checkout, provision its isolated container
+only after masking, generate credentials and fixture material inside a
+tracing-disabled shell, and upload already-finalized evidence with
+`if: always()`. `scripts/audit_ci_enforcement.sh --paired-launcher <path>`
+checks this source contract without adding or authorizing a workflow.
 
 The stopped local A/A probe completed only its two excluded warmups and is
 non-authoritative, non-PASS partial evidence. It is not qualification evidence
