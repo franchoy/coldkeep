@@ -1,0 +1,371 @@
+name: Phase 11 Bounded Paired Benchmark Qualification
+
+on:
+  push:
+    branches:
+      - release/v1.13.11
+    paths:
+      - .github/workflows/benchmark-paired-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase11-bounded-paired-qualification-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  sample:
+    name: sample (${{ matrix.profile }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: none-w1
+            compression: none
+            workers: 1
+            dataset: ci-paired-w1-v2
+          - profile: none-w4
+            compression: none
+            workers: 4
+            dataset: ci-paired-w4-v2
+          - profile: zstd-w1
+            compression: zstd
+            workers: 1
+            dataset: ci-paired-w1-v2
+          - profile: zstd-w4
+            compression: zstd
+            workers: 4
+            dataset: ci-paired-w4-v2
+
+    steps:
+      - name: Mask runner and controlled roots
+        shell: bash
+        run: |
+          set +x
+          echo "::add-mask::$GITHUB_WORKSPACE"
+          echo "::add-mask::$RUNNER_TEMP"
+          echo "::add-mask::$HOME"
+          build_root="${RUNNER_TEMP}/coldkeep-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}"
+          runtime_parent="${RUNNER_TEMP}/coldkeep-runtime-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}"
+          profile_parent="${GITHUB_WORKSPACE}/paired-evidence-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.profile }}"
+          profile_output="${profile_parent}/profile"
+          for value in \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${HOME}" \
+            "${GITHUB_WORKSPACE}/candidate" "${GITHUB_WORKSPACE}/reference" \
+            "${build_root}" "${runtime_parent}" "${profile_parent}" \
+            "${profile_output}"; do
+            echo "::add-mask::${value}"
+          done
+          echo '::add-mask::coldkeep_bench_'
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout exact reference
+        uses: actions/checkout@v6
+        with:
+          ref: 0e476025590bd6b8cbb855f464815b937d0b7303
+          path: reference
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate diagnostic event and source governance
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          reference_sha='0e476025590bd6b8cbb855f464815b937d0b7303'
+          candidate_sha='${{ github.sha }}'
+          launcher_path='.github/workflows/benchmark-paired-diagnostic.yml'
+
+          test '${{ github.event_name }}' = 'push'
+          test '${{ github.ref }}' = 'refs/heads/release/v1.13.11'
+          test '${{ github.event.forced }}' = 'false'
+          [[ "${candidate_sha}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C candidate rev-parse HEAD)" = "${candidate_sha}"
+          test "$(git -C candidate rev-parse HEAD^)" = "${reference_sha}"
+          test "$(git -C reference rev-parse HEAD)" = "${reference_sha}"
+
+          changed="$(git -C candidate diff --name-status "${reference_sha}" "${candidate_sha}")"
+          expected="$(printf 'A\t%s' "${launcher_path}")"
+          if [[ "${changed}" != "${expected}" ]]; then
+            echo 'candidate must add only the bounded paired diagnostic launcher' >&2
+            exit 2
+          fi
+
+          printf 'candidate12=%s\n' "${candidate_sha:0:12}" >> "${GITHUB_OUTPUT}"
+          printf 'reference12=%s\n' "${reference_sha:0:12}" >> "${GITHUB_OUTPUT}"
+
+      - name: Setup exact Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.12'
+          cache: true
+          cache-dependency-path: |
+            candidate/go.sum
+            reference/go.sum
+
+      - name: Build and verify byte-identical binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          build_root="${RUNNER_TEMP}/coldkeep-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}"
+          mkdir -p "${build_root}"
+          (
+            cd reference
+            env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+              go build -trimpath -buildvcs=false \
+              -o "${build_root}/reference-coldkeep" ./cmd/coldkeep
+          )
+          (
+            cd candidate
+            env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+              go build -trimpath -buildvcs=false \
+              -o "${build_root}/candidate-coldkeep" ./cmd/coldkeep
+          )
+          reference_hash="$(sha256sum "${build_root}/reference-coldkeep" | awk '{print $1}')"
+          candidate_hash="$(sha256sum "${build_root}/candidate-coldkeep" | awk '{print $1}')"
+          if [[ "${reference_hash}" != "${candidate_hash}" ]] || \
+             ! cmp --silent "${build_root}/reference-coldkeep" "${build_root}/candidate-coldkeep"; then
+            echo '{"classification":"BINARY_IDENTITY_INVALID"}' >&2
+            exit 2
+          fi
+
+      - name: Run fixed bounded diagnostic profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+
+          container_id=''
+          runtime_root=''
+          cleanup() {
+            set +e
+            if [[ -n "${container_id}" ]]; then
+              docker rm --force "${container_id}" >/dev/null 2>&1
+            fi
+            if [[ -n "${runtime_root}" ]]; then
+              rm -rf -- "${runtime_root}"
+            fi
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          token="$(openssl rand -hex 12)"
+          container_name="ck-${token}"
+          db_role="u${token}"
+          db_name="d${token}"
+          db_password="$(openssl rand -hex 32)"
+          db_host='127.0.0.1'
+          aes_key="$(openssl rand -hex 32)"
+          aes_fixture="$(openssl rand -hex 32)"
+          benchmark_namespace="b$(openssl rand -hex 12)"
+          runtime_parent="${RUNNER_TEMP}/coldkeep-runtime-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}"
+          mkdir -p "${runtime_parent}"
+          runtime_root="$(mktemp -d "${runtime_parent}/root.XXXXXXXX")"
+
+          for value in \
+            "${token}" "${container_name}" "${db_role}" "${db_name}" \
+            "${db_password}" "${db_host}" "${aes_key}" "${aes_fixture}" \
+            "${benchmark_namespace}" "${runtime_parent}" "${runtime_root}"; do
+            echo "::add-mask::${value}"
+          done
+
+          container_id="$(docker run --detach --name "${container_name}" \
+            --publish 127.0.0.1::5432 \
+            --env POSTGRES_USER="${db_role}" \
+            --env POSTGRES_PASSWORD="${db_password}" \
+            --env POSTGRES_DB="${db_name}" \
+            postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20)"
+          echo "::add-mask::${container_id}"
+
+          port_mapping="$(docker port "${container_id}" 5432/tcp)"
+          db_port="${port_mapping##*:}"
+          echo "::add-mask::${port_mapping}"
+          echo "::add-mask::${db_port}"
+
+          ready='false'
+          for _ in $(seq 1 60); do
+            if docker exec "${container_id}" \
+              pg_isready --username "${db_role}" --dbname "${db_name}" \
+              >/dev/null 2>&1; then
+              ready='true'
+              break
+            fi
+            sleep 1
+          done
+          test "${ready}" = 'true'
+
+          postgres_version="$(docker exec "${container_id}" postgres --version)"
+          build_root="${RUNNER_TEMP}/coldkeep-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}"
+          profile_parent="${GITHUB_WORKSPACE}/paired-evidence-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.profile }}"
+          profile_output="${profile_parent}/profile"
+          mkdir -p "${profile_parent}" "${runtime_root}/tmp"
+          test ! -e "${profile_output}"
+
+          env \
+            TMPDIR="${runtime_root}/tmp" \
+            COLDKEEP_DB_AUTO_BOOTSTRAP=true \
+            COLDKEEP_CODEC=aes-gcm \
+            COLDKEEP_KEY="${aes_key}" \
+            COLDKEEP_AES_GCM_FIXTURE_HEX="${aes_fixture}" \
+            COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS=12 \
+            COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15 \
+            COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900 \
+            COLDKEEP_TEST_DB_MAINTENANCE="${db_name}" \
+            DB_HOST="${db_host}" \
+            DB_PORT="${db_port}" \
+            DB_USER="${db_role}" \
+            DB_PASSWORD="${db_password}" \
+            DB_NAME="${db_name}" \
+            DB_SSLMODE=disable \
+            python3 candidate/scripts/paired_benchmark_gate.py sample \
+              --reference-binary "${build_root}/reference-coldkeep" \
+              --candidate-binary "${build_root}/candidate-coldkeep" \
+              --reference-sha 0e476025590bd6b8cbb855f464815b937d0b7303 \
+              --candidate-sha '${{ github.sha }}' \
+              --output-dir "${profile_output}" \
+              --dataset '${{ matrix.dataset }}' \
+              --compression '${{ matrix.compression }}' \
+              --workers '${{ matrix.workers }}' \
+              --mode diagnostic \
+              --pairs 10 \
+              --command-timeout-seconds 600 \
+              --go-version "$(go version)" \
+              --postgres-version "${postgres_version}" \
+              --database-image-digest 'sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20'
+
+      - name: Upload immutable profile evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-paired-${{ steps.preflight.outputs.candidate12 }}-against-${{ steps.preflight.outputs.reference12 }}-${{ matrix.compression }}-w${{ matrix.workers }}-a${{ github.run_attempt }}
+          path: paired-evidence-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.profile }}/profile
+          if-no-files-found: error
+
+  decision:
+    name: decision
+    needs: sample
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Mask runner and controlled roots
+        shell: bash
+        run: |
+          set +x
+          echo "::add-mask::$GITHUB_WORKSPACE"
+          echo "::add-mask::$RUNNER_TEMP"
+          echo "::add-mask::$HOME"
+          download_root="${GITHUB_WORKSPACE}/paired-download-${{ github.run_id }}-${{ github.run_attempt }}"
+          decision_parent="${GITHUB_WORKSPACE}/paired-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+          decision_output="${decision_parent}/decision"
+          for value in \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${HOME}" \
+            "${GITHUB_WORKSPACE}/candidate" "${download_root}" \
+            "${decision_parent}" "${decision_output}"; do
+            echo "::add-mask::${value}"
+          done
+          echo '::add-mask::coldkeep_bench_'
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate decision source governance
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          reference_sha='0e476025590bd6b8cbb855f464815b937d0b7303'
+          candidate_sha='${{ github.sha }}'
+          launcher_path='.github/workflows/benchmark-paired-diagnostic.yml'
+
+          test '${{ github.event_name }}' = 'push'
+          test '${{ github.ref }}' = 'refs/heads/release/v1.13.11'
+          test '${{ github.event.forced }}' = 'false'
+          [[ "${candidate_sha}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C candidate rev-parse HEAD)" = "${candidate_sha}"
+          test "$(git -C candidate rev-parse HEAD^)" = "${reference_sha}"
+          changed="$(git -C candidate diff --name-status "${reference_sha}" "${candidate_sha}")"
+          expected="$(printf 'A\t%s' "${launcher_path}")"
+          test "${changed}" = "${expected}"
+
+          printf 'candidate12=%s\n' "${candidate_sha:0:12}" >> "${GITHUB_OUTPUT}"
+          printf 'reference12=%s\n' "${reference_sha:0:12}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download none-w1 evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: benchmark-paired-${{ steps.preflight.outputs.candidate12 }}-against-${{ steps.preflight.outputs.reference12 }}-none-w1-a${{ github.run_attempt }}
+          path: paired-download-${{ github.run_id }}-${{ github.run_attempt }}/none-w1
+
+      - name: Download none-w4 evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: benchmark-paired-${{ steps.preflight.outputs.candidate12 }}-against-${{ steps.preflight.outputs.reference12 }}-none-w4-a${{ github.run_attempt }}
+          path: paired-download-${{ github.run_id }}-${{ github.run_attempt }}/none-w4
+
+      - name: Download zstd-w1 evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: benchmark-paired-${{ steps.preflight.outputs.candidate12 }}-against-${{ steps.preflight.outputs.reference12 }}-zstd-w1-a${{ github.run_attempt }}
+          path: paired-download-${{ github.run_id }}-${{ github.run_attempt }}/zstd-w1
+
+      - name: Download zstd-w4 evidence
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: benchmark-paired-${{ steps.preflight.outputs.candidate12 }}-against-${{ steps.preflight.outputs.reference12 }}-zstd-w4-a${{ github.run_attempt }}
+          path: paired-download-${{ github.run_id }}-${{ github.run_attempt }}/zstd-w4
+
+      - name: Evaluate diagnostic qualification
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          download_root="${GITHUB_WORKSPACE}/paired-download-${{ github.run_id }}-${{ github.run_attempt }}"
+          decision_parent="${GITHUB_WORKSPACE}/paired-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+          decision_output="${decision_parent}/decision"
+          mkdir -p "${decision_parent}"
+          test ! -e "${decision_output}"
+          python3 candidate/scripts/paired_benchmark_gate.py decision \
+            --mode diagnostic \
+            --profile "none-w1=${download_root}/none-w1" \
+            --profile "none-w4=${download_root}/none-w4" \
+            --profile "zstd-w1=${download_root}/zstd-w1" \
+            --profile "zstd-w4=${download_root}/zstd-w4" \
+            --output-dir "${decision_output}"
+
+      - name: Upload immutable decision evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-paired-${{ steps.preflight.outputs.candidate12 }}-against-${{ steps.preflight.outputs.reference12 }}-decision-a${{ github.run_attempt }}
+          path: paired-decision-${{ github.run_id }}-${{ github.run_attempt }}/decision
+          if-no-files-found: error
