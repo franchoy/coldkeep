@@ -11,6 +11,7 @@ import pathlib
 import tempfile
 import unittest
 from copy import deepcopy
+from unittest import mock
 
 MODULE_PATH = pathlib.Path(__file__).with_name("benchmark_gate.py")
 SPEC = importlib.util.spec_from_file_location("benchmark_gate", MODULE_PATH)
@@ -19,9 +20,9 @@ gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 
 
-def fixture() -> dict:
+def fixture(dataset: str = gate.FIXTURE_ID) -> dict:
     return {
-        **gate.FIXTURE_FIELDS,
+        **gate.fixture_fields(dataset),
         "ordered_cases": [
             {"name": name, "seed": 1712 + index * 10}
             for index, name in enumerate(gate.EXPECTED_CASES)
@@ -134,7 +135,9 @@ def raw_row(case: str = "store-large-file", *, workers: int = 4) -> dict:
     }
 
 
-def raw_report(*, workers: int = 4, compression: str = "none") -> dict:
+def raw_report(
+    *, workers: int = 4, compression: str = "none", dataset: str = gate.FIXTURE_ID
+) -> dict:
     rows = [raw_row(case, workers=workers) for case in gate.EXPECTED_CASES]
     total_io = {
         field: sum(row["execution_stats"]["io"][field] for row in rows)
@@ -143,9 +146,9 @@ def raw_report(*, workers: int = 4, compression: str = "none") -> dict:
     data = {
         "schema_version": gate.SCHEMA_VERSION,
         "generated_at_utc": "2026-07-25T00:00:00Z",
-        "dataset": gate.FIXTURE_ID,
+        "dataset": dataset,
         "repeat": 1,
-        "fixture": fixture(),
+        "fixture": fixture(dataset),
         "execution": {
             "store_folder_workers": workers,
             "pipeline_depth": 1,
@@ -171,7 +174,9 @@ def raw_report(*, workers: int = 4, compression: str = "none") -> dict:
         "rows": rows,
     }
     report = {"status": "ok", "command": "benchmark", "data": data}
-    gate.validate_raw_report(report, workers=workers, compression=compression)
+    gate.validate_raw_report(
+        report, workers=workers, compression=compression, dataset=dataset
+    )
     return report
 
 
@@ -591,6 +596,90 @@ class OutcomeEPolicyTests(unittest.TestCase):
                 result["cases"][4]["operational_counter_distributions"]["fsync_count"]["values"],
                 [1, 2],
             )
+
+
+class IntegrityCommandTests(unittest.TestCase):
+    def args(self, root: pathlib.Path, *, dataset: str = "ci-paired-w1-v2") -> argparse.Namespace:
+        root.mkdir(parents=True, exist_ok=True)
+        binary = root / "coldkeep"
+        binary.write_bytes(b"binary")
+        return argparse.Namespace(
+            binary=binary,
+            output_dir=root / "owned" / "integrity",
+            compression="none",
+            workers=1,
+            dataset=dataset,
+            command_timeout_seconds=600,
+            source_commit="a" * 40,
+            source_tag=None,
+            go_version="go version go1.25.12 linux/amd64",
+            postgres_version="postgres (PostgreSQL) 16",
+            database_image_digest="sha256:" + "b" * 64,
+        )
+
+    def environment(self) -> dict[str, str]:
+        return {
+            "COLDKEEP_CODEC": "aes-gcm",
+            "DB_HOST": "127.0.0.1",
+            "DB_PORT": "5432",
+            "DB_USER": "test",
+            "DB_PASSWORD": "test",
+            "DB_NAME": "test",
+            "DB_SSLMODE": "disable",
+        }
+
+    def test_integrity_success_owns_output_and_checksums_every_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            args = self.args(root)
+            report = raw_report(workers=1, dataset=args.dataset)
+
+            def capture(_args, path, _binary_hash):
+                gate.write_json(path, report)
+                path.with_suffix(".stderr").write_text("", encoding="utf-8")
+                point = {"load_1m": 0, "load_5m": 0, "load_15m": 0, "free_disk_bytes": 1}
+                return deepcopy(report), 1000.0, {"before": point, "after": point}
+
+            with mock.patch.dict(gate.os.environ, self.environment(), clear=False), mock.patch.object(
+                gate, "capture_sample", side_effect=capture
+            ):
+                self.assertEqual(gate.integrity_command(args), 0)
+            result = gate.load_json_strict(args.output_dir / "benchmark-integrity.json")
+            gate.validate_integrity_report(result)
+            self.assertEqual(result["classification"], "BENCHMARK_INTEGRITY_PASS")
+            self.assertEqual(result["completed_sample_count"], 2)
+            checksum_lines = (args.output_dir / "checksums.sha256").read_text().splitlines()
+            self.assertEqual(len(checksum_lines), 6)
+            self.assertTrue(any(line.endswith("  aggregate.json") for line in checksum_lines))
+
+    def test_integrity_failure_is_checksummed_without_aggregate_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            args = self.args(root)
+            with mock.patch.dict(gate.os.environ, self.environment(), clear=False), mock.patch.object(
+                gate, "capture_sample", side_effect=gate.GateError("raw contract mismatch")
+            ):
+                self.assertEqual(gate.integrity_command(args), 2)
+            result = gate.load_json_strict(args.output_dir / "benchmark-integrity.json")
+            gate.validate_integrity_report(result)
+            self.assertEqual(result["classification"], "BENCHMARK_INTEGRITY_FAILURE")
+            self.assertIsNone(result["aggregate_file"])
+            self.assertEqual(result["completed_prefix"], [])
+            self.assertIsNone(result["active_invocation"])
+            self.assertEqual(result["incomplete_invocation"]["sample_index"], 1)
+            self.assertFalse((args.output_dir / "aggregate.json").exists())
+            self.assertTrue((args.output_dir / "checksums.sha256").is_file())
+
+    def test_integrity_rejects_existing_output_and_worker_fixture_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            args = self.args(root)
+            args.output_dir.mkdir(parents=True)
+            with self.assertRaisesRegex(gate.GateError, "must not exist"):
+                gate.integrity_command(args)
+            args = self.args(root / "second", dataset="ci-paired-w4-v2")
+            with self.assertRaisesRegex(gate.GateError, "worker profile mismatch"):
+                gate.integrity_command(args)
 
 
 class ComparisonTests(unittest.TestCase):

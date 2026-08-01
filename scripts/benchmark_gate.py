@@ -22,6 +22,7 @@ from typing import Any, Iterable
 SCHEMA_VERSION = 2
 REPORT_KIND = "benchmark_gate_aggregate"
 REVALIDATION_KIND = "benchmark_evidence_contract_revalidation"
+INTEGRITY_KIND = "benchmark_integrity"
 MANIFEST_KIND = "benchmark_gate_manifest"
 FIXTURE_ID = "ci-stable-v1"
 FIXTURE_FIELDS = {
@@ -35,6 +36,34 @@ FIXTURE_FIELDS = {
     "mixed_max_file_size_bytes": 256 * 1024,
     "remove_every": 4,
     "case_database_isolation": True,
+}
+INTEGRITY_FIXTURES = {
+    "ci-paired-w1-v2": {
+        "id": "ci-paired-w1-v2",
+        "seed": 1701,
+        "large_file_size_bytes": 64 * 1024 * 1024,
+        "many_small_file_count": 400,
+        "many_small_file_size_bytes": 1024,
+        "mixed_file_count": 400,
+        "mixed_min_file_size_bytes": 1024,
+        "mixed_max_file_size_bytes": 256 * 1024,
+        "remove_every": 4,
+        "case_database_isolation": True,
+        "workers": 1,
+    },
+    "ci-paired-w4-v2": {
+        "id": "ci-paired-w4-v2",
+        "seed": 1701,
+        "large_file_size_bytes": 64 * 1024 * 1024,
+        "many_small_file_count": 400,
+        "many_small_file_size_bytes": 1024,
+        "mixed_file_count": 800,
+        "mixed_min_file_size_bytes": 1024,
+        "mixed_max_file_size_bytes": 256 * 1024,
+        "remove_every": 4,
+        "case_database_isolation": True,
+        "workers": 4,
+    },
 }
 EXPECTED_CASES = [
     "store-large-file",
@@ -80,6 +109,8 @@ MANIFEST_PROFILES = {
 DIAGNOSTIC_SCHEMA_VERSION = 2
 EVIDENCE_POLICY_VERSION = 2
 INT64_MAX = (1 << 63) - 1
+INTEGRITY_SAMPLE_COUNT = 2
+INTEGRITY_COMMAND_TIMEOUT_SECONDS = 600
 
 # Outcome E evidence policy. Paths use [] for repeated case/sample records.
 # Unknown fields in validated sections fail closed; adding a field requires an
@@ -291,6 +322,14 @@ def write_json(path: pathlib.Path, value: Any) -> None:
     )
 
 
+def write_checksums(directory: pathlib.Path) -> None:
+    entries = []
+    for path in sorted(directory.rglob("*")):
+        if path.is_file() and path.name != "checksums.sha256":
+            entries.append(f"{sha256_file(path)}  {path.relative_to(directory).as_posix()}")
+    (directory / "checksums.sha256").write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+
 def require_exact_fields(value: Any, expected: set[str], label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise GateError(f"{label} must be an object")
@@ -326,6 +365,15 @@ def validate_no_sensitive_evidence(value: Any, label: str = "evidence") -> None:
                 raise GateError(f"{label} contains prohibited sensitive value at {path}")
 
     visit(value, label)
+
+
+def write_sanitized_capture(path: pathlib.Path, value: str) -> None:
+    try:
+        validate_no_sensitive_evidence({"capture": value}, "captured output")
+    except GateError:
+        value = "[captured output omitted: sensitive content]\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
 
 
 def require_number(value: Any, label: str, *, positive: bool = False) -> float:
@@ -652,15 +700,25 @@ def validate_top_execution_stats(value: Any, rows: list[dict[str, Any]], *, work
             raise GateError(f"raw aggregate I/O {field} does not match case rows")
 
 
-def validate_fixture(fixture: Any) -> list[dict[str, Any]]:
+def fixture_fields(dataset: str) -> dict[str, Any]:
+    if dataset == FIXTURE_ID:
+        return FIXTURE_FIELDS
+    configured = INTEGRITY_FIXTURES.get(dataset)
+    if configured is None:
+        raise GateError(f"unsupported benchmark fixture {dataset!r}")
+    return {key: value for key, value in configured.items() if key != "workers"}
+
+
+def validate_fixture(fixture: Any, *, dataset: str = FIXTURE_ID) -> list[dict[str, Any]]:
+    expected_fields = fixture_fields(dataset)
     fixture = require_exact_fields(
         fixture,
-        set(FIXTURE_FIELDS) | {"ordered_cases"},
+        set(expected_fields) | {"ordered_cases"},
         "fixture",
     )
-    for field, expected in FIXTURE_FIELDS.items():
+    for field, expected in expected_fields.items():
         if fixture.get(field) != expected:
-            raise GateError(f"fixture field {field!r} does not match {FIXTURE_ID}")
+            raise GateError(f"fixture field {field!r} does not match {dataset}")
     ordered = fixture.get("ordered_cases")
     if not isinstance(ordered, list) or len(ordered) != len(EXPECTED_CASES):
         raise GateError("fixture ordered case count mismatch")
@@ -707,6 +765,7 @@ def validate_raw_report(
     *,
     workers: int,
     compression: str,
+    dataset: str = FIXTURE_ID,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     require_exact_fields(envelope, RAW_ENVELOPE_FIELDS, "raw report envelope")
     if envelope.get("status") != "ok" or envelope.get("command") != "benchmark":
@@ -714,12 +773,12 @@ def validate_raw_report(
     data = require_exact_fields(envelope.get("data"), RAW_DATA_FIELDS, "raw report data")
     if data.get("schema_version") != SCHEMA_VERSION:
         raise GateError(f"raw report schema must be {SCHEMA_VERSION}")
-    if data.get("dataset") != FIXTURE_ID or data.get("repeat") != 1:
+    if data.get("dataset") != dataset or data.get("repeat") != 1:
         raise GateError("raw report has the wrong dataset or repeat count")
 
     execution = validate_execution(data.get("execution"), workers=workers, label="raw report execution")
 
-    validate_fixture(data.get("fixture"))
+    validate_fixture(data.get("fixture"), dataset=dataset)
 
     rows = data.get("rows")
     if not isinstance(rows, list) or not rows:
@@ -814,32 +873,46 @@ def capture_sample(
         raise GateError("benchmark binary hash changed during sampling")
     before = host_load()
     started = time.monotonic()
-    completed = subprocess.run(
-        [
-            str(args.binary),
-            "benchmark",
-            "run",
-            "--dataset",
-            args.dataset,
-            "--workers",
-            str(args.workers),
-            "--repeat",
-            "1",
-            "--output",
-            "json",
-        ],
-        text=True,
-        capture_output=True,
-        env={**os.environ, "COLDKEEP_COMPRESSION": args.compression},
-    )
+    try:
+        completed = subprocess.run(
+            [
+                str(args.binary),
+                "benchmark",
+                "run",
+                "--dataset",
+                args.dataset,
+                "--workers",
+                str(args.workers),
+                "--repeat",
+                "1",
+                "--output",
+                "json",
+            ],
+            text=True,
+            capture_output=True,
+            env={**os.environ, "COLDKEEP_COMPRESSION": args.compression},
+            timeout=getattr(args, "command_timeout_seconds", None),
+        )
+    except subprocess.TimeoutExpired as exc:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        output_path.write_text(stdout, encoding="utf-8")
+        write_sanitized_capture(output_path.with_suffix(".stderr"), stderr)
+        raise GateError("benchmark command timeout") from exc
     elapsed_ms = (time.monotonic() - started) * 1000.0
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(completed.stdout, encoding="utf-8")
-    output_path.with_suffix(".stderr").write_text(completed.stderr, encoding="utf-8")
+    write_sanitized_capture(output_path.with_suffix(".stderr"), completed.stderr)
     if completed.returncode != 0:
         raise GateError(f"benchmark sample failed with exit {completed.returncode}")
     envelope = load_json_strict(output_path)
-    validate_raw_report(envelope, workers=args.workers, compression=args.compression)
+    validate_raw_report(
+        envelope,
+        workers=args.workers,
+        compression=args.compression,
+        dataset=args.dataset,
+    )
     return envelope, elapsed_ms, {"before": before, "after": host_load()}
 
 
@@ -848,11 +921,12 @@ def build_contract_cases(
     *,
     workers: int,
     compression: str,
+    dataset: str = FIXTURE_ID,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not raw_reports:
         raise GateError("cannot aggregate an empty raw report set")
     first_data, first_rows = validate_raw_report(
-        raw_reports[0], workers=workers, compression=compression
+        raw_reports[0], workers=workers, compression=compression, dataset=dataset
     )
     fixture_cases = first_data["fixture"]["ordered_cases"]
     cases: list[dict[str, Any]] = []
@@ -872,7 +946,7 @@ def build_contract_cases(
         operational_samples: list[dict[str, int]] = []
         for sample_index, envelope in enumerate(raw_reports):
             data, rows = validate_raw_report(
-                envelope, workers=workers, compression=compression
+                envelope, workers=workers, compression=compression, dataset=dataset
             )
             if data["fixture"] != first_data["fixture"] or data["execution"] != first_data["execution"]:
                 raise GateError(f"fixture/profile changed in sample {sample_index + 1}")
@@ -1012,6 +1086,7 @@ def sample_command(args: argparse.Namespace) -> int:
         raw_reports,
         workers=args.workers,
         compression=args.compression,
+        dataset=args.dataset,
     )
 
     aggregate = {
@@ -1044,6 +1119,218 @@ def sample_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def validate_integrity_report(report: dict[str, Any]) -> None:
+    report = require_exact_fields(
+        report,
+        {
+            "schema_version", "evidence_policy_version", "report_kind", "status",
+            "classification", "authority", "profile", "expected_sample_count",
+            "completed_sample_count", "completed_prefix", "active_invocation",
+            "incomplete_invocation", "aggregate_file", "hard_state", "counters",
+            "cleanup", "failure",
+        },
+        "benchmark integrity report",
+    )
+    if (
+        report["schema_version"] != 1
+        or report["evidence_policy_version"] != EVIDENCE_POLICY_VERSION
+        or report["report_kind"] != INTEGRITY_KIND
+    ):
+        raise GateError("benchmark integrity report identity mismatch")
+    require_exact_fields(
+        report["authority"],
+        {"integrity_authority", "performance_authority"},
+        "benchmark integrity authority",
+    )
+    if report["authority"] != {"integrity_authority": True, "performance_authority": False}:
+        raise GateError("benchmark integrity authority mismatch")
+    profile = require_exact_fields(
+        report["profile"], {"compression", "workers", "dataset"}, "benchmark integrity profile"
+    )
+    configured = INTEGRITY_FIXTURES.get(profile["dataset"])
+    if (
+        configured is None
+        or configured["workers"] != profile["workers"]
+        or profile["compression"] not in {"none", "zstd"}
+    ):
+        raise GateError("benchmark integrity profile mismatch")
+    expected = require_nonnegative_integer(report["expected_sample_count"], "expected sample count")
+    completed = require_nonnegative_integer(report["completed_sample_count"], "completed sample count")
+    if (
+        expected != INTEGRITY_SAMPLE_COUNT
+        or completed > expected
+        or report["completed_prefix"] != [f"raw/sample-{index:02d}.json" for index in range(1, completed + 1)]
+    ):
+        raise GateError("benchmark integrity sample inventory mismatch")
+    if report["status"] == "complete":
+        if (
+            report["classification"] != "BENCHMARK_INTEGRITY_PASS"
+            or completed != expected
+            or report["aggregate_file"] != "aggregate.json"
+            or report["hard_state"] != "equal"
+            or report["counters"] != "valid"
+            or report["cleanup"] != "complete"
+            or report["failure"] is not None
+            or report["active_invocation"] is not None
+            or report["incomplete_invocation"] is not None
+        ):
+            raise GateError("benchmark integrity success claims mismatch")
+    elif report["status"] == "failed":
+        if (
+            report["classification"] != "BENCHMARK_INTEGRITY_FAILURE"
+            or report["aggregate_file"] is not None
+            or report["hard_state"] not in {"not_evaluated", "prefix_valid"}
+            or report["counters"] not in {"not_evaluated", "prefix_valid"}
+            or report["cleanup"] not in {"not_verified", "complete"}
+            or report["failure"] not in {
+                "command_timeout", "contract_or_command_failure", "infrastructure_failure"
+            }
+            or report["active_invocation"] is not None
+            or report["incomplete_invocation"] != (
+                None
+                if completed == expected
+                else {
+                    "sample_index": completed + 1,
+                    "raw_file": f"raw/sample-{completed + 1:02d}.json",
+                    "stderr_file": f"raw/sample-{completed + 1:02d}.stderr",
+                }
+            )
+        ):
+            raise GateError("benchmark integrity failure claims mismatch")
+    else:
+        raise GateError("benchmark integrity status mismatch")
+    validate_no_sensitive_evidence(report, "benchmark integrity report")
+
+
+def integrity_command(args: argparse.Namespace) -> int:
+    configured = INTEGRITY_FIXTURES.get(args.dataset)
+    if configured is None or configured["workers"] != args.workers:
+        raise GateError("integrity dataset and worker profile mismatch")
+    if args.command_timeout_seconds != INTEGRITY_COMMAND_TIMEOUT_SECONDS:
+        raise GateError("integrity command timeout must be 600 seconds")
+    if not args.binary.is_file():
+        raise GateError("integrity binary does not exist")
+    if args.output_dir.exists():
+        raise GateError("integrity output directory must not exist")
+    if os.environ.get("COLDKEEP_CODEC") != "aes-gcm":
+        raise GateError("integrity sampling requires COLDKEEP_CODEC=aes-gcm")
+    for name in ("DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SSLMODE"):
+        if not os.environ.get(name):
+            raise GateError(f"integrity sampling requires {name}")
+
+    args.binary = args.binary.resolve()
+    args.output_dir.parent.mkdir(parents=True, exist_ok=True)
+    args.output_dir.mkdir()
+    binary_hash = sha256_file(args.binary)
+    raw_reports: list[dict[str, Any]] = []
+    command_durations: list[float] = []
+    loads: list[dict[str, Any]] = []
+    failure: str | None = None
+    try:
+        for index in range(INTEGRITY_SAMPLE_COUNT):
+            envelope, elapsed_ms, load = capture_sample(
+                args,
+                args.output_dir / "raw" / f"sample-{index + 1:02d}.json",
+                binary_hash,
+            )
+            raw_reports.append(envelope)
+            command_durations.append(elapsed_ms)
+            loads.append(load)
+        first_data, cases = build_contract_cases(
+            raw_reports,
+            workers=args.workers,
+            compression=args.compression,
+            dataset=args.dataset,
+        )
+        aggregate = {
+            "schema_version": SCHEMA_VERSION,
+            "evidence_policy_version": EVIDENCE_POLICY_VERSION,
+            "report_kind": REPORT_KIND,
+            "status": "ok",
+            "provenance": provenance(args, binary_hash),
+            "profile": {
+                "codec": "aes-gcm",
+                "compression": args.compression,
+                "dataset": args.dataset,
+                "workers": args.workers,
+                "pipeline_depth": 1,
+                "deterministic": True,
+            },
+            "fixture": first_data["fixture"],
+            "warmup_count": 0,
+            "sample_count": INTEGRITY_SAMPLE_COUNT,
+            "sample_order": [1, 2],
+            "command_durations_ms": command_durations,
+            "command_p95_ms": percentile_nearest_rank(command_durations, 0.95),
+            "host_observations": loads,
+            "operation_totals": operation_totals(INTEGRITY_SAMPLE_COUNT),
+            "cleanup_totals": cleanup_totals(INTEGRITY_SAMPLE_COUNT),
+            "cases": cases,
+        }
+        validate_aggregate(aggregate, require_gate_count=False)
+        write_json(args.output_dir / "aggregate.json", aggregate)
+        report = {
+            "schema_version": 1,
+            "evidence_policy_version": EVIDENCE_POLICY_VERSION,
+            "report_kind": INTEGRITY_KIND,
+            "status": "complete",
+            "classification": "BENCHMARK_INTEGRITY_PASS",
+            "authority": {"integrity_authority": True, "performance_authority": False},
+            "profile": {"compression": args.compression, "workers": args.workers, "dataset": args.dataset},
+            "expected_sample_count": INTEGRITY_SAMPLE_COUNT,
+            "completed_sample_count": len(raw_reports),
+            "completed_prefix": [f"raw/sample-{index:02d}.json" for index in range(1, len(raw_reports) + 1)],
+            "active_invocation": None,
+            "incomplete_invocation": None,
+            "aggregate_file": "aggregate.json",
+            "hard_state": "equal",
+            "counters": "valid",
+            "cleanup": "complete",
+            "failure": None,
+        }
+    except subprocess.TimeoutExpired:
+        failure = "command_timeout"
+    except GateError as exc:
+        failure = "command_timeout" if "timeout" in str(exc).lower() else "contract_or_command_failure"
+    except (OSError, subprocess.CalledProcessError):
+        failure = "infrastructure_failure"
+
+    if failure is not None:
+        prefix_valid = bool(raw_reports)
+        report = {
+            "schema_version": 1,
+            "evidence_policy_version": EVIDENCE_POLICY_VERSION,
+            "report_kind": INTEGRITY_KIND,
+            "status": "failed",
+            "classification": "BENCHMARK_INTEGRITY_FAILURE",
+            "authority": {"integrity_authority": True, "performance_authority": False},
+            "profile": {"compression": args.compression, "workers": args.workers, "dataset": args.dataset},
+            "expected_sample_count": INTEGRITY_SAMPLE_COUNT,
+            "completed_sample_count": len(raw_reports),
+            "completed_prefix": [f"raw/sample-{index:02d}.json" for index in range(1, len(raw_reports) + 1)],
+            "active_invocation": None,
+            "incomplete_invocation": (
+                None
+                if len(raw_reports) == INTEGRITY_SAMPLE_COUNT
+                else {
+                    "sample_index": len(raw_reports) + 1,
+                    "raw_file": f"raw/sample-{len(raw_reports) + 1:02d}.json",
+                    "stderr_file": f"raw/sample-{len(raw_reports) + 1:02d}.stderr",
+                }
+            ),
+            "aggregate_file": None,
+            "hard_state": "prefix_valid" if prefix_valid else "not_evaluated",
+            "counters": "prefix_valid" if prefix_valid else "not_evaluated",
+            "cleanup": "not_verified",
+            "failure": failure,
+        }
+    validate_integrity_report(report)
+    write_json(args.output_dir / "benchmark-integrity.json", report)
+    write_checksums(args.output_dir)
+    print(json.dumps({"classification": report["classification"]}))
+    return 0 if report["classification"] == "BENCHMARK_INTEGRITY_PASS" else 2
+
+
 def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> None:
     require_exact_fields(report, AGGREGATE_FIELDS, "aggregate")
     if (
@@ -1062,10 +1349,12 @@ def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> N
     if report.get("sample_order") != list(range(1, sample_count + 1)):
         raise GateError("aggregate sample order mismatch")
     profile = require_exact_fields(report.get("profile"), PROFILE_FIELDS, "aggregate profile")
-    fixture_cases = validate_fixture(report.get("fixture"))
+    profile_value = report.get("profile")
+    profile_dataset = profile_value.get("dataset") if isinstance(profile_value, dict) else ""
+    fixture_cases = validate_fixture(report.get("fixture"), dataset=profile_dataset)
     validate_provenance(report.get("provenance"))
     if (
-        profile.get("dataset") != FIXTURE_ID
+        profile.get("dataset") not in {FIXTURE_ID, *INTEGRITY_FIXTURES}
         or profile.get("codec") != "aes-gcm"
         or profile.get("compression") not in {"none", "zstd"}
         or profile.get("workers") not in {1, 4}
@@ -1623,6 +1912,27 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--database-image-digest", required=True)
     sample.set_defaults(handler=sample_command)
 
+    integrity = subparsers.add_parser(
+        "integrity",
+        help="capture two candidate-only v2 samples with hard functional evidence",
+    )
+    integrity.add_argument("--binary", type=pathlib.Path, required=True)
+    integrity.add_argument("--output-dir", type=pathlib.Path, required=True)
+    integrity.add_argument("--compression", choices=("none", "zstd"), required=True)
+    integrity.add_argument("--workers", type=int, choices=(1, 4), required=True)
+    integrity.add_argument("--dataset", choices=tuple(INTEGRITY_FIXTURES), required=True)
+    integrity.add_argument(
+        "--command-timeout-seconds",
+        type=int,
+        default=INTEGRITY_COMMAND_TIMEOUT_SECONDS,
+    )
+    integrity.add_argument("--source-commit")
+    integrity.add_argument("--source-tag")
+    integrity.add_argument("--go-version")
+    integrity.add_argument("--postgres-version", required=True)
+    integrity.add_argument("--database-image-digest", required=True)
+    integrity.set_defaults(handler=integrity_command)
+
     revalidate = subparsers.add_parser(
         "revalidate-raw",
         help="validate preserved raw diagnostic reports without claiming calibration acceptance",
@@ -1666,7 +1976,7 @@ def main() -> int:
     args = build_parser().parse_args()
     try:
         return args.handler(args)
-    except (GateError, OSError, subprocess.CalledProcessError) as exc:
+    except (GateError, OSError, subprocess.SubprocessError) as exc:
         print(f"benchmark gate error: {exc}", file=sys.stderr)
         return 2
 
