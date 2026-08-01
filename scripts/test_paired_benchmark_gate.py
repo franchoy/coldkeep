@@ -23,6 +23,29 @@ gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 
 
+class FakeProcess:
+    def __init__(self, *, returncode: int = 0, stdout: str = "", stderr: str = "", timeout: bool = False):
+        self.returncode = None if timeout else returncode
+        self._final_returncode = returncode
+        self._stdout = stdout
+        self._stderr = stderr
+        self._timeout = timeout
+        self._communicates = 0
+        self.timeout_values: list[float | None] = []
+        self.pid = 424242
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+        self._communicates += 1
+        self.timeout_values.append(timeout)
+        if self._timeout and self._communicates == 1:
+            raise subprocess.TimeoutExpired(["coldkeep"], timeout or 0)
+        self.returncode = self._final_returncode
+        return self._stdout, self._stderr
+
+
 def fixture(dataset: str = "ci-paired-w1-v1") -> dict:
     expected = {key: value for key, value in gate.FIXTURES[dataset].items() if key != "workers"}
     return {
@@ -534,6 +557,32 @@ class PairedContractTests(unittest.TestCase):
                     "case_database_isolation": True,
                     "workers": 4,
                 },
+                "ci-paired-w1-v2": {
+                    "id": "ci-paired-w1-v2",
+                    "seed": 1701,
+                    "large_file_size_bytes": 64 * 1024 * 1024,
+                    "many_small_file_count": 400,
+                    "many_small_file_size_bytes": 1024,
+                    "mixed_file_count": 400,
+                    "mixed_min_file_size_bytes": 1024,
+                    "mixed_max_file_size_bytes": 256 * 1024,
+                    "remove_every": 4,
+                    "case_database_isolation": True,
+                    "workers": 1,
+                },
+                "ci-paired-w4-v2": {
+                    "id": "ci-paired-w4-v2",
+                    "seed": 1701,
+                    "large_file_size_bytes": 64 * 1024 * 1024,
+                    "many_small_file_count": 400,
+                    "many_small_file_size_bytes": 1024,
+                    "mixed_file_count": 800,
+                    "mixed_min_file_size_bytes": 1024,
+                    "mixed_max_file_size_bytes": 256 * 1024,
+                    "remove_every": 4,
+                    "case_database_isolation": True,
+                    "workers": 4,
+                },
             },
         )
         self.assertEqual(
@@ -1028,8 +1077,13 @@ class PairedContractTests(unittest.TestCase):
                 ("candidate", "CANDIDATE_TIMEOUT_INCONCLUSIVE"),
                 ("reference", "CI_INFRASTRUCTURE_TIMEOUT"),
             ):
-                with mock.patch.object(
-                    gate.subprocess, "run", side_effect=subprocess.TimeoutExpired(["coldkeep"], 1)
+                with (
+                    mock.patch.object(
+                        gate.subprocess,
+                        "Popen",
+                        return_value=FakeProcess(timeout=True),
+                    ),
+                    mock.patch.object(gate.os, "killpg"),
                 ):
                     with self.assertRaises(gate.PairedGateError) as caught:
                         gate._capture(
@@ -1097,12 +1151,15 @@ class PairedContractTests(unittest.TestCase):
             binary = root / "coldkeep"
             binary.write_bytes(b"binary")
             digest = gate._binary_hash(binary)
-            completed = subprocess.CompletedProcess(["coldkeep"], 2, stdout="", stderr="failed")
             for side, expected in (
                 ("candidate", "CANDIDATE_FUNCTIONAL_FAILURE"),
                 ("reference", "REFERENCE_FUNCTIONAL_FAILURE"),
             ):
-                with mock.patch.object(gate.subprocess, "run", return_value=completed):
+                with mock.patch.object(
+                    gate.subprocess,
+                    "Popen",
+                    return_value=FakeProcess(returncode=2, stderr="failed"),
+                ):
                     with self.assertRaises(gate.PairedGateError) as caught:
                         gate._capture(
                             binary=binary,
@@ -1134,7 +1191,7 @@ class PairedContractTests(unittest.TestCase):
                     "--output-dir",
                     str(output),
                     "--dataset",
-                    "ci-paired-w1-v1",
+                    "ci-paired-w1-v2",
                     "--compression",
                     "none",
                     "--workers",
@@ -1199,7 +1256,7 @@ class PairedContractTests(unittest.TestCase):
                 )
             report = gate.load_json_strict(terminated / "paired-comparison.json")
             self.assertEqual(report["classification"], "CI_INFRASTRUCTURE_TIMEOUT")
-            self.assertEqual(report["cleanup"]["status"], "incomplete")
+            self.assertEqual(report["cleanup"]["status"], "complete")
 
             interrupted = root / "interrupted"
             with mock.patch.object(gate, "sample_command", side_effect=KeyboardInterrupt):
@@ -1207,7 +1264,7 @@ class PairedContractTests(unittest.TestCase):
                     gate.main([*base, "--output-dir", str(interrupted)]), 2
                 )
             report = gate.load_json_strict(interrupted / "paired-comparison.json")
-            self.assertEqual(report["classification"], "PAIR_INVENTORY_INVALID")
+            self.assertEqual(report["classification"], "CI_INFRASTRUCTURE_TIMEOUT")
 
     def test_cleanup_and_report_unknown_field_fail_closed(self) -> None:
         report = report_summary()
@@ -1620,6 +1677,357 @@ class PairedContractTests(unittest.TestCase):
         )
         for profile in gate.PROFILE_MATRIX:
             gate.validate_report_summary(report_summary(profile=profile), expected_profile=profile)
+
+    def test_internal_profile_deadline_boundary_and_immediate_exhaustion(self) -> None:
+        with mock.patch.object(gate.time, "monotonic", return_value=2100.0):
+            with self.assertRaises(gate.PairedGateError) as caught:
+                gate._profile_elapsed_ms_or_fail(0.0, "diagnostic")
+        self.assertEqual(caught.exception.classification, "DIAGNOSTIC_TIME_BUDGET_EXCEEDED")
+
+        with mock.patch.object(gate.time, "monotonic", return_value=2099.999):
+            self.assertEqual(gate._profile_elapsed_ms_or_fail(0.0, "diagnostic"), 2099999.0)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            binary = root / "coldkeep"
+            binary.write_bytes(b"binary")
+            with (
+                mock.patch.object(gate.time, "monotonic", return_value=100.0),
+                mock.patch.object(gate.subprocess, "Popen") as popen,
+            ):
+                with self.assertRaises(gate.PairedGateError) as caught:
+                    gate._capture(
+                        binary=binary,
+                        expected_hash=gate._binary_hash(binary),
+                        side="candidate",
+                        output_dir=root,
+                        relative_raw_path=pathlib.Path("raw/candidate.json"),
+                        dataset="ci-paired-w1-v2",
+                        workers=1,
+                        compression="none",
+                        timeout_seconds=600,
+                        profile_deadline=100.0,
+                    )
+            self.assertEqual(caught.exception.classification, "DIAGNOSTIC_TIME_BUDGET_EXCEEDED")
+            popen.assert_not_called()
+
+            process = FakeProcess(timeout=True)
+            state = {"active_invocation": None, "process_started": False}
+            with (
+                mock.patch.object(gate.time, "monotonic", side_effect=[100.0, 100.0]),
+                mock.patch.object(gate.subprocess, "Popen", return_value=process),
+                mock.patch.object(gate.os, "killpg"),
+            ):
+                with self.assertRaises(gate.PairedGateError) as caught:
+                    gate._capture(
+                        binary=binary,
+                        expected_hash=gate._binary_hash(binary),
+                        side="candidate",
+                        output_dir=root,
+                        relative_raw_path=pathlib.Path("raw/deadline-candidate.json"),
+                        dataset="ci-paired-w1-v2",
+                        workers=1,
+                        compression="none",
+                        timeout_seconds=600,
+                        profile_deadline=105.0,
+                        profile_state=state,
+                        invocation={
+                            "kind": "warmup",
+                            "pair_ordinal": None,
+                            "position": 1,
+                            "side": "candidate",
+                        },
+                    )
+            self.assertEqual(caught.exception.classification, "DIAGNOSTIC_TIME_BUDGET_EXCEEDED")
+            self.assertEqual(process.timeout_values[0], 5.0)
+
+    def test_owned_process_group_escalates_and_reaps(self) -> None:
+        process = FakeProcess(timeout=True)
+        calls = 0
+
+        def stubborn(timeout: float | None = None) -> tuple[str, str]:
+            nonlocal calls
+            calls += 1
+            if calls <= 1:
+                raise subprocess.TimeoutExpired(["coldkeep"], timeout or 0)
+            process.returncode = 0
+            return "", ""
+
+        process.communicate = stubborn  # type: ignore[method-assign]
+        with mock.patch.object(gate.os, "killpg") as killpg:
+            gate._terminate_process_group(process)
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(process.pid, gate.signal.SIGTERM),
+                mock.call(process.pid, gate.signal.SIGKILL),
+            ],
+        )
+        self.assertEqual(calls, 2)
+
+    def test_interrupted_profile_artifact_contains_only_validated_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            output = root / "artifact"
+            output.mkdir()
+            reference = root / "reference"
+            candidate = root / "candidate"
+            reference.write_bytes(b"same")
+            candidate.write_bytes(b"same")
+            raw_path = output / "raw" / "warmup-01-candidate.json"
+            raw_path.parent.mkdir(parents=True)
+            gate.raw_gate.write_json(
+                raw_path,
+                raw_report(dataset="ci-paired-w1-v2", workers=1),
+            )
+            raw_path.with_suffix(".stderr").write_text("", encoding="utf-8")
+            active_raw = output / "raw" / "warmup-02-reference.json"
+            active_raw.write_text('{"status":', encoding="utf-8")
+            active_raw.with_suffix(".stderr").write_text(
+                "terminated before JSON completion\n", encoding="utf-8"
+            )
+            args = argparse.Namespace(
+                output_dir=output,
+                mode="diagnostic",
+                reference_sha="a" * 40,
+                candidate_sha="b" * 40,
+                reference_binary=reference,
+                candidate_binary=candidate,
+                compression="none",
+                dataset="ci-paired-w1-v2",
+                workers=1,
+                pairs=10,
+                go_version="go1.25.12",
+                postgres_version="16.14",
+                database_image_digest="sha256:" + "1" * 64,
+            )
+            args._profile_state = {
+                "started": 1.0,
+                "active_invocation": {
+                    "kind": "warmup",
+                    "pair_ordinal": None,
+                    "position": 2,
+                    "side": "reference",
+                },
+                "cancellation_reason": "internal profile deadline reached",
+            }
+            with (
+                mock.patch.object(gate.time, "monotonic", return_value=2.0),
+                mock.patch.object(
+                    gate,
+                    "_cleanup_interrupted_profile",
+                    return_value={
+                        "status": "complete",
+                        "filesystem_entries_removed": 1,
+                        "databases_removed": 1,
+                        "errors": 0,
+                    },
+                ),
+            ):
+                gate._write_failure_artifact(
+                    args,
+                    gate.PairedGateError(
+                        "DIAGNOSTIC_TIME_BUDGET_EXCEEDED", "deadline"
+                    ),
+                )
+            report = gate.validate_profile_artifact(
+                output, expected_profile="none-w1", expected_mode="diagnostic"
+            )
+            self.assertEqual(report["classification"], "DIAGNOSTIC_TIME_BUDGET_EXCEEDED")
+            self.assertEqual(report["prefix_validation"]["raw_report_count"], 1)
+            self.assertEqual(report["active_invocation"]["status"], "incomplete")
+            self.assertEqual(
+                report["active_invocation"]["capture_validation"], "unvalidated"
+            )
+            self.assertTrue(report["active_invocation"]["raw_capture_present"])
+            self.assertNotIn("cases", report)
+            self.assertNotIn("paired_ratios", str(report))
+
+            failed_output = root / "cleanup-failed"
+            failed_output.mkdir()
+            failed_args = argparse.Namespace(**vars(args))
+            failed_args.output_dir = failed_output
+            failed_args._profile_state = {
+                **args._profile_state,
+                "active_invocation": {
+                    "kind": "warmup",
+                    "pair_ordinal": None,
+                    "position": 1,
+                    "side": "candidate",
+                },
+            }
+            with (
+                mock.patch.object(gate.time, "monotonic", return_value=2.0),
+                mock.patch.object(
+                    gate,
+                    "_cleanup_interrupted_profile",
+                    return_value={
+                        "status": "incomplete",
+                        "filesystem_entries_removed": 0,
+                        "databases_removed": 0,
+                        "errors": 1,
+                    },
+                ),
+            ):
+                classification = gate._write_failure_artifact(
+                    failed_args,
+                    gate.PairedGateError(
+                        "DIAGNOSTIC_TIME_BUDGET_EXCEEDED", "deadline"
+                    ),
+                )
+            self.assertEqual(classification, "EVIDENCE_INTEGRITY_FAILURE")
+            failed_report = gate.validate_profile_artifact(
+                failed_output,
+                expected_profile="none-w1",
+                expected_mode="diagnostic",
+            )
+            self.assertEqual(failed_report["cleanup"]["status"], "incomplete")
+            self.assertEqual(
+                failed_report["classification"], "EVIDENCE_INTEGRITY_FAILURE"
+            )
+
+    def test_decision_failures_are_owned_checksummed_and_non_authoritative(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            output = root / "missing-decision"
+            argv = ["decision", "--mode", "diagnostic"]
+            for name in gate.PROFILE_MATRIX:
+                argv.extend(["--profile", f"{name}={root / name}"])
+            argv.extend(["--output-dir", str(output)])
+            self.assertEqual(gate.main(argv), 2)
+            report = gate.validate_decision_artifact(output, expected_mode="diagnostic")
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["classification"], "EVIDENCE_INTEGRITY_FAILURE")
+            self.assertTrue(all(value is None for value in report["identity"].values()))
+            self.assertEqual(report["evidence"]["hard_state"]["status"], "not_verified")
+
+            incomplete = root / "incomplete-decision"
+            incomplete_argv = ["decision", "--mode", "diagnostic"]
+            for name in gate.PROFILE_MATRIX:
+                incomplete_argv.extend(["--profile", f"{name}={root / name}"])
+            incomplete_argv.extend(["--output-dir", str(incomplete)])
+            failed_profile = {
+                "status": "failed",
+                "classification": "DIAGNOSTIC_TIME_BUDGET_EXCEEDED",
+            }
+            with mock.patch.object(
+                gate, "validate_profile_artifact", return_value=failed_profile
+            ):
+                self.assertEqual(gate.main(incomplete_argv), 2)
+            report = gate.validate_decision_artifact(incomplete, expected_mode="diagnostic")
+            self.assertEqual(report["classification"], "DIAGNOSTIC_TIME_BUDGET_EXCEEDED")
+            self.assertEqual(report["profiles"][0]["status"], "failed")
+
+            def decision_argv(label: str) -> list[str]:
+                values = ["decision", "--mode", "diagnostic"]
+                for profile_name in gate.PROFILE_MATRIX:
+                    values.extend(
+                        ["--profile", f"{profile_name}={root / profile_name}"]
+                    )
+                values.extend(["--output-dir", str(root / label)])
+                return values
+
+            failure_cases = (
+                (
+                    "functional-decision",
+                    {
+                        "status": "failed",
+                        "classification": "REFERENCE_FUNCTIONAL_FAILURE",
+                    },
+                    "REFERENCE_FUNCTIONAL_FAILURE",
+                ),
+                (
+                    "tampered-decision",
+                    gate.PairedGateError(
+                        "EVIDENCE_INTEGRITY_FAILURE", "checksum mismatch"
+                    ),
+                    "EVIDENCE_INTEGRITY_FAILURE",
+                ),
+                (
+                    "malformed-decision",
+                    gate.PairedGateError("CONTRACT_INVALID", "malformed raw"),
+                    "CONTRACT_INVALID",
+                ),
+            )
+            for label, validator_result, expected_classification in failure_cases:
+                with self.subTest(decision_failure=label):
+                    with mock.patch.object(
+                        gate,
+                        "validate_profile_artifact",
+                        side_effect=validator_result
+                        if isinstance(validator_result, BaseException)
+                        else None,
+                        return_value=validator_result
+                        if isinstance(validator_result, dict)
+                        else mock.DEFAULT,
+                    ):
+                        self.assertEqual(gate.main(decision_argv(label)), 2)
+                    report = gate.validate_decision_artifact(
+                        root / label, expected_mode="diagnostic"
+                    )
+                    self.assertEqual(
+                        report["classification"], expected_classification
+                    )
+
+            mixed_source_reports = [
+                report_summary(profile=name, mode="diagnostic")
+                for name in sorted(gate.PROFILE_MATRIX)
+            ]
+            mixed_source_reports[1]["identity"]["candidate_sha"] = "c" * 40
+            with mock.patch.object(
+                gate,
+                "validate_profile_artifact",
+                side_effect=mixed_source_reports,
+            ):
+                self.assertEqual(gate.main(decision_argv("mixed-source-decision")), 2)
+            report = gate.validate_decision_artifact(
+                root / "mixed-source-decision", expected_mode="diagnostic"
+            )
+            self.assertEqual(report["classification"], "EXECUTION_CONTRACT_MISMATCH")
+
+            mixed_binary_reports = [
+                report_summary(profile=name, mode="diagnostic")
+                for name in sorted(gate.PROFILE_MATRIX)
+            ]
+            mixed_binary_reports[2]["identity"]["reference_binary_sha256"] = "0" * 64
+            mixed_binary_reports[2]["identity"]["candidate_binary_sha256"] = "0" * 64
+            with mock.patch.object(
+                gate,
+                "validate_profile_artifact",
+                side_effect=mixed_binary_reports,
+            ):
+                self.assertEqual(gate.main(decision_argv("mixed-binary-decision")), 2)
+            report = gate.validate_decision_artifact(
+                root / "mixed-binary-decision", expected_mode="diagnostic"
+            )
+            self.assertEqual(report["classification"], "BINARY_IDENTITY_INVALID")
+
+            for name in gate.PROFILE_MATRIX:
+                (root / name).mkdir()
+            interrupted = root / "interrupted-decision"
+            interrupted_argv = ["decision", "--mode", "diagnostic"]
+            for name in gate.PROFILE_MATRIX:
+                interrupted_argv.extend(["--profile", f"{name}={root / name}"])
+            interrupted_argv.extend(["--output-dir", str(interrupted)])
+            with mock.patch.object(
+                gate, "validate_profile_artifact", side_effect=KeyboardInterrupt
+            ):
+                self.assertEqual(gate.main(interrupted_argv), 2)
+            report = gate.validate_decision_artifact(
+                interrupted, expected_mode="diagnostic"
+            )
+            self.assertEqual(report["classification"], "CI_INFRASTRUCTURE_TIMEOUT")
+            self.assertTrue(
+                all(item["raw_reconstruction"] != "verified" for item in report["profiles"])
+            )
+
+        self.assertEqual(
+            gate.decision_classification(
+                ["DIAGNOSTIC_TIME_BUDGET_EXCEEDED", "DIAGNOSTIC_REJECTED"],
+                mode="diagnostic",
+            ),
+            "DIAGNOSTIC_TIME_BUDGET_EXCEEDED",
+        )
 
     def test_historical_absolute_fixture_has_no_paired_authority(self) -> None:
         self.assertNotIn("ci-stable-v1", gate.FIXTURES)

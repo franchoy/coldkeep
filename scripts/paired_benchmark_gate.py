@@ -21,6 +21,7 @@ import signal
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from decimal import Decimal
 from typing import Any
@@ -39,6 +40,8 @@ RAW_SCHEMA_VERSION = 2
 DIAGNOSTIC_SCHEMA_VERSION = 2
 DECISION_MODES = ("diagnostic", "production")
 DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS = 35 * 60 * 1000
+DIAGNOSTIC_MAX_PROFILE_ELAPSED_SECONDS = DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS / 1000
+PROCESS_TERMINATION_GRACE_SECONDS = 10
 GOVERNED_MANIFEST_RELATIVE = pathlib.PurePosixPath(
     "benchmarks/paired/reference-v1.13.json"
 )
@@ -83,10 +86,10 @@ TEN_PAIR_ORDER = FIVE_PAIR_ORDER + tuple(
     tuple(reversed(pair_order)) for pair_order in FIVE_PAIR_ORDER
 )
 PROFILE_MATRIX = {
-    "none-w1": ("none", 1, "ci-paired-w1-v1"),
-    "none-w4": ("none", 4, "ci-paired-w4-v1"),
-    "zstd-w1": ("zstd", 1, "ci-paired-w1-v1"),
-    "zstd-w4": ("zstd", 4, "ci-paired-w4-v1"),
+    "none-w1": ("none", 1, "ci-paired-w1-v2"),
+    "none-w4": ("none", 4, "ci-paired-w4-v2"),
+    "zstd-w1": ("zstd", 1, "ci-paired-w1-v2"),
+    "zstd-w4": ("zstd", 4, "ci-paired-w4-v2"),
 }
 FIXTURES = {
     "ci-paired-w1-v1": {
@@ -115,6 +118,32 @@ FIXTURES = {
         "case_database_isolation": True,
         "workers": 4,
     },
+    "ci-paired-w1-v2": {
+        "id": "ci-paired-w1-v2",
+        "seed": 1701,
+        "large_file_size_bytes": 64 * 1024 * 1024,
+        "many_small_file_count": 400,
+        "many_small_file_size_bytes": 1024,
+        "mixed_file_count": 400,
+        "mixed_min_file_size_bytes": 1024,
+        "mixed_max_file_size_bytes": 256 * 1024,
+        "remove_every": 4,
+        "case_database_isolation": True,
+        "workers": 1,
+    },
+    "ci-paired-w4-v2": {
+        "id": "ci-paired-w4-v2",
+        "seed": 1701,
+        "large_file_size_bytes": 64 * 1024 * 1024,
+        "many_small_file_count": 400,
+        "many_small_file_size_bytes": 1024,
+        "mixed_file_count": 800,
+        "mixed_min_file_size_bytes": 1024,
+        "mixed_max_file_size_bytes": 256 * 1024,
+        "remove_every": 4,
+        "case_database_isolation": True,
+        "workers": 4,
+    },
 }
 
 CLASSIFICATIONS = {
@@ -131,6 +160,7 @@ CLASSIFICATIONS = {
     "PERFORMANCE_REGRESSION",
     "CANDIDATE_TIMEOUT_INCONCLUSIVE",
     "CI_INFRASTRUCTURE_TIMEOUT",
+    "DIAGNOSTIC_TIME_BUDGET_EXCEEDED",
     "DIAGNOSTIC_QUALIFIED",
     "DIAGNOSTIC_REJECTED",
     "PASS",
@@ -145,6 +175,7 @@ DECISION_PRECEDENCE = (
     "REFERENCE_FUNCTIONAL_FAILURE",
     "CANDIDATE_FUNCTIONAL_FAILURE",
     "CANDIDATE_TIMEOUT_INCONCLUSIVE",
+    "DIAGNOSTIC_TIME_BUDGET_EXCEEDED",
     "CI_INFRASTRUCTURE_TIMEOUT",
     "CORRECTNESS_REGRESSION",
     "EVIDENCE_INTEGRITY_FAILURE",
@@ -882,6 +913,40 @@ def _host_observation() -> dict[str, Any]:
     }
 
 
+def _terminate_process_group(process: subprocess.Popen[str]) -> tuple[str, str]:
+    """Terminate and reap one owned benchmark process group."""
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        return process.communicate(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        return process.communicate()
+
+
+def _remaining_profile_seconds(profile_deadline: float | None) -> float | None:
+    if profile_deadline is None:
+        return None
+    return profile_deadline - time.monotonic()
+
+
+def _profile_elapsed_ms_or_fail(profile_started: float, mode: str) -> float:
+    elapsed_ms = (time.monotonic() - profile_started) * 1000.0
+    if mode == "diagnostic" and elapsed_ms >= DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS:
+        fail(
+            "DIAGNOSTIC_TIME_BUDGET_EXCEEDED",
+            "diagnostic profile did not finish validation within its fixed time budget",
+        )
+    return elapsed_ms
+
+
 def _capture(
     *,
     binary: pathlib.Path,
@@ -893,6 +958,9 @@ def _capture(
     workers: int,
     compression: str,
     timeout_seconds: int,
+    profile_deadline: float | None = None,
+    profile_state: dict[str, Any] | None = None,
+    invocation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if _binary_hash(binary) != expected_hash:
         fail("BINARY_IDENTITY_INVALID", f"{side} binary changed during sampling")
@@ -901,55 +969,87 @@ def _capture(
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     before = _host_observation()
     started = time.monotonic()
+    remaining = _remaining_profile_seconds(profile_deadline)
+    if remaining is not None and remaining <= 0:
+        if profile_state is not None:
+            profile_state["cancellation_reason"] = "internal profile deadline reached"
+            profile_state["active_invocation"] = invocation
+        fail(
+            "DIAGNOSTIC_TIME_BUDGET_EXCEEDED",
+            "diagnostic profile exhausted its fixed time budget before the next invocation",
+        )
+    effective_timeout = min(float(timeout_seconds), remaining) if remaining is not None else float(timeout_seconds)
+    deadline_limited = remaining is not None and remaining <= float(timeout_seconds)
+    command = [
+        str(binary),
+        "benchmark",
+        "run",
+        "--dataset",
+        dataset,
+        "--workers",
+        str(workers),
+        "--repeat",
+        "1",
+        "--output",
+        "json",
+    ]
+    process: subprocess.Popen[str] | None = None
+    if profile_state is not None:
+        profile_state["active_invocation"] = invocation
     try:
-        completed = subprocess.run(
-            [
-                str(binary),
-                "benchmark",
-                "run",
-                "--dataset",
-                dataset,
-                "--workers",
-                str(workers),
-                "--repeat",
-                "1",
-                "--output",
-                "json",
-            ],
+        process = subprocess.Popen(
+            command,
             text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
             env={**os.environ, "COLDKEEP_COMPRESSION": compression},
         )
-    except subprocess.TimeoutExpired as exc:
-        stdout = (
-            exc.stdout.decode("utf-8", errors="replace")
-            if isinstance(exc.stdout, bytes)
-            else exc.stdout or ""
-        )
-        stderr = (
-            exc.stderr.decode("utf-8", errors="replace")
-            if isinstance(exc.stderr, bytes)
-            else exc.stderr or ""
-        )
-        raw_path.write_text(stdout, encoding="utf-8")
-        stderr_path.write_text(stderr, encoding="utf-8")
-        if side == "candidate":
-            fail("CANDIDATE_TIMEOUT_INCONCLUSIVE", "candidate command exceeded safety timeout")
-        fail("CI_INFRASTRUCTURE_TIMEOUT", "reference command exceeded safety timeout")
-    elapsed_ms = (time.monotonic() - started) * 1000.0
-    raw_path.write_text(completed.stdout, encoding="utf-8")
-    stderr_path.write_text(completed.stderr, encoding="utf-8")
-    if completed.returncode != 0:
+        if profile_state is not None:
+            profile_state["process_started"] = True
+        try:
+            stdout, stderr = process.communicate(timeout=effective_timeout)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = _terminate_process_group(process)
+            raw_path.write_text(stdout or "", encoding="utf-8")
+            stderr_path.write_text(stderr or "", encoding="utf-8")
+            if deadline_limited:
+                if profile_state is not None:
+                    profile_state["cancellation_reason"] = "internal profile deadline reached"
+                fail(
+                    "DIAGNOSTIC_TIME_BUDGET_EXCEEDED",
+                    "diagnostic profile exhausted its fixed time budget during an invocation",
+                )
+            if side == "candidate":
+                fail("CANDIDATE_TIMEOUT_INCONCLUSIVE", "candidate command exceeded safety timeout")
+            fail("CI_INFRASTRUCTURE_TIMEOUT", "reference command exceeded safety timeout")
+    except OSError:
         classification = (
             "REFERENCE_FUNCTIONAL_FAILURE" if side == "reference" else "CANDIDATE_FUNCTIONAL_FAILURE"
         )
-        fail(classification, f"{side} command failed with exit {completed.returncode}")
+        fail(classification, f"{side} command could not be started")
+    except BaseException:
+        if process is not None and process.poll() is None:
+            stdout, stderr = _terminate_process_group(process)
+            raw_path.write_text(stdout or "", encoding="utf-8")
+            stderr_path.write_text(stderr or "", encoding="utf-8")
+        raise
+
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    raw_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
+    if process.returncode != 0:
+        classification = (
+            "REFERENCE_FUNCTIONAL_FAILURE" if side == "reference" else "CANDIDATE_FUNCTIONAL_FAILURE"
+        )
+        fail(classification, f"{side} command failed with exit {process.returncode}")
     try:
         envelope = load_json_strict(raw_path)
     except raw_gate.GateError as exc:
         fail("CONTRACT_INVALID", str(exc))
     validate_raw_report(envelope, dataset=dataset, workers=workers, compression=compression)
+    if profile_state is not None:
+        profile_state["active_invocation"] = None
     return {
         "envelope": envelope,
         "raw_file": relative_raw_path.as_posix(),
@@ -1012,8 +1112,111 @@ def _provenance(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _benchmark_temp_roots() -> set[pathlib.Path]:
+    temp_root = pathlib.Path(tempfile.gettempdir())
+    return {
+        path.resolve()
+        for path in temp_root.glob("coldkeep-benchmark-*")
+        if path.is_dir() and not path.is_symlink()
+    }
+
+
+def _cleanup_benchmark_databases() -> tuple[int, int]:
+    required = ("DB_HOST", "DB_PORT", "DB_USER")
+    if any(not os.environ.get(name) for name in required) or shutil.which("psql") is None:
+        return 0, 1
+    command = [
+        "psql",
+        "-X",
+        "--no-psqlrc",
+        "--tuples-only",
+        "--no-align",
+        "--set",
+        "ON_ERROR_STOP=1",
+        "--host",
+        os.environ["DB_HOST"],
+        "--port",
+        os.environ["DB_PORT"],
+        "--username",
+        os.environ["DB_USER"],
+        "--dbname",
+        os.environ.get("COLDKEEP_TEST_DB_MAINTENANCE", "postgres"),
+    ]
+    psql_env = dict(os.environ)
+    if os.environ.get("DB_PASSWORD"):
+        psql_env["PGPASSWORD"] = os.environ["DB_PASSWORD"]
+    query = subprocess.run(
+        [*command, "--command", "SELECT datname FROM pg_database WHERE datname LIKE 'coldkeep\\_bench\\_%' ESCAPE '\\';"],
+        text=True,
+        capture_output=True,
+        env=psql_env,
+    )
+    if query.returncode != 0:
+        return 0, 1
+    names = [line.strip() for line in query.stdout.splitlines() if line.strip()]
+    if any(re.fullmatch(r"coldkeep_bench_[a-z0-9_]+", name) is None for name in names):
+        return 0, 1
+    removed = 0
+    errors = 0
+    for name in names:
+        quoted = '"' + name.replace('"', '""') + '"'
+        terminate_statement = (
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname = '{name}' AND pid <> pg_backend_pid();"
+        )
+        completed = subprocess.run(
+            [
+                *command,
+                "--command",
+                terminate_statement,
+                "--command",
+                f"DROP DATABASE IF EXISTS {quoted};",
+            ],
+            text=True,
+            capture_output=True,
+            env=psql_env,
+        )
+        if completed.returncode == 0:
+            removed += 1
+        else:
+            errors += 1
+    return removed, errors
+
+
+def _cleanup_interrupted_profile(args: argparse.Namespace) -> dict[str, Any]:
+    state = getattr(args, "_profile_state", {})
+    before = state.get("temp_roots_before", set())
+    removed_roots = 0
+    errors = 0
+    for path in sorted(_benchmark_temp_roots() - before):
+        try:
+            shutil.rmtree(path)
+            removed_roots += 1
+        except OSError:
+            errors += 1
+    removed_databases = 0
+    if state.get("process_started") and state.get("active_invocation") is not None:
+        removed_databases, database_errors = _cleanup_benchmark_databases()
+        errors += database_errors
+    return {
+        "status": "complete" if errors == 0 else "incomplete",
+        "filesystem_entries_removed": removed_roots,
+        "databases_removed": removed_databases,
+        "errors": errors,
+    }
+
+
 def sample_command(args: argparse.Namespace) -> int:
     profile_started = time.monotonic()
+    profile_deadline = profile_started + DIAGNOSTIC_MAX_PROFILE_ELAPSED_SECONDS
+    args._profile_state = {
+        "started": profile_started,
+        "deadline": profile_deadline,
+        "active_invocation": None,
+        "cancellation_reason": None,
+        "process_started": False,
+        "temp_roots_before": _benchmark_temp_roots(),
+    }
     fixture_contract(args.dataset, args.workers)
     if (args.mode, args.pairs) not in {("diagnostic", 10), ("production", 5)}:
         fail("PAIR_INVENTORY_INVALID", "mode and fixed pair count are inconsistent")
@@ -1090,6 +1293,7 @@ def sample_command(args: argparse.Namespace) -> int:
         )
     warmup_records: list[dict[str, Any]] = []
     for position, side in enumerate(WARMUP_ORDER, start=1):
+        invocation = {"kind": "warmup", "pair_ordinal": None, "position": position, "side": side}
         record = _capture(
             binary=getattr(args, f"{side}_binary"),
             expected_hash=binary_hashes[side],
@@ -1100,13 +1304,22 @@ def sample_command(args: argparse.Namespace) -> int:
             workers=args.workers,
             compression=args.compression,
             timeout_seconds=args.command_timeout_seconds,
+            profile_deadline=profile_deadline if args.mode == "diagnostic" else None,
+            profile_state=args._profile_state,
+            invocation=invocation,
         )
-        record.update({"kind": "warmup", "pair_ordinal": None, "position": position, "side": side})
+        record.update(invocation)
         warmup_records.append(record)
 
     records: list[dict[str, Any]] = []
     for ordinal, pair_order in enumerate(measured_order(args.pairs), start=1):
         for position, side in enumerate(pair_order, start=1):
+            invocation = {
+                "kind": "measured",
+                "pair_ordinal": ordinal,
+                "position": position,
+                "side": side,
+            }
             record = _capture(
                 binary=getattr(args, f"{side}_binary"),
                 expected_hash=binary_hashes[side],
@@ -1119,10 +1332,11 @@ def sample_command(args: argparse.Namespace) -> int:
                 workers=args.workers,
                 compression=args.compression,
                 timeout_seconds=args.command_timeout_seconds,
+                profile_deadline=profile_deadline if args.mode == "diagnostic" else None,
+                profile_state=args._profile_state,
+                invocation=invocation,
             )
-            record.update(
-                {"kind": "measured", "pair_ordinal": ordinal, "position": position, "side": side}
-            )
+            record.update(invocation)
             records.append(record)
 
     comparison = compare_records(
@@ -1141,14 +1355,12 @@ def sample_command(args: argparse.Namespace) -> int:
         workers=args.workers,
         compression=args.compression,
     )
-    profile_elapsed_ms = (time.monotonic() - profile_started) * 1000.0
+    try:
+        profile_elapsed_ms = _profile_elapsed_ms_or_fail(profile_started, args.mode)
+    except PairedGateError:
+        args._profile_state["cancellation_reason"] = "internal profile deadline reached"
+        raise
     classification = comparison["classification"]
-    if (
-        args.mode == "diagnostic"
-        and profile_elapsed_ms > DIAGNOSTIC_MAX_PROFILE_ELAPSED_MS
-        and classification == "DIAGNOSTIC_QUALIFIED"
-    ):
-        classification = "DIAGNOSTIC_REJECTED"
     inventory = []
     for record in warmup_records + records:
         inventory.append(
@@ -1209,6 +1421,11 @@ def sample_command(args: argparse.Namespace) -> int:
         "provenance": _provenance(args),
     }
     raw_gate.validate_no_sensitive_evidence(report, "paired comparison report")
+    try:
+        report["profile_elapsed_ms"] = _profile_elapsed_ms_or_fail(profile_started, args.mode)
+    except PairedGateError:
+        args._profile_state["cancellation_reason"] = "internal profile deadline reached"
+        raise
     raw_gate.write_json(args.output_dir / "paired-comparison.json", report)
     _write_checksums(args.output_dir)
     print(json.dumps({"classification": report["classification"], "report": "paired-comparison.json"}))
@@ -1256,6 +1473,10 @@ FAILURE_REPORT_FIELDS = {
     "warmup_order",
     "measured_order",
     "attempted_invocations",
+    "active_invocation",
+    "profile_elapsed_ms",
+    "cancellation",
+    "prefix_validation",
     "cleanup",
     "provenance",
 }
@@ -1365,7 +1586,16 @@ def _validate_failure_report(report: Any, *, expected_profile: str | None) -> di
     try:
         cleanup = raw_gate.require_exact_fields(
             report["cleanup"],
-            {"status", "observed_invocations", "required_invocations"},
+            {
+                "status",
+                "observed_invocations",
+                "required_invocations",
+                "completed_cases",
+                "active_invocation",
+                "filesystem_entries_removed",
+                "databases_removed",
+                "errors",
+            },
             "failure cleanup",
         )
         observed_invocations = raw_gate.require_nonnegative_integer(
@@ -1374,15 +1604,101 @@ def _validate_failure_report(report: Any, *, expected_profile: str | None) -> di
         required_invocations = raw_gate.require_nonnegative_integer(
             cleanup["required_invocations"], "failure required invocations"
         )
+        completed_cases = raw_gate.require_nonnegative_integer(
+            cleanup["completed_cases"], "failure completed cases"
+        )
+        for field in ("filesystem_entries_removed", "databases_removed", "errors"):
+            raw_gate.require_nonnegative_integer(cleanup[field], f"failure cleanup {field}")
     except raw_gate.GateError as exc:
         fail("EVIDENCE_INTEGRITY_FAILURE", str(exc))
     if (
-        cleanup["status"] != "incomplete"
+        cleanup["status"] not in {"complete", "incomplete"}
         or observed_invocations != len(attempted)
         or required_invocations != len(expected_attempts)
         or observed_invocations >= required_invocations
+        or completed_cases != observed_invocations * len(ORDERED_CASES)
+        or cleanup["active_invocation"] not in {"not_applicable", "cleaned", "incomplete"}
     ):
         fail("EVIDENCE_INTEGRITY_FAILURE", "failure cleanup/inventory evidence mismatch")
+    if cleanup["status"] == "complete" and cleanup["errors"] != 0:
+        fail("EVIDENCE_INTEGRITY_FAILURE", "complete cleanup reports errors")
+    if cleanup["status"] == "incomplete" and cleanup["errors"] == 0:
+        fail("EVIDENCE_INTEGRITY_FAILURE", "incomplete cleanup lacks an error")
+    try:
+        raw_gate.require_number(report["profile_elapsed_ms"], "failure profile elapsed", positive=True)
+        cancellation = raw_gate.require_exact_fields(
+            report["cancellation"], {"reason", "authoritative"}, "failure cancellation"
+        )
+        prefix = raw_gate.require_exact_fields(
+            report["prefix_validation"],
+            {"status", "raw_report_count", "case_row_count", "counter_validation", "hard_state"},
+            "failure prefix validation",
+        )
+    except raw_gate.GateError as exc:
+        fail("CONTRACT_INVALID", str(exc))
+    if (
+        not isinstance(cancellation["reason"], str)
+        or not cancellation["reason"]
+        or cancellation["authoritative"] is not False
+        or prefix["status"] not in {"validated", "not_evaluated"}
+        or prefix["raw_report_count"] != len(attempted)
+        or prefix["case_row_count"] != len(attempted) * len(ORDERED_CASES)
+        or prefix["counter_validation"] not in {"valid", "not_evaluated"}
+        or prefix["hard_state"] not in {"equal", "mismatch", "not_evaluated"}
+    ):
+        fail("CONTRACT_INVALID", "failure cancellation/prefix evidence mismatch")
+    active = report["active_invocation"]
+    if active is not None:
+        try:
+            active = raw_gate.require_exact_fields(
+                active,
+                {
+                    "kind",
+                    "pair_ordinal",
+                    "position",
+                    "side",
+                    "raw_file",
+                    "stderr_file",
+                    "raw_capture_present",
+                    "stderr_capture_present",
+                    "capture_validation",
+                    "status",
+                },
+                "active invocation",
+            )
+        except raw_gate.GateError as exc:
+            fail("PAIR_INVENTORY_INVALID", str(exc))
+        if (
+            active["status"] != "incomplete"
+            or active["capture_validation"] != "unvalidated"
+            or active["side"] not in {"reference", "candidate"}
+            or not isinstance(active["raw_capture_present"], bool)
+            or not isinstance(active["stderr_capture_present"], bool)
+        ):
+            fail("PAIR_INVENTORY_INVALID", "active invocation status is invalid")
+        if len(attempted) >= len(expected_attempts):
+            fail("PAIR_INVENTORY_INVALID", "complete failure inventory cannot have an active invocation")
+        next_expected = expected_attempts[len(attempted)]
+        if any(active[field] != next_expected[field] for field in ("kind", "pair_ordinal", "position", "side")):
+            fail("PAIR_INVENTORY_INVALID", "active invocation is not next in fixed order")
+        if next_expected["kind"] == "warmup":
+            expected_active_raw = (
+                f"raw/warmup-{next_expected['position']:02d}-{next_expected['side']}.json"
+            )
+        else:
+            expected_active_raw = (
+                f"raw/pair-{next_expected['pair_ordinal']:02d}/"
+                f"{next_expected['position']:02d}-{next_expected['side']}.json"
+            )
+        if (
+            require_relative_artifact_path(active["raw_file"], "active raw file").as_posix()
+            != expected_active_raw
+            or require_relative_artifact_path(
+                active["stderr_file"], "active stderr file"
+            ).as_posix()
+            != pathlib.PurePosixPath(expected_active_raw).with_suffix(".stderr").as_posix()
+        ):
+            fail("PAIR_INVENTORY_INVALID", "active invocation path mismatch")
     for field in ("reference_sha", "candidate_sha"):
         if not isinstance(identity[field], str) or not re.fullmatch(r"[0-9a-f]{40}", identity[field]):
             if report["classification"] != "REFERENCE_GOVERNANCE_INVALID":
@@ -1819,6 +2135,18 @@ def _expected_profile_artifact_files(report: dict[str, Any]) -> set[str]:
                 invocation["stderr_file"], f"artifact invocation {index} stderr file"
             ).as_posix()
         )
+    if report["status"] == "failed" and report["active_invocation"] is not None:
+        active = report["active_invocation"]
+        if active["raw_capture_present"]:
+            expected.add(
+                require_relative_artifact_path(active["raw_file"], "active invocation raw file").as_posix()
+            )
+        if active["stderr_capture_present"]:
+            expected.add(
+                require_relative_artifact_path(
+                    active["stderr_file"], "active invocation stderr file"
+                ).as_posix()
+            )
     if report["status"] == "complete" and report["mode"] == "production":
         expected.update(
             {
@@ -1875,6 +2203,20 @@ def validate_profile_artifact(
                     directory, relative, f"failure invocation {index} {field}"
                 )
                 _read_artifact_capture(path, f"failure invocation {index} {field}")
+        active = report["active_invocation"]
+        if active is not None:
+            for field, presence_field in (
+                ("raw_file", "raw_capture_present"),
+                ("stderr_file", "stderr_capture_present"),
+            ):
+                if active[presence_field]:
+                    relative = require_relative_artifact_path(
+                        active[field], f"active failure invocation {field}"
+                    )
+                    path = _contained_regular_file(
+                        directory, relative, f"active failure invocation {field}"
+                    )
+                    _read_artifact_capture(path, f"active failure invocation {field}")
         return report
     thresholds: dict[str, float] | None = None
     if expected_mode == "production":
@@ -2023,8 +2365,152 @@ DECISION_FIELDS = {
     "evidence",
 }
 
+DECISION_FAILURE_FIELDS = DECISION_FIELDS - {"evidence"} | {"evidence", "failure_reason"}
+
+
+def _validate_decision_failure_report(
+    report: Any, *, expected_mode: str | None = None
+) -> dict[str, Any]:
+    try:
+        report = raw_gate.require_exact_fields(
+            report, DECISION_FAILURE_FIELDS, "paired failure decision"
+        )
+        identity = raw_gate.require_exact_fields(
+            report["identity"],
+            {
+                "reference_sha",
+                "candidate_sha",
+                "reference_binary_sha256",
+                "candidate_binary_sha256",
+            },
+            "failure decision identity",
+        )
+        evidence = raw_gate.require_exact_fields(
+            report["evidence"],
+            {
+                "checksum_verification",
+                "raw_reconstruction",
+                "pair_inventory",
+                "hard_state",
+                "counters",
+                "cleanup",
+            },
+            "failure decision evidence",
+        )
+    except raw_gate.GateError as exc:
+        fail("CONTRACT_INVALID", str(exc))
+    mode = report["mode"]
+    if (
+        report["schema_version"] != SCHEMA_VERSION
+        or report["evidence_policy_version"] != EVIDENCE_POLICY_VERSION
+        or report["report_kind"] != DECISION_KIND
+        or report["status"] != "failed"
+        or report["contract_version"] != CONTRACT_VERSION
+        or report["classification"] not in CLASSIFICATIONS - SUCCESS_CLASSIFICATIONS
+        or mode not in DECISION_MODES
+    ):
+        fail("CONTRACT_INVALID", "failure decision identity mismatch")
+    if expected_mode is not None and mode != expected_mode:
+        fail("REFERENCE_GOVERNANCE_INVALID", "failure decision mode mismatch")
+    expected_authority = authority_contract(mode)
+    if any(report[field] != expected_authority[field] for field in expected_authority):
+        fail("REFERENCE_GOVERNANCE_INVALID", "failure decision authority mismatch")
+    if not isinstance(report["failure_reason"], str) or not report["failure_reason"]:
+        fail("CONTRACT_INVALID", "failure decision reason is missing")
+    for field, length in (
+        ("reference_sha", 40),
+        ("candidate_sha", 40),
+        ("reference_binary_sha256", 64),
+        ("candidate_binary_sha256", 64),
+    ):
+        value = identity[field]
+        if value is not None and (
+            not isinstance(value, str) or re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is None
+        ):
+            fail("CONTRACT_INVALID", f"failure decision {field} is invalid")
+    profiles = report["profiles"]
+    if (
+        not isinstance(profiles, list)
+        or any(not isinstance(item, dict) for item in profiles)
+        or [item.get("profile") for item in profiles] != sorted(PROFILE_MATRIX)
+    ):
+        fail("PAIR_INVENTORY_INVALID", "failure decision profile inventory mismatch")
+    for item in profiles:
+        try:
+            item = raw_gate.require_exact_fields(
+                item,
+                {
+                    "profile",
+                    "status",
+                    "classification",
+                    "checksum_verification",
+                    "raw_reconstruction",
+                },
+                "failure decision profile",
+            )
+        except raw_gate.GateError as exc:
+            fail("CONTRACT_INVALID", str(exc))
+        if item["status"] not in {"verified", "failed", "invalid", "missing", "not_evaluated"}:
+            fail("CONTRACT_INVALID", "failure decision profile status is invalid")
+        if item["checksum_verification"] not in {"verified", "failed", "missing", "not_evaluated"}:
+            fail("CONTRACT_INVALID", "failure decision checksum state is invalid")
+        if item["raw_reconstruction"] not in {"verified", "failed", "not_evaluated"}:
+            fail("CONTRACT_INVALID", "failure decision raw state is invalid")
+        if item["classification"] is not None and item["classification"] not in CLASSIFICATIONS:
+            fail("CONTRACT_INVALID", "failure decision profile classification is invalid")
+        if item["status"] == "verified" and (
+            item["checksum_verification"] != "verified"
+            or item["raw_reconstruction"] != "verified"
+        ):
+            fail("EVIDENCE_INTEGRITY_FAILURE", "verified failure-decision profile lacks evidence")
+        if item["status"] in {"missing", "not_evaluated"} and (
+            item["checksum_verification"] == "verified"
+            or item["raw_reconstruction"] == "verified"
+        ):
+            fail("EVIDENCE_INTEGRITY_FAILURE", "unavailable failure-decision profile is verified")
+    if report["matrix_coverage"] != sorted(PROFILE_MATRIX):
+        fail("PAIR_INVENTORY_INVALID", "failure decision matrix coverage mismatch")
+    try:
+        checksum_evidence = raw_gate.require_exact_fields(
+            evidence["checksum_verification"],
+            {"status", "verified_profile_count"},
+            "failure decision checksum evidence",
+        )
+        raw_evidence = raw_gate.require_exact_fields(
+            evidence["raw_reconstruction"],
+            {"status", "verified_profile_count"},
+            "failure decision raw evidence",
+        )
+        for field in ("pair_inventory", "hard_state", "counters", "cleanup"):
+            raw_gate.require_exact_fields(
+                evidence[field], {"status"}, f"failure decision {field} evidence"
+            )
+        checksum_count = raw_gate.require_nonnegative_integer(
+            checksum_evidence["verified_profile_count"], "verified checksum profile count"
+        )
+        raw_count = raw_gate.require_nonnegative_integer(
+            raw_evidence["verified_profile_count"], "verified raw profile count"
+        )
+    except raw_gate.GateError as exc:
+        fail("CONTRACT_INVALID", str(exc))
+    if (
+        checksum_evidence["status"] not in {"failed", "incomplete"}
+        or raw_evidence["status"] not in {"failed", "incomplete"}
+        or checksum_count != sum(item["checksum_verification"] == "verified" for item in profiles)
+        or raw_count != sum(item["raw_reconstruction"] == "verified" for item in profiles)
+        or evidence["pair_inventory"]["status"] != "incomplete"
+        or evidence["hard_state"]["status"] != "not_verified"
+        or evidence["counters"]["status"] != "not_verified"
+        or evidence["cleanup"]["status"] != "not_verified"
+    ):
+        fail("EVIDENCE_INTEGRITY_FAILURE", "failure decision evidence overclaims verification")
+    raw_gate.validate_no_sensitive_evidence(report, "paired failure decision")
+    return report
+
 
 def validate_decision_report(report: Any, *, expected_mode: str | None = None) -> dict[str, Any]:
+    if isinstance(report, dict) and report.get("status") == "failed":
+        return _validate_decision_failure_report(report, expected_mode=expected_mode)
     try:
         report = raw_gate.require_exact_fields(report, DECISION_FIELDS, "paired decision report")
     except raw_gate.GateError as exc:
@@ -2246,6 +2732,30 @@ def validate_decision_artifact(directory: pathlib.Path, *, expected_mode: str) -
 
 
 def decision_command(args: argparse.Namespace) -> int:
+    if args.output_dir.exists() and not args.output_dir.is_symlink():
+        if not args.output_dir.is_dir() or any(args.output_dir.iterdir()):
+            fail("EVIDENCE_INTEGRITY_FAILURE", "decision output directory is not empty")
+    else:
+        _create_output_directory(args.output_dir)
+    args._output_owned = True
+    args._decision_state = {
+        "profiles": {
+            name: {
+                "profile": name,
+                "status": "not_evaluated",
+                "classification": None,
+                "checksum_verification": "not_evaluated",
+                "raw_reconstruction": "not_evaluated",
+            }
+            for name in sorted(PROFILE_MATRIX)
+        },
+        "identity": {
+            "reference_sha": None,
+            "candidate_sha": None,
+            "reference_binary_sha256": None,
+            "candidate_binary_sha256": None,
+        },
+    }
     if args.mode not in DECISION_MODES:
         fail("CONTRACT_INVALID", f"unknown decision mode {args.mode!r}")
     if args.mode == "production" and not PRODUCTION_SAMPLING_AUTHORIZED:
@@ -2272,11 +2782,27 @@ def decision_command(args: argparse.Namespace) -> int:
     common_inventory: tuple[Any, ...] | None = None
     for name in sorted(profile_args):
         directory = profile_args[name]
-        report = validate_profile_artifact(
-            directory, expected_profile=name, expected_mode=args.mode
+        state = args._decision_state["profiles"][name]
+        state["status"] = "missing" if not directory.is_dir() else "invalid"
+        state["checksum_verification"] = (
+            "missing" if not (directory / "checksums.sha256").is_file() else "failed"
         )
+        state["raw_reconstruction"] = "not_evaluated"
+        try:
+            report = validate_profile_artifact(
+                directory, expected_profile=name, expected_mode=args.mode
+            )
+        except PairedGateError as exc:
+            state["classification"] = exc.classification
+            raise
+        state["checksum_verification"] = "verified"
+        state["raw_reconstruction"] = "verified"
         if report["status"] != "complete":
+            state["status"] = "failed"
+            state["classification"] = report["classification"]
             fail(report["classification"], f"profile {name} did not complete")
+        state["status"] = "verified"
+        state["classification"] = report["classification"]
         identity = report["identity"]
         source_key = (
             identity["reference_sha"],
@@ -2311,6 +2837,12 @@ def decision_command(args: argparse.Namespace) -> int:
             common_provenance = provenance_key
             common_governance = governance_key
             common_inventory = inventory_key
+            args._decision_state["identity"] = {
+                "reference_sha": identity["reference_sha"],
+                "candidate_sha": identity["candidate_sha"],
+                "reference_binary_sha256": identity["reference_binary_sha256"],
+                "candidate_binary_sha256": identity["candidate_binary_sha256"],
+            }
         elif source_key != common_source:
             fail("EXECUTION_CONTRACT_MISMATCH", "profile source or contract identities differ")
         elif hash_key != common_hashes:
@@ -2397,15 +2929,88 @@ def decision_command(args: argparse.Namespace) -> int:
         },
     }
     validate_decision_report(decision, expected_mode=args.mode)
-    _create_output_directory(args.output_dir)
     raw_gate.write_json(args.output_dir / "paired-decision.json", decision)
     _write_checksums(args.output_dir)
     print(json.dumps({"classification": classification, "report": "paired-decision.json"}))
     return 0 if classification in SUCCESS_CLASSIFICATIONS else 1
 
 
-def _write_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> None:
-    """Write a sanitized immutable summary without claiming partial evidence."""
+def _write_decision_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> str:
+    output_dir = args.output_dir
+    if output_dir.is_symlink() or not output_dir.is_dir():
+        raise PairedGateError(
+            "EVIDENCE_INTEGRITY_FAILURE", "owned decision artifact directory is unavailable"
+        )
+    state = getattr(args, "_decision_state", {})
+    profiles_by_name = state.get("profiles", {})
+    profiles = []
+    for name in sorted(PROFILE_MATRIX):
+        profiles.append(
+            profiles_by_name.get(
+                name,
+                {
+                    "profile": name,
+                    "status": "not_evaluated",
+                    "classification": None,
+                    "checksum_verification": "not_evaluated",
+                    "raw_reconstruction": "not_evaluated",
+                },
+            )
+        )
+    checksum_verified = sum(
+        item["checksum_verification"] == "verified" for item in profiles
+    )
+    raw_verified = sum(item["raw_reconstruction"] == "verified" for item in profiles)
+    authority = authority_contract(args.mode)
+    decision = {
+        "schema_version": SCHEMA_VERSION,
+        "evidence_policy_version": EVIDENCE_POLICY_VERSION,
+        "report_kind": DECISION_KIND,
+        "status": "failed",
+        "mode": args.mode,
+        "classification": exc.classification,
+        "contract_version": CONTRACT_VERSION,
+        **authority,
+        "identity": state.get(
+            "identity",
+            {
+                "reference_sha": None,
+                "candidate_sha": None,
+                "reference_binary_sha256": None,
+                "candidate_binary_sha256": None,
+            },
+        ),
+        "profiles": profiles,
+        "matrix_coverage": sorted(PROFILE_MATRIX),
+        "failure_reason": exc.classification.lower(),
+        "evidence": {
+            "checksum_verification": {
+                "status": "failed" if any(
+                    item["checksum_verification"] in {"failed", "missing"}
+                    for item in profiles
+                ) else "incomplete",
+                "verified_profile_count": checksum_verified,
+            },
+            "raw_reconstruction": {
+                "status": "failed" if any(
+                    item["raw_reconstruction"] == "failed" for item in profiles
+                ) else "incomplete",
+                "verified_profile_count": raw_verified,
+            },
+            "pair_inventory": {"status": "incomplete"},
+            "hard_state": {"status": "not_verified"},
+            "counters": {"status": "not_verified"},
+            "cleanup": {"status": "not_verified"},
+        },
+    }
+    validate_decision_report(decision, expected_mode=args.mode)
+    raw_gate.write_json(output_dir / "paired-decision.json", decision)
+    _write_checksums(output_dir)
+    return exc.classification
+
+
+def _write_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> str:
+    """Write a sanitized immutable summary of only the validated prefix."""
     output_dir = args.output_dir
     if output_dir.is_symlink() or not output_dir.is_dir():
         raise PairedGateError(
@@ -2420,6 +3025,7 @@ def _write_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> N
 
     _sanitize_failure_captures(output_dir)
     attempted_invocations = []
+    validated_records: list[tuple[str, list[dict[str, Any]]]] = []
     raw_root = output_dir / "raw"
     if raw_root.is_dir():
         for path in sorted(raw_root.rglob("*.json")):
@@ -2428,30 +3034,40 @@ def _write_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> N
             pair_match = re.fullmatch(
                 r"raw/pair-(\d{2})/(\d{2})-(reference|candidate)\.json", relative
             )
+            invocation: dict[str, Any] | None = None
             if warmup_match:
                 position, side = warmup_match.groups()
-                attempted_invocations.append(
-                    {
-                        "kind": "warmup",
-                        "pair_ordinal": None,
-                        "position": int(position),
-                        "side": side,
-                        "raw_file": relative,
-                        "stderr_file": path.with_suffix(".stderr").relative_to(output_dir).as_posix(),
-                    }
-                )
+                invocation = {
+                    "kind": "warmup",
+                    "pair_ordinal": None,
+                    "position": int(position),
+                    "side": side,
+                    "raw_file": relative,
+                    "stderr_file": path.with_suffix(".stderr").relative_to(output_dir).as_posix(),
+                }
             elif pair_match:
                 ordinal, position, side = pair_match.groups()
-                attempted_invocations.append(
-                    {
-                        "kind": "measured",
-                        "pair_ordinal": int(ordinal),
-                        "position": int(position),
-                        "side": side,
-                        "raw_file": relative,
-                        "stderr_file": path.with_suffix(".stderr").relative_to(output_dir).as_posix(),
-                    }
+                invocation = {
+                    "kind": "measured",
+                    "pair_ordinal": int(ordinal),
+                    "position": int(position),
+                    "side": side,
+                    "raw_file": relative,
+                    "stderr_file": path.with_suffix(".stderr").relative_to(output_dir).as_posix(),
+                }
+            if invocation is None or not path.with_suffix(".stderr").is_file():
+                continue
+            try:
+                _, rows = validate_raw_report(
+                    load_json_strict(path),
+                    dataset=args.dataset,
+                    workers=args.workers,
+                    compression=args.compression,
                 )
+            except (PairedGateError, raw_gate.GateError):
+                continue
+            attempted_invocations.append(invocation)
+            validated_records.append((invocation["side"], rows))
     attempted_invocations.sort(
         key=lambda item: (
             0 if item["kind"] == "warmup" else 1,
@@ -2460,13 +3076,67 @@ def _write_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> N
         )
     )
 
+    state = getattr(args, "_profile_state", {})
+    cleanup_result = _cleanup_interrupted_profile(args)
+    classification = (
+        "EVIDENCE_INTEGRITY_FAILURE"
+        if cleanup_result["status"] != "complete"
+        else exc.classification
+    )
+    active = state.get("active_invocation")
+    active_report = None
+    if active is not None:
+        if active["kind"] == "warmup":
+            active_raw = pathlib.Path("raw") / f"warmup-{active['position']:02d}-{active['side']}.json"
+        else:
+            active_raw = (
+                pathlib.Path("raw")
+                / f"pair-{active['pair_ordinal']:02d}"
+                / f"{active['position']:02d}-{active['side']}.json"
+            )
+        active_stderr = active_raw.with_suffix(".stderr")
+        active_report = {
+            **active,
+            "raw_file": active_raw.as_posix(),
+            "stderr_file": active_stderr.as_posix(),
+            "raw_capture_present": (output_dir / active_raw).is_file(),
+            "stderr_capture_present": (output_dir / active_stderr).is_file(),
+            "capture_validation": "unvalidated",
+            "status": "incomplete",
+        }
+
+    hard_state = "not_evaluated"
+    if {side for side, _ in validated_records} == {"reference", "candidate"}:
+        hard_state = "equal"
+        for case_index in range(len(ORDERED_CASES)):
+            contracts = {
+                side: [_semantic_contract(rows[case_index]) for record_side, rows in validated_records if record_side == side]
+                for side in ("reference", "candidate")
+            }
+            if any(values and any(value != values[0] for value in values[1:]) for values in contracts.values()):
+                hard_state = "mismatch"
+                break
+            if all(contracts.values()) and contracts["reference"][0] != contracts["candidate"][0]:
+                hard_state = "mismatch"
+                break
+
+    started = state.get("started")
+    elapsed_ms = max((time.monotonic() - started) * 1000.0, 0.001) if started is not None else 0.001
+    cancellation_reason = state.get("cancellation_reason") or classification.lower()
+    cleanup_active = (
+        "not_applicable"
+        if active_report is None
+        else "cleaned"
+        if cleanup_result["status"] == "complete"
+        else "incomplete"
+    )
     report = {
         "schema_version": SCHEMA_VERSION,
         "evidence_policy_version": EVIDENCE_POLICY_VERSION,
         "report_kind": REPORT_KIND,
         "status": "failed",
         "mode": args.mode,
-        "classification": exc.classification,
+        "classification": classification,
         "contract_version": CONTRACT_VERSION,
         "authority": authority_contract(args.mode),
         "identity": {
@@ -2490,15 +3160,35 @@ def _write_failure_artifact(args: argparse.Namespace, exc: PairedGateError) -> N
         "warmup_order": list(WARMUP_ORDER),
         "measured_order": [list(pair) for pair in measured_order(args.pairs)],
         "attempted_invocations": attempted_invocations,
+        "active_invocation": active_report,
+        "profile_elapsed_ms": elapsed_ms,
+        "cancellation": {
+            "reason": cancellation_reason,
+            "authoritative": False,
+        },
+        "prefix_validation": {
+            "status": "validated" if attempted_invocations else "not_evaluated",
+            "raw_report_count": len(attempted_invocations),
+            "case_row_count": len(attempted_invocations) * len(ORDERED_CASES),
+            "counter_validation": "valid" if attempted_invocations else "not_evaluated",
+            "hard_state": hard_state,
+        },
         "cleanup": {
-            "status": "incomplete",
+            "status": cleanup_result["status"],
             "observed_invocations": len(attempted_invocations),
             "required_invocations": 2 + args.pairs * 2,
+            "completed_cases": len(attempted_invocations) * len(ORDERED_CASES),
+            "active_invocation": cleanup_active,
+            "filesystem_entries_removed": cleanup_result["filesystem_entries_removed"],
+            "databases_removed": cleanup_result["databases_removed"],
+            "errors": cleanup_result["errors"],
         },
         "provenance": _provenance(args),
     }
+    _validate_failure_report(report, expected_profile=None)
     raw_gate.write_json(output_dir / "paired-comparison.json", report)
     _write_checksums(output_dir)
+    return classification
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2535,41 +3225,49 @@ def main(argv: list[str] | None = None) -> int:
     previous_sigterm = signal.getsignal(signal.SIGTERM)
 
     def handle_sigterm(_signum: int, _frame: Any) -> None:
+        if hasattr(args, "_profile_state"):
+            args._profile_state["cancellation_reason"] = "external SIGTERM"
         raise PairedGateError(
-            "CI_INFRASTRUCTURE_TIMEOUT", "sampling terminated before fixed inventory completed"
+            "CI_INFRASTRUCTURE_TIMEOUT", "command terminated before fixed evidence completed"
         )
 
     try:
         if args.command == "sample":
             _create_output_directory(args.output_dir)
             output_owned = True
-            signal.signal(signal.SIGTERM, handle_sigterm)
+        signal.signal(signal.SIGTERM, handle_sigterm)
         return args.handler(args)
     except PairedGateError as exc:
+        classification = exc.classification
         if args.command == "sample" and output_owned:
-            _write_failure_artifact(args, exc)
-        print(json.dumps({"classification": exc.classification, "error": str(exc)}), file=sys.stderr)
+            classification = _write_failure_artifact(args, exc)
+        elif args.command == "decision" and getattr(args, "_output_owned", False):
+            classification = _write_decision_failure_artifact(args, exc)
+        print(json.dumps({"classification": classification, "error": str(exc)}), file=sys.stderr)
         return 2
     except raw_gate.GateError as exc:
         paired_exc = PairedGateError("CONTRACT_INVALID", str(exc))
         if args.command == "sample" and output_owned:
             _write_failure_artifact(args, paired_exc)
+        elif args.command == "decision" and getattr(args, "_output_owned", False):
+            _write_decision_failure_artifact(args, paired_exc)
         print(json.dumps({"classification": "CONTRACT_INVALID", "error": str(exc)}), file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         paired_exc = PairedGateError(
-            "PAIR_INVENTORY_INVALID", "sampling interrupted before fixed inventory completed"
+            "CI_INFRASTRUCTURE_TIMEOUT", "command interrupted before fixed evidence completed"
         )
         if args.command == "sample" and output_owned:
             _write_failure_artifact(args, paired_exc)
+        elif args.command == "decision" and getattr(args, "_output_owned", False):
+            _write_decision_failure_artifact(args, paired_exc)
         print(
             json.dumps({"classification": paired_exc.classification, "error": str(paired_exc)}),
             file=sys.stderr,
         )
         return 2
     finally:
-        if args.command == "sample":
-            signal.signal(signal.SIGTERM, previous_sigterm)
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == "__main__":

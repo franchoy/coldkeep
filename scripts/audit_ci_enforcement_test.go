@@ -187,6 +187,76 @@ func TestAuditCIEnforcementRejectsPrematurePairedGovernanceFiles(t *testing.T) {
 	}
 }
 
+func TestAuditCIEnforcementPairedLauncherConfidentialityAndLifecycle(t *testing.T) {
+	compliant := `name: Temporary Paired Diagnostic
+jobs:
+  sample:
+    timeout-minutes: 45
+    steps:
+      - name: Mask runner roots
+        run: |
+          set +x
+          echo "::add-mask::$GITHUB_WORKSPACE"
+          echo "::add-mask::$RUNNER_TEMP"
+          echo "::add-mask::$HOME"
+      - name: Sample
+        run: |
+          python3 scripts/paired_benchmark_gate.py sample --dataset ci-paired-w1-v2 --pairs 10 --command-timeout-seconds 600
+          python3 scripts/paired_benchmark_gate.py sample --dataset ci-paired-w4-v2 --pairs 10 --command-timeout-seconds 600
+      - name: Decide
+        run: python3 scripts/paired_benchmark_gate.py decision
+      - name: Upload
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+`
+	tests := []struct {
+		name        string
+		mutate      func(string) string
+		wantFailure bool
+		message     string
+	}{
+		{name: "compliant", mutate: func(value string) string { return value }},
+		{
+			name: "yaml env exposure",
+			mutate: func(value string) string {
+				return value + "        env:\n          DB_PASSWORD: exposed\n"
+			},
+			wantFailure: true,
+			message:     "prohibited values through YAML env",
+		},
+		{
+			name: "pre-mask service",
+			mutate: func(value string) string {
+				return strings.Replace(value, "    steps:\n", "    services:\n      postgres:\n        image: postgres:16\n    steps:\n", 1)
+			},
+			wantFailure: true,
+			message:     "must provision its isolated container after masking",
+		},
+		{
+			name: "outer timeout gap",
+			mutate: func(value string) string {
+				return strings.Replace(value, "timeout-minutes: 45", "timeout-minutes: 40", 1)
+			},
+			wantFailure: true,
+			message:     "outer timeout is 45 minutes",
+		},
+		{
+			name:        "runtime persistence",
+			mutate:      func(value string) string { return value + "# GITHUB_ENV\n" },
+			wantFailure: true,
+			message:     "persists or traces sensitive runtime values",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := runPairedLauncherAudit(t, tt.mutate(compliant), tt.wantFailure)
+			if tt.message != "" && !strings.Contains(output, tt.message) {
+				t.Fatalf("expected %q, got:\n%s", tt.message, output)
+			}
+		})
+	}
+}
+
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformSuccessAssertion(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
@@ -298,6 +368,33 @@ func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wan
 		readRepoFile(t, filepath.Join(".github", "workflows", "benchmark-baseline.yml")),
 		wantFailure,
 	)
+}
+
+func runPairedLauncherAudit(t *testing.T, launcher string, wantFailure bool) string {
+	t.Helper()
+	launcherPath := filepath.Join(t.TempDir(), "paired.yml")
+	if err := os.WriteFile(launcherPath, []byte(launcher), 0o600); err != nil {
+		t.Fatalf("write paired launcher fixture: %v", err)
+	}
+	cmd := exec.Command(
+		"bash",
+		"scripts/audit_ci_enforcement.sh",
+		"--local-only",
+		"--paired-launcher",
+		launcherPath,
+	)
+	cmd.Dir = repoRoot(t)
+	output, err := cmd.CombinedOutput()
+	if wantFailure {
+		if err == nil {
+			t.Fatalf("expected paired launcher audit failure, got success:\n%s", output)
+		}
+		return string(output)
+	}
+	if err != nil {
+		t.Fatalf("expected paired launcher audit success, got err=%v output:\n%s", err, output)
+	}
+	return string(output)
 }
 
 func runAuditLocalOnlyWithBaseline(

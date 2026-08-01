@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/audit_ci_enforcement.sh [--repo owner/repo] [--local-only] [--remote-only]
+Usage: scripts/audit_ci_enforcement.sh [--repo owner/repo] [--local-only] [--remote-only] [--paired-launcher FILE]
 
 Verifies the repo-side CI gate invariants and, when GitHub API access is
 available, audits the repository protection settings needed to make CI
@@ -22,6 +22,7 @@ EOF
 REPO=""
 LOCAL_ONLY=0
 REMOTE_ONLY=0
+PAIRED_LAUNCHER_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,6 +41,14 @@ while [[ $# -gt 0 ]]; do
     --remote-only)
       REMOTE_ONLY=1
       shift
+      ;;
+    --paired-launcher)
+      if [[ $# -lt 2 ]]; then
+        echo "[audit] ERROR: --paired-launcher requires a workflow path" >&2
+        exit 2
+      fi
+      PAIRED_LAUNCHER_FILE="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -122,6 +131,54 @@ extract_step_block_from_content() {
       print
     }
   ' <<<"$content"
+}
+
+check_paired_launcher() {
+  local file="$1"
+  local check_status=0
+  local prohibited_env='^[[:space:]]+(COLDKEEP_KEY|COLDKEEP_AES_GCM_FIXTURE_HEX|DB_HOST|DB_PORT|DB_USER|DB_PASSWORD|DB_NAME|DB_SSLMODE|POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB):'
+
+  echo "[audit] checking paired diagnostic launcher confidentiality and lifecycle"
+  if [[ ! -f "$file" || -L "$file" ]]; then
+    echo "[audit] ERROR: paired launcher must be a regular non-symlink file" >&2
+    return 1
+  fi
+  require_pattern "$file" '^    timeout-minutes: 45$' 'paired launcher outer timeout is 45 minutes' || check_status=1
+  require_pattern "$file" 'ci-paired-w1-v2' 'paired launcher selects workers=1 v2 fixture' || check_status=1
+  require_pattern "$file" 'ci-paired-w4-v2' 'paired launcher selects workers=4 v2 fixture' || check_status=1
+  require_pattern "$file" '--pairs 10' 'paired launcher retains ten diagnostic pairs' || check_status=1
+  require_pattern "$file" '--command-timeout-seconds 600' 'paired launcher retains 600-second command safety timeout' || check_status=1
+  require_pattern "$file" 'paired_benchmark_gate\.py sample' 'paired launcher uses strict sampler' || check_status=1
+  require_pattern "$file" 'paired_benchmark_gate\.py decision' 'paired launcher writes a matrix decision' || check_status=1
+  require_pattern "$file" 'if: \$\{\{ always\(\) \}\}' 'paired launcher always uploads finalized evidence' || check_status=1
+  require_pattern "$file" 'set \+x' 'paired launcher disables shell tracing before sensitive setup' || check_status=1
+  for variable in GITHUB_WORKSPACE RUNNER_TEMP HOME; do
+    require_pattern "$file" "::add-mask::.*\\\$${variable}" "paired launcher masks ${variable}" || check_status=1
+  done
+  if grep -Eq '^    services:|^      services:' "$file"; then
+    echo "[audit] ERROR: paired launcher must provision its isolated container after masking" >&2
+    check_status=1
+  else
+    echo "[audit] ok: paired launcher does not use pre-step service provisioning"
+  fi
+  if grep -Eq "$prohibited_env" "$file"; then
+    echo "[audit] ERROR: paired launcher exposes prohibited values through YAML env" >&2
+    check_status=1
+  else
+    echo "[audit] ok: paired launcher has no prohibited YAML env exposure"
+  fi
+  if grep -Eq 'GITHUB_ENV|set -x' "$file"; then
+    echo "[audit] ERROR: paired launcher persists or traces sensitive runtime values" >&2
+    check_status=1
+  else
+    echo "[audit] ok: paired launcher neither persists nor traces sensitive runtime values"
+  fi
+  if grep -Eq 'echo.*(GITHUB_WORKSPACE|RUNNER_TEMP|COLDKEEP_KEY|DB_PASSWORD|DB_NAME)' "$file" \
+    && ! grep -Eq '::add-mask::.*(GITHUB_WORKSPACE|RUNNER_TEMP)' "$file"; then
+    echo "[audit] ERROR: paired launcher may print a prohibited path or runtime value" >&2
+    check_status=1
+  fi
+  return "$check_status"
 }
 
 check_local_workflow() {
@@ -636,6 +693,9 @@ status=0
 
 if [[ "$REMOTE_ONLY" -eq 0 ]]; then
   check_local_workflow || status=1
+  if [[ -n "$PAIRED_LAUNCHER_FILE" ]]; then
+    check_paired_launcher "$PAIRED_LAUNCHER_FILE" || status=1
+  fi
 fi
 
 if [[ "$LOCAL_ONLY" -eq 0 ]]; then
