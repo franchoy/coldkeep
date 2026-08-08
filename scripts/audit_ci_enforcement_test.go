@@ -134,6 +134,22 @@ func TestAuditCIEnforcementRejectsBenchmarkGovernanceMutations(t *testing.T) {
 			replacement: "verify-removed-exit", message: "exact classification and exit code",
 		},
 		{
+			name: "machine report not required", old: "          [[ -s \"${report}\" ]]\n",
+			replacement: "", message: "requires a machine-readable report",
+		},
+		{
+			name: "advisory exit allowlist widened", old: "            0|10|11|12)\n",
+			replacement: "            0|2|10|11|12)\n", message: "narrowly accepts valid informational exit codes",
+		},
+		{
+			name: "evaluator failure made successful", old: "            2)\n              exit 2\n",
+			replacement: "            2)\n              exit 0\n", message: "must return failure for evaluator exit code 2",
+		},
+		{
+			name: "timing checksum verification removed", old: "          sha256sum --check checksums.sha256\n",
+			replacement: "", message: "timing artifact verifies checksums",
+		},
+		{
 			name: "broad suppression", old: "          report=\"${evidence_dir}/timing-advisory.json\"\n          set +e\n",
 			replacement: "          report=\"${evidence_dir}/timing-advisory.json\"\n          continue-on-error: true\n          set +e\n", message: "broad failure suppression",
 		},
@@ -157,6 +173,68 @@ func TestAuditCIEnforcementRejectsBenchmarkGovernanceMutations(t *testing.T) {
 				t.Fatalf("mutation target not found: %q", tt.old)
 			}
 			output := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(output, tt.message) {
+				t.Fatalf("expected %q, got:\n%s", tt.message, output)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresSeparatedTimingAndIntegrityContracts(t *testing.T) {
+	validator := readRepoFile(t, filepath.Join("scripts", "validate_regression_thresholds.py"))
+	tests := []struct {
+		name        string
+		old         string
+		replacement string
+		message     string
+	}{
+		{
+			name:        "diagnostic state made required",
+			old:         `TIMING_ROW_OPTIONAL_FIELDS = {"diagnostic_final_state"}`,
+			replacement: `TIMING_ROW_OPTIONAL_FIELDS = {}`,
+			message:     "historical timing treats diagnostic final state as optional",
+		},
+		{
+			name:        "optional state no longer validated",
+			old:         `not legacy and "diagnostic_final_state" in row`,
+			replacement: `not legacy and False`,
+			message:     "optional timing diagnostic final state is validated when present",
+		},
+		{
+			name:        "hard state imported into timing",
+			old:         `TIMING_ROW_OPTIONAL_FIELDS = {"diagnostic_final_state"}`,
+			replacement: "TIMING_ROW_OPTIONAL_FIELDS = {\"diagnostic_final_state\"}\nbenchmark_contract.hard_final_state({})",
+			message:     "historical timing advisory must not require hard diagnostic final state",
+		},
+		{
+			name:        "evaluator exit remapped",
+			old:         `"BENCHMARK_TIMING_EVALUATION_FAILURE": 2`,
+			replacement: `"BENCHMARK_TIMING_EVALUATION_FAILURE": 12`,
+			message:     "timing evaluator failure maps exactly to exit code 2",
+		},
+		{
+			name:        "omitempty counter removed",
+			old:         `"container_append_count", "fsync_count", "container_open_count",`,
+			replacement: `"fsync_count", "container_open_count",`,
+			message:     "timing validator models Go omitempty field container_append_count",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutated := strings.Replace(validator, tt.old, tt.replacement, 1)
+			if mutated == validator {
+				t.Fatalf("mutation target not found: %q", tt.old)
+			}
+			output := runAuditFixtureWithTimingValidator(
+				t,
+				readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml")),
+				readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml")),
+				readRepoFile(t, filepath.Join(".github", "workflows", "benchmark-baseline.yml")),
+				mutated,
+				true,
+				false,
+				false,
+			)
 			if !strings.Contains(output, tt.message) {
 				t.Fatalf("expected %q, got:\n%s", tt.message, output)
 			}
@@ -676,11 +754,35 @@ func runAuditFixture(
 	createPairedThreshold bool,
 ) string {
 	t.Helper()
+	return runAuditFixtureWithTimingValidator(
+		t,
+		workflow,
+		codeqlWorkflow,
+		baselineWorkflow,
+		readRepoFile(t, filepath.Join("scripts", "validate_regression_thresholds.py")),
+		wantFailure,
+		createPairedReference,
+		createPairedThreshold,
+	)
+}
+
+func runAuditFixtureWithTimingValidator(
+	t *testing.T,
+	workflow string,
+	codeqlWorkflow string,
+	baselineWorkflow string,
+	timingValidator string,
+	wantFailure bool,
+	createPairedReference bool,
+	createPairedThreshold bool,
+) string {
+	t.Helper()
 
 	tmpDir := t.TempDir()
 	workflowPath := filepath.Join(tmpDir, "ci.yml")
 	codeqlWorkflowPath := filepath.Join(tmpDir, "codeql.yml")
 	baselineWorkflowPath := filepath.Join(tmpDir, "benchmark-baseline.yml")
+	timingValidatorPath := filepath.Join(tmpDir, "validate_regression_thresholds.py")
 	matrixPath := filepath.Join(tmpDir, "VALIDATION_MATRIX.md")
 	pairedReferencePath := filepath.Join(tmpDir, "reference-v1.13.json")
 	pairedThresholdPath := filepath.Join(tmpDir, "threshold-policy-v1.13.json")
@@ -693,6 +795,9 @@ func runAuditFixture(
 	}
 	if err := os.WriteFile(baselineWorkflowPath, []byte(baselineWorkflow), 0o600); err != nil {
 		t.Fatalf("write benchmark baseline workflow fixture: %v", err)
+	}
+	if err := os.WriteFile(timingValidatorPath, []byte(timingValidator), 0o600); err != nil {
+		t.Fatalf("write timing validator fixture: %v", err)
 	}
 	if err := os.WriteFile(matrixPath, []byte(readRepoFile(t, "VALIDATION_MATRIX.md")), 0o600); err != nil {
 		t.Fatalf("write validation matrix fixture: %v", err)
@@ -714,6 +819,7 @@ func runAuditFixture(
 		"COLDKEEP_CI_WORKFLOW_FILE="+workflowPath,
 		"COLDKEEP_CODEQL_WORKFLOW_FILE="+codeqlWorkflowPath,
 		"COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE="+baselineWorkflowPath,
+		"COLDKEEP_TIMING_VALIDATOR_FILE="+timingValidatorPath,
 		"COLDKEEP_VALIDATION_MATRIX_FILE="+matrixPath,
 		"COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE="+pairedReferencePath,
 		"COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE="+pairedThresholdPath,

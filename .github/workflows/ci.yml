@@ -963,6 +963,7 @@ jobs:
             --json-report "${report}"
           comparator_exit=$?
           set -e
+          [[ -s "${report}" ]]
           python3 scripts/validate_regression_thresholds.py verify-advisory-exit \
             --report "${report}" \
             --observed-exit-code "${comparator_exit}"
@@ -976,8 +977,22 @@ jobs:
             echo "Historical threshold crossings: ${violations}"
           } >> "${GITHUB_STEP_SUMMARY}"
           cd "${evidence_dir}"
+          actual_inventory="$(find . -maxdepth 1 -type f ! -name checksums.sha256 -printf '%f\n' | sort)"
+          [[ "${actual_inventory}" == $'benchmark.json\ntiming-advisory.json' ]]
           sha256sum benchmark.json timing-advisory.json > checksums.sha256
           sha256sum --check checksums.sha256
+          case "${comparator_exit}" in
+            0|10|11|12)
+              exit 0
+              ;;
+            2)
+              exit 2
+              ;;
+            *)
+              echo "unexpected benchmark timing advisory exit: ${comparator_exit}" >&2
+              exit 2
+              ;;
+          esac
 
       - name: Upload benchmark timing advisory evidence
         if: ${{ always() }}

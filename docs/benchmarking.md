@@ -37,7 +37,9 @@ advisory:
   state, counters, cleanup, confidentiality, inventory, and checksums are hard.
 - `benchmark-timing-advisory` retains all four historical `small` observations.
   Valid threshold crossings are explicit `BENCHMARK_TIMING_WARNING` results,
-  never hard performance failures or passes.
+  never hard performance failures or passes. The ordinary `small` path does
+  not capture `diagnostic_final_state`; that hard semantic authority belongs
+  only to `benchmark-integrity`.
 - `CI Required Gate` requires both families to complete successfully. Missing,
   malformed, unverified, skipped, or failed evidence remains blocking.
 
@@ -45,6 +47,14 @@ Hard performance enforcement is `deferred_to_controlled_infrastructure`.
 Historical v1.9 inputs are `historical_v1.9_absolute` advisory material only.
 No paired required job, production paired mode, paired manifest, or numeric
 paired threshold policy is active.
+
+The historical command's successful completion establishes that its temporary
+benchmark database cleanup completed. Explicit per-case and repeat cleanup
+evidence, semantic final state, and repeat hard-state equality remain integrity
+responsibilities. Candidate/configuration/I/O/contract failures produce a
+machine-readable `BENCHMARK_TIMING_EVALUATION_FAILURE` report and exit 2 after
+evidence finalization; they are never converted to an advisory warning or
+`BENCHMARK_TIMING_NOT_EVALUATED`.
 
 ### Retained paired diagnostic tooling
 

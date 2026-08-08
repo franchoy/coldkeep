@@ -23,7 +23,6 @@ THRESHOLDS = ROOT / "benchmarks/v1.9/regression-thresholds.yaml"
 def candidate_from_baseline() -> dict:
     candidate = copy.deepcopy(json.loads(BASELINE.read_text(encoding="utf-8")))
     data = candidate["data"]
-    diagnostic_rows = raw_report(workers=1, dataset="ci-paired-w1-v2")["data"]["rows"]
     data["schema_version"] = 2
     data["fixture"] = {
         **validator.SMALL_FIXTURE,
@@ -32,9 +31,13 @@ def candidate_from_baseline() -> dict:
             for index, name in enumerate(validator.EXPECTED_CASES)
         ],
     }
-    for row, diagnostic_row in zip(data["rows"], diagnostic_rows):
-        row["diagnostic_final_state"] = diagnostic_row["diagnostic_final_state"]
     return candidate
+
+
+def valid_diagnostic_final_state() -> dict:
+    return raw_report(workers=1, dataset="ci-paired-w1-v2")["data"]["rows"][0][
+        "diagnostic_final_state"
+    ]
 
 
 class AdvisoryComparatorTests(unittest.TestCase):
@@ -98,6 +101,39 @@ class AdvisoryComparatorTests(unittest.TestCase):
             2,
         )
 
+    def test_real_shape_small_observation_does_not_require_diagnostic_state(self) -> None:
+        candidate = candidate_from_baseline()
+        self.assertTrue(all("diagnostic_final_state" not in row for row in candidate["data"]["rows"]))
+        self.write_candidate(candidate)
+        self.assertEqual(self.check(), 0)
+
+    def test_go_omitempty_operational_zeroes_may_all_be_absent(self) -> None:
+        candidate = candidate_from_baseline()
+        for stats in [
+            candidate["data"]["execution_stats"],
+            *(row["execution_stats"] for row in candidate["data"]["rows"]),
+        ]:
+            for field in validator.EXECUTION_STATS_OMITTABLE_ZERO_FIELDS:
+                stats.pop(field, None)
+            stats["io"]["container_opens"] = 0
+            stats["io"]["container_appends"] = 0
+            stats["io"]["fsyncs"] = 0
+            stats["io"]["bytes_written"] = 0
+            stats["io"]["bytes_read"] = 0
+        self.write_candidate(candidate)
+        self.assertEqual(self.check(), 0)
+
+    def test_optional_diagnostic_final_state_is_structurally_validated(self) -> None:
+        candidate = candidate_from_baseline()
+        candidate["data"]["rows"][0]["diagnostic_final_state"] = valid_diagnostic_final_state()
+        self.write_candidate(candidate)
+        self.assertEqual(self.check(), 0)
+
+        candidate["data"]["rows"][0]["diagnostic_final_state"] = {"schema_version": 2}
+        self.write_candidate(candidate)
+        self.assertEqual(self.check(), 2)
+        self.assert_failure_report()
+
     def test_warning_exit_is_ten_and_never_pass(self) -> None:
         candidate = candidate_from_baseline()
         row = candidate["data"]["rows"][0]
@@ -114,28 +150,107 @@ class AdvisoryComparatorTests(unittest.TestCase):
         self.assertGreater(report["violations_count"], 0)
         self.assertNotIn("passed", report)
 
-    def test_malformed_or_unknown_candidate_evidence_is_error(self) -> None:
+    def test_unknown_candidate_data_is_error_with_failure_report(self) -> None:
         candidate = candidate_from_baseline()
         candidate["data"]["unknown"] = True
         self.write_candidate(candidate)
         self.assertEqual(self.check(), 2)
-        self.assertFalse(self.report.exists())
+        self.assert_failure_report()
 
-    def test_counter_total_and_derived_throughput_are_hard_contracts(self) -> None:
+    def test_unknown_row_and_execution_stat_fields_fail_closed(self) -> None:
+        for location in ("row", "stats"):
+            with self.subTest(location=location):
+                candidate = candidate_from_baseline()
+                target = candidate["data"]["rows"][0]
+                if location == "stats":
+                    target = target["execution_stats"]
+                target["unknown"] = True
+                self.write_candidate(candidate)
+                self.assertEqual(self.check(), 2)
+                self.assert_failure_report()
+
+    def test_fixture_order_and_seed_mismatches_are_errors(self) -> None:
+        mutations = (
+            lambda candidate: candidate["data"]["fixture"].__setitem__("seed", 1702),
+            lambda candidate: candidate["data"]["rows"].reverse(),
+            lambda candidate: candidate["data"]["fixture"]["ordered_cases"][0].__setitem__("seed", 1713),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                candidate = candidate_from_baseline()
+                mutation(candidate)
+                self.write_candidate(candidate)
+                self.assertEqual(self.check(), 2)
+                self.assert_failure_report()
+
+    def test_counter_total_mismatch_is_error(self) -> None:
         candidate = candidate_from_baseline()
         candidate["data"]["execution_stats"]["total_files"] += 1
         self.write_candidate(candidate)
         self.assertEqual(self.check(), 2)
+        self.assert_failure_report()
 
-    def test_missing_diagnostic_final_state_is_hard_contract_error(self) -> None:
+    def test_duplicated_io_counter_mismatch_is_error(self) -> None:
         candidate = candidate_from_baseline()
-        del candidate["data"]["rows"][0]["diagnostic_final_state"]
+        candidate["data"]["rows"][0]["execution_stats"]["io"]["container_opens"] += 1
         self.write_candidate(candidate)
         self.assertEqual(self.check(), 2)
+
+    def test_derived_throughput_mismatch_is_error(self) -> None:
         candidate = candidate_from_baseline()
         candidate["data"]["rows"][0]["throughput_mbps"] += 0.1
         self.write_candidate(candidate)
         self.assertEqual(self.check(), 2)
+
+    def assert_failure_report(self) -> dict:
+        report = json.loads(self.report.read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["classification"], "BENCHMARK_TIMING_EVALUATION_FAILURE")
+        self.assertEqual(report["authority"], "informational")
+        self.assertEqual(report["violations_count"], 0)
+        self.assertEqual(report["violations"], [])
+        self.assertNotIn("passed", report)
+        return report
+
+    def test_missing_and_malformed_candidate_emit_evaluator_failure(self) -> None:
+        self.assertEqual(self.check(), 2)
+        missing = self.assert_failure_report()
+        self.assertEqual(missing["error"]["category"], "missing_input")
+        self.assertNotIn("candidate_sha256", missing)
+
+        self.candidate.write_text("{malformed\n", encoding="utf-8")
+        self.assertEqual(self.check(), 2)
+        malformed = self.assert_failure_report()
+        self.assertEqual(malformed["error"]["category"], "malformed_input")
+        self.assertIn("candidate_sha256", malformed)
+
+    def test_evaluator_failure_report_exit_two_verifies_exactly(self) -> None:
+        candidate = candidate_from_baseline()
+        candidate["data"]["unknown"] = True
+        self.write_candidate(candidate)
+        self.assertEqual(self.check(), 2)
+        self.assertEqual(validator.verify_advisory_exit(self.report, 2), 0)
+        with self.assertRaises(RuntimeError):
+            validator.verify_advisory_exit(self.report, 12)
+
+    def test_evaluator_failure_cannot_claim_not_evaluated_timing_or_production_authority(self) -> None:
+        candidate = candidate_from_baseline()
+        candidate["data"]["unknown"] = True
+        self.write_candidate(candidate)
+        self.assertEqual(self.check(), 2)
+        base = self.assert_failure_report()
+        mutations = (
+            {"classification": "BENCHMARK_TIMING_NOT_EVALUATED"},
+            {"timing_within_reference": True},
+            {"performance_authority": True},
+            {"authority": "production"},
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                report = {**base, **mutation}
+                self.report.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaises(RuntimeError):
+                    validator.verify_advisory_exit(self.report, 2)
 
     def test_all_declared_advisory_exit_classifications_verify(self) -> None:
         base = {
@@ -160,6 +275,12 @@ class AdvisoryComparatorTests(unittest.TestCase):
                     report["violations_count"] = 1
                 if classification == "BENCHMARK_TIMING_NOT_EVALUATED":
                     report["status"] = "not_evaluated"
+                if classification == "BENCHMARK_TIMING_EVALUATION_FAILURE":
+                    report["status"] = "failed"
+                    report["error"] = {
+                        "category": "contract_error",
+                        "message": "benchmark advisory evidence violates its contract",
+                    }
                 self.report.write_text(json.dumps(report), encoding="utf-8")
                 self.assertEqual(validator.verify_advisory_exit(self.report, exit_code), 0)
 

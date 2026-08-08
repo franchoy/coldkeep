@@ -39,6 +39,10 @@ ADVISORY_EXIT_CODES = {
     "BENCHMARK_TIMING_WARNING": 10,
     "BENCHMARK_TIMING_UNSTABLE": 11,
     "BENCHMARK_TIMING_NOT_EVALUATED": 12,
+    "BENCHMARK_TIMING_EVALUATION_FAILURE": 2,
+}
+ADVISORY_FAILURE_CATEGORIES = {
+    "configuration_error", "contract_error", "io_error", "malformed_input", "missing_input",
 }
 
 
@@ -103,6 +107,18 @@ SMALL_FIXTURE = {
     "mixed_max_file_size_bytes": 256 * 1024, "remove_every": 4,
     "case_database_isolation": False,
 }
+TIMING_ROW_REQUIRED_FIELDS = {
+    "case", "duration_ms", "throughput_mbps", "execution", "execution_stats",
+}
+# The ordinary historical `small` path does not install the diagnostic observer.
+# Integrity-only hard state remains required by benchmark_gate.py, not this timing contract.
+TIMING_ROW_OPTIONAL_FIELDS = {"diagnostic_final_state"}
+EXECUTION_STATS_REQUIRED_FIELDS = {"total_files", "total_bytes", "workers_used", "io"}
+# These are the only BenchmarkExecutionStats fields shipped with Go `omitempty` tags.
+EXECUTION_STATS_OMITTABLE_ZERO_FIELDS = {
+    "container_append_count", "fsync_count", "container_open_count",
+    "container_close_count", "snapshot_metadata_write_count",
+}
 
 
 def require_fields(value: Any, expected: set[str], label: str) -> Dict[str, Any]:
@@ -121,35 +137,62 @@ def validate_execution(value: Any, workers: int, label: str) -> None:
         raise RuntimeError(f"{label} policy mismatch")
 
 
-def validate_execution_stats(value: Any, *, workers: int, label: str) -> Dict[str, Any]:
-    required = {
-        "total_files", "total_bytes", "workers_used", "container_append_count",
-        "fsync_count", "container_open_count", "container_close_count", "io",
-    }
-    optional = {"snapshot_metadata_write_count"}
-    if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
+def validate_execution_stats(
+    value: Any, *, workers: int, label: str, case_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or not EXECUTION_STATS_REQUIRED_FIELDS <= set(value)
+        or set(value) - EXECUTION_STATS_REQUIRED_FIELDS - EXECUTION_STATS_OMITTABLE_ZERO_FIELDS
+    ):
         raise RuntimeError(f"{label} fields mismatch")
     io = require_fields(
         value["io"],
         {"container_opens", "container_appends", "fsyncs", "bytes_written", "bytes_read"},
         f"{label} I/O",
     )
+    normalized = {
+        **value,
+        **{field: value.get(field, 0) for field in EXECUTION_STATS_OMITTABLE_ZERO_FIELDS},
+    }
     counters = [
-        *(value[field] for field in required - {"io"}),
+        *(normalized[field] for field in EXECUTION_STATS_REQUIRED_FIELDS - {"io"}),
+        *(normalized[field] for field in EXECUTION_STATS_OMITTABLE_ZERO_FIELDS),
         *io.values(),
-        value.get("snapshot_metadata_write_count", 0),
     ]
-    if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in counters):
-        raise RuntimeError(f"{label} counter invalid")
-    if value["workers_used"] != workers or value["container_open_count"] != value["container_close_count"]:
+    for item in counters:
+        try:
+            benchmark_contract.require_nonnegative_integer(item, label)
+        except benchmark_contract.GateError as exc:
+            raise RuntimeError(f"{label} counter invalid") from exc
+    if (
+        normalized["workers_used"] != workers
+        or normalized["container_open_count"] != normalized["container_close_count"]
+    ):
         raise RuntimeError(f"{label} counters inconsistent")
     if (
-        io["container_opens"] != value["container_open_count"]
-        or io["container_appends"] != value["container_append_count"]
-        or io["fsyncs"] != value["fsync_count"]
+        io["container_opens"] != normalized["container_open_count"]
+        or io["container_appends"] != normalized["container_append_count"]
+        or io["fsyncs"] != normalized["fsync_count"]
     ):
         raise RuntimeError(f"{label} duplicated counters inconsistent")
-    return value
+    if normalized["total_files"] <= 0 or normalized["total_bytes"] <= 0:
+        raise RuntimeError(f"{label} logical totals invalid")
+    if normalized["container_append_count"] > 0 and (
+        normalized["container_open_count"] == 0
+        or normalized["fsync_count"] == 0
+        or io["bytes_written"] == 0
+    ):
+        raise RuntimeError(f"{label} append counters contradict I/O")
+    if io["bytes_read"] > 0 and normalized["container_open_count"] == 0:
+        raise RuntimeError(f"{label} read counters contradict container opens")
+    if (
+        case_name is not None
+        and normalized["snapshot_metadata_write_count"] > 0
+        and case_name not in {"snapshot-creation", "gc-after-churn"}
+    ):
+        raise RuntimeError(f"{label} snapshot writes contradict operation")
+    return normalized
 
 
 def validate_timing_envelope(envelope: Dict[str, Any], *, workers: int, legacy: bool) -> None:
@@ -176,17 +219,21 @@ def validate_timing_envelope(envelope: Dict[str, Any], *, workers: int, legacy: 
         if [item.get("seed") for item in ordered] != [1712 + index * 10 for index in range(9)]:
             raise RuntimeError("fixture case seed mismatch")
     rows = data["rows"]
-    if not isinstance(rows, list) or [row.get("case") for row in rows if isinstance(row, dict)] != EXPECTED_CASES:
+    if (
+        not isinstance(rows, list)
+        or any(not isinstance(row, dict) for row in rows)
+        or [row.get("case") for row in rows] != EXPECTED_CASES
+    ):
         raise RuntimeError("benchmark row case order mismatch")
-    row_fields = {
-        "case", "duration_ms", "throughput_mbps", "execution", "execution_stats",
-        "diagnostic_final_state",
-    } if not legacy else {
-        "case", "duration_ms", "throughput_mbps", "execution", "execution_stats",
-    }
+    row_fields = TIMING_ROW_REQUIRED_FIELDS
     row_stats: List[Dict[str, Any]] = []
     for row in rows:
-        require_fields(row, row_fields, f"row {row.get('case')}")
+        if (
+            not isinstance(row, dict)
+            or not row_fields <= set(row)
+            or set(row) - row_fields - (set() if legacy else TIMING_ROW_OPTIONAL_FIELDS)
+        ):
+            raise RuntimeError(f"row {row.get('case') if isinstance(row, dict) else None} fields mismatch")
         validate_execution(row["execution"], workers, f"row {row['case']} execution")
         duration = row["duration_ms"]
         throughput = row["throughput_mbps"]
@@ -198,10 +245,15 @@ def validate_timing_envelope(envelope: Dict[str, Any], *, workers: int, legacy: 
         ):
             raise RuntimeError(f"row {row['case']} timing values invalid")
         stats = validate_execution_stats(
-            row["execution_stats"], workers=workers, label=f"row {row['case']} execution_stats"
+            row["execution_stats"],
+            workers=workers,
+            label=f"row {row['case']} execution_stats",
+            case_name=row["case"],
         )
-        if not legacy:
-            benchmark_contract.hard_final_state(row)
+        if not legacy and "diagnostic_final_state" in row:
+            benchmark_contract.validate_diagnostic_final_state(
+                row["diagnostic_final_state"], f"row {row['case']}"
+            )
         expected_throughput = stats["total_bytes"] / (1024 * 1024) / (float(duration) / 1000.0)
         if not legacy and not math.isclose(
             float(throughput), expected_throughput, rel_tol=1e-12, abs_tol=1e-12
@@ -476,27 +528,97 @@ def advisory_report(
     }
 
 
+def advisory_failure_report(arguments: List[str], error: Exception) -> Optional[Tuple[pathlib.Path, Dict[str, Any]]]:
+    if not arguments or arguments[0] != "check":
+        return None
+
+    def option(name: str) -> Optional[str]:
+        try:
+            index = arguments.index(name)
+        except ValueError:
+            return None
+        return arguments[index + 1] if index + 1 < len(arguments) else None
+
+    if option("--policy") != "hosted-advisory" or option("--json-report") is None:
+        return None
+    report_path = pathlib.Path(option("--json-report"))
+    if isinstance(error, FileNotFoundError):
+        category, message = "missing_input", "required benchmark advisory input is missing"
+    elif isinstance(error, (json.JSONDecodeError, yaml.YAMLError)):
+        category, message = "malformed_input", "benchmark advisory input is malformed"
+    elif isinstance(error, RuntimeError) and str(error).startswith("No valid benchmark envelope"):
+        category, message = "malformed_input", "benchmark advisory input is malformed"
+    elif isinstance(error, OSError):
+        category, message = "io_error", "benchmark advisory input or report I/O failed"
+    elif isinstance(error, ValueError):
+        category, message = "configuration_error", "benchmark advisory configuration is invalid"
+    else:
+        category, message = "contract_error", "benchmark advisory evidence violates its contract"
+    report: Dict[str, Any] = {
+        "schema_version": 1,
+        "report_kind": ADVISORY_REPORT_KIND,
+        "status": "failed",
+        "classification": "BENCHMARK_TIMING_EVALUATION_FAILURE",
+        "authority": "informational",
+        "reference_kind": "historical_v1.9_absolute",
+        "error": {"category": category, "message": message},
+        "violations_count": 0,
+        "violations": [],
+    }
+    mode = option("--mode")
+    if mode in {"uncompressed", "compressed"}:
+        report["mode"] = mode
+    paths = {
+        "candidate_sha256": pathlib.Path(arguments[1]) if len(arguments) > 1 else None,
+        "baseline_sha256": pathlib.Path(option("--baseline")) if option("--baseline") else None,
+    }
+    for field, path in paths.items():
+        if path is not None:
+            try:
+                report[field] = sha256_file(path)
+            except OSError:
+                pass
+    return report_path, report
+
+
 def validate_advisory_report(report: Any) -> Dict[str, Any]:
-    report = require_fields(
-        report,
-        {
-            "schema_version", "report_kind", "status", "classification", "authority",
-            "reference_kind", "mode", "candidate_sha256", "baseline_sha256",
-            "violations_count", "violations",
-        },
-        "timing advisory report",
-    )
+    if not isinstance(report, dict):
+        raise RuntimeError("timing advisory report fields mismatch")
+    classification = report.get("classification")
+    common_fields = {
+        "schema_version", "report_kind", "status", "classification", "authority",
+        "reference_kind", "violations_count", "violations",
+    }
+    if classification == "BENCHMARK_TIMING_EVALUATION_FAILURE":
+        required = common_fields | {"error"}
+        optional = {"mode", "candidate_sha256", "baseline_sha256"}
+        if not required <= set(report) or set(report) - required - optional:
+            raise RuntimeError("timing advisory report fields mismatch")
+    else:
+        report = require_fields(
+            report,
+            common_fields | {"mode", "candidate_sha256", "baseline_sha256"},
+            "timing advisory report",
+        )
     if (
         report["schema_version"] != 1
         or report["report_kind"] != ADVISORY_REPORT_KIND
-        or report["status"] not in {"complete", "not_evaluated"}
-        or report["classification"] not in ADVISORY_EXIT_CODES
+        or report["status"] not in {"complete", "not_evaluated", "failed"}
+        or classification not in ADVISORY_EXIT_CODES
         or report["authority"] != "informational"
         or report["reference_kind"] != "historical_v1.9_absolute"
-        or report["mode"] not in {"uncompressed", "compressed"}
+        or ("mode" in report and report["mode"] not in {"uncompressed", "compressed"})
     ):
         raise RuntimeError("timing advisory report identity mismatch")
+    expected_status = {
+        "BENCHMARK_TIMING_NOT_EVALUATED": "not_evaluated",
+        "BENCHMARK_TIMING_EVALUATION_FAILURE": "failed",
+    }.get(classification, "complete")
+    if report["status"] != expected_status:
+        raise RuntimeError("timing advisory report status mismatch")
     for field in ("candidate_sha256", "baseline_sha256"):
+        if field not in report:
+            continue
         value = report[field]
         if not isinstance(value, str) or len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
             raise RuntimeError(f"timing advisory {field} invalid")
@@ -512,6 +634,16 @@ def validate_advisory_report(report: Any) -> Dict[str, Any]:
         raise RuntimeError("within-reference advisory contains violations")
     if report["classification"] == "BENCHMARK_TIMING_WARNING" and not report["violations"]:
         raise RuntimeError("timing warning contains no violations")
+    if classification in {"BENCHMARK_TIMING_NOT_EVALUATED", "BENCHMARK_TIMING_EVALUATION_FAILURE"} and report["violations"]:
+        raise RuntimeError("unevaluated timing report contains violations")
+    if classification == "BENCHMARK_TIMING_EVALUATION_FAILURE":
+        error = require_fields(report["error"], {"category", "message"}, "timing advisory error")
+        if (
+            error["category"] not in ADVISORY_FAILURE_CATEGORIES
+            or not isinstance(error["message"], str)
+            or not error["message"]
+        ):
+            raise RuntimeError("timing advisory error invalid")
     return report
 
 
@@ -705,7 +837,18 @@ def _main():
 def main() -> int:
     try:
         return _main()
-    except (OSError, ValueError, RuntimeError, json.JSONDecodeError, yaml.YAMLError) as exc:
+    except (
+        AttributeError, KeyError, OSError, TypeError, ValueError, RuntimeError,
+        json.JSONDecodeError, yaml.YAMLError,
+    ) as exc:
+        failure = advisory_failure_report(sys.argv[1:], exc)
+        if failure is not None:
+            report_path, report = failure
+            try:
+                validate_advisory_report(report)
+                report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            except (OSError, ValueError, RuntimeError) as report_exc:
+                print(f"benchmark timing failure-report error: {report_exc}", file=sys.stderr)
         print(f"benchmark timing policy error: {exc}", file=sys.stderr)
         return 2
 

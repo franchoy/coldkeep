@@ -73,6 +73,7 @@ WORKFLOW_FILE="${COLDKEEP_CI_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/ci.yml}
 CODEQL_WORKFLOW_FILE="${COLDKEEP_CODEQL_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/codeql.yml}"
 BENCHMARK_BASELINE_WORKFLOW_FILE="${COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/benchmark-baseline.yml}"
 BENCHMARK_GATE_FILE="${COLDKEEP_BENCHMARK_GATE_FILE:-$REPO_ROOT/scripts/benchmark_gate.py}"
+TIMING_VALIDATOR_FILE="${COLDKEEP_TIMING_VALIDATOR_FILE:-$REPO_ROOT/scripts/validate_regression_thresholds.py}"
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
 PAIRED_REFERENCE_MANIFEST_FILE="${COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE:-$REPO_ROOT/benchmarks/paired/reference-v1.13.json}"
 PAIRED_THRESHOLD_POLICY_FILE="${COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE:-$REPO_ROOT/benchmarks/paired/threshold-policy-v1.13.json}"
@@ -451,12 +452,61 @@ check_local_workflow() {
   require_content_pattern "$benchmark_timing_block" '^\s+--dataset small \\$' 'timing advisory retains the historical small fixture' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'scripts/validate_regression_thresholds\.py check' 'timing advisory retains the historical comparator' || check_status=1
   require_content_pattern "$benchmark_timing_block" '--policy hosted-advisory' 'timing comparator has informational authority' || check_status=1
+  require_content_pattern "$benchmark_timing_block" '^\s+set \+e$' 'timing advisory disables errexit only for comparator evaluation' || check_status=1
+  require_content_pattern "$benchmark_timing_block" '^\s+set -e$' 'timing advisory restores errexit immediately after comparator evaluation' || check_status=1
+  if ! grep -A1 -E '^\s+comparator_exit=\$\?$' <<<"$benchmark_timing_block" | grep -Eq '^\s+set -e$'; then
+    echo "[audit] ERROR: timing advisory must restore errexit immediately after capturing comparator exit" >&2
+    check_status=1
+  else
+    echo "[audit] ok: timing advisory restores errexit immediately after capturing comparator exit"
+  fi
+  require_content_pattern "$benchmark_timing_block" '\[\[ -s "\$\{report\}" \]\]' 'timing advisory requires a machine-readable report' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'verify-advisory-exit' 'timing advisory verifies exact classification and exit code' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'comparator_exit=\$\?' 'timing advisory captures the comparator exit exactly' || check_status=1
+  require_content_pattern "$benchmark_timing_block" '^\s+0\|10\|11\|12\)$' 'timing advisory narrowly accepts valid informational exit codes' || check_status=1
+  require_content_pattern "$benchmark_timing_block" '^\s+2\)$' 'timing advisory preserves evaluator exit code 2 as failure' || check_status=1
+  if ! grep -A1 -E '^\s+2\)$' <<<"$benchmark_timing_block" | grep -Eq '^\s+exit 2$'; then
+    echo "[audit] ERROR: timing advisory must return failure for evaluator exit code 2" >&2
+    check_status=1
+  else
+    echo "[audit] ok: timing advisory returns failure for evaluator exit code 2"
+  fi
   require_content_pattern "$benchmark_timing_block" 'GITHUB_STEP_SUMMARY' 'timing advisory publishes its classification summary' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'historical_v1\.9|benchmarks/v1\.9/baselines' 'timing advisory alone cites historical v1.9 baselines' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'if-no-files-found: error' 'timing artifact rejects missing evidence' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'if: \$\{\{ always\(\) \}\}' 'timing artifact upload always runs' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'actual_inventory=.*find .*checksums\.sha256' 'timing artifact inventory is enumerated exhaustively' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'benchmark\.json\\ntiming-advisory\.json' 'timing artifact inventory is restricted to the report and observation' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'sha256sum benchmark\.json timing-advisory\.json > checksums\.sha256' 'timing artifact creates exhaustive checksums' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'sha256sum --check checksums\.sha256' 'timing artifact verifies checksums' || check_status=1
+  checksum_line="$(grep -nEm1 'sha256sum --check checksums\.sha256' <<<"$benchmark_timing_block" | cut -d: -f1 || true)"
+  evaluator_failure_line="$(grep -nEm1 '^\s+2\)$' <<<"$benchmark_timing_block" | cut -d: -f1 || true)"
+  if [[ -z "$checksum_line" || -z "$evaluator_failure_line" || "$checksum_line" -ge "$evaluator_failure_line" ]]; then
+    echo "[audit] ERROR: timing checksums must be finalized before evaluator code 2 fails the job" >&2
+    check_status=1
+  else
+    echo "[audit] ok: timing checksums are finalized before evaluator code 2 fails the job"
+  fi
+  require_pattern "$TIMING_VALIDATOR_FILE" '^TIMING_ROW_OPTIONAL_FIELDS = \{"diagnostic_final_state"\}$' 'historical timing treats diagnostic final state as optional' || check_status=1
+  require_pattern "$TIMING_VALIDATOR_FILE" 'not legacy and "diagnostic_final_state" in row' 'optional timing diagnostic final state is validated when present' || check_status=1
+  require_pattern "$TIMING_VALIDATOR_FILE" '"BENCHMARK_TIMING_EVALUATION_FAILURE": 2' 'timing evaluator failure maps exactly to exit code 2' || check_status=1
+  require_pattern "$TIMING_VALIDATOR_FILE" '^EXECUTION_STATS_OMITTABLE_ZERO_FIELDS = \{' 'timing validator models Go omitempty counters explicitly' || check_status=1
+  omitempty_block="$(awk '
+    /^EXECUTION_STATS_OMITTABLE_ZERO_FIELDS = \{/ { in_block = 1 }
+    in_block { print }
+    in_block && /^\}$/ { exit }
+  ' "$TIMING_VALIDATOR_FILE")"
+  for field in container_append_count fsync_count container_open_count container_close_count snapshot_metadata_write_count; do
+    require_content_pattern "$omitempty_block" "\"${field}\"" "timing validator models Go omitempty field ${field}" || check_status=1
+  done
+  if grep -Eq 'benchmark_contract\.hard_final_state' "$TIMING_VALIDATOR_FILE"; then
+    echo "[audit] ERROR: historical timing advisory must not require hard diagnostic final state" >&2
+    check_status=1
+  else
+    echo "[audit] ok: historical timing advisory does not require hard diagnostic final state"
+  fi
+  require_pattern "$BENCHMARK_GATE_FILE" '^RAW_ROW_FIELDS = \{' 'hard integrity keeps an explicit raw row contract' || check_status=1
+  require_pattern "$BENCHMARK_GATE_FILE" '^def hard_final_state\(' 'hard integrity still requires diagnostic final-state authority' || check_status=1
   require_pattern "$BENCHMARK_GATE_FILE" '^INTEGRITY_SAMPLE_COUNT = 2$' 'integrity interface fixes two candidate samples' || check_status=1
   require_pattern "$BENCHMARK_GATE_FILE" '^INTEGRITY_COMMAND_TIMEOUT_SECONDS = 600$' 'integrity interface fixes the command ceiling' || check_status=1
   require_pattern "$BENCHMARK_GATE_FILE" '"warmup_count": 0' 'integrity interface has no warmup invocation' || check_status=1
