@@ -471,10 +471,11 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func runCLIWithCapturedIO(t *testing.T, args []string) (stdout string, stderr string, code int) {
 	t.Helper()
+	runtime := newDefaultCommandTestRuntime(t)
 
 	stderr = captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
-			code = runCLI(args)
+			code = runCLIWithRuntime(args, runtime)
 		})
 	})
 
@@ -1013,7 +1014,10 @@ func TestRunCLIRepairJSONFailureIncludesInvariantMetadata(t *testing.T) {
 	}
 
 	stderr := captureStderr(t, func() {
-		code := runCLI([]string{"repair", "ref-counts", "--output", "json"})
+		code := runCLIWithRuntime(
+			[]string{"repair", "ref-counts", "--output", "json"},
+			newDefaultCommandTestRuntime(t),
+		)
 		if code != exitVerify {
 			t.Fatalf("expected exit code %d, got %d", exitVerify, code)
 		}
@@ -1146,7 +1150,10 @@ func TestRunCLIStoreJSONEmitsStartupRecoveryAndCrossVersionReuseSuccess(t *testi
 	var stdout string
 	stderr := captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
-			code := runCLI([]string{"store", "--output", "json", inPath})
+			code := runCLIWithRuntime(
+				[]string{"store", "--output", "json", inPath},
+				newDefaultCommandTestRuntime(t),
+			)
 			if code != exitSuccess {
 				t.Fatalf("expected exit code %d, got %d", exitSuccess, code)
 			}
@@ -10365,17 +10372,14 @@ func TestJSONModeUsageErrorKeepsStdoutEmptyAndStderrJSONOnly(t *testing.T) {
 	}
 
 	stderrPayloads := assertEveryLineIsJSONObject(t, stderr)
-	if len(stderrPayloads) != 2 {
-		t.Fatalf("expected startup event + error payload on stderr, got %d lines output=%q", len(stderrPayloads), stderr)
+	if len(stderrPayloads) != 1 {
+		t.Fatalf("expected only the parse-time error payload on stderr, got %d lines output=%q", len(stderrPayloads), stderr)
 	}
-	if got, _ := stderrPayloads[0]["event"].(string); got != "startup_recovery" {
-		t.Fatalf("expected first stderr line to be startup_recovery event, got %v payload=%v", stderrPayloads[0]["event"], stderrPayloads[0])
+	if got, _ := stderrPayloads[0]["status"].(string); got != "error" {
+		t.Fatalf("expected stderr status=error, got %v payload=%v", stderrPayloads[0]["status"], stderrPayloads[0])
 	}
-	if got, _ := stderrPayloads[1]["status"].(string); got != "error" {
-		t.Fatalf("expected second stderr line status=error, got %v payload=%v", stderrPayloads[1]["status"], stderrPayloads[1])
-	}
-	if got, _ := stderrPayloads[1]["error_class"].(string); got != "USAGE" {
-		t.Fatalf("expected second stderr line error_class=USAGE, got %v payload=%v", stderrPayloads[1]["error_class"], stderrPayloads[1])
+	if got, _ := stderrPayloads[0]["error_class"].(string); got != "USAGE" {
+		t.Fatalf("expected stderr error_class=USAGE, got %v payload=%v", stderrPayloads[0]["error_class"], stderrPayloads[0])
 	}
 }
 

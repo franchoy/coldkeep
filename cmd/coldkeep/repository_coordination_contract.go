@@ -6,8 +6,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/coordination"
 )
 
-// repositoryCoordinationPolicy is the non-acquiring Phase 11 CLI contract.
-// Phase 12 will consume this policy from one top-level runtime wrapper.
+// repositoryCoordinationPolicy is the Phase 11 command classification consumed
+// by the single top-level repository lease wrapper.
 type repositoryCoordinationPolicy struct {
 	Required  bool
 	Operation coordination.Operation

@@ -33,6 +33,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 	clirender "github.com/franchoy/coldkeep/internal/cli/render"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/coordination"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/execution"
@@ -138,6 +139,17 @@ type parsedCommandLine struct {
 	method      string
 	positionals []string
 	flags       map[string][]string
+}
+
+type cliRuntime struct {
+	newCoordinator  func() coordination.Coordinator
+	newOutputSpool  func() (*coordinatedOutputSpool, error)
+	resolveIdentity func(string) (coordination.Identity, error)
+	newOwner        func(coordination.Operation, coordination.Identity, string, time.Time) (coordination.Owner, error)
+	recover         func(cliOutputMode) (recovery.Report, error)
+	dispatch        func(parsedCommandLine, cliOutputMode) error
+	renderSuccess   func(parsedCommandLine, cliOutputMode)
+	now             func() time.Time
 }
 
 type verifyOutputSummary struct {
@@ -651,6 +663,19 @@ func main() {
 }
 
 func runCLI(args []string) int {
+	return runCLIWithRuntime(args, cliRuntime{
+		newCoordinator:  coordination.NewCoordinator,
+		newOutputSpool:  newDefaultCoordinatedOutputSpool,
+		resolveIdentity: coordination.ResolveIdentity,
+		newOwner:        coordination.NewOwner,
+		recover:         runStartupRecoveryWithOptionalLogBuffering,
+		dispatch:        dispatchCLICommand,
+		renderSuccess:   printCLISuccess,
+		now:             time.Now,
+	})
+}
+
+func runCLIWithRuntime(args []string, runtime cliRuntime) int {
 	startupMode := inferOutputModeFromArgs(args)
 	if startupMode == outputModeJSON {
 		prevOutput := log.Writer()
@@ -666,18 +691,6 @@ func runCLI(args []string) int {
 	if len(args) < 1 {
 		printHelp()
 		return exitSuccess
-	}
-
-	if shouldRunStartupRecovery(args) {
-		recoveryReport, recoveryErr := runStartupRecoveryWithOptionalLogBuffering(startupMode)
-		if recoveryErr != nil {
-			log.Printf("System recovery failed: %v\n", recoveryErr)
-		}
-		emitStartupRecoveryReport(startupMode, recoveryReport, recoveryErr)
-
-		if startupMode != outputModeJSON {
-			checkEnvFilePermissions()
-		}
 	}
 
 	parsed, err := parseCommandLine(args, flagsWithValues)
@@ -699,6 +712,91 @@ func runCLI(args []string) int {
 		return printCLIError(err, startupMode)
 	}
 
+	policy := repositoryCoordinationPolicyFor(parsed)
+	err = executeCLICommand(args, parsed, outputMode, policy, runtime)
+	if err != nil {
+		return printCLIError(err, outputMode)
+	}
+
+	runtime.renderSuccess(parsed, outputMode)
+
+	return exitSuccess
+}
+
+func executeCLICommand(
+	args []string,
+	parsed parsedCommandLine,
+	outputMode cliOutputMode,
+	policy repositoryCoordinationPolicy,
+	runtime cliRuntime,
+) (err error) {
+	if !policy.Required {
+		return runtime.dispatch(parsed, outputMode)
+	}
+	newOutputSpool := runtime.newOutputSpool
+	if newOutputSpool == nil {
+		newOutputSpool = newDefaultCoordinatedOutputSpool
+	}
+	outputSpool, err := newOutputSpool()
+	if err != nil {
+		return err
+	}
+	if outputSpool == nil {
+		return fmt.Errorf("create coordinated command output spool: factory returned nil spool")
+	}
+	defer func() {
+		err = errors.Join(err, outputSpool.cleanup())
+	}()
+
+	identity, err := runtime.resolveIdentity(container.ContainersDir)
+	if err != nil {
+		return err
+	}
+	owner, err := runtime.newOwner(policy.Operation, identity, version.String(), runtime.now())
+	if err != nil {
+		return err
+	}
+	request := coordination.Request{
+		Operation: policy.Operation,
+		Mode:      policy.Mode,
+		Owner:     owner,
+	}
+
+	var operationErr error
+	var outputDestination *os.File
+	lifecycleErr := coordination.WithLease(
+		context.Background(),
+		runtime.newCoordinator(),
+		identity,
+		request,
+		func() error {
+			outputDestination, operationErr = outputSpool.capture(func() error {
+				if shouldRunStartupRecovery(args) {
+					recoveryReport, recoveryErr := runtime.recover(outputMode)
+					if recoveryErr != nil {
+						log.Printf("System recovery failed: %v\n", recoveryErr)
+					}
+					emitStartupRecoveryReport(outputMode, recoveryReport, recoveryErr)
+					if outputMode != outputModeJSON {
+						checkEnvFilePermissions()
+					}
+				}
+				return runtime.dispatch(parsed, outputMode)
+			})
+			return operationErr
+		},
+	)
+	shouldReplayOutput := lifecycleErr == nil || operationErr != nil
+	if shouldReplayOutput && outputDestination != nil {
+		if replayErr := outputSpool.replayTo(outputDestination); replayErr != nil {
+			return errors.Join(lifecycleErr, replayErr)
+		}
+	}
+	return lifecycleErr
+}
+
+func dispatchCLICommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	var err error
 	switch parsed.method {
 	case "init":
 		err = initCommand(parsed, outputMode)
@@ -749,14 +847,7 @@ func runCLI(args []string) int {
 	default:
 		err = usageErrorf("unknown command: %s", parsed.method)
 	}
-
-	if err != nil {
-		return printCLIError(err, outputMode)
-	}
-
-	printCLISuccess(parsed, outputMode)
-
-	return exitSuccess
+	return err
 }
 
 func runStartupRecoveryWithOptionalLogBuffering(mode cliOutputMode) (recovery.Report, error) {
