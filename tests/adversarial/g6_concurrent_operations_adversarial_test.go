@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +21,9 @@ import (
 
 	dbschema "github.com/franchoy/coldkeep/db"
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/coordination"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/storage"
@@ -30,16 +35,17 @@ import (
 // G6 — Safe concurrent storage operations
 //
 // Adversarial goals:
-//   - concurrent store/remove/GC activity must not corrupt metadata or graph shape
-//   - identical concurrent stores must converge on deterministic chunk graphs
+//   - repository coordination must reject known independent-process overlap
+//   - repeated same-file CLI stores must converge on deterministic chunk graphs
+//   - lower-layer concurrent store/remove/GC activity must not corrupt metadata or graph shape
 //   - mixed concurrent operations must preserve healthy restores for surviving files
 //   - verification invariants must remain true after each stress phase
 //
 // Notes:
 //   - This file uses the current Postgres-backed adversarial harness.
 //   - It runs a codec matrix for plain + aes-gcm where data-path behavior matters.
-//   - It intentionally validates semantics after concurrency rather than imposing
-//     scheduler-specific timing assumptions.
+//   - Independent-process contention uses an explicit holder READY protocol;
+//     storage-level interleaving tests retain the internal concurrency evidence.
 
 func adversarialG6Codecs() []string {
 	return []string{"plain", "aes-gcm"}
@@ -518,6 +524,273 @@ func storeFileWithCodecCLIG6(t *testing.T, repoRoot, binPath string, env map[str
 	)
 	data := testutils.JSONMap(t, payload, "data")
 	return testutils.JSONInt64(t, data, "file_id")
+}
+
+const (
+	g6LeaseHolderEnv     = "COLDKEEP_G6_REPOSITORY_LEASE_HOLDER"
+	g6LeaseHolderReady   = "READY"
+	g6LeaseHolderRelease = "RELEASE"
+	g6LeaseHolderDone    = "RELEASED"
+)
+
+// TestAdversarialG6RepositoryLeaseHolderProcess is a helper-process entry
+// point. The parent test executes this test binary in a separate OS process
+// with g6LeaseHolderEnv set, so acquisition uses the production Coordinator
+// while synchronization remains test-only.
+func TestAdversarialG6RepositoryLeaseHolderProcess(t *testing.T) {
+	if strings.TrimSpace(os.Getenv(g6LeaseHolderEnv)) != "1" {
+		return
+	}
+
+	identity, err := coordination.ResolveIdentity(os.Getenv("COLDKEEP_STORAGE_DIR"))
+	if err != nil {
+		t.Fatalf("resolve holder repository identity: %v", err)
+	}
+	owner, err := coordination.NewOwner(coordination.OperationStore, identity, "phase13a-test", time.Now())
+	if err != nil {
+		t.Fatalf("create holder owner metadata: %v", err)
+	}
+	lease, err := coordination.NewCoordinator().Acquire(context.Background(), identity, coordination.Request{
+		Operation: coordination.OperationStore,
+		Mode:      coordination.ModeExclusive,
+		Owner:     owner,
+	})
+	if err != nil {
+		t.Fatalf("acquire holder repository Lease: %v", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			_ = lease.Release()
+		}
+	}()
+
+	if _, err := fmt.Fprintln(os.Stdout, g6LeaseHolderReady); err != nil {
+		t.Fatalf("signal holder readiness: %v", err)
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			t.Fatalf("read holder release signal: %v", err)
+		}
+		t.Fatal("holder release signal stream closed before RELEASE")
+	}
+	if signal := strings.TrimSpace(scanner.Text()); signal != g6LeaseHolderRelease {
+		t.Fatalf("holder release signal=%q want %q", signal, g6LeaseHolderRelease)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("release holder repository Lease: %v", err)
+	}
+	released = true
+	if _, err := fmt.Fprintln(os.Stdout, g6LeaseHolderDone); err != nil {
+		t.Fatalf("signal holder release: %v", err)
+	}
+}
+
+type g6RepositoryLeaseHolder struct {
+	command  *exec.Cmd
+	stdin    io.WriteCloser
+	lines    chan string
+	wait     chan error
+	stderr   *bytes.Buffer
+	finished bool
+}
+
+func startG6RepositoryLeaseHolder(t *testing.T, env map[string]string) *g6RepositoryLeaseHolder {
+	t.Helper()
+
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve G6 test binary: %v", err)
+	}
+	holderEnv := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		holderEnv[key] = value
+	}
+	// The holder does not open the database. Removing this gate prevents the
+	// adversarial package TestMain from creating a second isolated PostgreSQL
+	// database inside the helper process.
+	holderEnv["COLDKEEP_TEST_DB"] = ""
+	holderEnv[g6LeaseHolderEnv] = "1"
+
+	command := exec.Command(testBinary, "-test.run=^TestAdversarialG6RepositoryLeaseHolderProcess$", "-test.count=1")
+	command.Env = testutils.BuildCommandEnv(holderEnv)
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatalf("create holder stdin pipe: %v", err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		t.Fatalf("create holder stdout pipe: %v", err)
+	}
+	stderr := &bytes.Buffer{}
+	command.Stderr = stderr
+	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		t.Fatalf("start repository Lease holder: %v", err)
+	}
+
+	holder := &g6RepositoryLeaseHolder{
+		command: command,
+		stdin:   stdin,
+		lines:   make(chan string, 16),
+		wait:    make(chan error, 1),
+		stderr:  stderr,
+	}
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			holder.lines <- strings.TrimSpace(scanner.Text())
+		}
+		close(holder.lines)
+	}()
+	go func() {
+		holder.wait <- command.Wait()
+	}()
+	t.Cleanup(func() { holder.cleanup(t) })
+	holder.waitForLine(t, g6LeaseHolderReady)
+	return holder
+}
+
+func (holder *g6RepositoryLeaseHolder) waitForLine(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case line, ok := <-holder.lines:
+			if !ok {
+				select {
+				case err := <-holder.wait:
+					holder.finished = true
+					t.Fatalf("repository Lease holder exited before %q: %v; stderr=%s", want, err, holder.stderr.String())
+				case <-time.After(2 * time.Second):
+					t.Fatalf("repository Lease holder output closed before %q", want)
+				}
+			}
+			if line == want {
+				return
+			}
+		case <-deadline.C:
+			t.Fatalf("timeout waiting for repository Lease holder signal %q", want)
+		}
+	}
+}
+
+func (holder *g6RepositoryLeaseHolder) release(t *testing.T) {
+	t.Helper()
+	if holder.finished {
+		t.Fatal("repository Lease holder exited before release")
+	}
+	if _, err := fmt.Fprintln(holder.stdin, g6LeaseHolderRelease); err != nil {
+		t.Fatalf("send repository Lease holder release: %v", err)
+	}
+	if err := holder.stdin.Close(); err != nil {
+		t.Fatalf("close repository Lease holder stdin: %v", err)
+	}
+	holder.waitForLine(t, g6LeaseHolderDone)
+	select {
+	case err := <-holder.wait:
+		holder.finished = true
+		if err != nil {
+			t.Fatalf("repository Lease holder exit: %v; stderr=%s", err, holder.stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for repository Lease holder exit")
+	}
+}
+
+func (holder *g6RepositoryLeaseHolder) cleanup(t *testing.T) {
+	t.Helper()
+	if holder == nil || holder.finished {
+		return
+	}
+	_, _ = fmt.Fprintln(holder.stdin, g6LeaseHolderRelease)
+	_ = holder.stdin.Close()
+	select {
+	case <-holder.wait:
+		holder.finished = true
+		return
+	case <-time.After(2 * time.Second):
+	}
+	if holder.command.Process != nil {
+		_ = holder.command.Process.Kill()
+	}
+	select {
+	case <-holder.wait:
+		holder.finished = true
+	case <-time.After(5 * time.Second):
+		t.Log("repository Lease holder did not exit after cleanup kill")
+	}
+}
+
+func runColdkeepCommandWithTimeoutG6(
+	t *testing.T,
+	repoRoot string,
+	binPath string,
+	env map[string]string,
+	args ...string,
+) testutils.CLIExecResult {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	command := exec.CommandContext(ctx, binPath, args...)
+	command.Dir = repoRoot
+	command.Env = testutils.BuildCommandEnv(env)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("coldkeep command %v timed out: %v", args, ctx.Err())
+	}
+	if err == nil {
+		return testutils.CLIExecResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: 0}
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return testutils.CLIExecResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitErr.ExitCode()}
+	}
+	t.Fatalf("run coldkeep command %v: %v", args, err)
+	return testutils.CLIExecResult{}
+}
+
+func assertRepositoryBusyCLIResultG6(t *testing.T, result testutils.CLIExecResult) {
+	t.Helper()
+	if result.ExitCode != 1 {
+		t.Fatalf("busy contender exit=%d want 1; stdout=%s stderr=%s", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	if strings.TrimSpace(result.Stdout) != "" {
+		t.Fatalf("busy contender stdout=%q want empty", result.Stdout)
+	}
+	payload, ok := testutils.TryParseLastJSONLine(result.Stderr)
+	if !ok {
+		t.Fatalf("busy contender produced no JSON error; stderr=%s", result.Stderr)
+	}
+	if got, _ := payload["status"].(string); got != "error" {
+		t.Fatalf("busy status=%q want error; payload=%v", got, payload)
+	}
+	if got, _ := payload["error_class"].(string); got != "GENERAL" {
+		t.Fatalf("busy error_class=%q want GENERAL; payload=%v", got, payload)
+	}
+	if got, _ := payload["exit_code"].(float64); int(got) != 1 {
+		t.Fatalf("busy JSON exit_code=%v want 1; payload=%v", payload["exit_code"], payload)
+	}
+	if got, _ := payload["message"].(string); got != "repository is busy" {
+		t.Fatalf("busy message=%q want %q; payload=%v", got, "repository is busy", payload)
+	}
+	errorNode, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("busy error node=%T want object; payload=%v", payload["error"], payload)
+	}
+	if got, _ := errorNode["code"].(string); got != "REPOSITORY_BUSY" {
+		t.Fatalf("busy error code=%q want REPOSITORY_BUSY; payload=%v", got, payload)
+	}
+	if got, _ := errorNode["message"].(string); got != "repository is busy" {
+		t.Fatalf("busy nested message=%q want %q; payload=%v", got, "repository is busy", payload)
+	}
 }
 
 // storeFileWithCodecCLIG6Async is safe to call from goroutines because it
@@ -1403,16 +1676,64 @@ func writeConcurrentInvariantManifestG6(t *testing.T, manifest g6ChunkFailureDia
 	t.Logf("G6 verify diagnostics: wrote failure manifest %s", path)
 }
 
-func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testing.T) {
+func TestAdversarialG6IndependentProcessRepositoryContention(t *testing.T) {
 	testgate.RequireDB(t)
 	testgate.RequireLongRun(t)
 
 	for _, codec := range adversarialG6Codecs() {
 		t.Run(codec, func(t *testing.T) {
-			outerJobCodec := os.Getenv("COLDKEEP_CODEC")
 			configureAdversarialG6Codec(t, codec)
 
-			dbconn, env, repoRoot, binPath, tmp, testDBName := setupAdversarialG6Env(t)
+			dbconn, env, repoRoot, binPath, tmp, _ := setupAdversarialG6Env(t)
+			defer dbconn.Close()
+
+			inputDir := filepath.Join(tmp, "input")
+			restoreDir := filepath.Join(tmp, "restore")
+			if err := os.MkdirAll(inputDir, 0o755); err != nil {
+				t.Fatalf("mkdir input: %v", err)
+			}
+			if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+				t.Fatalf("mkdir restore: %v", err)
+			}
+
+			inPath := testutils.CreateTempFile(t, inputDir, "g6-contention.bin", 256*1024+313)
+			fileHash := testutils.SHA256File(t, inPath)
+			holder := startG6RepositoryLeaseHolder(t, env)
+
+			busyResult := runColdkeepCommandWithTimeoutG6(
+				t,
+				repoRoot,
+				binPath,
+				env,
+				"store", "--codec", codec, inPath, "--output", "json",
+			)
+			assertRepositoryBusyCLIResultG6(t, busyResult)
+
+			var storedRows int
+			if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&storedRows); err != nil {
+				t.Fatalf("count logical files after Busy contender: %v", err)
+			}
+			if storedRows != 0 {
+				t.Fatalf("Busy contender stored %d logical-file rows; want 0", storedRows)
+			}
+
+			holder.release(t)
+			fileID := storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, inPath)
+			verifyConcurrentInvariantsG6(t, dbconn, nil)
+			restoreMustMatchHashG6(t, dbconn, fileID, filepath.Join(restoreDir, "g6-contention-restored.bin"), fileHash)
+		})
+	}
+}
+
+func TestAdversarialG6SequentialStoresSameFileConvergeDeterministically(t *testing.T) {
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
+
+	for _, codec := range adversarialG6Codecs() {
+		t.Run(codec, func(t *testing.T) {
+			configureAdversarialG6Codec(t, codec)
+
+			dbconn, env, repoRoot, binPath, tmp, _ := setupAdversarialG6Env(t)
 			defer dbconn.Close()
 
 			inputDir := filepath.Join(tmp, "input")
@@ -1427,60 +1748,12 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 			inPath := testutils.CreateTempFile(t, inputDir, "g6-same-file.bin", 2*1024*1024+313)
 			wantHash := testutils.SHA256File(t, inPath)
 
-			const workers = 6
-			type g6storeResult struct {
-				idx         int
-				id          int64
-				trace       []string
-				startedUTC  time.Time
-				finishedUTC time.Time
-				err         error
+			const stores = 6
+			ids := make([]int64, stores)
+			for i := range ids {
+				ids[i] = storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, inPath)
 			}
-			resultCh := make(chan g6storeResult, workers)
-			for i := 0; i < workers; i++ {
-				i := i
-				go func() {
-					storeResult, err := storeFileWithCodecCLIG6AsyncDiagnostics(repoRoot, binPath, env, codec, inPath)
-					resultCh <- g6storeResult{
-						idx:         i,
-						id:          storeResult.FileID,
-						trace:       storeResult.LifecycleTrace,
-						startedUTC:  storeResult.StartedUTC,
-						finishedUTC: storeResult.FinishedUTC,
-						err:         err,
-					}
-				}()
-			}
-			ids := make([]int64, workers)
-			storeResults := make([]g6StoreOperationResult, workers)
-			for i := 0; i < workers; i++ {
-				res := <-resultCh
-				storeResults[res.idx] = g6StoreOperationResult{
-					Worker:         res.idx,
-					FileID:         res.id,
-					LifecycleTrace: append([]string(nil), res.trace...),
-					StartedUTC:     res.startedUTC,
-					FinishedUTC:    res.finishedUTC,
-				}
-				if res.err != nil {
-					storeResults[res.idx].Error = res.err.Error()
-				}
-				if res.err != nil {
-					t.Fatalf("concurrent store worker %d failed: %v", res.idx, res.err)
-				}
-				ids[res.idx] = res.id
-			}
-			verifyConcurrentInvariantsG6(t, dbconn, &g6FailureDiagnosticContext{
-				TestName:      t.Name(),
-				Backend:       "postgres",
-				OuterJobCodec: outerJobCodec,
-				InnerSubtest:  codec,
-				GOMAXPROCS:    runtime.GOMAXPROCS(0),
-				Concurrency:   workers,
-				IsolatedDB:    testDBName,
-				TempRoot:      tmp,
-				StoreResults:  storeResults,
-			})
+			verifyConcurrentInvariantsG6(t, dbconn, nil)
 
 			baseGraph := testutils.QueryChunkGraph(t, dbconn, ids[0])
 			if len(baseGraph) == 0 {
@@ -1493,7 +1766,7 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 				}
 				for j := range baseGraph {
 					if baseGraph[j] != graph[j] {
-						t.Fatalf("chunk graph drift between concurrent stores at file=%d index=%d: base=%+v got=%+v", i, j, baseGraph[j], graph[j])
+						t.Fatalf("chunk graph drift between sequential stores at file=%d index=%d: base=%+v got=%+v", i, j, baseGraph[j], graph[j])
 					}
 				}
 			}
@@ -1522,7 +1795,7 @@ func TestAdversarialG6DeterministicStoreInterleavingPostgres(t *testing.T) {
 	}
 }
 
-func TestAdversarialG6ConcurrentStoresSharedChunkInputsPreserveHealthyRestores(t *testing.T) {
+func TestAdversarialG6SequentialStoresSharedChunksPreserveHealthyRestores(t *testing.T) {
 	testgate.RequireDB(t)
 	testgate.RequireLongRun(t)
 
@@ -1542,30 +1815,41 @@ func TestAdversarialG6ConcurrentStoresSharedChunkInputsPreserveHealthyRestores(t
 				t.Fatalf("mkdir restore: %v", err)
 			}
 
-			paths := testutils.CreateSampleDataset(t, inputDir)
-			hybridA := paths["hybrid_a.bin"]
-			hybridB := paths["hybrid_b.bin"]
+			sharedPrefix := make([]byte, chunk.MaxChunkSize)
+			for i := range sharedPrefix {
+				sharedPrefix[i] = byte((i*31 + 7) % 251)
+			}
+			tailA := make([]byte, 64*1024)
+			tailB := make([]byte, 64*1024)
+			for i := range tailA {
+				tailA[i] = byte((i*17 + 3) % 251)
+				tailB[i] = byte((i*29 + 11) % 251)
+			}
+			hybridA := filepath.Join(inputDir, "hybrid_a.bin")
+			hybridB := filepath.Join(inputDir, "hybrid_b.bin")
+			if err := os.WriteFile(hybridA, append(append([]byte{}, sharedPrefix...), tailA...), 0o600); err != nil {
+				t.Fatalf("write hybrid_a: %v", err)
+			}
+			if err := os.WriteFile(hybridB, append(append([]byte{}, sharedPrefix...), tailB...), 0o600); err != nil {
+				t.Fatalf("write hybrid_b: %v", err)
+			}
 			hashA := testutils.SHA256File(t, hybridA)
 			hashB := testutils.SHA256File(t, hybridB)
 
-			resultACh := make(chan error, 1)
-			resultBCh := make(chan error, 1)
-			var fileAID, fileBID int64
-			go func() {
-				var err error
-				fileAID, err = storeFileWithCodecCLIG6Async(repoRoot, binPath, env, codec, hybridA)
-				resultACh <- err
-			}()
-			go func() {
-				var err error
-				fileBID, err = storeFileWithCodecCLIG6Async(repoRoot, binPath, env, codec, hybridB)
-				resultBCh <- err
-			}()
-			if errA := <-resultACh; errA != nil {
-				t.Fatalf("concurrent store hybrid_a failed: %v", errA)
+			fileAID := storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, hybridA)
+			fileBID := storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, hybridB)
+
+			var sharedChunks int
+			if err := dbconn.QueryRow(`
+				SELECT COUNT(DISTINCT fc_a.chunk_id)
+				FROM file_chunk fc_a
+				JOIN file_chunk fc_b ON fc_b.chunk_id = fc_a.chunk_id
+				WHERE fc_a.logical_file_id = $1 AND fc_b.logical_file_id = $2
+			`, fileAID, fileBID).Scan(&sharedChunks); err != nil {
+				t.Fatalf("count shared chunks: %v", err)
 			}
-			if errB := <-resultBCh; errB != nil {
-				t.Fatalf("concurrent store hybrid_b failed: %v", errB)
+			if sharedChunks == 0 {
+				t.Fatal("expected hybrid inputs to reference at least one shared chunk")
 			}
 
 			verifyConcurrentInvariantsG6(t, dbconn, nil)
