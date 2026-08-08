@@ -766,7 +766,7 @@ func executeCLICommand(
 	var outputDestination *os.File
 	lifecycleErr := coordination.WithLease(
 		context.Background(),
-		runtime.newCoordinator(),
+		cliRepositoryCoordinator{delegate: runtime.newCoordinator()},
 		identity,
 		request,
 		func() error {
@@ -961,6 +961,7 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 }
 
 func printCLIError(err error, mode cliOutputMode) int {
+	err = stableCLIError(err)
 	code := classifyExitCode(err)
 	message := strings.TrimSpace(err.Error())
 	publicCode := publicErrorCode(err, code)

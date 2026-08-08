@@ -56,6 +56,34 @@ func TestRepositoryCoordinationPolicyRequiresExclusiveRepositoryOperations(t *te
 	}
 }
 
+func TestRepositoryCoordinationPolicyKeepsRestoreVerifyAndBothGCModesExclusive(t *testing.T) {
+	tests := []struct {
+		name      string
+		parsed    parsedCommandLine
+		operation coordination.Operation
+	}{
+		{name: "restore", parsed: parsedCommandLine{method: "restore"}, operation: coordination.OperationRestore},
+		{name: "verify fast", parsed: parsedCommandLine{method: "verify", flags: map[string][]string{"fast": {""}}}, operation: coordination.OperationVerify},
+		{name: "verify standard", parsed: parsedCommandLine{method: "verify", flags: map[string][]string{"standard": {""}}}, operation: coordination.OperationVerify},
+		{name: "verify full", parsed: parsedCommandLine{method: "verify", flags: map[string][]string{"full": {""}}}, operation: coordination.OperationVerify},
+		{name: "verify deep", parsed: parsedCommandLine{method: "verify", flags: map[string][]string{"deep": {""}}}, operation: coordination.OperationVerify},
+		{name: "gc dry run", parsed: parsedCommandLine{method: "gc", flags: map[string][]string{"dry-run": {""}}}, operation: coordination.OperationGarbageCollect},
+		{name: "gc live", parsed: parsedCommandLine{method: "gc"}, operation: coordination.OperationGarbageCollect},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.parsed.flags == nil {
+				test.parsed.flags = map[string][]string{}
+			}
+			policy := repositoryCoordinationPolicyFor(test.parsed)
+			if !policy.Required || policy.Mode != coordination.ModeExclusive || policy.Operation != test.operation {
+				t.Fatalf("policy=%+v want required exclusive operation=%q", policy, test.operation)
+			}
+		})
+	}
+}
+
 func TestRepositoryCoordinationPolicyBypassesNonRepositoryCommands(t *testing.T) {
 	tests := []parsedCommandLine{
 		{method: "init"},

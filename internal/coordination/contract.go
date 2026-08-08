@@ -1,8 +1,23 @@
-// Package coordination defines the repository coordination contract.
+// Package coordination defines Coldkeep's same-host, local-filesystem
+// repository coordination contract.
 //
-// Phase 11 deliberately contains no operating-system lock implementation.
-// Native acquisition and CLI integration belong to Phase 12, while independent
-// process and live-GC contention proof belongs to Phase 13.
+// A direct library caller operating on a real or shared repository must
+// acquire a repository Lease before opening the database, initializing its
+// schema, or constructing an Engine. The caller must hold that Lease through
+// the repository operation, operation cleanup, and database/runtime cleanup,
+// then release it afterward. The ordering is repository Lease, database/schema,
+// database locks and transactions, then filesystem work.
+//
+// Coldkeep intentionally does not acquire a Lease inside individual Engine
+// methods. Direct Engine calls remain appropriate for isolated temporary
+// repositories and single-owner test fixtures that do not claim repository
+// coordination evidence. A direct Engine call against a shared real repository
+// is not safe-concurrency proof without an outer Lease.
+//
+// Coordination is repository-wide, exclusive, fail-fast, and non-reentrant.
+// It is not distributed coordination. In particular, using the same database
+// with different container namespaces is unsupported and is not made safe by
+// this Lease.
 package coordination
 
 import (

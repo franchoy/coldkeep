@@ -276,7 +276,7 @@ func TestRunCLICoordinatedOutputDecisionMatrix(t *testing.T) {
 			name:           "operation success release failure",
 			releaseErr:     releaseErr,
 			wantCode:       exitGeneral,
-			wantStderrText: []string{releaseErr.Error()},
+			wantStderrText: []string{"repository coordination failed"},
 		},
 		{
 			name:           "operation failure release success",
@@ -291,7 +291,7 @@ func TestRunCLICoordinatedOutputDecisionMatrix(t *testing.T) {
 			releaseErr:     releaseErr,
 			wantCode:       exitGeneral,
 			wantPayload:    true,
-			wantStderrText: []string{operationErr.Error(), releaseErr.Error()},
+			wantStderrText: []string{operationErr.Error()},
 		},
 	}
 
@@ -452,8 +452,8 @@ func TestRunCLIReleaseOnlyFailureSuppressesJSONSuccessPayload(t *testing.T) {
 	if strings.TrimSpace(stdout) != "" {
 		t.Fatalf("stdout=%q want empty after release-only failure", stdout)
 	}
-	if !strings.Contains(stderr, releaseErr.Error()) {
-		t.Fatalf("stderr=%q does not contain release error", stderr)
+	if !strings.Contains(stderr, "repository coordination failed") {
+		t.Fatalf("stderr=%q does not contain stable coordination error", stderr)
 	}
 }
 
