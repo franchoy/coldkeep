@@ -692,6 +692,8 @@ check_local_workflow() {
 	fi
   require_pattern "$WORKFLOW_FILE" '^  cross-platform:$' 'cross-platform job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run native coordination runtime tests' 'cross-platform native coordination runtime step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test -v -count=1 -run '\\^\\(TestNativeLock\\|TestWindowsNativeLock\\|TestProductionCoordinator\\)' ./internal/coordination" 'cross-platform native coordination command covers native backends and production Coordinator' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run path safety cross-platform tests' 'cross-platform path safety step' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test ./internal/pathsafe/\\.\\.\\. -run 'TrustedRoot\\|Symlink\\|Alias\\|WritePath' -count=1" 'cross-platform path safety command covers trusted-root and alias checks' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run storage restore cross-platform tests' 'cross-platform storage restore step' || check_status=1

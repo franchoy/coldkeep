@@ -27,6 +27,39 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 	}
 }
 
+func TestAuditCIEnforcementLocalWorkflowRequiresNativeCoordinationRuntime(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	for name, test := range map[string]struct {
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		"missing step": {
+			old: "      - name: Run native coordination runtime tests\n" +
+				"        run: go test -v -count=1 -run '^(TestNativeLock|TestWindowsNativeLock|TestProductionCoordinator)' ./internal/coordination\n\n",
+			wantMessage: "cross-platform native coordination runtime step",
+		},
+		"altered command": {
+			old:         "go test -v -count=1 -run '^(TestNativeLock|TestWindowsNativeLock|TestProductionCoordinator)' ./internal/coordination",
+			replacement: "go test -v -count=1 ./internal/coordination",
+			wantMessage: "cross-platform native coordination command covers native backends and production Coordinator",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mutated := strings.Replace(workflow, test.old, test.replacement, 1)
+			if mutated == workflow {
+				t.Fatalf("workflow fixture did not contain %q", test.old)
+			}
+			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
 func TestAuditCIEnforcementRequiresPinnedBenchmarkCalibrationToolchain(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))

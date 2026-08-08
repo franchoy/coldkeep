@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin || windows
 
 package coordination
 
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestProductionCoordinatorIntegratedLinuxLifecycle(t *testing.T) {
+func TestProductionCoordinatorIntegratedNativeLifecycle(t *testing.T) {
 	repositoryPath := t.TempDir()
 	identity, request := mustProductionRequest(t, repositoryPath, OperationStore, time.Unix(1_700_000_000, 0))
 	coordinator := NewCoordinator()
