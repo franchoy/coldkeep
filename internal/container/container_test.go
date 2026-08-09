@@ -428,7 +428,7 @@ func TestBrokenOpenContainerErrorNilReceiverBehavior(t *testing.T) {
 	}
 }
 
-func TestQuarantineContainerInDirUpdatesSizesToPhysicalFile(t *testing.T) {
+func TestQuarantineContainerInDirUpdatesCurrentSizeAndPreservesMaximum(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -495,8 +495,8 @@ func TestQuarantineContainerInDirUpdatesSizesToPhysicalFile(t *testing.T) {
 	if currentSize != info.Size() {
 		t.Fatalf("expected current_size=%d, got %d", info.Size(), currentSize)
 	}
-	if maxSize != info.Size() {
-		t.Fatalf("expected max_size=%d, got %d", info.Size(), maxSize)
+	if maxSize != ContainerHdrLen+128 {
+		t.Fatalf("expected max_size=%d to remain unchanged, got %d", ContainerHdrLen+128, maxSize)
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func TestQuarantineOrphanContainersAcceptsDirectQuarantineAfterSizeSync(t *testing.T) {
+func TestQuarantineOrphanContainersAcceptsDirectQuarantineAfterCurrentSizeSync(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -74,8 +74,8 @@ func TestQuarantineOrphanContainersAcceptsDirectQuarantineAfterSizeSync(t *testi
 	if err != nil {
 		t.Fatalf("stat container file: %v", err)
 	}
-	if currentSize != info.Size() || maxSize != info.Size() {
-		t.Fatalf("expected direct quarantine size sync to %d, got current=%d max=%d", info.Size(), currentSize, maxSize)
+	if currentSize != info.Size() || maxSize != container.ContainerHdrLen+256 {
+		t.Fatalf("expected current size sync to %d and preserved maximum %d, got current=%d max=%d", info.Size(), container.ContainerHdrLen+256, currentSize, maxSize)
 	}
 
 	stats := &recoveryStats{}
@@ -87,7 +87,7 @@ func TestQuarantineOrphanContainersAcceptsDirectQuarantineAfterSizeSync(t *testi
 	}
 }
 
-func TestQuarantineOrphanContainersResyncsExistingQuarantineSizeDrift(t *testing.T) {
+func TestQuarantineOrphanContainersResyncsCurrentSizeAndPreservesMaximum(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -111,7 +111,7 @@ func TestQuarantineOrphanContainersResyncsExistingQuarantineSizeDrift(t *testing
 	res, err := dbconn.Exec(`
 		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
 		VALUES (?, ?, ?, FALSE, FALSE, TRUE)
-	`, filename, int64(len(content))-5, int64(len(content))-5)
+	`, filename, int64(len(content))-5, int64(len(content))+64)
 	if err != nil {
 		t.Fatalf("insert stale quarantine row: %v", err)
 	}
@@ -134,8 +134,8 @@ func TestQuarantineOrphanContainersResyncsExistingQuarantineSizeDrift(t *testing
 	if quarantine != 1 {
 		t.Fatalf("expected row to remain quarantined, got %d", quarantine)
 	}
-	if currentSize != int64(len(content)) || maxSize != int64(len(content)) {
-		t.Fatalf("expected resynced sizes=%d, got current=%d max=%d", len(content), currentSize, maxSize)
+	if currentSize != int64(len(content)) || maxSize != int64(len(content))+64 {
+		t.Fatalf("expected current size=%d and preserved maximum=%d, got current=%d max=%d", len(content), len(content)+64, currentSize, maxSize)
 	}
 	if stats.quarantinedOrphan != 0 {
 		t.Fatalf("expected no new orphan rows, got %d", stats.quarantinedOrphan)

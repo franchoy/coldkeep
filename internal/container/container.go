@@ -653,14 +653,14 @@ func isQuarantineableContainer(dbconn *sql.DB, containerID int64) bool {
 // quarantine flag is set; any other stat error is returned as fatal.
 func quarantineContainerUpdateQueryAndArgs(backend db.Backend, containerID int64, info os.FileInfo, statErr error) (string, []any, error) {
 	updateQ := `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`
-	updateWithSizeQ := `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`
+	updateWithSizeQ := `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2 WHERE id = $1`
 	if backend == db.BackendSQLite {
 		updateQ = `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = ?`
-		updateWithSizeQ = `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = ?, max_size = ? WHERE id = ?`
+		updateWithSizeQ = `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = ? WHERE id = ?`
 	}
 	if statErr == nil {
 		if backend == db.BackendSQLite {
-			return updateWithSizeQ, []any{info.Size(), info.Size(), containerID}, nil
+			return updateWithSizeQ, []any{info.Size(), containerID}, nil
 		}
 		return updateWithSizeQ, []any{containerID, info.Size()}, nil
 	}
