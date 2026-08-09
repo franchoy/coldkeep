@@ -701,6 +701,34 @@ func (holder *g6RepositoryLeaseHolder) release(t *testing.T) {
 	}
 }
 
+func (holder *g6RepositoryLeaseHolder) kill(t *testing.T) {
+	t.Helper()
+	if holder.finished {
+		t.Fatal("repository Lease holder exited before intentional kill")
+	}
+	if holder.command.Process == nil {
+		t.Fatal("repository Lease holder has no process to kill")
+	}
+	if err := holder.command.Process.Kill(); err != nil {
+		t.Fatalf("kill repository Lease holder: %v", err)
+	}
+	_ = holder.stdin.Close()
+
+	select {
+	case err := <-holder.wait:
+		holder.finished = true
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("repository Lease holder wait error=%T %v want killed-process ExitError; stderr=%s", err, err, holder.stderr.String())
+		}
+		if exitErr.ProcessState == nil || exitErr.ProcessState.Success() {
+			t.Fatalf("repository Lease holder process state=%v want unsuccessful killed exit; stderr=%s", exitErr.ProcessState, holder.stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for killed repository Lease holder exit")
+	}
+}
+
 func (holder *g6RepositoryLeaseHolder) cleanup(t *testing.T) {
 	t.Helper()
 	if holder == nil || holder.finished {
@@ -1723,6 +1751,105 @@ func TestAdversarialG6IndependentProcessRepositoryContention(t *testing.T) {
 			restoreMustMatchHashG6(t, dbconn, fileID, filepath.Join(restoreDir, "g6-contention-restored.bin"), fileHash)
 		})
 	}
+}
+
+func TestAdversarialG6KilledLeaseHolderReleasesRepository(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("killed-process repository Lease release proof is required on Linux")
+	}
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
+
+	codec := getenvOrDefaultAdversarialG6("COLDKEEP_CODEC", "plain")
+	if codec != "plain" && codec != "aes-gcm" {
+		t.Fatalf("unsupported killed-holder proof codec %q", codec)
+	}
+	configureAdversarialG6Codec(t, codec)
+
+	dbconn, env, repoRoot, binPath, tmp, _ := setupAdversarialG6Env(t)
+	defer dbconn.Close()
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	inPath := testutils.CreateTempFile(t, inputDir, "g6-killed-holder.bin", 256*1024+313)
+	fileHash := testutils.SHA256File(t, inPath)
+	holder := startG6RepositoryLeaseHolder(t, env)
+
+	prepared, err := coordination.PrepareControlNamespace(env["COLDKEEP_STORAGE_DIR"])
+	if err != nil {
+		t.Fatalf("prepare killed-holder control namespace: %v", err)
+	}
+	assertG6PersistentRepositoryLock(t, prepared.LockArtifactPath, "holder acquisition")
+	ownerBeforeKill := readG6OwnerMetadata(t, prepared.OwnerMetadataPath, "before holder kill")
+	if ownerBeforeKill.PID != holder.command.Process.Pid {
+		t.Fatalf("holder owner PID=%d want process PID=%d", ownerBeforeKill.PID, holder.command.Process.Pid)
+	}
+	if ownerBeforeKill.Operation != coordination.OperationStore || ownerBeforeKill.IdentityHash != prepared.Identity.Hash {
+		t.Fatalf("holder owner metadata=%+v want store owner for repository identity %s", ownerBeforeKill, prepared.Identity.Hash)
+	}
+
+	busyResult := runColdkeepCommandWithTimeoutG6(
+		t,
+		repoRoot,
+		binPath,
+		env,
+		"store", "--codec", codec, inPath, "--output", "json",
+	)
+	assertRepositoryBusyCLIResultG6(t, busyResult)
+
+	var storedRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&storedRows); err != nil {
+		t.Fatalf("count logical files after killed-holder Busy contender: %v", err)
+	}
+	if storedRows != 0 {
+		t.Fatalf("killed-holder Busy contender stored %d logical-file rows; want 0", storedRows)
+	}
+
+	holder.kill(t)
+	assertG6PersistentRepositoryLock(t, prepared.LockArtifactPath, "holder death")
+	ownerAfterKill := readG6OwnerMetadata(t, prepared.OwnerMetadataPath, "after holder kill")
+	if ownerAfterKill != ownerBeforeKill {
+		t.Fatalf("stale owner metadata after holder kill=%+v want %+v", ownerAfterKill, ownerBeforeKill)
+	}
+
+	fileID := storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, inPath)
+	assertG6PersistentRepositoryLock(t, prepared.LockArtifactPath, "successful reacquisition and release")
+	if _, err := os.Lstat(prepared.OwnerMetadataPath); !os.IsNotExist(err) {
+		t.Fatalf("owner metadata exists after successful reacquisition and release, stat err=%v", err)
+	}
+	verifyConcurrentInvariantsG6(t, dbconn, nil)
+	restoreMustMatchHashG6(t, dbconn, fileID, filepath.Join(restoreDir, "g6-killed-holder-restored.bin"), fileHash)
+}
+
+func assertG6PersistentRepositoryLock(t *testing.T, path, stage string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat repository.lock after %s: %v", stage, err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("repository.lock mode after %s=%v want regular", stage, info.Mode())
+	}
+}
+
+func readG6OwnerMetadata(t *testing.T, path, stage string) coordination.Owner {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read owner metadata %s: %v", stage, err)
+	}
+	owner, err := coordination.DecodeOwner(data)
+	if err != nil {
+		t.Fatalf("decode owner metadata %s: %v", stage, err)
+	}
+	return owner
 }
 
 func TestAdversarialG6SequentialStoresSameFileConvergeDeterministically(t *testing.T) {
