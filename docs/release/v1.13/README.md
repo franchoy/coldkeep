@@ -77,7 +77,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phases 0–14 are complete. Phase 12 implements the
+  active release. Phases 0–15 are complete. Phase 12 implements the
   repository-wide exclusive fail-fast Lease and proves native runtime plus the
   production Coordinator lifecycle on Linux, macOS, and Windows. Phase 13
   preserves strengthened G6 integrity coverage and proves deterministic Linux
@@ -91,7 +91,13 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   maxima across packed reads and recovery without changing format bytes. Its
   evidence is recorded in
   [v1.13.11-phase14-container-range-header-consistency.md](v1.13.11-phase14-container-range-header-consistency.md).
-  Phase 15 — Bounded Decompression — is Next. BKC-016 remains
+  Phase 15 now validates exact decompression expectations before allocation,
+  caps complete CKBL output and zstd decoder memory/window resources at 4 MiB,
+  and applies the same intrinsic contract to identity and zstd codecs. Restore,
+  system Verify, and Store semantic reuse inherit the shared bounded path. Its
+  evidence is recorded in
+  [v1.13.11-phase15-bounded-decompression.md](v1.13.11-phase15-bounded-decompression.md).
+  Phase 16 — JSON Integer Fidelity — is Next. BKC-016 remains
   `Deferred — documented`. Phase 12 closure remains recorded in
   [v1.13.11-phase12-closure.md](v1.13.11-phase12-closure.md). The diagnostic
   benchmark-gate bootstrap remains recorded in
