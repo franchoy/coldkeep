@@ -721,7 +721,7 @@ func (holder *g6RepositoryLeaseHolder) kill(t *testing.T) {
 		if !ok {
 			t.Fatalf("repository Lease holder wait error=%T %v want killed-process ExitError; stderr=%s", err, err, holder.stderr.String())
 		}
-		if exitErr.ProcessState == nil || exitErr.ProcessState.Success() {
+		if exitErr.ProcessState == nil || exitErr.Success() {
 			t.Fatalf("repository Lease holder process state=%v want unsuccessful killed exit; stderr=%s", exitErr.ProcessState, holder.stderr.String())
 		}
 	case <-time.After(10 * time.Second):
