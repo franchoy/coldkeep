@@ -7403,8 +7403,8 @@ func TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState(t *test
 	if !isQuarantined {
 		t.Fatalf("expected preexisting orphan row to remain quarantined")
 	}
-	if currentSize != expectedSize || maxSize != 1 {
-		t.Fatalf("expected quarantine row current size to resync to %d and maximum to remain 1, got current=%d max=%d", expectedSize, currentSize, maxSize)
+	if currentSize != expectedSize || maxSize != expectedSize {
+		t.Fatalf("expected quarantine row sizes to resync to physical size %d, got current=%d max=%d", expectedSize, currentSize, maxSize)
 	}
 }
 
@@ -7512,8 +7512,8 @@ func TestStartupRecoveryNonStrictContinuesOnSuspiciousOrphanConflictState(t *tes
 	).Scan(&currentSize, &maxSize); err != nil {
 		t.Fatalf("query non-strict resynced quarantine row: %v", err)
 	}
-	if currentSize != expectedSize || maxSize != 1 {
-		t.Fatalf("expected non-strict recovery to resync current size to %d and preserve maximum 1, got current=%d max=%d", expectedSize, currentSize, maxSize)
+	if currentSize != expectedSize || maxSize != expectedSize {
+		t.Fatalf("expected non-strict recovery to resync quarantine row sizes to %d, got current=%d max=%d", expectedSize, currentSize, maxSize)
 	}
 }
 

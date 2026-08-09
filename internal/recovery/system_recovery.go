@@ -615,6 +615,18 @@ func resolveOrphanConflictWithFS(ctx context.Context, dbconn *sql.DB, backend db
 			resyncQuery = `UPDATE container SET current_size = ? WHERE filename = ?`
 			resyncArgs = []any{fileSize, name}
 		}
+		// Orphan quarantine rows use max_size as a physical-size marker because
+		// there is no trusted container header. Keep that marker synchronized
+		// when both stored sizes still identify the same orphan artifact. A real
+		// container row has a distinct persisted capacity and must retain it.
+		if existingMaxSize == existingCurrentSize {
+			resyncQuery = `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
+			resyncArgs = []any{name, fileSize}
+			if backend == db.BackendSQLite {
+				resyncQuery = `UPDATE container SET current_size = ?, max_size = ? WHERE filename = ?`
+				resyncArgs = []any{fileSize, fileSize, name}
+			}
+		}
 		if _, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...); err != nil {
 			return false, false, fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
 		}
