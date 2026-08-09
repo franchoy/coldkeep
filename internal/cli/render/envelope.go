@@ -1,7 +1,10 @@
 package render
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"sort"
 	"time"
 
@@ -54,7 +57,15 @@ func toObjectMap(v any) (map[string]any, error) {
 	}
 
 	var out map[string]any
-	if err := json.Unmarshal(encoded, &out); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	if err := decoder.Decode(&out); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("unexpected trailing JSON value")
+		}
 		return nil, err
 	}
 	if out == nil {

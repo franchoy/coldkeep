@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8675,6 +8676,76 @@ func TestStatsCommandJSONShorthand(t *testing.T) {
 	}
 	if mode != outputModeJSON {
 		t.Fatalf("expected outputModeJSON for --json shorthand, got %q", mode)
+	}
+}
+
+func TestRunStatsCommandJSONPreservesExactLargeIntegers(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			Logical: observability.LogicalStats{
+				TotalFiles:     9007199254740993,
+				TotalSizeBytes: math.MaxInt64,
+			},
+			Chunks: observability.ChunkStats{
+				ChunkerVersions: []observability.VersionStat{{
+					Version: "v2-fastcdc",
+					Chunks:  9007199254740991,
+					Bytes:   9007199254740993,
+				}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{
+			method: "stats",
+			flags:  map[string][]string{"output": {"json"}},
+		}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand JSON: %v", err)
+		}
+	})
+
+	var envelope struct {
+		Data struct {
+			Logical struct {
+				TotalFiles     json.Number `json:"total_files"`
+				TotalSizeBytes json.Number `json:"total_size_bytes"`
+			} `json:"logical"`
+			Chunks struct {
+				ChunkerVersions []struct {
+					Chunks json.Number `json:"chunks"`
+					Bytes  json.Number `json:"bytes"`
+				} `json:"chunker_versions"`
+			} `json:"chunks"`
+		} `json:"data"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(output))
+	decoder.UseNumber()
+	if err := decoder.Decode(&envelope); err != nil {
+		t.Fatalf("decode stats JSON: %v output=%q", err, output)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatalf("stats JSON has trailing content: %v output=%q", err, output)
+	}
+
+	if got := envelope.Data.Logical.TotalFiles.String(); got != "9007199254740993" {
+		t.Fatalf("data.logical.total_files=%q want 9007199254740993", got)
+	}
+	if got := envelope.Data.Logical.TotalSizeBytes.String(); got != "9223372036854775807" {
+		t.Fatalf("data.logical.total_size_bytes=%q want 9223372036854775807", got)
+	}
+	if len(envelope.Data.Chunks.ChunkerVersions) != 1 {
+		t.Fatalf("chunker_versions=%v want one entry", envelope.Data.Chunks.ChunkerVersions)
+	}
+	version := envelope.Data.Chunks.ChunkerVersions[0]
+	if got := version.Chunks.String(); got != "9007199254740991" {
+		t.Fatalf("chunker_versions[0].chunks=%q want 9007199254740991", got)
+	}
+	if got := version.Bytes.String(); got != "9007199254740993" {
+		t.Fatalf("chunker_versions[0].bytes=%q want 9007199254740993", got)
 	}
 }
 
