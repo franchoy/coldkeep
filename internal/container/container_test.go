@@ -3,12 +3,15 @@ package container
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/fsx"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -66,12 +69,28 @@ func TestFileContainerAppendFailsWhenFull(t *testing.T) {
 	}
 }
 
-func TestFileContainerReadAtFailsOnShortRead(t *testing.T) {
-	c := openWritableTestContainer(t, ContainerHdrLen+32)
+func TestFileContainerReadAtFailsClosedWhenFileShrinksAfterOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shrinking.bin")
+	createTestContainerFile(t, path, ContainerHdrLen+32)
+	c, err := OpenWritableContainer(path, ContainerHdrLen+32)
+	if err != nil {
+		t.Fatalf("open writable container: %v", err)
+	}
 	defer func() { _ = c.Close() }()
 
-	// No payload has been written, so reads from the payload region are short.
-	_, err := c.ReadAt(ContainerHdrLen, 1)
+	if _, err := c.Append([]byte("x")); err != nil {
+		t.Fatalf("append payload: %v", err)
+	}
+	if err := c.Sync(); err != nil {
+		t.Fatalf("sync payload: %v", err)
+	}
+	if err := os.Truncate(path, ContainerHdrLen); err != nil {
+		t.Fatalf("truncate behind open container: %v", err)
+	}
+
+	// The open handle still records the pre-truncation logical size, so the
+	// lower-level short-read check remains the fail-closed fallback.
+	_, err = c.ReadAt(ContainerHdrLen, 1)
 	if err == nil || !strings.Contains(err.Error(), "short read") {
 		t.Fatalf("expected short-read error contract, got: %v", err)
 	}
@@ -173,8 +192,143 @@ func TestFileContainerTruncateDiscardsPendingWritesWithoutSync(t *testing.T) {
 		t.Fatalf("expected logical size reset to %d, got %d", ContainerHdrLen, got)
 	}
 	_, err = c.ReadAt(ContainerHdrLen, 1)
-	if err == nil || !strings.Contains(err.Error(), "short read") {
+	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("expected no payload after truncate, got: %v", err)
+	}
+}
+
+func TestValidateContainerRangeBoundaries(t *testing.T) {
+	tests := []struct {
+		name           string
+		offset, length int64
+		limit          int64
+		wantErr        bool
+	}{
+		{name: "zero at start", offset: 0, length: 0, limit: 10},
+		{name: "zero at end", offset: 10, length: 0, limit: 10},
+		{name: "exact end", offset: 4, length: 6, limit: 10},
+		{name: "negative offset", offset: -1, length: 1, limit: 10, wantErr: true},
+		{name: "negative length", offset: 0, length: -1, limit: 10, wantErr: true},
+		{name: "negative limit", offset: 0, length: 0, limit: -1, wantErr: true},
+		{name: "offset past limit", offset: 11, length: 0, limit: 10, wantErr: true},
+		{name: "length past limit", offset: 4, length: 7, limit: 10, wantErr: true},
+		{name: "overflow shape", offset: math.MaxInt64 - 1, length: 2, limit: math.MaxInt64, wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateContainerRange("test range", tc.offset, tc.length, tc.limit)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateContainerRange(%d, %d, %d) error=%v wantErr=%v", tc.offset, tc.length, tc.limit, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestFileContainerReadAtRejectsInvalidRangeBeforeAllocation(t *testing.T) {
+	c := openWritableTestContainer(t, ContainerHdrLen+32)
+	defer func() { _ = c.Close() }()
+
+	tests := []struct {
+		name         string
+		offset, size int64
+	}{
+		{name: "negative offset", offset: -1, size: 1},
+		{name: "negative size", offset: ContainerHdrLen, size: -1},
+		{name: "offset past eof", offset: ContainerHdrLen + 1, size: 0},
+		{name: "range past eof", offset: ContainerHdrLen, size: 1},
+		{name: "huge size", offset: ContainerHdrLen, size: math.MaxInt64},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := c.ReadAt(tc.offset, tc.size); err == nil {
+				t.Fatalf("expected invalid range offset=%d size=%d to fail", tc.offset, tc.size)
+			}
+		})
+	}
+}
+
+func TestFileContainerReadAtAllowsZeroLengthAndExactEOF(t *testing.T) {
+	c := openWritableTestContainer(t, ContainerHdrLen+32)
+	defer func() { _ = c.Close() }()
+
+	if _, err := c.Append([]byte("data")); err != nil {
+		t.Fatalf("append payload: %v", err)
+	}
+	if got, err := c.ReadAt(ContainerHdrLen+4, 0); err != nil || len(got) != 0 {
+		t.Fatalf("zero-length EOF read got=%v err=%v", got, err)
+	}
+	got, err := c.ReadAt(ContainerHdrLen, 4)
+	if err != nil || string(got) != "data" {
+		t.Fatalf("exact-EOF read got=%q err=%v", got, err)
+	}
+}
+
+func TestOpenExistingContainerRejectsHeaderCatalogMaxSizeMismatch(t *testing.T) {
+	const headerMax = ContainerHdrLen + 128
+	path := filepath.Join(t.TempDir(), "mismatch.bin")
+	createTestContainerFile(t, path, headerMax)
+
+	for _, readonly := range []bool{true, false} {
+		_, err := openExistingContainer(readonly, path, headerMax+1, fsx.Default())
+		if err == nil || !strings.Contains(err.Error(), "container max size mismatch") {
+			t.Fatalf("readonly=%v expected max-size mismatch, got %v", readonly, err)
+		}
+	}
+}
+
+func TestOpenExistingContainerRejectsPhysicalSizeBeyondDeclaredMaximum(t *testing.T) {
+	const maxSize = ContainerHdrLen + 1
+	path := filepath.Join(t.TempDir(), "oversized.bin")
+	createTestContainerFile(t, path, maxSize)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open container for append: %v", err)
+	}
+	if _, err := f.Write([]byte("xx")); err != nil {
+		_ = f.Close()
+		t.Fatalf("append oversized bytes: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close oversized container: %v", err)
+	}
+
+	_, err = OpenReadOnlyContainer(path, maxSize)
+	if err == nil || !strings.Contains(err.Error(), "container size exceeds maximum") {
+		t.Fatalf("expected oversized-container error, got %v", err)
+	}
+}
+
+func TestOpenExistingContainerAcceptsSupportedMatchingHeaderMaxSize(t *testing.T) {
+	const maxSize = ContainerHdrLen + 128
+	for _, major := range []uint16{LegacyContainerFormatVersionMajor, ContainerFormatVersionMajor} {
+		t.Run(fmt.Sprintf("major_%d", major), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "supported.bin")
+			writeContainerHeaderFixture(t, path, major, maxSize)
+			c, err := OpenReadOnlyContainer(path, maxSize)
+			if err != nil {
+				t.Fatalf("open supported header major=%d: %v", major, err)
+			}
+			if err := c.Close(); err != nil {
+				t.Fatalf("close supported container: %v", err)
+			}
+		})
+	}
+}
+
+func TestFileContainerAppendRejectsOverflowAsContainerFull(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "append-overflow.bin")
+	createTestContainerFile(t, path, math.MaxInt64)
+	c, err := OpenWritableContainer(path, math.MaxInt64)
+	if err != nil {
+		t.Fatalf("open writable container: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	c.offset = math.MaxInt64 - 1
+
+	if _, err := c.Append([]byte("xx")); !errors.Is(err, ErrContainerFull) {
+		t.Fatalf("expected ErrContainerFull for overflowing append, got %v", err)
 	}
 }
 

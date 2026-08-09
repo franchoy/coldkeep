@@ -2,11 +2,39 @@ package container
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"hash/crc32"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/franchoy/coldkeep/internal/fsx"
 )
+
+func writeContainerHeaderFixture(t *testing.T, path string, major uint16, maxSize int64) {
+	t.Helper()
+	hdr := make([]byte, ContainerHdrLen)
+	copy(hdr[hdrMagicStart:hdrMagicEnd], []byte(ContainerMagic))
+	binary.LittleEndian.PutUint16(hdr[hdrVersionMajor:hdrVersionMinor], major)
+	binary.LittleEndian.PutUint16(hdr[hdrVersionMinor:hdrHeaderLen], 0)
+	binary.LittleEndian.PutUint32(hdr[hdrHeaderLen:hdrFlags], uint32(ContainerHdrLen))
+	binary.LittleEndian.PutUint64(hdr[hdrMaxSize:hdrUIDStart], uint64(maxSize))
+	binary.LittleEndian.PutUint32(hdr[hdrCRC:hdrCodecID], computeHeaderCRC(hdr, major))
+	if err := os.WriteFile(path, hdr, 0o600); err != nil {
+		t.Fatalf("write container header fixture: %v", err)
+	}
+}
+
+type shortWriteContainerFile struct {
+	fsx.File
+}
+
+func (shortWriteContainerFile) Write(p []byte) (int, error) {
+	return len(p) - 1, nil
+}
 
 func TestWriteNewContainerHeader_UsesStableFormatVersionAndCodecHint(t *testing.T) {
 	tmp, err := os.CreateTemp(t.TempDir(), "container-header-*.bin")
@@ -173,5 +201,49 @@ func TestReadAndValidateContainerHeader_RejectsCRCMismatch(t *testing.T) {
 	_, err = readAndValidateContainerHeader(tmp)
 	if err == nil || !strings.Contains(err.Error(), "container header crc mismatch") {
 		t.Fatalf("expected crc-mismatch error contract, got: %v", err)
+	}
+}
+
+func TestReadAndValidateContainerHeaderRejectsInvalidMaxSizeAcrossSupportedVersions(t *testing.T) {
+	for _, major := range []uint16{LegacyContainerFormatVersionMajor, ContainerFormatVersionMajor} {
+		for _, maxSize := range []int64{-1, 0, ContainerHdrLen} {
+			t.Run(fmt.Sprintf("major_%d/max_%d", major, maxSize), func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "invalid-max.bin")
+				writeContainerHeaderFixture(t, path, major, maxSize)
+				f, err := os.Open(path)
+				if err != nil {
+					t.Fatalf("open header fixture: %v", err)
+				}
+				defer func() { _ = f.Close() }()
+
+				_, err = readAndValidateContainerHeader(f)
+				if err == nil || !strings.Contains(err.Error(), "invalid container max size") {
+					t.Fatalf("expected invalid max-size error, got %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestWriteNewContainerHeaderRejectsInvalidMaxSize(t *testing.T) {
+	for _, maxSize := range []int64{-1, 0, ContainerHdrLen} {
+		t.Run(fmt.Sprintf("max_%d", maxSize), func(t *testing.T) {
+			f, err := os.CreateTemp(t.TempDir(), "invalid-write-max-*.bin")
+			if err != nil {
+				t.Fatalf("create temp file: %v", err)
+			}
+			defer func() { _ = f.Close() }()
+
+			if err := writeNewContainerHeader(f, maxSize); err == nil || !strings.Contains(err.Error(), "invalid container max size") {
+				t.Fatalf("expected invalid max-size error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestWriteNewContainerHeaderRejectsShortWrite(t *testing.T) {
+	err := writeNewContainerHeader(shortWriteContainerFile{}, ContainerHdrLen+1)
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("expected io.ErrShortWrite, got %v", err)
 	}
 }
