@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -783,6 +784,123 @@ func runColdkeepCommandWithTimeoutG6(
 	}
 	t.Fatalf("run coldkeep command %v: %v", args, err)
 	return testutils.CLIExecResult{}
+}
+
+type g6AsyncCLICommand struct {
+	command  *exec.Cmd
+	wait     chan error
+	stdout   *bytes.Buffer
+	stderr   *bytes.Buffer
+	finished bool
+}
+
+func startG6AsyncCLICommand(
+	t *testing.T,
+	repoRoot string,
+	binPath string,
+	env map[string]string,
+	args ...string,
+) *g6AsyncCLICommand {
+	t.Helper()
+
+	command := exec.Command(binPath, args...)
+	command.Dir = repoRoot
+	command.Env = testutils.BuildCommandEnv(env)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	command.Stdout = stdout
+	command.Stderr = stderr
+	if err := command.Start(); err != nil {
+		t.Fatalf("start coldkeep command %v: %v", args, err)
+	}
+
+	running := &g6AsyncCLICommand{
+		command: command,
+		wait:    make(chan error, 1),
+		stdout:  stdout,
+		stderr:  stderr,
+	}
+	go func() { running.wait <- command.Wait() }()
+	t.Cleanup(func() { running.cleanup(t) })
+	return running
+}
+
+func (running *g6AsyncCLICommand) result(t *testing.T) testutils.CLIExecResult {
+	t.Helper()
+	if running.finished {
+		t.Fatal("coldkeep command result requested after process was already reaped")
+	}
+	select {
+	case err := <-running.wait:
+		running.finished = true
+		if err == nil {
+			return testutils.CLIExecResult{Stdout: running.stdout.String(), Stderr: running.stderr.String(), ExitCode: 0}
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return testutils.CLIExecResult{
+				Stdout:   running.stdout.String(),
+				Stderr:   running.stderr.String(),
+				ExitCode: exitErr.ExitCode(),
+			}
+		}
+		t.Fatalf("wait for coldkeep command: %v; stdout=%s stderr=%s", err, running.stdout.String(), running.stderr.String())
+	case <-time.After(30 * time.Second):
+		if running.command.Process != nil {
+			_ = running.command.Process.Kill()
+		}
+		t.Fatalf("timeout waiting for coldkeep command; stdout=%s stderr=%s", running.stdout.String(), running.stderr.String())
+	}
+	return testutils.CLIExecResult{}
+}
+
+func (running *g6AsyncCLICommand) cleanup(t *testing.T) {
+	t.Helper()
+	if running == nil || running.finished {
+		return
+	}
+	if running.command.Process != nil {
+		_ = running.command.Process.Kill()
+	}
+	select {
+	case <-running.wait:
+		running.finished = true
+	case <-time.After(5 * time.Second):
+		t.Log("coldkeep subprocess did not exit after cleanup kill")
+	}
+}
+
+func waitForG6GCPhysicalGraphLockWait(t *testing.T, observer *sql.Conn, blockerPID int) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		var waiterPID int
+		err := observer.QueryRowContext(ctx, `
+			SELECT activity.pid
+			FROM pg_stat_activity activity
+			WHERE activity.datname = current_database()
+			  AND activity.state = 'active'
+			  AND activity.wait_event_type = 'Lock'
+			  AND $1 = ANY(pg_blocking_pids(activity.pid))
+			  AND activity.query LIKE '%FROM physical_file pf%'
+			ORDER BY activity.pid
+			LIMIT 1
+		`, blockerPID).Scan(&waiterPID)
+		if err == nil {
+			return waiterPID
+		}
+		if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
+			t.Fatalf("observe live-GC physical-graph lock wait: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("live GC did not enter the server-observed physical-graph lock wait: %v", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func assertRepositoryBusyCLIResultG6(t *testing.T, result testutils.CLIExecResult) {
@@ -1826,6 +1944,133 @@ func TestAdversarialG6KilledLeaseHolderReleasesRepository(t *testing.T) {
 	}
 	verifyConcurrentInvariantsG6(t, dbconn, nil)
 	restoreMustMatchHashG6(t, dbconn, fileID, filepath.Join(restoreDir, "g6-killed-holder-restored.bin"), fileHash)
+}
+
+func TestAdversarialG6LiveGCExcludesIndependentStoreProcess(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("live-GC independent-process repository barrier proof is required on Linux")
+	}
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
+
+	codec := getenvOrDefaultAdversarialG6("COLDKEEP_CODEC", "plain")
+	if codec != "plain" && codec != "aes-gcm" {
+		t.Fatalf("unsupported live-GC barrier proof codec %q", codec)
+	}
+	configureAdversarialG6Codec(t, codec)
+
+	dbconn, env, repoRoot, binPath, tmp, _ := setupAdversarialG6Env(t)
+	defer dbconn.Close()
+	// The server-observed relation wait is the synchronization mechanism. Give
+	// the child enough lock/statement budget for diagnostics on loaded runners.
+	env["COLDKEEP_DB_LOCK_TIMEOUT_MS"] = "30000"
+	env["COLDKEEP_DB_STATEMENT_TIMEOUT_MS"] = "30000"
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	anchorPath := testutils.CreateTempFile(t, inputDir, "g6-live-gc-anchor.bin", 256*1024+313)
+	anchorHash := testutils.SHA256File(t, anchorPath)
+	anchorID := storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, anchorPath)
+	contenderPath := testutils.CreateTempFile(t, inputDir, "g6-live-gc-contender.bin", 192*1024+197)
+	contenderHash := testutils.SHA256File(t, contenderPath)
+
+	prepared, err := coordination.PrepareControlNamespace(env["COLDKEEP_STORAGE_DIR"])
+	if err != nil {
+		t.Fatalf("prepare live-GC control namespace: %v", err)
+	}
+	assertG6PersistentRepositoryLock(t, prepared.LockArtifactPath, "anchor store")
+
+	locker, err := dbconn.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("reserve live-GC barrier session: %v", err)
+	}
+	defer locker.Close()
+	observer, err := dbconn.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("reserve live-GC observer session: %v", err)
+	}
+	defer observer.Close()
+
+	barrierTx, err := locker.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin live-GC relation barrier: %v", err)
+	}
+	barrierReleased := false
+	defer func() {
+		if !barrierReleased {
+			_ = barrierTx.Rollback()
+		}
+	}()
+	var blockerPID int
+	if err := barrierTx.QueryRow(`SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
+		t.Fatalf("query live-GC barrier backend PID: %v", err)
+	}
+	if _, err := barrierTx.Exec(`LOCK TABLE physical_file IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("acquire live-GC physical_file relation barrier: %v", err)
+	}
+
+	liveGC := startG6AsyncCLICommand(t, repoRoot, binPath, env, "gc", "--output", "json")
+	waiterPID := waitForG6GCPhysicalGraphLockWait(t, observer, blockerPID)
+	if waiterPID == blockerPID {
+		t.Fatalf("live-GC waiter PID=%d unexpectedly equals blocker PID", waiterPID)
+	}
+
+	assertG6PersistentRepositoryLock(t, prepared.LockArtifactPath, "live GC server-observed wait")
+	owner := readG6OwnerMetadata(t, prepared.OwnerMetadataPath, "live GC server-observed wait")
+	if owner.PID != liveGC.command.Process.Pid {
+		t.Fatalf("live-GC owner PID=%d want process PID=%d", owner.PID, liveGC.command.Process.Pid)
+	}
+	if owner.Operation != coordination.OperationGarbageCollect || owner.IdentityHash != prepared.Identity.Hash {
+		t.Fatalf("live-GC owner metadata=%+v want gc owner for repository identity %s", owner, prepared.Identity.Hash)
+	}
+
+	busyResult := runColdkeepCommandWithTimeoutG6(
+		t,
+		repoRoot,
+		binPath,
+		env,
+		"store", "--codec", codec, contenderPath, "--output", "json",
+	)
+	assertRepositoryBusyCLIResultG6(t, busyResult)
+
+	var storedRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, contenderHash).Scan(&storedRows); err != nil {
+		t.Fatalf("count logical files after live-GC Busy contender: %v", err)
+	}
+	if storedRows != 0 {
+		t.Fatalf("live-GC Busy contender stored %d logical-file rows; want 0", storedRows)
+	}
+
+	if err := barrierTx.Rollback(); err != nil {
+		t.Fatalf("release live-GC relation barrier: %v", err)
+	}
+	barrierReleased = true
+	gcResult := liveGC.result(t)
+	gcPayload := testutils.AssertCLIJSONOK(t, gcResult, "gc")
+	gcData := testutils.JSONMap(t, gcPayload, "data")
+	if dryRun, _ := gcData["dry_run"].(bool); dryRun {
+		t.Fatalf("live GC reported dry_run=true: %v", gcData)
+	}
+	if affected := testutils.JSONInt64(t, gcData, "affected_containers"); affected != 0 {
+		t.Fatalf("live GC affected containers=%d want 0", affected)
+	}
+
+	assertG6PersistentRepositoryLock(t, prepared.LockArtifactPath, "live GC completion")
+	if _, err := os.Lstat(prepared.OwnerMetadataPath); !os.IsNotExist(err) {
+		t.Fatalf("owner metadata exists after live GC completion, stat err=%v", err)
+	}
+
+	contenderID := storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, contenderPath)
+	verifyConcurrentInvariantsG6(t, dbconn, nil)
+	restoreMustMatchHashG6(t, dbconn, anchorID, filepath.Join(restoreDir, "g6-live-gc-anchor-restored.bin"), anchorHash)
+	restoreMustMatchHashG6(t, dbconn, contenderID, filepath.Join(restoreDir, "g6-live-gc-contender-restored.bin"), contenderHash)
 }
 
 func assertG6PersistentRepositoryLock(t *testing.T, path, stage string) {
