@@ -23,6 +23,7 @@ import (
 	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/execution"
 	gcpkg "github.com/franchoy/coldkeep/internal/gc"
@@ -4200,6 +4201,49 @@ func TestValidateReusableLogicalFileForStoreRunsSemanticValidation(t *testing.T)
 	err = validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
 	if err == nil || !strings.Contains(err.Error(), "semantic reuse validation failed") {
 		t.Fatalf("expected semantic reuse validation failure, got: %v", err)
+	}
+}
+
+func TestValidateReusableLogicalFileForStoreRejectsZstdBoundFailure(t *testing.T) {
+	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET plaintext_size = $1 WHERE id = $2`, int64(1), blockID); err != nil {
+		t.Fatalf("update plaintext_size for semantic-reuse bound fixture: %v", err)
+	}
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "always")
+
+	err := validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, workDir)
+	if err == nil || !strings.Contains(err.Error(), "semantic reuse validation failed") {
+		t.Fatalf("expected semantic reuse bound failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "decompress codec=zstd") && !strings.Contains(err.Error(), "decompress codec=\"zstd\"") {
+		t.Fatalf("expected bounded decompression cause, got: %v", err)
+	}
+}
+
+func TestMaximumReleasedPackedWriterOutputFitsDecompressionLimit(t *testing.T) {
+	t.Setenv("COLDKEEP_BLOCK_TARGET_SIZE_MB", "3")
+	t.Setenv("COLDKEEP_PACKED_BLOCK_SIZE_MIB", "")
+
+	targetSize := packedBlockTargetSizeBytesFromEnv()
+	maxEntries := targetSize / int64(fastcdc.MinChunkSize)
+	const (
+		ckblHeaderSize = int64(20)
+		ckblEntrySize  = int64(24)
+	)
+	maxEncodedSize := targetSize + ckblHeaderSize + maxEntries*ckblEntrySize
+
+	if maxEntries != 96 {
+		t.Fatalf("released writer entry-bound drift: got=%d want=96", maxEntries)
+	}
+	if maxEncodedSize != 3_148_052 {
+		t.Fatalf("released writer encoded maximum drift: got=%d want=3148052", maxEncodedSize)
+	}
+	if maxEncodedSize >= storagecompression.MaxDecompressedBlockSize {
+		t.Fatalf("writer maximum must fit decompression limit: writer=%d limit=%d", maxEncodedSize, storagecompression.MaxDecompressedBlockSize)
 	}
 }
 

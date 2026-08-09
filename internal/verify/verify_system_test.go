@@ -1507,6 +1507,33 @@ func TestVerifyBlockPayloadsDetectsDecompressionFailureOnCompressedBlock(t *test
 	}
 }
 
+func TestVerifyBlockPayloadsRejectsZstdOutputBeyondExpectedSize(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(
+		t,
+		dbconn,
+		containersDir,
+		[][]byte{bytes.Repeat([]byte("bounded-system-verify-"), 128)},
+		blocks.CodecPlain,
+		storagecompression.CompressionZstd,
+	)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET plaintext_size = $1 WHERE id = $2`, int64(1), blockID); err != nil {
+		t.Fatalf("update plaintext_size for bounded decompression fixture: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") {
+		t.Fatalf("expected metadata_invalid bounded decompression failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "decompress codec=zstd") {
+		t.Fatalf("expected decompress-stage diagnostic, got: %v", err)
+	}
+}
+
 func TestVerifyBlockPayloadsDetectsLogicalHashMismatchStageOnCompressedBlock(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -1599,7 +1626,7 @@ func TestVerifyBlockPayloadsDetectsDecodedPayloadSizeMismatch(t *testing.T) {
 	}
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") || !strings.Contains(err.Error(), "plaintext size mismatch") {
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") || !strings.Contains(err.Error(), "decompression size mismatch") {
 		t.Fatalf("expected decoded payload size mismatch error, got: %v", err)
 	}
 }

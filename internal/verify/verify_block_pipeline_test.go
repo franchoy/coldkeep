@@ -114,6 +114,51 @@ func TestVerifyStoredBlockCompressedZstdPasses(t *testing.T) {
 	}
 }
 
+func TestVerifyStoredBlockRejectsZstdOutputBeyondExpectedSizeAtDecompressStage(t *testing.T) {
+	logicalPayload := buildPipelineEncodedBytes(t, bytes.Repeat([]byte("bounded-verify-"), 64))
+	zstdCompressor, err := storagecompression.NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("NewZstdCompressor: %v", err)
+	}
+	compressedPayload, err := zstdCompressor.Compress(logicalPayload)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	level := 3
+	meta := BlockStorageMetadata{
+		BlockID:          203,
+		ContainerID:      23,
+		ContainerOffset:  192,
+		ContainerName:    "container_bounded_zstd.ck",
+		ContainerMaxSize: 1 << 20,
+		FormatVersion:    1,
+		Codec:            "none",
+		PlaintextSize:    int64(len(logicalPayload) - 1),
+		StoredSize:       int64(len(compressedPayload)),
+		CompressionCodec: "zstd",
+		CompressionLevel: &level,
+		LogicalHash:      blocks.HashLogical(logicalPayload),
+		CompressedHash:   blocks.HashCompressed(compressedPayload),
+		PhysicalHash:     blocks.HashPhysical(compressedPayload),
+	}
+
+	_, err = VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: compressedPayload})
+	if err == nil {
+		t.Fatal("expected bounded decompression failure")
+	}
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %v", err)
+	}
+	if vf.Stage != VerifyStageDecompress || vf.Category != verifyErrMetadataInvalid {
+		t.Fatalf("unexpected failure classification: stage=%q category=%q err=%v", vf.Stage, vf.Category, err)
+	}
+	if !errors.Is(err, storagecompression.ErrCompressionSizeMismatch) {
+		t.Fatalf("expected ErrCompressionSizeMismatch, got: %v", err)
+	}
+}
+
 func TestVerifyStoredBlockDecompressionControlledByPerBlockMetadata(t *testing.T) {
 	logicalPayload := buildPipelineEncodedBytes(t, []byte("verify-metadata-controls-decompression"))
 	zstd, err := storagecompression.NewZstdCompressor(3)

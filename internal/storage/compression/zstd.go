@@ -1,7 +1,9 @@
 package compression
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -42,20 +44,45 @@ func (c zstdCompressor) Compress(input []byte) ([]byte, error) {
 }
 
 func (zstdCompressor) Decompress(input []byte, expectedSize int64) ([]byte, error) {
-	decoder, err := zstd.NewReader(nil)
+	return decompressZstdBounded(input, expectedSize, MaxDecompressedBlockSize)
+}
+
+func decompressZstdBounded(input []byte, expectedSize, maxOutput int64) ([]byte, error) {
+	if err := validateDecompressionExpectation(CompressionZstd, expectedSize, maxOutput); err != nil {
+		return nil, err
+	}
+
+	decoder, err := zstd.NewReader(
+		nil,
+		zstd.WithDecoderMaxMemory(uint64(maxOutput)),
+		zstd.WithDecodeAllCapLimit(true),
+	)
 	if err != nil {
 		return nil, newCompressionError(ErrDecompressionFailed, 0, CompressionZstd, expectedSize, -1, err)
 	}
 	defer decoder.Close()
 
-	output, err := decoder.DecodeAll(input, nil)
+	output, err := decoder.DecodeAll(input, make([]byte, 0, int(expectedSize)))
 	if err != nil {
+		if isZstdDecompressionLimitError(err) {
+			return nil, newCompressionError(ErrCompressionSizeMismatch, 0, CompressionZstd, expectedSize, -1, err)
+		}
 		return nil, newCompressionError(ErrDecompressionFailed, 0, CompressionZstd, expectedSize, -1, fmt.Errorf("invalid compressed input: %w", err))
 	}
 
-	if expectedSize >= 0 && int64(len(output)) != expectedSize {
-		return nil, newCompressionError(ErrCompressionSizeMismatch, 0, CompressionZstd, expectedSize, int64(len(output)), nil)
+	if err := validateDecompressedSize(CompressionZstd, int64(len(output)), expectedSize); err != nil {
+		return nil, err
 	}
 
 	return output, nil
+}
+
+func isZstdDecompressionLimitError(err error) bool {
+	return errors.Is(err, zstd.ErrDecoderSizeExceeded) ||
+		errors.Is(err, zstd.ErrWindowSizeExceeded) ||
+		// klauspost/compress v1.18.0 has SIMD decode paths that report a
+		// cap-limit breach with this non-sentinel error instead of
+		// ErrDecoderSizeExceeded. The dependency is pinned, and this keeps all
+		// of its bounded-output paths under Coldkeep's size-mismatch contract.
+		strings.Contains(err.Error(), "output bigger than max block size")
 }

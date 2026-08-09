@@ -953,7 +953,7 @@ func TestStorageBlockReaderDecompressionFailureAfterCompressedHashFixtureUpdate(
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-decompression-failure.restore", "decompress codec=zstd")
 }
 
-func TestStorageBlockReaderEncryptedPlaintextSizeMismatchDetectedWithoutPartialOutput(t *testing.T) {
+func TestStorageBlockReaderRejectsZstdOutputBeyondExpectedSizeAfterAESGCMDecrypt(t *testing.T) {
 	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
 	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
 
@@ -980,6 +980,45 @@ func TestStorageBlockReaderEncryptedPlaintextSizeMismatchDetectedWithoutPartialO
 	}
 	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
 		t.Fatalf("expected restore output to be absent after failure, stat err=%v", statErr)
+	}
+}
+
+func TestRestorePackedZstdBoundFailurePreservesDestinationAndCleansTemp(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET plaintext_size = $1 WHERE id = $2`, int64(1), blockID); err != nil {
+		t.Fatalf("update plaintext_size for bound fixture: %v", err)
+	}
+
+	outputDir := t.TempDir()
+	outPath := filepath.Join(outputDir, "bounded-restore.bin")
+	original := []byte("existing-destination-must-survive")
+	if err := os.WriteFile(outPath, original, 0o600); err != nil {
+		t.Fatalf("write existing destination: %v", err)
+	}
+
+	_, err := restoreFileWithDBAndDir(dbconn, fileID, outPath, workDir, RestoreOptions{Overwrite: true})
+	if err == nil || (!strings.Contains(err.Error(), "decompress codec=\"zstd\"") && !strings.Contains(err.Error(), "decompress codec=zstd")) {
+		t.Fatalf("expected bounded zstd restore failure, got: %v", err)
+	}
+
+	got, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		t.Fatalf("read preserved destination: %v", readErr)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("destination changed after bound failure: got=%q want=%q", got, original)
+	}
+
+	entries, readDirErr := os.ReadDir(outputDir)
+	if readDirErr != nil {
+		t.Fatalf("read output directory: %v", readDirErr)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".coldkeep-restore-") {
+			t.Fatalf("stale restore temporary file: %s", entry.Name())
+		}
 	}
 }
 
