@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	dbschema "github.com/franchoy/coldkeep/db"
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -131,15 +132,23 @@ func setupAdvisoryLockHeldGCFixture(t *testing.T) (*sql.DB, *sql.DB, string, str
 func holdGCAdvisoryLock(t *testing.T, lockerDB *sql.DB) {
 	t.Helper()
 
+	conn, err := lockerDB.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("reserve advisory-lock holder session: %v", err)
+	}
 	var locked bool
-	if err := lockerDB.QueryRow(`SELECT pg_try_advisory_lock($1)`, gcAdvisoryLockID).Scan(&locked); err != nil {
+	if err := conn.QueryRowContext(context.Background(), `SELECT pg_try_advisory_lock($1)`, gcAdvisoryLockID).Scan(&locked); err != nil {
+		_ = conn.Close()
 		t.Fatalf("acquire advisory lock: %v", err)
 	}
 	if !locked {
+		_ = conn.Close()
 		t.Fatal("expected to acquire advisory lock in test setup")
 	}
 	t.Cleanup(func() {
-		_, _ = lockerDB.Exec(`SELECT pg_advisory_unlock($1)`, gcAdvisoryLockID)
+		var unlocked bool
+		_ = conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1)`, gcAdvisoryLockID).Scan(&unlocked)
+		_ = conn.Close()
 	})
 }
 
@@ -159,7 +168,7 @@ func assertGCRefusalPreservesContainerState(t *testing.T, dbconn *sql.DB, contai
 	}
 }
 
-func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
+func TestGCAdvisoryLockUsesDedicatedSessionAndReleases(t *testing.T) {
 	requireDB(t)
 
 	dbconn, err := db.ConnectDB()
@@ -171,51 +180,237 @@ func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	containersDir := t.TempDir()
-	originalContainersDir := container.ContainersDir
-	t.Cleanup(func() {
-		container.ContainersDir = originalContainersDir
-	})
-	container.ContainersDir = containersDir
-
-	filename := "gc-unlock-failure.bin"
-	containerPath := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(containerPath, []byte("gc unlock failure test"), 0o600); err != nil {
-		t.Fatalf("write container file: %v", err)
+	observer, err := dbconn.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("reserve advisory observer session: %v", err)
 	}
+	defer observer.Close()
 
-	if _, err := dbconn.Exec(
-		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
-		 VALUES ($1, $2, $3, TRUE, FALSE)`,
-		filename,
-		int64(len("gc unlock failure test")),
-		container.GetContainerMaxSize(),
-	); err != nil {
-		t.Fatalf("insert container row: %v", err)
+	preflightEntered := make(chan struct{})
+	resumePreflight := make(chan struct{})
+	originalCheck := gcPhysicalIntegrityCheck
+	gcPhysicalIntegrityCheck = func(_ *sql.DB) (verify.PhysicalFileIntegritySummary, error) {
+		close(preflightEntered)
+		<-resumePreflight
+		return verify.PhysicalFileIntegritySummary{}, nil
 	}
+	t.Cleanup(func() { gcPhysicalIntegrityCheck = originalCheck })
 
 	originalUnlock := gcAdvisoryUnlock
-	gcAdvisoryUnlock = func(_ context.Context, _ *sql.DB) error {
-		return errors.New("forced advisory unlock failure")
+	unlockPID := make(chan int, 1)
+	gcAdvisoryUnlock = func(ctx context.Context, conn *sql.Conn) (bool, error) {
+		var pid int
+		if err := conn.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+			return false, err
+		}
+		unlockPID <- pid
+		return originalUnlock(ctx, conn)
 	}
-	t.Cleanup(func() {
-		gcAdvisoryUnlock = originalUnlock
-	})
+	t.Cleanup(func() { gcAdvisoryUnlock = originalUnlock })
 
-	result, err := RunGCWithContainersDirResult(false, containersDir)
+	type gcResult struct {
+		result GCResult
+		err    error
+	}
+	resultCh := make(chan gcResult, 1)
+	go func() {
+		result, runErr := RunGCWithDB(context.Background(), dbconn, false, t.TempDir())
+		resultCh <- gcResult{result: result, err: runErr}
+	}()
+
+	select {
+	case <-preflightEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for GC preflight after advisory acquisition")
+	}
+
+	var holderPID int
+	if err := observer.QueryRowContext(context.Background(), `
+		SELECT pid
+		FROM pg_locks
+		WHERE locktype = 'advisory'
+		  AND granted
+		  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+		  AND classid::bigint = 0
+		  AND objid::bigint = $1
+		  AND objsubid = 1
+	`, gcAdvisoryLockID).Scan(&holderPID); err != nil {
+		t.Fatalf("observe GC advisory-lock holder PID: %v", err)
+	}
+	if locked := tryGCAdvisoryLockOnConn(t, observer); locked {
+		t.Fatal("independent session unexpectedly acquired held GC advisory lock")
+	}
+
+	close(resumePreflight)
+	select {
+	case run := <-resultCh:
+		if run.err != nil {
+			t.Fatalf("RunGCWithDB: %v", run.err)
+		}
+		if run.result.DryRun {
+			t.Fatalf("expected live GC result, got %+v", run.result)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for GC completion")
+	}
+
+	select {
+	case pid := <-unlockPID:
+		if pid != holderPID {
+			t.Fatalf("advisory unlock PID=%d want acquisition PID=%d", pid, holderPID)
+		}
+	default:
+		t.Fatal("advisory unlock did not report its backend PID")
+	}
+	if locked := tryGCAdvisoryLockOnConn(t, observer); !locked {
+		t.Fatal("independent session could not reacquire advisory lock immediately after GC")
+	}
+	unlockGCAdvisoryLockOnConn(t, observer)
+}
+
+func TestRunGCReleasesAdvisoryLockAfterOperationFailure(t *testing.T) {
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
 	if err != nil {
-		t.Fatalf("gc should succeed despite advisory unlock failure: %v", err)
+		t.Fatalf("connect db: %v", err)
 	}
-	if result.AffectedContainers != 1 {
-		t.Fatalf("expected one affected container, got %d", result.AffectedContainers)
-	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
-	var remaining int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&remaining); err != nil {
-		t.Fatalf("count container rows: %v", err)
+	observer, err := dbconn.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("reserve advisory observer session: %v", err)
 	}
-	if remaining != 0 {
-		t.Fatalf("expected container row to be deleted, got %d", remaining)
+	defer observer.Close()
+
+	operationErr := errors.New("forced GC operation failure")
+	originalCheck := gcPhysicalIntegrityCheck
+	gcPhysicalIntegrityCheck = func(_ *sql.DB) (verify.PhysicalFileIntegritySummary, error) {
+		return verify.PhysicalFileIntegritySummary{}, operationErr
+	}
+	t.Cleanup(func() { gcPhysicalIntegrityCheck = originalCheck })
+
+	_, runErr := RunGCWithDB(context.Background(), dbconn, false, t.TempDir())
+	if !errors.Is(runErr, operationErr) {
+		t.Fatalf("RunGCWithDB error=%v want operation failure", runErr)
+	}
+	if locked := tryGCAdvisoryLockOnConn(t, observer); !locked {
+		t.Fatal("independent session could not reacquire advisory lock after GC operation failure")
+	}
+	unlockGCAdvisoryLockOnConn(t, observer)
+}
+
+func TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession(t *testing.T) {
+	requireDB(t)
+
+	tests := []struct {
+		name      string
+		unlockErr error
+		wantText  string
+	}{
+		{name: "SQL error", unlockErr: errors.New("forced advisory unlock failure")},
+		{name: "false result", wantText: "returned false"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dbconn, err := db.ConnectDB()
+			if err != nil {
+				t.Fatalf("connect db: %v", err)
+			}
+			defer dbconn.Close()
+			applySchema(t, dbconn)
+			resetDB(t, dbconn)
+
+			observerDB, err := db.ConnectDB()
+			if err != nil {
+				t.Fatalf("connect observer db: %v", err)
+			}
+			defer observerDB.Close()
+			observer, err := observerDB.Conn(context.Background())
+			if err != nil {
+				t.Fatalf("reserve observer session: %v", err)
+			}
+			defer observer.Close()
+
+			originalUnlock := gcAdvisoryUnlock
+			var discardedPID int
+			gcAdvisoryUnlock = func(ctx context.Context, conn *sql.Conn) (bool, error) {
+				if err := conn.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&discardedPID); err != nil {
+					return false, err
+				}
+				return false, test.unlockErr
+			}
+			t.Cleanup(func() { gcAdvisoryUnlock = originalUnlock })
+
+			result, runErr := RunGCWithDB(context.Background(), dbconn, false, t.TempDir())
+			if runErr == nil {
+				t.Fatal("expected advisory cleanup failure")
+			}
+			if test.unlockErr != nil && !errors.Is(runErr, test.unlockErr) {
+				t.Fatalf("cleanup error=%v want errors.Is(%v)", runErr, test.unlockErr)
+			}
+			if test.wantText != "" && !strings.Contains(runErr.Error(), test.wantText) {
+				t.Fatalf("cleanup error=%v want text %q", runErr, test.wantText)
+			}
+			if result.DryRun {
+				t.Fatalf("expected completed live GC result, got %+v", result)
+			}
+			if discardedPID == 0 {
+				t.Fatal("unlock failure did not observe the owning backend PID")
+			}
+
+			var remaining int
+			if err := observer.QueryRowContext(context.Background(), `
+				SELECT COUNT(*) FROM pg_stat_activity WHERE pid = $1
+			`, discardedPID).Scan(&remaining); err != nil {
+				t.Fatalf("observe discarded advisory session: %v", err)
+			}
+			if remaining != 0 {
+				t.Fatalf("advisory session PID %d remained active after cleanup failure", discardedPID)
+			}
+			if locked := tryGCAdvisoryLockOnConn(t, observer); !locked {
+				t.Fatal("independent session could not acquire advisory lock after failed cleanup discard")
+			}
+			unlockGCAdvisoryLockOnConn(t, observer)
+		})
+	}
+}
+
+func TestRunGCLiveRefusesSingleConnectionPool(t *testing.T) {
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+	dbconn.SetMaxOpenConns(1)
+
+	_, runErr := RunGCWithDB(context.Background(), dbconn, false, t.TempDir())
+	if runErr == nil || !strings.Contains(runErr.Error(), "requires at least two database connections") {
+		t.Fatalf("single-connection GC error=%v want explicit pool-capacity refusal", runErr)
+	}
+}
+
+func tryGCAdvisoryLockOnConn(t *testing.T, conn *sql.Conn) bool {
+	t.Helper()
+	var locked bool
+	if err := conn.QueryRowContext(context.Background(), `SELECT pg_try_advisory_lock($1)`, gcAdvisoryLockID).Scan(&locked); err != nil {
+		t.Fatalf("try GC advisory lock: %v", err)
+	}
+	return locked
+}
+
+func unlockGCAdvisoryLockOnConn(t *testing.T, conn *sql.Conn) {
+	t.Helper()
+	var unlocked bool
+	if err := conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1)`, gcAdvisoryLockID).Scan(&unlocked); err != nil {
+		t.Fatalf("unlock GC advisory lock: %v", err)
+	}
+	if !unlocked {
+		t.Fatal("expected observer session to release GC advisory lock")
 	}
 }
 

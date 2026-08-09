@@ -275,7 +275,10 @@ jobs:
                   r"^TestEngineGCDryRunAcrossBackends/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/maintenance": [
-                  r"^TestRunGCWithAdvisoryUnlockFailureStillSucceeds$",
+                  r"^TestGCAdvisoryLockUsesDedicatedSessionAndReleases$",
+                  r"^TestRunGCReleasesAdvisoryLockAfterOperationFailure$",
+                  r"^TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession$",
+                  r"^TestRunGCLiveRefusesSingleConnectionPool$",
               ],
               "github.com/franchoy/coldkeep/internal/container": [
                   r"^TestContainerRowLockIntegrationAcrossBackends/postgres$",

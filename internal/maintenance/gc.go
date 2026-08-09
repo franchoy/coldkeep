@@ -3,6 +3,8 @@ package maintenance
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -30,9 +32,10 @@ func isContainerFKViolation(err error) bool {
 
 var gcConnectDB = db.ConnectDB
 
-var gcAdvisoryUnlock = func(ctx context.Context, dbconn *sql.DB) error {
-	_, err := dbconn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
-	return err
+var gcAdvisoryUnlock = func(ctx context.Context, conn *sql.Conn) (bool, error) {
+	var unlocked bool
+	err := conn.QueryRowContext(ctx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID).Scan(&unlocked)
+	return unlocked, err
 }
 
 var gcPhysicalIntegrityCheck = func(dbconn *sql.DB) (verify.PhysicalFileIntegritySummary, error) {
@@ -122,11 +125,13 @@ func RunGCWithDB(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir
 
 	fsys := fsx.Default()
 
-	unlock, err := acquireGCAdvisoryLock(ctx, dbconn, dryRun)
+	advisoryLock, err := acquireGCAdvisoryLock(ctx, dbconn, dryRun)
 	if err != nil {
 		return GCResult{}, err
 	}
-	defer unlock()
+	defer func() {
+		err = errors.Join(err, advisoryLock.release())
+	}()
 
 	if err := gcIntegrityPreFlight(dbconn); err != nil {
 		return GCResult{}, err
@@ -169,31 +174,90 @@ const (
 	sealedContainerAffected                                // deleted (or dry-run counted)
 )
 
+// gcAdvisoryLock owns the dedicated PostgreSQL session carrying GC's
+// session-level advisory lock. The connection must not return to the pool until
+// a successful unlock, or until it has been discarded after uncertain cleanup.
+type gcAdvisoryLock struct {
+	conn *sql.Conn
+}
+
 // acquireGCAdvisoryLock enforces the SQLite/PostgreSQL backend rules and, for
-// PostgreSQL, acquires the advisory lock. Returns an unlock func to defer.
-func acquireGCAdvisoryLock(ctx context.Context, dbconn *sql.DB, dryRun bool) (func(), error) {
+// PostgreSQL, acquires the advisory lock on one dedicated session.
+func acquireGCAdvisoryLock(ctx context.Context, dbconn *sql.DB, dryRun bool) (*gcAdvisoryLock, error) {
 	backend := db.BackendFromDB(dbconn)
 	if backend == db.BackendSQLite {
 		if !dryRun {
-			return func() {}, fmt.Errorf("live GC is not supported on the SQLite backend; run with --dry-run to inspect GC candidates")
+			return nil, fmt.Errorf("live GC is not supported on the SQLite backend; run with --dry-run to inspect GC candidates")
 		}
 		log.Println("gc: SQLite backend detected — skipping advisory lock (dry-run only)")
-		return func() {}, nil
+		return &gcAdvisoryLock{}, nil
 	}
+	if backend == db.BackendPostgres && dbconn.Stats().MaxOpenConnections == 1 {
+		return nil, fmt.Errorf("PostgreSQL GC requires at least two database connections so its dedicated advisory-lock session does not exhaust the pool")
+	}
+
+	conn, err := dbconn.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reserve advisory-lock session: %w", err)
+	}
+
 	var locked bool
-	if err := dbconn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked); err != nil {
-		return func() {}, fmt.Errorf("failed to attempt advisory lock: %w", err)
+	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked); err != nil {
+		acquireErr := fmt.Errorf("failed to attempt advisory lock: %w", err)
+		return nil, errors.Join(acquireErr, discardGCAdvisoryConn(conn))
 	}
 	if !locked {
-		return func() {}, fmt.Errorf("GC already running (advisory lock held)")
+		return nil, errors.Join(
+			fmt.Errorf("GC already running (advisory lock held)"),
+			closeGCAdvisoryConn(conn),
+		)
 	}
-	return func() {
-		cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
-		defer cleanupCancel()
-		if unlockErr := gcAdvisoryUnlock(cleanupCtx, dbconn); unlockErr != nil {
-			log.Printf("warning: failed to release advisory lock: %v\n", unlockErr)
-		}
-	}, nil
+	return &gcAdvisoryLock{conn: conn}, nil
+}
+
+func (lock *gcAdvisoryLock) release() error {
+	if lock == nil || lock.conn == nil {
+		return nil
+	}
+	conn := lock.conn
+	lock.conn = nil
+
+	cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
+	defer cleanupCancel()
+	unlocked, unlockErr := gcAdvisoryUnlock(cleanupCtx, conn)
+	if unlockErr == nil && unlocked {
+		return closeGCAdvisoryConn(conn)
+	}
+	if unlockErr == nil {
+		unlockErr = fmt.Errorf("PostgreSQL advisory unlock returned false for the owned GC lock")
+	} else {
+		unlockErr = fmt.Errorf("failed to release PostgreSQL GC advisory lock: %w", unlockErr)
+	}
+	return errors.Join(unlockErr, discardGCAdvisoryConn(conn))
+}
+
+func closeGCAdvisoryConn(conn *sql.Conn) error {
+	if conn == nil {
+		return nil
+	}
+	if err := conn.Close(); err != nil && !errors.Is(err, sql.ErrConnDone) {
+		return fmt.Errorf("close PostgreSQL GC advisory-lock session: %w", err)
+	}
+	return nil
+}
+
+// discardGCAdvisoryConn prevents a session whose lock state is uncertain from
+// returning to database/sql's reusable pool. driver.ErrBadConn is the expected
+// signal used by Conn.Raw to make that connection unusable.
+func discardGCAdvisoryConn(conn *sql.Conn) error {
+	if conn == nil {
+		return nil
+	}
+	err := conn.Raw(func(any) error { return driver.ErrBadConn })
+	if err != nil && !errors.Is(err, driver.ErrBadConn) && !errors.Is(err, sql.ErrConnDone) {
+		return fmt.Errorf("discard PostgreSQL GC advisory-lock session: %w", err)
+	}
+	return nil
 }
 
 // gcIntegrityPreFlight runs CheckPhysicalFileGraphIntegrity and returns an
