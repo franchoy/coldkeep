@@ -661,6 +661,7 @@ check_local_workflow() {
 	    require_content_pattern "$correctness_integration_block" 'print\("required execution-proof failure:", file=sys\.stderr\)' 'integration correctness execution-proof parser' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'status=\$\{PIPESTATUS\[0\]\}' 'integration correctness execution proof preserves test status' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'status=\$\?' 'integration correctness execution proof propagates parser status' || check_status=1
+	    # shellcheck disable=SC2016 # The audit pattern must match the literal $status.
 	    require_content_pattern "$correctness_integration_block" 'exit "\$status"' 'integration correctness execution proof remains blocking' || check_status=1
 	    if grep -Eq 'continue-on-error|go test .*\|\| true' <<<"$correctness_integration_block"; then
 	      echo "[audit] ERROR: integration correctness execution-proof step must not suppress broad failures" >&2
@@ -804,6 +805,7 @@ check_local_workflow() {
       require_content_pattern "$adversarial_validation_block" 'print\("required execution-proof failure:", file=sys\.stderr\)' 'adversarial coordination execution-proof parser' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'status=\$\{PIPESTATUS\[0\]\}' 'adversarial coordination proof preserves test status' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'status=\$\?' 'adversarial coordination proof propagates parser status' || check_status=1
+      # shellcheck disable=SC2016 # The audit pattern must match the literal $status.
       require_content_pattern "$adversarial_validation_block" 'exit "\$status"' 'adversarial coordination proof remains blocking' || check_status=1
       if grep -Eq 'continue-on-error|\|\| true' <<<"$adversarial_validation_block"; then
         echo "[audit] ERROR: adversarial coordination execution-proof step must not suppress broad failures" >&2
