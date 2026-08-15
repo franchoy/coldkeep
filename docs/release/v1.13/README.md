@@ -102,8 +102,14 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   number types, schemas, APIs, storage, coordination, or error behavior. Its
   evidence is recorded in
   [v1.13.11-phase16-json-integer-fidelity.md](v1.13.11-phase16-json-integer-fidelity.md).
-  Phase 17 — Fail-Closed SQL Mutation Audit — is Next. BKC-016 remains
-  `Deferred — documented`. Phase 12 closure remains recorded in
+  Phase 17 now inventories all 70 non-DDL production mutations and hardens the
+  20 required-row gaps without changing valid zero-row cleanup, recovery, CAS,
+  upsert, bulk, or GC semantics. SQLite/PostgreSQL parity and rollback are
+  proven, including no physical GC deletion after a missed metadata delete.
+  Its evidence is recorded in
+  [v1.13.11-phase17-fail-closed-sql-mutations.md](v1.13.11-phase17-fail-closed-sql-mutations.md).
+  Phase 18 — Required Backend and Coordination CI Gate — is Next. BKC-016
+  remains `Deferred — documented`. Phase 12 closure remains recorded in
   [v1.13.11-phase12-closure.md](v1.13.11-phase12-closure.md). The diagnostic
   benchmark-gate bootstrap remains recorded in
   [v1.13.11-phase11-benchmark-gate-integrity-remediation.md](v1.13.11-phase11-benchmark-gate-integrity-remediation.md).
