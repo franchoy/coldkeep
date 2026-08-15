@@ -77,7 +77,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phases 0–16 are complete. Phase 12 implements the
+  active release. Phases 0–18 are complete. Phase 12 implements the
   repository-wide exclusive fail-fast Lease and proves native runtime plus the
   production Coordinator lifecycle on Linux, macOS, and Windows. Phase 13
   preserves strengthened G6 integrity coverage and proves deterministic Linux
@@ -108,8 +108,13 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   proven, including no physical GC deletion after a missed metadata delete.
   Its evidence is recorded in
   [v1.13.11-phase17-fail-closed-sql-mutations.md](v1.13.11-phase17-fail-closed-sql-mutations.md).
-  Phase 18 — Required Backend and Coordination CI Gate — is Next. BKC-016
-  remains `Deferred — documented`. Phase 12 closure remains recorded in
+  Phase 18 now makes selected existing PostgreSQL mutation-cardinality,
+  storage/recovery, and Linux coordination execution proof fail closed in
+  required CI without changing product semantics or job topology. Its evidence
+  is recorded in
+  [v1.13.11-phase18-required-backend-coordination-ci.md](v1.13.11-phase18-required-backend-coordination-ci.md).
+  Phase 19 — Validation Matrix and Release Evidence Reconciliation — is Next.
+  BKC-016 remains `Deferred — documented`. Phase 12 closure remains recorded in
   [v1.13.11-phase12-closure.md](v1.13.11-phase12-closure.md). The diagnostic
   benchmark-gate bootstrap remains recorded in
   [v1.13.11-phase11-benchmark-gate-integrity-remediation.md](v1.13.11-phase11-benchmark-gate-integrity-remediation.md).
