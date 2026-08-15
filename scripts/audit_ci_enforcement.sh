@@ -77,6 +77,9 @@ TIMING_VALIDATOR_FILE="${COLDKEEP_TIMING_VALIDATOR_FILE:-$REPO_ROOT/scripts/vali
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
 PAIRED_REFERENCE_MANIFEST_FILE="${COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE:-$REPO_ROOT/benchmarks/paired/reference-v1.13.json}"
 PAIRED_THRESHOLD_POLICY_FILE="${COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE:-$REPO_ROOT/benchmarks/paired/threshold-policy-v1.13.json}"
+NATIVE_UNIX_TEST_FILE="${COLDKEEP_NATIVE_UNIX_TEST_FILE:-$REPO_ROOT/internal/coordination/native_lock_unix_test.go}"
+NATIVE_WINDOWS_TEST_FILE="${COLDKEEP_NATIVE_WINDOWS_TEST_FILE:-$REPO_ROOT/internal/coordination/native_lock_windows_test.go}"
+COORDINATOR_NATIVE_TEST_FILE="${COLDKEEP_COORDINATOR_NATIVE_TEST_FILE:-$REPO_ROOT/internal/coordination/coordinator_native_test.go}"
 
 require_pattern() {
   local file="$1"
@@ -607,6 +610,8 @@ check_local_workflow() {
     check_status=1
   else
     quality_checkout_block="$(extract_step_block_from_content "$quality_block" "Checkout")"
+    quality_plain_block="$(extract_step_block_from_content "$quality_block" "Test packages (plain codec)")"
+    quality_aes_gcm_block="$(extract_step_block_from_content "$quality_block" "Test packages (aes-gcm codec)")"
     validator_test_block="$(extract_step_block_from_content "$quality_block" "Test release-state validator")"
     validator_real_block="$(extract_step_block_from_content "$quality_block" "Validate repository release state")"
     require_content_pattern "$quality_checkout_block" '^        uses: actions/checkout@v6$' 'quality checkout uses actions/checkout@v6' || check_status=1
@@ -620,6 +625,10 @@ check_local_workflow() {
     require_content_pattern "$validator_real_block" 'refs/tags/v' 'release-state validator tag condition' || check_status=1
     require_content_pattern "$validator_real_block" 'github\.event_name == .pull_request.' 'release-state validator pull-request condition' || check_status=1
     require_content_pattern "$validator_real_block" 'github\.head_ref' 'release-state validator pull-request head condition' || check_status=1
+    require_content_pattern "$quality_plain_block" '^          COLDKEEP_CODEC: plain$' 'SQLite quality plain codec environment' || check_status=1
+    require_content_pattern "$quality_plain_block" '^        run: go test -race -count=1 \./cmd/\.\.\. \./internal/\.\.\.$' 'SQLite quality plain package command' || check_status=1
+    require_content_pattern "$quality_aes_gcm_block" '^          COLDKEEP_CODEC: aes-gcm$' 'SQLite quality AES-GCM codec environment' || check_status=1
+    require_content_pattern "$quality_aes_gcm_block" '^        run: go test -race -count=1 \./cmd/\.\.\. \./internal/\.\.\.$' 'SQLite quality AES-GCM package command' || check_status=1
     if grep -Eq 'continue-on-error|\|\| true' <<<"$validator_test_block$validator_real_block"; then
       echo "[audit] ERROR: release-state validator steps must remain blocking" >&2
       check_status=1
@@ -633,6 +642,33 @@ check_local_workflow() {
 	  echo "[audit] ERROR: missing correctness-matrix job block content" >&2
 	  check_status=1
 	else
+	  correctness_integration_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run integration tests (correctness tier)")"
+	  if [[ -z "$correctness_integration_block" ]]; then
+	    echo "[audit] ERROR: missing integration correctness execution-proof step block" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$correctness_integration_block" 'COLDKEEP_TEST_DB:\s*1' 'integration correctness execution proof enables DB gate' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'go test -race -count=1 -short -json \./tests/integration/\.\.\.' 'integration correctness execution proof uses JSON evidence' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'TestRoundTripStoreRestore' 'required PostgreSQL storage round-trip execution proof' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'TestRemoveWithSharedChunksRefCount' 'required PostgreSQL storage remove execution proof' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState' 'required PostgreSQL recovery execution proof' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'github.com/franchoy/coldkeep/tests/integration' 'integration correctness execution proof binds the integration package' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'if codec == "plain"' 'integration correctness execution proof scopes recovery and remove markers to plain codec' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'json\.loads\(raw_line\)' 'integration correctness execution proof rejects malformed JSON' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'if not events:' 'integration correctness execution proof rejects empty JSON' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'event\.get\("Action"\) == "skip"' 'integration correctness execution proof rejects required skips' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'event\.get\("Action"\) == "pass"' 'integration correctness execution proof requires pass events' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'print\("required execution-proof failure:", file=sys\.stderr\)' 'integration correctness execution-proof parser' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'status=\$\{PIPESTATUS\[0\]\}' 'integration correctness execution proof preserves test status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'status=\$\?' 'integration correctness execution proof propagates parser status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'exit "\$status"' 'integration correctness execution proof remains blocking' || check_status=1
+	    if grep -Eq 'continue-on-error|go test .*\|\| true' <<<"$correctness_integration_block"; then
+	      echo "[audit] ERROR: integration correctness execution-proof step must not suppress broad failures" >&2
+	      check_status=1
+	    else
+	      echo "[audit] ok: integration correctness execution-proof step does not suppress broad failures"
+	    fi
+	  fi
 	  postgres_internal_contracts_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run required PostgreSQL internal package contracts")"
 	  if [[ -z "$postgres_internal_contracts_block" ]]; then
 	    echo "[audit] ERROR: missing required PostgreSQL internal package contracts step block" >&2
@@ -681,6 +717,7 @@ check_local_workflow() {
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestBackendForUpdateLockReleaseAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 10 FOR UPDATE execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestBackendNowaitAndSkipLockedAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 10 NOWAIT and SKIP LOCKED execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestBackendBlockedLockCancellationAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 10 blocked-lock cancellation execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestMutationRowsAffectedContractAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 17 mutation-cardinality execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestContainerRowLockIntegrationAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 10 container row-lock integration execution' || check_status=1
 	    if grep -Eq 'continue-on-error|\|\| true' <<<"$postgres_internal_contracts_block"; then
 	      echo "[audit] ERROR: PostgreSQL internal package contracts step must remain blocking" >&2
@@ -694,6 +731,9 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run native coordination runtime tests' 'cross-platform native coordination runtime step' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -v -count=1 -run '\\^\\(TestNativeLock\\|TestWindowsNativeLock\\|TestProductionCoordinator\\)' ./internal/coordination" 'cross-platform native coordination command covers native backends and production Coordinator' || check_status=1
+  require_pattern "$NATIVE_UNIX_TEST_FILE" '^func TestNativeLockContentionAndReacquire' 'Unix native coordination source retains contention runtime test' || check_status=1
+  require_pattern "$NATIVE_WINDOWS_TEST_FILE" '^func TestWindowsNativeLockContentionAndReacquire' 'Windows native coordination source retains contention runtime test' || check_status=1
+  require_pattern "$COORDINATOR_NATIVE_TEST_FILE" '^func TestProductionCoordinatorsShareProcessRegistryAndProtectSuccessor' 'production Coordinator source retains registry and successor runtime test' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run path safety cross-platform tests' 'cross-platform path safety step' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test ./internal/pathsafe/\\.\\.\\. -run 'TrustedRoot\\|Symlink\\|Alias\\|WritePath' -count=1" 'cross-platform path safety command covers trusted-root and alias checks' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run storage restore cross-platform tests' 'cross-platform storage restore step' || check_status=1
@@ -720,13 +760,14 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  integration-long-run:$' 'integration long-run job' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^  adversarial:$' 'adversarial job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G17\)' 'adversarial workflow step names batch coverage through G17' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -json ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite with JSON evidence' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14\\|TestAdversarialG15\\|TestAdversarialG16\\|TestAdversarialG17'" 'explicit G14-G17 adversarial gate command' || check_status=1
   adversarial_block="$(extract_job_block adversarial)"
   if [[ -z "$adversarial_block" ]]; then
     echo "[audit] ERROR: missing adversarial job block content" >&2
     check_status=1
   else
+    require_content_pattern "$adversarial_block" '^    runs-on: ubuntu-latest$' 'adversarial coordination proof runs on Linux' || check_status=1
     require_content_pattern "$adversarial_block" '^    services:$' 'adversarial job declares services' || check_status=1
     require_content_pattern "$adversarial_block" '^      postgres:$' 'adversarial job provisions postgres service' || check_status=1
     require_content_pattern "$adversarial_block" 'image:\s*postgres:16' 'adversarial job pins postgres service image' || check_status=1
@@ -742,6 +783,34 @@ check_local_workflow() {
       require_content_pattern "$deterministic_g6_block" 'COLDKEEP_REQUIRE_DETERMINISTIC_G6_RETRY_CASE:\s*1' 'deterministic G6 PostgreSQL regression requires retry-case execution' || check_status=1
       require_content_pattern "$deterministic_g6_block" 'go test -v -race -count=1 ./tests/adversarial/\.\.\.' 'deterministic G6 PostgreSQL regression targets adversarial package explicitly' || check_status=1
       require_content_pattern "$deterministic_g6_block" "-run '\\^TestAdversarialG6DeterministicStoreInterleavingPostgres\\$'" 'deterministic G6 PostgreSQL regression uses exact selector' || check_status=1
+    fi
+    adversarial_validation_block="$(extract_step_block_from_content "$adversarial_block" "Run adversarial validation (G1–G17)")"
+    if [[ -z "$adversarial_validation_block" ]]; then
+      echo "[audit] ERROR: missing adversarial coordination execution-proof step block" >&2
+      check_status=1
+    else
+      require_content_pattern "$adversarial_validation_block" 'COLDKEEP_TEST_DB:\s*1' 'adversarial coordination proof enables DB gate' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'COLDKEEP_LONG_RUN:\s*1' 'adversarial coordination proof enables long-run gate' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'go test -race -count=1 -json \./tests/adversarial/\.\.\.' 'adversarial coordination proof uses JSON execution evidence' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6IndependentProcessRepositoryContention/plain' 'independent-process plain execution proof' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm' 'independent-process AES-GCM execution proof' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6KilledLeaseHolderReleasesRepository' 'killed-holder execution proof' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6LiveGCExcludesIndependentStoreProcess' 'live-GC execution proof' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'github.com/franchoy/coldkeep/tests/adversarial' 'adversarial coordination execution proof binds the adversarial package' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'json\.loads\(raw_line\)' 'adversarial coordination execution proof rejects malformed JSON' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'if not events:' 'adversarial coordination execution proof rejects empty JSON' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'event\.get\("Action"\) == "skip"' 'adversarial coordination execution proof rejects required skips' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'event\.get\("Action"\) == "pass"' 'adversarial coordination execution proof requires pass events' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'print\("required execution-proof failure:", file=sys\.stderr\)' 'adversarial coordination execution-proof parser' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'status=\$\{PIPESTATUS\[0\]\}' 'adversarial coordination proof preserves test status' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'status=\$\?' 'adversarial coordination proof propagates parser status' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'exit "\$status"' 'adversarial coordination proof remains blocking' || check_status=1
+      if grep -Eq 'continue-on-error|\|\| true' <<<"$adversarial_validation_block"; then
+        echo "[audit] ERROR: adversarial coordination execution-proof step must not suppress broad failures" >&2
+        check_status=1
+      else
+        echo "[audit] ok: adversarial coordination execution-proof step does not suppress broad failures"
+      fi
     fi
   fi
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job' || check_status=1

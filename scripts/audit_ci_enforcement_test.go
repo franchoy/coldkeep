@@ -688,6 +688,342 @@ func TestAuditCIEnforcementLocalWorkflowPassesCurrentConfiguration(t *testing.T)
 	}
 }
 
+func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	tests := []struct {
+		name        string
+		anchor      string
+		old         string
+		replacement string
+		wantMessage string
+		sourcePath  string
+		sourceEnv   string
+	}{
+		{
+			name:        "SQLite plain package command",
+			anchor:      "      - name: Test packages (plain codec)\n",
+			old:         "go test -race -count=1 ./cmd/... ./internal/...",
+			replacement: "go test -race -count=1 ./internal/...",
+			wantMessage: "SQLite quality plain package command",
+		},
+		{
+			name:        "SQLite AES-GCM package command",
+			anchor:      "      - name: Test packages (aes-gcm codec)\n",
+			old:         "go test -race -count=1 ./cmd/... ./internal/...",
+			replacement: "go test -race -count=1 ./cmd/...",
+			wantMessage: "SQLite quality AES-GCM package command",
+		},
+		{
+			name:        "Phase 17 PostgreSQL mutation marker",
+			anchor:      "      - name: Run required PostgreSQL internal package contracts\n",
+			old:         "TestMutationRowsAffectedContractAcrossBackends/postgres",
+			replacement: "TestMutationRowsAffectedContractAcrossBackends/sqlite",
+			wantMessage: "PostgreSQL internal package contracts prove Phase 17 mutation-cardinality execution",
+		},
+		{
+			name:        "Unix native contention source",
+			old:         "func TestNativeLockContentionAndReacquire",
+			replacement: "func removedNativeLockContentionAndReacquire",
+			wantMessage: "Unix native coordination source retains contention runtime test",
+			sourcePath:  filepath.Join("internal", "coordination", "native_lock_unix_test.go"),
+			sourceEnv:   "COLDKEEP_NATIVE_UNIX_TEST_FILE",
+		},
+		{
+			name:        "Windows native contention source",
+			old:         "func TestWindowsNativeLockContentionAndReacquire",
+			replacement: "func removedWindowsNativeLockContentionAndReacquire",
+			wantMessage: "Windows native coordination source retains contention runtime test",
+			sourcePath:  filepath.Join("internal", "coordination", "native_lock_windows_test.go"),
+			sourceEnv:   "COLDKEEP_NATIVE_WINDOWS_TEST_FILE",
+		},
+		{
+			name:        "production Coordinator source",
+			old:         "func TestProductionCoordinatorsShareProcessRegistryAndProtectSuccessor",
+			replacement: "func removedProductionCoordinatorsShareProcessRegistryAndProtectSuccessor",
+			wantMessage: "production Coordinator source retains registry and successor runtime test",
+			sourcePath:  filepath.Join("internal", "coordination", "coordinator_native_test.go"),
+			sourceEnv:   "COLDKEEP_COORDINATOR_NATIVE_TEST_FILE",
+		},
+		{
+			name:        "correctness DB gate",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "COLDKEEP_TEST_DB: 1",
+			replacement: "COLDKEEP_TEST_DB: 0",
+			wantMessage: "integration correctness execution proof enables DB gate",
+		},
+		{
+			name:        "correctness JSON command",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "go test -race -count=1 -short -json ./tests/integration/...",
+			replacement: "go test -race -count=1 -short ./tests/integration/...",
+			wantMessage: "integration correctness execution proof uses JSON evidence",
+		},
+		{
+			name:        "storage round-trip marker",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "TestRoundTripStoreRestore",
+			replacement: "RemovedRoundTripMarker",
+			wantMessage: "required PostgreSQL storage round-trip execution proof",
+		},
+		{
+			name:        "storage remove marker",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "TestRemoveWithSharedChunksRefCount",
+			replacement: "RemovedSharedChunkMarker",
+			wantMessage: "required PostgreSQL storage remove execution proof",
+		},
+		{
+			name:        "startup recovery marker",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState",
+			replacement: "TestStartupRecoveryMarkerRemoved",
+			wantMessage: "required PostgreSQL recovery execution proof",
+		},
+		{
+			name:        "correctness plain codec scope",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "if codec == \"plain\":",
+			replacement: "if codec == \"unused\":",
+			wantMessage: "integration correctness execution proof scopes recovery and remove markers to plain codec",
+		},
+		{
+			name:        "correctness package binding",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "github.com/franchoy/coldkeep/tests/integration",
+			replacement: "github.com/franchoy/coldkeep/tests/adversarial",
+			wantMessage: "integration correctness execution proof binds the integration package",
+		},
+		{
+			name:        "correctness malformed JSON rejection",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "json.loads(raw_line)",
+			replacement: "{}",
+			wantMessage: "integration correctness execution proof rejects malformed JSON",
+		},
+		{
+			name:        "correctness empty JSON rejection",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "if not events:",
+			replacement: "if False:",
+			wantMessage: "integration correctness execution proof rejects empty JSON",
+		},
+		{
+			name:        "correctness skip rejection",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "event.get(\"Action\") == \"skip\"",
+			replacement: "False",
+			wantMessage: "integration correctness execution proof rejects required skips",
+		},
+		{
+			name:        "correctness pass requirement",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "event.get(\"Action\") == \"pass\"",
+			replacement: "event.get(\"Action\") == \"output\"",
+			wantMessage: "integration correctness execution proof requires pass events",
+		},
+		{
+			name:        "correctness parser diagnostic",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "print(\"required execution-proof failure:\", file=sys.stderr)",
+			replacement: "print(\"execution proof failed\", file=sys.stderr)",
+			wantMessage: "integration correctness execution-proof parser",
+		},
+		{
+			name:        "correctness test status",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "status=${PIPESTATUS[0]}",
+			replacement: "status=0",
+			wantMessage: "integration correctness execution proof preserves test status",
+		},
+		{
+			name:        "correctness parser status",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "status=$?",
+			replacement: "status=0",
+			wantMessage: "integration correctness execution proof propagates parser status",
+		},
+		{
+			name:        "correctness blocking exit",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "exit \"$status\"",
+			replacement: "exit 0",
+			wantMessage: "integration correctness execution proof remains blocking",
+		},
+		{
+			name:        "correctness broad failure suppression",
+			anchor:      "      - name: Run integration tests (correctness tier)\n",
+			old:         "        env:\n",
+			replacement: "        continue-on-error: true\n        env:\n",
+			wantMessage: "integration correctness execution-proof step must not suppress broad failures",
+		},
+		{
+			name:        "adversarial Linux runner",
+			anchor:      "  adversarial:\n",
+			old:         "runs-on: ubuntu-latest",
+			replacement: "runs-on: macos-latest",
+			wantMessage: "adversarial coordination proof runs on Linux",
+		},
+		{
+			name:        "adversarial PostgreSQL service",
+			anchor:      "  adversarial:\n",
+			old:         "image: postgres:16",
+			replacement: "image: postgres:15",
+			wantMessage: "adversarial job pins postgres service image",
+		},
+		{
+			name:        "adversarial DB gate",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "COLDKEEP_TEST_DB: 1",
+			replacement: "COLDKEEP_TEST_DB: 0",
+			wantMessage: "adversarial coordination proof enables DB gate",
+		},
+		{
+			name:        "adversarial long-run gate",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "COLDKEEP_LONG_RUN: 1",
+			replacement: "COLDKEEP_LONG_RUN: 0",
+			wantMessage: "adversarial coordination proof enables long-run gate",
+		},
+		{
+			name:        "adversarial JSON command",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "go test -race -count=1 -json ./tests/adversarial/...",
+			replacement: "go test -race -count=1 ./tests/adversarial/...",
+			wantMessage: "adversarial coordination proof uses JSON execution evidence",
+		},
+		{
+			name:        "independent-process plain marker",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "TestAdversarialG6IndependentProcessRepositoryContention/plain",
+			replacement: "TestAdversarialG6IndependentProcessRepositoryContention/removed",
+			wantMessage: "independent-process plain execution proof",
+		},
+		{
+			name:        "independent-process AES-GCM marker",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm",
+			replacement: "TestAdversarialG6IndependentProcessRepositoryContention/removed",
+			wantMessage: "independent-process AES-GCM execution proof",
+		},
+		{
+			name:        "killed-holder marker",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "TestAdversarialG6KilledLeaseHolderReleasesRepository",
+			replacement: "TestAdversarialG6KilledHolderMarkerRemoved",
+			wantMessage: "killed-holder execution proof",
+		},
+		{
+			name:        "live-GC marker",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "TestAdversarialG6LiveGCExcludesIndependentStoreProcess",
+			replacement: "TestAdversarialG6LiveGCMarkerRemoved",
+			wantMessage: "live-GC execution proof",
+		},
+		{
+			name:        "adversarial package binding",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "github.com/franchoy/coldkeep/tests/adversarial",
+			replacement: "github.com/franchoy/coldkeep/tests/integration",
+			wantMessage: "adversarial coordination execution proof binds the adversarial package",
+		},
+		{
+			name:        "adversarial malformed JSON rejection",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "json.loads(raw_line)",
+			replacement: "{}",
+			wantMessage: "adversarial coordination execution proof rejects malformed JSON",
+		},
+		{
+			name:        "adversarial empty JSON rejection",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "if not events:",
+			replacement: "if False:",
+			wantMessage: "adversarial coordination execution proof rejects empty JSON",
+		},
+		{
+			name:        "adversarial skip rejection",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "event.get(\"Action\") == \"skip\"",
+			replacement: "False",
+			wantMessage: "adversarial coordination execution proof rejects required skips",
+		},
+		{
+			name:        "adversarial pass requirement",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "event.get(\"Action\") == \"pass\"",
+			replacement: "event.get(\"Action\") == \"output\"",
+			wantMessage: "adversarial coordination execution proof requires pass events",
+		},
+		{
+			name:        "adversarial parser diagnostic",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "print(\"required execution-proof failure:\", file=sys.stderr)",
+			replacement: "print(\"execution proof failed\", file=sys.stderr)",
+			wantMessage: "adversarial coordination execution-proof parser",
+		},
+		{
+			name:        "adversarial test status",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "status=${PIPESTATUS[0]}",
+			replacement: "status=0",
+			wantMessage: "adversarial coordination proof preserves test status",
+		},
+		{
+			name:        "adversarial parser status",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "status=$?",
+			replacement: "status=0",
+			wantMessage: "adversarial coordination proof propagates parser status",
+		},
+		{
+			name:        "adversarial blocking exit",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "exit \"$status\"",
+			replacement: "exit 0",
+			wantMessage: "adversarial coordination proof remains blocking",
+		},
+		{
+			name:        "adversarial broad failure suppression",
+			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
+			old:         "        id: adversarial_g1_g17\n",
+			replacement: "        id: adversarial_g1_g17\n        continue-on-error: true\n",
+			wantMessage: "adversarial coordination execution-proof step must not suppress broad failures",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.sourcePath != "" {
+				source := readRepoFile(t, test.sourcePath)
+				mutated := strings.Replace(source, test.old, test.replacement, 1)
+				if mutated == source {
+					t.Fatalf("source fixture %s did not contain %q", test.sourcePath, test.old)
+				}
+				stderr := runAuditLocalOnlyWithSourceFixture(t, workflow, codeqlWorkflow, test.sourceEnv, mutated)
+				if !strings.Contains(stderr, test.wantMessage) {
+					t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+				}
+				return
+			}
+			anchorIndex := strings.Index(workflow, test.anchor)
+			if anchorIndex < 0 {
+				t.Fatalf("workflow fixture did not contain anchor %q", test.anchor)
+			}
+			targetOffset := strings.Index(workflow[anchorIndex:], test.old)
+			if targetOffset < 0 {
+				t.Fatalf("workflow fixture did not contain %q after anchor %q", test.old, test.anchor)
+			}
+			targetIndex := anchorIndex + targetOffset
+			mutated := workflow[:targetIndex] + test.replacement + workflow[targetIndex+len(test.old):]
+			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
 func TestAuditCIEnforcementLocalWorkflowRequiresDeterministicG6PostgresCommand(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
@@ -718,6 +1054,22 @@ func TestAuditCIEnforcementLocalWorkflowRequiresDeterministicG6DBGate(t *testing
 	if !strings.Contains(stderr, "deterministic G6 PostgreSQL regression enables DB gate") {
 		t.Fatalf("expected missing deterministic G6 postgres DB gate error, got:\n%s", stderr)
 	}
+}
+
+func runAuditLocalOnlyWithSourceFixture(
+	t *testing.T,
+	workflow string,
+	codeqlWorkflow string,
+	sourceEnv string,
+	source string,
+) string {
+	t.Helper()
+	sourcePath := filepath.Join(t.TempDir(), "coordination_test.go")
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write coordination source fixture: %v", err)
+	}
+	t.Setenv(sourceEnv, sourcePath)
+	return runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
 }
 
 func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wantFailure bool) string {

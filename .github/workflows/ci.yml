@@ -173,6 +173,64 @@ jobs:
           go test -race -count=1 -short -json ./tests/integration/... | tee "$json_file"
           status=${PIPESTATUS[0]}
 
+          if [ "$status" -eq 0 ]; then
+          python3 - "$json_file" "${{ matrix.codec }}" <<'PY'
+          import json
+          import re
+          import sys
+
+          json_file, codec = sys.argv[1:]
+          package = "github.com/franchoy/coldkeep/tests/integration"
+          expected = [
+              r"^TestRoundTripStoreRestore$",
+          ]
+          if codec == "plain":
+              expected.extend([
+                  r"^TestRemoveWithSharedChunksRefCount$",
+                  r"^TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState$",
+              ])
+
+          events = []
+          malformed = []
+          try:
+              with open(json_file, encoding="utf-8") as handle:
+                  for line_number, raw_line in enumerate(handle, start=1):
+                      try:
+                          events.append(json.loads(raw_line))
+                      except json.JSONDecodeError as exc:
+                          malformed.append(f"line {line_number}: {exc}")
+          except OSError as exc:
+              print(f"required execution-proof failure: cannot read {json_file}: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          failures = []
+          if not events:
+              failures.append("JSON evidence file contained no events")
+          if malformed:
+              failures.append("malformed JSON evidence: " + "; ".join(malformed[:3]))
+
+          package_events = [event for event in events if event.get("Package") == package]
+          for pattern in expected:
+              matching = [
+                  event for event in package_events
+                  if re.search(pattern, event.get("Test", ""))
+              ]
+              skipped = [event.get("Test", "") for event in matching if event.get("Action") == "skip"]
+              passed = [event.get("Test", "") for event in matching if event.get("Action") == "pass"]
+              if skipped:
+                  failures.append(f"required test skipped: selector={pattern} tests={skipped}")
+              if not passed:
+                  failures.append(f"required pass missing: package={package} selector={pattern}")
+
+          if failures:
+              print("required execution-proof failure:", file=sys.stderr)
+              for failure in failures:
+                  print(f"- {failure}", file=sys.stderr)
+              sys.exit(1)
+          PY
+            status=$?
+          fi
+
           if [ "$status" -ne 0 ]; then
             echo "correctness-matrix failed for codec=${{ matrix.codec }}"
             first_test_fail=$(grep '"Action":"fail"' "$json_file" | grep '"Test":' | head -n 1 || true)
@@ -259,6 +317,7 @@ jobs:
                   r"^TestBackendForUpdateLockReleaseAcrossBackends/postgres$",
                   r"^TestBackendNowaitAndSkipLockedAcrossBackends/postgres$",
                   r"^TestBackendBlockedLockCancellationAcrossBackends/postgres$",
+                  r"^TestMutationRowsAffectedContractAcrossBackends/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/engine": [
                   r"^TestRemoveByIDPostgresPreservesSharedChunks$",
@@ -594,8 +653,65 @@ jobs:
           echo "diag_dir=$diag_dir" >> "$GITHUB_OUTPUT"
           echo "log_file=$log_file" >> "$GITHUB_OUTPUT"
 
-          go test -race -count=1 ./tests/adversarial/... 2>&1 | tee "$log_file"
+          go test -race -count=1 -json ./tests/adversarial/... 2>&1 | tee "$log_file"
           status=${PIPESTATUS[0]}
+
+          if [ "$status" -eq 0 ]; then
+          python3 - "$log_file" <<'PY'
+          import json
+          import re
+          import sys
+
+          log_file = sys.argv[1]
+          package = "github.com/franchoy/coldkeep/tests/adversarial"
+          expected = [
+              r"^TestAdversarialG6IndependentProcessRepositoryContention/plain$",
+              r"^TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm$",
+              r"^TestAdversarialG6KilledLeaseHolderReleasesRepository$",
+              r"^TestAdversarialG6LiveGCExcludesIndependentStoreProcess$",
+          ]
+
+          events = []
+          malformed = []
+          try:
+              with open(log_file, encoding="utf-8") as handle:
+                  for line_number, raw_line in enumerate(handle, start=1):
+                      try:
+                          events.append(json.loads(raw_line))
+                      except json.JSONDecodeError as exc:
+                          malformed.append(f"line {line_number}: {exc}")
+          except OSError as exc:
+              print(f"required execution-proof failure: cannot read {log_file}: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          failures = []
+          if not events:
+              failures.append("JSON evidence file contained no events")
+          if malformed:
+              failures.append("malformed JSON evidence: " + "; ".join(malformed[:3]))
+
+          package_events = [event for event in events if event.get("Package") == package]
+          for pattern in expected:
+              matching = [
+                  event for event in package_events
+                  if re.search(pattern, event.get("Test", ""))
+              ]
+              skipped = [event.get("Test", "") for event in matching if event.get("Action") == "skip"]
+              passed = [event.get("Test", "") for event in matching if event.get("Action") == "pass"]
+              if skipped:
+                  failures.append(f"required test skipped: selector={pattern} tests={skipped}")
+              if not passed:
+                  failures.append(f"required pass missing: package={package} selector={pattern}")
+
+          if failures:
+              print("required execution-proof failure:", file=sys.stderr)
+              for failure in failures:
+                  print(f"- {failure}", file=sys.stderr)
+              sys.exit(1)
+          PY
+            status=$?
+          fi
+
           exit "$status"
 
       - name: Collect G6 failure diagnostics
