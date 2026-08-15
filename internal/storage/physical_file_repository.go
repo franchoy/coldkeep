@@ -132,42 +132,47 @@ func updatePhysicalFile(ctx context.Context, ex execer, path string, logicalFile
 	result, err := ex.ExecContext(
 		ctx,
 		`UPDATE physical_file
-		 SET logical_file_id = $2,
-		     mode = $3,
-		     mtime = $4,
-		     uid = $5,
-		     gid = $6,
-		     is_metadata_complete = $7
-		 WHERE path = $1`,
-		path,
+		 SET logical_file_id = $1,
+		     mode = $2,
+		     mtime = $3,
+		     uid = $4,
+		     gid = $5,
+		     is_metadata_complete = $6
+		 WHERE path = $7`,
 		logicalFileID,
 		meta.Mode,
 		meta.MTime,
 		meta.UID,
 		meta.GID,
 		meta.IsMetadataComplete,
+		path,
 	)
 	if err != nil {
 		return err
 	}
-	_, _ = result.RowsAffected()
-	return nil
+	return db.RequireExactlyOneRow(result, "update physical file metadata")
 }
 
 func incrementLogicalFileRefCount(ctx context.Context, ex execer, logicalFileID int64) error {
-	_, err := ex.ExecContext(ctx, `UPDATE logical_file SET ref_count = ref_count + 1 WHERE id = $1`, logicalFileID)
-	return err
+	result, err := ex.ExecContext(ctx, `UPDATE logical_file SET ref_count = ref_count + 1 WHERE id = $1`, logicalFileID)
+	if err != nil {
+		return err
+	}
+	return db.RequireExactlyOneRow(result, "increment logical file refcount")
 }
 
 func decrementLogicalFileRefCount(ctx context.Context, ex execer, logicalFileID int64) error {
-	_, err := ex.ExecContext(
+	result, err := ex.ExecContext(
 		ctx,
 		`UPDATE logical_file
 		 SET ref_count = ref_count - 1
 		 WHERE id = $1 AND ref_count > 0`,
 		logicalFileID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return db.RequireExactlyOneRow(result, "decrement logical file refcount")
 }
 
 func ensurePhysicalFileForPathDefaultPolicyWithTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, logicalFileID int64, meta physicalFileMetadata) (bool, error) {
@@ -278,7 +283,11 @@ func replacePhysicalFileLogicalTargetTx(ctx context.Context, dbconn *sql.DB, tx 
 
 	// Keep the delete+insert replacement strategy here because historical SQLite
 	// behavior in this path showed unreliable persistence for in-place logical target updates.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, path); err != nil {
+	result, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, path)
+	if err != nil {
+		return fmt.Errorf("delete physical_file row for replace path %q: %w", path, err)
+	}
+	if err := db.RequireExactlyOneRow(result, "delete physical file replacement target"); err != nil {
 		return fmt.Errorf("delete physical_file row for replace path %q: %w", path, err)
 	}
 	inserted, err := insertPhysicalFileIfAbsent(ctx, tx, path, newLogicalFileID, meta)

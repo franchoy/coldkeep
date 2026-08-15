@@ -424,12 +424,20 @@ func commitPreparedChunksWithContext(
 					return err
 				}
 
-				if _, err := tx.ExecContext(
+				result, err := tx.ExecContext(
 					ctx,
 					`UPDATE chunk SET status = $1 WHERE id = $2`,
 					filestate.ChunkCompleted,
 					pending.chunkID,
-				); err != nil {
+				)
+				if err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+				if err := db.RequireExactlyOneRow(result, "complete packed chunk"); err != nil {
 					_ = tx.Rollback()
 					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return errors.Join(err, rbErr)
@@ -682,7 +690,12 @@ func commitPreparedChunksWithContext(
 					return StoreFileResult{}, err
 				}
 
-				if _, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err != nil {
+				result, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID)
+				if err != nil {
+					_ = tx.Rollback()
+					return StoreFileResult{}, err
+				}
+				if err := db.RequireExactlyOneRow(result, "complete reclaimed chunk"); err != nil {
 					_ = tx.Rollback()
 					return StoreFileResult{}, err
 				}
@@ -911,7 +924,11 @@ func markContainerSealingInTx(tx *sql.Tx, containerID int64) error {
 	if tx == nil || containerID <= 0 {
 		return nil
 	}
-	if _, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, containerID); err != nil {
+	result, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, containerID)
+	if err != nil {
+		return fmt.Errorf("mark container %d sealing in tx: %w", containerID, err)
+	}
+	if err := db.RequireExactlyOneRow(result, "mark container sealing"); err != nil {
 		return fmt.Errorf("mark container %d sealing in tx: %w", containerID, err)
 	}
 	return nil
@@ -2662,7 +2679,11 @@ func linkFileChunkWithContext(ctx context.Context, tx *sql.Tx, fileID int64, chu
 	}
 
 	if rowsAffected > 0 && incrementRefCount {
-		if _, err := tx.ExecContext(ctx, `UPDATE chunk SET live_ref_count = live_ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+		result, err := tx.ExecContext(ctx, `UPDATE chunk SET live_ref_count = live_ref_count + 1 WHERE id = $1`, chunkID)
+		if err != nil {
+			return err
+		}
+		if err := db.RequireExactlyOneRow(result, "increment linked chunk live refcount"); err != nil {
 			return err
 		}
 	}
@@ -2711,12 +2732,16 @@ func finalizeLogicalFileStorageWithContext(ctx context.Context, dbconn *sql.DB, 
 	}
 
 	// All verification passed; mark file complete in the same transaction.
-	if _, err := tx.ExecContext(
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE logical_file SET status = $1 WHERE id = $2`,
 		filestate.LogicalFileCompleted,
 		fileID,
-	); err != nil {
+	)
+	if err != nil {
+		return fmt.Errorf("update logical_file to COMPLETED: %w", err)
+	}
+	if err := db.RequireExactlyOneRow(result, "finalize logical file storage"); err != nil {
 		return fmt.Errorf("update logical_file to COMPLETED: %w", err)
 	}
 

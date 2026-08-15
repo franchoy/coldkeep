@@ -576,12 +576,15 @@ func GetOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 }
 
 func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
-	_, err := tx.Exec(
+	result, err := tx.Exec(
 		`UPDATE container SET current_size = $1 WHERE id = $2`,
 		newSize,
 		containerID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return db.RequireExactlyOneRow(result, "update container size")
 }
 
 func SealContainer(tx db.DBTX, containerID int64, filename string) error {
@@ -625,7 +628,7 @@ func sealContainerInDirWithFS(tx db.DBTX, containerID int64, filename string, co
 	}
 
 	// Update DB: mark sealed and clear the sealing-in-progress flag atomically.
-	_, err = tx.Exec(`
+	result, err := tx.Exec(`
 		UPDATE container
 		SET sealed = TRUE,
 			sealing = FALSE,
@@ -634,6 +637,9 @@ func sealContainerInDirWithFS(tx db.DBTX, containerID int64, filename string, co
 	`, sumHex, containerID)
 
 	if err != nil {
+		return fmt.Errorf("update/seal container failed: %w", err)
+	}
+	if err := db.RequireExactlyOneRow(result, "seal container"); err != nil {
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 

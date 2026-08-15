@@ -143,7 +143,11 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		previousSize = w.activeSize
 
 		// Mark sealing inside the transaction that already owns the container row.
-		if _, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, previousID); err != nil {
+		result, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, previousID)
+		if err != nil {
+			return LocalPlacement{}, fmt.Errorf("mark rotation container %d sealing: %w", previousID, err)
+		}
+		if err := db.RequireExactlyOneRow(result, "mark rotation container sealing"); err != nil {
 			return LocalPlacement{}, fmt.Errorf("mark rotation container %d sealing: %w", previousID, err)
 		}
 

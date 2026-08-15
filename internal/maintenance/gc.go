@@ -536,7 +536,7 @@ func commitGCContainerDeletion(ctx context.Context, tx *sql.Tx, containerID int6
 		_ = tx.Rollback()
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, containerID)
+	result, err := tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, containerID)
 	if err != nil {
 		_ = tx.Rollback()
 		if isContainerFKViolation(err) {
@@ -546,6 +546,10 @@ func commitGCContainerDeletion(ctx context.Context, tx *sql.Tx, containerID int6
 				err,
 			)
 		}
+		return err
+	}
+	if err := db.RequireExactlyOneRow(result, "delete GC container"); err != nil {
+		_ = tx.Rollback()
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -858,10 +862,14 @@ func deletePackedBlockMetadata(ctx context.Context, execer gcSweepExecer, blockI
 		return err
 	}
 
-	if _, err := execer.ExecContext(ctx, `
+	result, err := execer.ExecContext(ctx, `
 		DELETE FROM storage_blocks
 		WHERE id = $1
-	`, blockID); err != nil {
+	`, blockID)
+	if err != nil {
+		return err
+	}
+	if err := db.RequireExactlyOneRow(result, "delete GC packed storage block"); err != nil {
 		return err
 	}
 
@@ -992,7 +1000,12 @@ func sweepDeadActiveContainer(ctx context.Context, dbconn *sql.DB, containersDir
 	}
 
 	// Delete the container row.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, containerID); err != nil {
+	result, err := tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, containerID)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := db.RequireExactlyOneRow(result, "delete fully dead active GC container"); err != nil {
 		_ = tx.Rollback()
 		return err
 	}

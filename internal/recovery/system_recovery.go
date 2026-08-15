@@ -627,7 +627,11 @@ func resolveOrphanConflictWithFS(ctx context.Context, dbconn *sql.DB, backend db
 				resyncArgs = []any{fileSize, fileSize, name}
 			}
 		}
-		if _, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...); err != nil {
+		result, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...)
+		if err != nil {
+			return false, false, fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
+		}
+		if err := db.RequireExactlyOneRow(result, "resync quarantined orphan container"); err != nil {
 			return false, false, fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
 		}
 		logRecoveryEvent(

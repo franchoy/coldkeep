@@ -74,7 +74,7 @@ func RepairLogicalRefCountsResultWithDB(dbconn *sql.DB) (result RepairLogicalRef
 	}
 
 	if result.UpdatedLogicalFiles > 0 {
-		if _, err := tx.ExecContext(ctx, `
+		mutationResult, err := tx.ExecContext(ctx, `
 			UPDATE logical_file
 			SET ref_count = (
 				SELECT COUNT(*)
@@ -86,7 +86,11 @@ func RepairLogicalRefCountsResultWithDB(dbconn *sql.DB) (result RepairLogicalRef
 				FROM physical_file pf
 				WHERE pf.logical_file_id = logical_file.id
 			)
-		`); err != nil {
+		`)
+		if err != nil {
+			return RepairLogicalRefCountsResult{}, fmt.Errorf("update logical_file.ref_count from physical_file rows: %w", err)
+		}
+		if err := db.RequireRowsAffected(mutationResult, "repair logical file refcounts", result.UpdatedLogicalFiles); err != nil {
 			return RepairLogicalRefCountsResult{}, fmt.Errorf("update logical_file.ref_count from physical_file rows: %w", err)
 		}
 	}
