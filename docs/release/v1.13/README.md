@@ -77,7 +77,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phases 0–19 are complete. Phase 12 implements the
+  release ready for pre-release validation. Phases 0–20 are complete. Phase 12 implements the
   repository-wide exclusive fail-fast Lease and proves native runtime plus the
   production Coordinator lifecycle on Linux, macOS, and Windows. Phase 13
   preserves strengthened G6 integrity coverage and proves deterministic Linux
@@ -118,8 +118,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   boundaries, deferred items, and evidence links. Its documentation-only
   evidence is recorded in
   [v1.13.11-phase19-validation-evidence-reconciliation.md](v1.13.11-phase19-validation-evidence-reconciliation.md).
-  Phase 20 is Next: Final Exact-Head Local Release Gate and PR Authorization.
-  The release gate remains not started. BKC-016 remains
+  Phase 20 freezes the prospective exact-head gate contract and pre-release
+  state. The immutable commit containing that record must pass candidate-head
+  CI, Required Gate, CodeQL, and the complete clean local Profile A gate before
+  one pull request to `main` is authorized. BKC-016 remains
   `Deferred — documented`. Phase 12 closure remains recorded in
   [v1.13.11-phase12-closure.md](v1.13.11-phase12-closure.md). The diagnostic
   benchmark-gate bootstrap remains recorded in
@@ -142,8 +144,9 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   deterministic snapshot ordering. Selected schema/bootstrap/migration
   contracts and the G6 fail-closed remediation also have exact-head CI
   evidence, while broad backend parity remains intentionally unclaimed.
-  v1.13.11 is not ready for
-  release; the latest released version remains v1.13.10. Its canonical trackers are
+  v1.13.11 is ready for exact-head pre-release validation; the latest released
+  version remains v1.13.10. Merge, tag, and publication remain later
+  operations. Its canonical trackers are
   `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
   `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
   `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.

@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.11%20active%20release%20train-blue)
+![Status](https://img.shields.io/badge/status-v1.13.11%20ready%20for%20release-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -35,9 +35,12 @@ a valid released baseline, but its earlier final-v1.x conclusion was superseded
 after release by a roadmap-to-code audit that identified remaining
 must-before-v2 work.
 
-v1.13.11 is the active release train for safety and backend compatibility gate
-closure. v1.x is not finally closed under the expanded roadmap; v1.13.12 and
-v1.13.13 remain required follow-on releases. SQLite-first remains a future
+v1.13.11 has completed Phases 0–20 and is ready as a pre-release candidate for safety
+and backend compatibility gate closure. One pull request is authorized only
+after the immutable commit containing the final gate contract passes
+candidate-head CI, Required Gate, CodeQL, and the complete clean local Profile
+A gate. Merge, tag, and publication remain later operations. v1.13.12 and
+v1.13.13 remain required follow-on releases; SQLite-first remains a future
 local-product direction, PostgreSQL compatibility remains required, and v2.0
 implementation has not started.
 

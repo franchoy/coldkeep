@@ -20,7 +20,15 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.11 - Unreleased — Safety and Backend Compatibility Gate Closure
+## v1.13.11 - 2026-08-18 — Safety and Backend Compatibility Gate Closure
+
+- Completed the Phase 20 pre-release state transition and froze the exact-head
+  candidate contract. The commit containing that contract must pass
+  candidate-head CI, Required Gate, CodeQL, and the complete clean local
+  Profile A gate before one pull request to `main` is authorized.
+- Kept benchmark integrity hard-required, timing advisory, and BKC-016
+  `Deferred — documented`. Merge, tag, publication, and release-branch
+  deletion remain separate later operations.
 
 ### Phase 11 benchmark gate diagnostic bootstrap
 
