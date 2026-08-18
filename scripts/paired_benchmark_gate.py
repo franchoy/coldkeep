@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run and validate Coldkeep's same-job reference/candidate benchmark gate.
+"""
+Run and validate Coldkeep's same-job reference/candidate benchmark gate.
 
 Raw benchmark and diagnostic-final-state payloads remain schema version 2.  This
 module adds the independent ``benchmark_paired_comparison`` schema version 1.
@@ -75,15 +76,15 @@ PERFORMANCE_CASES = (
     "verify-system-deep",
 )
 WARMUP_ORDER = ("candidate", "reference")
-FIVE_PAIR_ORDER = (
+FIVE_PAIR_ORDER: tuple[tuple[str, str], ...] = (
     ("reference", "candidate"),
     ("candidate", "reference"),
     ("candidate", "reference"),
     ("reference", "candidate"),
     ("reference", "candidate"),
 )
-TEN_PAIR_ORDER = FIVE_PAIR_ORDER + tuple(
-    tuple(reversed(pair_order)) for pair_order in FIVE_PAIR_ORDER
+TEN_PAIR_ORDER: tuple[tuple[str, str], ...] = FIVE_PAIR_ORDER + tuple(
+    (pair_order[1], pair_order[0]) for pair_order in FIVE_PAIR_ORDER
 )
 PROFILE_MATRIX = {
     "none-w1": ("none", 1, "ci-paired-w1-v2"),
@@ -191,6 +192,7 @@ class PairedGateError(raw_gate.GateError):
     """A fail-closed paired-gate error with a stable classification."""
 
     def __init__(self, classification: str, message: str):
+        """Initialize an error with a validated stable classification."""
         if classification not in CLASSIFICATIONS - SUCCESS_CLASSIFICATIONS:
             raise ValueError(f"invalid paired classification {classification!r}")
         super().__init__(message)
@@ -222,7 +224,6 @@ def authority_contract(mode: str) -> dict[str, Any]:
             "production_authority": True,
         }
     fail("CONTRACT_INVALID", f"unknown decision mode {mode!r}")
-    raise AssertionError("unreachable")
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -686,16 +687,17 @@ def validate_pair_inventory(records: list[dict[str, Any]], pair_count: int) -> N
         for position, side in enumerate(pair_order, start=1):
             record = records[index]
             index += 1
-            key = (record.get("pair_ordinal"), record.get("side"))
-            if key in seen:
+            pair_ordinal = record.get("pair_ordinal")
+            record_side = record.get("side")
+            if (pair_ordinal, record_side) in seen:
                 fail("PAIR_INVENTORY_INVALID", "duplicate paired invocation")
-            seen.add(key)
             if (
-                record.get("pair_ordinal") != ordinal
+                pair_ordinal != ordinal
                 or record.get("position") != position
-                or record.get("side") != side
+                or record_side != side
             ):
                 fail("PAIR_INVENTORY_INVALID", f"altered invocation order at pair {ordinal}")
+            seen.add((ordinal, side))
 
 
 def validate_warmups(
@@ -1262,8 +1264,8 @@ def sample_command(args: argparse.Namespace) -> int:
         threshold_path = _governed_repository_file(
             repository, GOVERNED_THRESHOLD_RELATIVE, "governed threshold policy"
         )
-        manifest = load_json_strict(manifest_path)
-        reference_sha = manifest.get("reference_sha")
+        manifest = validate_reference_manifest(load_json_strict(manifest_path))
+        reference_sha = require_sha(manifest.get("reference_sha"), "reference SHA")
         verify_reference_governance(
             manifest,
             reference_sha=reference_sha,

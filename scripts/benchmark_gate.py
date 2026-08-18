@@ -709,6 +709,13 @@ def fixture_fields(dataset: str) -> dict[str, Any]:
     return {key: value for key, value in configured.items() if key != "workers"}
 
 
+def _require_fixture_dataset(value: Any) -> str:
+    fixture_fields(value)
+    if not isinstance(value, str):
+        raise GateError(f"unsupported benchmark fixture {value!r}")
+    return value
+
+
 def validate_fixture(fixture: Any, *, dataset: str = FIXTURE_ID) -> list[dict[str, Any]]:
     expected_fields = fixture_fields(dataset)
     fixture = require_exact_fields(
@@ -864,6 +871,22 @@ def provenance(args: argparse.Namespace, binary_hash: str) -> dict[str, Any]:
     }
 
 
+def _benchmark_sample_command(args: argparse.Namespace) -> list[str]:
+    return [
+        str(args.binary),
+        "benchmark",
+        "run",
+        "--dataset",
+        args.dataset,
+        "--workers",
+        str(args.workers),
+        "--repeat",
+        "1",
+        "--output",
+        "json",
+    ]
+
+
 def capture_sample(
     args: argparse.Namespace,
     output_path: pathlib.Path,
@@ -875,19 +898,7 @@ def capture_sample(
     started = time.monotonic()
     try:
         completed = subprocess.run(
-            [
-                str(args.binary),
-                "benchmark",
-                "run",
-                "--dataset",
-                args.dataset,
-                "--workers",
-                str(args.workers),
-                "--repeat",
-                "1",
-                "--output",
-                "json",
-            ],
+            _benchmark_sample_command(args),
             check=False,
             text=True,
             capture_output=True,
@@ -1350,8 +1361,7 @@ def validate_aggregate(report: dict[str, Any], *, require_gate_count: bool) -> N
     if report.get("sample_order") != list(range(1, sample_count + 1)):
         raise GateError("aggregate sample order mismatch")
     profile = require_exact_fields(report.get("profile"), PROFILE_FIELDS, "aggregate profile")
-    profile_value = report.get("profile")
-    profile_dataset = profile_value.get("dataset") if isinstance(profile_value, dict) else ""
+    profile_dataset = _require_fixture_dataset(profile.get("dataset"))
     fixture_cases = validate_fixture(report.get("fixture"), dataset=profile_dataset)
     validate_provenance(report.get("provenance"))
     if (
@@ -1965,11 +1975,11 @@ def build_parser() -> argparse.ArgumentParser:
     manifest.add_argument("--output", type=pathlib.Path, required=True)
     manifest.set_defaults(handler=manifest_command)
 
-    validate_manifest = subparsers.add_parser(
+    validate_manifest_parser = subparsers.add_parser(
         "validate-manifest", help="validate manifest hashes and aggregates"
     )
-    validate_manifest.add_argument("--manifest", type=pathlib.Path, required=True)
-    validate_manifest.set_defaults(handler=validate_manifest_command)
+    validate_manifest_parser.add_argument("--manifest", type=pathlib.Path, required=True)
+    validate_manifest_parser.set_defaults(handler=validate_manifest_command)
     return parser
 
 
