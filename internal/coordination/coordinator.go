@@ -69,12 +69,9 @@ func (coordinator *repositoryCoordinator) Acquire(
 		return nil, err
 	}
 
-	prepared, err := coordinator.dependencies.prepare(identity.CanonicalPath)
+	prepared, err := coordinator.prepareAcquisition(identity)
 	if err != nil {
 		return nil, err
-	}
-	if prepared.Identity != identity {
-		return nil, fmt.Errorf("%w: prepared repository identity does not match acquisition identity", ErrRepositoryIdentityInvalid)
 	}
 
 	reservation, err := coordinator.dependencies.reserve(prepared.Identity)
@@ -89,12 +86,7 @@ func (coordinator *repositoryCoordinator) Acquire(
 	}
 
 	if err := coordinator.dependencies.publishOwner(prepared, request.Owner); err != nil {
-		nativeReleaseErr := nativeLock.release()
-		reservation.release()
-		if nativeReleaseErr != nil {
-			return nil, errors.Join(err, nativeReleaseErr)
-		}
-		return nil, err
+		return nil, releaseFailedOwnerPublication(err, nativeLock, reservation)
 	}
 
 	return &repositoryLease{
@@ -103,6 +95,26 @@ func (coordinator *repositoryCoordinator) Acquire(
 		nativeLock:  nativeLock,
 		removeOwner: coordinator.dependencies.removeOwner,
 	}, nil
+}
+
+func (coordinator *repositoryCoordinator) prepareAcquisition(identity Identity) (PreparedControlNamespace, error) {
+	prepared, err := coordinator.dependencies.prepare(identity.CanonicalPath)
+	if err != nil {
+		return PreparedControlNamespace{}, err
+	}
+	if prepared.Identity != identity {
+		return PreparedControlNamespace{}, fmt.Errorf("%w: prepared repository identity does not match acquisition identity", ErrRepositoryIdentityInvalid)
+	}
+	return prepared, nil
+}
+
+func releaseFailedOwnerPublication(ownerErr error, nativeLock nativeLockResource, reservation processReservationResource) error {
+	nativeReleaseErr := nativeLock.release()
+	reservation.release()
+	if nativeReleaseErr != nil {
+		return errors.Join(ownerErr, nativeReleaseErr)
+	}
+	return ownerErr
 }
 
 type repositoryLease struct {

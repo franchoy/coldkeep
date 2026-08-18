@@ -14,45 +14,48 @@ type repositoryCoordinationPolicy struct {
 	Mode      coordination.Mode
 }
 
+var repositoryOperations = map[string]coordination.Operation{
+	"store":        coordination.OperationStore,
+	"store-folder": coordination.OperationStoreFolder,
+	"restore":      coordination.OperationRestore,
+	"remove":       coordination.OperationRemove,
+	"repair":       coordination.OperationRepair,
+	"gc":           coordination.OperationGarbageCollect,
+	"stats":        coordination.OperationStats,
+	"inspect":      coordination.OperationInspect,
+	"list":         coordination.OperationList,
+	"search":       coordination.OperationSearch,
+	"verify":       coordination.OperationVerify,
+	"doctor":       coordination.OperationDoctor,
+}
+
+var snapshotOperations = map[string]coordination.Operation{
+	"create":  coordination.OperationSnapshotCreate,
+	"delete":  coordination.OperationSnapshotDelete,
+	"restore": coordination.OperationSnapshotRestore,
+	"list":    coordination.OperationSnapshotList,
+	"show":    coordination.OperationSnapshotShow,
+	"stats":   coordination.OperationSnapshotStats,
+	"diff":    coordination.OperationSnapshotDiff,
+}
+
 func repositoryCoordinationPolicyFor(parsed parsedCommandLine) repositoryCoordinationPolicy {
 	if parsed.hasFlag("help", "h") {
 		return repositoryCoordinationPolicy{}
 	}
 
+	if operation, ok := repositoryOperations[parsed.method]; ok {
+		return exclusiveRepositoryPolicy(operation)
+	}
 	switch parsed.method {
-	case "store":
-		return exclusiveRepositoryPolicy(coordination.OperationStore)
-	case "store-folder":
-		return exclusiveRepositoryPolicy(coordination.OperationStoreFolder)
-	case "restore":
-		return exclusiveRepositoryPolicy(coordination.OperationRestore)
-	case "remove":
-		return exclusiveRepositoryPolicy(coordination.OperationRemove)
-	case "repair":
-		return exclusiveRepositoryPolicy(coordination.OperationRepair)
-	case "gc":
-		return exclusiveRepositoryPolicy(coordination.OperationGarbageCollect)
-	case "stats":
-		return exclusiveRepositoryPolicy(coordination.OperationStats)
-	case "inspect":
-		return exclusiveRepositoryPolicy(coordination.OperationInspect)
-	case "list":
-		return exclusiveRepositoryPolicy(coordination.OperationList)
-	case "search":
-		return exclusiveRepositoryPolicy(coordination.OperationSearch)
-	case "verify":
-		return exclusiveRepositoryPolicy(coordination.OperationVerify)
-	case "doctor":
-		return exclusiveRepositoryPolicy(coordination.OperationDoctor)
 	case "config":
 		return configRepositoryPolicy(parsed.positionals)
 	case "snapshot":
 		return snapshotRepositoryPolicy(parsed.positionals)
-	default:
-		// init, simulate, benchmark, version, help, and invalid commands do not
-		// access the shared repository through this policy.
-		return repositoryCoordinationPolicy{}
 	}
+	// init, simulate, benchmark, version, help, and invalid commands do not
+	// access the shared repository through this policy.
+	return repositoryCoordinationPolicy{}
 }
 
 func exclusiveRepositoryPolicy(operation coordination.Operation) repositoryCoordinationPolicy {
@@ -81,22 +84,9 @@ func snapshotRepositoryPolicy(positionals []string) repositoryCoordinationPolicy
 	if len(positionals) == 0 {
 		return repositoryCoordinationPolicy{}
 	}
-	switch strings.ToLower(strings.TrimSpace(positionals[0])) {
-	case "create":
-		return exclusiveRepositoryPolicy(coordination.OperationSnapshotCreate)
-	case "delete":
-		return exclusiveRepositoryPolicy(coordination.OperationSnapshotDelete)
-	case "restore":
-		return exclusiveRepositoryPolicy(coordination.OperationSnapshotRestore)
-	case "list":
-		return exclusiveRepositoryPolicy(coordination.OperationSnapshotList)
-	case "show":
-		return exclusiveRepositoryPolicy(coordination.OperationSnapshotShow)
-	case "stats":
-		return exclusiveRepositoryPolicy(coordination.OperationSnapshotStats)
-	case "diff":
-		return exclusiveRepositoryPolicy(coordination.OperationSnapshotDiff)
-	default:
+	operation, ok := snapshotOperations[strings.ToLower(strings.TrimSpace(positionals[0]))]
+	if !ok {
 		return repositoryCoordinationPolicy{}
 	}
+	return exclusiveRepositoryPolicy(operation)
 }

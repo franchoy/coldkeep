@@ -103,12 +103,23 @@ func ValidateOwner(owner Owner) error {
 	if strings.TrimSpace(owner.Version) == "" {
 		return fmt.Errorf("coordination: owner version is required")
 	}
+	if err := validateOwnerIdentity(owner); err != nil {
+		return err
+	}
+	return validateOwnerDisplayFields(owner)
+}
+
+func validateOwnerIdentity(owner Owner) error {
 	if len(owner.IdentityHash) != sha256HexLength || !isLowerHex(owner.IdentityHash) {
 		return fmt.Errorf("coordination: owner identity hash must be lowercase SHA-256")
 	}
 	if owner.Mode != ModeExclusive {
 		return fmt.Errorf("coordination: owner mode must be %q", ModeExclusive)
 	}
+	return nil
+}
+
+func validateOwnerDisplayFields(owner Owner) error {
 	if strings.ContainsAny(owner.Hostname, "\r\n") || strings.ContainsAny(owner.Executable, "\r\n") {
 		return fmt.Errorf("coordination: owner metadata contains a line break")
 	}

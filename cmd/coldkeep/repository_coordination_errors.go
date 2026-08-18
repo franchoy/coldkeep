@@ -88,21 +88,8 @@ func stableCLIError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok && hasStableCLIClassification(err) {
-		causes := joined.Unwrap()
-		if len(causes) > 0 {
-			primary := stableCLIError(causes[0])
-			var classified *cliError
-			if errors.As(primary, &classified) {
-				return &cliError{
-					code:       classified.code,
-					msg:        classified.msg,
-					err:        err,
-					publicCode: classified.publicCode,
-				}
-			}
-			return observabilityWrappedError(exitGeneral, "INTERNAL", strings.TrimSpace(causes[0].Error()), err)
-		}
+	if joinedError, ok := stableJoinedCLIError(err); ok {
+		return joinedError
 	}
 
 	var existing *cliError
@@ -110,21 +97,8 @@ func stableCLIError(err error) error {
 		return err
 	}
 
-	switch {
-	case errors.Is(err, coordination.ErrRepositoryIdentityInvalid):
-		return observabilityWrappedError(exitUsage, "INVALID_ARGUMENT", "repository identity is invalid", err)
-	case errors.Is(err, coordination.ErrRepositoryBusy):
-		return observabilityWrappedError(exitGeneral, publicCodeRepositoryBusy, "repository is busy", err)
-	case errors.Is(err, coordination.ErrRepositoryLockUnsupported):
-		return observabilityWrappedError(exitGeneral, publicCodeRepositoryLockUnsupported, "repository locking is unsupported", err)
-	case errors.Is(err, coordination.ErrNestedRepositoryAcquisition):
-		return observabilityWrappedError(exitGeneral, "INTERNAL", "repository coordination failed", err)
-	case errors.Is(err, context.Canceled):
-		return observabilityWrappedError(exitGeneral, publicCodeCanceled, "operation canceled", err)
-	case errors.Is(err, context.DeadlineExceeded):
-		return observabilityWrappedError(exitGeneral, publicCodeDeadlineExceeded, "operation deadline exceeded", err)
-	case errors.Is(err, fs.ErrPermission):
-		return observabilityWrappedError(exitGeneral, publicCodePermissionDenied, "permission denied", err)
+	if classified, ok := stableSentinelCLIError(err); ok {
+		return classified
 	}
 
 	var coordinationFailure *repositoryCoordinationFailure
@@ -135,19 +109,55 @@ func stableCLIError(err error) error {
 	return err
 }
 
+func stableJoinedCLIError(err error) (error, bool) {
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok || !hasStableCLIClassification(err) {
+		return nil, false
+	}
+	causes := joined.Unwrap()
+	if len(causes) == 0 {
+		return nil, false
+	}
+	primary := stableCLIError(causes[0])
+	var classified *cliError
+	if errors.As(primary, &classified) {
+		return &cliError{code: classified.code, msg: classified.msg, err: err, publicCode: classified.publicCode}, true
+	}
+	return observabilityWrappedError(exitGeneral, "INTERNAL", strings.TrimSpace(causes[0].Error()), err), true
+}
+
+func stableSentinelCLIError(err error) (error, bool) {
+	switch {
+	case errors.Is(err, coordination.ErrRepositoryIdentityInvalid):
+		return observabilityWrappedError(exitUsage, "INVALID_ARGUMENT", "repository identity is invalid", err), true
+	case errors.Is(err, coordination.ErrRepositoryBusy):
+		return observabilityWrappedError(exitGeneral, publicCodeRepositoryBusy, "repository is busy", err), true
+	case errors.Is(err, coordination.ErrRepositoryLockUnsupported):
+		return observabilityWrappedError(exitGeneral, publicCodeRepositoryLockUnsupported, "repository locking is unsupported", err), true
+	case errors.Is(err, coordination.ErrNestedRepositoryAcquisition):
+		return observabilityWrappedError(exitGeneral, "INTERNAL", "repository coordination failed", err), true
+	case errors.Is(err, context.Canceled):
+		return observabilityWrappedError(exitGeneral, publicCodeCanceled, "operation canceled", err), true
+	case errors.Is(err, context.DeadlineExceeded):
+		return observabilityWrappedError(exitGeneral, publicCodeDeadlineExceeded, "operation deadline exceeded", err), true
+	case errors.Is(err, fs.ErrPermission):
+		return observabilityWrappedError(exitGeneral, publicCodePermissionDenied, "permission denied", err), true
+	}
+	return nil, false
+}
+
 func hasStableCLIClassification(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, coordination.ErrRepositoryIdentityInvalid) ||
-		errors.Is(err, coordination.ErrRepositoryBusy) ||
-		errors.Is(err, coordination.ErrRepositoryLockUnsupported) ||
-		errors.Is(err, coordination.ErrNestedRepositoryAcquisition) ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, fs.ErrPermission) {
+	if stableSentinelCLIClassification(err) {
 		return true
 	}
 	var coordinationFailure *repositoryCoordinationFailure
 	return errors.As(err, &coordinationFailure)
+}
+
+func stableSentinelCLIClassification(err error) bool {
+	_, ok := stableSentinelCLIError(err)
+	return ok
 }

@@ -46,21 +46,13 @@ func publishOwnerMetadata(prepared PreparedControlNamespace, owner Owner) (err e
 		}
 	}()
 
-	written, writeErr := temp.Write(data)
-	if writeErr != nil {
-		return fmt.Errorf("coordination: write owner metadata temporary file: %w", writeErr)
-	}
-	if written != len(data) {
-		return fmt.Errorf("coordination: write owner metadata temporary file: %w", io.ErrShortWrite)
-	}
-	if err := temp.Sync(); err != nil {
-		return fmt.Errorf("coordination: sync owner metadata temporary file: %w", err)
-	}
-	if err := temp.Close(); err != nil {
+	closed, err := writeSyncedOwnerMetadataTemp(temp, data)
+	if closed {
 		temp = nil
-		return fmt.Errorf("coordination: close owner metadata temporary file: %w", err)
 	}
-	temp = nil
+	if err != nil {
+		return err
+	}
 
 	if err := replaceOwnerMetadata(tempPath, prepared.OwnerMetadataPath); err != nil {
 		return err
@@ -69,35 +61,60 @@ func publishOwnerMetadata(prepared PreparedControlNamespace, owner Owner) (err e
 	return nil
 }
 
+func writeSyncedOwnerMetadataTemp(temp *os.File, data []byte) (bool, error) {
+	written, err := temp.Write(data)
+	if err != nil {
+		return false, fmt.Errorf("coordination: write owner metadata temporary file: %w", err)
+	}
+	if written != len(data) {
+		return false, fmt.Errorf("coordination: write owner metadata temporary file: %w", io.ErrShortWrite)
+	}
+	if err := temp.Sync(); err != nil {
+		return false, fmt.Errorf("coordination: sync owner metadata temporary file: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return true, fmt.Errorf("coordination: close owner metadata temporary file: %w", err)
+	}
+	return true, nil
+}
+
 // readOwnerMetadata reads non-authoritative diagnostics. Missing, malformed,
 // and unsupported metadata remain ordinary diagnostic errors, never Busy.
 func readOwnerMetadata(prepared PreparedControlNamespace) (Owner, error) {
 	if err := validatePreparedControlNamespace(prepared); err != nil {
 		return Owner{}, err
 	}
-	info, err := os.Lstat(prepared.OwnerMetadataPath)
+	data, err := readBoundedRegularOwnerMetadata(prepared.OwnerMetadataPath)
 	if err != nil {
-		return Owner{}, fmt.Errorf("coordination: inspect owner metadata: %w", err)
+		return Owner{}, err
+	}
+	return DecodeOwner(data)
+}
+
+func readBoundedRegularOwnerMetadata(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("coordination: inspect owner metadata: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return Owner{}, fmt.Errorf("coordination: owner metadata must be a regular file")
+		return nil, fmt.Errorf("coordination: owner metadata must be a regular file")
 	}
-	file, err := os.Open(prepared.OwnerMetadataPath)
+	file, err := os.Open(path)
 	if err != nil {
-		return Owner{}, fmt.Errorf("coordination: open owner metadata: %w", err)
+		return nil, fmt.Errorf("coordination: open owner metadata: %w", err)
 	}
 	data, readErr := io.ReadAll(io.LimitReader(file, int64(maxOwnerMetadataSize)+1))
 	closeErr := file.Close()
 	if readErr != nil {
-		return Owner{}, fmt.Errorf("coordination: read owner metadata: %w", readErr)
+		return nil, fmt.Errorf("coordination: read owner metadata: %w", readErr)
 	}
 	if closeErr != nil {
-		return Owner{}, fmt.Errorf("coordination: close owner metadata: %w", closeErr)
+		return nil, fmt.Errorf("coordination: close owner metadata: %w", closeErr)
 	}
 	if len(data) > maxOwnerMetadataSize {
-		return Owner{}, fmt.Errorf("coordination: owner metadata exceeds maximum size of %d bytes", maxOwnerMetadataSize)
+		return nil, fmt.Errorf("coordination: owner metadata exceeds maximum size of %d bytes", maxOwnerMetadataSize)
 	}
-	return DecodeOwner(data)
+	return data, nil
 }
 
 func inspectOwnerMetadataDestination(path string) (bool, error) {
@@ -144,11 +161,19 @@ func validatePreparedControlNamespace(prepared PreparedControlNamespace) error {
 	if err != nil {
 		return err
 	}
-	if prepared.ControlDirectory != controlDirectory ||
-		prepared.LockArtifactPath != filepath.Join(controlDirectory, LockArtifactName) ||
-		prepared.OwnerMetadataPath != filepath.Join(controlDirectory, OwnerMetadataName) {
+	if !preparedNamespacePathsMatch(prepared, controlDirectory) {
 		return fmt.Errorf("%w: prepared control namespace paths do not match identity", ErrRepositoryIdentityInvalid)
 	}
+	return validateRealControlDirectory(controlDirectory)
+}
+
+func preparedNamespacePathsMatch(prepared PreparedControlNamespace, controlDirectory string) bool {
+	return prepared.ControlDirectory == controlDirectory &&
+		prepared.LockArtifactPath == filepath.Join(controlDirectory, LockArtifactName) &&
+		prepared.OwnerMetadataPath == filepath.Join(controlDirectory, OwnerMetadataName)
+}
+
+func validateRealControlDirectory(controlDirectory string) error {
 	info, err := os.Lstat(controlDirectory)
 	if err != nil {
 		return fmt.Errorf("%w: inspect prepared control directory: %w", ErrRepositoryIdentityInvalid, err)

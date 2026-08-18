@@ -1550,21 +1550,9 @@ func lockAndValidateChunkRebuildCandidatesWithContext(
 	if err != nil {
 		return nil, fmt.Errorf("query and lock storage_blocks for chunk %d rebuild cleanup: %w", chunkID, err)
 	}
-	var candidateBlockIDs []int64
-	for rows.Next() {
-		var blockID int64
-		if err := rows.Scan(&blockID); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("scan storage_block id for chunk %d rebuild cleanup: %w", chunkID, err)
-		}
-		candidateBlockIDs = append(candidateBlockIDs, blockID)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, fmt.Errorf("iterate storage_block ids for chunk %d rebuild cleanup: %w", chunkID, err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close storage_block ids rows for chunk %d rebuild cleanup: %w", chunkID, err)
+	candidateBlockIDs, err := scanLockedBlockIDs(rows, chunkID)
+	if err != nil {
+		return nil, err
 	}
 
 	memberQuery := db.QueryWithOptionalForUpdate(dbconn, `
@@ -1578,21 +1566,9 @@ func lockAndValidateChunkRebuildCandidatesWithContext(
 		if err != nil {
 			return nil, fmt.Errorf("query and lock members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
 		}
-		memberCount := 0
-		for memberRows.Next() {
-			var memberChunkID int64
-			if err := memberRows.Scan(&memberChunkID); err != nil {
-				_ = memberRows.Close()
-				return nil, fmt.Errorf("scan member for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
-			}
-			memberCount++
-		}
-		if err := memberRows.Err(); err != nil {
-			_ = memberRows.Close()
-			return nil, fmt.Errorf("iterate members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
-		}
-		if err := memberRows.Close(); err != nil {
-			return nil, fmt.Errorf("close members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+		memberCount, err := countLockedBlockMembers(memberRows, blockID, chunkID)
+		if err != nil {
+			return nil, err
 		}
 		if memberCount > 1 {
 			return nil, fmt.Errorf(
@@ -1605,6 +1581,46 @@ func lockAndValidateChunkRebuildCandidatesWithContext(
 		}
 	}
 	return candidateBlockIDs, nil
+}
+
+func scanLockedBlockIDs(rows *sql.Rows, chunkID int64) ([]int64, error) {
+	var blockIDs []int64
+	for rows.Next() {
+		var blockID int64
+		if err := rows.Scan(&blockID); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan storage_block id for chunk %d rebuild cleanup: %w", chunkID, err)
+		}
+		blockIDs = append(blockIDs, blockID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate storage_block ids for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close storage_block ids rows for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	return blockIDs, nil
+}
+
+func countLockedBlockMembers(rows *sql.Rows, blockID, chunkID int64) (int, error) {
+	count := 0
+	for rows.Next() {
+		var memberChunkID int64
+		if err := rows.Scan(&memberChunkID); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("scan member for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, fmt.Errorf("iterate members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+	}
+	return count, nil
 }
 
 func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
