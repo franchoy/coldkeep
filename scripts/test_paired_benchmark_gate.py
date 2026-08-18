@@ -143,25 +143,27 @@ def raw_row(case_name: str, *, workers: int, duration_ms: float) -> dict:
 def recompute_top(report: dict) -> None:
     rows = report["data"]["rows"]
     report["data"]["execution_stats"] = {
-        "total_files": sum(row["execution_stats"]["total_files"] for row in rows),
-        "total_bytes": sum(row["execution_stats"]["total_bytes"] for row in rows),
+        "total_files": sum_row_execution_stat(rows, "total_files"),
+        "total_bytes": sum_row_execution_stat(rows, "total_bytes"),
         "workers_used": report["data"]["execution"]["store_folder_workers"],
-        "container_append_count": sum(
-            row["execution_stats"]["container_append_count"] for row in rows
-        ),
-        "fsync_count": sum(row["execution_stats"]["fsync_count"] for row in rows),
-        "container_open_count": sum(
-            row["execution_stats"]["container_open_count"] for row in rows
-        ),
-        "container_close_count": sum(
-            row["execution_stats"]["container_close_count"] for row in rows
-        ),
+        "container_append_count": sum_row_execution_stat(rows, "container_append_count"),
+        "fsync_count": sum_row_execution_stat(rows, "fsync_count"),
+        "container_open_count": sum_row_execution_stat(rows, "container_open_count"),
+        "container_close_count": sum_row_execution_stat(rows, "container_close_count"),
         "snapshot_metadata_write_count": 0,
         "io": {
-            field: sum(row["execution_stats"]["io"][field] for row in rows)
+            field: sum_row_io_stat(rows, field)
             for field in gate.raw_gate.IO_COUNTER_FIELDS
         },
     }
+
+
+def sum_row_execution_stat(rows: list[dict], field: str) -> int:
+    return sum(row["execution_stats"][field] for row in rows)
+
+
+def sum_row_io_stat(rows: list[dict], field: str) -> int:
+    return sum(row["execution_stats"]["io"][field] for row in rows)
 
 
 def raw_report(
@@ -276,35 +278,8 @@ def report_summary(
     pair_count = 5 if mode == "production" else 10
     if classification is None:
         classification = "PASS" if mode == "production" else "DIAGNOSTIC_QUALIFIED"
-    cases = []
-    for case_name in gate.ORDERED_CASES:
-        if case_name not in gate.PERFORMANCE_CASES:
-            cases.append({"case": case_name, "performance_gated": False})
-        else:
-            cases.append(
-                {
-                    "case": case_name,
-                    "performance_gated": True,
-                    "paired_ratios": [1.0] * pair_count,
-                    "median_ratio": 1.0,
-                    "regression_pct": 0.0,
-                    "paired_mad_ratio_pct": 0.0,
-                    "stability_boundary_pct": 2.5,
-                    "threshold_pct": 5.0 if mode == "production" else None,
-                    "candidate_throughput_mbps": 1.0,
-                    "status": "pass",
-                }
-            )
-    distributions = {
-        side: {
-            case_name: {
-                field: {"min": 0, "max": 0, "values": [0]}
-                for field in gate.raw_gate.OPERATIONAL_COUNTER_FIELDS
-            }
-            for case_name in gate.ORDERED_CASES
-        }
-        for side in ("reference", "candidate")
-    }
+    cases = summary_cases(pair_count, mode)
+    distributions = summary_distributions()
     inventory = invocation_inventory(pair_count)
     if mode == "diagnostic":
         for item in inventory:
@@ -318,35 +293,9 @@ def report_summary(
         "classification": classification,
         "contract_version": gate.CONTRACT_VERSION,
         "authority": gate.authority_contract(mode),
-        "identity": {
-            "reference_sha": "a" * 40,
-            "candidate_sha": "b" * 40,
-            "reference_binary_sha256": "c" * 64,
-            "candidate_binary_sha256": ("d" if mode == "production" else "c") * 64,
-        },
-        "governance": (
-            {
-                "status": "governed",
-                "manifest_sha256": "e" * 64,
-                "threshold_policy_id": "paired-v1-test",
-                "threshold_policy_sha256": "f" * 64,
-            }
-            if mode == "production"
-            else {
-                "status": "provisional-diagnostic",
-                "manifest_sha256": None,
-                "threshold_policy_id": None,
-                "threshold_policy_sha256": None,
-            }
-        ),
-        "profile": {
-            "codec": "aes-gcm",
-            "compression": compression,
-            "dataset": dataset,
-            "workers": workers,
-            "pipeline_depth": 1,
-            "deterministic": True,
-        },
+        "identity": summary_identity(mode),
+        "governance": summary_governance(mode),
+        "profile": summary_profile(compression, dataset, workers),
         "fixture": fixture(dataset),
         "warmup_order": list(gate.WARMUP_ORDER),
         "measured_order": [list(pair) for pair in gate.measured_order(pair_count)],
@@ -356,23 +305,101 @@ def report_summary(
         "cases": cases,
         "operational_counter_distributions": distributions,
         "hard_state_comparison": {"status": "equal", "case_count": 9},
-        "cleanup": {
-            "status": "complete",
-            "attempted": (2 + pair_count * 2) * len(gate.ORDERED_CASES),
-            "succeeded": (2 + pair_count * 2) * len(gate.ORDERED_CASES),
-            "failed": 0,
-        },
-        "provenance": {
-            "event_name": "pull_request",
-            "repository_id": "owner/coldkeep",
-            "runner_os": "Linux",
-            "runner_image": "image",
-            "runner_arch": "X64",
-            "cpu_count": 4,
-            "go_version": "go1.25.1",
-            "postgres_version": "16.14",
-            "database_image_digest": "sha256:" + "1" * 64,
-        },
+        "cleanup": summary_cleanup(pair_count),
+        "provenance": summary_provenance(),
+    }
+
+
+def summary_cases(pair_count: int, mode: str) -> list[dict]:
+    cases = []
+    for case_name in gate.ORDERED_CASES:
+        if case_name not in gate.PERFORMANCE_CASES:
+            cases.append({"case": case_name, "performance_gated": False})
+        else:
+            cases.append(performance_summary_case(case_name, pair_count, mode))
+    return cases
+
+
+def performance_summary_case(case_name: str, pair_count: int, mode: str) -> dict:
+    return {
+        "case": case_name,
+        "performance_gated": True,
+        "paired_ratios": [1.0] * pair_count,
+        "median_ratio": 1.0,
+        "regression_pct": 0.0,
+        "paired_mad_ratio_pct": 0.0,
+        "stability_boundary_pct": 2.5,
+        "threshold_pct": 5.0 if mode == "production" else None,
+        "candidate_throughput_mbps": 1.0,
+        "status": "pass",
+    }
+
+
+def summary_distributions() -> dict:
+    return {
+        side: {
+            case_name: {
+                field: {"min": 0, "max": 0, "values": [0]}
+                for field in gate.raw_gate.OPERATIONAL_COUNTER_FIELDS
+            }
+            for case_name in gate.ORDERED_CASES
+        }
+        for side in ("reference", "candidate")
+    }
+
+
+def summary_identity(mode: str) -> dict:
+    return {
+        "reference_sha": "a" * 40,
+        "candidate_sha": "b" * 40,
+        "reference_binary_sha256": "c" * 64,
+        "candidate_binary_sha256": ("d" if mode == "production" else "c") * 64,
+    }
+
+
+def summary_governance(mode: str) -> dict:
+    if mode == "production":
+        return {
+            "status": "governed",
+            "manifest_sha256": "e" * 64,
+            "threshold_policy_id": "paired-v1-test",
+            "threshold_policy_sha256": "f" * 64,
+        }
+    return {
+        "status": "provisional-diagnostic",
+        "manifest_sha256": None,
+        "threshold_policy_id": None,
+        "threshold_policy_sha256": None,
+    }
+
+
+def summary_profile(compression: str, dataset: str, workers: int) -> dict:
+    return {
+        "codec": "aes-gcm",
+        "compression": compression,
+        "dataset": dataset,
+        "workers": workers,
+        "pipeline_depth": 1,
+        "deterministic": True,
+    }
+
+
+def summary_cleanup(pair_count: int) -> dict:
+    attempts = (2 + pair_count * 2) * len(gate.ORDERED_CASES)
+    return {"status": "complete", "attempted": attempts, "succeeded": attempts, "failed": 0}
+
+
+def summary_provenance() -> dict:
+    return {
+        "event_name": "pull_request",
+        "repository_id": "owner/coldkeep",
+        "runner_os": "Linux",
+        "runner_image": "image",
+        "runner_arch": "X64",
+        "cpu_count": 4,
+        "go_version": "go1.25.1",
+        "postgres_version": "16.14",
+        "database_image_digest": "sha256:" + "1" * 64,
     }
 
 
@@ -411,16 +438,7 @@ def write_complete_profile_artifact(
 ) -> None:
     compression, workers, dataset = gate.PROFILE_MATRIX[profile]
     measured = records_for_ratios([1.0] * 5, dataset=dataset, workers=workers)
-    warmups = [
-        {
-            "kind": "warmup",
-            "pair_ordinal": None,
-            "position": position,
-            "side": side,
-            "envelope": raw_report(dataset=dataset, workers=workers),
-        }
-        for position, side in enumerate(gate.WARMUP_ORDER, start=1)
-    ]
+    warmups = profile_warmup_records(dataset, workers)
     comparison = gate.compare_records(
         measured,
         pair_count=5,
@@ -431,41 +449,11 @@ def write_complete_profile_artifact(
         thresholds=thresholds(5),
     )
     report = report_summary(profile=profile)
-    report["fixture"] = comparison["fixture"]
-    report["cases"] = comparison["cases"]
-    report["operational_counter_distributions"] = comparison[
-        "operational_counter_distributions"
-    ]
-    report["hard_state_comparison"] = comparison["hard_state_comparison"]
+    apply_comparison_summary(report, comparison)
 
     directory.mkdir()
-    artifact_governance = directory / "governance"
-    artifact_governance.mkdir()
-    repository_governance = repository / "benchmarks" / "paired"
-    shutil.copyfile(
-        repository_governance / "reference-v1.13.json",
-        artifact_governance / "reference-manifest.json",
-    )
-    shutil.copyfile(
-        repository_governance / "threshold-policy-v1.13.json",
-        artifact_governance / "threshold-policy.json",
-    )
-    report["governance"] = {
-        "status": "governed",
-        "manifest_sha256": gate._binary_hash(artifact_governance / "reference-manifest.json"),
-        "threshold_policy_id": "paired-v1-test",
-        "threshold_policy_sha256": gate._binary_hash(
-            artifact_governance / "threshold-policy.json"
-        ),
-    }
-
-    observations = warmups + measured
-    for invocation_record, observation in zip(report["invocation_inventory"], observations):
-        raw_path = directory / invocation_record["raw_file"]
-        stderr_path = directory / invocation_record["stderr_file"]
-        raw_path.parent.mkdir(parents=True, exist_ok=True)
-        gate.raw_gate.write_json(raw_path, observation["envelope"])
-        stderr_path.write_text("", encoding="utf-8")
+    report["governance"] = copy_profile_governance(directory, repository)
+    write_profile_observations(directory, report, warmups + measured)
     gate.raw_gate.write_json(directory / "paired-comparison.json", report)
     gate._write_checksums(directory)
 
@@ -481,16 +469,7 @@ def write_complete_diagnostic_profile_artifact(
     measured = records_for_ratios(
         ratios or [1.0] * 10, dataset=dataset, workers=workers
     )
-    warmups = [
-        {
-            "kind": "warmup",
-            "pair_ordinal": None,
-            "position": position,
-            "side": side,
-            "envelope": raw_report(dataset=dataset, workers=workers),
-        }
-        for position, side in enumerate(gate.WARMUP_ORDER, start=1)
-    ]
+    warmups = profile_warmup_records(dataset, workers)
     comparison = gate.compare_records(
         measured,
         pair_count=10,
@@ -507,6 +486,28 @@ def write_complete_diagnostic_profile_artifact(
         and report["classification"] == "DIAGNOSTIC_QUALIFIED"
     ):
         report["classification"] = "DIAGNOSTIC_REJECTED"
+    apply_comparison_summary(report, comparison)
+
+    directory.mkdir()
+    write_profile_observations(directory, report, warmups + measured)
+    gate.raw_gate.write_json(directory / "paired-comparison.json", report)
+    gate._write_checksums(directory)
+
+
+def profile_warmup_records(dataset: str, workers: int) -> list[dict]:
+    return [
+        {
+            "kind": "warmup",
+            "pair_ordinal": None,
+            "position": position,
+            "side": side,
+            "envelope": raw_report(dataset=dataset, workers=workers),
+        }
+        for position, side in enumerate(gate.WARMUP_ORDER, start=1)
+    ]
+
+
+def apply_comparison_summary(report: dict, comparison: dict) -> None:
     report["fixture"] = comparison["fixture"]
     report["cases"] = comparison["cases"]
     report["operational_counter_distributions"] = comparison[
@@ -514,17 +515,38 @@ def write_complete_diagnostic_profile_artifact(
     ]
     report["hard_state_comparison"] = comparison["hard_state_comparison"]
 
-    directory.mkdir()
-    for invocation_record, observation in zip(
-        report["invocation_inventory"], warmups + measured
-    ):
+
+def copy_profile_governance(directory: pathlib.Path, repository: pathlib.Path) -> dict:
+    artifact_governance = directory / "governance"
+    artifact_governance.mkdir()
+    repository_governance = repository / "benchmarks" / "paired"
+    shutil.copyfile(
+        repository_governance / "reference-v1.13.json",
+        artifact_governance / "reference-manifest.json",
+    )
+    shutil.copyfile(
+        repository_governance / "threshold-policy-v1.13.json",
+        artifact_governance / "threshold-policy.json",
+    )
+    return {
+        "status": "governed",
+        "manifest_sha256": gate._binary_hash(artifact_governance / "reference-manifest.json"),
+        "threshold_policy_id": "paired-v1-test",
+        "threshold_policy_sha256": gate._binary_hash(
+            artifact_governance / "threshold-policy.json"
+        ),
+    }
+
+
+def write_profile_observations(
+    directory: pathlib.Path, report: dict, observations: list[dict]
+) -> None:
+    for invocation_record, observation in zip(report["invocation_inventory"], observations):
         raw_path = directory / invocation_record["raw_file"]
         stderr_path = directory / invocation_record["stderr_file"]
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         gate.raw_gate.write_json(raw_path, observation["envelope"])
         stderr_path.write_text("", encoding="utf-8")
-    gate.raw_gate.write_json(directory / "paired-comparison.json", report)
-    gate._write_checksums(directory)
 
 
 class PairedContractTests(unittest.TestCase):

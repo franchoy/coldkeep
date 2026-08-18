@@ -55,38 +55,50 @@ def diagnostic_final_state(
         },
         "snapshots": {"count": 0, "total_bytes": 0, "sha256": digest},
         "snapshot_count": 0,
-        "gc": {
-            "total_chunks": logical_files,
-            "reachable_chunks": logical_files,
-            "unreachable_chunks": 0,
-            "logically_reclaimable_bytes": 0,
-            "physically_reclaimable_bytes": 0,
-            "packed_blocks_live": 1,
-            "packed_blocks_dead": 0,
-            "packed_bytes_live": 1024,
-            "packed_bytes_reclaimable": 0,
-            "retained_dead_bytes": 0,
-        },
-        "verification": {
-            "blocks_checked": 1,
-            "physical_hashes_checked": 1,
-            "compressed_hashes_checked": 0,
-            "logical_hashes_checked": 1,
-            "compressed_blocks_checked": 0,
-            "physical_file_issues": 0,
-            "snapshot_membership_rows": 0,
-            "snapshot_reachability_issues": 0,
-        },
-        "physical": {
-            "container_count": 1,
-            "storage_block_count": 1,
-            "legacy_block_count": 0,
-            "chunk_reference_count": logical_files,
-            "payload_bytes": logical_bytes,
-            "container_bytes": logical_bytes + 64,
-            "canonical_sha256": digest,
-        },
+        "gc": diagnostic_gc(logical_files),
+        "verification": diagnostic_verification(),
+        "physical": diagnostic_physical(logical_files, logical_bytes, digest),
         "physical_layout_sha256": "e" * 64,
+    }
+
+
+def diagnostic_gc(logical_files: int) -> dict:
+    return {
+        "total_chunks": logical_files,
+        "reachable_chunks": logical_files,
+        "unreachable_chunks": 0,
+        "logically_reclaimable_bytes": 0,
+        "physically_reclaimable_bytes": 0,
+        "packed_blocks_live": 1,
+        "packed_blocks_dead": 0,
+        "packed_bytes_live": 1024,
+        "packed_bytes_reclaimable": 0,
+        "retained_dead_bytes": 0,
+    }
+
+
+def diagnostic_verification() -> dict:
+    return {
+        "blocks_checked": 1,
+        "physical_hashes_checked": 1,
+        "compressed_hashes_checked": 0,
+        "logical_hashes_checked": 1,
+        "compressed_blocks_checked": 0,
+        "physical_file_issues": 0,
+        "snapshot_membership_rows": 0,
+        "snapshot_reachability_issues": 0,
+    }
+
+
+def diagnostic_physical(logical_files: int, logical_bytes: int, digest: str) -> dict:
+    return {
+        "container_count": 1,
+        "storage_block_count": 1,
+        "legacy_block_count": 0,
+        "chunk_reference_count": logical_files,
+        "payload_bytes": logical_bytes,
+        "container_bytes": logical_bytes + 64,
+        "canonical_sha256": digest,
     }
 
 
@@ -140,10 +152,6 @@ def raw_report(
     *, workers: int = 4, compression: str = "none", dataset: str = gate.FIXTURE_ID
 ) -> dict:
     rows = [raw_row(case, workers=workers) for case in gate.EXPECTED_CASES]
-    total_io = {
-        field: sum(row["execution_stats"]["io"][field] for row in rows)
-        for field in gate.IO_COUNTER_FIELDS
-    }
     data = {
         "schema_version": gate.SCHEMA_VERSION,
         "generated_at_utc": "2026-07-25T00:00:00Z",
@@ -155,23 +163,7 @@ def raw_report(
             "pipeline_depth": 1,
             "deterministic": True,
         },
-        "execution_stats": {
-            "total_files": sum(row["execution_stats"]["total_files"] for row in rows),
-            "total_bytes": sum(row["execution_stats"]["total_bytes"] for row in rows),
-            "workers_used": workers,
-            "container_append_count": sum(
-                row["execution_stats"]["container_append_count"] for row in rows
-            ),
-            "container_open_count": sum(
-                row["execution_stats"]["container_open_count"] for row in rows
-            ),
-            "container_close_count": sum(
-                row["execution_stats"]["container_close_count"] for row in rows
-            ),
-            "fsync_count": sum(row["execution_stats"]["fsync_count"] for row in rows),
-            "snapshot_metadata_write_count": 0,
-            "io": total_io,
-        },
+        "execution_stats": raw_execution_stats(rows, workers),
         "rows": rows,
     }
     report = {"status": "ok", "command": "benchmark", "data": data}
@@ -181,6 +173,31 @@ def raw_report(
     return report
 
 
+def raw_execution_stats(rows: list[dict], workers: int) -> dict:
+    return {
+        "total_files": sum_execution_stat(rows, "total_files"),
+        "total_bytes": sum_execution_stat(rows, "total_bytes"),
+        "workers_used": workers,
+        "container_append_count": sum_execution_stat(rows, "container_append_count"),
+        "container_open_count": sum_execution_stat(rows, "container_open_count"),
+        "container_close_count": sum_execution_stat(rows, "container_close_count"),
+        "fsync_count": sum_execution_stat(rows, "fsync_count"),
+        "snapshot_metadata_write_count": 0,
+        "io": {
+            field: sum_execution_io_stat(rows, field)
+            for field in gate.IO_COUNTER_FIELDS
+        },
+    }
+
+
+def sum_execution_stat(rows: list[dict], field: str) -> int:
+    return sum(row["execution_stats"][field] for row in rows)
+
+
+def sum_execution_io_stat(rows: list[dict], field: str) -> int:
+    return sum(row["execution_stats"]["io"][field] for row in rows)
+
+
 def aggregate(
     durations: list[float] | None = None,
     *,
@@ -188,59 +205,16 @@ def aggregate(
     runner_image: str = "image-a",
 ) -> dict:
     durations = durations or [5000, 5000, 5000, 5000, 5000]
-    cases = []
-    for index, name in enumerate(gate.EXPECTED_CASES):
-        summary = gate.summarize(durations)
-        logical_bytes = 1024 * (index + 1)
-        logical_files = index + 1
-        restored_files = logical_files if name in {"restore-large-file", "restore-many-files"} else 0
-        diagnostic = diagnostic_final_state(
-            logical_files=logical_files,
-            logical_bytes=logical_bytes,
-            restored_files=restored_files,
-        )
-        operational_samples = [operational_sample(index) for _ in durations]
-        cases.append(
-            {
-                "case": name,
-                "seed": 1712 + index * 10,
-                "logical_files": logical_files,
-                "logical_bytes": logical_bytes,
-                "workers_used": 4,
-                "sample_durations_ms": list(durations),
-                "diagnostic_final_state": diagnostic,
-                "diagnostic_samples": [deepcopy(diagnostic) for _ in durations],
-                "operational_samples": operational_samples,
-                "operational_counter_distributions": gate.summarize_operational_counters(
-                    operational_samples
-                ),
-                **summary,
-                "throughput_mbps": logical_bytes
-                / (1024 * 1024)
-                / (summary["median_duration_ms"] / 1000),
-            }
-        )
+    cases = [
+        aggregate_case(index, name, durations)
+        for index, name in enumerate(gate.EXPECTED_CASES)
+    ]
     return {
         "schema_version": 2,
         "evidence_policy_version": gate.EVIDENCE_POLICY_VERSION,
         "report_kind": gate.REPORT_KIND,
         "status": "ok",
-        "provenance": {
-            "source_commit": source,
-            "source_tag": None,
-            "generated_at_utc": "2026-07-25T00:00:00Z",
-            "workflow_run_id": "1",
-            "workflow_job_id": "benchmark",
-            "workflow_run_attempt": "1",
-            "runner_os": "Linux",
-            "runner_image": runner_image,
-            "runner_arch": "X64",
-            "cpu_count": 4,
-            "go_version": "go version go1.25.12 linux/amd64",
-            "postgres_version": "PostgreSQL 16.14",
-            "database_image_digest": "sha256:" + "b" * 64,
-            "binary_sha256": "c" * 64,
-        },
+        "provenance": aggregate_provenance(source, runner_image),
         "profile": {
             "codec": "aes-gcm",
             "compression": "none",
@@ -265,6 +239,56 @@ def aggregate(
         "operation_totals": gate.operation_totals(len(durations)),
         "cleanup_totals": gate.cleanup_totals(len(durations)),
         "cases": cases,
+    }
+
+
+def aggregate_case(index: int, name: str, durations: list[float]) -> dict:
+    summary = gate.summarize(durations)
+    logical_bytes = 1024 * (index + 1)
+    logical_files = index + 1
+    restored_files = logical_files if name in {"restore-large-file", "restore-many-files"} else 0
+    diagnostic = diagnostic_final_state(
+        logical_files=logical_files,
+        logical_bytes=logical_bytes,
+        restored_files=restored_files,
+    )
+    operational_samples = [operational_sample(index) for _ in durations]
+    return {
+        "case": name,
+        "seed": 1712 + index * 10,
+        "logical_files": logical_files,
+        "logical_bytes": logical_bytes,
+        "workers_used": 4,
+        "sample_durations_ms": list(durations),
+        "diagnostic_final_state": diagnostic,
+        "diagnostic_samples": [deepcopy(diagnostic) for _ in durations],
+        "operational_samples": operational_samples,
+        "operational_counter_distributions": gate.summarize_operational_counters(
+            operational_samples
+        ),
+        **summary,
+        "throughput_mbps": logical_bytes
+        / (1024 * 1024)
+        / (summary["median_duration_ms"] / 1000),
+    }
+
+
+def aggregate_provenance(source: str, runner_image: str) -> dict:
+    return {
+        "source_commit": source,
+        "source_tag": None,
+        "generated_at_utc": "2026-07-25T00:00:00Z",
+        "workflow_run_id": "1",
+        "workflow_job_id": "benchmark",
+        "workflow_run_attempt": "1",
+        "runner_os": "Linux",
+        "runner_image": runner_image,
+        "runner_arch": "X64",
+        "cpu_count": 4,
+        "go_version": "go version go1.25.12 linux/amd64",
+        "postgres_version": "PostgreSQL 16.14",
+        "database_image_digest": "sha256:" + "b" * 64,
+        "binary_sha256": "c" * 64,
     }
 
 
