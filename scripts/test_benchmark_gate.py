@@ -15,7 +15,8 @@ from unittest import mock
 
 MODULE_PATH = pathlib.Path(__file__).with_name("benchmark_gate.py")
 SPEC = importlib.util.spec_from_file_location("benchmark_gate", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load benchmark_gate test module")
 gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 

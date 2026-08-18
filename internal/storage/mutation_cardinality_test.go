@@ -218,7 +218,7 @@ func setupMutationCardinalityStore(t *testing.T) (*sql.DB, StorageContext, strin
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "phase17-store.txt")
-	if err := os.WriteFile(path, []byte("phase17 mutation cardinality store fixture"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("phase17 mutation cardinality store fixture"), 0o600); err != nil {
 		t.Fatalf("write store fixture: %v", err)
 	}
 	codec, err := blocks.ParseCodec("plain")

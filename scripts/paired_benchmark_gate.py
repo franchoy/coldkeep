@@ -24,7 +24,7 @@ import sys
 import tempfile
 import time
 from decimal import Decimal
-from typing import Any
+from typing import Any, NoReturn
 
 import benchmark_gate as raw_gate
 
@@ -197,8 +197,15 @@ class PairedGateError(raw_gate.GateError):
         self.classification = classification
 
 
-def fail(classification: str, message: str) -> None:
+def fail(classification: str, message: str) -> NoReturn:
     raise PairedGateError(classification, message)
+
+
+def _git_executable() -> str:
+    executable = shutil.which("git")
+    if executable is None or not pathlib.Path(executable).is_absolute():
+        fail("REFERENCE_GOVERNANCE_INVALID", "cannot resolve an absolute git executable")
+    return executable
 
 
 def authority_contract(mode: str) -> dict[str, Any]:
@@ -334,7 +341,10 @@ def _create_output_directory(path: pathlib.Path) -> None:
 
 def _repository_root() -> pathlib.Path:
     completed = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+        [_git_executable(), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if completed.returncode != 0:
         fail("REFERENCE_GOVERNANCE_INVALID", "cannot resolve repository root")
@@ -618,9 +628,10 @@ def verify_reference_governance(
         fail("REFERENCE_GOVERNANCE_INVALID", "effective reference differs from manifest")
     for sha in (reference_sha, candidate_sha):
         completed = subprocess.run(
-            ["git", "-C", str(repository), "cat-file", "-e", f"{sha}^{{commit}}"],
+            [_git_executable(), "-C", str(repository), "cat-file", "-e", f"{sha}^{{commit}}"],
             capture_output=True,
             text=True,
+            check=False,
         )
         if completed.returncode != 0:
             fail("REFERENCE_GOVERNANCE_INVALID", f"commit {sha} is not reachable")
@@ -629,16 +640,18 @@ def verify_reference_governance(
         if not isinstance(approval["value"], str) or not re.fullmatch(r"v[0-9A-Za-z._-]+", approval["value"]):
             fail("REFERENCE_GOVERNANCE_INVALID", "trusted tag name is invalid")
         tagged = subprocess.run(
-            ["git", "-C", str(repository), "rev-parse", f"refs/tags/{approval['value']}^{{commit}}"],
+            [_git_executable(), "-C", str(repository), "rev-parse", f"refs/tags/{approval['value']}^{{commit}}"],
             capture_output=True,
             text=True,
+            check=False,
         )
         if tagged.returncode != 0 or tagged.stdout.strip() != reference_sha:
             fail("REFERENCE_GOVERNANCE_INVALID", "trusted tag does not resolve to reference")
     ancestor = subprocess.run(
-        ["git", "-C", str(repository), "merge-base", "--is-ancestor", reference_sha, candidate_sha],
+        [_git_executable(), "-C", str(repository), "merge-base", "--is-ancestor", reference_sha, candidate_sha],
         capture_output=True,
         text=True,
+        check=False,
     )
     if ancestor.returncode != 0:
         fail("REFERENCE_GOVERNANCE_INVALID", "reference is not an ancestor of candidate")
@@ -1150,6 +1163,7 @@ def _cleanup_benchmark_databases() -> tuple[int, int]:
         text=True,
         capture_output=True,
         env=psql_env,
+        check=False,
     )
     if query.returncode != 0:
         return 0, 1
@@ -1175,6 +1189,7 @@ def _cleanup_benchmark_databases() -> tuple[int, int]:
             text=True,
             capture_output=True,
             env=psql_env,
+            check=False,
         )
         if completed.returncode == 0:
             removed += 1

@@ -18,7 +18,8 @@ SCRIPT_DIR = pathlib.Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR))
 MODULE_PATH = SCRIPT_DIR / "paired_benchmark_gate.py"
 SPEC = importlib.util.spec_from_file_location("paired_benchmark_gate", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load paired_benchmark_gate test module")
 gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 
@@ -1041,8 +1042,11 @@ class PairedContractTests(unittest.TestCase):
                 self.assertEqual(report["classification"], "REFERENCE_GOVERNANCE_INVALID")
 
     def test_reference_reachability_and_ancestry(self) -> None:
+        git = shutil.which("git")
+        if git is None:
+            self.skipTest("git is unavailable")
         head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], check=True, text=True, capture_output=True
+            [git, "rev-parse", "HEAD"], check=True, text=True, capture_output=True
         ).stdout.strip()
         governed = manifest(head)
         governed["approval"] = {"kind": "reviewed_record", "value": "phase11-test"}

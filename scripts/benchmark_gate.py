@@ -888,6 +888,7 @@ def capture_sample(
                 "--output",
                 "json",
             ],
+            check=False,
             text=True,
             capture_output=True,
             env={**os.environ, "COLDKEEP_COMPRESSION": args.compression},
