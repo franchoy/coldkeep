@@ -33,8 +33,10 @@ Run:
 
 - Section 1: local PostgreSQL and CI-compatible environment setup.
 - Section 2: quality-equivalent checks.
-- Section 3: required CI matrix local equivalents, including smoke, benchmark,
-  legacy compatibility, and local cross-platform approximation.
+- Section 3: required CI matrix local equivalents, including Phase 18 named
+  backend/storage/recovery/coordination selectors, smoke, hard benchmark
+  integrity, timing advisory evaluation, legacy compatibility, and the local
+  cross-platform approximation.
 - Final local checks: `git diff --check` and `git status -sb`.
 
 Profile A is green only when:
@@ -42,8 +44,9 @@ Profile A is green only when:
 - quality checks pass;
 - required CI matrix local equivalents pass;
 - smoke passes;
-- the benchmark matrix is run and interpreted according to the documented local
-  variance policy;
+- all four benchmark-integrity profiles pass and all four hosted-timing-style
+  observations produce a valid advisory classification; historical timing
+  threshold crossings alone do not fail the gate;
 - `git diff --check` passes;
 - the working tree is clean or only intentional committed changes remain.
 
@@ -96,7 +99,7 @@ These estimates are broad and environment-dependent:
 - Quality gate: often several minutes; longer on cold caches or slower CPUs.
 - Full CI-parity matrix: often tens of minutes because it includes race tests,
   integration suites, smoke, adversarial tests, and benchmarks.
-- Benchmark matrix: sensitive to local CPU scheduling and virtualization,
+- Benchmark timing observations: sensitive to local CPU scheduling and virtualization,
   especially workers=4.
 - Full release-tag/manual gate: can take substantially longer because it adds
   manual CLI/operator checks and optional release-specific gates.
@@ -363,43 +366,108 @@ done
 # Reset it before the benchmark block and manual CLI checks in later steps.
 unset COLDKEEP_CODEC
 
-# benchmark-matrix (CI-equivalent)
-# CI always sets COLDKEEP_CODEC=aes-gcm for benchmarks and applies tuned
-# lock-retry settings to reduce false-slow results under container contention.
-# Both compressions (none, zstd) and both worker counts (1, 4) are required
-# CI gates enforced by ci-required — do not skip any combination.
+# Phase 18 named execution proof. Every selected test below must report PASS;
+# a matching SKIP is a release-gate failure even when `go test` exits zero.
+COLDKEEP_CODEC=plain go test -v -race -count=1 ./internal/db \
+  -run '^TestMutationRowsAffectedContractAcrossBackends/postgres$'
+
+for codec in plain aes-gcm; do
+  COLDKEEP_CODEC="$codec" go test -v -race -count=1 ./tests/integration/... \
+    -run '^TestRoundTripStoreRestore$'
+done
+
+COLDKEEP_CODEC=plain go test -v -race -count=1 ./tests/integration/... \
+  -run '^(TestRemoveWithSharedChunksRefCount|TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState)$'
+
+for codec in plain aes-gcm; do
+  COLDKEEP_CODEC="$codec" COLDKEEP_LONG_RUN=1 go test -v -race -count=1 \
+    ./tests/adversarial/... \
+    -run '^(TestAdversarialG6IndependentProcessRepositoryContention|TestAdversarialG6KilledLeaseHolderReleasesRepository|TestAdversarialG6LiveGCExcludesIndependentStoreProcess)$'
+done
+
+COLDKEEP_CODEC=plain go test -v -race -count=1 ./internal/maintenance \
+  -run '^(TestGCAdvisoryLockUsesDedicatedSessionAndReleases|TestRunGCReleasesAdvisoryLockAfterOperationFailure|TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession|TestRunGCLiveRefusesSingleConnectionPool)$'
+
+# benchmark-integrity and benchmark-timing-advisory (CI-equivalent policy)
+# CI always sets COLDKEEP_CODEC=aes-gcm and applies the fixed lock-retry
+# settings below. Candidate integrity is hard-required. Historical timing is
+# informational when the observation and evaluator are valid; threshold
+# crossings must remain visible but do not fail the gate.
 export COLDKEEP_CODEC=aes-gcm
 export COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS=12
 export COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15
 export COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900
 
-./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-none-w1.json
-./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-none-w4.json
+candidate_sha=$(git rev-parse HEAD)
+go_version=$(go version)
+postgres_version=$(psql --version)
+postgres_digest=sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
 
-COLDKEEP_COMPRESSION=zstd ./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-zstd-w1.json
-COLDKEEP_COMPRESSION=zstd ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-zstd-w4.json
+while read -r profile compression workers dataset; do
+  output_dir="benchmark-integrity-evidence/${profile}/integrity"
+  test ! -e "$output_dir"
+  COLDKEEP_COMPRESSION="$compression" \
+    python3 scripts/benchmark_gate.py integrity \
+      --binary ./coldkeep \
+      --output-dir "$output_dir" \
+      --compression "$compression" \
+      --workers "$workers" \
+      --dataset "$dataset" \
+      --command-timeout-seconds 600 \
+      --source-commit "$candidate_sha" \
+      --go-version "$go_version" \
+      --postgres-version "$postgres_version" \
+      --database-image-digest "$postgres_digest"
+  (cd "$output_dir" && sha256sum --check checksums.sha256)
+done <<'EOF'
+none-w1 none 1 ci-paired-w1-v2
+none-w4 none 4 ci-paired-w4-v2
+zstd-w1 zstd 1 ci-paired-w1-v2
+zstd-w4 zstd 4 ci-paired-w4-v2
+EOF
 
-# Regression checks against versioned v1.9 baselines using validate_regression_thresholds.py.
-# This mirrors the exact CI gate — all four combinations are required.
-python3 scripts/validate_regression_thresholds.py check benchmark-none-w1.json \
-  --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json \
-  --mode uncompressed \
-  --json-report regression-report-none-w1.json
+while read -r profile compression workers mode baseline; do
+  evidence_dir="benchmark-timing-evidence/${profile}"
+  mkdir -p "$evidence_dir"
+  COLDKEEP_COMPRESSION="$compression" \
+    ./coldkeep benchmark run \
+      --dataset small \
+      --workers "$workers" \
+      --repeat 1 \
+      --output json \
+      | tee "${evidence_dir}/benchmark.json"
 
-python3 scripts/validate_regression_thresholds.py check benchmark-none-w4.json \
-  --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json \
-  --mode uncompressed \
-  --json-report regression-report-none-w4.json
+  set +e
+  python3 scripts/validate_regression_thresholds.py check \
+    "${evidence_dir}/benchmark.json" \
+    --baseline "benchmarks/v1.9/baselines/${baseline}" \
+    --mode "$mode" \
+    --policy hosted-advisory \
+    --json-report "${evidence_dir}/timing-advisory.json"
+  comparator_exit=$?
+  set -e
 
-python3 scripts/validate_regression_thresholds.py check benchmark-zstd-w1.json \
-  --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json \
-  --mode compressed \
-  --json-report regression-report-zstd-w1.json
-
-python3 scripts/validate_regression_thresholds.py check benchmark-zstd-w4.json \
-  --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json \
-  --mode compressed \
-  --json-report regression-report-zstd-w4.json
+  test -s "${evidence_dir}/timing-advisory.json"
+  python3 scripts/validate_regression_thresholds.py verify-advisory-exit \
+    --report "${evidence_dir}/timing-advisory.json" \
+    --observed-exit-code "$comparator_exit"
+  case "$comparator_exit" in
+    0|10|11|12) ;;
+    *) echo "invalid timing-advisory exit: $comparator_exit" >&2; exit 2 ;;
+  esac
+  (
+    cd "$evidence_dir"
+    actual_inventory=$(find . -maxdepth 1 -type f ! -name checksums.sha256 -printf '%f\n' | sort)
+    test "$actual_inventory" = $'benchmark.json\ntiming-advisory.json'
+    sha256sum benchmark.json timing-advisory.json > checksums.sha256
+    sha256sum --check checksums.sha256
+  )
+done <<'EOF'
+none-w1 none 1 uncompressed benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json
+none-w4 none 4 uncompressed benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json
+zstd-w1 zstd 1 compressed benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json
+zstd-w4 zstd 4 compressed benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json
+EOF
 
 unset COLDKEEP_CODEC COLDKEEP_COMPRESSION COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS \
       COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS
@@ -478,10 +546,10 @@ scripts/smoke.sh
 
 Expected: this mirrors the current `ci-required` upstream jobs (`quality`,
 `correctness-matrix`, `integration-stress`, `integration-long-run`,
-`adversarial`, `smoke`, `legacy-compatibility`, and `benchmark-matrix`) across
-their documented codec matrices. It also runs a local approximation of the
-separate `cross-platform` job, which GitHub Actions must still prove on macOS
-and Windows.
+`adversarial`, `smoke`, `legacy-compatibility`, `benchmark-integrity`,
+`benchmark-timing-advisory`, and `cross-platform`) across their documented
+codec/profile matrices. The local cross-platform commands are an approximation;
+GitHub Actions must still prove native macOS and Windows runtime.
 
 Generate the critical coverage report (mirrors the CI `critical-coverage-report` job;
 informational, not enforced by `ci-required` in the current workflow, but useful

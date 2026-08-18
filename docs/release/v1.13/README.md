@@ -77,7 +77,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
 - `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  active release. Phases 0–18 are complete. Phase 12 implements the
+  active release. Phases 0–19 are complete. Phase 12 implements the
   repository-wide exclusive fail-fast Lease and proves native runtime plus the
   production Coordinator lifecycle on Linux, macOS, and Windows. Phase 13
   preserves strengthened G6 integrity coverage and proves deterministic Linux
@@ -113,8 +113,14 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   required CI without changing product semantics or job topology. Its evidence
   is recorded in
   [v1.13.11-phase18-required-backend-coordination-ci.md](v1.13.11-phase18-required-backend-coordination-ci.md).
-  Phase 19 — Validation Matrix and Release Evidence Reconciliation — is Next.
-  BKC-016 remains `Deferred — documented`. Phase 12 closure remains recorded in
+  Phase 19 reconciles the validation matrix, backend claim matrix, reusable
+  release checklist, active trackers, Phase 18 closure chronology, proof
+  boundaries, deferred items, and evidence links. Its documentation-only
+  evidence is recorded in
+  [v1.13.11-phase19-validation-evidence-reconciliation.md](v1.13.11-phase19-validation-evidence-reconciliation.md).
+  Phase 20 is Next: Final Exact-Head Local Release Gate and PR Authorization.
+  The release gate remains not started. BKC-016 remains
+  `Deferred — documented`. Phase 12 closure remains recorded in
   [v1.13.11-phase12-closure.md](v1.13.11-phase12-closure.md). The diagnostic
   benchmark-gate bootstrap remains recorded in
   [v1.13.11-phase11-benchmark-gate-integrity-remediation.md](v1.13.11-phase11-benchmark-gate-integrity-remediation.md).
