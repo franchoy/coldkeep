@@ -11,7 +11,7 @@ on:
           - calibration
           - capture
       source_sha:
-        description: Full governed 40-character commit SHA to build and measure.
+        description: Confirm the exact protected-main dispatch SHA to build and measure.
         required: true
         type: string
 
@@ -24,7 +24,32 @@ env:
   POSTGRES_IMAGE_DIGEST: sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
 
 jobs:
+  authorize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate trusted benchmark source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TRUSTED_REF: ${{ github.ref }}
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${TRUSTED_REF}" != "refs/heads/main" ]]; then
+            echo "benchmark calibration must be dispatched from refs/heads/main" >&2
+            exit 2
+          fi
+          if ! [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase commit SHA" >&2
+            exit 2
+          fi
+          if [[ "${SOURCE_SHA}" != "${TRUSTED_SHA}" ]]; then
+            echo "source_sha must equal the trusted workflow dispatch SHA" >&2
+            exit 2
+          fi
+
   sample:
+    needs: authorize
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
@@ -49,30 +74,27 @@ jobs:
         replicate: [1, 2]
 
     steps:
-      - name: Checkout governed source
+      - name: Checkout trusted source
         if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Validate governed source
+      - name: Verify trusted checkout
         if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          TRUSTED_SHA: ${{ github.sha }}
         run: |
-          if ! [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "source_sha must be a full lowercase commit SHA" >&2
-            exit 2
-          fi
-          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git rev-parse HEAD)" = "${TRUSTED_SHA}"
 
       - name: Setup exact Go toolchain
         if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
         uses: actions/setup-go@v6
         with:
           go-version: '1.25.12'
-          cache: true
+          cache: false
 
       - name: Build benchmark binary once
         if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
@@ -81,7 +103,7 @@ jobs:
       - name: Capture fixed benchmark samples
         if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ github.sha }}
           CAPTURE_MODE: ${{ inputs.mode }}
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: aes-gcm
@@ -133,22 +155,43 @@ jobs:
       - name: Checkout calibration harness
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Download calibration evidence
         uses: actions/download-artifact@v8
         with:
           pattern: benchmark-calibration-*
-          path: downloaded
+          path: ${{ runner.temp }}/benchmark-calibration-input
 
       - name: Evaluate the fixed calibration matrix
         run: |
+          mapfile -t aggregates < <(
+            find "${RUNNER_TEMP}/benchmark-calibration-input" \
+              -mindepth 2 -maxdepth 2 -name aggregate.json -print | sort
+          )
           args=()
-          while IFS= read -r aggregate; do
+          for aggregate in "${aggregates[@]}"; do
             artifact="$(basename "$(dirname "${aggregate}")")"
             profile="${artifact#benchmark-calibration-}"
             args+=(--aggregate "${profile}=${aggregate}")
-          done < <(find downloaded -mindepth 2 -maxdepth 2 -name aggregate.json -print | sort)
+          done
+          python3 - "${GITHUB_SHA}" "${aggregates[@]}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          expected = sys.argv[1]
+          for raw_path in sys.argv[2:]:
+              path = pathlib.Path(raw_path)
+              with path.open(encoding="utf-8") as handle:
+                  report = json.load(handle)
+              actual = report.get("provenance", {}).get("source_commit")
+              if actual != expected:
+                  raise SystemExit(
+                      f"{path}: source_commit {actual!r} does not match trusted SHA {expected}"
+                  )
+          PY
           python3 scripts/benchmark_gate.py calibrate \
             "${args[@]}" \
             --thresholds benchmarks/v1.9/regression-thresholds.yaml \

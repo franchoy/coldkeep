@@ -122,6 +122,22 @@ extract_job_block() {
   ' "$WORKFLOW_FILE"
 }
 
+extract_job_block_from_file() {
+  local file="$1"
+  local job_name="$2"
+  awk -v job_name="$job_name" '
+    $0 ~ ("^  " job_name ":$") {
+      in_job = 1
+    }
+    in_job && $0 ~ "^  [A-Za-z0-9_-]+:$" && $0 !~ ("^  " job_name ":$") {
+      exit
+    }
+    in_job {
+      print
+    }
+  ' "$file"
+}
+
 extract_step_block_from_content() {
   local content="$1"
   local step_name="$2"
@@ -409,7 +425,14 @@ check_paired_launcher() {
 check_local_workflow() {
   local check_status=0
   local adversarial_block=""
+  local benchmark_authorize_block=""
+  local benchmark_calibration_block=""
   local deterministic_g6_block=""
+  local benchmark_permissions_block=""
+  local benchmark_sample_block=""
+  local cache_disabled_count=0
+  local checkout_count=0
+  local credential_disabled_count=0
   local quality_block=""
   local quality_checkout_block=""
   local validator_test_block=""
@@ -417,7 +440,9 @@ check_local_workflow() {
 	local benchmark_integrity_block=""
 	local benchmark_timing_block=""
 	local correctness_matrix_block=""
-	local postgres_internal_contracts_block=""
+  local postgres_internal_contracts_block=""
+  local setup_go_count=0
+  local trusted_checkout_count=0
   local upload_v5_count=0
   local upload_v6_count=0
   local upload_v7_count=0
@@ -427,6 +452,65 @@ check_local_workflow() {
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^name: Benchmark Gate Calibration and Baseline Capture$' 'manual benchmark calibration workflow' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  workflow_dispatch:$' 'benchmark calibration is manually dispatched' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  contents: read$' 'benchmark calibration has read-only repository permission' || check_status=1
+  benchmark_authorize_block="$(extract_job_block_from_file "$BENCHMARK_BASELINE_WORKFLOW_FILE" authorize)"
+  benchmark_sample_block="$(extract_job_block_from_file "$BENCHMARK_BASELINE_WORKFLOW_FILE" sample)"
+  benchmark_calibration_block="$(extract_job_block_from_file "$BENCHMARK_BASELINE_WORKFLOW_FILE" calibration)"
+  benchmark_permissions_block="$(awk '
+    /^permissions:$/ { in_permissions = 1 }
+    in_permissions && /^env:$/ { exit }
+    in_permissions { print }
+  ' "$BENCHMARK_BASELINE_WORKFLOW_FILE")"
+  if [[ "$benchmark_permissions_block" != $'permissions:\n  contents: read' ]]; then
+    echo "[audit] ERROR: benchmark workflow permissions must be exactly contents read" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark workflow permissions are exactly contents read"
+  fi
+  require_content_pattern "$benchmark_authorize_block" 'if \[\[ "\$\{TRUSTED_REF\}" != "refs/heads/main" \]\]; then' 'benchmark authorization is fail-closed on refs/heads/main' || check_status=1
+  require_content_pattern "$benchmark_authorize_block" 'if ! \[\[ "\$\{SOURCE_SHA\}" =~ \^\[0-9a-f\]\{40\}\$ \]\]; then' 'benchmark source_sha uses strict lowercase full-SHA validation' || check_status=1
+  require_content_pattern "$benchmark_authorize_block" 'if \[\[ "\$\{SOURCE_SHA\}" != "\$\{TRUSTED_SHA\}" \]\]; then' 'benchmark source_sha must equal trusted github.sha' || check_status=1
+  require_content_pattern "$benchmark_sample_block" '^    needs: authorize$' 'benchmark sample job depends on trusted-source authorization' || check_status=1
+  if grep -Eq 'ref:.*inputs\.source_sha' "$BENCHMARK_BASELINE_WORKFLOW_FILE"; then
+    echo "[audit] ERROR: benchmark checkout cannot use inputs.source_sha" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark checkout does not use inputs.source_sha"
+  fi
+  checkout_count="$(grep -Ec 'uses: actions/checkout@' "$BENCHMARK_BASELINE_WORKFLOW_FILE")"
+  trusted_checkout_count="$(grep -Fc "ref: \${{ github.sha }}" "$BENCHMARK_BASELINE_WORKFLOW_FILE")"
+  credential_disabled_count="$(grep -Ec '^\s+persist-credentials: false$' "$BENCHMARK_BASELINE_WORKFLOW_FILE")"
+  if [[ "$checkout_count" -eq 0 || "$trusted_checkout_count" -ne "$checkout_count" ]]; then
+    echo "[audit] ERROR: benchmark checkouts must use trusted github.sha" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark checkouts use trusted github.sha"
+  fi
+  if [[ "$credential_disabled_count" -ne "$checkout_count" ]]; then
+    echo "[audit] ERROR: benchmark checkouts must disable persisted credentials" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark checkouts disable persisted credentials"
+  fi
+  setup_go_count="$(grep -Ec 'uses: actions/setup-go@' "$BENCHMARK_BASELINE_WORKFLOW_FILE")"
+  cache_disabled_count="$(grep -Ec '^\s+cache: false$' "$BENCHMARK_BASELINE_WORKFLOW_FILE")"
+  if [[ "$setup_go_count" -eq 0 || "$cache_disabled_count" -ne "$setup_go_count" ]] \
+    || grep -Eq '^\s+cache: true$|uses: actions/cache@' "$BENCHMARK_BASELINE_WORKFLOW_FILE"; then
+    echo "[audit] ERROR: benchmark setup-go caching must be disabled" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark setup-go caching is disabled"
+  fi
+  require_content_pattern "$benchmark_sample_block" '^\s+python3 scripts/benchmark_gate\.py sample \\$' 'benchmark sample harness runs from trusted checkout' || check_status=1
+  require_content_pattern "$benchmark_calibration_block" '^\s+python3 scripts/benchmark_gate\.py calibrate \\$' 'benchmark calibration harness runs from trusted checkout' || check_status=1
+  require_content_pattern "$benchmark_calibration_block" 'path: \$\{\{ runner\.temp \}\}/benchmark-calibration-input' 'benchmark calibration artifacts use runner.temp' || check_status=1
+  require_content_pattern "$benchmark_calibration_block" 'actual = report\.get\("provenance", \{\}\)\.get\("source_commit"\)' 'benchmark calibration reads artifact source provenance' || check_status=1
+  require_content_pattern "$benchmark_calibration_block" 'if actual != expected:' 'benchmark calibration requires artifact provenance to match github.sha' || check_status=1
+  if grep -Eq 'continue-on-error|\|\| true|^\s+set \+e$' <<<"$benchmark_authorize_block"; then
+    echo "[audit] ERROR: benchmark source validation must not use broad failure suppression" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark source validation has no broad failure suppression"
+  fi
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'runs-on: ubuntu-24\.04' 'benchmark calibration pins the runner family' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" "go-version: '1\\.25\\.12'" 'benchmark calibration pins the Go patch' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'benchmark calibration pins the PostgreSQL image digest' || check_status=1

@@ -82,6 +82,101 @@ func TestAuditCIEnforcementRejectsUnsafeBenchmarkCalibrationWorkflow(t *testing.
 		wantMessage string
 	}{
 		{
+			name: "main-only authorization removed",
+			mutate: func(value string) string {
+				return strings.Replace(
+					value,
+					`if [[ "${TRUSTED_REF}" != "refs/heads/main" ]]; then`,
+					`if [[ "${TRUSTED_REF}" != "refs/heads/release/v1.13.11" ]]; then`,
+					1,
+				)
+			},
+			wantMessage: "benchmark authorization is fail-closed on refs/heads/main",
+		},
+		{
+			name: "source SHA equality removed",
+			mutate: func(value string) string {
+				return strings.Replace(
+					value,
+					`if [[ "${SOURCE_SHA}" != "${TRUSTED_SHA}" ]]; then`,
+					`if [[ -z "${SOURCE_SHA}" ]]; then`,
+					1,
+				)
+			},
+			wantMessage: "benchmark source_sha must equal trusted github.sha",
+		},
+		{
+			name: "checkout source made operator-controlled",
+			mutate: func(value string) string {
+				return strings.Replace(value, "ref: ${{ github.sha }}", "ref: ${{ inputs.source_sha }}", 1)
+			},
+			wantMessage: "benchmark checkout cannot use inputs.source_sha",
+		},
+		{
+			name: "persisted credentials defaulted",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          persist-credentials: false\n", "", 1)
+			},
+			wantMessage: "benchmark checkouts must disable persisted credentials",
+		},
+		{
+			name: "setup-go cache re-enabled",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          cache: false", "          cache: true", 1)
+			},
+			wantMessage: "benchmark setup-go caching must be disabled",
+		},
+		{
+			name: "sample harness redirected",
+			mutate: func(value string) string {
+				return strings.Replace(
+					value,
+					"python3 scripts/benchmark_gate.py sample",
+					"python3 governed-source/scripts/benchmark_gate.py sample",
+					1,
+				)
+			},
+			wantMessage: "benchmark sample harness runs from trusted checkout",
+		},
+		{
+			name: "calibration harness redirected",
+			mutate: func(value string) string {
+				return strings.Replace(
+					value,
+					"python3 scripts/benchmark_gate.py calibrate",
+					"python3 governed-source/scripts/benchmark_gate.py calibrate",
+					1,
+				)
+			},
+			wantMessage: "benchmark calibration harness runs from trusted checkout",
+		},
+		{
+			name: "runner temp artifact isolation removed",
+			mutate: func(value string) string {
+				return strings.Replace(
+					value,
+					"path: ${{ runner.temp }}/benchmark-calibration-input",
+					"path: downloaded",
+					1,
+				)
+			},
+			wantMessage: "benchmark calibration artifacts use runner.temp",
+		},
+		{
+			name: "artifact source provenance check removed",
+			mutate: func(value string) string {
+				return strings.Replace(value, "              if actual != expected:\n", "", 1)
+			},
+			wantMessage: "benchmark calibration requires artifact provenance to match github.sha",
+		},
+		{
+			name: "authorization failure suppressed",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          set -euo pipefail", "          set -euo pipefail\n          set +e", 1)
+			},
+			wantMessage: "benchmark source validation must not use broad failure suppression",
+		},
+		{
 			name: "automatic schedule",
 			mutate: func(value string) string {
 				return strings.Replace(value, "  workflow_dispatch:", "  schedule:\n  workflow_dispatch:", 1)
@@ -119,11 +214,15 @@ func TestAuditCIEnforcementRejectsUnsafeBenchmarkCalibrationWorkflow(t *testing.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			mutated := tt.mutate(baselineWorkflow)
+			if mutated == baselineWorkflow {
+				t.Fatal("benchmark baseline workflow mutation target not found")
+			}
 			stderr := runAuditLocalOnlyWithBaseline(
 				t,
 				workflow,
 				codeqlWorkflow,
-				tt.mutate(baselineWorkflow),
+				mutated,
 				true,
 			)
 			if !strings.Contains(stderr, tt.wantMessage) {
