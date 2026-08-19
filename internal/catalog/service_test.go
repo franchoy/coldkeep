@@ -3,7 +3,6 @@ package catalog_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"testing"
 	"time"
 
@@ -389,28 +388,23 @@ func TestServiceLoadReachabilityRoots(t *testing.T) {
 	assertReachabilityRoots(t, roots)
 }
 
-// TestServiceDeferredMethodsReturnErrNotImplemented verifies the remaining GC
-// skeleton method returns ErrNotImplemented.
-func TestServiceDeferredMethodsReturnErrNotImplemented(t *testing.T) {
+func TestServiceLoadGCPlanMetadataEmptyCatalog(t *testing.T) {
 	dbconn := openTestDB(t)
 	svc := catalog.NewServiceFromSQL(dbconn)
 	ctx := context.Background()
 	before := countCatalogLogicalFiles(t, dbconn)
 
 	gcPlan, err := svc.LoadGCPlanMetadata(ctx, catalog.GCPlanInput{})
-	if !errors.Is(err, catalog.ErrNotImplemented) {
-		t.Errorf("LoadGCPlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
+	if err != nil {
+		t.Fatalf("LoadGCPlanMetadata: %v", err)
 	}
-	if !catalog.IsDeferred(err) {
-		t.Errorf("LoadGCPlanMetadata: want catalog.IsDeferred=true, got %v", err)
-	}
-	if gcPlan != nil {
-		t.Errorf("LoadGCPlanMetadata: want nil metadata on deferred path, got %+v", gcPlan)
+	if gcPlan == nil || gcPlan.Roots == nil || gcPlan.ProtectedSnapshots == nil || len(gcPlan.Roots) != 0 || len(gcPlan.ProtectedSnapshots) != 0 {
+		t.Fatalf("LoadGCPlanMetadata: want non-nil empty slices, got %+v", gcPlan)
 	}
 
 	after := countCatalogLogicalFiles(t, dbconn)
 	if after != before {
-		t.Fatalf("deferred catalog methods should not mutate logical_file rows: before=%d after=%d", before, after)
+		t.Fatalf("GC plan read should not mutate logical_file rows: before=%d after=%d", before, after)
 	}
 }
 

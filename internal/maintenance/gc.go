@@ -9,6 +9,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/fsx"
@@ -43,7 +44,7 @@ var gcPhysicalIntegrityCheck = func(dbconn *sql.DB) (verify.PhysicalFileIntegrit
 }
 
 var gcComputeReachability = func(ctx context.Context, dbconn *sql.DB) (*retention.ReachabilitySummary, error) {
-	return retention.ComputeReachabilitySummary(ctx, dbconn)
+	return computeGCReachabilityFromCatalog(ctx, dbconn)
 }
 
 var gcMarkReachableChunks = func(ctx context.Context, dbconn *sql.DB) (map[int64]struct{}, error) {
@@ -577,12 +578,36 @@ func MarkReachableChunks(ctx context.Context, dbconn *sql.DB) (map[int64]struct{
 	}
 	g := graph.NewService(dbconn)
 
-	roots, err := g.GCRoots(ctx, graph.GCRootOptions{})
+	metadata, err := catalog.NewServiceFromSQL(dbconn).LoadGCPlanMetadata(ctx, catalog.GCPlanInput{})
 	if err != nil {
 		return nil, err
 	}
+	roots := make([]graph.NodeID, 0, len(metadata.Roots))
+	for _, root := range metadata.Roots {
+		roots = append(roots, graph.NodeID{Type: graph.EntityLogicalFile, ID: root.LogicalFileID})
+	}
 
 	return g.ReachableChunksFromRoots(ctx, roots)
+}
+
+func computeGCReachabilityFromCatalog(ctx context.Context, dbconn *sql.DB) (*retention.ReachabilitySummary, error) {
+	metadata, err := catalog.NewServiceFromSQL(dbconn).LoadGCPlanMetadata(ctx, catalog.GCPlanInput{})
+	if err != nil {
+		return nil, err
+	}
+	current := make(map[int64]struct{})
+	snapshot := make(map[int64]struct{})
+	retained := make(map[int64]struct{}, len(metadata.Roots))
+	for _, root := range metadata.Roots {
+		retained[root.LogicalFileID] = struct{}{}
+		if root.Current {
+			current[root.LogicalFileID] = struct{}{}
+		}
+		if len(root.SnapshotIDs) != 0 {
+			snapshot[root.LogicalFileID] = struct{}{}
+		}
+	}
+	return &retention.ReachabilitySummary{CurrentLogicalIDs: current, SnapshotLogicalIDs: snapshot, RetainedLogicalIDs: retained}, nil
 }
 
 // LoadLivePackedBlockIDs resolves live chunks (live_ref_count > 0 OR pin_count > 0)

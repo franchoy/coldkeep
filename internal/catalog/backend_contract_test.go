@@ -354,42 +354,68 @@ func TestCatalogContractSnapshotGraphAcrossBackends(t *testing.T) {
 	})
 }
 
-// CAT-007 preserves the remaining deliberately deferred API boundary and proves
-// those methods cannot return partial results or mutate the catalog.
-func TestCatalogContractDeferredMethodsAcrossBackends(t *testing.T) {
+// CAT-007 proves deterministic current/snapshot GC roots on both backends.
+func TestCatalogContractGCPlansAcrossBackends(t *testing.T) {
 	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
 		seedCatalogFixture(t, backend.DB)
 		svc := catalog.NewServiceFromSQL(backend.DB)
 		before := catalogStateCounts(t, backend.DB)
-		gcPlan, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{})
-		assertDeferred(t, "LoadGCPlanMetadata", err, gcPlan)
+		first, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{})
+		if err != nil {
+			t.Fatalf("LoadGCPlanMetadata: %v", err)
+		}
+		second, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{})
+		if err != nil || !reflect.DeepEqual(first, second) {
+			t.Fatalf("GC plan not deterministic: first=%+v second=%+v err=%v", first, second, err)
+		}
+		wantSnapshots := []string{"snap-full", "snap-tie-a", "snap-tie-b", "snap-child", "snap-null-label"}
+		gotSnapshots := make([]string, len(first.ProtectedSnapshots))
+		for i, snapshot := range first.ProtectedSnapshots {
+			gotSnapshots[i] = snapshot.ID
+		}
+		if !reflect.DeepEqual(gotSnapshots, wantSnapshots) {
+			t.Fatalf("protected snapshots=%v want=%v", gotSnapshots, wantSnapshots)
+		}
+		wantRoots := []catalog.GCReachabilityRoot{
+			{LogicalFileID: 1, Current: true, SnapshotIDs: []string{}},
+			{LogicalFileID: 2, SnapshotIDs: []string{"snap-full", "snap-tie-a"}},
+			{LogicalFileID: 3, Current: true, SnapshotIDs: []string{"snap-child"}},
+			{LogicalFileID: 5, Current: true, SnapshotIDs: []string{}},
+		}
+		if !reflect.DeepEqual(first.Roots, wantRoots) {
+			t.Fatalf("GC roots=%+v want=%+v", first.Roots, wantRoots)
+		}
+		excluded, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{ExcludeSnapshotIDs: []string{"snap-full", "snap-full"}})
+		if err != nil {
+			t.Fatalf("excluded GC plan: %v", err)
+		}
+		if containsSnapshot(excluded.ProtectedSnapshots, "snap-full") || !reflect.DeepEqual(excluded.Roots[1].SnapshotIDs, []string{"snap-tie-a"}) {
+			t.Fatalf("excluded GC plan retained snap-full: %+v", excluded)
+		}
+		if plan, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{ExcludeSnapshotIDs: []string{"missing"}}); plan != nil || !catalog.IsCode(err, catalog.ErrorNotFound) {
+			t.Fatalf("missing excluded snapshot: plan=%+v err=%v", plan, err)
+		}
+		if plan, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{ExcludeSnapshotIDs: []string{" "}}); plan != nil || !catalog.IsCode(err, catalog.ErrorInvalidArgument) {
+			t.Fatalf("empty excluded snapshot: plan=%+v err=%v", plan, err)
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if plan, err := svc.LoadGCPlanMetadata(cancelled, catalog.GCPlanInput{}); plan != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled GC plan: plan=%+v err=%v", plan, err)
+		}
 		if after := catalogStateCounts(t, backend.DB); after != before {
-			t.Fatalf("deferred catalog methods mutated catalog state: before=%+v after=%+v", before, after)
+			t.Fatalf("GC plan read mutated catalog state: before=%+v after=%+v", before, after)
 		}
 	})
 }
 
-func assertDeferred(t *testing.T, name string, err error, result any) {
-	t.Helper()
-	if !errors.Is(err, catalog.ErrNotImplemented) || !catalog.IsDeferred(err) {
-		t.Errorf("%s: want catalog.ErrNotImplemented, got %v", name, err)
+func containsSnapshot(snapshots []catalog.SnapshotRef, id string) bool {
+	for _, snapshot := range snapshots {
+		if snapshot.ID == id {
+			return true
+		}
 	}
-	if !isNil(result) {
-		t.Errorf("%s: want nil result, got %#v", name, result)
-	}
-}
-
-func isNil(value any) bool {
-	if value == nil {
-		return true
-	}
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
-	case reflect.Ptr, reflect.Slice, reflect.Map, reflect.Interface:
-		return v.IsNil()
-	default:
-		return false
-	}
+	return false
 }
 
 // CAT-007 adds bounded portable cancelled-context assertions. Errors must not

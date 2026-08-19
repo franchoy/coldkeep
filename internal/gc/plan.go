@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/franchoy/coldkeep/internal/catalog"
 	chunkmeta "github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/graph"
 	"github.com/franchoy/coldkeep/internal/invariants"
@@ -126,18 +127,21 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 	if dbconn == nil {
 		return nil, fmt.Errorf("gc.BuildPlan: nil db")
 	}
-	if err := validateAssumeDeletedSnapshots(ctx, dbconn, opts.AssumeDeletedSnapshots); err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: validate assumed-deleted snapshots: %w", err)
+	metadata, err := catalog.NewServiceFromSQL(dbconn).LoadGCPlanMetadata(ctx, catalog.GCPlanInput{ExcludeSnapshotIDs: opts.AssumeDeletedSnapshots})
+	if err != nil {
+		if catalog.IsCode(err, catalog.ErrorInvalidArgument) || catalog.IsCode(err, catalog.ErrorNotFound) {
+			return nil, fmt.Errorf("gc.BuildPlan: validate assumed-deleted snapshots: %w", err)
+		}
+		return nil, fmt.Errorf("gc.BuildPlan: gc roots: %w", err)
 	}
 	if err := refuseOnIntegrityIssues(dbconn); err != nil {
 		return nil, fmt.Errorf("gc.BuildPlan: %w", err)
 	}
 
 	g := graph.NewService(dbconn)
-
-	roots, err := g.GCRoots(ctx, graph.GCRootOptions{ExcludeSnapshots: opts.AssumeDeletedSnapshots})
-	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: gc roots: %w", err)
+	roots := make([]graph.NodeID, 0, len(metadata.Roots))
+	for _, root := range metadata.Roots {
+		roots = append(roots, graph.NodeID{Type: graph.EntityLogicalFile, ID: root.LogicalFileID})
 	}
 
 	reachableChunkIDs, err := g.ReachableChunksFromRoots(ctx, roots)
@@ -185,33 +189,6 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 	}
 
 	return plan, nil
-}
-
-func validateAssumeDeletedSnapshots(ctx context.Context, dbconn *sql.DB, snapshotIDs []string) error {
-	if len(snapshotIDs) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(snapshotIDs))
-	for _, snapshotID := range snapshotIDs {
-		if snapshotID == "" {
-			return fmt.Errorf("snapshot id must not be empty")
-		}
-		if _, exists := seen[snapshotID]; exists {
-			continue
-		}
-		seen[snapshotID] = struct{}{}
-
-		var exists bool
-		if err := dbconn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM snapshot WHERE id = $1)`, snapshotID).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return fmt.Errorf("snapshot %q does not exist", snapshotID)
-		}
-	}
-
-	return nil
 }
 
 func loadAllCompletedChunks(ctx context.Context, dbconn *sql.DB) ([]chunkRecord, error) {

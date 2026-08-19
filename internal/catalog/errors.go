@@ -69,8 +69,8 @@ func IsCode(err error, code ErrorCode) bool {
 
 var deferredCause = errors.New("catalog operation not implemented")
 
-// ErrNotImplemented is the typed transitional sentinel for the four planning
-// methods. Production must not consume a method while it returns this value.
+// ErrNotImplemented is retained for error-taxonomy compatibility. No active
+// catalog operation returns it after Phase 9 completed all four planning APIs.
 var ErrNotImplemented error = NewError(
 	ErrorUnsupported,
 	"deferred planning operation",

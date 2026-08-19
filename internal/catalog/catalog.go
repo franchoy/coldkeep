@@ -79,8 +79,7 @@ type SnapshotCatalog interface {
 
 // SnapshotGraphCatalog exposes the snapshot lineage graph.
 //
-// Phase 5 implements this contract. Until then it returns the typed
-// ErrNotImplemented sentinel and no partial graph.
+// Phase 5 implemented this contract.
 // Empty catalogs return empty ordered slices. Historical missing parents are
 // represented by SnapshotParentMissing; malformed cycles return a typed
 // invariant_violation. The catalog never invents or silently repairs edges.
@@ -97,8 +96,8 @@ type ReachabilityCatalog interface {
 
 // PlacementCatalog exposes chunk/block/container placement metadata.
 //
-// Phase 6 implements this contract. It represents packed and legacy roots as a
-// strict tagged union. Until then it returns no partial placement result.
+// Phase 6 implemented this contract. It represents packed and legacy roots as
+// a strict tagged union and never returns a partial placement result.
 // A missing logical file returns not_found. A zero-length logical file returns
 // an empty placement slice. Missing, duplicate, mixed, or malformed placement
 // rows return invariant_violation rather than a partial recipe.
@@ -108,9 +107,8 @@ type PlacementCatalog interface {
 
 // RestorePlanCatalog exposes restore-plan metadata.
 //
-// Phase 7 implements this contract, where the "restore must not write
+// Phase 7 implemented this contract, where the "restore must not write
 // outside destination" invariant is enforced at the engine/catalog boundary.
-// Until then it returns no partial restore plan.
 // The service never opens or commits a transaction: constructing it with the
 // caller's *sql.Tx keeps selector resolution and recipe loading in that exact
 // transaction.
@@ -124,8 +122,7 @@ type RestorePlanCatalog interface {
 // GCPlanCatalog exposes GC-plan metadata.
 //
 // Phase 9 implements and adopts this contract, where the "GC must never delete
-// reachable data" invariant is tested at the engine/catalog boundary. Until
-// then it returns no partial GC plan.
+// reachable data" invariant is tested at the engine/catalog boundary.
 // Excluded snapshot IDs are validated before reads; missing IDs return a typed
 // not_found error, while malformed graph rows return invariant_violation.
 type GCPlanCatalog interface {
