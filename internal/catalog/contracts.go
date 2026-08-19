@@ -52,6 +52,9 @@ func ValidateChunkPlacement(placement ChunkPlacementRef) error {
 		if placement.Legacy.BlockID <= 0 || placement.Legacy.Codec == "" || placement.Legacy.FormatVersion <= 0 || placement.Legacy.PlaintextSize <= 0 || placement.Legacy.StoredSize <= 0 || !validContainerRead(placement.Legacy.Container, placement.Legacy.ContainerOffset, placement.Legacy.StoredSize) {
 			return invalidPlacement(placement, "legacy block and container bounds must be valid")
 		}
+		if placement.Legacy.PlaintextSize != placement.ChunkSize || !validLegacyCodec(placement.Legacy.Codec, placement.Legacy.Nonce) {
+			return invalidPlacement(placement, "legacy codec, nonce, and plaintext size must match the chunk")
+		}
 	case PlacementPacked:
 		if placement.Packed == nil || placement.Legacy != nil {
 			return invalidPlacement(placement, "packed placement must contain only packed metadata")
@@ -59,14 +62,42 @@ func ValidateChunkPlacement(placement ChunkPlacementRef) error {
 		if placement.Packed.BlockID <= 0 || placement.Packed.Codec == "" || placement.Packed.FormatVersion <= 0 || placement.Packed.PlaintextSize <= 0 || placement.Packed.CompressionCodec == "" || placement.Packed.StoredSize <= 0 || len(placement.Packed.BlockHash) == 0 || placement.Packed.OffsetInBlock < 0 || placement.Packed.SizeInBlock <= 0 || placement.Packed.OffsetInBlock+placement.Packed.SizeInBlock > placement.Packed.PlaintextSize || !validContainerRead(placement.Packed.Container, placement.Packed.ContainerOffset, placement.Packed.StoredSize) {
 			return invalidPlacement(placement, "packed block, segment, and container bounds must be valid")
 		}
+		if placement.Packed.SizeInBlock != placement.ChunkSize || !validPackedTransforms(placement.Packed) {
+			return invalidPlacement(placement, "packed codec, compression, and segment size must be valid")
+		}
 	default:
 		return invalidPlacement(placement, "placement kind must be legacy or packed")
 	}
 	return nil
 }
 
+func validLegacyCodec(codec string, nonce []byte) bool {
+	switch codec {
+	case "plain":
+		return len(nonce) == 0
+	case "aes-gcm":
+		return len(nonce) == 12
+	default:
+		return false
+	}
+}
+
+func validPackedTransforms(placement *PackedChunkPlacement) bool {
+	if placement == nil || (placement.Codec != "none" && placement.Codec != "aes-gcm") {
+		return false
+	}
+	switch placement.CompressionCodec {
+	case "none":
+		return placement.CompressionLevel == nil && (placement.CompressedSize == nil || *placement.CompressedSize > 0)
+	case "zstd":
+		return placement.CompressionLevel != nil && *placement.CompressionLevel >= 1 && *placement.CompressionLevel <= 9 && placement.CompressedSize != nil && *placement.CompressedSize > 0
+	default:
+		return false
+	}
+}
+
 func validContainerRead(container ContainerPlacementRef, offset, size int64) bool {
-	if container.ID <= 0 || container.Filename == "" || container.Quarantined || offset < 0 || size <= 0 || container.CurrentSize < 0 || container.MaxSize <= 0 {
+	if container.ID <= 0 || container.Filename == "" || offset < 0 || size <= 0 || container.CurrentSize < 0 || container.MaxSize <= 0 {
 		return false
 	}
 	end := offset + size

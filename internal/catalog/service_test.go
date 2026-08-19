@@ -390,23 +390,12 @@ func TestServiceLoadReachabilityRoots(t *testing.T) {
 }
 
 // TestServiceDeferredMethodsReturnErrNotImplemented verifies the remaining
-// placement/restore/GC skeleton methods return ErrNotImplemented.
+// restore/GC skeleton methods return ErrNotImplemented.
 func TestServiceDeferredMethodsReturnErrNotImplemented(t *testing.T) {
 	dbconn := openTestDB(t)
 	svc := catalog.NewServiceFromSQL(dbconn)
 	ctx := context.Background()
 	before := countCatalogLogicalFiles(t, dbconn)
-
-	placements, err := svc.LoadChunkPlacements(ctx, 1)
-	if !errors.Is(err, catalog.ErrNotImplemented) {
-		t.Errorf("LoadChunkPlacements: want ErrNotImplemented via errors.Is, got %v", err)
-	}
-	if !catalog.IsDeferred(err) {
-		t.Errorf("LoadChunkPlacements: want catalog.IsDeferred=true, got %v", err)
-	}
-	if placements != nil {
-		t.Errorf("LoadChunkPlacements: want nil placements on deferred path, got %+v", placements)
-	}
 
 	restorePlan, err := svc.LoadRestorePlanMetadata(ctx, catalog.RestorePlanInput{FileID: 1})
 	if !errors.Is(err, catalog.ErrNotImplemented) {
