@@ -22,6 +22,7 @@ type stubCommandEngine struct {
 	snapshotRestoreFunc   func(context.Context, engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error)
 	restoreStoredPathFunc func(context.Context, engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error)
 	removeStoredPathsFunc func(context.Context, engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error)
+	storeFolderFunc       func(context.Context, engine.StoreFolderRequest) (engine.StoreFolderResult, error)
 }
 
 func (s stubCommandEngine) SnapshotCreate(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
@@ -57,6 +58,85 @@ func (s stubCommandEngine) RemoveStoredPaths(ctx context.Context, req engine.Rem
 		return s.removeStoredPathsFunc(ctx, req)
 	}
 	return engine.RemoveStoredPathsResult{}, errors.New("unexpected RemoveStoredPaths call")
+}
+
+func (s stubCommandEngine) StoreFolder(ctx context.Context, req engine.StoreFolderRequest) (engine.StoreFolderResult, error) {
+	if s.storeFolderFunc != nil {
+		return s.storeFolderFunc(ctx, req)
+	}
+	return engine.StoreFolderResult{}, errors.New("unexpected StoreFolder call")
+}
+
+func TestRunStoreFolderCommandUsesEngineJSONParity(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	installStoreFolderCommandStubs(t, dbconn, stubCommandEngine{
+		storeFolderFunc: func(_ context.Context, req engine.StoreFolderRequest) (engine.StoreFolderResult, error) {
+			if req.SourcePath != "/input" || req.Codec != "aes-gcm" || req.Workers != 3 {
+				t.Fatalf("unexpected StoreFolder request: %+v", req)
+			}
+			return engine.StoreFolderResult{SourcePath: req.SourcePath, FilesStored: 2, BytesLogical: 11, WorkersUsed: 3}, nil
+		},
+	})
+
+	output := captureStdout(t, func() {
+		err := runStoreFolderCommand(parsedCommandLine{
+			method:      "store-folder",
+			positionals: []string{"/input"},
+			flags: map[string][]string{
+				"codec":   {"aes-gcm"},
+				"workers": {"3"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runStoreFolderCommand: %v", err)
+		}
+	})
+	if strings.TrimSpace(output) != `{"command":"store-folder","status":"ok","target":"/input"}` {
+		t.Fatalf("unexpected JSON output: %s", output)
+	}
+}
+
+func TestRunStoreFolderCommandUsesEngineTextParity(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	installStoreFolderCommandStubs(t, dbconn, stubCommandEngine{
+		storeFolderFunc: func(_ context.Context, req engine.StoreFolderRequest) (engine.StoreFolderResult, error) {
+			return engine.StoreFolderResult{SourcePath: req.SourcePath, FilesStored: 1}, nil
+		},
+	})
+
+	output := captureStdout(t, func() {
+		err := runStoreFolderCommand(parsedCommandLine{
+			method:      "store-folder",
+			positionals: []string{"/input"},
+			flags:       map[string][]string{"codec": {"aes-gcm"}},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runStoreFolderCommand: %v", err)
+		}
+	})
+	for _, want := range []string{"Folder stored successfully: /input", "Hint: " + doctorOperationalHint} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunStoreFolderCommandPropagatesEngineErrors(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	installStoreFolderCommandStubs(t, dbconn, stubCommandEngine{
+		storeFolderFunc: func(context.Context, engine.StoreFolderRequest) (engine.StoreFolderResult, error) {
+			return engine.StoreFolderResult{}, errors.New("folder store failed")
+		},
+	})
+
+	err := runStoreFolderCommand(parsedCommandLine{
+		method:      "store-folder",
+		positionals: []string{"/input"},
+		flags:       map[string][]string{"codec": {"aes-gcm"}},
+	}, outputModeText)
+	if err == nil || err.Error() != "folder store failed" {
+		t.Fatalf("expected engine error to propagate unchanged, got %v", err)
+	}
 }
 
 func TestRunRestoreCommandStoredPathUsesEngineJSONParity(t *testing.T) {
@@ -583,5 +663,23 @@ func installStoredPathCommandStubs(
 			*removeByIDCalled = true
 			return batch.ItemResult{}
 		}
+	}
+}
+
+func installStoreFolderCommandStubs(t *testing.T, dbconn *sql.DB, stub stubCommandEngine) {
+	t.Helper()
+
+	originalLoad := loadDefaultStorageContextPhase
+	originalNewEngine := newStoreFolderCommandEngine
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		newStoreFolderCommandEngine = originalNewEngine
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+	newStoreFolderCommandEngine = func(storage.StorageContext) (engine.Engine, error) {
+		return stub, nil
 	}
 }

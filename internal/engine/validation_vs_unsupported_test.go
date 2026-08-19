@@ -10,29 +10,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
-func TestUnsupportedEngineModesRemainUnsupportedBoundaries(t *testing.T) {
-	t.Run("recursive store", func(t *testing.T) {
-		db := openSnapshotTestDB(t)
-		sgctx := storage.StorageContext{
-			DB:           db,
-			Writer:       container.NewSimulatedWriter(1024 * 1024),
-			ContainerDir: t.TempDir(),
-		}
-		eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: &sgctx})
-		if err != nil {
-			t.Fatalf("engine.New: %v", err)
-		}
-
-		_, err = eng.Store(context.Background(), engine.StoreRequest{
-			SourcePath: t.TempDir(),
-			Recursive:  true,
-			Workers:    2,
-			Codec:      "plain",
-		})
-		assertUnsupportedBoundary(t, err, engine.ErrNotImplemented.Error())
-	})
-}
-
 func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 	t.Run("store requires source path", func(t *testing.T) {
 		db := openSnapshotTestDB(t)
@@ -48,6 +25,56 @@ func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 
 		_, err = eng.Store(context.Background(), engine.StoreRequest{SourcePath: "", Codec: "plain"})
 		assertValidationBoundary(t, err, "engine: store source path is required")
+	})
+
+	t.Run("store folder requires source path", func(t *testing.T) {
+		db := openSnapshotTestDB(t)
+		sgctx := storage.StorageContext{
+			DB:           db,
+			Writer:       container.NewSimulatedWriter(1024 * 1024),
+			ContainerDir: t.TempDir(),
+		}
+		eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: &sgctx})
+		if err != nil {
+			t.Fatalf("engine.New: %v", err)
+		}
+
+		_, err = eng.StoreFolder(context.Background(), engine.StoreFolderRequest{Codec: "plain"})
+		assertValidationBoundary(t, err, "engine: store folder source path is required")
+	})
+
+	t.Run("store folder rejects negative workers", func(t *testing.T) {
+		db := openSnapshotTestDB(t)
+		sgctx := storage.StorageContext{
+			DB:           db,
+			Writer:       container.NewSimulatedWriter(1024 * 1024),
+			ContainerDir: t.TempDir(),
+		}
+		eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: &sgctx})
+		if err != nil {
+			t.Fatalf("engine.New: %v", err)
+		}
+
+		_, err = eng.StoreFolder(context.Background(), engine.StoreFolderRequest{
+			SourcePath: t.TempDir(),
+			Codec:      "plain",
+			Workers:    -1,
+		})
+		assertValidationBoundary(t, err, "engine: store folder workers must be zero or greater")
+	})
+
+	t.Run("store folder requires injected StoreContext", func(t *testing.T) {
+		db := openSnapshotTestDB(t)
+		eng, err := engine.New(engine.Config{DB: db, ContainerDir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("engine.New: %v", err)
+		}
+
+		_, err = eng.StoreFolder(context.Background(), engine.StoreFolderRequest{
+			SourcePath: t.TempDir(),
+			Codec:      "plain",
+		})
+		assertValidationBoundary(t, err, "engine: store folder requires injected StoreContext")
 	})
 
 	t.Run("store requires injected StoreContext", func(t *testing.T) {

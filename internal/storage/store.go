@@ -3097,6 +3097,16 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 }
 
 func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) (execution.ExecutionStats, error) {
+	return StoreFolderWithStorageContextAndCodecAndOptionsWithStatsContext(context.Background(), sgctx, root, codec, opts)
+}
+
+func StoreFolderWithStorageContextAndCodecAndOptionsWithStatsContext(ctx context.Context, sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) (execution.ExecutionStats, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return execution.ExecutionStats{}, err
+	}
 	// Default to a single worker for deterministic append ordering and safer
 	// container mutation semantics under mixed file sizes.
 	err := opts.Validate()
@@ -3119,7 +3129,7 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 		return execution.ExecutionStats{}, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	jobCh := make(chan FileJob, 256)

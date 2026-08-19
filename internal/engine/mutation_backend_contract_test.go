@@ -14,6 +14,41 @@ import (
 	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
 )
 
+func TestEngineStoreFolderAcrossBackends(t *testing.T) {
+	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
+		fixture := newMutationBackendFixture(t, backend)
+		folder := filepath.Join(fixture.inputRoot, "folder")
+		for relativePath, payload := range map[string][]byte{
+			"a.txt":        []byte("alpha"),
+			"nested/b.txt": []byte("bravo"),
+			"nested/c.txt": []byte("charlie"),
+		} {
+			path := filepath.Join(folder, filepath.FromSlash(relativePath))
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatalf("create folder input parent: %v", err)
+			}
+			if err := os.WriteFile(path, payload, 0o600); err != nil {
+				t.Fatalf("write folder input: %v", err)
+			}
+		}
+
+		result, err := fixture.engine.StoreFolder(context.Background(), engine.StoreFolderRequest{
+			SourcePath: folder,
+			Codec:      "plain",
+			Workers:    2,
+		})
+		if err != nil {
+			t.Fatalf("StoreFolder: %v", err)
+		}
+		if result.SourcePath != folder || result.FilesStored != 3 || result.BytesLogical != 17 || result.WorkersUsed != 2 {
+			t.Fatalf("unexpected StoreFolder result: %+v", result)
+		}
+		if got := mutationBackendInt64(t, backend.DB, `SELECT COUNT(*) FROM physical_file`); got != 3 {
+			t.Fatalf("physical file count: got %d want 3", got)
+		}
+	})
+}
+
 func TestEngineMutationStoreRemoveAcrossBackends(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
 		fixture := newMutationBackendFixture(t, backend)
@@ -409,6 +444,7 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 
 		cancelled, cancel := context.WithCancel(context.Background())
 		cancel()
+		cancelledFolder := t.TempDir()
 		if _, err := fixture.engine.Store(cancelled, engine.StoreRequest{
 			SourcePath: "retained.txt", Codec: "plain",
 		}); !errors.Is(err, context.Canceled) {
@@ -418,6 +454,12 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 			name string
 			call func() error
 		}{
+			{"StoreFolder", func() error {
+				_, err := fixture.engine.StoreFolder(cancelled, engine.StoreFolderRequest{
+					SourcePath: cancelledFolder, Codec: "plain", Workers: 2,
+				})
+				return err
+			}},
 			{"Remove", func() error {
 				_, err := eng.Remove(cancelled, engine.RemoveRequest{FileIDs: []int64{retained.LogicalFileID}})
 				return err
@@ -467,10 +509,10 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 				}
 			})
 		}
-		if _, err := fixture.engine.Store(context.Background(), engine.StoreRequest{
-			SourcePath: "retained.txt", Recursive: true,
-		}); !errors.Is(err, engine.ErrNotImplemented) || !engine.IsUnsupported(err) {
-			t.Fatalf("recursive Store classification: %v", err)
+		if _, err := fixture.engine.StoreFolder(context.Background(), engine.StoreFolderRequest{
+			SourcePath: " ", Codec: "plain",
+		}); err == nil || engine.IsUnsupported(err) {
+			t.Fatalf("blank-path StoreFolder classification: %v", err)
 		}
 		if _, err := fixture.engine.Store(context.Background(), engine.StoreRequest{
 			SourcePath: " ",

@@ -42,6 +42,8 @@ func activeCoreContractTypes() []struct {
 		{"SnapshotQuery", engine.SnapshotQuery{}},
 		{"StoreRequest", engine.StoreRequest{}},
 		{"StoreResult", engine.StoreResult{}},
+		{"StoreFolderRequest", engine.StoreFolderRequest{}},
+		{"StoreFolderResult", engine.StoreFolderResult{}},
 		{"RestoreRequest", engine.RestoreRequest{}},
 		{"RestoreItemResult", engine.RestoreItemResult{}},
 		{"RestoreResult", engine.RestoreResult{}},
@@ -649,23 +651,28 @@ func assertRecoverRequestIsCorrectiveOnly(t *testing.T, req engine.RecoverReques
 	}
 }
 
-// TestStoreContractRepresentsFileAndFolder proves store covers single file and
-// recursive folder store with codec and workers.
-func TestStoreContractRepresentsFileAndFolder(t *testing.T) {
+// TestStoreContractsSeparateFileAndFolder proves recursive traversal is a
+// distinct operation rather than dormant fields on the single-file request.
+func TestStoreContractsSeparateFileAndFolder(t *testing.T) {
 	file := engine.StoreRequest{SourcePath: "f.txt", Codec: "aes-gcm"}
-	folder := engine.StoreRequest{SourcePath: "dir", Recursive: true, Workers: 8, Codec: "plain"}
-	if file.Recursive || !folder.Recursive || folder.Workers != 8 {
+	folder := engine.StoreFolderRequest{SourcePath: "dir", Workers: 8, Codec: "plain"}
+	if file.SourcePath != "f.txt" || folder.SourcePath != "dir" || folder.Workers != 8 {
 		t.Fatalf("store contract not representable: file=%+v folder=%+v", file, folder)
 	}
-	res := engine.StoreResult{
+	fileResult := engine.StoreResult{
 		SourcePath:    "f.txt",
 		StoredPath:    "f.txt",
 		LogicalFileID: 1,
 		FileHash:      "h",
 		AlreadyStored: true,
-		ChunksReused:  3,
 	}
-	if !res.AlreadyStored || res.ChunksReused != 3 {
-		t.Fatalf("store result not representable: %+v", res)
+	folderResult := engine.StoreFolderResult{
+		SourcePath:   "dir",
+		FilesStored:  3,
+		BytesLogical: 42,
+		WorkersUsed:  2,
+	}
+	if !fileResult.AlreadyStored || folderResult.FilesStored != 3 || folderResult.BytesLogical != 42 {
+		t.Fatalf("store results not representable: file=%+v folder=%+v", fileResult, folderResult)
 	}
 }

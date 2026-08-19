@@ -440,11 +440,6 @@ func assertStoreResultShape(t *testing.T, result engine.StoreResult) {
 		result.LogicalFileID <= 0 || result.FileHash == "" {
 		t.Fatalf("Store returned incomplete stable fields: %+v", result)
 	}
-	if result.PhysicalFileID != 0 || result.BytesLogical != 0 ||
-		result.BytesStored != 0 || result.ChunksCreated != 0 ||
-		result.ChunksReused != 0 || result.Warnings != nil {
-		t.Fatalf("Store dormant result fields changed: %+v", result)
-	}
 }
 
 func seedMutationDeadContainer(

@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/storage"
 )
 
 func TestErrNotImplementedRemainsUnsupportedSentinel(t *testing.T) {
@@ -42,30 +40,6 @@ func TestIsUnsupportedRejectsUnrelatedErrors(t *testing.T) {
 			t.Fatalf("expected unrelated error to not classify as unsupported: %v", err)
 		}
 	}
-}
-
-func TestUnsupportedEngineModesRemainRecognizedByIsUnsupported(t *testing.T) {
-	t.Run("recursive store", func(t *testing.T) {
-		db := openSnapshotTestDB(t)
-		sgctx := storage.StorageContext{
-			DB:           db,
-			Writer:       container.NewSimulatedWriter(1024 * 1024),
-			ContainerDir: t.TempDir(),
-		}
-		eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: &sgctx})
-		if err != nil {
-			t.Fatalf("engine.New: %v", err)
-		}
-		_, err = eng.Store(context.Background(), engine.StoreRequest{
-			SourcePath: t.TempDir(),
-			Recursive:  true,
-			Workers:    2,
-			Codec:      "plain",
-		})
-		if !engine.IsUnsupported(err) {
-			t.Fatalf("expected recursive store error to classify as unsupported, got %v", err)
-		}
-	})
 }
 
 func TestEngineErrorCodesAreStable(t *testing.T) {

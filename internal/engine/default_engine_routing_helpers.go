@@ -10,6 +10,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/snapshot"
@@ -126,9 +127,6 @@ func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (StoreResul
 	if err := ctx.Err(); err != nil {
 		return StoreResult{}, err
 	}
-	if req.Recursive {
-		return StoreResult{}, ErrNotImplemented
-	}
 	if strings.TrimSpace(req.SourcePath) == "" {
 		return StoreResult{}, fmt.Errorf("engine: store source path is required")
 	}
@@ -141,13 +139,45 @@ func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (StoreResul
 		return StoreResult{}, err
 	}
 	return StoreResult{
-		SourcePath:     req.SourcePath,
-		StoredPath:     stored.Path,
-		LogicalFileID:  stored.FileID,
-		FileHash:       stored.FileHash,
-		AlreadyStored:  stored.AlreadyStored,
-		PhysicalFileID: 0,
+		SourcePath:    req.SourcePath,
+		StoredPath:    stored.Path,
+		LogicalFileID: stored.FileID,
+		FileHash:      stored.FileHash,
+		AlreadyStored: stored.AlreadyStored,
 	}, nil
+}
+
+func (e *DefaultEngine) StoreFolder(ctx context.Context, req StoreFolderRequest) (StoreFolderResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return StoreFolderResult{}, err
+	}
+	if strings.TrimSpace(req.SourcePath) == "" {
+		return StoreFolderResult{}, fmt.Errorf("engine: store folder source path is required")
+	}
+	if req.Workers < 0 {
+		return StoreFolderResult{}, fmt.Errorf("engine: store folder workers must be zero or greater")
+	}
+	if e.config.StoreContext == nil {
+		return StoreFolderResult{}, fmt.Errorf("engine: store folder requires injected StoreContext")
+	}
+	workers := req.Workers
+	if workers == 0 {
+		workers = execution.DefaultOptions().StoreFolderWorkers
+	}
+	opts := execution.Options{StoreFolderWorkers: workers, PipelineDepth: 1, Deterministic: true}
+	codec, err := blocks.LoadDefaultCodec()
+	if strings.TrimSpace(req.Codec) != "" {
+		codec, err = blocks.ParseCodec(req.Codec)
+	}
+	if err != nil {
+		return StoreFolderResult{}, err
+	}
+	stats, err := storage.StoreFolderWithStorageContextAndCodecAndOptionsWithStatsContext(ctx, *e.config.StoreContext, req.SourcePath, codec, opts)
+	result := StoreFolderResult{SourcePath: req.SourcePath, FilesStored: stats.TotalFilesProcessed, BytesLogical: stats.TotalBytesProcessed, WorkersUsed: stats.WorkersUsed}
+	return result, err
 }
 
 func storeWithOptionalCodec(ctx storage.StorageContext, req StoreRequest) (storage.StoreFileResult, error) {

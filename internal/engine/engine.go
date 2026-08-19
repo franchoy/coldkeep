@@ -79,6 +79,11 @@ type Engine interface {
 	// Active semantics are limited to single-file store.
 	Store(ctx context.Context, req StoreRequest) (StoreResult, error)
 
+	// StoreFolder recursively stores a directory with deterministic discovery,
+	// bounded workers, aggregate results, and worker-writer finalization owned
+	// below this engine boundary.
+	StoreFolder(ctx context.Context, req StoreFolderRequest) (StoreFolderResult, error)
+
 	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.
 	// Method selection owns addressing semantics: this method is by-ID only.

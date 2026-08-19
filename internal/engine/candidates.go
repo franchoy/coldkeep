@@ -114,26 +114,14 @@ type SnapshotQuery struct {
 
 // StoreRequest is the active request contract for Engine.Store.
 //
-// Active semantics are single-file only. Recursive/folder-store ownership
-// remains outside the active route, and Engine.Store returns ErrNotImplemented
-// when Recursive is true. Any future contract split or narrowing requires an
-// explicit v2.0 design.
+// Store is intentionally single-file only. Folder traversal and aggregation
+// use the distinct StoreFolder operation.
 type StoreRequest struct {
-	// SourcePath is the file or folder to store.
+	// SourcePath is the file to store.
 	SourcePath string
 	// Codec selects the storage codec (e.g. "plain", "aes-gcm"). Empty means
 	// the repository default.
 	Codec string
-	// Recursive requests folder store semantics (store-folder).
-	// Active Engine.Store callers must leave this false; true returns
-	// ErrNotImplemented.
-	Recursive bool
-	// Workers is the parallelism for folder store; zero means the default.
-	// This remains outside the active route until an explicit v2.0 contract
-	// decision addresses recursive folder-store ownership.
-	Workers int
-	// Tags carries optional caller-supplied tags.
-	Tags []string
 }
 
 // StoreResult is the active result contract for Engine.Store.
@@ -144,21 +132,29 @@ type StoreResult struct {
 	StoredPath string
 	// LogicalFileID identifies the stored logical file.
 	LogicalFileID int64
-	// PhysicalFileID identifies the underlying physical file when applicable.
-	PhysicalFileID int64
 	// FileHash is the content hash (e.g. SHA-256) of the stored file.
 	FileHash string
 	// AlreadyStored indicates the content was already present (dedup hit).
 	AlreadyStored bool
-	// BytesLogical is the logical (pre-transform) size in bytes.
+}
+
+// StoreFolderRequest is the recursive folder-store contract. Workers zero
+// selects the established default; positive values request bounded file-level
+// fan-out subject to writer capability.
+type StoreFolderRequest struct {
+	SourcePath string
+	Codec      string
+	Workers    int
+}
+
+// StoreFolderResult reports deterministic aggregate execution statistics.
+// Partial statistics are returned with an error when work fails after some
+// files have completed.
+type StoreFolderResult struct {
+	SourcePath   string
+	FilesStored  int
 	BytesLogical int64
-	// BytesStored is the physical (post-transform) size in bytes.
-	BytesStored int64
-	// ChunksCreated and ChunksReused describe chunk-level dedup outcomes.
-	ChunksCreated int
-	ChunksReused  int
-	// Warnings carries structured, non-fatal warnings.
-	Warnings []OperationWarning
+	WorkersUsed  int
 }
 
 // ---------------------------------------------------------------------------

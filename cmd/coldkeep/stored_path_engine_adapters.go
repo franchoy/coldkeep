@@ -25,6 +25,14 @@ var newSnapshotRestoreCommandEngine = func(sgctx storage.StorageContext) (engine
 	})
 }
 
+var newStoreFolderCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
+	return engine.New(engine.Config{
+		DB:           sgctx.DB,
+		ContainerDir: sgctx.EffectiveContainerDir(),
+		StoreContext: &sgctx,
+	})
+}
+
 func restoreStoredPathWithEngine(
 	ctx context.Context,
 	eng engine.Engine,

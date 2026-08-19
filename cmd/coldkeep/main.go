@@ -1784,26 +1784,24 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 		opts.StoreFolderWorkers = workers
 	}
 
-	sgctx, err := storage.LoadDefaultStorageContext()
+	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	if codecName == "" {
-		err = storage.StoreFolderWithStorageContextAndOptions(sgctx, path, opts)
-	} else {
-		if codecName == "plain" {
-			_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
-		}
-
-		codec, parseErr := blocks.ParseCodec(codecName)
-		if parseErr != nil {
-			return parseErr
-		}
-
-		err = storage.StoreFolderWithStorageContextAndCodecAndOptions(sgctx, path, codec, opts)
+	if codecName == "plain" {
+		_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
 	}
+	eng, err := newStoreFolderCommandEngine(sgctx)
+	if err != nil {
+		return err
+	}
+	_, err = eng.StoreFolder(context.Background(), engine.StoreFolderRequest{
+		SourcePath: path,
+		Codec:      codecName,
+		Workers:    opts.StoreFolderWorkers,
+	})
 	if err != nil {
 		return err
 	}
