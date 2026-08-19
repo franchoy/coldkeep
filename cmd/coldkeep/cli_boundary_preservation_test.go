@@ -327,7 +327,7 @@ func TestRunRepairCommandDoesNotConstructEngine(t *testing.T) {
 	}
 }
 
-func TestRunDoctorCommandPreservesDirectRecoveryOwnership(t *testing.T) {
+func TestRunDoctorCommandPreservesRecoveryFailureShortCircuitCompatibility(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase
 	originalVerify := doctorVerifyPhase
@@ -361,7 +361,7 @@ func TestRunDoctorCommandPreservesDirectRecoveryOwnership(t *testing.T) {
 		t.Fatalf("expected recovery exit code %d, got %d", exitRecovery, got)
 	}
 	if !recoveryCalled {
-		t.Fatal("expected doctor to preserve direct recovery ownership")
+		t.Fatal("expected the legacy compatibility adapter to invoke recovery")
 	}
 	if schemaCalled {
 		t.Fatal("schema phase should not run after recovery failure")
@@ -371,7 +371,7 @@ func TestRunDoctorCommandPreservesDirectRecoveryOwnership(t *testing.T) {
 	}
 }
 
-func TestRunDoctorCommandDoesNotConstructEngine(t *testing.T) {
+func TestRunDoctorLegacyCompatibilityDoesNotUseGenericCommandEngine(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase
 	originalVerify := doctorVerifyPhase
@@ -388,7 +388,7 @@ func TestRunDoctorCommandDoesNotConstructEngine(t *testing.T) {
 	engineConstructed := false
 	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
 		engineConstructed = true
-		t.Fatal("doctor should not construct an engine repair/recovery API")
+		t.Fatal("doctor compatibility adapter should not use the generic command-engine seam")
 		return nil, nil
 	}
 	doctorRecoveryPhase = func(string) (recovery.Report, error) {
@@ -412,6 +412,6 @@ func TestRunDoctorCommandDoesNotConstructEngine(t *testing.T) {
 		t.Fatalf("runDoctorCommand: %v", err)
 	}
 	if engineConstructed {
-		t.Fatal("doctor unexpectedly constructed an engine")
+		t.Fatal("doctor unexpectedly used the generic command-engine seam")
 	}
 }

@@ -91,6 +91,27 @@ func recoveryReportFromEngine(result engine.RecoverResult) recovery.Report {
 	}
 }
 
+var connectDoctorDBPhase = db.ConnectDB
+
+var newDoctorCommandEngine = func(dbconn *sql.DB, containersDir string) (engine.Engine, error) {
+	return engine.New(engine.Config{DB: dbconn, ContainerDir: containersDir})
+}
+
+func executeDoctorEngine(containersDir, verifyLevel string) (engine.DoctorResult, error) {
+	dbconn, err := connectDoctorDBPhase()
+	if err != nil {
+		return engine.DoctorResult{}, fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	eng, err := newDoctorCommandEngine(dbconn, containersDir)
+	if err != nil {
+		return engine.DoctorResult{}, err
+	}
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return eng.Doctor(ctx, engine.DoctorRequest{VerifyLevel: verifyLevel})
+}
+
 func restoreStoredPathWithEngine(
 	ctx context.Context,
 	eng engine.Engine,

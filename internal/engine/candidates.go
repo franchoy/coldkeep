@@ -886,3 +886,53 @@ type RecoverResult struct {
 	SealingQuarantined     int64
 	Warnings               []OperationWarning
 }
+
+// DoctorRequest selects the verification strength for the corrective health
+// gate. Empty VerifyLevel means standard.
+type DoctorRequest struct {
+	VerifyLevel string
+}
+
+// DoctorPhysicalAudit is the neutral current-path integrity summary.
+type DoctorPhysicalAudit struct {
+	OrphanPhysicalFileRows    int64
+	LogicalRefCountMismatches int64
+	NegativeLogicalRefCounts  int64
+}
+
+// DoctorSnapshotAudit is the neutral snapshot-retention integrity summary.
+type DoctorSnapshotAudit struct {
+	SnapshotFileRows               int64
+	OrphanSnapshotPathRefs         int64
+	DuplicateSnapshotPathPairs     int64
+	SnapshotReferencedLogicalFiles int64
+	SnapshotOnlyLogicalFiles       int64
+	SharedLogicalFiles             int64
+	OrphanSnapshotLogicalRefs      int64
+	InvalidLifecycleStates         int64
+	RetainedMissingChunkGraph      int64
+}
+
+// DoctorStage identifies one ordered Doctor stage.
+type DoctorStage string
+
+const (
+	DoctorStageRecovery DoctorStage = "recovery"
+	DoctorStageSchema   DoctorStage = "schema"
+	DoctorStageVerify   DoctorStage = "verify"
+	DoctorStageAudit    DoctorStage = "audit"
+)
+
+// DoctorResult is the presentation-neutral ordered recovery, schema,
+// verification, and audit report. Status strings retain the stable CLI values.
+type DoctorResult struct {
+	Recovery       RecoverResult
+	VerifyLevel    string
+	SchemaVersion  int64
+	RecoveryStatus string
+	VerifyStatus   string
+	SchemaStatus   string
+	PhysicalAudit  DoctorPhysicalAudit
+	SnapshotAudit  DoctorSnapshotAudit
+	FailedStage    DoctorStage
+}

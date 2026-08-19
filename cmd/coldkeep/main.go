@@ -186,13 +186,6 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
-// Doctor's recovery stage uses the same active engine operation as startup.
-// Phase 17 owns the remaining schema/verify/audit composition.
-var doctorRecoveryPhase = runRecoveryThroughEngine
-var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
-var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
-var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
-
 var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
 		return storage.StoreFileResult{}, fmt.Errorf("store: storage context DB is required")
@@ -2663,39 +2656,18 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return err
 	}
 
-	report := doctorReport{
-		VerifyLevel: verifyLevelToString(verifyLevel),
+	engineResult, doctorErr := executeDoctorEngine(container.ContainersDir, verifyLevelToString(verifyLevel))
+	if doctorErr != nil {
+		switch engineResult.FailedStage {
+		case engine.DoctorStageRecovery:
+			return recoveryError(doctorErr)
+		case engine.DoctorStageVerify, engine.DoctorStageAudit:
+			return verifyError(doctorErr)
+		default:
+			return doctorErr
+		}
 	}
-
-	recoveryReport, recoveryErr := doctorRecoveryPhase(container.ContainersDir)
-	report.Recovery = recoveryReport
-	if recoveryErr != nil {
-		report.RecoveryStatus = "error"
-		return recoveryError(fmt.Errorf("doctor recovery phase failed: %w", recoveryErr))
-	}
-	report.RecoveryStatus = "ok"
-
-	schemaVersion, schemaErr := doctorSchemaVersionPhase()
-	if schemaErr != nil {
-		report.SchemaStatus = "error"
-		return fmt.Errorf("doctor schema/version check failed: %w", schemaErr)
-	}
-	report.SchemaVersion = schemaVersion
-	report.SchemaStatus = "ok"
-
-	verifyErr := doctorVerifyPhase(container.ContainersDir, "system", 0, verifyLevel)
-	if verifyErr != nil {
-		report.VerifyStatus = "error"
-		return verifyError(fmt.Errorf("doctor verify phase failed: %w", verifyErr))
-	}
-	report.VerifyStatus = "ok"
-
-	auditSummary, auditErr := doctorSystemAuditPhase()
-	if auditErr != nil {
-		return verifyError(fmt.Errorf("doctor audit summary phase failed: %w", auditErr))
-	}
-	report.physicalAudit = auditSummary.Physical
-	report.snapshotAudit = auditSummary.Snapshot
+	report := doctorReportFromEngine(engineResult)
 
 	// Intentional JSON contract (frozen v1.0):
 	// - Startup/preflight recovery diagnostics are emitted as stderr events
@@ -2724,6 +2696,30 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 
 	return nil
+}
+
+func doctorReportFromEngine(result engine.DoctorResult) doctorReport {
+	return doctorReport{
+		Recovery: recoveryReportFromEngine(result.Recovery), VerifyLevel: result.VerifyLevel,
+		SchemaVersion: result.SchemaVersion, RecoveryStatus: result.RecoveryStatus,
+		VerifyStatus: result.VerifyStatus, SchemaStatus: result.SchemaStatus,
+		physicalAudit: verify.PhysicalFileIntegritySummary{
+			OrphanPhysicalFileRows:    result.PhysicalAudit.OrphanPhysicalFileRows,
+			LogicalRefCountMismatches: result.PhysicalAudit.LogicalRefCountMismatches,
+			NegativeLogicalRefCounts:  result.PhysicalAudit.NegativeLogicalRefCounts,
+		},
+		snapshotAudit: verify.SnapshotReachabilityIntegritySummary{
+			SnapshotFileRows:               result.SnapshotAudit.SnapshotFileRows,
+			OrphanSnapshotPathRefs:         result.SnapshotAudit.OrphanSnapshotPathRefs,
+			DuplicateSnapshotPathPairs:     result.SnapshotAudit.DuplicateSnapshotPathPairs,
+			SnapshotReferencedLogicalFiles: result.SnapshotAudit.SnapshotReferencedLogicalFiles,
+			SnapshotOnlyLogicalFiles:       result.SnapshotAudit.SnapshotOnlyLogicalFiles,
+			SharedLogicalFiles:             result.SnapshotAudit.SharedLogicalFiles,
+			OrphanSnapshotLogicalRefs:      result.SnapshotAudit.OrphanSnapshotLogicalRefs,
+			InvalidSnapshotLifecycleStates: result.SnapshotAudit.InvalidLifecycleStates,
+			RetainedMissingChunkGraph:      result.SnapshotAudit.RetainedMissingChunkGraph,
+		},
+	}
 }
 
 func formatDoctorTextReport(report doctorReport) string {

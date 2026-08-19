@@ -103,6 +103,9 @@ type Engine interface {
 	// Recover executes the corrective repository recovery pass against the
 	// injected database and configured container directory.
 	Recover(ctx context.Context, req RecoverRequest) (RecoverResult, error)
+	// Doctor executes recovery, schema validation, system verification, and
+	// integrity audit in order, stopping on the first failed stage.
+	Doctor(ctx context.Context, req DoctorRequest) (DoctorResult, error)
 
 	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.
