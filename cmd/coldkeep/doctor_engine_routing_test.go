@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/application"
 	"github.com/franchoy/coldkeep/internal/engine"
 )
 
@@ -67,6 +68,22 @@ func TestRunDoctorCommandPreservesStageExitClasses(t *testing.T) {
 				t.Fatalf("stage %s error=%v exit=%d want %d", tc.stage, err, classifyExitCode(err), tc.exit)
 			}
 		})
+	}
+}
+
+func TestRunDoctorCommandClassifiesSessionOpenFailureAsRecovery(t *testing.T) {
+	original := openApplicationSessionPhase
+	t.Cleanup(func() { openApplicationSessionPhase = original })
+	openApplicationSessionPhase = func(application.Request) (commandSession, error) {
+		return nil, errors.New("dial failed")
+	}
+
+	err := runDoctorCommand(parsedCommandLine{method: "doctor", flags: map[string][]string{}}, outputModeJSON)
+	if err == nil || classifyExitCode(err) != exitRecovery {
+		t.Fatalf("session-open error=%v exit=%d want %d", err, classifyExitCode(err), exitRecovery)
+	}
+	if !strings.Contains(err.Error(), "doctor recovery phase failed: failed to connect to DB: dial failed") {
+		t.Fatalf("session-open message changed: %v", err)
 	}
 }
 

@@ -821,6 +821,20 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 			wantMessage: "PostgreSQL internal package contracts prove Phase 17 mutation-cardinality execution",
 		},
 		{
+			name:        "v1.13.12 PostgreSQL catalog planning marker",
+			anchor:      "      - name: Run required PostgreSQL internal package contracts\n",
+			old:         "TestCatalogContractRestorePlansAcrossBackends/postgres",
+			replacement: "TestCatalogContractRestorePlansAcrossBackends/sqlite",
+			wantMessage: "PostgreSQL internal package contracts prove catalog restore-plan execution",
+		},
+		{
+			name:        "v1.13.12 PostgreSQL engine Doctor marker",
+			anchor:      "      - name: Run required PostgreSQL internal package contracts\n",
+			old:         "TestEngineDoctorAcrossBackends/postgres",
+			replacement: "TestEngineDoctorAcrossBackends/sqlite",
+			wantMessage: "PostgreSQL internal package contracts prove engine Doctor execution",
+		},
+		{
 			name:        "Unix native contention source",
 			old:         "func TestNativeLockContentionAndReacquire",
 			replacement: "func removedNativeLockContentionAndReacquire",

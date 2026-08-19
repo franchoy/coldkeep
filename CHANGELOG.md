@@ -34,6 +34,18 @@ project, do not start here; start with [README.md](README.md).
   engine-owned DTOs, exact tagged dynamic values, ordered trace events, and a
   complete Verify summary while preserving the existing renderer output
   through compatibility projection.
+- Completed the catalog graph, placement, restore-plan, and GC-plan contracts
+  on SQLite and PostgreSQL and adopted each in its production path. Completed
+  engine ownership for folder store, list/search, configuration, snapshots,
+  inspect/stats/verify, repair, recovery/startup recovery, Doctor, and live GC
+  planning behind an application composition boundary and enforced thin-CLI
+  dependency guards.
+- Completed the isolated compatibility and adversarial regression phase. Its
+  full PostgreSQL matrix caught and corrected Doctor session-open exit/message
+  projection drift; the restarted plain matrix, AES-GCM matrix, G1–G17
+  adversarial suite, coordination/advisory-session proofs, legacy fixture, and
+  post-correction full/race suites pass. Phase 21 exact-head candidate evidence
+  remains unrun.
 
 ------------------------------------------------------------------------
 

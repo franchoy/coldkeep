@@ -38,7 +38,7 @@ func recoveryReportFromEngine(result engine.RecoverResult) recovery.Report {
 func executeDoctorEngine(containersDir, verifyLevel string) (engine.DoctorResult, error) {
 	session, err := openCommandSession("doctor", false, containersDir)
 	if err != nil {
-		return engine.DoctorResult{}, fmt.Errorf("failed to connect to DB: %w", err)
+		return engine.DoctorResult{FailedStage: engine.DoctorStageRecovery}, fmt.Errorf("doctor recovery phase failed: failed to connect to DB: %w", err)
 	}
 	defer func() { _ = session.Close() }()
 	ctx, cancel := session.OperationContext(context.Background())
