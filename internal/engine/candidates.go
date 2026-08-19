@@ -827,51 +827,33 @@ const (
 	RepairTargetChunkLiveRefCounts RepairTarget = "chunk-live-ref-counts"
 )
 
-// RepairRequest is a candidate-only request contract for a future Repair
-// operation. Repair is not a method on the current Engine interface.
-//
-// Request/result presence must not be mistaken for active engine ownership.
-// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
-// ownership. Any early-v2.0 activation design must be explicit and
-// behavior-preserving.
+// RepairRequest is the active ordered repair contract. Targets contain raw
+// caller values so validation, normalization, duplicate detection, and
+// deterministic reporting remain engine-owned. Input-file ingestion remains a
+// caller responsibility.
 type RepairRequest struct {
-	// Target selects the single-target repair (when Batch is false).
-	Target RepairTarget
-	// Batch processes multiple targets.
-	Batch bool
-	// Targets is the explicit batch target list.
-	Targets []RepairTarget
+	Targets []string
 	// FailFast stops a batch on the first failure.
 	FailFast bool
-	// InputPath is an optional batch-input source.
-	//
-	// Batch-input parsing remains caller-side under current ownership and would
-	// require an explicit decision if Repair were activated.
-	InputPath string
-	// DryRun simulates without mutating, where supported.
-	DryRun bool
-	// Limit caps the number of rows processed when greater than zero.
-	Limit int
 }
 
 // RepairTargetResult is the outcome of a single repair target.
 type RepairTargetResult struct {
-	Target RepairTarget
+	RawTarget string
+	Target    RepairTarget
 	// ScannedRows and UpdatedRows are generic counters covering both
 	// logical-file and chunk recomputations.
-	ScannedRows int
-	UpdatedRows int
+	ScannedRows int64
+	UpdatedRows int64
 	// OrphanRows captures orphan physical-file rows for ref-count repair.
-	OrphanRows int
-	Status     BatchItemStatus
-	Error      string
+	OrphanRows        int64
+	Status            BatchItemStatus
+	Message           string
+	InvariantCode     string
+	RecommendedAction string
 }
 
-// RepairResult is a candidate-only result contract for a future Repair
-// operation. Repair is not a method on the current Engine interface.
-// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
-// ownership; any early-v2.0 activation design must be explicit and
-// behavior-preserving.
+// RepairResult is the complete aggregate result of the processed targets.
 type RepairResult struct {
 	// Targets holds per-target outcomes.
 	Targets []RepairTargetResult

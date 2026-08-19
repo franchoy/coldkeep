@@ -24,7 +24,7 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "SnapshotRestore", "GarbageCollect", "Store", "StoreFolder", "ListFiles", "SearchFiles", "GetConfiguration", "SetConfiguration", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "SnapshotRestore", "GarbageCollect", "Store", "StoreFolder", "ListFiles", "SearchFiles", "GetConfiguration", "SetConfiguration", "Repair", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)
@@ -52,7 +52,6 @@ func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"Repair",
 		"SnapshotRepair",
 		"RepairPlan",
 		"Recover",
@@ -101,13 +100,6 @@ type candidateOnlyOperationCase struct {
 
 func candidateOnlyOperationCases() []candidateOnlyOperationCase {
 	return []candidateOnlyOperationCase{
-		{
-			name:              "repair",
-			requestType:       engine.RepairRequest{},
-			resultType:        engine.RepairResult{},
-			forbiddenMethod:   "Repair",
-			futureDisposition: "early v2.0 activation-design decision",
-		},
 		{
 			name:              "recover",
 			requestType:       engine.RecoverRequest{},

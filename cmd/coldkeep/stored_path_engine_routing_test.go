@@ -34,6 +34,7 @@ type stubCommandEngine struct {
 	statsFunc             func(context.Context, engine.StatsRequest) (engine.StatsResult, error)
 	inspectFunc           func(context.Context, engine.InspectRequest) (engine.InspectResult, error)
 	verifyFunc            func(context.Context, engine.VerifyRequest) (engine.VerifyResult, error)
+	repairFunc            func(context.Context, engine.RepairRequest) (engine.RepairResult, error)
 }
 
 func (s stubCommandEngine) SnapshotCreate(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
@@ -153,6 +154,13 @@ func (s stubCommandEngine) Verify(ctx context.Context, req engine.VerifyRequest)
 		return s.verifyFunc(ctx, req)
 	}
 	return engine.VerifyResult{}, errors.New("unexpected Verify call")
+}
+
+func (s stubCommandEngine) Repair(ctx context.Context, req engine.RepairRequest) (engine.RepairResult, error) {
+	if s.repairFunc != nil {
+		return s.repairFunc(ctx, req)
+	}
+	return engine.RepairResult{}, errors.New("unexpected Repair call")
 }
 
 func TestRunStoreFolderCommandUsesEngineJSONParity(t *testing.T) {

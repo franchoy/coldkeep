@@ -21,12 +21,21 @@ type RepairLogicalRefCountsResult struct {
 }
 
 func RepairLogicalRefCountsResultWithDB(dbconn *sql.DB) (result RepairLogicalRefCountsResult, err error) {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return RepairLogicalRefCountsResultWithDBContext(ctx, dbconn)
+}
+
+func RepairLogicalRefCountsResultWithDBContext(ctx context.Context, dbconn *sql.DB) (result RepairLogicalRefCountsResult, err error) {
 	if dbconn == nil {
 		return RepairLogicalRefCountsResult{}, fmt.Errorf("db connection is nil")
 	}
-
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return RepairLogicalRefCountsResult{}, err
+	}
 
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {

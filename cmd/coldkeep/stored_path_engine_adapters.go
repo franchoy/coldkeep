@@ -52,6 +52,12 @@ var newObservabilityCommandEngine = func(sgctx storage.StorageContext) (engine.E
 	return engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
 }
 
+var newRepairCommandEngine = func(dbconn *sql.DB) (engine.Engine, error) {
+	return engine.New(engine.Config{DB: dbconn})
+}
+
+var connectRepairDBPhase = db.ConnectDB
+
 func restoreStoredPathWithEngine(
 	ctx context.Context,
 	eng engine.Engine,

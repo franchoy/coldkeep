@@ -96,6 +96,11 @@ type Engine interface {
 	// SetConfiguration validates and persists one repository write default.
 	SetConfiguration(ctx context.Context, req SetConfigurationRequest) (SetConfigurationResult, error)
 
+	// Repair validates, normalizes, deduplicates, and executes ordered catalog
+	// integrity recomputations. Each target remains transactionally independent;
+	// FailFast stops after the first execution failure.
+	Repair(ctx context.Context, req RepairRequest) (RepairResult, error)
+
 	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.
 	// Method selection owns addressing semantics: this method is by-ID only.

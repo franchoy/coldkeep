@@ -155,7 +155,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   `507859daccf25594142c61e5ab8209a751fb579a`. It must complete the deferred
   catalog planning APIs, production engine ownership, neutral contracts, and
   enforceable thin-CLI boundary without changing storage semantics. Phases
-  0–7 are complete; Phase 8 is next.
+  0–15 are complete; Phase 16 is next.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan;
   final v1.x completion remains gated by v1.13.12 and v1.13.13. v1.13.13 is an
   audit-only final handoff gate, and v2.x implementation is not authorized.

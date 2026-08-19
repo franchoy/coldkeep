@@ -68,6 +68,9 @@ func activeCoreContractTypes() []struct {
 		{"GarbageCollectResult", engine.GarbageCollectResult{}},
 		{"VerifyRequest", engine.VerifyRequest{}},
 		{"VerifyResult", engine.VerifyResult{}},
+		{"RepairRequest", engine.RepairRequest{}},
+		{"RepairTargetResult", engine.RepairTargetResult{}},
+		{"RepairResult", engine.RepairResult{}},
 		{"SnapshotMeta", engine.SnapshotMeta{}},
 		{"SnapshotListRequest", engine.SnapshotListRequest{}},
 		{"SnapshotListResult", engine.SnapshotListResult{}},
@@ -136,9 +139,6 @@ func candidateCorrectiveContractTypes() []struct {
 		name string
 		val  any
 	}{
-		{"RepairRequest", engine.RepairRequest{}},
-		{"RepairTargetResult", engine.RepairTargetResult{}},
-		{"RepairResult", engine.RepairResult{}},
 		{"RecoverRequest", engine.RecoverRequest{}},
 		{"RecoverResult", engine.RecoverResult{}},
 	}
@@ -603,27 +603,22 @@ func assertSnapshotRestoreContract(t *testing.T, after time.Time, before time.Ti
 // TestRepairContractRepresentsTargetsAndBatch proves repair can express the
 // single targets and batch/fail-fast behavior.
 func TestRepairContractRepresentsTargetsAndBatch(t *testing.T) {
-	single := engine.RepairRequest{Target: engine.RepairTargetRefCounts}
-	if single.Target != engine.RepairTargetRefCounts {
-		t.Error("single ref-counts repair not representable")
+	request := engine.RepairRequest{
+		Targets:  []string{" ref-counts ", "chunk-live-ref-counts", "ref-counts"},
+		FailFast: true,
 	}
-	batch := engine.RepairRequest{
-		Batch:     true,
-		Targets:   []engine.RepairTarget{engine.RepairTargetRefCounts, engine.RepairTargetChunkLiveRefCounts},
-		FailFast:  true,
-		InputPath: "/in",
-	}
-	if !batch.Batch || len(batch.Targets) != 2 {
+	if !request.FailFast || len(request.Targets) != 3 {
 		t.Error("batch repair not representable")
 	}
 	res := engine.RepairResult{
 		Targets: []engine.RepairTargetResult{
-			{Target: engine.RepairTargetRefCounts, ScannedRows: 10, UpdatedRows: 2, OrphanRows: 1, Status: engine.BatchItemOK},
-			{Target: engine.RepairTargetChunkLiveRefCounts, ScannedRows: 5, UpdatedRows: 0, Status: engine.BatchItemOK},
+			{RawTarget: "ref-counts", Target: engine.RepairTargetRefCounts, ScannedRows: 10, UpdatedRows: 2, OrphanRows: 1, Status: engine.BatchItemOK},
+			{RawTarget: "chunk-live-ref-counts", Target: engine.RepairTargetChunkLiveRefCounts, ScannedRows: 5, UpdatedRows: 0, Status: engine.BatchItemOK},
+			{RawTarget: "ref-counts", Target: engine.RepairTargetRefCounts, Status: engine.BatchItemSkipped, Message: "duplicate target"},
 		},
-		Summary: engine.BatchSummary{OK: 2},
+		Summary: engine.BatchSummary{OK: 2, Skipped: 1},
 	}
-	if len(res.Targets) != 2 {
+	if len(res.Targets) != 3 {
 		t.Fatalf("repair result not representable: %+v", res)
 	}
 }

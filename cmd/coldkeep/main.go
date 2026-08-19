@@ -196,17 +196,6 @@ var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 
-// Current intentional CLI/domain ownership: repair remains direct maintenance
-// execution rather than active engine ownership. Phase 14 made this boundary
-// decision, and the Phase 16 honesty proof confirmed it. Any future activation
-// belongs to an explicit early-v2.0 design; this direct hook is intentional.
-var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
-
-// Current intentional CLI/domain ownership: chunk live-ref-count repair remains
-// a direct maintenance hook, not an engine-routed workflow. Phase 14 made this
-// boundary decision, and the Phase 16 honesty proof confirmed it. Any future
-// early-v2.0 activation design must be explicit and behavior-preserving.
-var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
 	if sgctx == nil || sgctx.DB == nil {
 		return storage.StoreFileResult{}, fmt.Errorf("store: storage context DB is required")
@@ -2303,12 +2292,12 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return usageErrorf("Usage: coldkeep repair ref-counts --batch [--input <file>] [--fail-fast] [--output <text|json>]")
 		}
 
-		prepared := prepareRepairTargets(rawTargets)
-		if len(prepared) == 0 {
-			return usageErrorf("no valid repair targets after parsing input")
+		failFast := parsed.hasFlag("fail-fast", "failFast")
+		result, err := executeRepairEngine(rawRepairTargetValues(rawTargets), failFast)
+		if err != nil {
+			return err
 		}
-
-		report := executeRepairPrepared(parsed.hasFlag("fail-fast", "failFast"), prepared)
+		report := repairBatchReport(result, failFast)
 		return emitBatchCommandReport("repair", report, outputMode)
 	}
 
@@ -2319,9 +2308,9 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	target := strings.TrimSpace(parsed.positionals[0])
 	switch target {
 	case "ref-counts":
-		result, err := repairLogicalRefCountsPhase()
+		result, err := executeSingleRepairEngine(target)
 		if err != nil {
-			return verifyError(fmt.Errorf("repair ref-counts failed: %w", err))
+			return err
 		}
 
 		if outputMode == outputModeJSON {
@@ -2330,9 +2319,9 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 				"command": "repair",
 				"data": map[string]any{
 					"target":                    "ref-counts",
-					"scanned_logical_files":     result.ScannedLogicalFiles,
-					"updated_logical_files":     result.UpdatedLogicalFiles,
-					"orphan_physical_file_rows": result.OrphanPhysicalFileRows,
+					"scanned_logical_files":     result.ScannedRows,
+					"updated_logical_files":     result.UpdatedRows,
+					"orphan_physical_file_rows": result.OrphanRows,
 				},
 			}
 			encoded, _ := json.Marshal(payload)
@@ -2341,17 +2330,17 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 
 		fmt.Printf("Recomputed logical_file.ref_count from physical_file rows. scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d\n",
-			result.ScannedLogicalFiles,
-			result.UpdatedLogicalFiles,
-			result.OrphanPhysicalFileRows,
+			result.ScannedRows,
+			result.UpdatedRows,
+			result.OrphanRows,
 		)
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 
 	case "chunk-live-ref-counts":
-		result, err := repairChunkLiveRefCountsPhase()
+		result, err := executeSingleRepairEngine(target)
 		if err != nil {
-			return verifyError(fmt.Errorf("repair chunk-live-ref-counts failed: %w", err))
+			return err
 		}
 
 		if outputMode == outputModeJSON {
@@ -2360,8 +2349,8 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 				"command": "repair",
 				"data": map[string]any{
 					"target":         "chunk-live-ref-counts",
-					"scanned_chunks": result.ScannedChunks,
-					"updated_chunks": result.UpdatedChunks,
+					"scanned_chunks": result.ScannedRows,
+					"updated_chunks": result.UpdatedRows,
 				},
 			}
 			encoded, _ := json.Marshal(payload)
@@ -2370,8 +2359,8 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 
 		fmt.Printf("Recomputed chunk.live_ref_count from file_chunk rows. scanned_chunks=%d updated_chunks=%d\n",
-			result.ScannedChunks,
-			result.UpdatedChunks,
+			result.ScannedRows,
+			result.UpdatedRows,
 		)
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
@@ -2380,129 +2369,64 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 }
 
-type preparedRepairTarget struct {
-	Target     string
-	Executable bool
-	Result     batch.ItemResult
+func rawRepairTargetValues(raw []batch.RawTarget) []string {
+	values := make([]string, len(raw))
+	for i, item := range raw {
+		values[i] = item.Value
+	}
+	return values
 }
 
-func prepareRepairTargets(raw []batch.RawTarget) []preparedRepairTarget {
-	prepared := make([]preparedRepairTarget, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-
-	for _, item := range raw {
-		target := strings.TrimSpace(item.Value)
-		if target == "" {
-			prepared = append(prepared, preparedRepairTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					RawValue: item.Value,
-					Status:   batch.ResultFailed,
-					Message:  fmt.Sprintf("invalid repair target %q", item.Value),
-				},
-			})
-			continue
-		}
-
-		if target != "ref-counts" && target != "chunk-live-ref-counts" {
-			prepared = append(prepared, preparedRepairTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					RawValue: item.Value,
-					Status:   batch.ResultFailed,
-					Message:  fmt.Sprintf("unknown repair target %q", item.Value),
-				},
-			})
-			continue
-		}
-
-		if _, exists := seen[target]; exists {
-			prepared = append(prepared, preparedRepairTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					RawValue: target,
-					Status:   batch.ResultSkipped,
-					Message:  "duplicate target",
-				},
-			})
-			continue
-		}
-
-		seen[target] = struct{}{}
-		prepared = append(prepared, preparedRepairTarget{Target: target, Executable: true})
+func executeRepairEngine(targets []string, failFast bool) (engine.RepairResult, error) {
+	dbconn, err := connectRepairDBPhase()
+	if err != nil {
+		return engine.RepairResult{}, fmt.Errorf("connect repair database: %w", err)
 	}
-
-	return prepared
+	defer func() { _ = dbconn.Close() }()
+	eng, err := newRepairCommandEngine(dbconn)
+	if err != nil {
+		return engine.RepairResult{}, err
+	}
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return eng.Repair(ctx, engine.RepairRequest{Targets: append([]string(nil), targets...), FailFast: failFast})
 }
 
-func executeRepairPrepared(failFast bool, targets []preparedRepairTarget) batch.Report {
-	results := make([]batch.ItemResult, 0, len(targets))
-
-	for _, target := range targets {
-		if !target.Executable {
-			results = append(results, target.Result)
-			continue
+func executeSingleRepairEngine(target string) (engine.RepairTargetResult, error) {
+	result, err := executeRepairEngine([]string{target}, false)
+	if err != nil {
+		return engine.RepairTargetResult{}, err
+	}
+	if len(result.Targets) != 1 {
+		return engine.RepairTargetResult{}, fmt.Errorf("repair engine returned %d target results, want 1", len(result.Targets))
+	}
+	item := result.Targets[0]
+	if item.Status == engine.BatchItemFailed {
+		failure := error(fmt.Errorf("%s", item.Message))
+		if item.InvariantCode != "" {
+			failure = invariants.New(item.InvariantCode, item.Message, nil)
 		}
+		return engine.RepairTargetResult{}, verifyError(failure)
+	}
+	return item, nil
+}
 
-		switch target.Target {
-		case "ref-counts":
-			result, err := repairLogicalRefCountsPhase()
-			if err != nil {
-				item := batch.ItemResult{
-					RawValue: target.Target,
-					Status:   batch.ResultFailed,
-					Message:  fmt.Sprintf("repair ref-counts failed: %v", err),
-				}
-				if code, ok := invariants.Code(err); ok {
-					item.InvariantCode = code
-					item.RecommendedAction = invariants.RecommendedActionForCode(code)
-				}
-				results = append(results, item)
-				if failFast {
-					break
-				}
-				continue
-			}
-
-			results = append(results, batch.ItemResult{
-				RawValue: target.Target,
-				Status:   batch.ResultSuccess,
-				Message: fmt.Sprintf(
-					"repaired scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d",
-					result.ScannedLogicalFiles,
-					result.UpdatedLogicalFiles,
-					result.OrphanPhysicalFileRows,
-				),
-			})
-
-		case "chunk-live-ref-counts":
-			result, err := repairChunkLiveRefCountsPhase()
-			if err != nil {
-				item := batch.ItemResult{
-					RawValue: target.Target,
-					Status:   batch.ResultFailed,
-					Message:  fmt.Sprintf("repair chunk-live-ref-counts failed: %v", err),
-				}
-				if code, ok := invariants.Code(err); ok {
-					item.InvariantCode = code
-					item.RecommendedAction = invariants.RecommendedActionForCode(code)
-				}
-				results = append(results, item)
-				if failFast {
-					break
-				}
-				continue
-			}
-
-			results = append(results, batch.ItemResult{
-				RawValue: target.Target,
-				Status:   batch.ResultSuccess,
-				Message:  fmt.Sprintf("repaired scanned_chunks=%d updated_chunks=%d", result.ScannedChunks, result.UpdatedChunks),
-			})
+func repairBatchReport(result engine.RepairResult, failFast bool) batch.Report {
+	items := make([]batch.ItemResult, len(result.Targets))
+	for i, item := range result.Targets {
+		status := batch.ResultFailed
+		switch item.Status {
+		case engine.BatchItemOK:
+			status = batch.ResultSuccess
+		case engine.BatchItemSkipped:
+			status = batch.ResultSkipped
+		}
+		items[i] = batch.ItemResult{
+			RawValue: item.RawTarget, Status: status, Message: item.Message,
+			InvariantCode: item.InvariantCode, RecommendedAction: item.RecommendedAction,
 		}
 	}
-
-	report := batch.NewReport(batch.OperationRepair, false, results)
+	report := batch.NewReport(batch.OperationRepair, false, items)
 	report.ExecutionMode = batch.ExecutionModeContinueOnError
 	if failFast {
 		report.ExecutionMode = batch.ExecutionModeFailFast
