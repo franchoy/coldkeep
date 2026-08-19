@@ -20,6 +20,15 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.12 - Unreleased — Engine and Catalog Completion
+
+- Started the mandatory architecture-completion release from exact v1.13.11
+  merge commit `507859daccf25594142c61e5ab8209a751fb579a`.
+- Activated version 1.13.12 and froze the production ownership, compatibility,
+  catalog-adoption, and thin-CLI acceptance baseline.
+
+------------------------------------------------------------------------
+
 ## v1.13.11 - 2026-08-19 — Safety and Backend Compatibility Gate Closure
 
 - Published the stable v1.13.11 release from merge commit
