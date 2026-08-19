@@ -34,6 +34,10 @@ func activeCoreContractTypes() []struct {
 	}{
 		{"OperationWarning", engine.OperationWarning{}},
 		{"Error", engine.Error{}},
+		{"StatsRequest", engine.StatsRequest{}},
+		{"StatsResult", engine.StatsResult{}},
+		{"InspectRequest", engine.InspectRequest{}},
+		{"InspectResult", engine.InspectResult{}},
 		{"BatchSummary", engine.BatchSummary{}},
 		{"SnapshotQuery", engine.SnapshotQuery{}},
 		{"StoreRequest", engine.StoreRequest{}},
@@ -69,23 +73,14 @@ func activeCoreContractTypes() []struct {
 }
 
 // TestActiveEngineContractNeutralityCoverage prevents a request/result pair
-// from escaping the structural neutrality walk when a method is added. The
-// four exact observability-backed DTOs are the frozen Phase 3 migration debt;
-// no other omission is permitted, and Phase 3 must remove this allowlist.
+// from escaping the structural neutrality walk when a method is added.
 func TestActiveEngineContractNeutralityCoverage(t *testing.T) {
 	covered := make(map[reflect.Type]bool)
 	for _, tc := range allEngineContractTypes() {
 		covered[reflect.TypeOf(tc.val)] = true
 	}
-	legacyPhase3 := map[reflect.Type]bool{
-		reflect.TypeOf(engine.StatsRequest{}):   true,
-		reflect.TypeOf(engine.StatsResult{}):    true,
-		reflect.TypeOf(engine.InspectRequest{}): true,
-		reflect.TypeOf(engine.InspectResult{}):  true,
-	}
 
 	interfaceType := reflect.TypeOf((*engine.Engine)(nil)).Elem()
-	seenLegacy := make(map[reflect.Type]bool)
 	for i := 0; i < interfaceType.NumMethod(); i++ {
 		method := interfaceType.Method(i)
 		if method.Type.NumIn() != 2 || method.Type.NumOut() != 2 {
@@ -95,16 +90,7 @@ func TestActiveEngineContractNeutralityCoverage(t *testing.T) {
 			if covered[contractType] {
 				continue
 			}
-			if legacyPhase3[contractType] {
-				seenLegacy[contractType] = true
-				continue
-			}
 			t.Errorf("Engine.%s contract %s is absent from the neutrality walk", method.Name, contractType)
-		}
-	}
-	for contractType := range legacyPhase3 {
-		if !seenLegacy[contractType] {
-			t.Errorf("stale Phase 3 neutrality exception for %s", contractType)
 		}
 	}
 }

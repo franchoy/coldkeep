@@ -30,6 +30,10 @@ project, do not start here; start with [README.md](README.md).
   translation helpers, invariant/cancellation preservation, and exhaustive
   active-contract neutrality coverage with only the four explicit Phase 3
   observability DTO debts temporarily allowlisted.
+- Replaced Stats and Inspect observability-backed contracts with complete
+  engine-owned DTOs, exact tagged dynamic values, ordered trace events, and a
+  complete Verify summary while preserving the existing renderer output
+  through compatibility projection.
 
 ------------------------------------------------------------------------
 

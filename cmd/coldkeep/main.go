@@ -504,13 +504,16 @@ var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observa
 
 	result, err := eng.Stats(context.Background(), engine.StatsRequest{
 		IncludeContainers: opts.IncludeContainers,
-		Trace:             opts.Trace,
+		IncludeTrace:      opts.Trace.Enabled,
 	})
+	if traceErr := replayEngineTrace(opts.Trace, result.Trace); traceErr != nil {
+		return nil, traceErr
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	return result.Raw, nil
+	return statsResultFromEngine(result), nil
 }
 var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
 	// Engine.Inspect is active, while this production CLI path intentionally

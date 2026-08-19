@@ -86,9 +86,12 @@ func TestBuildSnapshotDiffResultDetailedModeKeepsMatchedAndTotalDistinct(t *test
 	}
 }
 
-func TestVerifyResultRemainsIntentionalPlaceholder(t *testing.T) {
-	var result VerifyResult
-	if result != (VerifyResult{}) {
-		t.Fatalf("expected empty VerifyResult placeholder, got %#v", result)
+func TestVerifyResultRepresentsCompleteCLISummary(t *testing.T) {
+	result := VerifyResult{
+		BlocksChecked: 5, PhysicalHashChecked: 4, CompressedHashChecked: 3,
+		LogicalHashChecked: 2, CompressedBlocksChecked: 1,
+	}
+	if result.BlocksChecked != 5 || result.CompressedBlocksChecked != 1 {
+		t.Fatalf("verify summary not representable: %#v", result)
 	}
 }

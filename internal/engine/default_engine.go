@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -76,25 +77,44 @@ func secureSnapshotIDGenerator() (string, error) {
 }
 
 func (e *DefaultEngine) Stats(ctx context.Context, req StatsRequest) (StatsResult, error) {
+	trace, collector := traceOptions(req.IncludeTrace)
 	r, err := e.obs.Stats(ctx, observability.StatsOptions{
 		IncludeContainers: req.IncludeContainers,
-		Trace:             req.Trace,
+		Trace:             trace,
 	})
-	if err != nil {
-		return StatsResult{}, err
+	result := statsFromObservability(r, collector.events)
+	if collector.err != nil {
+		return result, TranslateError("stats", collector.err)
 	}
-	return StatsResult{Raw: r}, nil
+	if err != nil {
+		return result, TranslateError("stats", err)
+	}
+	return result, nil
 }
 
 func (e *DefaultEngine) Inspect(ctx context.Context, req InspectRequest) (InspectResult, error) {
 	if err := validateInspectRequest(req); err != nil {
-		return InspectResult{}, err
+		return InspectResult{}, TranslateErrorAs("inspect", ErrorInvalidArgument, err)
 	}
-	r, err := e.obs.Inspect(ctx, req.Entity, req.EntityID, req.Options)
+	trace, collector := traceOptions(req.Options.IncludeTrace)
+	r, err := e.obs.Inspect(ctx, observability.EntityType(req.Entity), req.EntityID, observability.InspectOptions{
+		Deep: req.Options.Deep, Relations: req.Options.Relations,
+		Reverse: req.Options.Reverse, Limit: req.Options.Limit, Trace: trace,
+	})
+	result, conversionErr := inspectFromObservability(r, collector.events)
+	if collector.err != nil {
+		return result, TranslateError("inspect", collector.err)
+	}
+	if conversionErr != nil {
+		return result, TranslateError("inspect", conversionErr)
+	}
 	if err != nil {
-		return InspectResult{}, err
+		if errors.Is(err, observability.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+			return result, TranslateErrorAs("inspect", ErrorNotFound, err)
+		}
+		return result, TranslateError("inspect", err)
 	}
-	return InspectResult{Raw: r}, nil
+	return result, nil
 }
 
 func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyResult, error) {
@@ -117,9 +137,13 @@ func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyRe
 		containerDir = container.ContainersDir
 	}
 	if err := maintenance.VerifyCommandWithDBAndContainersDir(e.config.DB, containerDir, target, req.FileID, level); err != nil {
-		return VerifyResult{}, err
+		return VerifyResult{}, TranslateErrorAs("verify", ErrorVerificationFailed, err)
 	}
-	return VerifyResult{}, nil
+	result, err := collectVerifyResult(ctx, e.config.DB, target, int64(req.FileID))
+	if err != nil {
+		return VerifyResult{}, TranslateError("verify", fmt.Errorf("collect verify summary: %w", err))
+	}
+	return result, nil
 }
 
 // validateInspectRequest returns an error if req contains an unrecognized entity
@@ -127,16 +151,15 @@ func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyRe
 // validation so correctness does not depend solely on the CLI parsing path.
 func validateInspectRequest(req InspectRequest) error {
 	switch req.Entity {
-	case observability.EntityRepository:
+	case InspectRepository:
 		// EntityRepository is the only entity that requires no ID.
 		return nil
-	case observability.EntitySnapshot:
+	case InspectSnapshot:
 		if strings.TrimSpace(req.EntityID) == "" {
 			return fmt.Errorf("engine: entity ID is required for %s", req.Entity)
 		}
 		return nil
-	case observability.EntityFile, observability.EntityLogicalFile, observability.EntityPhysicalFile,
-		observability.EntityChunk, observability.EntityContainer:
+	case InspectFile, InspectLogicalFile, InspectPhysicalFile, InspectChunk, InspectContainer:
 		id := strings.TrimSpace(req.EntityID)
 		if id == "" {
 			return fmt.Errorf("engine: entity ID is required for %s", req.Entity)
