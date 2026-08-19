@@ -192,6 +192,36 @@ type SearchFilesResult struct {
 	Files []CurrentFile
 }
 
+type ConfigurationKey string
+
+const (
+	ConfigurationDefaultChunker   ConfigurationKey = "default-chunker"
+	ConfigurationCompression      ConfigurationKey = "compression"
+	ConfigurationCompressionLevel ConfigurationKey = "compression-level"
+)
+
+type GetConfigurationRequest struct {
+	Key ConfigurationKey
+}
+
+type GetConfigurationResult struct {
+	Key          ConfigurationKey
+	Value        string
+	IntegerValue *int64
+}
+
+type SetConfigurationRequest struct {
+	Key   ConfigurationKey
+	Value string
+}
+
+type SetConfigurationResult struct {
+	Key          ConfigurationKey
+	Value        string
+	IntegerValue *int64
+	Changed      bool
+}
+
 // ---------------------------------------------------------------------------
 // Restore
 // ---------------------------------------------------------------------------

@@ -74,6 +74,12 @@ type CurrentFileCatalog interface {
 	SearchCurrentFiles(ctx context.Context, filter CurrentFileSearch) ([]CurrentFileRef, error)
 }
 
+// RepositoryConfigurationCatalog owns repository_config metadata truth.
+type RepositoryConfigurationCatalog interface {
+	GetRepositoryConfiguration(ctx context.Context, key string) (RepositoryConfigurationRef, error)
+	SetRepositoryConfiguration(ctx context.Context, key, value string) (SetRepositoryConfigurationResult, error)
+}
+
 // SnapshotCatalog exposes snapshot metadata.
 type SnapshotCatalog interface {
 	// FindSnapshot returns the snapshot with the given ID.
@@ -141,6 +147,7 @@ type Catalog interface {
 	LogicalFileCatalog
 	PhysicalFileCatalog
 	CurrentFileCatalog
+	RepositoryConfigurationCatalog
 	SnapshotCatalog
 	SnapshotGraphCatalog
 	ReachabilityCatalog

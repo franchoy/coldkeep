@@ -226,6 +226,38 @@ func TestCatalogContractCurrentFileQueriesAcrossBackends(t *testing.T) {
 	})
 }
 
+func TestCatalogContractRepositoryConfigurationAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		missing, err := svc.GetRepositoryConfiguration(context.Background(), "phase12_missing")
+		if err != nil || missing.Exists || missing.Key != "phase12_missing" || missing.Value != "" {
+			t.Fatalf("missing repository configuration: got (%+v, %v)", missing, err)
+		}
+
+		first, err := svc.SetRepositoryConfiguration(context.Background(), "compression", "zstd")
+		if err != nil || !first.PreviouslySet || !first.Changed || first.Value != "zstd" || first.PreviousValue != "none" {
+			t.Fatalf("first repository configuration set: got (%+v, %v)", first, err)
+		}
+		second, err := svc.SetRepositoryConfiguration(context.Background(), "compression", "zstd")
+		if err != nil || !second.PreviouslySet || second.Changed || second.PreviousValue != "zstd" {
+			t.Fatalf("unchanged repository configuration set: got (%+v, %v)", second, err)
+		}
+		got, err := svc.GetRepositoryConfiguration(context.Background(), "compression")
+		if err != nil || !got.Exists || got.Value != "zstd" {
+			t.Fatalf("repository configuration round trip: got (%+v, %v)", got, err)
+		}
+
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := svc.GetRepositoryConfiguration(cancelled, "compression"); !catalog.IsCode(err, catalog.ErrorCancelled) {
+			t.Fatalf("cancelled repository configuration get: %v", err)
+		}
+		if _, err := svc.SetRepositoryConfiguration(context.Background(), " ", "x"); !catalog.IsCode(err, catalog.ErrorInvalidArgument) {
+			t.Fatalf("blank repository configuration key: %v", err)
+		}
+	})
+}
+
 func requirePhysicalFiles(t *testing.T, svc interface {
 	FindPhysicalFilesForLogicalFile(context.Context, int64) ([]catalog.PhysicalFileRef, error)
 }, id int64) []catalog.PhysicalFileRef {

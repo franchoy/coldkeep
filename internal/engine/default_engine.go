@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
@@ -36,6 +37,9 @@ type Config struct {
 	// StoreContext provides writer+chunker-aware dependencies for active store
 	// orchestration.
 	StoreContext *storage.StorageContext
+	// ChunkerDeprecationPolicy optionally rejects registered chunkers for new
+	// repository defaults. Nil means no registered chunker is deprecated.
+	ChunkerDeprecationPolicy func(chunk.Version) (bool, string)
 }
 
 // DefaultEngine is the canonical Engine implementation.

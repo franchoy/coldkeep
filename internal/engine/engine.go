@@ -90,6 +90,12 @@ type Engine interface {
 	// SearchFiles returns completed current-state paths matching typed filters.
 	SearchFiles(ctx context.Context, req SearchFilesRequest) (SearchFilesResult, error)
 
+	// GetConfiguration returns one validated repository write default.
+	GetConfiguration(ctx context.Context, req GetConfigurationRequest) (GetConfigurationResult, error)
+
+	// SetConfiguration validates and persists one repository write default.
+	SetConfiguration(ctx context.Context, req SetConfigurationRequest) (SetConfigurationResult, error)
+
 	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.
 	// Method selection owns addressing semantics: this method is by-ID only.

@@ -556,10 +556,6 @@ var verifySummaryPhase = func(dbconn *sql.DB, target string, fileID int64) (veri
 var runChunkerBenchmarkPhase = runChunkerBenchmark
 var runCoreBenchmarkPhase = runCoreBenchmark
 var runBenchmarkDeterminismPhase = validateBenchmarkDeterminism
-var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
-	// Future-proof policy hook: no deprecated chunkers currently.
-	return false, ""
-}
 
 type cliError struct {
 	code       int
@@ -1257,24 +1253,6 @@ func runVersionCommand(mode cliOutputMode) error {
 	return nil
 }
 
-func validateConfigDefaultChunkerVersion(raw string) (chunk.Version, error) {
-	v := chunk.Version(strings.TrimSpace(raw))
-	if !chunk.IsWellFormedVersion(v) {
-		return "", usageErrorf("invalid default-chunker value %q: malformed version", raw)
-	}
-	if _, ok := chunk.DefaultRegistry().Get(v); !ok {
-		return "", usageErrorf("invalid default-chunker value %q: unknown chunker version", raw)
-	}
-	if deprecated, reason := isDeprecatedChunkerVersionPhase(v); deprecated {
-		reason = strings.TrimSpace(reason)
-		if reason == "" {
-			return "", usageErrorf("invalid default-chunker value %q: deprecated chunker version", raw)
-		}
-		return "", usageErrorf("invalid default-chunker value %q: deprecated chunker version (%s)", raw, reason)
-	}
-	return v, nil
-}
-
 func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "output", "json"); err != nil {
 		return err
@@ -1307,67 +1285,25 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
-
-	repo := storage.NewRepository(sgctx.DB)
+	eng, err := newConfigurationCommandEngine(sgctx)
+	if err != nil {
+		return err
+	}
+	engineKey := engine.ConfigurationKey(key)
 
 	switch subcommand {
 	case "get":
-		switch key {
-		case "compression":
-			codec, err := repo.GetDefaultCompression(sgctx.DB)
-			if err != nil {
-				return err
-			}
-			if outputMode == outputModeJSON {
-				payload := map[string]any{
-					"status":  "ok",
-					"command": "config get",
-					"data": map[string]any{
-						"key":   "compression",
-						"value": codec,
-					},
-				}
-				encoded, _ := json.Marshal(payload)
-				fmt.Println(string(encoded))
-				return nil
-			}
-			_, _ = fmt.Fprintln(os.Stdout, codec)
-			return nil
-
-		case "compression-level":
-			level, err := repo.GetDefaultCompressionLevel(sgctx.DB)
-			if err != nil {
-				return err
-			}
-			if outputMode == outputModeJSON {
-				payload := map[string]any{
-					"status":  "ok",
-					"command": "config get",
-					"data": map[string]any{
-						"key":   "compression-level",
-						"value": level,
-					},
-				}
-				encoded, _ := json.Marshal(payload)
-				fmt.Println(string(encoded))
-				return nil
-			}
-			_, _ = fmt.Fprintf(os.Stdout, "%d\n", level)
-			return nil
-		}
-
-		v, err := repo.GetDefaultChunkerVersion()
+		result, err := eng.GetConfiguration(context.Background(), engine.GetConfigurationRequest{Key: engineKey})
 		if err != nil {
 			return err
 		}
-
 		if outputMode == outputModeJSON {
 			payload := map[string]any{
 				"status":  "ok",
 				"command": "config get",
 				"data": map[string]any{
-					"key":   "default-chunker",
-					"value": string(v),
+					"key":   key,
+					"value": configurationResultValue(result.Value, result.IntegerValue),
 				},
 			}
 			encoded, _ := json.Marshal(payload)
@@ -1375,100 +1311,26 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return nil
 		}
 
-		_, _ = fmt.Fprintln(os.Stdout, string(v))
+		_, _ = fmt.Fprintln(os.Stdout, result.Value)
 		return nil
 
 	case "set":
-		switch key {
-		case "compression":
-			codec := strings.TrimSpace(parsed.positionals[2])
-			if !storage.IsRegisteredCompressionCodec(codec) {
-				return usageErrorf("invalid compression codec %q, must be 'none' or 'zstd'", codec)
-			}
-			previous, err := repo.GetDefaultCompression(sgctx.DB)
-			if err != nil {
-				return err
-			}
-			if err := repo.SetDefaultCompression(sgctx.DB, codec); err != nil {
-				return err
-			}
-			if outputMode == outputModeJSON {
-				payload := map[string]any{
-					"status":  "ok",
-					"command": "config set",
-					"data": map[string]any{
-						"key":   "compression",
-						"value": codec,
-					},
-				}
-				encoded, _ := json.Marshal(payload)
-				fmt.Println(string(encoded))
-				return nil
-			}
-			_, _ = fmt.Fprintf(os.Stdout, "compression set to %s\n", codec)
-			if previous != codec {
-				_, _ = fmt.Fprintln(os.Stdout, "ℹ️  This affects only NEW blocks. Existing blocks are not recompressed.")
-				_, _ = fmt.Fprintln(os.Stdout, "    Blocks remain readable according to their stored metadata.")
-			}
-			return nil
-
-		case "compression-level":
-			levelStr := strings.TrimSpace(parsed.positionals[2])
-			level, err := strconv.Atoi(levelStr)
-			if err != nil {
-				return usageErrorf("invalid compression-level %q, must be an integer 1-9", levelStr)
-			}
-			if level < 1 || level > 9 {
-				return usageErrorf("compression-level %d out of range, must be 1-9", level)
-			}
-			previous, err := repo.GetDefaultCompressionLevel(sgctx.DB)
-			if err != nil {
-				return err
-			}
-			if err := repo.SetDefaultCompressionLevel(sgctx.DB, level); err != nil {
-				return err
-			}
-			if outputMode == outputModeJSON {
-				payload := map[string]any{
-					"status":  "ok",
-					"command": "config set",
-					"data": map[string]any{
-						"key":   "compression-level",
-						"value": level,
-					},
-				}
-				encoded, _ := json.Marshal(payload)
-				fmt.Println(string(encoded))
-				return nil
-			}
-			_, _ = fmt.Fprintf(os.Stdout, "compression-level set to %d\n", level)
-			if previous != level {
-				_, _ = fmt.Fprintln(os.Stdout, "ℹ️  This affects only NEW blocks. Existing blocks are not recompressed.")
-			}
-			return nil
-		}
-
-		v, err := validateConfigDefaultChunkerVersion(parsed.positionals[2])
+		result, err := eng.SetConfiguration(context.Background(), engine.SetConfigurationRequest{
+			Key: engineKey, Value: parsed.positionals[2],
+		})
 		if err != nil {
+			if engine.IsCode(err, engine.ErrorInvalidArgument) {
+				return usageErrorf("%s", err)
+			}
 			return err
 		}
-
-		previous, err := repo.GetDefaultChunkerVersion()
-		if err != nil {
-			return err
-		}
-
-		if err := repo.SetDefaultChunkerVersion(v); err != nil {
-			return err
-		}
-
 		if outputMode == outputModeJSON {
 			payload := map[string]any{
 				"status":  "ok",
 				"command": "config set",
 				"data": map[string]any{
-					"key":   "default-chunker",
-					"value": string(v),
+					"key":   key,
+					"value": configurationResultValue(result.Value, result.IntegerValue),
 				},
 			}
 			encoded, _ := json.Marshal(payload)
@@ -1476,15 +1338,40 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return nil
 		}
 
-		_, _ = fmt.Fprintf(os.Stdout, "default-chunker set to %s\n", v)
-		if previous != v {
-			_, _ = fmt.Fprintln(os.Stdout, "Warning: This affects only new stored data.")
-			_, _ = fmt.Fprintln(os.Stdout, "Existing data remains unchanged.")
-		}
+		emitConfigurationSetText(key, result)
 		return nil
 
 	default:
 		return usageErrorf("unknown config subcommand: %s", parsed.positionals[0])
+	}
+}
+
+func configurationResultValue(value string, integerValue *int64) any {
+	if integerValue != nil {
+		return *integerValue
+	}
+	return value
+}
+
+func emitConfigurationSetText(key string, result engine.SetConfigurationResult) {
+	switch key {
+	case "compression":
+		_, _ = fmt.Fprintf(os.Stdout, "compression set to %s\n", result.Value)
+		if result.Changed {
+			_, _ = fmt.Fprintln(os.Stdout, "ℹ️  This affects only NEW blocks. Existing blocks are not recompressed.")
+			_, _ = fmt.Fprintln(os.Stdout, "    Blocks remain readable according to their stored metadata.")
+		}
+	case "compression-level":
+		_, _ = fmt.Fprintf(os.Stdout, "compression-level set to %s\n", result.Value)
+		if result.Changed {
+			_, _ = fmt.Fprintln(os.Stdout, "ℹ️  This affects only NEW blocks. Existing blocks are not recompressed.")
+		}
+	case "default-chunker":
+		_, _ = fmt.Fprintf(os.Stdout, "default-chunker set to %s\n", result.Value)
+		if result.Changed {
+			_, _ = fmt.Fprintln(os.Stdout, "Warning: This affects only new stored data.")
+			_, _ = fmt.Fprintln(os.Stdout, "Existing data remains unchanged.")
+		}
 	}
 }
 

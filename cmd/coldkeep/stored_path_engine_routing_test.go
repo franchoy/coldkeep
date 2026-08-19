@@ -25,6 +25,8 @@ type stubCommandEngine struct {
 	storeFolderFunc       func(context.Context, engine.StoreFolderRequest) (engine.StoreFolderResult, error)
 	listFilesFunc         func(context.Context, engine.ListFilesRequest) (engine.ListFilesResult, error)
 	searchFilesFunc       func(context.Context, engine.SearchFilesRequest) (engine.SearchFilesResult, error)
+	getConfigurationFunc  func(context.Context, engine.GetConfigurationRequest) (engine.GetConfigurationResult, error)
+	setConfigurationFunc  func(context.Context, engine.SetConfigurationRequest) (engine.SetConfigurationResult, error)
 }
 
 func (s stubCommandEngine) SnapshotCreate(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
@@ -81,6 +83,20 @@ func (s stubCommandEngine) SearchFiles(ctx context.Context, req engine.SearchFil
 		return s.searchFilesFunc(ctx, req)
 	}
 	return engine.SearchFilesResult{}, errors.New("unexpected SearchFiles call")
+}
+
+func (s stubCommandEngine) GetConfiguration(ctx context.Context, req engine.GetConfigurationRequest) (engine.GetConfigurationResult, error) {
+	if s.getConfigurationFunc != nil {
+		return s.getConfigurationFunc(ctx, req)
+	}
+	return engine.GetConfigurationResult{}, errors.New("unexpected GetConfiguration call")
+}
+
+func (s stubCommandEngine) SetConfiguration(ctx context.Context, req engine.SetConfigurationRequest) (engine.SetConfigurationResult, error) {
+	if s.setConfigurationFunc != nil {
+		return s.setConfigurationFunc(ctx, req)
+	}
+	return engine.SetConfigurationResult{}, errors.New("unexpected SetConfiguration call")
 }
 
 func TestRunStoreFolderCommandUsesEngineJSONParity(t *testing.T) {

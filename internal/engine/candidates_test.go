@@ -24,7 +24,7 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "SnapshotRestore", "GarbageCollect", "Store", "StoreFolder", "ListFiles", "SearchFiles", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "SnapshotRestore", "GarbageCollect", "Store", "StoreFolder", "ListFiles", "SearchFiles", "GetConfiguration", "SetConfiguration", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)

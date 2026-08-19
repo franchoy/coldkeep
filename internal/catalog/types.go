@@ -47,6 +47,20 @@ type CurrentFileSearch struct {
 	Page         CurrentFilePage
 }
 
+type RepositoryConfigurationRef struct {
+	Key    string
+	Value  string
+	Exists bool
+}
+
+type SetRepositoryConfigurationResult struct {
+	Key           string
+	Value         string
+	PreviousValue string
+	PreviouslySet bool
+	Changed       bool
+}
+
 type SnapshotRef struct {
 	ID        string
 	Type      string

@@ -4727,49 +4727,6 @@ func TestRunConfigCommandSetRejectsUnknownVersion(t *testing.T) {
 	}
 }
 
-func TestRunConfigCommandSetRejectsDeprecatedVersion(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDeprecation := isDeprecatedChunkerVersionPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		isDeprecatedChunkerVersionPhase = originalDeprecation
-	})
-
-	dbPath := filepath.Join(t.TempDir(), "config_deprecated.sqlite")
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", dbPath)
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		if err := dbpkg.RunMigrations(dbconn); err != nil {
-			_ = dbconn.Close()
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
-		if v == chunk.VersionV2FastCDC {
-			return true, "scheduled removal"
-		}
-		return false, ""
-	}
-
-	err := runConfigCommand(parsedCommandLine{
-		method:      "config",
-		positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
-	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "deprecated chunker version") {
-		t.Fatalf("expected deprecated-version error, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "scheduled removal") {
-		t.Fatalf("expected deprecated-version reason in error, got: %v", err)
-	}
-	if got := classifyExitCode(err); got != exitUsage {
-		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
-	}
-}
-
 func TestRunConfigCommandGetJSON(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	t.Cleanup(func() {
