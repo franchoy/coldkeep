@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -269,6 +270,9 @@ func toInt64(v any) (int64, bool) {
 	case int64:
 		return n, true
 	case uint:
+		if uint64(n) > uint64(math.MaxInt64) {
+			return 0, false
+		}
 		return int64(n), true
 	case uint8:
 		return int64(n), true
@@ -277,7 +281,7 @@ func toInt64(v any) (int64, bool) {
 	case uint32:
 		return int64(n), true
 	case uint64:
-		if n > uint64(^uint64(0)>>1) {
+		if n > uint64(math.MaxInt64) {
 			return 0, false
 		}
 		return int64(n), true

@@ -116,15 +116,16 @@ WHERE lf.status = $1`)
 }
 
 func paginateCurrentFiles(refs []CurrentFileRef, page CurrentFilePage) []CurrentFileRef {
-	start := 0
-	if page.Offset != nil && *page.Offset < int64(len(refs)) {
-		start = int(*page.Offset)
+	refsLength := int64(len(refs))
+	start := int64(0)
+	if page.Offset != nil && *page.Offset < refsLength {
+		start = *page.Offset
 	} else if page.Offset != nil {
-		start = len(refs)
+		start = refsLength
 	}
-	end := len(refs)
-	if page.Limit != nil && *page.Limit < int64(end-start) {
-		end = start + int(*page.Limit)
+	end := refsLength
+	if page.Limit != nil && *page.Limit < end-start {
+		end = start + *page.Limit
 	}
 	return refs[start:end]
 }

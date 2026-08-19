@@ -3,6 +3,8 @@ package render
 import (
 	"bytes"
 	"encoding/json"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -137,5 +139,46 @@ func TestRenderInspectJSONIsDeterministic(t *testing.T) {
 	firstRel := relations[0].(map[string]any)
 	if got, _ := firstRel["target_id"].(string); got != "10" {
 		t.Fatalf("expected sorted relations by target_id, got %v", got)
+	}
+}
+
+func TestToInt64UnsignedBoundaries(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  any
+		want   int64
+		wantOK bool
+	}{
+		{name: "normal uint", value: uint(42), want: 42, wantOK: true},
+		{name: "maximum int64 as uint64", value: uint64(math.MaxInt64), want: math.MaxInt64, wantOK: true},
+		{name: "one above maximum int64 as uint64", value: uint64(math.MaxInt64) + 1, wantOK: false},
+		{name: "maximum uint64", value: uint64(math.MaxUint64), wantOK: false},
+	}
+	if strconv.IntSize == 64 {
+		tests = append(tests, struct {
+			name   string
+			value  any
+			want   int64
+			wantOK bool
+		}{name: "one above maximum int64 as uint", value: uint(uint64(math.MaxInt64) + 1), wantOK: false})
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := toInt64(tc.value)
+			if got != tc.want || ok != tc.wantOK {
+				t.Fatalf("toInt64(%T(%v)) = (%d, %t), want (%d, %t)", tc.value, tc.value, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestSummaryValueStringOversizedUnsignedDoesNotNarrow(t *testing.T) {
+	value := uint64(math.MaxInt64) + 1
+	if got, want := summaryValueString("chunk_count", value), strconv.FormatUint(value, 10); got != want {
+		t.Fatalf("summaryValueString() = %q, want exact unsigned fallback %q", got, want)
+	}
+	if got := summaryValueString("chunk_count", uint64(math.MaxUint64)); strings.HasPrefix(got, "-") {
+		t.Fatalf("maximum uint64 rendered as negative value: %q", got)
 	}
 }
