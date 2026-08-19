@@ -26,6 +26,10 @@ project, do not start here; start with [README.md](README.md).
   merge commit `507859daccf25594142c61e5ab8209a751fb579a`.
 - Activated version 1.13.12 and froze the production ownership, compatibility,
   catalog-adoption, and thin-CLI acceptance baseline.
+- Added the stable backend-neutral engine error taxonomy, deterministic
+  translation helpers, invariant/cancellation preservation, and exhaustive
+  active-contract neutrality coverage with only the four explicit Phase 3
+  observability DTO debts temporarily allowlisted.
 
 ------------------------------------------------------------------------
 

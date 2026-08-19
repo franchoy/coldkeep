@@ -24,14 +24,7 @@
 //	domain packages must not import internal/engine
 package engine
 
-import (
-	"context"
-	"errors"
-)
-
-// ErrNotImplemented is returned by active engine methods when a genuinely
-// deferred mode remains outside the implemented surface.
-var ErrNotImplemented = errors.New("engine operation not implemented")
+import "context"
 
 // Engine is the behavior-preserving facade for coldkeep operations.
 //
