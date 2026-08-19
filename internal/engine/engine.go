@@ -84,6 +84,12 @@ type Engine interface {
 	// below this engine boundary.
 	StoreFolder(ctx context.Context, req StoreFolderRequest) (StoreFolderResult, error)
 
+	// ListFiles returns completed current-state stored paths in path order.
+	ListFiles(ctx context.Context, req ListFilesRequest) (ListFilesResult, error)
+
+	// SearchFiles returns completed current-state paths matching typed filters.
+	SearchFiles(ctx context.Context, req SearchFilesRequest) (SearchFilesResult, error)
+
 	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.
 	// Method selection owns addressing semantics: this method is by-ID only.

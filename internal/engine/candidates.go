@@ -157,6 +157,41 @@ type StoreFolderResult struct {
 	WorkersUsed  int
 }
 
+const MaxFileQueryLimit int64 = 10000
+
+// CurrentFile is a presentation-neutral completed current-state path.
+// JSON tags preserve the established CLI projection when the CLI embeds it.
+type CurrentFile struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	FileHash  string `json:"file_hash"`
+	SizeBytes int64  `json:"size_bytes"`
+	CreatedAt string `json:"created_at"`
+}
+
+type ListFilesRequest struct {
+	Limit  *int64
+	Offset *int64
+}
+
+type ListFilesResult struct {
+	Files []CurrentFile
+}
+
+// SearchFilesRequest preserves repeated filters and their historical AND
+// semantics without exposing raw CLI tokens to the engine or catalog.
+type SearchFilesRequest struct {
+	NameContains []string
+	MinSizeBytes []int64
+	MaxSizeBytes []int64
+	Limit        *int64
+	Offset       *int64
+}
+
+type SearchFilesResult struct {
+	Files []CurrentFile
+}
+
 // ---------------------------------------------------------------------------
 // Restore
 // ---------------------------------------------------------------------------

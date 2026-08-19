@@ -8,10 +8,13 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
+
+var connectListSearchDBPhase = db.ConnectDB
 
 var newCommandEngine = func(dbconn *sql.DB, containerDir string) (engine.Engine, error) {
 	return engine.New(engine.Config{DB: dbconn, ContainerDir: containerDir})

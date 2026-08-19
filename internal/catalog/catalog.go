@@ -68,6 +68,12 @@ type PhysicalFileCatalog interface {
 	FindPhysicalFilesForLogicalFile(ctx context.Context, logicalFileID int64) ([]PhysicalFileRef, error)
 }
 
+// CurrentFileCatalog owns completed current-state path query truth.
+type CurrentFileCatalog interface {
+	ListCurrentFiles(ctx context.Context, page CurrentFilePage) ([]CurrentFileRef, error)
+	SearchCurrentFiles(ctx context.Context, filter CurrentFileSearch) ([]CurrentFileRef, error)
+}
+
 // SnapshotCatalog exposes snapshot metadata.
 type SnapshotCatalog interface {
 	// FindSnapshot returns the snapshot with the given ID.
@@ -134,6 +140,7 @@ type GCPlanCatalog interface {
 type Catalog interface {
 	LogicalFileCatalog
 	PhysicalFileCatalog
+	CurrentFileCatalog
 	SnapshotCatalog
 	SnapshotGraphCatalog
 	ReachabilityCatalog

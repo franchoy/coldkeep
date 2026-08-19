@@ -170,6 +170,62 @@ func TestCatalogContractFindPhysicalFilesAcrossBackends(t *testing.T) {
 	})
 }
 
+func TestCatalogContractCurrentFileQueriesAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+
+		all, err := svc.ListCurrentFiles(context.Background(), catalog.CurrentFilePage{})
+		if err != nil {
+			t.Fatalf("ListCurrentFiles: %v", err)
+		}
+		paths := make([]string, len(all))
+		for i, ref := range all {
+			paths[i] = ref.Path
+			if ref.CreatedAt.IsZero() {
+				t.Fatalf("current file has zero creation time: %+v", ref)
+			}
+		}
+		if want := []string{"/current/a.txt", "/current/b.txt", "/current/both.txt"}; !reflect.DeepEqual(paths, want) {
+			t.Fatalf("current-file ordering/filtering: got %v want %v", paths, want)
+		}
+
+		limit, offset := int64(1), int64(1)
+		page, err := svc.ListCurrentFiles(context.Background(), catalog.CurrentFilePage{Limit: &limit, Offset: &offset})
+		if err != nil || len(page) != 1 || page[0].Path != "/current/b.txt" {
+			t.Fatalf("paginated current files: got (%+v, %v)", page, err)
+		}
+		offsetOnly, err := svc.ListCurrentFiles(context.Background(), catalog.CurrentFilePage{Offset: &offset})
+		if err != nil || len(offsetOnly) != 2 || offsetOnly[0].Path != "/current/b.txt" {
+			t.Fatalf("offset-only current files: got (%+v, %v)", offsetOnly, err)
+		}
+
+		matches, err := svc.SearchCurrentFiles(context.Background(), catalog.CurrentFileSearch{
+			NameContains: []string{"current", "both"},
+			MinSizeBytes: []int64{30},
+			MaxSizeBytes: []int64{40},
+		})
+		if err != nil || len(matches) != 1 || matches[0].Path != "/current/both.txt" || matches[0].LogicalFileID != 3 {
+			t.Fatalf("searched current files: got (%+v, %v)", matches, err)
+		}
+
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if refs, err := svc.ListCurrentFiles(cancelled, catalog.CurrentFilePage{}); refs != nil || !catalog.IsCode(err, catalog.ErrorCancelled) {
+			t.Fatalf("cancelled list current files: got (%+v, %v)", refs, err)
+		}
+		negative := int64(-1)
+		if refs, err := svc.SearchCurrentFiles(context.Background(), catalog.CurrentFileSearch{Page: catalog.CurrentFilePage{Limit: &negative}}); refs != nil || !catalog.IsCode(err, catalog.ErrorInvalidArgument) {
+			t.Fatalf("invalid current-file page: got (%+v, %v)", refs, err)
+		}
+
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("current-file reads mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
+}
+
 func requirePhysicalFiles(t *testing.T, svc interface {
 	FindPhysicalFilesForLogicalFile(context.Context, int64) ([]catalog.PhysicalFileRef, error)
 }, id int64) []catalog.PhysicalFileRef {

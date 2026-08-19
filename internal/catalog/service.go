@@ -16,6 +16,7 @@ var (
 	_ Catalog              = (*Service)(nil)
 	_ LogicalFileCatalog   = (*Service)(nil)
 	_ PhysicalFileCatalog  = (*Service)(nil)
+	_ CurrentFileCatalog   = (*Service)(nil)
 	_ SnapshotCatalog      = (*Service)(nil)
 	_ SnapshotGraphCatalog = (*Service)(nil)
 	_ ReachabilityCatalog  = (*Service)(nil)

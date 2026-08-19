@@ -23,6 +23,8 @@ type stubCommandEngine struct {
 	restoreStoredPathFunc func(context.Context, engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error)
 	removeStoredPathsFunc func(context.Context, engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error)
 	storeFolderFunc       func(context.Context, engine.StoreFolderRequest) (engine.StoreFolderResult, error)
+	listFilesFunc         func(context.Context, engine.ListFilesRequest) (engine.ListFilesResult, error)
+	searchFilesFunc       func(context.Context, engine.SearchFilesRequest) (engine.SearchFilesResult, error)
 }
 
 func (s stubCommandEngine) SnapshotCreate(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
@@ -65,6 +67,20 @@ func (s stubCommandEngine) StoreFolder(ctx context.Context, req engine.StoreFold
 		return s.storeFolderFunc(ctx, req)
 	}
 	return engine.StoreFolderResult{}, errors.New("unexpected StoreFolder call")
+}
+
+func (s stubCommandEngine) ListFiles(ctx context.Context, req engine.ListFilesRequest) (engine.ListFilesResult, error) {
+	if s.listFilesFunc != nil {
+		return s.listFilesFunc(ctx, req)
+	}
+	return engine.ListFilesResult{}, errors.New("unexpected ListFiles call")
+}
+
+func (s stubCommandEngine) SearchFiles(ctx context.Context, req engine.SearchFilesRequest) (engine.SearchFilesResult, error) {
+	if s.searchFilesFunc != nil {
+		return s.searchFilesFunc(ctx, req)
+	}
+	return engine.SearchFilesResult{}, errors.New("unexpected SearchFiles call")
 }
 
 func TestRunStoreFolderCommandUsesEngineJSONParity(t *testing.T) {

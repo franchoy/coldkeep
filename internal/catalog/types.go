@@ -21,6 +21,32 @@ type PhysicalFileRef struct {
 	IsMetadataComplete bool
 }
 
+const MaxCurrentFilePageSize int64 = 10000
+
+// CurrentFileRef is one completed current-state physical path joined to its
+// logical identity. Snapshot-only and non-completed logical files are excluded.
+type CurrentFileRef struct {
+	LogicalFileID int64
+	Path          string
+	FileHash      string
+	SizeBytes     int64
+	CreatedAt     time.Time
+}
+
+type CurrentFilePage struct {
+	Limit  *int64
+	Offset *int64
+}
+
+// CurrentFileSearch preserves repeated CLI filters. Repeated name and size
+// constraints are combined with AND, matching the historical query behavior.
+type CurrentFileSearch struct {
+	NameContains []string
+	MinSizeBytes []int64
+	MaxSizeBytes []int64
+	Page         CurrentFilePage
+}
+
 type SnapshotRef struct {
 	ID        string
 	Type      string

@@ -40,7 +40,6 @@ import (
 	internalgc "github.com/franchoy/coldkeep/internal/gc"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/iodebug"
-	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -2841,35 +2840,36 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if len(parsed.positionals) != 0 {
 		return usageErrorf("Usage: coldkeep list [--limit <count>] [--offset <count>]")
 	}
-	dbconn, err := db.ConnectDB()
+	req, err := listFilesRequest(parsed)
+	if err != nil {
+		return err
+	}
+	dbconn, err := connectListSearchDBPhase()
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
+	eng, err := newCommandEngine(dbconn, "")
+	if err != nil {
+		return err
+	}
+	result, err := eng.ListFiles(context.Background(), req)
+	if err != nil {
+		return err
+	}
 
 	if outputMode == outputModeJSON {
-		files, err := listing.ListFilesResultWithDB(dbconn, listArgs(parsed))
-		if err != nil {
-			return err
-		}
-		if files == nil {
-			files = []listing.FileRecord{}
-		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "list",
-			"files":   files,
+			"files":   result.Files,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
 	}
 
-	files, err := listing.ListFilesResultWithDB(dbconn, listArgs(parsed))
-	if err != nil {
-		return err
-	}
-	printFileRecordsTable(files)
+	printFileRecordsTable(result.Files)
 	return nil
 }
 
@@ -2897,39 +2897,40 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	if err := validateNonNegativeIntegerFlag(parsed, "offset"); err != nil {
 		return err
 	}
-	dbconn, err := db.ConnectDB()
+	req, err := searchFilesRequest(parsed)
+	if err != nil {
+		return err
+	}
+	dbconn, err := connectListSearchDBPhase()
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
+	eng, err := newCommandEngine(dbconn, "")
+	if err != nil {
+		return err
+	}
+	result, err := eng.SearchFiles(context.Background(), req)
+	if err != nil {
+		return err
+	}
 
 	if outputMode == outputModeJSON {
-		files, err := listing.SearchFilesResultWithDB(dbconn, searchArgs(parsed))
-		if err != nil {
-			return err
-		}
-		if files == nil {
-			files = []listing.FileRecord{}
-		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "search",
-			"files":   files,
+			"files":   result.Files,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
 	}
 
-	files, err := listing.SearchFilesResultWithDB(dbconn, searchArgs(parsed))
-	if err != nil {
-		return err
-	}
-	printFileRecordsTable(files)
+	printFileRecordsTable(result.Files)
 	return nil
 }
 
-func printFileRecordsTable(records []listing.FileRecord) {
+func printFileRecordsTable(records []engine.CurrentFile) {
 	fmt.Printf("%-6s %-25s %-15s %-20s\n", "ID", "PATH", "SIZE(bytes)", "CREATED_AT")
 	fmt.Println("---------------------------------------------------------------------")
 	for _, r := range records {
@@ -7322,48 +7323,74 @@ func validateNonNegativeIntegerFlag(parsed parsedCommandLine, name string) error
 	if err != nil || parsedValue < 0 {
 		return usageErrorf("invalid --%s value %q: must be a non-negative integer", name, value)
 	}
-	if name == "limit" && parsedValue > listing.MaxPaginationLimit {
-		return usageErrorf("invalid --%s value %q: must be <= %d", name, value, listing.MaxPaginationLimit)
+	if name == "limit" && parsedValue > engine.MaxFileQueryLimit {
+		return usageErrorf("invalid --%s value %q: must be <= %d", name, value, engine.MaxFileQueryLimit)
 	}
 
 	return nil
 }
 
-func listArgs(parsed parsedCommandLine) []string {
-	args := make([]string, 0, 4)
-
-	if value, ok := parsed.lastFlagValue("limit"); ok {
-		args = append(args, "--limit", value)
+func listFilesRequest(parsed parsedCommandLine) (engine.ListFilesRequest, error) {
+	limit, err := parsedInt64Pointer(parsed, "limit")
+	if err != nil {
+		return engine.ListFilesRequest{}, err
 	}
-	if value, ok := parsed.lastFlagValue("offset"); ok {
-		args = append(args, "--offset", value)
+	offset, err := parsedInt64Pointer(parsed, "offset")
+	if err != nil {
+		return engine.ListFilesRequest{}, err
 	}
-
-	return args
+	return engine.ListFilesRequest{Limit: limit, Offset: offset}, nil
 }
 
-func searchArgs(parsed parsedCommandLine) []string {
-	orderedFlags := []string{"name", "min-size", "max-size"}
-	args := make([]string, 0)
+func searchFilesRequest(parsed parsedCommandLine) (engine.SearchFilesRequest, error) {
+	limit, err := parsedInt64Pointer(parsed, "limit")
+	if err != nil {
+		return engine.SearchFilesRequest{}, err
+	}
+	offset, err := parsedInt64Pointer(parsed, "offset")
+	if err != nil {
+		return engine.SearchFilesRequest{}, err
+	}
+	mins, err := parsedInt64Values(parsed, "min-size")
+	if err != nil {
+		return engine.SearchFilesRequest{}, err
+	}
+	maxes, err := parsedInt64Values(parsed, "max-size")
+	if err != nil {
+		return engine.SearchFilesRequest{}, err
+	}
+	return engine.SearchFilesRequest{
+		NameContains: append([]string(nil), parsed.flags["name"]...),
+		MinSizeBytes: mins,
+		MaxSizeBytes: maxes,
+		Limit:        limit,
+		Offset:       offset,
+	}, nil
+}
 
-	for _, flag := range orderedFlags {
-		for _, value := range parsed.flags[flag] {
-			args = append(args, "--"+flag)
-			if value != "" {
-				args = append(args, value)
-			}
+func parsedInt64Pointer(parsed parsedCommandLine, name string) (*int64, error) {
+	value, ok := parsed.lastFlagValue(name)
+	if !ok {
+		return nil, nil
+	}
+	parsedValue, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return nil, usageErrorf("invalid --%s value %q: must be a non-negative integer", name, value)
+	}
+	return &parsedValue, nil
+}
+
+func parsedInt64Values(parsed parsedCommandLine, name string) ([]int64, error) {
+	values := parsed.flags[name]
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		parsedValue, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return nil, usageErrorf("invalid --%s value %q: must be a non-negative integer", name, value)
 		}
+		result = append(result, parsedValue)
 	}
-
-	if value, ok := parsed.lastFlagValue("limit"); ok {
-		args = append(args, "--limit", value)
-	}
-	if value, ok := parsed.lastFlagValue("offset"); ok {
-		args = append(args, "--offset", value)
-	}
-
-	args = append(args, parsed.positionals...)
-	return args
+	return result, nil
 }
 
 func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
