@@ -13,8 +13,6 @@ import (
 
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
-var productionRepairCommandEngine = newRepairCommandEngine
-var productionRepairDBConnector = connectRepairDBPhase
 
 func init() {
 	connectRepairDBPhase = func() (*sql.DB, error) { return sql.Open("sqlite3", ":memory:") }

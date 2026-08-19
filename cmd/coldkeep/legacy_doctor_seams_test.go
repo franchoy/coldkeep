@@ -18,9 +18,6 @@ var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 
-var productionDoctorDBConnector = connectDoctorDBPhase
-var productionDoctorCommandEngine = newDoctorCommandEngine
-
 func init() {
 	connectDoctorDBPhase = func() (*sql.DB, error) { return sql.Open("sqlite3", ":memory:") }
 	newDoctorCommandEngine = func(*sql.DB, string) (engine.Engine, error) {

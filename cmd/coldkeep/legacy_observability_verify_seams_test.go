@@ -31,8 +31,6 @@ var verifySummaryPhase = func(_ *sql.DB, _ string, _ int64) (verifyOutputSummary
 	return verifyOutputSummary{}, nil
 }
 
-var productionVerifyCommandEngine = newVerifyCommandEngine
-
 func init() {
 	newVerifyCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
 		return legacyVerifyTestEngine{db: sgctx.DB}, nil

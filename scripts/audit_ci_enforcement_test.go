@@ -27,6 +27,90 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 	}
 }
 
+func TestAuditCIEnforcementRequiresCandidateLintParity(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	t.Run("hosted version pin", func(t *testing.T) {
+		mutated := strings.Replace(workflow, "version: v2.6.2", "version: v2.6.3", 1)
+		if mutated == workflow {
+			t.Fatal("hosted linter version fixture not found")
+		}
+		stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+		if !strings.Contains(stderr, "hosted quality pins golangci-lint v2.6.2") {
+			t.Fatalf("expected hosted linter pin failure, got:\n%s", stderr)
+		}
+	})
+
+	t.Run("pipeline status capture", func(t *testing.T) {
+		gate := readRepoFile(t, filepath.Join("scripts", "run_candidate_lint_gate.sh"))
+		mutated := strings.Replace(gate, "pipeline_status=(\"${PIPESTATUS[@]}\")", "pipeline_status=(0 0)", 1)
+		if mutated == gate {
+			t.Fatal("candidate lint pipeline fixture not found")
+		}
+		gatePath := filepath.Join(t.TempDir(), "run_candidate_lint_gate.sh")
+		if err := os.WriteFile(gatePath, []byte(mutated), 0o700); err != nil {
+			t.Fatalf("write candidate lint gate fixture: %v", err)
+		}
+		t.Setenv("COLDKEEP_CANDIDATE_LINT_GATE_FILE", gatePath)
+		stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+		if !strings.Contains(stderr, "candidate lint gate captures lint and tee pipeline statuses") {
+			t.Fatalf("expected pipeline status audit failure, got:\n%s", stderr)
+		}
+	})
+}
+
+func TestCandidateLintGateRejectsFindingsWhenLinterReturnsSuccess(t *testing.T) {
+	fakeLinter := writeFakeCandidateLinter(t)
+	evidenceDir := t.TempDir()
+	cmd := exec.Command("bash", "scripts/run_candidate_lint_gate.sh", "run", evidenceDir)
+	cmd.Dir = repoRoot(t)
+	cmd.Env = append(os.Environ(),
+		"COLDKEEP_GOLANGCI_LINT_BIN="+fakeLinter,
+		"FAKE_LINT_OUTPUT=cmd/example.go:7:3: synthetic actionable finding (unused)",
+		"FAKE_LINT_EXIT=0",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected actionable finding to fail closed, got success:\n%s", output)
+	}
+	if strings.Contains(string(output), "LOCAL_CANDIDATE_LINT=PASS") {
+		t.Fatalf("finding-bearing run emitted PASS:\n%s", output)
+	}
+	status, readErr := os.ReadFile(filepath.Join(evidenceDir, "golangci-lint.status"))
+	if readErr != nil {
+		t.Fatalf("read lint status: %v", readErr)
+	}
+	if string(status) != "FAIL\n" {
+		t.Fatalf("finding-bearing run status = %q, want FAIL", status)
+	}
+
+	verify := exec.Command("bash", "scripts/run_candidate_lint_gate.sh", "verify", evidenceDir)
+	verify.Dir = repoRoot(t)
+	if verifyOutput, verifyErr := verify.CombinedOutput(); verifyErr == nil {
+		t.Fatalf("expected finding-bearing evidence verification to fail, got:\n%s", verifyOutput)
+	}
+}
+
+func TestCandidateLintGateAcceptsCleanPinnedLinter(t *testing.T) {
+	fakeLinter := writeFakeCandidateLinter(t)
+	evidenceDir := t.TempDir()
+	cmd := exec.Command("bash", "scripts/run_candidate_lint_gate.sh", "run", evidenceDir)
+	cmd.Dir = repoRoot(t)
+	cmd.Env = append(os.Environ(),
+		"COLDKEEP_GOLANGCI_LINT_BIN="+fakeLinter,
+		"FAKE_LINT_OUTPUT=",
+		"FAKE_LINT_EXIT=0",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected clean pinned linter to pass, got err=%v output:\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "LOCAL_CANDIDATE_LINT=PASS") {
+		t.Fatalf("clean run did not emit PASS:\n%s", output)
+	}
+}
+
 func TestAuditCIEnforcementLocalWorkflowRequiresNativeCoordinationRuntime(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
@@ -1351,6 +1435,44 @@ func readRepoFile(t *testing.T, relPath string) string {
 		t.Fatalf("read %s: %v", relPath, err)
 	}
 	return string(content)
+}
+
+func writeFakeCandidateLinter(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "golangci-lint")
+	content := `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  version)
+    echo "golangci-lint has version 2.6.2 built with test"
+    ;;
+  config)
+    case "${2:-}" in
+      path)
+        echo ".golangci.yml"
+        ;;
+      verify)
+        ;;
+      *)
+        exit 2
+        ;;
+    esac
+    ;;
+  run)
+    if [[ -n "${FAKE_LINT_OUTPUT:-}" ]]; then
+      printf '%s\n' "${FAKE_LINT_OUTPUT}"
+    fi
+    exit "${FAKE_LINT_EXIT:-0}"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+		t.Fatalf("write fake candidate linter: %v", err)
+	}
+	return path
 }
 
 func repoRoot(t *testing.T) string {

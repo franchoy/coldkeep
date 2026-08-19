@@ -83,6 +83,9 @@ jobs:
 
       - name: Enforce versioned row writer scope
         run: bash scripts/check_versioned_row_writers.sh
+
+      - name: Test candidate lint gate contract
+        run: go test -count=1 ./scripts -run '^TestCandidateLintGate'
           
       - name: Lint
         uses: golangci/golangci-lint-action@v9

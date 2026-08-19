@@ -132,11 +132,12 @@ func openLegacyApplicationSession(req application.Request) (commandSession, erro
 
 func openLegacyDBSession(req application.Request) (commandSession, error) {
 	connector := connectListSearchDBPhase
-	if req.Operation == "repair" {
+	switch req.Operation {
+	case "repair":
 		connector = connectRepairDBPhase
-	} else if req.Operation == "recovery" {
+	case "recovery":
 		connector = connectRecoveryDBPhase
-	} else if req.Operation == "doctor" {
+	case "doctor":
 		connector = connectDoctorDBPhase
 	}
 	dbconn, err := connector()
@@ -298,25 +299,4 @@ func (e legacyPerItemEngine) Restore(_ context.Context, req engine.RestoreReques
 		}
 	}
 	return result, nil
-}
-
-func executeRestoreDryRunItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
-	result, err := restoreByIDPhase(sgctx, fileID, outputDir, overwrite, true)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d not found", fileID)}
-		}
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
-	}
-	return batch.ItemResult{ID: fileID, Status: batch.ResultPlanned, Message: fmt.Sprintf("would restore -> %s", result.OutputPath), OriginalName: result.OriginalName, OutputPath: result.OutputPath}
-}
-
-func executeRestoreItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
-	result, err := restoreByIDPhase(sgctx, fileID, outputDir, overwrite, false)
-	if err != nil {
-		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
-		annotateBatchFailureFromError(err, &item)
-		return item
-	}
-	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: "restored", OriginalName: result.OriginalName, OutputPath: result.OutputPath}
 }
