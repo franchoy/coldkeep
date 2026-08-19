@@ -19,7 +19,7 @@ import (
 )
 
 func isSnapshotDiffSummaryFastPath(req SnapshotDiffRequest) bool {
-	return req.Summary && req.Filter == "" && req.Query == (SnapshotQuery{})
+	return req.Summary && req.Filter == "" && isEmptySnapshotQuery(req.Query)
 }
 
 func (e *DefaultEngine) snapshotDiffSummaryFastPath(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error) {
@@ -58,17 +58,25 @@ func (e *DefaultEngine) snapshotDiffDetailed(ctx context.Context, req SnapshotDi
 		if !snapshotDiffEntryMatchesFilter(diffType, req.Filter) {
 			continue
 		}
-		entries = append(entries, SnapshotDiffEntry{StoredPath: entry.Path, Change: SnapshotDiffChange(diffType)})
+		entries = append(entries, SnapshotDiffEntry{
+			StoredPath: entry.Path, Change: SnapshotDiffChange(diffType),
+			BaseLogicalID: nullableInt64(entry.BaseLogicalID), TargetLogicalID: nullableInt64(entry.TargetLogicalID),
+		})
 		addSnapshotDiffSummaryEntry(&summary, diffType)
 	}
 	return buildSnapshotDiffResult(req, entries, summary, len(raw.Entries)), nil
 }
 
 func snapshotQueryOrNil(q SnapshotQuery) (*snapshot.SnapshotQuery, error) {
-	if q == (SnapshotQuery{}) {
+	if isEmptySnapshotQuery(q) {
 		return nil, nil
 	}
 	return engineQueryToSnapshotQuery(q)
+}
+
+func isEmptySnapshotQuery(q SnapshotQuery) bool {
+	return len(q.Paths) == 0 && len(q.Prefixes) == 0 && q.Pattern == "" && q.Regex == "" &&
+		q.MinSize == nil && q.MaxSize == nil && q.ModifiedAfter == nil && q.ModifiedBefore == nil && q.Limit == 0
 }
 
 func snapshotDiffEntryMatchesFilter(diffType string, filter SnapshotDiffFilter) bool {

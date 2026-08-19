@@ -435,8 +435,8 @@ func snapshotContractQuery() (engine.SnapshotQuery, time.Time, time.Time) {
 	after := time.Unix(0, 0)
 	before := time.Unix(1000, 0)
 	q := engine.SnapshotQuery{
-		Path:           "p",
-		Prefix:         "pre",
+		Paths:          []string{"p", "q"},
+		Prefixes:       []string{"pre/", "other/"},
 		Pattern:        "*.txt",
 		Regex:          ".*",
 		MinSize:        &min,

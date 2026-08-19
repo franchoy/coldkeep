@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/chunk"
@@ -292,9 +294,14 @@ func projectSelectedSnapshotGraph(graph *catalog.SnapshotGraph, selected []catal
 			ChildIDs:    children,
 		})
 	}
-	for _, rootID := range graph.RootIDs {
-		if _, ok := selectedIDs[rootID]; ok {
-			result.RootIDs = append(result.RootIDs, rootID)
+	// RootIDs are roots of the selected projection. A selected child whose
+	// existing parent was filtered out remains parent-aware metadata, but it is
+	// a top-level node for this projection. Historical missing parents are also
+	// top-level without inventing a parent edge.
+	for _, node := range result.Nodes {
+		_, parentSelected := selectedIDs[node.Snapshot.ParentID]
+		if node.ParentState != SnapshotParentPresent || !parentSelected {
+			result.RootIDs = append(result.RootIDs, node.Snapshot.ID)
 		}
 	}
 
@@ -324,7 +331,7 @@ func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowReques
 		CreatedAt: ref.CreatedAt,
 	}
 	var snapshotQ *snapshot.SnapshotQuery
-	if req.Query != (SnapshotQuery{}) {
+	if !isEmptySnapshotQuery(req.Query) {
 		var err error
 		snapshotQ, err = engineQueryToSnapshotQuery(req.Query)
 		if err != nil {
@@ -344,9 +351,9 @@ func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowReques
 		files[i] = SnapshotFile{
 			StoredPath:    entry.Path,
 			LogicalFileID: entry.LogicalFileID,
-			Size:          entry.Size.Int64,
-			Mode:          uint32(entry.Mode.Int64),
-			ModTime:       entry.MTime.Time,
+			Size:          nullableInt64(entry.Size),
+			Mode:          nullableInt64(entry.Mode),
+			ModTime:       nullableTime(entry.MTime),
 		}
 	}
 	return SnapshotShowResult{
@@ -433,11 +440,33 @@ func engineQueryToSnapshotQuery(q SnapshotQuery) (*snapshot.SnapshotQuery, error
 		ModifiedAfter:  q.ModifiedAfter,
 		ModifiedBefore: q.ModifiedBefore,
 	}
-	if q.Path != "" {
-		sq.ExactPaths = map[string]struct{}{q.Path: {}}
+	if len(q.Paths) > 0 {
+		sq.ExactPaths = make(map[string]struct{}, len(q.Paths))
+		for _, rawPath := range q.Paths {
+			normalized, err := snapshot.NormalizeSnapshotPath(rawPath)
+			if err != nil {
+				return nil, fmt.Errorf("invalid snapshot query path %q: %w", rawPath, err)
+			}
+			sq.ExactPaths[normalized] = struct{}{}
+		}
 	}
-	if q.Prefix != "" {
-		sq.Prefixes = []string{q.Prefix}
+	if len(q.Prefixes) > 0 {
+		sq.Prefixes = make([]string, 0, len(q.Prefixes))
+		for _, rawPrefix := range q.Prefixes {
+			normalized, err := snapshot.NormalizeSnapshotPath(rawPrefix)
+			if err != nil {
+				return nil, fmt.Errorf("invalid snapshot query prefix %q: %w", rawPrefix, err)
+			}
+			if !strings.HasSuffix(normalized, "/") {
+				return nil, fmt.Errorf("invalid snapshot query prefix %q: must end with '/'", rawPrefix)
+			}
+			sq.Prefixes = append(sq.Prefixes, normalized)
+		}
+	}
+	if q.Pattern != "" {
+		if _, err := path.Match(q.Pattern, ""); err != nil {
+			return nil, fmt.Errorf("invalid snapshot query pattern %q: %w", q.Pattern, err)
+		}
 	}
 	if q.Regex != "" {
 		compiled, err := regexp.Compile(q.Regex)
@@ -446,5 +475,30 @@ func engineQueryToSnapshotQuery(q SnapshotQuery) (*snapshot.SnapshotQuery, error
 		}
 		sq.Regex = compiled
 	}
+	if (q.MinSize != nil && *q.MinSize < 0) || (q.MaxSize != nil && *q.MaxSize < 0) {
+		return nil, fmt.Errorf("invalid snapshot query size range")
+	}
+	if q.MinSize != nil && q.MaxSize != nil && *q.MinSize > *q.MaxSize {
+		return nil, fmt.Errorf("invalid snapshot query size range: minimum exceeds maximum")
+	}
+	if q.ModifiedAfter != nil && q.ModifiedBefore != nil && q.ModifiedAfter.After(*q.ModifiedBefore) {
+		return nil, fmt.Errorf("invalid snapshot query time range: after exceeds before")
+	}
 	return sq, nil
+}
+
+func nullableInt64(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64
+	return &result
+}
+
+func nullableTime(value sql.NullTime) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Time
+	return &result
 }

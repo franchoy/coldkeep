@@ -20,6 +20,10 @@ type stubCommandEngine struct {
 	snapshotCreateFunc    func(context.Context, engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error)
 	snapshotDeleteFunc    func(context.Context, engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error)
 	snapshotRestoreFunc   func(context.Context, engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error)
+	snapshotListFunc      func(context.Context, engine.SnapshotListRequest) (engine.SnapshotListResult, error)
+	snapshotShowFunc      func(context.Context, engine.SnapshotShowRequest) (engine.SnapshotShowResult, error)
+	snapshotStatsFunc     func(context.Context, engine.SnapshotStatsRequest) (engine.SnapshotStatsResult, error)
+	snapshotDiffFunc      func(context.Context, engine.SnapshotDiffRequest) (engine.SnapshotDiffResult, error)
 	restoreStoredPathFunc func(context.Context, engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error)
 	removeStoredPathsFunc func(context.Context, engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error)
 	storeFolderFunc       func(context.Context, engine.StoreFolderRequest) (engine.StoreFolderResult, error)
@@ -48,6 +52,34 @@ func (s stubCommandEngine) SnapshotRestore(ctx context.Context, req engine.Snaps
 		return s.snapshotRestoreFunc(ctx, req)
 	}
 	return engine.SnapshotRestoreResult{}, errors.New("unexpected SnapshotRestore call")
+}
+
+func (s stubCommandEngine) SnapshotList(ctx context.Context, req engine.SnapshotListRequest) (engine.SnapshotListResult, error) {
+	if s.snapshotListFunc != nil {
+		return s.snapshotListFunc(ctx, req)
+	}
+	return engine.SnapshotListResult{}, errors.New("unexpected SnapshotList call")
+}
+
+func (s stubCommandEngine) SnapshotShow(ctx context.Context, req engine.SnapshotShowRequest) (engine.SnapshotShowResult, error) {
+	if s.snapshotShowFunc != nil {
+		return s.snapshotShowFunc(ctx, req)
+	}
+	return engine.SnapshotShowResult{}, errors.New("unexpected SnapshotShow call")
+}
+
+func (s stubCommandEngine) SnapshotStats(ctx context.Context, req engine.SnapshotStatsRequest) (engine.SnapshotStatsResult, error) {
+	if s.snapshotStatsFunc != nil {
+		return s.snapshotStatsFunc(ctx, req)
+	}
+	return engine.SnapshotStatsResult{}, errors.New("unexpected SnapshotStats call")
+}
+
+func (s stubCommandEngine) SnapshotDiff(ctx context.Context, req engine.SnapshotDiffRequest) (engine.SnapshotDiffResult, error) {
+	if s.snapshotDiffFunc != nil {
+		return s.snapshotDiffFunc(ctx, req)
+	}
+	return engine.SnapshotDiffResult{}, errors.New("unexpected SnapshotDiff call")
 }
 
 func (s stubCommandEngine) RestoreStoredPath(ctx context.Context, req engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error) {

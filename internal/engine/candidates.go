@@ -4,12 +4,10 @@ import "time"
 
 // Engine operation contracts.
 //
-// This historically named file contains both active Engine request/result
-// contracts and the candidate-only corrective Repair and Recover contracts.
-// Active method ownership is defined by the Engine interface, not by this file
-// name. Some active read-side contracts remain provisional and may still
-// participate in mixed CLI/domain workflows; active does not imply a frozen
-// daemon/API-ready contract.
+// This historically named file contains active Engine request/result contracts
+// plus corrective Repair and Recover contracts that later v1.13.12 phases
+// activate. Active method ownership is defined by the Engine interface, not by
+// this file name.
 //
 // Contract rules (see docs/release/v1.12/engine-baseline.md):
 //   - Requests represent operation intent, not CLI syntax.
@@ -80,18 +78,11 @@ type BatchSummary struct {
 // snapshot show and diff. All fields are optional; zero values mean
 // "no filter on this dimension". Size and time fields use pointers so that a
 // zero value can be distinguished from "unset".
-//
-// Only one exact Path and one Prefix can cross the current read-side seam,
-// even though CLI parsing may accept richer repeated path/prefix inputs before
-// narrowing. Broader read-side shape and ownership decisions are deferred to
-// early v2.0.
 type SnapshotQuery struct {
-	// Path matches an exact stored path.
-	// Only one exact path is preserved at the current engine seam.
-	Path string
-	// Prefix matches stored paths by prefix.
-	// Only one prefix is preserved at the current engine seam.
-	Prefix string
+	// Paths match exact normalized stored paths.
+	Paths []string
+	// Prefixes match normalized stored paths by directory prefix.
+	Prefixes []string
 	// Pattern is a glob-style match against stored paths.
 	Pattern string
 	// Regex is a regular-expression match against stored paths.
@@ -561,25 +552,19 @@ type SnapshotListResult struct {
 type SnapshotFile struct {
 	StoredPath    string
 	LogicalFileID int64
-	Size          int64
-	Mode          uint32
-	ModTime       time.Time
+	Size          *int64
+	Mode          *int64
+	ModTime       *time.Time
 }
 
-// SnapshotShowRequest is the active but provisional request contract for
-// Engine.SnapshotShow.
+// SnapshotShowRequest is the active request contract for Engine.SnapshotShow.
 type SnapshotShowRequest struct {
 	SnapshotID string
 	// Query filters which files are returned.
 	Query SnapshotQuery
 }
 
-// SnapshotShowResult is the active but provisional result contract for
-// Engine.SnapshotShow.
-//
-// This coherent result shape does not prove fully unified engine ownership.
-// Metadata, listing, and counts may still come from mixed seams; read-side
-// ownership and shape decisions are deferred to early v2.0.
+// SnapshotShowResult is the active result contract for Engine.SnapshotShow.
 type SnapshotShowResult struct {
 	Snapshot SnapshotMeta
 	Files    []SnapshotFile
@@ -589,20 +574,15 @@ type SnapshotShowResult struct {
 	TotalFileCount int
 }
 
-// SnapshotStatsRequest is the active but provisional request contract for
-// Engine.SnapshotStats.
+// SnapshotStatsRequest is the active request contract for Engine.SnapshotStats.
 //
 // SnapshotID is optional; empty means aggregate stats across all snapshots.
 type SnapshotStatsRequest struct {
 	SnapshotID string
 }
 
-// SnapshotStatsResult is the active but provisional result contract for
-// Engine.SnapshotStats.
-//
+// SnapshotStatsResult is the active result contract for Engine.SnapshotStats.
 // Reuse fields are populated only for a specific snapshot that has a parent.
-// Aggregate, metadata, and rendering workflows may still use mixed seams;
-// read-side ownership and shape decisions are deferred to early v2.0.
 type SnapshotStatsResult struct {
 	SnapshotCount     int
 	SnapshotFileCount int
@@ -646,17 +626,13 @@ const (
 
 // SnapshotDiffEntry is a renderer-neutral diff entry.
 type SnapshotDiffEntry struct {
-	StoredPath string
-	Change     SnapshotDiffChange
+	StoredPath      string
+	Change          SnapshotDiffChange
+	BaseLogicalID   *int64
+	TargetLogicalID *int64
 }
 
-// SnapshotDiffRequest is the active but provisional request contract for
-// Engine.SnapshotDiff.
-//
-// Summary fast-path behavior and query/filter semantics remain provisional.
-// The CLI can parse richer repeated path/prefix inputs than the current engine
-// seam preserves; read-side ownership and shape decisions are deferred to
-// early v2.0.
+// SnapshotDiffRequest is the active request contract for Engine.SnapshotDiff.
 type SnapshotDiffRequest struct {
 	BaseID   string
 	TargetID string
@@ -665,8 +641,6 @@ type SnapshotDiffRequest struct {
 	// semantics rather than a full entry list.
 	Summary bool
 	// Filter narrows the diff to a single change class.
-	// Filter behavior is layered on top of a provisional diff seam and is not yet
-	// a frozen daemon/API-ready contract.
 	Filter SnapshotDiffFilter
 	// Query filters which entries are considered.
 	Query SnapshotQuery
@@ -679,13 +653,7 @@ type SnapshotDiffSummary struct {
 	Modified int
 }
 
-// SnapshotDiffResult is the active but provisional result contract for
-// Engine.SnapshotDiff.
-//
-// SummaryMode, MatchedEntryCount, and TotalEntryCount are provisional
-// read-side semantics. They reflect the current summary-versus-detailed seam
-// and filtering behavior, not a frozen daemon/API-ready diff contract.
-// Read-side ownership and shape decisions are deferred to early v2.0.
+// SnapshotDiffResult is the complete result contract for Engine.SnapshotDiff.
 type SnapshotDiffResult struct {
 	BaseID   string
 	TargetID string

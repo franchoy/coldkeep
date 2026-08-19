@@ -367,111 +367,12 @@ var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 // through Engine.SnapshotRestore.
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
 var currentWorkingDirectoryPhase = os.Getwd
-var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
-	eng, err := engine.New(engine.Config{DB: db})
-	if err != nil {
-		return nil, err
-	}
-	req := engine.SnapshotListRequest{
-		Since: filter.Since,
-		Until: filter.Until,
-		Limit: filter.Limit,
-		Tree:  filter.Tree,
-	}
-	if filter.Type != nil {
-		req.Type = engine.SnapshotType(*filter.Type)
-	}
-	if filter.Label != nil {
-		req.Label = *filter.Label
-	}
-	result, err := eng.SnapshotList(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]snapshot.Snapshot, len(result.Snapshots))
-	for i, m := range result.Snapshots {
-		items[i] = snapshotMetaToSnapshot(m)
-	}
-	return items, nil
-}
-var getSnapshotPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.Snapshot, error) {
-	// Engine.SnapshotShow is active, but the CLI workflow may still combine
-	// engine metadata with direct snapshot-domain listing, counting, or
-	// rendering. Active method presence does not prove complete read-side
-	// workflow ownership; early v2.0 owns the remaining ownership decision.
-	eng, err := engine.New(engine.Config{DB: db})
-	if err != nil {
-		return nil, err
-	}
-	result, err := eng.SnapshotShow(ctx, engine.SnapshotShowRequest{SnapshotID: id})
-	if err != nil {
-		return nil, err
-	}
-	s := snapshotMetaToSnapshot(result.Snapshot)
-	return &s, nil
-}
-
-// Engine.SnapshotShow is active, while snapshot show file listing remains
-// direct snapshot-domain work in this mixed CLI workflow. Active method
-// presence does not prove complete read-side workflow ownership; early v2.0
-// owns the remaining ownership decision.
-var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
-var snapshotStatsPhase = func(ctx context.Context, db *sql.DB, id string) (*snapshot.SnapshotStats, error) {
-	// Engine.SnapshotStats is active, but snapshot show and stats workflows may
-	// still use direct snapshot-domain helpers alongside engine-backed seams.
-	// Active method presence does not prove complete read-side workflow
-	// ownership; early v2.0 owns the remaining ownership decision.
-	eng, err := engine.New(engine.Config{DB: db})
-	if err != nil {
-		return nil, err
-	}
-	result, err := eng.SnapshotStats(ctx, engine.SnapshotStatsRequest{SnapshotID: id})
-	if err != nil {
-		return nil, err
-	}
-	stats := &snapshot.SnapshotStats{
-		SnapshotCount:     int64(result.SnapshotCount),
-		SnapshotFileCount: int64(result.SnapshotFileCount),
-		TotalSizeBytes:    result.TotalSizeBytes,
-		LineageStatus:     snapshot.SnapshotLineageStatus(result.LineageStatus),
-	}
-	if result.HasReuse {
-		stats.ParentSnapshotID = sql.NullString{Valid: true, String: result.ParentSnapshotID}
-		stats.ReusedFileCount = sql.NullInt64{Valid: true, Int64: int64(result.Reused)}
-		stats.NewFileCount = sql.NullInt64{Valid: true, Int64: int64(result.New)}
-		stats.ReuseRatioPct = sql.NullFloat64{Valid: true, Float64: result.ReuseRatio}
-	}
-	return stats, nil
-}
 
 // Compatibility-only direct snapshot-domain delete seams remain for lower-
 // level tests and non-CLI callers. Production CLI snapshot delete routes
 // through Engine.SnapshotDelete.
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
-var diffSnapshotsPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
-	// The CLI accepts repeated path and prefix selectors. Keep that full
-	// snapshot-domain query shape instead of narrowing it through the current
-	// single-path engine seam.
-	return snapshot.DiffSnapshots(ctx, db, baseID, targetID, query)
-}
-var diffSnapshotSummaryPhase = func(ctx context.Context, db *sql.DB, baseID, targetID string) (*snapshot.SnapshotDiffSummary, error) {
-	eng, err := engine.New(engine.Config{DB: db})
-	if err != nil {
-		return nil, err
-	}
-	result, err := eng.SnapshotDiff(ctx, engine.SnapshotDiffRequest{
-		BaseID: baseID, TargetID: targetID, Summary: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &snapshot.SnapshotDiffSummary{
-		Added:    int64(result.Summary.Added),
-		Removed:  int64(result.Summary.Removed),
-		Modified: int64(result.Summary.Modified),
-	}, nil
-}
 
 // snapshotMetaToSnapshot maps an engine.SnapshotMeta to a snapshot.Snapshot for
 // CLI renderers that expect the snapshot package's type with sql.NullString fields.
@@ -5566,6 +5467,70 @@ func renderSnapshotTreeLines(items []snapshot.Snapshot) []string {
 	return lines
 }
 
+func renderEngineSnapshotTreeLines(graph *engine.SnapshotGraph) []string {
+	if graph == nil || len(graph.Nodes) == 0 {
+		return nil
+	}
+
+	nodes := make(map[string]engine.SnapshotGraphNode, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		nodes[node.Snapshot.ID] = node
+	}
+	lines := make([]string, 0, len(graph.Nodes))
+	visited := make(map[string]struct{}, len(graph.Nodes))
+	var walk func(string, string, bool, bool)
+	walk = func(id, prefix string, isLast, hasParent bool) {
+		if _, seen := visited[id]; seen {
+			return
+		}
+		node, ok := nodes[id]
+		if !ok {
+			return
+		}
+		visited[id] = struct{}{}
+
+		linePrefix := prefix
+		if hasParent {
+			if isLast {
+				linePrefix += "└── "
+			} else {
+				linePrefix += "├── "
+			}
+		}
+		lines = append(lines, linePrefix+id)
+
+		nextPrefix := prefix
+		if hasParent {
+			if isLast {
+				nextPrefix += "    "
+			} else {
+				nextPrefix += "│   "
+			}
+		}
+		for i, childID := range node.ChildIDs {
+			walk(childID, nextPrefix, i == len(node.ChildIDs)-1, true)
+		}
+	}
+	emitRoot := func(id string) {
+		if _, seen := visited[id]; seen {
+			return
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		walk(id, "", true, false)
+	}
+	for _, rootID := range graph.RootIDs {
+		emitRoot(rootID)
+	}
+	// Defensive completion keeps rendering finite if a custom Engine returns a
+	// malformed root list; relationship validation remains engine-owned.
+	for _, node := range graph.Nodes {
+		emitRoot(node.Snapshot.ID)
+	}
+	return lines
+}
+
 func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
@@ -5578,6 +5543,77 @@ func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
 		})
 	}
 	return result
+}
+
+func snapshotQueryToEngine(query *snapshot.SnapshotQuery, limit int) engine.SnapshotQuery {
+	result := engine.SnapshotQuery{Limit: limit}
+	if query == nil {
+		return result
+	}
+	result.Paths = make([]string, 0, len(query.ExactPaths))
+	for exactPath := range query.ExactPaths {
+		result.Paths = append(result.Paths, exactPath)
+	}
+	sort.Strings(result.Paths)
+	result.Prefixes = append([]string(nil), query.Prefixes...)
+	result.Pattern = query.Pattern
+	if query.Regex != nil {
+		result.Regex = query.Regex.String()
+	}
+	result.MinSize = query.MinSize
+	result.MaxSize = query.MaxSize
+	result.ModifiedAfter = query.ModifiedAfter
+	result.ModifiedBefore = query.ModifiedBefore
+	return result
+}
+
+func snapshotFileFromEngine(file engine.SnapshotFile) snapshot.SnapshotFileEntry {
+	result := snapshot.SnapshotFileEntry{Path: file.StoredPath, LogicalFileID: file.LogicalFileID}
+	if file.Size != nil {
+		result.Size = sql.NullInt64{Int64: *file.Size, Valid: true}
+	}
+	if file.Mode != nil {
+		result.Mode = sql.NullInt64{Int64: *file.Mode, Valid: true}
+	}
+	if file.ModTime != nil {
+		result.MTime = sql.NullTime{Time: *file.ModTime, Valid: true}
+	}
+	return result
+}
+
+func snapshotStatsFromEngine(result engine.SnapshotStatsResult) snapshot.SnapshotStats {
+	stats := snapshot.SnapshotStats{
+		SnapshotCount: int64(result.SnapshotCount), SnapshotFileCount: int64(result.SnapshotFileCount),
+		TotalSizeBytes: result.TotalSizeBytes, LineageStatus: snapshot.SnapshotLineageStatus(result.LineageStatus),
+	}
+	if result.HasReuse {
+		stats.ParentSnapshotID = sql.NullString{String: result.ParentSnapshotID, Valid: true}
+		stats.ReusedFileCount = sql.NullInt64{Int64: int64(result.Reused), Valid: true}
+		stats.NewFileCount = sql.NullInt64{Int64: int64(result.New), Valid: true}
+		stats.ReuseRatioPct = sql.NullFloat64{Float64: result.ReuseRatio, Valid: true}
+	}
+	return stats
+}
+
+func snapshotDiffFromEngine(result engine.SnapshotDiffResult) snapshot.SnapshotDiffResult {
+	entries := make([]snapshot.SnapshotDiffEntry, len(result.Entries))
+	for i, entry := range result.Entries {
+		entries[i] = snapshot.SnapshotDiffEntry{
+			Path: entry.StoredPath, Type: snapshot.DiffType(entry.Change),
+			BaseLogicalID: nullableSQLInt64(entry.BaseLogicalID), TargetLogicalID: nullableSQLInt64(entry.TargetLogicalID),
+		}
+	}
+	return snapshot.SnapshotDiffResult{
+		BaseSnapshotID: result.BaseID, TargetSnapshotID: result.TargetID, Entries: entries,
+		Summary: snapshot.SnapshotDiffSummary{Added: int64(result.Summary.Added), Removed: int64(result.Summary.Removed), Modified: int64(result.Summary.Modified)},
+	}
+}
+
+func nullableSQLInt64(value *int64) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *value, Valid: true}
 }
 
 func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -5644,9 +5680,33 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	items, err := listSnapshotsPhase(ctx, sgctx.DB, filter)
+	eng, err := newSnapshotReadCommandEngine(sgctx)
 	if err != nil {
 		return err
+	}
+	req := engine.SnapshotListRequest{
+		Since: filter.Since, Until: filter.Until, Limit: filter.Limit, Tree: treeMode,
+	}
+	if filter.Type != nil {
+		req.Type = engine.SnapshotType(*filter.Type)
+	}
+	if filter.Label != nil {
+		req.Label = *filter.Label
+	}
+	result, err := eng.SnapshotList(ctx, req)
+	if err != nil {
+		return err
+	}
+	items := make([]snapshot.Snapshot, len(result.Snapshots))
+	for i, item := range result.Snapshots {
+		items[i] = snapshotMetaToSnapshot(item)
+	}
+	var treeLines []string
+	if treeMode {
+		if result.Graph == nil {
+			return fmt.Errorf("snapshot list engine result missing requested graph")
+		}
+		treeLines = renderEngineSnapshotTreeLines(result.Graph)
 	}
 
 	if outputMode == outputModeJSON {
@@ -5662,7 +5722,7 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		}
 		if treeMode {
 			data["tree_mode"] = true
-			data["tree_lines"] = renderSnapshotTreeLines(items)
+			data["tree_lines"] = treeLines
 		}
 		payload := map[string]any{
 			"status":  "ok",
@@ -5675,8 +5735,7 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	if treeMode {
-		lines := renderSnapshotTreeLines(items)
-		return clirender.RenderSnapshotListHuman(os.Stdout, items, true, lines, time.Since(startedAt).Milliseconds(), doctorOperationalHint)
+		return clirender.RenderSnapshotListHuman(os.Stdout, items, true, treeLines, time.Since(startedAt).Milliseconds(), doctorOperationalHint)
 	}
 
 	return clirender.RenderSnapshotListHuman(os.Stdout, items, false, nil, time.Since(startedAt).Milliseconds(), doctorOperationalHint)
@@ -5718,19 +5777,23 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	item, err := getSnapshotPhase(ctx, sgctx.DB, snapshotID)
+	eng, err := newSnapshotReadCommandEngine(sgctx)
 	if err != nil {
 		return err
 	}
-	files, err := listSnapshotFilesPhase(ctx, sgctx.DB, snapshotID, limit, query)
+	result, err := eng.SnapshotShow(ctx, engine.SnapshotShowRequest{
+		SnapshotID: snapshotID,
+		Query:      snapshotQueryToEngine(query, limit),
+	})
 	if err != nil {
 		return err
 	}
-	stats, err := snapshotStatsPhase(ctx, sgctx.DB, snapshotID)
-	if err != nil {
-		return err
+	item := snapshotMetaToSnapshot(result.Snapshot)
+	files := make([]snapshot.SnapshotFileEntry, len(result.Files))
+	for i, file := range result.Files {
+		files[i] = snapshotFileFromEngine(file)
 	}
-	matchedFileCount := len(files)
+	matchedFileCount := result.MatchedFileCount
 
 	if outputMode == outputModeJSON {
 		payload := map[string]any{
@@ -5738,10 +5801,10 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 			"command": "snapshot",
 			"data": map[string]any{
 				"action":                    "show",
-				"snapshot":                  snapshotSummaryJSON(*item),
+				"snapshot":                  snapshotSummaryJSON(item),
 				"file_count":                matchedFileCount,
 				"matched_file_count":        matchedFileCount,
-				"total_snapshot_file_count": stats.SnapshotFileCount,
+				"total_snapshot_file_count": result.TotalFileCount,
 				"files":                     snapshotFilesJSON(files),
 				"duration_ms":               time.Since(startedAt).Milliseconds(),
 			},
@@ -5753,10 +5816,10 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 
 	return clirender.RenderSnapshotShowHuman(
 		os.Stdout,
-		*item,
+		item,
 		files,
 		matchedFileCount,
-		stats.SnapshotFileCount,
+		int64(result.TotalFileCount),
 		time.Since(startedAt).Milliseconds(),
 		doctorOperationalHint,
 	)
@@ -5789,10 +5852,15 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	stats, err := snapshotStatsPhase(ctx, sgctx.DB, snapshotID)
+	eng, err := newSnapshotReadCommandEngine(sgctx)
 	if err != nil {
 		return err
 	}
+	result, err := eng.SnapshotStats(ctx, engine.SnapshotStatsRequest{SnapshotID: snapshotID})
+	if err != nil {
+		return err
+	}
+	stats := snapshotStatsFromEngine(result)
 
 	if outputMode == outputModeJSON {
 		data := map[string]any{
@@ -6142,60 +6210,22 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	useSummaryFastPath := summaryMode && filterType == "" && query == nil
-	if useSummaryFastPath {
-		summary, err := diffSnapshotSummaryPhase(ctx, sgctx.DB, baseID, targetID)
-		if err != nil {
-			return err
-		}
-		totalEntryCount := int(summary.Added + summary.Removed + summary.Modified)
-
-		if outputMode == outputModeJSON {
-			payload := map[string]any{
-				"status":  "ok",
-				"command": "snapshot diff",
-				"data": map[string]any{
-					"base":                   baseID,
-					"target":                 targetID,
-					"entry_count":            totalEntryCount,
-					"matched_entry_count":    totalEntryCount,
-					"total_diff_entry_count": totalEntryCount,
-					"summary":                summary,
-					"summary_mode":           true,
-					"duration_ms":            time.Since(startedAt).Milliseconds(),
-				},
-			}
-			encoded, _ := json.Marshal(payload)
-			fmt.Println(string(encoded))
-			return nil
-		}
-
-		return clirender.RenderSnapshotDiffSummaryHuman(os.Stdout, baseID, targetID, *summary)
-	}
-
-	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID, query)
+	eng, err := newSnapshotReadCommandEngine(sgctx)
 	if err != nil {
 		return err
 	}
-
-	entries := make([]snapshot.SnapshotDiffEntry, 0, len(result.Entries))
-	summary := snapshot.SnapshotDiffSummary{}
-	for _, entry := range result.Entries {
-		if filterType != "" && entry.Type != snapshot.DiffType(filterType) {
-			continue
-		}
-		entries = append(entries, entry)
-		switch entry.Type {
-		case snapshot.DiffAdded:
-			summary.Added++
-		case snapshot.DiffRemoved:
-			summary.Removed++
-		case snapshot.DiffModified:
-			summary.Modified++
-		}
+	engineResult, err := eng.SnapshotDiff(ctx, engine.SnapshotDiffRequest{
+		BaseID: baseID, TargetID: targetID, Summary: summaryMode,
+		Filter: engine.SnapshotDiffFilter(filterType), Query: snapshotQueryToEngine(query, 0),
+	})
+	if err != nil {
+		return err
 	}
-	totalEntryCount := len(result.Entries)
-	matchedEntryCount := len(entries)
+	result := snapshotDiffFromEngine(engineResult)
+	entries := result.Entries
+	summary := result.Summary
+	totalEntryCount := engineResult.TotalEntryCount
+	matchedEntryCount := engineResult.MatchedEntryCount
 
 	if outputMode == outputModeJSON {
 		jsonEntries := make([]map[string]any, 0, len(entries))
