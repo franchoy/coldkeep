@@ -361,8 +361,6 @@ func TestCatalogContractDeferredMethodsAcrossBackends(t *testing.T) {
 		seedCatalogFixture(t, backend.DB)
 		svc := catalog.NewServiceFromSQL(backend.DB)
 		before := catalogStateCounts(t, backend.DB)
-		restorePlan, err := svc.LoadRestorePlanMetadata(context.Background(), catalog.RestorePlanInput{FileID: 1})
-		assertDeferred(t, "LoadRestorePlanMetadata", err, restorePlan)
 		gcPlan, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{})
 		assertDeferred(t, "LoadGCPlanMetadata", err, gcPlan)
 		if after := catalogStateCounts(t, backend.DB); after != before {

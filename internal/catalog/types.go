@@ -160,6 +160,7 @@ type RestoreSourceRef struct {
 	StoredPath         string
 	SnapshotID         string
 	SnapshotPath       string
+	Size               *int64
 	Mode               *int64
 	MTime              *time.Time
 	UID                *int64

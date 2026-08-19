@@ -389,24 +389,13 @@ func TestServiceLoadReachabilityRoots(t *testing.T) {
 	assertReachabilityRoots(t, roots)
 }
 
-// TestServiceDeferredMethodsReturnErrNotImplemented verifies the remaining
-// restore/GC skeleton methods return ErrNotImplemented.
+// TestServiceDeferredMethodsReturnErrNotImplemented verifies the remaining GC
+// skeleton method returns ErrNotImplemented.
 func TestServiceDeferredMethodsReturnErrNotImplemented(t *testing.T) {
 	dbconn := openTestDB(t)
 	svc := catalog.NewServiceFromSQL(dbconn)
 	ctx := context.Background()
 	before := countCatalogLogicalFiles(t, dbconn)
-
-	restorePlan, err := svc.LoadRestorePlanMetadata(ctx, catalog.RestorePlanInput{FileID: 1})
-	if !errors.Is(err, catalog.ErrNotImplemented) {
-		t.Errorf("LoadRestorePlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
-	}
-	if !catalog.IsDeferred(err) {
-		t.Errorf("LoadRestorePlanMetadata: want catalog.IsDeferred=true, got %v", err)
-	}
-	if restorePlan != nil {
-		t.Errorf("LoadRestorePlanMetadata: want nil metadata on deferred path, got %+v", restorePlan)
-	}
 
 	gcPlan, err := svc.LoadGCPlanMetadata(ctx, catalog.GCPlanInput{})
 	if !errors.Is(err, catalog.ErrNotImplemented) {

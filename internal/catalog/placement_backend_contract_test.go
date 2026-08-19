@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
@@ -60,6 +61,105 @@ func TestCatalogContractChunkPlacementsAcrossBackends(t *testing.T) {
 			t.Fatalf("placement reads mutated catalog: before=%+v after=%+v", before, after)
 		}
 	})
+}
+
+func TestCatalogContractRestorePlansAcrossBackends(t *testing.T) {
+	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
+		seedPlacementContractFixture(t, backend)
+		mtime := time.Date(2026, 8, 19, 16, 30, 0, 0, time.UTC)
+		if _, err := backend.DB.ExecContext(context.Background(), `INSERT INTO physical_file (path,logical_file_id,mode,mtime,uid,gid,is_metadata_complete) VALUES ('current/mixed.bin',$1,420,$2,1000,1001,$3)`, placementLogicalID, mtime, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := backend.DB.ExecContext(context.Background(), `INSERT INTO snapshot (id,created_at,type,label) VALUES ('restore-snap',$1,'full','restore')`, mtime); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := backend.DB.ExecContext(context.Background(), `INSERT INTO snapshot_path (id,path) VALUES (701,'archive/mixed.bin')`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := backend.DB.ExecContext(context.Background(), `INSERT INTO snapshot_file (snapshot_id,path_id,logical_file_id,size,mode,mtime) VALUES ('restore-snap',701,$1,20,384,$2)`, placementLogicalID, mtime); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := backend.DB.ExecContext(context.Background(), `INSERT INTO logical_file (id,original_name,total_size,file_hash,ref_count,chunker_version,status) VALUES (54,'processing.bin',0,'processing-hash',1,'v2-fastcdc','PROCESSING')`); err != nil {
+			t.Fatal(err)
+		}
+
+		before := catalogStateCounts(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		byID := requireRestorePlan(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreByFileID, FileID: placementLogicalID})
+		if byID.LogicalFile.ID != placementLogicalID || byID.Source != (catalog.RestoreSourceRef{}) || len(byID.Placements) != 2 {
+			t.Fatalf("file-ID plan: %+v", byID)
+		}
+		stored := requireRestorePlan(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreByStoredPath, StoredPath: "current/mixed.bin"})
+		if stored.Source.StoredPath != "current/mixed.bin" || stored.Source.Mode == nil || *stored.Source.Mode != 420 || stored.Source.UID == nil || *stored.Source.UID != 1000 || stored.Source.GID == nil || *stored.Source.GID != 1001 || stored.Source.MTime == nil || !stored.Source.MTime.Equal(mtime) || !stored.Source.IsMetadataComplete {
+			t.Fatalf("stored-path source: %+v", stored.Source)
+		}
+		snapshotPlan := requireRestorePlan(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreBySnapshotPath, SnapshotID: "restore-snap", SnapshotPath: "archive/mixed.bin"})
+		if snapshotPlan.Source.SnapshotID != "restore-snap" || snapshotPlan.Source.SnapshotPath != "archive/mixed.bin" || snapshotPlan.Source.Size == nil || *snapshotPlan.Source.Size != 20 || snapshotPlan.Source.Mode == nil || *snapshotPlan.Source.Mode != 384 || snapshotPlan.Source.MTime == nil || !snapshotPlan.Source.MTime.Equal(mtime) || !snapshotPlan.Source.IsMetadataComplete {
+			t.Fatalf("snapshot source: %+v", snapshotPlan.Source)
+		}
+		if !reflect.DeepEqual(byID.Placements, stored.Placements) || !reflect.DeepEqual(byID.Placements, snapshotPlan.Placements) {
+			t.Fatal("selectors produced different logical recipes")
+		}
+		empty := requireRestorePlan(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreByFileID, FileID: placementEmptyID})
+		if empty.LogicalFile.TotalSize != 0 || len(empty.Placements) != 0 || empty.Placements == nil {
+			t.Fatalf("empty plan: %+v", empty)
+		}
+
+		assertRestorePlanCode(t, svc, catalog.RestorePlanInput{}, catalog.ErrorInvalidArgument)
+		assertRestorePlanCode(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreByFileID, FileID: 999999}, catalog.ErrorNotFound)
+		assertRestorePlanCode(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreByStoredPath, StoredPath: "missing"}, catalog.ErrorNotFound)
+		assertRestorePlanCode(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreBySnapshotPath, SnapshotID: "restore-snap", SnapshotPath: "missing"}, catalog.ErrorNotFound)
+		assertRestorePlanCode(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreByFileID, FileID: placementMalformedID}, catalog.ErrorInvariantViolation)
+		assertRestorePlanCode(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreByFileID, FileID: 54}, catalog.ErrorConflict)
+
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if plan, err := svc.LoadRestorePlanMetadata(cancelled, catalog.RestorePlanInput{Selector: catalog.RestoreByFileID, FileID: placementLogicalID}); plan != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled plan=%+v err=%v", plan, err)
+		}
+
+		tx, err := backend.DB.BeginTx(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO physical_file (path,logical_file_id,is_metadata_complete) VALUES ('transaction-only.bin',$1,$2)`, placementLogicalID, false); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		txPlan, err := catalog.NewService(tx).LoadRestorePlanMetadata(context.Background(), catalog.RestorePlanInput{Selector: catalog.RestoreByStoredPath, StoredPath: "transaction-only.bin"})
+		if err != nil || txPlan.Source.StoredPath != "transaction-only.bin" {
+			_ = tx.Rollback()
+			t.Fatalf("transaction plan=%+v err=%v", txPlan, err)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatal(err)
+		}
+		assertRestorePlanCode(t, svc, catalog.RestorePlanInput{Selector: catalog.RestoreByStoredPath, StoredPath: "transaction-only.bin"}, catalog.ErrorNotFound)
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("restore plan reads mutated catalog: before=%+v after=%+v", before, after)
+		}
+	})
+}
+
+func requireRestorePlan(t *testing.T, svc interface {
+	LoadRestorePlanMetadata(context.Context, catalog.RestorePlanInput) (*catalog.RestorePlanMetadata, error)
+}, input catalog.RestorePlanInput) *catalog.RestorePlanMetadata {
+	t.Helper()
+	plan, err := svc.LoadRestorePlanMetadata(context.Background(), input)
+	if err != nil || plan == nil {
+		t.Fatalf("LoadRestorePlanMetadata(%+v): plan=%+v err=%v", input, plan, err)
+	}
+	return plan
+}
+
+func assertRestorePlanCode(t *testing.T, svc interface {
+	LoadRestorePlanMetadata(context.Context, catalog.RestorePlanInput) (*catalog.RestorePlanMetadata, error)
+}, input catalog.RestorePlanInput, code catalog.ErrorCode) {
+	t.Helper()
+	plan, err := svc.LoadRestorePlanMetadata(context.Background(), input)
+	if plan != nil || !catalog.IsCode(err, code) {
+		t.Fatalf("LoadRestorePlanMetadata(%+v): plan=%+v err=%v wantCode=%s", input, plan, err, code)
+	}
 }
 
 func seedPlacementContractFixture(t *testing.T, backend backendtest.Backend) {
