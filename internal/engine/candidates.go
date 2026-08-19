@@ -251,6 +251,10 @@ type RestoreRequest struct {
 type RestoreItemResult struct {
 	// FileID is the restored logical file ID.
 	FileID int64
+	// OriginalName is the persisted logical-file name used to derive the
+	// destination. It lets adapters preserve the established batch projection
+	// without querying storage metadata outside the engine boundary.
+	OriginalName string
 	// DestinationPath is the path the file was (or would be) written to.
 	DestinationPath string
 	// RestoredHash is the content hash of the restored file.
@@ -445,6 +449,50 @@ type GarbageCollectResult struct {
 	BytesReclaimed int64
 	// Warnings carries structured, non-fatal warnings.
 	Warnings []OperationWarning
+}
+
+// GarbageCollectionPlanRequest describes a read-only live-repository GC plan.
+type GarbageCollectionPlanRequest struct {
+	SnapshotIDsToOmit []string
+	IncludeTrace      bool
+}
+
+// GarbageCollectionContainerImpact is a presentation-neutral container plan.
+type GarbageCollectionContainerImpact struct {
+	ContainerID        int64
+	Filename           string
+	TotalBytes         int64
+	LiveBytesAfterGC   int64
+	ReclaimableBytes   int64
+	ReclaimableChunks  int64
+	TotalChunks        int64
+	FullyReclaimable   bool
+	RequiresCompaction bool
+}
+
+// GarbageCollectionPlanSummary preserves exact GC planner counters.
+type GarbageCollectionPlanSummary struct {
+	TotalChunks                        int64
+	ReachableChunks                    int64
+	UnreachableChunks                  int64
+	LogicallyReclaimableBytes          int64
+	PhysicallyReclaimableBytes         int64
+	FullyReclaimableContainers         int64
+	PartiallyDeadContainers            int64
+	PackedBlocksLive                   int64
+	PackedBlocksDead                   int64
+	PackedBytesLive                    int64
+	PackedBytesReclaimable             int64
+	RetainedDeadBytesDueToPackedBlocks int64
+}
+
+// GarbageCollectionPlanResult is the immutable read-only plan projection.
+type GarbageCollectionPlanResult struct {
+	SnapshotIDsToOmit []string
+	Summary           GarbageCollectionPlanSummary
+	Containers        []GarbageCollectionContainerImpact
+	Warnings          []OperationWarning
+	Trace             []TraceEvent
 }
 
 // ---------------------------------------------------------------------------

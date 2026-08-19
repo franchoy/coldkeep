@@ -17,7 +17,8 @@ type goListPackage struct {
 // TestEngineDependencyDirection enforces the v1.11 engine facade boundary:
 //
 //   - Rule 1: internal/engine must not import cmd/coldkeep (transitively).
-//   - Rule 2: non-engine internal/* packages must not directly import internal/engine.
+//   - Rule 2: non-engine internal/* packages except the application composition
+//     boundary must not directly import internal/engine.
 //   - Rule 3: cmd/coldkeep may import internal/engine (allowed; not tested here).
 //
 // This guard prevents architecture drift as more CLI commands are routed through
@@ -27,6 +28,7 @@ func TestEngineDependencyDirection(t *testing.T) {
 	const enginePkg = module + "/internal/engine"
 	const catalogPkg = module + "/internal/catalog"
 	const cliPkg = module + "/cmd/coldkeep"
+	const applicationPkg = module + "/internal/application"
 
 	// Locate the module root so ./... covers all packages, not just internal/engine.
 	modOut, err := exec.Command("go", "env", "GOMOD").Output()
@@ -49,7 +51,7 @@ func TestEngineDependencyDirection(t *testing.T) {
 			t.Fatalf("decode go list output: %v", err)
 		}
 		checkEngineNotDependsOnCLI(t, pkg, enginePkg, cliPkg)
-		checkDomainNotImportsEngine(t, pkg, module, enginePkg)
+		checkDomainNotImportsEngine(t, pkg, module, enginePkg, applicationPkg)
 		checkCLINotImportsCatalog(t, pkg, cliPkg, catalogPkg)
 	}
 }
@@ -71,10 +73,10 @@ func checkEngineNotDependsOnCLI(t *testing.T, pkg goListPackage, enginePkg, cliP
 
 // checkDomainNotImportsEngine enforces Rule 2: non-engine internal/* packages
 // must not directly import internal/engine.
-func checkDomainNotImportsEngine(t *testing.T, pkg goListPackage, module, enginePkg string) {
+func checkDomainNotImportsEngine(t *testing.T, pkg goListPackage, module, enginePkg, applicationPkg string) {
 	t.Helper()
 	if !strings.HasPrefix(pkg.ImportPath, module+"/internal/") ||
-		strings.HasPrefix(pkg.ImportPath, enginePkg) {
+		strings.HasPrefix(pkg.ImportPath, enginePkg) || pkg.ImportPath == applicationPkg {
 		return
 	}
 	for _, imp := range pkg.Imports {

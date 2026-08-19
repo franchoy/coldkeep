@@ -186,131 +186,14 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
-var storeByFilePhase = func(sgctx *storage.StorageContext, path, codecName string) (storage.StoreFileResult, error) {
-	if sgctx == nil || sgctx.DB == nil {
-		return storage.StoreFileResult{}, fmt.Errorf("store: storage context DB is required")
-	}
-	eng, err := engine.New(engine.Config{
-		DB:           sgctx.DB,
-		ContainerDir: sgctx.EffectiveContainerDir(),
-		StoreContext: sgctx,
-	})
-	if err != nil {
-		return storage.StoreFileResult{}, err
-	}
-
-	res, err := eng.Store(context.Background(), engine.StoreRequest{
-		SourcePath: path,
-		Codec:      strings.TrimSpace(codecName),
-	})
-	if err != nil {
-		return storage.StoreFileResult{}, err
-	}
-
-	return storage.StoreFileResult{
-		FileID:        res.LogicalFileID,
-		FileHash:      res.FileHash,
-		Path:          res.StoredPath,
-		AlreadyStored: res.AlreadyStored,
-	}, nil
-}
-var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun bool) batch.ItemResult {
-	// By-ID remove remains the active engine-owned path.
-	if sgctx == nil || sgctx.DB == nil {
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: "remove: storage context DB is required"}
-	}
-
-	eng, err := engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
-	if err != nil {
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
-	}
-
-	res, err := eng.Remove(context.Background(), engine.RemoveRequest{
-		FileIDs:  []int64{fileID},
-		DryRun:   dryRun,
-		FailFast: true,
-	})
-	if err != nil {
-		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
-		annotateBatchFailureFromError(err, &item)
-		return item
-	}
-	if len(res.Items) != 1 {
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("remove: expected one item result, got %d", len(res.Items))}
-	}
-
-	item := res.Items[0]
-	if item.Status == engine.BatchItemFailed {
-		return batch.ItemResult{
-			ID:                fileID,
-			Status:            batch.ResultFailed,
-			Message:           item.Error,
-			InvariantCode:     item.InvariantCode,
-			RecommendedAction: item.RecommendedAction,
-		}
-	}
-
-	if dryRun {
-		return batch.ItemResult{ID: fileID, Status: batch.ResultPlanned, Message: "would remove"}
-	}
-	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", item.RemovedChunkAssociations)}
-}
-var restoreByIDPhase = func(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool, dryRun bool) (storage.RestoreFileResult, error) {
-	// By-ID restore remains the active engine-owned path.
-	if sgctx == nil || sgctx.DB == nil {
-		return storage.RestoreFileResult{}, fmt.Errorf("restore: storage context DB is required")
-	}
-	eng, err := engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
-	if err != nil {
-		return storage.RestoreFileResult{}, err
-	}
-
-	info, err := storage.GetLogicalFileInfoWithDB(sgctx.DB, fileID)
-	if err != nil {
-		return storage.RestoreFileResult{}, err
-	}
-
-	res, err := eng.Restore(context.Background(), engine.RestoreRequest{
-		FileIDs:         []int64{fileID},
-		DestinationRoot: outputDir,
-		Overwrite:       overwrite,
-		DryRun:          dryRun,
-		FailFast:        true,
-	})
-	if err != nil {
-		return storage.RestoreFileResult{}, err
-	}
-	if len(res.Items) != 1 {
-		return storage.RestoreFileResult{}, fmt.Errorf("restore: expected one item result, got %d", len(res.Items))
-	}
-	item := res.Items[0]
-	if item.Status == engine.BatchItemFailed {
-		return storage.RestoreFileResult{}, errors.New(item.Error)
-	}
-
-	return storage.RestoreFileResult{
-		FileID:       fileID,
-		OriginalName: info.OriginalName,
-		OutputPath:   item.DestinationPath,
-		RestoredHash: item.RestoredHash,
-	}, nil
-}
 var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, error) {
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("gc", true, containersDir)
 	if err != nil {
 		return maintenance.GCResult{}, err
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 
-	eng, err := engine.New(engine.Config{
-		DB:           sgctx.DB,
-		ContainerDir: containersDir,
-	})
-	if err != nil {
-		return maintenance.GCResult{}, err
-	}
-
-	result, err := eng.GarbageCollect(context.Background(), engine.GarbageCollectRequest{DryRun: dryRun})
+	result, err := session.Engine().GarbageCollect(context.Background(), engine.GarbageCollectRequest{DryRun: dryRun})
 	if err != nil {
 		return maintenance.GCResult{}, err
 	}
@@ -326,24 +209,8 @@ var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, 
 	}, nil
 }
 var startupRecoveryPhase = runRecoveryThroughEngine
-var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 
-// Compatibility-only direct snapshot-domain create seam retained for lower-
-// level tests and non-CLI callers. Production CLI snapshot create routes
-// through Engine.SnapshotCreate.
-var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
-
-// Compatibility-only direct snapshot-domain restore seam retained for lower-
-// level tests and non-CLI callers. Production CLI snapshot restore routes
-// through Engine.SnapshotRestore.
-var restoreSnapshotPhase = snapshot.RestoreSnapshot
 var currentWorkingDirectoryPhase = os.Getwd
-
-// Compatibility-only direct snapshot-domain delete seams remain for lower-
-// level tests and non-CLI callers. Production CLI snapshot delete routes
-// through Engine.SnapshotDelete.
-var deleteSnapshotPhase = snapshot.DeleteSnapshot
-var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 
 // snapshotMetaToSnapshot maps an engine.SnapshotMeta to a snapshot.Snapshot for
 // CLI renderers that expect the snapshot package's type with sql.NullString fields.
@@ -359,18 +226,13 @@ func snapshotMetaToSnapshot(m engine.SnapshotMeta) snapshot.Snapshot {
 }
 
 var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("stats", true, "")
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = sgctx.DB.Close() }()
+	defer func() { _ = session.Close() }()
 
-	eng, err := newObservabilityCommandEngine(sgctx)
-	if err != nil {
-		return nil, err
-	}
-
-	result, err := eng.Stats(context.Background(), engine.StatsRequest{
+	result, err := session.Engine().Stats(context.Background(), engine.StatsRequest{
 		IncludeContainers: opts.IncludeContainers,
 		IncludeTrace:      opts.Trace.Enabled,
 	})
@@ -384,17 +246,12 @@ var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observa
 	return statsResultFromEngine(result), nil
 }
 var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("inspect", true, "")
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = sgctx.Close() }()
-
-	eng, err := newObservabilityCommandEngine(sgctx)
-	if err != nil {
-		return nil, err
-	}
-	result, err := eng.Inspect(context.Background(), engine.InspectRequest{
+	defer func() { _ = session.Close() }()
+	result, err := session.Engine().Inspect(context.Background(), engine.InspectRequest{
 		Entity: engine.InspectEntity(entity), EntityID: id,
 		Options: engine.InspectOptions{
 			Deep: opts.Deep, Relations: opts.Relations, Reverse: opts.Reverse,
@@ -413,7 +270,11 @@ var runObservabilityInspectPhase = func(entity observability.EntityType, id stri
 // Simulation and benchmark commands are explicitly classified tooling. Their
 // isolated simulated repositories retain the observability service seam; no
 // production inspect, stats, or verify command uses it.
-var newObservabilityServicePhase = observability.NewService
+func newSimulationObservabilityService(dbconn *sql.DB) (*observability.Service, error) {
+	return observability.NewService(dbconn)
+}
+
+var newObservabilityServicePhase = newSimulationObservabilityService
 var runChunkerBenchmarkPhase = runChunkerBenchmark
 var runCoreBenchmarkPhase = runCoreBenchmark
 var runBenchmarkDeterminismPhase = validateBenchmarkDeterminism
@@ -1055,15 +916,12 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("unknown config subcommand: %s", parsed.positionals[0])
 	}
 
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("config", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
-	defer func() { _ = sgctx.Close() }()
-	eng, err := newConfigurationCommandEngine(sgctx)
-	if err != nil {
-		return err
-	}
+	defer func() { _ = session.Close() }()
+	eng := session.Engine()
 	engineKey := engine.ConfigurationKey(key)
 
 	switch subcommand {
@@ -1364,16 +1222,16 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	codecName, _ := parsed.lastFlagValue("codec")
 
 	perf := newPerfTimer()
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("store", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 	perf.Mark("setup")
 
-	var result storage.StoreFileResult
+	var engineResult engine.StoreResult
 	if codecName == "" {
-		result, err = storeByFilePhase(&sgctx, path, "")
+		engineResult, err = session.Engine().Store(context.Background(), engine.StoreRequest{SourcePath: path})
 	} else {
 		if codecName == "plain" {
 			_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
@@ -1383,15 +1241,17 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		if parseErr != nil {
 			return parseErr
 		}
-		result, err = storeByFilePhase(&sgctx, path, string(codec))
+		engineResult, err = session.Engine().Store(context.Background(), engine.StoreRequest{SourcePath: path, Codec: string(codec)})
 	}
 	perf.Mark("operation")
-	if sgctx.Writer != nil {
-		_ = sgctx.Writer.FinalizeContainer()
-	}
+	_ = session.Close()
 	perf.Mark("finalize")
 	if err != nil {
 		return err
+	}
+	result := storage.StoreFileResult{
+		FileID: engineResult.LogicalFileID, FileHash: engineResult.FileHash,
+		Path: engineResult.StoredPath, AlreadyStored: engineResult.AlreadyStored,
 	}
 
 	if outputMode == outputModeJSON {
@@ -1445,20 +1305,16 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 		opts.StoreFolderWorkers = workers
 	}
 
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("store-folder", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 
 	if codecName == "plain" {
 		_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
 	}
-	eng, err := newStoreFolderCommandEngine(sgctx)
-	if err != nil {
-		return err
-	}
-	_, err = eng.StoreFolder(context.Background(), engine.StoreFolderRequest{
+	_, err = session.Engine().StoreFolder(context.Background(), engine.StoreFolderRequest{
 		SourcePath: path,
 		Codec:      codecName,
 		Workers:    opts.StoreFolderWorkers,
@@ -1526,20 +1382,16 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		}
 
 		perf := newPerfTimer()
-		sgctx, err := loadDefaultStorageContextPhase()
+		session, err := openCommandSession("restore-stored-path", true, "")
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
 		}
-		defer func() { _ = sgctx.Close() }()
+		defer func() { _ = session.Close() }()
 		perf.Mark("setup")
 
-		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
-		if err != nil {
-			return err
-		}
 		result, normalizedMode, err := restoreStoredPathWithEngine(
 			context.Background(),
-			eng,
+			session.Engine(),
 			storedPath,
 			destinationMode,
 			destination,
@@ -1622,21 +1474,22 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 
 	restorePerf := newPerfTimer()
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("restore", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 	restorePerf.Mark("setup")
 
-	execFunc := func(fileID int64) batch.ItemResult {
-		if dryRun {
-			return executeRestoreDryRunItem(&sgctx, fileID, outputPath, overwrite)
-		}
-		return executeRestoreItem(&sgctx, fileID, outputPath, overwrite)
+	fileIDs := executablePreparedIDs(preparedTargets)
+	result, err := session.Engine().Restore(context.Background(), engine.RestoreRequest{
+		FileIDs: fileIDs, DestinationRoot: outputPath, Overwrite: overwrite,
+		DryRun: dryRun, FailFast: failFast,
+	})
+	if err != nil {
+		return err
 	}
-
-	report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, execFunc)
+	report := preparedRestoreReport(preparedTargets, result, dryRun, failFast)
 	restorePerf.Mark("operation")
 	return emitBatchCommandReport("restore", report, outputMode, restorePerf.Spans())
 }
@@ -1686,17 +1539,13 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return usageErrorf("--dry-run and --fail-fast are not supported with --stored-path")
 		}
 
-		sgctx, err := loadDefaultStorageContextPhase()
+		session, err := openCommandSession("remove-stored-path", true, "")
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
 		}
-		defer func() { _ = sgctx.Close() }()
+		defer func() { _ = session.Close() }()
 
-		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
-		if err != nil {
-			return err
-		}
-		result, err := removeStoredPathWithEngine(context.Background(), eng, storedPath)
+		result, err := removeStoredPathWithEngine(context.Background(), session.Engine(), storedPath)
 		if err != nil {
 			return err
 		}
@@ -1760,18 +1609,14 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 		}
 
-		sgctx, err := loadDefaultStorageContextPhase()
+		session, err := openCommandSession("remove-stored-paths", true, "")
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
 		}
-		defer func() { _ = sgctx.Close() }()
+		defer func() { _ = session.Close() }()
 		removePerf.Mark("setup")
 
-		eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
-		if err != nil {
-			return err
-		}
-		result, err := eng.RemoveStoredPaths(context.Background(), req)
+		result, err := session.Engine().RemoveStoredPaths(context.Background(), req)
 		if err != nil {
 			return err
 		}
@@ -1805,18 +1650,20 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 	}
 
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("remove", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 	removePerf.Mark("setup")
 
-	execFunc := func(fileID int64) batch.ItemResult {
-		return removeByIDPhase(&sgctx, fileID, dryRun)
+	result, err := session.Engine().Remove(context.Background(), engine.RemoveRequest{
+		FileIDs: executablePreparedIDs(preparedTargets), DryRun: dryRun, FailFast: failFast,
+	})
+	if err != nil {
+		return err
 	}
-
-	report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, execFunc)
+	report := preparedRemoveReport(preparedTargets, result, dryRun, failFast)
 	removePerf.Mark("operation")
 	return emitBatchCommandReport("remove", report, outputMode, removePerf.Spans())
 }
@@ -1921,39 +1768,64 @@ func printBatchHumanReport(label string, report batch.Report) {
 	}
 }
 
-func executeRestoreDryRunItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
-	result, err := restoreByIDPhase(sgctx, fileID, outputDir, overwrite, true)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d not found", fileID)}
+func executablePreparedIDs(targets []batch.PreparedTarget) []int64 {
+	ids := make([]int64, 0, len(targets))
+	for _, target := range targets {
+		if target.Executable {
+			ids = append(ids, target.ID)
 		}
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
 	}
-
-	return batch.ItemResult{
-		ID:           fileID,
-		Status:       batch.ResultPlanned,
-		Message:      fmt.Sprintf("would restore -> %s", result.OutputPath),
-		OriginalName: result.OriginalName,
-		OutputPath:   result.OutputPath,
-	}
+	return ids
 }
 
-func executeRestoreItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
-	result, err := restoreByIDPhase(sgctx, fileID, outputDir, overwrite, false)
-	if err != nil {
-		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
-		annotateBatchFailureFromError(err, &item)
-		return item
-	}
+func preparedRestoreReport(targets []batch.PreparedTarget, result engine.RestoreResult, dryRun, failFast bool) batch.Report {
+	index := 0
+	return batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, targets, func(fileID int64) batch.ItemResult {
+		if index >= len(result.Items) {
+			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: "restore engine omitted item result"}
+		}
+		item := result.Items[index]
+		index++
+		if item.Status == engine.BatchItemFailed {
+			failure := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: item.Error}
+			annotateBatchFailureFromError(errors.New(item.Error), &failure)
+			return failure
+		}
+		status := batch.ResultSuccess
+		message := "restored"
+		if dryRun {
+			status = batch.ResultPlanned
+			message = fmt.Sprintf("would restore -> %s", item.DestinationPath)
+		}
+		return batch.ItemResult{
+			ID: fileID, Status: status, Message: message,
+			OriginalName: item.OriginalName, OutputPath: item.DestinationPath,
+		}
+	})
+}
 
-	return batch.ItemResult{
-		ID:           fileID,
-		Status:       batch.ResultSuccess,
-		Message:      "restored",
-		OriginalName: result.OriginalName,
-		OutputPath:   result.OutputPath,
-	}
+func preparedRemoveReport(targets []batch.PreparedTarget, result engine.RemoveResult, dryRun, failFast bool) batch.Report {
+	index := 0
+	return batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, targets, func(fileID int64) batch.ItemResult {
+		if index >= len(result.Items) {
+			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: "remove engine omitted item result"}
+		}
+		item := result.Items[index]
+		index++
+		if item.Status == engine.BatchItemFailed {
+			return batch.ItemResult{
+				ID: fileID, Status: batch.ResultFailed, Message: item.Error,
+				InvariantCode: item.InvariantCode, RecommendedAction: item.RecommendedAction,
+			}
+		}
+		if dryRun {
+			return batch.ItemResult{ID: fileID, Status: batch.ResultPlanned, Message: "would remove"}
+		}
+		return batch.ItemResult{
+			ID: fileID, Status: batch.ResultSuccess,
+			Message: fmt.Sprintf("removed mappings=%d", item.RemovedChunkAssociations),
+		}
+	})
 }
 
 func annotateBatchFailureFromError(err error, item *batch.ItemResult) {
@@ -2368,18 +2240,14 @@ func rawRepairTargetValues(raw []batch.RawTarget) []string {
 }
 
 func executeRepairEngine(targets []string, failFast bool) (engine.RepairResult, error) {
-	dbconn, err := connectRepairDBPhase()
+	session, err := openCommandSession("repair", false, "")
 	if err != nil {
 		return engine.RepairResult{}, fmt.Errorf("connect repair database: %w", err)
 	}
-	defer func() { _ = dbconn.Close() }()
-	eng, err := newRepairCommandEngine(dbconn)
-	if err != nil {
-		return engine.RepairResult{}, err
-	}
-	ctx, cancel := db.NewOperationContext(context.Background())
+	defer func() { _ = session.Close() }()
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
-	return eng.Repair(ctx, engine.RepairRequest{Targets: append([]string(nil), targets...), FailFast: failFast})
+	return session.Engine().Repair(ctx, engine.RepairRequest{Targets: append([]string(nil), targets...), FailFast: failFast})
 }
 
 func executeSingleRepairEngine(target string) (engine.RepairTargetResult, error) {
@@ -2441,16 +2309,12 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err != nil {
 		return err
 	}
-	dbconn, err := connectListSearchDBPhase()
+	session, err := openCommandSession("list", false, "")
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
-	defer func() { _ = dbconn.Close() }()
-	eng, err := newCommandEngine(dbconn, "")
-	if err != nil {
-		return err
-	}
-	result, err := eng.ListFiles(context.Background(), req)
+	defer func() { _ = session.Close() }()
+	result, err := session.Engine().ListFiles(context.Background(), req)
 	if err != nil {
 		return err
 	}
@@ -2498,16 +2362,12 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	if err != nil {
 		return err
 	}
-	dbconn, err := connectListSearchDBPhase()
+	session, err := openCommandSession("search", false, "")
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
-	defer func() { _ = dbconn.Close() }()
-	eng, err := newCommandEngine(dbconn, "")
-	if err != nil {
-		return err
-	}
-	result, err := eng.SearchFiles(context.Background(), req)
+	defer func() { _ = session.Close() }()
+	result, err := session.Engine().SearchFiles(context.Background(), req)
 	if err != nil {
 		return err
 	}
@@ -2586,18 +2446,14 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("Unknown target for verify: %s (expected 'system' or 'file <fileID>')", target)
 	}
 
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("verify", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
-	defer func() { _ = sgctx.Close() }()
-	eng, err := newVerifyCommandEngine(sgctx)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := db.NewOperationContext(context.Background())
+	defer func() { _ = session.Close() }()
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
-	result, err := eng.Verify(ctx, engine.VerifyRequest{
+	result, err := session.Engine().Verify(ctx, engine.VerifyRequest{
 		Target: target, FileID: fileID, Level: verifyLevelToString(verifyLevel),
 	})
 	if err != nil {
@@ -4875,18 +4731,71 @@ func resolveRenderer(outputMode cliOutputMode) clirender.Renderer {
 }
 
 var runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("simulate-gc", true, "")
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = sgctx.DB.Close() }()
-
-	svc, err := newObservabilityServicePhase(sgctx.DB)
+	defer func() { _ = session.Close() }()
+	result, err := session.Engine().PlanGarbageCollection(context.Background(), engine.GarbageCollectionPlanRequest{
+		SnapshotIDsToOmit: append([]string(nil), opts.AssumeDeletedSnapshots...),
+		IncludeTrace:      opts.Trace.Enabled,
+	})
+	if traceErr := replayEngineTrace(opts.Trace, result.Trace); traceErr != nil {
+		return nil, traceErr
+	}
 	if err != nil {
 		return nil, err
 	}
+	return gcSimulationFromEngine(result, time.Now().UTC()), nil
+}
 
-	return svc.Simulate(context.Background(), opts)
+func gcSimulationFromEngine(result engine.GarbageCollectionPlanResult, generatedAt time.Time) *observability.SimulationResult {
+	summary := result.Summary
+	impacts := make([]observability.ContainerSimulationImpact, len(result.Containers))
+	for i, item := range result.Containers {
+		impacts[i] = observability.ContainerSimulationImpact{
+			ContainerID: item.ContainerID, Filename: item.Filename, TotalBytes: item.TotalBytes,
+			LiveBytesAfterGC: item.LiveBytesAfterGC, ReclaimableBytes: item.ReclaimableBytes,
+			ReclaimableChunks: item.ReclaimableChunks, TotalChunks: item.TotalChunks,
+			FullyReclaimable: item.FullyReclaimable, RequiresCompaction: item.RequiresCompaction,
+		}
+	}
+	warnings := make([]observability.ObservationWarning, len(result.Warnings))
+	for i, warning := range result.Warnings {
+		warnings[i] = observability.ObservationWarning{Code: warning.Code, Message: warning.Message}
+	}
+	gcResult := &observability.GCSimulationResult{
+		GeneratedAtUTC: generatedAt, Kind: observability.SimulationKindGC, Exact: true,
+		Assumptions: observability.GCSimulationAssumptions{DeletedSnapshots: append([]string(nil), result.SnapshotIDsToOmit...)},
+		Summary: observability.GCSimulationSummary{
+			ReachableChunks: summary.ReachableChunks, UnreachableChunks: summary.UnreachableChunks,
+			LogicallyReclaimableBytes:  summary.LogicallyReclaimableBytes,
+			PhysicallyReclaimableBytes: summary.PhysicallyReclaimableBytes,
+			FullyReclaimableContainers: summary.FullyReclaimableContainers,
+			PartiallyDeadContainers:    summary.PartiallyDeadContainers,
+			PackedBlocksLive:           summary.PackedBlocksLive, PackedBlocksDead: summary.PackedBlocksDead,
+			PackedBytesLive: summary.PackedBytesLive, PackedBytesReclaimable: summary.PackedBytesReclaimable,
+			RetainedDeadBytesDueToPackedBlocks: summary.RetainedDeadBytesDueToPackedBlocks,
+		},
+		Containers: impacts, Warnings: warnings,
+	}
+	return &observability.SimulationResult{
+		GeneratedAtUTC: generatedAt, Kind: observability.SimulationKindGC, Exact: true,
+		Summary: map[string]any{
+			"total_chunks": summary.TotalChunks, "reachable_chunks": summary.ReachableChunks,
+			"unreachable_chunks":           summary.UnreachableChunks,
+			"logically_reclaimable_bytes":  summary.LogicallyReclaimableBytes,
+			"physically_reclaimable_bytes": summary.PhysicallyReclaimableBytes,
+			"fully_reclaimable_containers": summary.FullyReclaimableContainers,
+			"partially_dead_containers":    summary.PartiallyDeadContainers,
+			"packed_blocks_live":           summary.PackedBlocksLive, "packed_blocks_dead": summary.PackedBlocksDead,
+			"packed_bytes_live":                        summary.PackedBytesLive,
+			"packed_bytes_reclaimable":                 summary.PackedBytesReclaimable,
+			"retained_dead_bytes_due_to_packed_blocks": summary.RetainedDeadBytesDueToPackedBlocks,
+			"affected_containers":                      len(result.Containers),
+		},
+		GC: gcResult, Warnings: warnings,
+	}
 }
 
 var runObservabilitySimulateStoreReportPhase = func(dbconn *sql.DB, subcommand, path string) (*observability.SimulateStoreReport, error) {
@@ -4988,16 +4897,12 @@ func parseSnapshotDateFlag(flagName, value string, endOfDay bool) (*time.Time, e
 	return &parsedDate, nil
 }
 
-func loadSnapshotDB() (storage.StorageContext, error) {
-	sgctx, err := loadDefaultStorageContextPhase()
+func loadSnapshotSession(operation string) (commandSession, error) {
+	session, err := openCommandSession(operation, true, "")
 	if err != nil {
-		return storage.StorageContext{}, fmt.Errorf("load storage context: %w", err)
+		return nil, fmt.Errorf("load storage context: %w", err)
 	}
-	if sgctx.DB == nil {
-		_ = sgctx.Close()
-		return storage.StorageContext{}, errors.New("storage context DB is nil")
-	}
-	return sgctx, nil
+	return session, nil
 }
 
 // parseSnapshotQuery builds a SnapshotQuery from the query-related flags in parsed.
@@ -5486,19 +5391,16 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		filter.Limit = parsedLimit
 	}
 
-	sgctx, err := loadSnapshotDB()
+	session, err := loadSnapshotSession("snapshot-list")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
 
-	eng, err := newSnapshotReadCommandEngine(sgctx)
-	if err != nil {
-		return err
-	}
+	eng := session.Engine()
 	req := engine.SnapshotListRequest{
 		Since: filter.Since, Until: filter.Until, Limit: filter.Limit, Tree: treeMode,
 	}
@@ -5583,19 +5485,16 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		return err
 	}
 
-	sgctx, err := loadSnapshotDB()
+	session, err := loadSnapshotSession("snapshot-show")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
 
-	eng, err := newSnapshotReadCommandEngine(sgctx)
-	if err != nil {
-		return err
-	}
+	eng := session.Engine()
 	result, err := eng.SnapshotShow(ctx, engine.SnapshotShowRequest{
 		SnapshotID: snapshotID,
 		Query:      snapshotQueryToEngine(query, limit),
@@ -5658,19 +5557,16 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 		}
 	}
 
-	sgctx, err := loadSnapshotDB()
+	session, err := loadSnapshotSession("snapshot-stats")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
 
-	eng, err := newSnapshotReadCommandEngine(sgctx)
-	if err != nil {
-		return err
-	}
+	eng := session.Engine()
 	result, err := eng.SnapshotStats(ctx, engine.SnapshotStatsRequest{SnapshotID: snapshotID})
 	if err != nil {
 		return err
@@ -5749,16 +5645,16 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		return err
 	}
 
-	sgctx, err := loadSnapshotDB()
+	session, err := loadSnapshotSession("snapshot-delete")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
 
-	result, err := runSnapshotDeleteEngine(ctx, sgctx, req)
+	result, err := runSnapshotDeleteEngine(ctx, session.Engine(), req)
 	if err != nil {
 		return err
 	}
@@ -5811,13 +5707,9 @@ func parseSnapshotDeleteCommandRequest(parsed parsedCommandLine) (snapshotDelete
 
 func runSnapshotDeleteEngine(
 	ctx context.Context,
-	sgctx storage.StorageContext,
+	eng engine.Engine,
 	req snapshotDeleteCommandRequest,
 ) (engine.SnapshotDeleteResult, error) {
-	eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
-	if err != nil {
-		return engine.SnapshotDeleteResult{}, err
-	}
 	return eng.SnapshotDelete(ctx, engine.SnapshotDeleteRequest{
 		SnapshotID: req.SnapshotID,
 		Mode:       req.Mode,
@@ -5903,10 +5795,6 @@ func snapshotDeletePreviewFromEngineResult(result engine.SnapshotDeleteResult) (
 		return nil, fmt.Errorf("snapshot delete preview result has unknown parent state %q", result.Preview.Parent.State)
 	}
 	return preview, nil
-}
-
-func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-	return snapshot.LoadDeleteLineagePreview(ctx, dbconn, snapshotID)
 }
 
 func previewParentID(preview *snapshotDeleteLineagePreview) sql.NullString {
@@ -6016,19 +5904,16 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		return err
 	}
 
-	sgctx, err := loadSnapshotDB()
+	session, err := loadSnapshotSession("snapshot-diff")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
 
-	eng, err := newSnapshotReadCommandEngine(sgctx)
-	if err != nil {
-		return err
-	}
+	eng := session.Engine()
 	engineResult, err := eng.SnapshotDiff(ctx, engine.SnapshotDiffRequest{
 		BaseID: baseID, TargetID: targetID, Summary: summaryMode,
 		Filter: engine.SnapshotDiffFilter(filterType), Query: snapshotQueryToEngine(query, 0),
@@ -6133,22 +6018,15 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		parentID = trimmed
 	}
 
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("snapshot-create", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
-	defer func() { _ = sgctx.Close() }()
-
-	if sgctx.DB == nil {
-		return errors.New("storage context DB is nil")
-	}
-	eng, err := newCommandEngine(sgctx.DB, sgctx.EffectiveContainerDir())
-	if err != nil {
-		return err
-	}
+	defer func() { _ = session.Close() }()
+	eng := session.Engine()
 	perf.Mark("setup")
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
 
 	result, err := eng.SnapshotCreate(ctx, engine.SnapshotCreateRequest{
@@ -6248,17 +6126,13 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 		return err
 	}
 
-	sgctx, err := loadDefaultStorageContextPhase()
+	session, err := openCommandSession("snapshot-restore", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
-	defer func() { _ = sgctx.Close() }()
+	defer func() { _ = session.Close() }()
 
-	if sgctx.DB == nil {
-		return errors.New("storage context DB is nil")
-	}
-
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
 
 	req, jsonOutputRoot, err := buildSnapshotRestoreEngineRequest(snapshotID, paths, selection, destinationMode, destination, parsed)
@@ -6266,7 +6140,7 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 		return err
 	}
 
-	result, err := runSnapshotRestoreEngine(ctx, sgctx, req)
+	result, err := runSnapshotRestoreEngine(ctx, session.Engine(), req)
 	if err != nil {
 		return err
 	}
@@ -6548,13 +6422,9 @@ func buildSnapshotRestoreEngineRequest(
 
 func runSnapshotRestoreEngine(
 	ctx context.Context,
-	sgctx storage.StorageContext,
+	eng engine.Engine,
 	req snapshotRestoreCommandRequest,
 ) (engine.SnapshotRestoreResult, error) {
-	eng, err := newSnapshotRestoreCommandEngine(sgctx)
-	if err != nil {
-		return engine.SnapshotRestoreResult{}, err
-	}
 	return eng.SnapshotRestore(ctx, req.EngineRequest)
 }
 

@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/execution"
+	internalgc "github.com/franchoy/coldkeep/internal/gc"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/snapshot"
@@ -129,6 +131,93 @@ func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRe
 		SharedRetainedLogicalFiles:       gcRes.RetainedSharedLogical,
 		BytesReclaimed:                   0, // not computed by current maintenance layer
 	}, nil
+}
+
+func (e *DefaultEngine) PlanGarbageCollection(ctx context.Context, req GarbageCollectionPlanRequest) (GarbageCollectionPlanResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return GarbageCollectionPlanResult{}, err
+	}
+	result := GarbageCollectionPlanResult{SnapshotIDsToOmit: append([]string(nil), req.SnapshotIDsToOmit...)}
+	if req.IncludeTrace {
+		result.Trace = append(result.Trace, TraceEvent{
+			Step: "simulate.gc.start", Message: "starting gc simulation",
+			Metadata: map[string]Value{"assumed_deleted_snapshots": integerValue(len(req.SnapshotIDsToOmit))},
+		})
+		rootMetadata := map[string]Value{"excluded_snapshots": integerValue(len(req.SnapshotIDsToOmit))}
+		if roots, rootsErr := catalog.NewServiceFromSQL(e.config.DB).LoadGCPlanMetadata(ctx, catalog.GCPlanInput{ExcludeSnapshotIDs: req.SnapshotIDsToOmit}); rootsErr == nil {
+			rootMetadata["root_count"] = integerValue(len(roots.Roots))
+		}
+		result.Trace = append(result.Trace, TraceEvent{Step: "simulate.gc.roots.load", Message: "loading gc roots", Metadata: rootMetadata})
+		for _, snapshotID := range req.SnapshotIDsToOmit {
+			result.Trace = append(result.Trace, TraceEvent{
+				Step: "simulate.gc.assumption.exclude_snapshot", Entity: "snapshot", EntityID: snapshotID,
+				Message: "excluding snapshot from simulation roots",
+			})
+		}
+		result.Trace = append(result.Trace, TraceEvent{Step: "simulate.gc.mark.start", Message: "starting reachable chunk mark traversal"})
+	}
+	plan, err := internalgc.BuildPlan(ctx, e.config.DB, internalgc.PlanOptions{
+		AssumeDeletedSnapshots: append([]string(nil), req.SnapshotIDsToOmit...),
+	})
+	if err != nil {
+		return result, err
+	}
+	result.Summary = GarbageCollectionPlanSummary{
+		TotalChunks: plan.TotalChunks, ReachableChunks: plan.ReachableChunks,
+		UnreachableChunks:          plan.Summary.UnreachableChunks,
+		LogicallyReclaimableBytes:  plan.Summary.LogicallyReclaimableBytes,
+		PhysicallyReclaimableBytes: plan.Summary.PhysicallyReclaimableBytes,
+		FullyReclaimableContainers: plan.Summary.FullyReclaimableContainers,
+		PartiallyDeadContainers:    plan.Summary.PartiallyDeadContainers,
+		PackedBlocksLive:           plan.Summary.PackedBlocksLive, PackedBlocksDead: plan.Summary.PackedBlocksDead,
+		PackedBytesLive: plan.Summary.PackedBytesLive, PackedBytesReclaimable: plan.Summary.PackedBytesReclaimable,
+		RetainedDeadBytesDueToPackedBlocks: plan.Summary.RetainedDeadBytesDueToPackedBlocks,
+	}
+	if req.IncludeTrace {
+		result.Trace = append(result.Trace,
+			TraceEvent{Step: "simulate.gc.mark.complete", Message: "reachable chunk set computed", Metadata: map[string]Value{"reachable_chunks": integerValue(plan.ReachableChunks)}},
+			TraceEvent{Step: "simulate.gc.unreachable.compute", Message: "computed unreachable chunk set and logical reclaimability", Metadata: map[string]Value{
+				"unreachable_chunks": integerValue(plan.Summary.UnreachableChunks), "logically_reclaimable_bytes": integerValue(plan.Summary.LogicallyReclaimableBytes),
+			}},
+		)
+	}
+	for _, item := range plan.AffectedContainers {
+		result.Containers = append(result.Containers, GarbageCollectionContainerImpact{
+			ContainerID: item.ContainerID, Filename: item.Filename, TotalBytes: item.TotalBytes,
+			LiveBytesAfterGC: item.LiveBytesAfterGC, ReclaimableBytes: item.ReclaimableBytes,
+			ReclaimableChunks: item.ReclaimableChunks, TotalChunks: item.TotalChunks,
+			FullyReclaimable: item.FullyReclaimable, RequiresCompaction: item.RequiresCompaction,
+		})
+	}
+	for _, warning := range plan.Warnings {
+		result.Warnings = append(result.Warnings, OperationWarning{Code: warning.Code, Message: warning.Message})
+	}
+	if req.IncludeTrace {
+		result.Trace = append(result.Trace,
+			TraceEvent{Step: "simulate.gc.container_impact.compute", Message: "computed per-container reclaim impact", Metadata: map[string]Value{
+				"affected_containers":          integerValue(len(plan.AffectedContainers)),
+				"fully_reclaimable_containers": integerValue(plan.Summary.FullyReclaimableContainers),
+				"partially_dead_containers":    integerValue(plan.Summary.PartiallyDeadContainers),
+			}},
+			TraceEvent{Step: "simulate.gc.complete", Message: "completed gc simulation", Metadata: map[string]Value{
+				"reachable_chunks": integerValue(result.Summary.ReachableChunks), "unreachable_chunks": integerValue(result.Summary.UnreachableChunks),
+				"affected_containers": integerValue(len(result.Containers)), "warnings": integerValue(len(result.Warnings)),
+				"physically_reclaimable_bytes": integerValue(result.Summary.PhysicallyReclaimableBytes),
+			}},
+		)
+	}
+	return result, nil
+}
+
+func integerValue(value any) Value {
+	converted, err := valueFromAny(value)
+	if err != nil {
+		panic(err)
+	}
+	return converted
 }
 
 func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (StoreResult, error) {
@@ -323,7 +412,7 @@ func (e *DefaultEngine) dryRunRestoreFileID(req RestoreRequest, fileID int64) Re
 
 func (e *DefaultEngine) liveRestoreFileID(req RestoreRequest, fileID int64) RestoreItemResult {
 	sgctx := storage.StorageContext{DB: e.config.DB, ContainerDir: e.config.ContainerDir}
-	out, err := restoreByIDOutputPath(e.config.DB, fileID, req.DestinationRoot)
+	out, originalName, err := restoreByIDOutputPath(e.config.DB, fileID, req.DestinationRoot)
 	if err != nil {
 		return failedRestoreItem(fileID, err.Error())
 	}
@@ -336,6 +425,7 @@ func (e *DefaultEngine) liveRestoreFileID(req RestoreRequest, fileID int64) Rest
 	}
 	return RestoreItemResult{
 		FileID:          fileID,
+		OriginalName:    originalName,
 		Status:          BatchItemOK,
 		DestinationPath: r.OutputPath,
 		RestoredHash:    r.RestoredHash,
@@ -364,11 +454,12 @@ func finalizeBatchSummary(summary *BatchSummary, requested int) {
 
 func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) (RestoreItemResult, error) {
 	item := RestoreItemResult{FileID: fileID, Status: BatchItemOK}
-	out, err := restoreByIDOutputPath(dbconn, fileID, outputDir)
+	out, originalName, err := restoreByIDOutputPath(dbconn, fileID, outputDir)
 	if err != nil {
 		return item, err
 	}
 	item.DestinationPath = out
+	item.OriginalName = originalName
 	if !overwrite {
 		if _, statErr := os.Stat(out); statErr == nil {
 			return item, fmt.Errorf("output file already exists: %s (use --overwrite)", out)
@@ -379,15 +470,15 @@ func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite
 	return item, nil
 }
 
-func restoreByIDOutputPath(dbconn *sql.DB, fileID int64, outputDir string) (string, error) {
+func restoreByIDOutputPath(dbconn *sql.DB, fileID int64, outputDir string) (string, string, error) {
 	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if info.Status != filestate.LogicalFileCompleted {
-		return "", fmt.Errorf("file ID %d is not COMPLETED", fileID)
+		return "", "", fmt.Errorf("file ID %d is not COMPLETED", fileID)
 	}
-	return filepath.Join(outputDir, info.OriginalName), nil
+	return filepath.Join(outputDir, info.OriginalName), info.OriginalName, nil
 }
 
 func dryRunRemoveByID(dbconn *sql.DB, fileID int64) error {

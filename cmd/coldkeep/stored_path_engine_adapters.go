@@ -2,82 +2,26 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/batch"
-	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
-var connectListSearchDBPhase = db.ConnectDB
-
-var newCommandEngine = func(dbconn *sql.DB, containerDir string) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: dbconn, ContainerDir: containerDir})
-}
-
-var newSnapshotRestoreCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
-	return engine.New(engine.Config{
-		DB:           sgctx.DB,
-		ContainerDir: sgctx.EffectiveContainerDir(),
-		StoreContext: &sgctx,
-	})
-}
-
-var newStoreFolderCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
-	return engine.New(engine.Config{
-		DB:           sgctx.DB,
-		ContainerDir: sgctx.EffectiveContainerDir(),
-		StoreContext: &sgctx,
-	})
-}
-
-var newConfigurationCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
-}
-
-var newSnapshotReadCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
-}
-
-var newVerifyCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
-}
-
-var newObservabilityCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
-}
-
-var newRepairCommandEngine = func(dbconn *sql.DB) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: dbconn})
-}
-
-var connectRepairDBPhase = db.ConnectDB
-
-var connectRecoveryDBPhase = db.ConnectDB
-
-var newRecoveryCommandEngine = func(dbconn *sql.DB, containersDir string) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: dbconn, ContainerDir: containersDir})
-}
-
 func runRecoveryThroughEngine(containersDir string) (recovery.Report, error) {
-	dbconn, err := connectRecoveryDBPhase()
+	session, err := openCommandSession("recovery", false, containersDir)
 	if err != nil {
 		return recovery.Report{}, fmt.Errorf("failed to connect to DB: %w", err)
 	}
-	defer func() { _ = dbconn.Close() }()
-	eng, err := newRecoveryCommandEngine(dbconn, containersDir)
-	if err != nil {
-		return recovery.Report{}, err
-	}
-	ctx, cancel := db.NewOperationContext(context.Background())
+	defer func() { _ = session.Close() }()
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
-	result, err := eng.Recover(ctx, engine.RecoverRequest{})
+	result, err := session.Engine().Recover(ctx, engine.RecoverRequest{})
 	return recoveryReportFromEngine(result), err
 }
 
@@ -91,25 +35,15 @@ func recoveryReportFromEngine(result engine.RecoverResult) recovery.Report {
 	}
 }
 
-var connectDoctorDBPhase = db.ConnectDB
-
-var newDoctorCommandEngine = func(dbconn *sql.DB, containersDir string) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: dbconn, ContainerDir: containersDir})
-}
-
 func executeDoctorEngine(containersDir, verifyLevel string) (engine.DoctorResult, error) {
-	dbconn, err := connectDoctorDBPhase()
+	session, err := openCommandSession("doctor", false, containersDir)
 	if err != nil {
 		return engine.DoctorResult{}, fmt.Errorf("failed to connect to DB: %w", err)
 	}
-	defer func() { _ = dbconn.Close() }()
-	eng, err := newDoctorCommandEngine(dbconn, containersDir)
-	if err != nil {
-		return engine.DoctorResult{}, err
-	}
-	ctx, cancel := db.NewOperationContext(context.Background())
+	defer func() { _ = session.Close() }()
+	ctx, cancel := session.OperationContext(context.Background())
 	defer cancel()
-	return eng.Doctor(ctx, engine.DoctorRequest{VerifyLevel: verifyLevel})
+	return session.Engine().Doctor(ctx, engine.DoctorRequest{VerifyLevel: verifyLevel})
 }
 
 func restoreStoredPathWithEngine(

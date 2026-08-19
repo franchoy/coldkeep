@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -32,6 +33,31 @@ func TestGCDryRunThroughEngineEmptyDB(t *testing.T) {
 	}
 	if len(result.ContainerFilenames) != 0 {
 		t.Errorf("expected empty ContainerFilenames, got %v", result.ContainerFilenames)
+	}
+}
+
+func TestEnginePlanGarbageCollectionEmptyAndCancellation(t *testing.T) {
+	db := openSnapshotTestDB(t)
+	eng, err := engine.New(engine.Config{DB: db, ContainerDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	result, err := eng.PlanGarbageCollection(context.Background(), engine.GarbageCollectionPlanRequest{IncludeTrace: true})
+	if err != nil {
+		t.Fatalf("PlanGarbageCollection: %v", err)
+	}
+	if result.Summary.TotalChunks != 0 || result.Summary.ReachableChunks != 0 || result.Summary.UnreachableChunks != 0 {
+		t.Fatalf("unexpected empty plan: %+v", result.Summary)
+	}
+	if len(result.Trace) != 7 || result.Trace[0].Step != "simulate.gc.start" || result.Trace[len(result.Trace)-1].Step != "simulate.gc.complete" {
+		t.Fatalf("unexpected plan trace: %+v", result.Trace)
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := eng.PlanGarbageCollection(cancelled, engine.GarbageCollectionPlanRequest{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled PlanGarbageCollection: %v", err)
 	}
 }
 

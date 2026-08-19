@@ -74,6 +74,10 @@ type Engine interface {
 	// on both backends.
 	GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error)
 
+	// PlanGarbageCollection computes live-repository reachability and reclaim
+	// impact without mutating database or storage state.
+	PlanGarbageCollection(ctx context.Context, req GarbageCollectionPlanRequest) (GarbageCollectionPlanResult, error)
+
 	// Store stores a file into the repository.
 	// Safety invariant: Store must not create inconsistent catalog/storage state.
 	// Active semantics are limited to single-file store.
