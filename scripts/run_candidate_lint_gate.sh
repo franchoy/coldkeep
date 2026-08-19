@@ -70,7 +70,7 @@ printf 'FAIL\n' > "$LINT_STATUS"
 : > "$LINT_VERSION"
 
 cd "$REPO_ROOT"
-version_output="$($LINTER_BIN version 2>&1)" || {
+version_output="$("$LINTER_BIN" version 2>&1)" || {
   printf '%s\n' "$version_output" >&2
   echo "[candidate-lint] ERROR: cannot execute golangci-lint" >&2
   exit 1
@@ -82,7 +82,7 @@ if [[ ! "$version_output" =~ (^|[[:space:]])version[[:space:]]+2[.]6[.]2([[:spac
 fi
 printf '%s\n' "$EXPECTED_GOLANGCI_LINT_VERSION" > "$LINT_VERSION"
 
-config_path="$($LINTER_BIN config path 2>&1)" || {
+config_path="$("$LINTER_BIN" config path 2>&1)" || {
   printf '%s\n' "$config_path" >&2
   echo "[candidate-lint] ERROR: cannot resolve golangci-lint config" >&2
   exit 1

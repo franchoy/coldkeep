@@ -94,11 +94,16 @@ func TestCandidateLintGateRejectsFindingsWhenLinterReturnsSuccess(t *testing.T) 
 
 func TestCandidateLintGateAcceptsCleanPinnedLinter(t *testing.T) {
 	fakeLinter := writeFakeCandidateLinter(t)
+	if !strings.Contains(fakeLinter, " ") {
+		t.Fatalf("fake linter path %q does not exercise whitespace handling", fakeLinter)
+	}
 	evidenceDir := t.TempDir()
+	callLog := filepath.Join(t.TempDir(), "calls.log")
 	cmd := exec.Command("bash", "scripts/run_candidate_lint_gate.sh", "run", evidenceDir)
 	cmd.Dir = repoRoot(t)
 	cmd.Env = append(os.Environ(),
 		"COLDKEEP_GOLANGCI_LINT_BIN="+fakeLinter,
+		"FAKE_LINT_CALL_LOG="+callLog,
 		"FAKE_LINT_OUTPUT=",
 		"FAKE_LINT_EXIT=0",
 	)
@@ -108,6 +113,15 @@ func TestCandidateLintGateAcceptsCleanPinnedLinter(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "LOCAL_CANDIDATE_LINT=PASS") {
 		t.Fatalf("clean run did not emit PASS:\n%s", output)
+	}
+	calls, err := os.ReadFile(callLog)
+	if err != nil {
+		t.Fatalf("read fake linter call log: %v", err)
+	}
+	for _, invocation := range []string{"version\n", "config path\n"} {
+		if !strings.Contains(string(calls), invocation) {
+			t.Fatalf("whitespace-path fake linter did not receive %q; calls:\n%s", strings.TrimSpace(invocation), calls)
+		}
 	}
 }
 
@@ -1439,9 +1453,16 @@ func readRepoFile(t *testing.T, relPath string) string {
 
 func writeFakeCandidateLinter(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "golangci-lint")
+	toolDir := filepath.Join(t.TempDir(), "candidate lint tools")
+	if err := os.MkdirAll(toolDir, 0o700); err != nil {
+		t.Fatalf("create fake candidate linter directory: %v", err)
+	}
+	path := filepath.Join(toolDir, "golangci-lint")
 	content := `#!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FAKE_LINT_CALL_LOG:-}" ]]; then
+  printf '%s\n' "$*" >> "${FAKE_LINT_CALL_LOG}"
+fi
 case "${1:-}" in
   version)
     echo "golangci-lint has version 2.6.2 built with test"
