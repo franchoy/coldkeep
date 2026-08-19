@@ -100,6 +100,9 @@ type Engine interface {
 	// integrity recomputations. Each target remains transactionally independent;
 	// FailFast stops after the first execution failure.
 	Repair(ctx context.Context, req RepairRequest) (RepairResult, error)
+	// Recover executes the corrective repository recovery pass against the
+	// injected database and configured container directory.
+	Recover(ctx context.Context, req RecoverRequest) (RecoverResult, error)
 
 	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.

@@ -21,7 +21,7 @@ func allEngineContractTypes() []struct {
 		activeCoreContractTypes()...,
 	)
 	types = append(types, activeSnapshotMutationContractTypes()...)
-	return append(types, candidateCorrectiveContractTypes()...)
+	return types
 }
 
 func activeCoreContractTypes() []struct {
@@ -71,6 +71,8 @@ func activeCoreContractTypes() []struct {
 		{"RepairRequest", engine.RepairRequest{}},
 		{"RepairTargetResult", engine.RepairTargetResult{}},
 		{"RepairResult", engine.RepairResult{}},
+		{"RecoverRequest", engine.RecoverRequest{}},
+		{"RecoverResult", engine.RecoverResult{}},
 		{"SnapshotMeta", engine.SnapshotMeta{}},
 		{"SnapshotListRequest", engine.SnapshotListRequest{}},
 		{"SnapshotListResult", engine.SnapshotListResult{}},
@@ -128,19 +130,6 @@ func activeSnapshotMutationContractTypes() []struct {
 		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
 		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
 		{"SnapshotDeleteResult", engine.SnapshotDeleteResult{}},
-	}
-}
-
-func candidateCorrectiveContractTypes() []struct {
-	name string
-	val  any
-} {
-	return []struct {
-		name string
-		val  any
-	}{
-		{"RecoverRequest", engine.RecoverRequest{}},
-		{"RecoverResult", engine.RecoverResult{}},
 	}
 }
 
@@ -626,10 +615,7 @@ func TestRepairContractRepresentsTargetsAndBatch(t *testing.T) {
 // TestRecoverContractRepresentsCorrectiveReport proves the recovery contract
 // models a corrective integrity report rather than a restore.
 func TestRecoverContractRepresentsCorrectiveReport(t *testing.T) {
-	req := engine.RecoverRequest{DryRun: true}
-	if !req.DryRun {
-		t.Error("recover dry-run not representable")
-	}
+	req := engine.RecoverRequest{}
 	res := engine.RecoverResult{
 		AbortedLogicalFiles:    1,
 		AbortedChunks:          2,
@@ -645,13 +631,8 @@ func TestRecoverContractRepresentsCorrectiveReport(t *testing.T) {
 	if res.AbortedLogicalFiles != 1 || res.SealingQuarantined != 10 {
 		t.Fatalf("recovery report not representable: %+v", res)
 	}
-	assertRecoverRequestIsCorrectiveOnly(t, req)
-}
-
-func assertRecoverRequestIsCorrectiveOnly(t *testing.T, req engine.RecoverRequest) {
-	t.Helper()
-	if !req.DryRun {
-		t.Error("recover request should represent corrective dry-run mode")
+	if req != (engine.RecoverRequest{}) {
+		t.Fatalf("recover request unexpectedly carries options: %+v", req)
 	}
 }
 

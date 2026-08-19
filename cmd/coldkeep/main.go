@@ -186,12 +186,9 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
-// Current intentional CLI/domain ownership: doctor owns corrective recovery
-// orchestration directly through lower-layer recovery and verify hooks. Phase
-// 14 made this boundary decision, and the Phase 16 honesty proof confirmed the
-// seam remains outside active engine ownership. Any future activation belongs
-// to an explicit early-v2.0 design; these direct hooks are intentional.
-var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
+// Doctor's recovery stage uses the same active engine operation as startup.
+// Phase 17 owns the remaining schema/verify/audit composition.
+var doctorRecoveryPhase = runRecoveryThroughEngine
 var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
@@ -335,7 +332,7 @@ var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, 
 		RetainedSharedLogical:        result.SharedRetainedLogicalFiles,
 	}, nil
 }
-var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
+var startupRecoveryPhase = runRecoveryThroughEngine
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 
 // Compatibility-only direct snapshot-domain create seam retained for lower-

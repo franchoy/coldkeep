@@ -24,7 +24,7 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 		got[typ.Method(i).Name] = true
 	}
 
-	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "SnapshotRestore", "GarbageCollect", "Store", "StoreFolder", "ListFiles", "SearchFiles", "GetConfiguration", "SetConfiguration", "Repair", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
+	want := []string{"Stats", "Inspect", "Verify", "SnapshotList", "SnapshotShow", "SnapshotStats", "SnapshotDiff", "SnapshotCreate", "SnapshotDelete", "SnapshotRestore", "GarbageCollect", "Store", "StoreFolder", "ListFiles", "SearchFiles", "GetConfiguration", "SetConfiguration", "Repair", "Recover", "Remove", "RemoveStoredPaths", "Restore", "RestoreStoredPath"}
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("Engine interface missing expected method %q", name)
@@ -41,8 +41,8 @@ func TestEngineActiveInterfaceApprovedMethods(t *testing.T) {
 }
 
 // TestEngineActiveInterfaceExcludesStillInactiveOperations proves the active
-// Engine interface still excludes corrective integrity operations that remain
-// future-only.
+// Engine interface does not acquire unapproved planning or snapshot-corrective
+// aliases alongside the active Repair and Recover operations.
 func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
 
@@ -54,7 +54,6 @@ func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 	for _, forbidden := range []string{
 		"SnapshotRepair",
 		"RepairPlan",
-		"Recover",
 		"SnapshotRecover",
 		"RecoveryPlan",
 	} {
@@ -62,61 +61,6 @@ func TestEngineActiveInterfaceExcludesStillInactiveOperations(t *testing.T) {
 			t.Fatalf("Engine interface unexpectedly exposes candidate-only method %q; active methods=%v", forbidden, got)
 		}
 	}
-}
-
-// TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership
-// documents which request/result pairs remain intentionally future-only and
-// ties them to the approved active engine method set.
-func TestCandidateOnlyOperationContractsRemainOutsideActiveEngineOwnership(t *testing.T) {
-	activeMethods := activeEngineMethodSet()
-	for _, tc := range candidateOnlyOperationCases() {
-		t.Run(tc.name, func(t *testing.T) {
-			if activeMethods[tc.forbiddenMethod] {
-				t.Fatalf("candidate-only contract %q unexpectedly has active engine method %q", tc.name, tc.forbiddenMethod)
-			}
-
-			reqType := reflect.TypeOf(tc.requestType)
-			resType := reflect.TypeOf(tc.resultType)
-			if reqType.Name() == "" || resType.Name() == "" {
-				t.Fatalf("candidate-only contract %q must remain a named request/result type", tc.name)
-			}
-			if reqType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" || resType.PkgPath() != "github.com/franchoy/coldkeep/internal/engine" {
-				t.Fatalf("candidate-only contract %q moved outside engine package unexpectedly", tc.name)
-			}
-			if tc.futureDisposition == "" {
-				t.Fatalf("candidate-only contract %q must record a future disposition", tc.name)
-			}
-		})
-	}
-}
-
-type candidateOnlyOperationCase struct {
-	name              string
-	requestType       any
-	resultType        any
-	forbiddenMethod   string
-	futureDisposition string
-}
-
-func candidateOnlyOperationCases() []candidateOnlyOperationCase {
-	return []candidateOnlyOperationCase{
-		{
-			name:              "recover",
-			requestType:       engine.RecoverRequest{},
-			resultType:        engine.RecoverResult{},
-			forbiddenMethod:   "Recover",
-			futureDisposition: "early v2.0 activation-design decision",
-		},
-	}
-}
-
-func activeEngineMethodSet() map[string]bool {
-	typ := reflect.TypeOf((*engine.Engine)(nil)).Elem()
-	methods := make(map[string]bool, typ.NumMethod())
-	for i := 0; i < typ.NumMethod(); i++ {
-		methods[typ.Method(i).Name] = true
-	}
-	return methods
 }
 
 // TestEngineContractTypesAreRendererNeutral verifies that engine contract

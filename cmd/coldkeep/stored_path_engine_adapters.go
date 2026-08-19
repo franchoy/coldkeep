@@ -11,6 +11,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
@@ -57,6 +58,38 @@ var newRepairCommandEngine = func(dbconn *sql.DB) (engine.Engine, error) {
 }
 
 var connectRepairDBPhase = db.ConnectDB
+
+var connectRecoveryDBPhase = db.ConnectDB
+
+var newRecoveryCommandEngine = func(dbconn *sql.DB, containersDir string) (engine.Engine, error) {
+	return engine.New(engine.Config{DB: dbconn, ContainerDir: containersDir})
+}
+
+func runRecoveryThroughEngine(containersDir string) (recovery.Report, error) {
+	dbconn, err := connectRecoveryDBPhase()
+	if err != nil {
+		return recovery.Report{}, fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	eng, err := newRecoveryCommandEngine(dbconn, containersDir)
+	if err != nil {
+		return recovery.Report{}, err
+	}
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	result, err := eng.Recover(ctx, engine.RecoverRequest{})
+	return recoveryReportFromEngine(result), err
+}
+
+func recoveryReportFromEngine(result engine.RecoverResult) recovery.Report {
+	return recovery.Report{
+		AbortedLogicalFiles: result.AbortedLogicalFiles, AbortedChunks: result.AbortedChunks,
+		QuarantinedMissing: result.QuarantinedMissing, QuarantinedCorruptTail: result.QuarantinedCorruptTail,
+		QuarantinedOrphan: result.QuarantinedOrphan, SkippedDirEntries: result.SkippedDirEntries,
+		CheckedContainerRecord: result.CheckedContainerRecord, CheckedDiskFiles: result.CheckedDiskFiles,
+		SealingCompleted: result.SealingCompleted, SealingQuarantined: result.SealingQuarantined,
+	}
+}
 
 func restoreStoredPathWithEngine(
 	ctx context.Context,

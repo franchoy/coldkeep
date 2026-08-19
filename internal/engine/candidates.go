@@ -866,41 +866,23 @@ type RepairResult struct {
 // Recovery
 // ---------------------------------------------------------------------------
 
-// RecoverRequest is a candidate-only request contract for a future corrective
-// Recover operation. Recover is not a method on the current Engine interface.
-//
-// Request/result presence must not be mistaken for active engine ownership.
-// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
-// ownership. Any early-v2.0 activation design must be explicit and
-// behavior-preserving.
-//
 // Safety invariant: Recovery must not legitimize corrupt mappings. Recovery is
 // a corrective integrity pass (abort dangling writes, clear stale sealing
-// markers, quarantine corrupt/orphaned data), NOT a restore. The previous
-// placeholder modeled it like a restore; that was incorrect.
-type RecoverRequest struct {
-	// DryRun reports what recovery would do without mutating.
-	DryRun bool
-}
+// markers, quarantine corrupt/orphaned data), not a restore or simulation.
+// RecoverRequest deliberately has no unsupported dry-run/input/limit surface.
+type RecoverRequest struct{}
 
-// RecoverResult is a candidate-only result contract for a future Recover
-// operation. Recover is not a method on the current Engine interface.
-// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
-// ownership; any early-v2.0 activation design must be explicit and
-// behavior-preserving.
-//
-// Fields mirror the existing recovery report so the corrective outcome can be
-// represented without CLI rendering.
+// RecoverResult is the neutral corrective recovery report.
 type RecoverResult struct {
-	AbortedLogicalFiles    int
-	AbortedChunks          int
-	QuarantinedMissing     int
-	QuarantinedCorruptTail int
-	QuarantinedOrphan      int
-	SkippedDirEntries      int
-	CheckedContainerRecord int
-	CheckedDiskFiles       int
-	SealingCompleted       int
-	SealingQuarantined     int
+	AbortedLogicalFiles    int64
+	AbortedChunks          int64
+	QuarantinedMissing     int64
+	QuarantinedCorruptTail int64
+	QuarantinedOrphan      int64
+	SkippedDirEntries      int64
+	CheckedContainerRecord int64
+	CheckedDiskFiles       int64
+	SealingCompleted       int64
+	SealingQuarantined     int64
 	Warnings               []OperationWarning
 }
