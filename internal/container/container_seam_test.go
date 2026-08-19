@@ -28,6 +28,15 @@ func openSeamTestDB(t *testing.T) *sql.DB {
 	return dbconn
 }
 
+func seamCatalogContainerMaxSize(t *testing.T, dbconn *sql.DB, containerID int64) int64 {
+	t.Helper()
+	var maxSize int64
+	if err := dbconn.QueryRow(`SELECT max_size FROM container WHERE id = ?`, containerID).Scan(&maxSize); err != nil {
+		t.Fatalf("load catalog container maximum: %v", err)
+	}
+	return maxSize
+}
+
 // TestContainerSeamDefaultFSPreservesWriteBehavior verifies that the default
 // OS-backed filesystem seam (LocalWriter.fs == fsx.Default()) writes bytes
 // correctly through the full container creation and append path.
@@ -62,7 +71,7 @@ func TestContainerSeamDefaultFSPreservesWriteBehavior(t *testing.T) {
 
 	// Verify bytes on disk at the reported offset.
 	containerPath := filepath.Join(w.Dir(), placement.Filename)
-	rc, err := OpenReadOnlyContainer(containerPath, maxSize)
+	rc, err := OpenReadOnlyContainer(containerPath, seamCatalogContainerMaxSize(t, dbconn, placement.ContainerID))
 	if err != nil {
 		t.Fatalf("open readonly container: %v", err)
 	}
@@ -116,7 +125,7 @@ func TestContainerSeamNoopFSMatchesDefaultBehavior(t *testing.T) {
 
 	// Verify bytes are identical to what a default-FS run would produce.
 	containerPath := filepath.Join(w.Dir(), placement.Filename)
-	rc, err := OpenReadOnlyContainer(containerPath, maxSize)
+	rc, err := OpenReadOnlyContainer(containerPath, seamCatalogContainerMaxSize(t, dbconn, placement.ContainerID))
 	if err != nil {
 		t.Fatalf("open readonly container: %v", err)
 	}
@@ -204,7 +213,10 @@ func TestContainerFilesystemEquivalenceDefaultAndNoop(t *testing.T) {
 	mustNoErr(t, txDefault.Commit(), "commit tx (default)")
 	mustNoErr(t, wDefault.FinalizeContainer(), "finalize container (default)")
 
-	rcDefault, err := OpenReadOnlyContainer(filepath.Join(wDefault.Dir(), placementDefault.Filename), maxSize)
+	rcDefault, err := OpenReadOnlyContainer(
+		filepath.Join(wDefault.Dir(), placementDefault.Filename),
+		seamCatalogContainerMaxSize(t, dbDefault, placementDefault.ContainerID),
+	)
 	mustNoErr(t, err, "open readonly container (default)")
 	defer func() { _ = rcDefault.Close() }()
 
@@ -227,7 +239,10 @@ func TestContainerFilesystemEquivalenceDefaultAndNoop(t *testing.T) {
 	mustNoErr(t, txNoop.Commit(), "commit tx (noop)")
 	mustNoErr(t, wNoop.FinalizeContainer(), "finalize container (noop)")
 
-	rcNoop, err := OpenReadOnlyContainer(filepath.Join(wNoop.Dir(), placementNoop.Filename), maxSize)
+	rcNoop, err := OpenReadOnlyContainer(
+		filepath.Join(wNoop.Dir(), placementNoop.Filename),
+		seamCatalogContainerMaxSize(t, dbNoop, placementNoop.ContainerID),
+	)
 	mustNoErr(t, err, "open readonly container (noop)")
 	defer func() { _ = rcNoop.Close() }()
 

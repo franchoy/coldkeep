@@ -106,9 +106,22 @@ func openExistingContainer(readonly bool, path string, maxSize int64, fsys fsx.F
 		return nil, err
 	}
 
-	if _, err := readAndValidateContainerHeader(f); err != nil {
+	header, err := readAndValidateContainerHeader(f)
+	if err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("validate container header %s: %w", path, err)
+	}
+	if maxSize <= ContainerHdrLen {
+		_ = f.Close()
+		return nil, fmt.Errorf("invalid catalog container max size: %d", maxSize)
+	}
+	if header.MaxSize != maxSize {
+		_ = f.Close()
+		return nil, fmt.Errorf("container max size mismatch: header=%d catalog=%d", header.MaxSize, maxSize)
+	}
+	if stat.Size() > header.MaxSize {
+		_ = f.Close()
+		return nil, fmt.Errorf("container size exceeds maximum: size=%d max_size=%d", stat.Size(), header.MaxSize)
 	}
 	if !readonly {
 		if _, err := f.Seek(stat.Size(), io.SeekStart); err != nil {
@@ -151,8 +164,8 @@ func (c *FileContainer) Append(data []byte) (int64, error) {
 		return 0, fmt.Errorf("container is read-only")
 	}
 
-	if c.offset+int64(len(data)) > c.maxSize {
-		return 0, ErrContainerFull
+	if err := validateContainerRange("container append", c.offset, int64(len(data)), c.maxSize); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrContainerFull, err)
 	}
 
 	off := c.offset
@@ -186,13 +199,19 @@ func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 	if c.f == nil {
 		return nil, fmt.Errorf("container is closed")
 	}
+	if err := validateContainerRange("container read", offset, size, c.Size()); err != nil {
+		return nil, err
+	}
+	if uint64(size) > uint64(^uint(0)>>1) {
+		return nil, fmt.Errorf("container read length exceeds platform int range: %d", size)
+	}
 	if !c.readonly {
 		if err := c.flushPending(); err != nil {
 			return nil, err
 		}
 	}
 
-	buf := make([]byte, size)
+	buf := make([]byte, int(size))
 
 	n, err := c.f.ReadAt(buf, offset)
 	if err != nil && err != io.EOF {
@@ -205,6 +224,30 @@ func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 	iodebug.AddBytesRead(int64(n))
 
 	return buf, nil
+}
+
+// validateContainerRange checks that [offset, offset+length) is within limit
+// without computing offset+length, which could overflow int64.
+func validateContainerRange(label string, offset, length, limit int64) error {
+	if label == "" {
+		label = "container range"
+	}
+	if offset < 0 {
+		return fmt.Errorf("%s offset must be non-negative: %d", label, offset)
+	}
+	if length < 0 {
+		return fmt.Errorf("%s length must be non-negative: %d", label, length)
+	}
+	if limit < 0 {
+		return fmt.Errorf("%s limit must be non-negative: %d", label, limit)
+	}
+	if offset > limit {
+		return fmt.Errorf("%s offset exceeds limit: offset=%d limit=%d", label, offset, limit)
+	}
+	if length > limit-offset {
+		return fmt.Errorf("%s exceeds limit: offset=%d length=%d limit=%d", label, offset, length, limit)
+	}
+	return nil
 }
 
 func (c *FileContainer) Size() int64 {
@@ -533,12 +576,15 @@ func GetOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 }
 
 func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
-	_, err := tx.Exec(
+	result, err := tx.Exec(
 		`UPDATE container SET current_size = $1 WHERE id = $2`,
 		newSize,
 		containerID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return db.RequireExactlyOneRow(result, "update container size")
 }
 
 func SealContainer(tx db.DBTX, containerID int64, filename string) error {
@@ -582,7 +628,7 @@ func sealContainerInDirWithFS(tx db.DBTX, containerID int64, filename string, co
 	}
 
 	// Update DB: mark sealed and clear the sealing-in-progress flag atomically.
-	_, err = tx.Exec(`
+	result, err := tx.Exec(`
 		UPDATE container
 		SET sealed = TRUE,
 			sealing = FALSE,
@@ -591,6 +637,9 @@ func sealContainerInDirWithFS(tx db.DBTX, containerID int64, filename string, co
 	`, sumHex, containerID)
 
 	if err != nil {
+		return fmt.Errorf("update/seal container failed: %w", err)
+	}
+	if err := db.RequireExactlyOneRow(result, "seal container"); err != nil {
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
@@ -610,14 +659,14 @@ func isQuarantineableContainer(dbconn *sql.DB, containerID int64) bool {
 // quarantine flag is set; any other stat error is returned as fatal.
 func quarantineContainerUpdateQueryAndArgs(backend db.Backend, containerID int64, info os.FileInfo, statErr error) (string, []any, error) {
 	updateQ := `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`
-	updateWithSizeQ := `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`
+	updateWithSizeQ := `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2 WHERE id = $1`
 	if backend == db.BackendSQLite {
 		updateQ = `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = ?`
-		updateWithSizeQ = `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = ?, max_size = ? WHERE id = ?`
+		updateWithSizeQ = `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = ? WHERE id = ?`
 	}
 	if statErr == nil {
 		if backend == db.BackendSQLite {
-			return updateWithSizeQ, []any{info.Size(), info.Size(), containerID}, nil
+			return updateWithSizeQ, []any{info.Size(), containerID}, nil
 		}
 		return updateWithSizeQ, []any{containerID, info.Size()}, nil
 	}

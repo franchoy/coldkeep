@@ -3,6 +3,7 @@ package verify
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 
@@ -10,6 +11,57 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
+
+type deepVerifyContainer struct {
+	ID          int
+	Filename    string
+	CurrentSize int64
+	MaxSize     int64
+}
+
+func loadDeepVerifyContainers(ctx context.Context, dbconn *sql.DB) ([]deepVerifyContainer, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT ctr.id, ctr.filename, ctr.current_size, ctr.max_size
+		FROM container ctr
+		WHERE ctr.quarantine = FALSE
+		AND EXISTS (
+			SELECT 1
+			FROM storage_blocks sb
+			WHERE sb.container_id = ctr.id
+		)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query deep-verify containers: %w", err)
+	}
+
+	closeWithError := func(prior error) error {
+		if closeErr := rows.Close(); closeErr != nil {
+			closeErr = fmt.Errorf("failed to close deep-verify container rows: %w", closeErr)
+			if prior != nil {
+				return errors.Join(prior, closeErr)
+			}
+			return closeErr
+		}
+		return prior
+	}
+
+	containers := make([]deepVerifyContainer, 0)
+	for rows.Next() {
+		var container deepVerifyContainer
+		if err := rows.Scan(&container.ID, &container.Filename, &container.CurrentSize, &container.MaxSize); err != nil {
+			return nil, closeWithError(fmt.Errorf("failed to scan container info: %w", err))
+		}
+		containers = append(containers, container)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, closeWithError(fmt.Errorf("row iteration failed for containers: %w", err))
+	}
+	if err := closeWithError(nil); err != nil {
+		return nil, err
+	}
+
+	return containers, nil
+}
 
 func printCounters(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
@@ -236,56 +288,24 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 	}
 	reader := FilesystemContainerReader{ContainersDir: containersDir}
 
-	// Count all non-quarantined containers that currently hold packed storage blocks.
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	containerCount := 0
-	containerCountErr := dbconn.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM container ctr
-		WHERE ctr.quarantine = FALSE
-		AND EXISTS (
-			SELECT 1
-			FROM storage_blocks sb
-			WHERE sb.container_id = ctr.id
-		)
-	`).Scan(&containerCount)
-	if containerCountErr != nil {
-		log.Println(" ERROR ")
-		log.Printf("Failed to query deep-verify container count: %v", containerCountErr)
-		return fmt.Errorf("failed to query deep-verify container count: %w", containerCountErr)
-	}
-
-	processedContainers := 0
-
-	containers, err := dbconn.QueryContext(ctx, `
-		SELECT ctr.id, ctr.filename, ctr.current_size, ctr.max_size
-		FROM container ctr
-		WHERE ctr.quarantine = FALSE
-		AND EXISTS (
-			SELECT 1
-			FROM storage_blocks sb
-			WHERE sb.container_id = ctr.id
-		)
-	`)
+	containers, err := loadDeepVerifyContainers(ctx, dbconn)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query deep-verify containers: %v", err)
-		return fmt.Errorf("failed to query deep-verify containers: %w", err)
+		return err
 	}
-	defer func() { _ = containers.Close() }()
 
-	for containers.Next() {
+	containerCount := len(containers)
+	processedContainers := 0
+	for _, containerInfo := range containers {
 		processedContainers++
-		var containerID int
-		var filename string
-		var currentSize int64
-		var maxSize int64
-		if err := containers.Scan(&containerID, &filename, &currentSize, &maxSize); err != nil {
-			appendDeepError(fmt.Errorf("failed to scan container info: %w", err))
-			continue
-		}
+		containerID := containerInfo.ID
+		filename := containerInfo.Filename
+		currentSize := containerInfo.CurrentSize
+		maxSize := containerInfo.MaxSize
 		log.Printf("Verifying container %d/%d: %s", processedContainers, containerCount, filename)
 
 		fileSize := currentSize
@@ -437,10 +457,6 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 			continue
 		}
 	}
-	if err := containers.Err(); err != nil {
-		appendDeepError(fmt.Errorf("row iteration failed for containers: %w", err))
-	}
-
 	if len(errorList) > 0 {
 		log.Println(" ERROR ")
 		log.Printf("Found %d errors in deep verification of container files:", errorCount)

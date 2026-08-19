@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -36,6 +37,370 @@ import (
 )
 
 type singleChunkV2CLITestChunker struct{}
+
+func TestBenchmarkDiagnosticFingerprintsIgnoreRowOrderAndGeneratedIDs(t *testing.T) {
+	dataRoot := t.TempDir()
+	activeA := []benchmarkActiveLogicalRawRow{
+		{ID: 1001, Path: filepath.Join(dataRoot, "b.txt"), FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+		{ID: 1000, Path: filepath.Join(dataRoot, "a.txt"), FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+	}
+	activeB := []benchmarkActiveLogicalRawRow{
+		{ID: 9000, Path: filepath.Join(dataRoot, "a.txt"), FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+		{ID: 9001, Path: filepath.Join(dataRoot, "b.txt"), FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+	}
+	canonicalA, err := canonicalizeBenchmarkActiveLogicalRows(activeA, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize active logical rows A: %v", err)
+	}
+	canonicalB, err := canonicalizeBenchmarkActiveLogicalRows(activeB, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize active logical rows B: %v", err)
+	}
+	digestA, _ := benchmarkCanonicalDigest(canonicalA)
+	digestB, _ := benchmarkCanonicalDigest(canonicalB)
+	if digestA != digestB {
+		t.Fatalf("active namespace digest changed with row order/IDs: %s != %s", digestA, digestB)
+	}
+
+	catalogA := []benchmarkLogicalCatalogRawRow{
+		{ID: 101, FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", RefCount: 0, ChunkerVersion: "v2-fastcdc", SnapshotReferenceCount: 1},
+		{ID: 100, FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc", ActivePathCount: 1},
+	}
+	catalogB := []benchmarkLogicalCatalogRawRow{
+		{ID: 900, FileHash: "hash-a", TotalSize: 1, Status: "COMPLETED", RefCount: 1, ChunkerVersion: "v2-fastcdc", ActivePathCount: 1},
+		{ID: 901, FileHash: "hash-b", TotalSize: 2, Status: "COMPLETED", RefCount: 0, ChunkerVersion: "v2-fastcdc", SnapshotReferenceCount: 1},
+	}
+	catalogDigestA, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkLogicalCatalogRows(catalogA))
+	catalogDigestB, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkLogicalCatalogRows(catalogB))
+	if catalogDigestA != catalogDigestB {
+		t.Fatalf("logical catalog digest changed with row order/IDs: %s != %s", catalogDigestA, catalogDigestB)
+	}
+
+	graphA := []benchmarkChunkGraphRawRow{
+		{LogicalID: 1, ChunkID: 20, FileHash: "file", FileSize: 3, ChunkOrder: 1, ChunkHash: "chunk-b", ChunkSize: 2, Status: "COMPLETED", LiveRefCount: 1, ChunkerVersion: "v2-fastcdc"},
+		{LogicalID: 1, ChunkID: 10, FileHash: "file", FileSize: 3, ChunkOrder: 0, ChunkHash: "chunk-a", ChunkSize: 1, Status: "COMPLETED", LiveRefCount: 1, ChunkerVersion: "v2-fastcdc"},
+	}
+	graphB := []benchmarkChunkGraphRawRow{
+		{LogicalID: 800, ChunkID: 700, FileHash: "file", FileSize: 3, ChunkOrder: 0, ChunkHash: "chunk-a", ChunkSize: 1, Status: "COMPLETED", LiveRefCount: 1, ChunkerVersion: "v2-fastcdc"},
+		{LogicalID: 800, ChunkID: 701, FileHash: "file", FileSize: 3, ChunkOrder: 1, ChunkHash: "chunk-b", ChunkSize: 2, Status: "COMPLETED", LiveRefCount: 1, ChunkerVersion: "v2-fastcdc"},
+	}
+	graphDigestA, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkChunkGraphRows(graphA))
+	graphDigestB, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkChunkGraphRows(graphB))
+	if graphDigestA != graphDigestB {
+		t.Fatalf("chunk graph digest changed with row order/IDs: %s != %s", graphDigestA, graphDigestB)
+	}
+
+	physicalA := []benchmarkPhysicalRawRow{
+		{BlockID: 10, ContainerID: 20, FormatVersion: 1, Codec: "aes-gcm", CompressionCodec: "none", BlockHash: "packed-a", ChunkHash: "chunk-a", SizeInBlock: sql.NullInt64{Int64: 1, Valid: true}},
+		{BlockID: 11, ContainerID: 21, FormatVersion: 1, Codec: "aes-gcm", CompressionCodec: "none", BlockHash: "packed-b", ChunkHash: "chunk-b", SizeInBlock: sql.NullInt64{Int64: 2, Valid: true}},
+	}
+	physicalB := []benchmarkPhysicalRawRow{
+		{BlockID: 901, ContainerID: 801, FormatVersion: 1, Codec: "aes-gcm", CompressionCodec: "none", BlockHash: "different-packing-b", ChunkHash: "chunk-b", SizeInBlock: sql.NullInt64{Int64: 2, Valid: true}},
+		{BlockID: 900, ContainerID: 800, FormatVersion: 1, Codec: "aes-gcm", CompressionCodec: "none", BlockHash: "different-packing-a", ChunkHash: "chunk-a", SizeInBlock: sql.NullInt64{Int64: 1, Valid: true}},
+	}
+	physicalDigestA, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkPhysicalRows(physicalA))
+	physicalDigestB, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkPhysicalRows(physicalB))
+	if physicalDigestA != physicalDigestB {
+		t.Fatalf("canonical physical digest changed with IDs/packing: %s != %s", physicalDigestA, physicalDigestB)
+	}
+	physicalContentChanged := append([]benchmarkPhysicalRawRow(nil), physicalB...)
+	physicalContentChanged[0].ChunkHash = "changed-chunk-content"
+	changedDigest, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkPhysicalRows(physicalContentChanged))
+	if physicalDigestA == changedDigest {
+		t.Fatal("canonical physical digest did not change with payload content")
+	}
+}
+
+func TestBenchmarkDiagnosticRejectsDuplicateCanonicalLogicalPaths(t *testing.T) {
+	dataRoot := t.TempDir()
+	rows := []benchmarkActiveLogicalRawRow{
+		{ID: 1, Path: filepath.Join(dataRoot, "duplicate.txt"), FileHash: "hash-a"},
+		{ID: 2, Path: filepath.Join(dataRoot, "duplicate.txt"), FileHash: "hash-b"},
+	}
+	if _, err := canonicalizeBenchmarkActiveLogicalRows(rows, dataRoot); err == nil {
+		t.Fatal("expected duplicate canonical logical path to fail")
+	}
+}
+
+func TestBenchmarkDiagnosticSeparatesActiveNamespaceFromCatalogHistory(t *testing.T) {
+	dataRoot := t.TempDir()
+	active, err := canonicalizeBenchmarkActiveLogicalRows([]benchmarkActiveLogicalRawRow{
+		{ID: 1, Path: filepath.Join(dataRoot, "active-a.txt"), FileHash: "hash-active", TotalSize: 10, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+		{ID: 1, Path: filepath.Join(dataRoot, "active-b.txt"), FileHash: "hash-active", TotalSize: 10, Status: "COMPLETED", ChunkerVersion: "v2-fastcdc"},
+	}, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize active namespace: %v", err)
+	}
+	if len(active) != 2 {
+		t.Fatalf("expected two active paths for one logical object, got %+v", active)
+	}
+
+	catalog := canonicalizeBenchmarkLogicalCatalogRows([]benchmarkLogicalCatalogRawRow{
+		{ID: 1, FileHash: "hash-active", TotalSize: 10, Status: "COMPLETED", RefCount: 2, ChunkerVersion: "v2-fastcdc", ActivePathCount: 2, SnapshotReferenceCount: 1},
+		{ID: 2, FileHash: "hash-history", TotalSize: 20, Status: "COMPLETED", RefCount: 0, ChunkerVersion: "v2-fastcdc"},
+		{ID: 3, FileHash: "hash-snapshot", TotalSize: 30, Status: "COMPLETED", RefCount: 0, ChunkerVersion: "v2-fastcdc", SnapshotReferenceCount: 2},
+	})
+	classes := make(map[string]string, len(catalog))
+	for _, row := range catalog {
+		classes[row.FileHash] = row.ReachabilityClass
+	}
+	if classes["hash-active"] != "shared" || classes["hash-history"] != "unreachable_history" || classes["hash-snapshot"] != "snapshot_only" {
+		t.Fatalf("unexpected logical catalog reachability classes: %+v", classes)
+	}
+}
+
+func TestBenchmarkDiagnosticLogicalQueriesSeparateNamespaceAndCatalog(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open logical diagnostic fixture: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	dbconn.SetMaxOpenConns(1)
+
+	for _, statement := range []string{
+		`CREATE TABLE logical_file (
+			id INTEGER PRIMARY KEY, original_name TEXT NOT NULL, file_hash TEXT NOT NULL,
+			total_size INTEGER NOT NULL, status TEXT NOT NULL, ref_count INTEGER NOT NULL,
+			chunker_version TEXT NOT NULL
+		)`,
+		`CREATE TABLE physical_file (path TEXT PRIMARY KEY, logical_file_id INTEGER NOT NULL)`,
+		`CREATE TABLE snapshot_file (snapshot_id TEXT NOT NULL, logical_file_id INTEGER NOT NULL)`,
+		`INSERT INTO logical_file VALUES
+			(101, 'sensitive-active-name', 'hash-active', 10, 'COMPLETED', 2, 'v2-fastcdc'),
+			(102, 'sensitive-history-name', 'hash-history', 20, 'COMPLETED', 0, 'v2-fastcdc'),
+			(103, 'sensitive-snapshot-name', 'hash-snapshot', 30, 'COMPLETED', 0, 'v2-fastcdc')`,
+	} {
+		if _, err := dbconn.Exec(statement); err != nil {
+			t.Fatalf("apply logical diagnostic fixture: %v", err)
+		}
+	}
+	dataRoot := t.TempDir()
+	if _, err := dbconn.Exec(`INSERT INTO physical_file VALUES (?, 101), (?, 101)`,
+		filepath.Join(dataRoot, "active-a.txt"), filepath.Join(dataRoot, "active-b.txt")); err != nil {
+		t.Fatalf("insert active namespace fixture: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file VALUES ('snapshot-a', 101), ('snapshot-a', 103)`); err != nil {
+		t.Fatalf("insert snapshot fixture: %v", err)
+	}
+
+	activeRaw, activeBytes, err := readBenchmarkActiveLogicalNamespace(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("read active logical namespace: %v", err)
+	}
+	active, err := canonicalizeBenchmarkActiveLogicalRows(activeRaw, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize active logical namespace: %v", err)
+	}
+	if len(active) != 2 || activeBytes != 20 {
+		t.Fatalf("unexpected active namespace: rows=%+v bytes=%d", active, activeBytes)
+	}
+
+	catalogRaw, catalogBytes, statuses, err := readBenchmarkLogicalCatalog(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("read logical catalog: %v", err)
+	}
+	if len(catalogRaw) != 3 || catalogBytes != 60 || statuses.Completed != 3 {
+		t.Fatalf("unexpected logical catalog totals: rows=%+v bytes=%d statuses=%+v", catalogRaw, catalogBytes, statuses)
+	}
+	catalog := canonicalizeBenchmarkLogicalCatalogRows(catalogRaw)
+	classes := make(map[string]string, len(catalog))
+	for _, row := range catalog {
+		classes[row.FileHash] = row.ReachabilityClass
+	}
+	if classes["hash-active"] != "shared" || classes["hash-history"] != "unreachable_history" || classes["hash-snapshot"] != "snapshot_only" {
+		t.Fatalf("unexpected query-backed catalog classes: %+v", classes)
+	}
+}
+
+func TestBenchmarkDiagnosticGCAfterChurnPostgresEmitsCompleteV2State(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB")) == "" {
+		t.Skip("set COLDKEEP_TEST_DB=1 with PostgreSQL DB_* variables to run the reduced gc-after-churn diagnostic test")
+	}
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+	databaseName, cleanup, err := createTemporaryBenchmarkDatabase("diagnostic-gc-after-churn")
+	if err != nil {
+		t.Fatalf("create reduced churn database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup reduced churn database: %v", err)
+		}
+	})
+
+	connString, err := dbpkg.BuildPostgresConnStringFromEnv(databaseName)
+	if err != nil {
+		t.Fatalf("build reduced churn connection string: %v", err)
+	}
+	dbconn, err := sql.Open("postgres", connString)
+	if err != nil {
+		t.Fatalf("open reduced churn database: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := dbpkg.EnsureSchema(dbconn); err != nil {
+		t.Fatalf("bootstrap reduced churn schema: %v", err)
+	}
+
+	insertLogical := func(name, fileHash string, refCount int64) int64 {
+		t.Helper()
+		var logicalID int64
+		if err := dbconn.QueryRow(`
+			INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+			VALUES ($1, 1024, $2, 'COMPLETED', $3, 'v2-fastcdc')
+			RETURNING id
+		`, name, fileHash, refCount).Scan(&logicalID); err != nil {
+			t.Fatalf("insert reduced churn logical file: %v", err)
+		}
+		var chunkID int64
+		if err := dbconn.QueryRow(`
+			INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+			VALUES ($1, 1024, 'COMPLETED', 1, 0, 'v2-fastcdc')
+			RETURNING id
+		`, fileHash).Scan(&chunkID); err != nil {
+			t.Fatalf("insert reduced churn chunk: %v", err)
+		}
+		if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`, logicalID, chunkID); err != nil {
+			t.Fatalf("insert reduced churn chunk graph: %v", err)
+		}
+		return logicalID
+	}
+
+	dataRoot := t.TempDir()
+	activeID := insertLogical("sensitive-active-name", "active-content-hash", 1)
+	_ = insertLogical("sensitive-unreachable-history-name", "history-content-hash", 0)
+	activePath := filepath.Join(dataRoot, "churn", "active.bin")
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES ($1, $2)`, activePath, activeID); err != nil {
+		t.Fatalf("insert reduced churn active path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('reduced-churn', NOW(), 'full')`); err != nil {
+		t.Fatalf("insert reduced churn snapshot: %v", err)
+	}
+	var snapshotPathID int64
+	if err := dbconn.QueryRow(`INSERT INTO snapshot_path (path) VALUES ('churn/active.bin') RETURNING id`).Scan(&snapshotPathID); err != nil {
+		t.Fatalf("insert reduced churn snapshot path: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size)
+		VALUES ('reduced-churn', $1, $2, 1024)
+	`, snapshotPathID, activeID); err != nil {
+		t.Fatalf("insert reduced churn snapshot membership: %v", err)
+	}
+
+	state, err := buildBenchmarkDiagnosticFinalState(context.Background(), dbconn, corebenchmark.BenchmarkContext{
+		DataPath: dataRoot,
+		RepoPath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("build reduced gc-after-churn diagnostic state: %v", err)
+	}
+	if state.SchemaVersion != 2 || state.ActiveLogicalNamespace.Count != 1 || state.LogicalCatalog.Count != 2 ||
+		state.LogicalStatuses.Completed != 2 || state.SnapshotCount != 1 || state.Snapshots.Count != 1 {
+		t.Fatalf("unexpected reduced gc-after-churn diagnostic state: %+v", state)
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("encode reduced gc-after-churn diagnostic state: %v", err)
+	}
+	for _, forbidden := range []string{databaseName, dataRoot, "sensitive-active-name", "sensitive-unreachable-history-name"} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("reduced gc-after-churn diagnostic leaked sensitive value %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestBenchmarkDiagnosticLogicalDigestsChangeWithSemanticContent(t *testing.T) {
+	dataRoot := t.TempDir()
+	active := []benchmarkActiveLogicalRawRow{{
+		ID: 1, Path: filepath.Join(dataRoot, "file.txt"), FileHash: "hash-a", TotalSize: 10,
+		Status: "COMPLETED", ChunkerVersion: "v2-fastcdc",
+	}}
+	firstActive, err := canonicalizeBenchmarkActiveLogicalRows(active, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize active namespace: %v", err)
+	}
+	firstActiveDigest, _ := benchmarkCanonicalDigest(firstActive)
+	active[0].FileHash = "hash-b"
+	secondActive, err := canonicalizeBenchmarkActiveLogicalRows(active, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize changed active namespace: %v", err)
+	}
+	secondActiveDigest, _ := benchmarkCanonicalDigest(secondActive)
+	if firstActiveDigest == secondActiveDigest {
+		t.Fatal("active namespace digest did not change with content")
+	}
+
+	catalog := []benchmarkLogicalCatalogRawRow{{
+		ID: 1, FileHash: "hash-a", TotalSize: 10, Status: "COMPLETED", RefCount: 1,
+		ChunkerVersion: "v2-fastcdc", ActivePathCount: 1,
+	}}
+	firstCatalogDigest, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkLogicalCatalogRows(catalog))
+	catalog[0].ActivePathCount = 0
+	catalog[0].RefCount = 0
+	secondCatalogDigest, _ := benchmarkCanonicalDigest(canonicalizeBenchmarkLogicalCatalogRows(catalog))
+	if firstCatalogDigest == secondCatalogDigest {
+		t.Fatal("logical catalog digest did not change with lifecycle state")
+	}
+}
+
+func TestBenchmarkDiagnosticReportContainsNoSensitiveSourceValues(t *testing.T) {
+	dataRoot := t.TempDir()
+	sensitivePath := filepath.Join(dataRoot, "random-secret-name.txt")
+	canonical, err := canonicalizeBenchmarkActiveLogicalRows([]benchmarkActiveLogicalRawRow{{
+		ID: 8675309, Path: sensitivePath, FileHash: "semantic-hash", TotalSize: 10,
+		Status: "COMPLETED", ChunkerVersion: "v2-fastcdc",
+	}}, dataRoot)
+	if err != nil {
+		t.Fatalf("canonicalize sensitive logical row: %v", err)
+	}
+	digest, err := benchmarkCanonicalDigest(canonical)
+	if err != nil {
+		t.Fatalf("digest sensitive logical row: %v", err)
+	}
+	encoded, err := json.Marshal(benchmarkDiagnosticFinalState{
+		SchemaVersion:          benchmarkDiagnosticFinalStateSchemaVersion,
+		ActiveLogicalNamespace: benchmarkDiagnosticDigest{Count: 1, TotalBytes: 10, SHA256: digest},
+		LogicalCatalog:         benchmarkDiagnosticDigest{Count: 1, TotalBytes: 10, SHA256: digest},
+	})
+	if err != nil {
+		t.Fatalf("marshal diagnostic final state: %v", err)
+	}
+	for _, forbidden := range []string{
+		dataRoot,
+		"random-secret-name.txt",
+		"8675309",
+		"postgres://benchmark_user:benchmark_password@localhost/benchmark_database",
+	} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("diagnostic report leaked sensitive value %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestCanonicalBenchmarkActivePathRejectsEmptyAndTraversal(t *testing.T) {
+	dataRoot := t.TempDir()
+	if _, err := canonicalizeBenchmarkActiveLogicalRows([]benchmarkActiveLogicalRawRow{{Path: ""}}, dataRoot); err == nil {
+		t.Fatal("expected empty active path to fail")
+	}
+	outside := filepath.Join(filepath.Dir(dataRoot), "outside.txt")
+	if _, err := canonicalizeBenchmarkActiveLogicalRows([]benchmarkActiveLogicalRawRow{{Path: outside}}, dataRoot); err == nil {
+		t.Fatal("expected active path traversal to fail")
+	}
+}
+
+func TestCanonicalBenchmarkSnapshotPathAcceptsRelativeAndRejectsTraversal(t *testing.T) {
+	dataRoot := t.TempDir()
+	got, err := canonicalBenchmarkSnapshotPath(dataRoot, "snapshot/nested/file.bin")
+	if err != nil || got != "snapshot/nested/file.bin" {
+		t.Fatalf("canonical relative snapshot path: got=%q err=%v", got, err)
+	}
+	if _, err := canonicalBenchmarkSnapshotPath(dataRoot, "../outside.txt"); err == nil {
+		t.Fatal("expected snapshot traversal to be rejected")
+	}
+	normalizedAbsolute := strings.TrimPrefix(filepath.ToSlash(filepath.Join(dataRoot, "snapshot", "file.bin")), "/")
+	got, err = canonicalBenchmarkSnapshotPath(dataRoot, normalizedAbsolute)
+	if err != nil || got != "snapshot/file.bin" {
+		t.Fatalf("canonical normalized absolute snapshot path: got=%q err=%v", got, err)
+	}
+}
 
 func (singleChunkV2CLITestChunker) Version() chunk.Version {
 	return chunk.VersionV2FastCDC
@@ -107,10 +472,11 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func runCLIWithCapturedIO(t *testing.T, args []string) (stdout string, stderr string, code int) {
 	t.Helper()
+	runtime := newDefaultCommandTestRuntime(t)
 
 	stderr = captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
-			code = runCLI(args)
+			code = runCLIWithRuntime(args, runtime)
 		})
 	})
 
@@ -649,7 +1015,10 @@ func TestRunCLIRepairJSONFailureIncludesInvariantMetadata(t *testing.T) {
 	}
 
 	stderr := captureStderr(t, func() {
-		code := runCLI([]string{"repair", "ref-counts", "--output", "json"})
+		code := runCLIWithRuntime(
+			[]string{"repair", "ref-counts", "--output", "json"},
+			newDefaultCommandTestRuntime(t),
+		)
 		if code != exitVerify {
 			t.Fatalf("expected exit code %d, got %d", exitVerify, code)
 		}
@@ -782,7 +1151,10 @@ func TestRunCLIStoreJSONEmitsStartupRecoveryAndCrossVersionReuseSuccess(t *testi
 	var stdout string
 	stderr := captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
-			code := runCLI([]string{"store", "--output", "json", inPath})
+			code := runCLIWithRuntime(
+				[]string{"store", "--output", "json", inPath},
+				newDefaultCommandTestRuntime(t),
+			)
 			if code != exitSuccess {
 				t.Fatalf("expected exit code %d, got %d", exitSuccess, code)
 			}
@@ -2323,6 +2695,7 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 			t.Fatalf("unexpected default workers: %d", opts.StoreFolderWorkers)
 		}
 		return BenchmarkRunReport{
+			SchemaVersion:  2,
 			GeneratedAtUTC: "2026-04-29T00:00:00Z",
 			Dataset:        "small",
 			Repeat:         2,
@@ -2386,6 +2759,9 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	if got, _ := data["dataset"].(string); got != "small" {
 		t.Fatalf("dataset mismatch: got=%v data=%v", data["dataset"], data)
 	}
+	if got, _ := data["schema_version"].(float64); int(got) != 2 {
+		t.Fatalf("schema_version mismatch: got=%v data=%v", data["schema_version"], data)
+	}
 	if got, _ := data["repeat"].(float64); int(got) != 2 {
 		t.Fatalf("repeat mismatch: got=%v data=%v", data["repeat"], data)
 	}
@@ -2442,6 +2818,78 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	}
 	if got, _ := rowStats["workers_used"].(float64); int(got) != 1 {
 		t.Fatalf("row workers_used mismatch: got=%v stats=%v", rowStats["workers_used"], rowStats)
+	}
+}
+
+func TestRunCLIBenchmarkJSONEmitsExactlyOneEnvelope(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	runCoreBenchmarkPhase = func(
+		preset corebenchmark.DatasetPreset,
+		repeat int,
+		opts execution.Options,
+	) (BenchmarkRunReport, error) {
+		return BenchmarkRunReport{
+			SchemaVersion: 2,
+			Dataset:       string(preset),
+			Repeat:        repeat,
+			Execution: BenchmarkExecution{
+				StoreFolderWorkers: opts.StoreFolderWorkers,
+				PipelineDepth:      opts.PipelineDepth,
+				Deterministic:      opts.Deterministic,
+			},
+			Rows: []BenchmarkRunCaseRow{{
+				Case:           "store-large-file",
+				DurationMs:     1000,
+				ThroughputMBps: 1,
+			}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if code := runCLI([]string{"benchmark", "run", "--output", "json"}); code != exitSuccess {
+			t.Fatalf("runCLI exit=%d", code)
+		}
+	})
+	decoder := json.NewDecoder(strings.NewReader(output))
+	var envelope map[string]any
+	if err := decoder.Decode(&envelope); err != nil {
+		t.Fatalf("decode benchmark envelope: %v; output=%q", err, output)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected exactly one JSON envelope, got trailing=%v err=%v output=%q", trailing, err, output)
+	}
+}
+
+func TestRunCLIBenchmarkJSONFailureDoesNotEmitSuccess(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	runCoreBenchmarkPhase = func(
+		corebenchmark.DatasetPreset,
+		int,
+		execution.Options,
+	) (BenchmarkRunReport, error) {
+		return BenchmarkRunReport{}, errors.New("benchmark failed")
+	}
+
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			if code := runCLI([]string{"benchmark", "run", "--output", "json"}); code != exitGeneral {
+				t.Fatalf("runCLI exit=%d", code)
+			}
+		})
+	})
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatalf("benchmark failure emitted success output: %q", stdout)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stderr)), &envelope); err != nil {
+		t.Fatalf("decode benchmark error envelope: %v; stderr=%q", err, stderr)
+	}
+	if envelope["status"] != "error" {
+		t.Fatalf("expected error envelope, got=%v", envelope)
 	}
 }
 
@@ -3309,7 +3757,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version", "verify"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version", "verify"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -6082,6 +6530,16 @@ func TestRenderSnapshotTreeLinesDeterministicAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestRenderSnapshotTreeLinesDeduplicatesDuplicateIDs(t *testing.T) {
+	lines := renderSnapshotTreeLines([]snapshot.Snapshot{
+		{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+	})
+	if got := strings.Join(lines, "\n"); got != "root" {
+		t.Fatalf("expected duplicate metadata records to render once, got %q", got)
+	}
+}
+
 func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalGet := getSnapshotPhase
@@ -8221,6 +8679,76 @@ func TestStatsCommandJSONShorthand(t *testing.T) {
 	}
 }
 
+func TestRunStatsCommandJSONPreservesExactLargeIntegers(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			Logical: observability.LogicalStats{
+				TotalFiles:     9007199254740993,
+				TotalSizeBytes: math.MaxInt64,
+			},
+			Chunks: observability.ChunkStats{
+				ChunkerVersions: []observability.VersionStat{{
+					Version: "v2-fastcdc",
+					Chunks:  9007199254740991,
+					Bytes:   9007199254740993,
+				}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{
+			method: "stats",
+			flags:  map[string][]string{"output": {"json"}},
+		}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand JSON: %v", err)
+		}
+	})
+
+	var envelope struct {
+		Data struct {
+			Logical struct {
+				TotalFiles     json.Number `json:"total_files"`
+				TotalSizeBytes json.Number `json:"total_size_bytes"`
+			} `json:"logical"`
+			Chunks struct {
+				ChunkerVersions []struct {
+					Chunks json.Number `json:"chunks"`
+					Bytes  json.Number `json:"bytes"`
+				} `json:"chunker_versions"`
+			} `json:"chunks"`
+		} `json:"data"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(output))
+	decoder.UseNumber()
+	if err := decoder.Decode(&envelope); err != nil {
+		t.Fatalf("decode stats JSON: %v output=%q", err, output)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatalf("stats JSON has trailing content: %v output=%q", err, output)
+	}
+
+	if got := envelope.Data.Logical.TotalFiles.String(); got != "9007199254740993" {
+		t.Fatalf("data.logical.total_files=%q want 9007199254740993", got)
+	}
+	if got := envelope.Data.Logical.TotalSizeBytes.String(); got != "9223372036854775807" {
+		t.Fatalf("data.logical.total_size_bytes=%q want 9223372036854775807", got)
+	}
+	if len(envelope.Data.Chunks.ChunkerVersions) != 1 {
+		t.Fatalf("chunker_versions=%v want one entry", envelope.Data.Chunks.ChunkerVersions)
+	}
+	version := envelope.Data.Chunks.ChunkerVersions[0]
+	if got := version.Chunks.String(); got != "9007199254740991" {
+		t.Fatalf("chunker_versions[0].chunks=%q want 9007199254740991", got)
+	}
+	if got := version.Bytes.String(); got != "9007199254740993" {
+		t.Fatalf("chunker_versions[0].bytes=%q want 9007199254740993", got)
+	}
+}
+
 func TestStatsCommandContainers(t *testing.T) {
 	originalRunStats := runObservabilityStatsPhase
 	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
@@ -9915,17 +10443,14 @@ func TestJSONModeUsageErrorKeepsStdoutEmptyAndStderrJSONOnly(t *testing.T) {
 	}
 
 	stderrPayloads := assertEveryLineIsJSONObject(t, stderr)
-	if len(stderrPayloads) != 2 {
-		t.Fatalf("expected startup event + error payload on stderr, got %d lines output=%q", len(stderrPayloads), stderr)
+	if len(stderrPayloads) != 1 {
+		t.Fatalf("expected only the parse-time error payload on stderr, got %d lines output=%q", len(stderrPayloads), stderr)
 	}
-	if got, _ := stderrPayloads[0]["event"].(string); got != "startup_recovery" {
-		t.Fatalf("expected first stderr line to be startup_recovery event, got %v payload=%v", stderrPayloads[0]["event"], stderrPayloads[0])
+	if got, _ := stderrPayloads[0]["status"].(string); got != "error" {
+		t.Fatalf("expected stderr status=error, got %v payload=%v", stderrPayloads[0]["status"], stderrPayloads[0])
 	}
-	if got, _ := stderrPayloads[1]["status"].(string); got != "error" {
-		t.Fatalf("expected second stderr line status=error, got %v payload=%v", stderrPayloads[1]["status"], stderrPayloads[1])
-	}
-	if got, _ := stderrPayloads[1]["error_class"].(string); got != "USAGE" {
-		t.Fatalf("expected second stderr line error_class=USAGE, got %v payload=%v", stderrPayloads[1]["error_class"], stderrPayloads[1])
+	if got, _ := stderrPayloads[0]["error_class"].(string); got != "USAGE" {
+		t.Fatalf("expected stderr error_class=USAGE, got %v payload=%v", stderrPayloads[0]["error_class"], stderrPayloads[0])
 	}
 }
 
@@ -10157,7 +10682,7 @@ func TestCompareWithBaselineThroughputRegression(t *testing.T) {
 	}
 }
 
-func TestCompareWithBaselineNewCaseIgnored(t *testing.T) {
+func TestCompareWithBaselineRejectsUnexpectedCase(t *testing.T) {
 	baseline := BenchmarkRunReport{
 		Rows: []BenchmarkRunCaseRow{
 			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
@@ -10171,8 +10696,60 @@ func TestCompareWithBaselineNewCaseIgnored(t *testing.T) {
 	}
 
 	baselineFile := writeBaselineJSON(t, baseline)
-	if err := compareWithBaseline(current, baselineFile, 20.0); err != nil {
-		t.Fatalf("expected no regression for new cases, got: %v", err)
+	if err := compareWithBaseline(current, baselineFile, 20.0); err == nil || !strings.Contains(err.Error(), "case set mismatch") {
+		t.Fatalf("expected case-set validation error, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineRejectsDuplicateCase(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+			{Case: "store-large", DurationMs: 1001, ThroughputMBps: 199},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+			{Case: "restore-large", DurationMs: 1000, ThroughputMBps: 200},
+		},
+	}
+	err := compareWithBaseline(current, writeBaselineJSON(t, baseline), 20)
+	if err == nil || !strings.Contains(err.Error(), "duplicate case") {
+		t.Fatalf("expected duplicate-case validation error, got: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandRejectsRepeatForCIStableFixture(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags: map[string][]string{
+			"dataset": {"ci-stable-v1"},
+			"repeat":  {"2"},
+		},
+	}, outputModeJSON)
+	if err == nil || !strings.Contains(err.Error(), "requires --repeat 1") {
+		t.Fatalf("expected ci-stable repeat error, got: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandRejectsRepeatForPairedFixtures(t *testing.T) {
+	for _, dataset := range []string{
+		"ci-paired-w1-v1", "ci-paired-w4-v1",
+		"ci-paired-w1-v2", "ci-paired-w4-v2",
+	} {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags: map[string][]string{
+				"dataset": {dataset},
+				"repeat":  {"2"},
+			},
+		}, outputModeJSON)
+		if err == nil || !strings.Contains(err.Error(), "requires --repeat 1") {
+			t.Fatalf("expected paired repeat error for %q, got: %v", dataset, err)
+		}
 	}
 }
 

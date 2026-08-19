@@ -20,7 +20,125 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.10 - 2026-07-18 — v1.x Closure Integrity and CI Runtime Hygiene
+## v1.13.11 - 2026-08-18 — Safety and Backend Compatibility Gate Closure
+
+- Completed the Phase 20 pre-release state transition and froze the exact-head
+  candidate contract. The commit containing that contract must pass
+  candidate-head CI, Required Gate, CodeQL, and the complete clean local
+  Profile A gate before one pull request to `main` is authorized.
+- Kept benchmark integrity hard-required, timing advisory, and BKC-016
+  `Deferred — documented`. Merge, tag, publication, and release-branch
+  deletion remain separate later operations.
+
+### Phase 11 benchmark gate diagnostic bootstrap
+
+- Added a fixed, release-gate-only `ci-stable-v1` calibration fixture, strict
+  single-envelope schema-v2 reports, per-case database isolation, and an
+  external sampler with median/MAD statistics and fail-closed evidence checks.
+- Added a manual-only, read-only calibration/baseline-capture workflow pinned
+  to Go 1.25.12, Ubuntu 24.04, and the reviewed PostgreSQL 16 image digest.
+- Required CI still uses the historical benchmark gate. No baseline,
+  threshold, repository runtime, or Phase 12 change is included; Phase 11
+  remains blocked on the predetermined calibration.
+
+### Phase 11 repository coordination contract implemented
+
+- Added the internal exclusive-only repository coordination contract, stable
+  error sentinels, non-mutating canonical container-namespace identity,
+  recovery-safe `.coldkeep-control` namespace, versioned diagnostic owner
+  metadata, and explicit lease lifecycle helper.
+- Added fake-based contract tests for identity aliases, operation policy,
+  owner metadata, cancellation/deadlines, release errors, nested acquisition,
+  and independent repositories. Added a pure CLI policy seam that classifies
+  participating commands without acquiring a lock.
+- BKC-016 remains `Deferred — documented`: native Linux/macOS/Windows locking,
+  CLI acquisition, subprocess contention, crash release, live-GC barriers, and
+  PostgreSQL advisory session ownership remain Phases 12–13 work. No workflow,
+  schema, Engine behavior, OS lock, or advisory-lock behavior changed.
+
+### Phase 10 transaction and row-lock contracts complete
+
+- Added shared SQLite/PostgreSQL transaction contracts for backend detection,
+  commit/rollback, read-own-writes, constraint rollback, affected rows,
+  PostgreSQL `FOR UPDATE`, `NOWAIT`, `SKIP LOCKED`, server-observed blocked-lock
+  cancellation, and SQLite's intentional clause-omission boundary.
+- Added a production-helper integration contract for container NOWAIT
+  contention/savepoint recovery and deterministic SKIP LOCKED allocation.
+- Extended the existing plain-codec internal-package run with
+  `./internal/container` and five exact PostgreSQL pass-event requirements.
+  Exact-head CI run `30148670910` at `ad82c959` passed all five events in plain
+  job `89655223183` and required gate `89656972706`. The initial uncompressed
+  benchmark variance was resolved by successful same-head rerun `89656813012`;
+  no benchmark accommodation or production code change was made.
+
+### Phase 9 engine mutation parity complete
+
+- Added five shared SQLite/PostgreSQL Engine mutation contracts covering
+  single-file Store, by-ID and stored-path Remove/Restore, snapshot
+  create/delete/restore, deterministic failures and partial batches, semantic
+  repository/container fingerprints, and GC dry-run planning/non-mutation.
+- Exact-head CI run `30114444798` at `848e579b` passed quality, all five new
+  `/postgres` events in plain correctness job `89551564893`, and aggregate
+  required-gate job `89555865026`. BKC-012/013 are equivalently proven only
+  for the documented active, uncontended mutation and GC dry-run contracts.
+- Extended only the existing plain-codec internal-package JSON event parser and
+  matching CI audit. No production code, workflow job, package invocation,
+  codec leg, schema, storage format, or lock behavior changed.
+
+### Phase 8 snapshot selector determinism closure complete
+
+- Completed Phase 8 exact-head CI evidence in run `30109561344` at `bcae3576`:
+  quality, both correctness codecs, required PostgreSQL selector events,
+  adversarial, stress, long-run, smoke, compatibility, benchmark,
+  cross-platform, and `CI Required Gate` all passed. BKC-011 is equivalently
+  proven only for the scoped snapshot list/show/stats/diff selector and
+  tree-presentation contracts.
+- Implemented Phase 8 snapshot selector contracts for deterministic equal-time
+  list ordering, file-query filtering, invalid direct-engine regex rejection,
+  pre-cancelled selection, and read non-mutation. CLI diff now preserves
+  repeated path/prefix query selectors rather than narrowing an unordered map
+  into one engine path. The direct-engine invalid-regex silent-ignore defect is
+  corrected by fallible query conversion and propagation through show/diff.
+
+- Recorded the Phase 0 post-release correction that restored the v1.13.11–v1.13.13 release train.
+- Activated executable and reusable release-checklist identity to `1.13.11`.
+- Completed the Phase 2 backend compatibility claim matrix, distinguishing
+  separate evidence from proven parity and recording required-CI gaps.
+- Completed the Phase 3 reusable dual-backend test harness with file-backed
+  SQLite fixtures, optional isolated PostgreSQL scratch databases, strict
+  cleanup reporting, and catalog-suite adoption.
+- Implemented Phase 4 required-CI activation for PostgreSQL-gated internal
+  package contracts in the plain correctness-matrix codec leg, with JSON
+  execution-proof enforcement; run `29729981751` confirmed it. Phase 5
+  schema/bootstrap/migration parity is Next; no backend parity claim is added.
+- Closed Phase 5 schema/bootstrap/migration contract evidence: required
+  PostgreSQL SCH execution, canonical lint/vet, and selected schema contracts
+  are recorded without claiming broad schema parity.
+- Recorded deterministic G6 shared packed-block corruption reproduction and
+  added fail-closed protection that refuses partial rebuild of a shared
+  immutable block while preserving single-member cleanup.
+- Recorded final green exact-head CI after one authorized same-SHA retry of a
+  transient workers=4 uncompressed benchmark anomaly; no benchmark baseline,
+  workflow, or configuration changed between attempts.
+- Completed exact-head catalog contract evidence in CI run `29983479388` at
+  `db12c3d2`: all six PostgreSQL catalog contract selectors passed, including
+  CAT-004 after its deterministic `created_at DESC, id DESC` ordering fix, and
+  the aggregate required gate succeeded. Phase 6 is complete.
+- Completed Phase 7 exact-head engine read-side evidence in CI run
+  `29993172886` at `313d0069`: all four required PostgreSQL engine selectors,
+  quality, both correctness legs, adversarial validation, and the aggregate
+  required gate passed.
+- Corrected deep verification for a single-connection SQLite handle by fully
+  materializing and closing eligible-container rows before querying packed
+  blocks. The bounded regression retains `MaxOpenConns(1)` and the production
+  packed-storage writer; byte-level verification is unchanged.
+- BKC-010 is now equivalently proven for the tested Stats, Inspect, Verify,
+  context/error, and non-mutation contracts. BKC-011 remains separate evidence
+  because selector/query behavior is Phase 8 work, which is Next.
+
+------------------------------------------------------------------------
+
+## v1.13.10 - 2026-07-19 — v1.x Closure Integrity and CI Runtime Hygiene
 
 - Closed v1.13.9 post-release documentation truth, release-train
   reconciliation, engine-contract ownership documentation, and the v1.x/v2.0
@@ -40,9 +158,16 @@ project, do not start here; start with [README.md](README.md).
   database names rather than a cluster-global set. No production behavior
   changed, and the complete local pre-release gate passed on that remediation
   commit with no residual benchmark scratch databases.
-- The final evidence-restoration commit requires its own clean exact-head gate
-  before one release pull request is authorized; merge, tag, publication, and
-  external CI evidence remain pending.
+- Public GitHub evidence confirms stable release `Coldkeep v1.13.10 — v1.x
+  Closure Integrity and CI Runtime Hygiene`, published July 19, 2026 at 18:01;
+  tag `v1.13.10` targets `423c57815580c39bee4f79ecd81570e9cfa9d273`, the merge
+  of PR #105. Tag-triggered CI run #502 succeeded with 19 jobs in 18m26s, and
+  `release/v1.13.10` is absent from the public branch list. The local GitHub
+  CLI token was invalid; public GitHub pages supplied the independent evidence.
+- This remains a valid released closure-integrity and CI-runtime-hygiene
+  baseline. Its prior final-v1.x conclusion was superseded after release by a
+  roadmap-to-code audit that found remaining must-before-v2 work; the active
+  release train is now v1.13.11–v1.13.13.
 
 ------------------------------------------------------------------------
 

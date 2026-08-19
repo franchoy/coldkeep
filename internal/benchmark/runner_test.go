@@ -1,8 +1,11 @@
 package benchmark
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/execution"
@@ -122,5 +125,156 @@ func TestRunBenchmarkRejectsInvalidCases(t *testing.T) {
 	_, err = RunBenchmark([]BenchmarkCase{{Name: "nil", Execution: execution.Options{StoreFolderWorkers: 1, PipelineDepth: 1, Deterministic: true}, Run: nil}})
 	if err == nil {
 		t.Fatal("expected error for nil case run function")
+	}
+}
+
+func TestRunBenchmarkWithEnvironmentFactoryScopesAndCleansEachCase(t *testing.T) {
+	var created []string
+	var cleaned []string
+	cases := []BenchmarkCase{
+		{
+			Name:      "first",
+			Execution: execution.Options{StoreFolderWorkers: 1, PipelineDepth: 1, Deterministic: true},
+			Run: func(ctx BenchmarkContext) error {
+				if got := ctx.ExtraEnv["DB_NAME"]; got != "db_first" {
+					t.Fatalf("first DB_NAME=%q", got)
+				}
+				return nil
+			},
+		},
+		{
+			Name:      "second",
+			Execution: execution.Options{StoreFolderWorkers: 1, PipelineDepth: 1, Deterministic: true},
+			Run: func(ctx BenchmarkContext) error {
+				if got := ctx.ExtraEnv["DB_NAME"]; got != "db_second" {
+					t.Fatalf("second DB_NAME=%q", got)
+				}
+				return nil
+			},
+		},
+	}
+
+	_, err := RunBenchmarkWithEnvironmentFactory(cases, func(caseName string) (map[string]string, func() error, error) {
+		created = append(created, caseName)
+		return map[string]string{"DB_NAME": "db_" + caseName}, func() error {
+			cleaned = append(cleaned, caseName)
+			return nil
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("RunBenchmarkWithEnvironmentFactory: %v", err)
+	}
+	if got := len(created); got != 2 {
+		t.Fatalf("created=%v", created)
+	}
+	if got := len(cleaned); got != 2 {
+		t.Fatalf("cleaned=%v", cleaned)
+	}
+	for index := range created {
+		if created[index] != cleaned[index] {
+			t.Fatalf("cleanup order mismatch: created=%v cleaned=%v", created, cleaned)
+		}
+	}
+}
+
+func TestRunBenchmarkWithEnvironmentFactoryRejectsNilFactory(t *testing.T) {
+	if _, err := RunBenchmarkWithEnvironmentFactory(nil, nil); err == nil {
+		t.Fatal("expected nil factory error")
+	}
+}
+
+func TestRunBenchmarkWithEnvironmentFactoryCleansAfterCaseFailure(t *testing.T) {
+	cleaned := false
+	cases := []BenchmarkCase{{
+		Name: "failing",
+		Run: func(BenchmarkContext) error {
+			return errors.New("case failed")
+		},
+	}}
+	results, err := RunBenchmarkWithEnvironmentFactory(
+		cases,
+		func(string) (map[string]string, func() error, error) {
+			return map[string]string{"DB_NAME": "db_failing"}, func() error {
+				cleaned = true
+				return nil
+			}, nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "case failed") {
+		t.Fatalf("expected case failure, got results=%+v err=%v", results, err)
+	}
+	if !cleaned {
+		t.Fatal("expected external cleanup after case failure")
+	}
+}
+
+func TestRunBenchmarkObserverRunsBeforeCleanup(t *testing.T) {
+	var observedPath string
+	cleaned := false
+	cases := []BenchmarkCase{{
+		Name: "observed",
+		Run: func(ctx BenchmarkContext) error {
+			observedPath = filepath.Join(ctx.DataPath, "final-state.txt")
+			return os.WriteFile(observedPath, []byte("present"), 0o600)
+		},
+	}}
+
+	results, err := RunBenchmarkWithEnvironmentFactoryAndObserver(
+		cases,
+		func(string) (map[string]string, func() error, error) {
+			return map[string]string{"DB_NAME": "ephemeral"}, func() error {
+				cleaned = true
+				return nil
+			}, nil
+		},
+		func(_ string, ctx BenchmarkContext) (json.RawMessage, error) {
+			if cleaned {
+				t.Fatal("observer ran after external cleanup")
+			}
+			if _, err := os.Stat(observedPath); err != nil {
+				t.Fatalf("observer could not read pre-cleanup state: %v", err)
+			}
+			if _, err := os.Stat(ctx.RepoPath); err != nil {
+				t.Fatalf("observer could not read benchmark context: %v", err)
+			}
+			return []byte(`{"schema_version":1,"digest":"abc"}`), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("RunBenchmarkWithEnvironmentFactoryAndObserver: %v", err)
+	}
+	if !cleaned {
+		t.Fatal("external cleanup did not run")
+	}
+	if len(results) != 1 || string(results[0].DiagnosticFinalState) != `{"schema_version":1,"digest":"abc"}` {
+		t.Fatalf("unexpected diagnostic result: %+v", results)
+	}
+	if _, err := os.Stat(observedPath); !os.IsNotExist(err) {
+		t.Fatalf("benchmark context survived cleanup: %v", err)
+	}
+}
+
+func TestRunBenchmarkCleanupRunsAfterObserverFailure(t *testing.T) {
+	cleaned := false
+	results, err := RunBenchmarkWithEnvironmentFactoryAndObserver(
+		[]BenchmarkCase{{Name: "observed", Run: func(BenchmarkContext) error { return nil }}},
+		func(string) (map[string]string, func() error, error) {
+			return nil, func() error {
+				cleaned = true
+				return nil
+			}, nil
+		},
+		func(string, BenchmarkContext) (json.RawMessage, error) {
+			return nil, errors.New("capture failed")
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "capture failed") {
+		t.Fatalf("expected observer failure, got results=%+v err=%v", results, err)
+	}
+	if !cleaned {
+		t.Fatal("external cleanup did not run after observer failure")
+	}
+	if len(results) != 1 || results[0].Success || !strings.Contains(results[0].Error, "capture failed") {
+		t.Fatalf("observer failure missing from result: %+v", results)
 	}
 }

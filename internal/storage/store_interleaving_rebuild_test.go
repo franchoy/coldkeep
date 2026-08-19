@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	verifypkg "github.com/franchoy/coldkeep/internal/verify"
 )
 
 func TestStoreInterleavingRebuildCleanupDeletesBothMappings(t *testing.T) {
@@ -117,13 +121,410 @@ func assertRebuildCleanupHookSequence(t *testing.T, events []TestStoreInterleavi
 func TestStoreInterleavingRebuildCleanupRetainsSharedStorageBlock(t *testing.T) {
 	dbconn, _ := openSharedStoreInterleavingDB(t)
 	containersDir := t.TempDir()
-	losingChunkID, blockID, winningHash := seedSharedRebuildCleanupFixture(t, dbconn, containersDir)
-	if err := markChunkForRebuildWithContext(context.Background(), dbconn, losingChunkID); err != nil {
-		t.Fatalf("mark losing chunk for rebuild: %v", err)
+	losingChunkID, blockID, _ := seedSharedRebuildCleanupFixture(t, dbconn, containersDir)
+	err := markChunkForRebuildWithContext(context.Background(), dbconn, losingChunkID)
+	if !errors.Is(err, errSharedPackedBlockPartialRebuild) {
+		t.Fatalf("expected shared packed-block rebuild refusal, got %v", err)
 	}
-	assertChunkMappingsRemoved(t, dbconn, losingChunkID)
 	assertSharedStorageBlockRetained(t, dbconn, blockID)
-	assertSharedRebuildSurvivorState(t, dbconn, winningHash, losingChunkID)
+	packedRows := scanInterleavingCount(t, "count selected packed rows after refusal", dbconn.QueryRow(
+		`SELECT COUNT(*) FROM chunk_block_refs WHERE chunk_id = $1 AND block_id = $2`, losingChunkID, blockID,
+	))
+	if packedRows != 1 {
+		t.Fatalf("expected selected shared-block mapping to remain after refusal, got %d rows", packedRows)
+	}
+	var losingStatus string
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, losingChunkID).Scan(&losingStatus); err != nil {
+		t.Fatalf("load selected chunk status after refusal: %v", err)
+	}
+	if losingStatus != filestate.ChunkCompleted {
+		t.Fatalf("expected selected chunk status to remain COMPLETED, got %s", losingStatus)
+	}
+}
+
+func TestSharedPackedBlockSingleMemberRebuildCannotLeavePartialMembership(t *testing.T) {
+	dbconn, _ := openSharedStoreInterleavingDB(t)
+	containersDir := t.TempDir()
+	selectedPayload := bytes.Repeat([]byte("S"), 64)
+	siblingPayload := bytes.Repeat([]byte("W"), 64)
+	seeds := seedPackedFixtureBlock(
+		t,
+		dbconn,
+		containersDir,
+		packedFixtureChunkSpec{
+			hash:          storeInterleavingHash(selectedPayload),
+			payload:       selectedPayload,
+			liveRefCount:  0,
+			withCompanion: true,
+		},
+		packedFixtureChunkSpec{
+			hash:          storeInterleavingHash(siblingPayload),
+			payload:       siblingPayload,
+			liveRefCount:  0,
+			withCompanion: true,
+		},
+	)
+	if len(seeds) != 2 || seeds[0].blockID != seeds[1].blockID {
+		t.Fatalf("fixture must create exactly two members in one packed block: %+v", seeds)
+	}
+
+	blockID := seeds[0].blockID
+	memberIDs := []int64{seeds[0].chunkID, seeds[1].chunkID}
+	slices.Sort(memberIDs)
+	before := loadSharedPackedBlockSnapshot(t, dbconn, containersDir, blockID, memberIDs)
+	assertValidSharedPackedBlockSnapshot(t, before, memberIDs)
+	selectedCompanionBefore := requireValidSharedPackedCompanion(t, dbconn, seeds[0].chunkID, "selected before rebuild")
+	siblingCompanionBefore := requireValidSharedPackedCompanion(t, dbconn, seeds[1].chunkID, "sibling before rebuild")
+	if err := verifypkg.VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("baseline shared packed block must pass full verification: %v", err)
+	}
+
+	var events []TestStoreInterleavingHookEvent
+	ctx := withStoreInterleavingState(context.Background(), &storeInterleavingState{
+		hooks: &storeInterleavingHooks{
+			onEvent: func(_ context.Context, event storeInterleavingHookEvent) error {
+				events = append(events, event)
+				return nil
+			},
+		},
+		storeOpID: "shared-packed-single-member-rebuild",
+		codec:     "plain",
+		fileHash:  seeds[0].hash,
+	})
+	rebuildErr := markChunkForRebuildWithContext(ctx, dbconn, seeds[0].chunkID)
+	if rebuildErr == nil {
+		t.Fatal("shared packed-block single-member rebuild must fail closed")
+	}
+	if !errors.Is(rebuildErr, errSharedPackedBlockPartialRebuild) {
+		t.Fatalf("expected classified shared packed-block rebuild refusal, got %v", rebuildErr)
+	}
+	wantMessage := fmt.Sprintf(
+		"cannot rebuild chunk %d independently: packed block %d has 2 active members",
+		seeds[0].chunkID,
+		blockID,
+	)
+	if !strings.Contains(rebuildErr.Error(), wantMessage) {
+		t.Fatalf("expected stable shared packed-block refusal %q, got %v", wantMessage, rebuildErr)
+	}
+	assertSharedRebuildRefusalHookSequence(t, events, seeds[0].chunkID)
+
+	after := loadSharedPackedBlockSnapshot(t, dbconn, containersDir, blockID, memberIDs)
+	selectedCompanionAfter := requireValidSharedPackedCompanion(t, dbconn, seeds[0].chunkID, "selected after refusal")
+	siblingCompanionAfter := requireValidSharedPackedCompanion(t, dbconn, seeds[1].chunkID, "sibling after refusal")
+	if !sharedPackedBlockSnapshotsEqual(before, after) {
+		t.Fatalf("shared packed-block refusal mutated repository state: before=%+v after=%+v", before, after)
+	}
+	if !selectedCompanionBefore || !siblingCompanionBefore || !selectedCompanionAfter || !siblingCompanionAfter {
+		t.Fatalf(
+			"shared packed-block companions must remain valid after refusal: selected_before=%t sibling_before=%t selected_after=%t sibling_after=%t",
+			selectedCompanionBefore,
+			siblingCompanionBefore,
+			selectedCompanionAfter,
+			siblingCompanionAfter,
+		)
+	}
+	if err := verifypkg.VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("shared packed block must remain fully verifiable after refusal: %v", err)
+	}
+}
+
+func TestStoreInterleavingRebuildCleanupAllowsSingleMemberPackedBlock(t *testing.T) {
+	dbconn, _ := openSharedStoreInterleavingDB(t)
+	containersDir := t.TempDir()
+	payload := bytes.Repeat([]byte("S"), 64)
+	chunkHash := storeInterleavingHash(payload)
+	seeds := seedPackedFixtureBlock(t, dbconn, containersDir, packedFixtureChunkSpec{
+		hash:          chunkHash,
+		payload:       payload,
+		liveRefCount:  0,
+		withCompanion: true,
+	})
+	if len(seeds) != 1 {
+		t.Fatalf("fixture must create exactly one packed member: %+v", seeds)
+	}
+	if err := verifypkg.VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("baseline single-member packed block must pass full verification: %v", err)
+	}
+
+	if err := markChunkForRebuildWithContext(context.Background(), dbconn, seeds[0].chunkID); err != nil {
+		t.Fatalf("single-member packed block rebuild cleanup: %v", err)
+	}
+	assertInterleavingChunkFinalState(t, dbconn, containersDir, chunkHash, len(payload), interleavingChunkFinalState{
+		chunkStatus: filestate.ChunkAborted,
+	})
+	blockRows := scanInterleavingCount(t, "count single-member storage block after cleanup", dbconn.QueryRow(
+		`SELECT COUNT(*) FROM storage_blocks WHERE id = $1`, seeds[0].blockID,
+	))
+	if blockRows != 0 {
+		t.Fatalf("expected orphaned single-member storage block to be deleted, got %d rows", blockRows)
+	}
+	if err := verifypkg.VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("single-member rebuild cleanup must leave repository verifiable: %v", err)
+	}
+}
+
+type sharedPackedBlockSnapshot struct {
+	blockExists       bool
+	relationalMembers []int64
+	companionMembers  []int64
+	encodedMembers    []int64
+	chunkStatuses     []string
+	storageMetadata   string
+	physicalFileRows  int
+	physicalVerified  bool
+	physicalError     string
+}
+
+func loadSharedPackedBlockSnapshot(
+	t *testing.T,
+	dbconn *sql.DB,
+	containersDir string,
+	blockID int64,
+	memberIDs []int64,
+) sharedPackedBlockSnapshot {
+	t.Helper()
+	if len(memberIDs) != 2 {
+		t.Fatalf("shared packed block diagnostic expects two members, got %v", memberIDs)
+	}
+
+	snapshot := sharedPackedBlockSnapshot{
+		relationalMembers: loadSharedPackedBlockMemberIDs(t, dbconn, blockID),
+		companionMembers:  loadSharedPackedCompanionMemberIDs(t, dbconn, memberIDs),
+		chunkStatuses:     loadSharedPackedChunkStatuses(t, dbconn, memberIDs),
+		physicalFileRows: scanInterleavingCount(t, "count physical-file metadata for shared block", dbconn.QueryRow(
+			`SELECT COUNT(*) FROM physical_file`,
+		)),
+	}
+
+	var meta verifypkg.BlockStorageMetadata
+	var compressionLevel sql.NullInt64
+	var compressedSize sql.NullInt64
+	var containerCurrentSize int64
+	err := dbconn.QueryRow(`
+		SELECT sb.format_version, sb.codec, sb.compression_codec, sb.compression_level,
+		       sb.plaintext_size, sb.compressed_size, sb.stored_size,
+		       sb.container_id, c.filename, c.current_size, c.max_size, sb.container_offset,
+		       sb.block_hash, sb.compressed_hash, sb.physical_hash
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		WHERE sb.id = $1
+	`, blockID).Scan(
+		&meta.FormatVersion,
+		&meta.Codec,
+		&meta.CompressionCodec,
+		&compressionLevel,
+		&meta.PlaintextSize,
+		&compressedSize,
+		&meta.StoredSize,
+		&meta.ContainerID,
+		&meta.ContainerName,
+		&containerCurrentSize,
+		&meta.ContainerMaxSize,
+		&meta.ContainerOffset,
+		&meta.LogicalHash,
+		&meta.CompressedHash,
+		&meta.PhysicalHash,
+	)
+	if err == sql.ErrNoRows {
+		return snapshot
+	}
+	if err != nil {
+		t.Fatalf("load shared packed block %d metadata: %v", blockID, err)
+	}
+	snapshot.blockExists = true
+	meta.BlockID = blockID
+	snapshot.storageMetadata = fmt.Sprintf(
+		"container_id=%d name=%s current_size=%d max_size=%d offset=%d stored_size=%d logical_hash=%x compressed_hash=%x physical_hash=%x",
+		meta.ContainerID,
+		meta.ContainerName,
+		containerCurrentSize,
+		meta.ContainerMaxSize,
+		meta.ContainerOffset,
+		meta.StoredSize,
+		meta.LogicalHash,
+		meta.CompressedHash,
+		meta.PhysicalHash,
+	)
+	if compressedSize.Valid {
+		value := compressedSize.Int64
+		meta.CompressedSize = &value
+	}
+	if compressionLevel.Valid {
+		value := int(compressionLevel.Int64)
+		meta.CompressionLevel = &value
+	}
+
+	verified, err := verifypkg.VerifyStoredBlock(
+		context.Background(),
+		meta,
+		verifypkg.FilesystemContainerReader{ContainersDir: containersDir},
+	)
+	if err != nil {
+		snapshot.physicalError = err.Error()
+		return snapshot
+	}
+	snapshot.physicalVerified = true
+	for _, entry := range verified.DecodedBlock.Entries {
+		snapshot.encodedMembers = append(snapshot.encodedMembers, int64(entry.ChunkID))
+	}
+	slices.Sort(snapshot.encodedMembers)
+	return snapshot
+}
+
+func loadSharedPackedChunkStatuses(t *testing.T, dbconn *sql.DB, memberIDs []int64) []string {
+	t.Helper()
+	rows, err := dbconn.Query(
+		`SELECT status FROM chunk WHERE id = $1 OR id = $2 ORDER BY id`,
+		memberIDs[0],
+		memberIDs[1],
+	)
+	if err != nil {
+		t.Fatalf("load shared packed chunk statuses: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var statuses []string
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			t.Fatalf("scan shared packed chunk status: %v", err)
+		}
+		statuses = append(statuses, status)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate shared packed chunk statuses: %v", err)
+	}
+	return statuses
+}
+
+func loadSharedPackedBlockMemberIDs(t *testing.T, dbconn *sql.DB, blockID int64) []int64 {
+	t.Helper()
+	rows, err := dbconn.Query(`SELECT chunk_id FROM chunk_block_refs WHERE block_id = $1 ORDER BY chunk_id`, blockID)
+	if err != nil {
+		t.Fatalf("load relational members for packed block %d: %v", blockID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanSharedPackedMemberIDs(t, rows, "relational packed members")
+}
+
+func loadSharedPackedCompanionMemberIDs(t *testing.T, dbconn *sql.DB, memberIDs []int64) []int64 {
+	t.Helper()
+	rows, err := dbconn.Query(
+		`SELECT chunk_id FROM blocks WHERE chunk_id = $1 OR chunk_id = $2 ORDER BY chunk_id`,
+		memberIDs[0],
+		memberIDs[1],
+	)
+	if err != nil {
+		t.Fatalf("load packed companion members: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanSharedPackedMemberIDs(t, rows, "packed companion members")
+}
+
+func scanSharedPackedMemberIDs(t *testing.T, rows *sql.Rows, label string) []int64 {
+	t.Helper()
+	var memberIDs []int64
+	for rows.Next() {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			t.Fatalf("scan %s: %v", label, err)
+		}
+		memberIDs = append(memberIDs, chunkID)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate %s: %v", label, err)
+	}
+	return memberIDs
+}
+
+func assertValidSharedPackedBlockSnapshot(t *testing.T, snapshot sharedPackedBlockSnapshot, memberIDs []int64) {
+	t.Helper()
+	if !snapshot.blockExists || !snapshot.physicalVerified || snapshot.physicalError != "" {
+		t.Fatalf("fixture packed block physical metadata/bytes are invalid: %+v", snapshot)
+	}
+	if len(memberIDs) < 2 || !slices.Equal(snapshot.relationalMembers, memberIDs) || !slices.Equal(snapshot.companionMembers, memberIDs) || !slices.Equal(snapshot.encodedMembers, memberIDs) {
+		t.Fatalf("fixture must begin with identical multi-member relational, companion, and encoded membership: want=%v got=%+v", memberIDs, snapshot)
+	}
+}
+
+func requireValidSharedPackedCompanion(t *testing.T, dbconn *sql.DB, chunkID int64, label string) bool {
+	t.Helper()
+	valid, err := validateReusableChunkCompanionMappingWithContext(context.Background(), dbconn, chunkID)
+	if err != nil {
+		t.Fatalf("%s companion validation: %v", label, err)
+	}
+	if !valid {
+		t.Fatalf("%s companion must be valid: %s", label, describeSharedPackedCompanion(t, dbconn, chunkID))
+	}
+	return valid
+}
+
+func describeSharedPackedCompanion(t *testing.T, dbconn *sql.DB, chunkID int64) string {
+	t.Helper()
+	var chunkSize, plaintextSize, storedSize, legacyContainerID, legacyOffset int64
+	var offsetInBlock, sizeInBlock, packedContainerID, packedContainerOffset, packedPlaintextSize, totalReferencedBytes int64
+	var codec string
+	if err := dbconn.QueryRow(`
+		SELECT c.size, b.codec, b.plaintext_size, b.stored_size, b.container_id, b.block_offset,
+		       r.offset_in_block, r.size_in_block, sb.container_id, sb.container_offset,
+		       sb.plaintext_size,
+		       (SELECT COALESCE(SUM(size_in_block), 0) FROM chunk_block_refs WHERE block_id = r.block_id)
+		FROM chunk c
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN chunk_block_refs r ON r.chunk_id = c.id
+		JOIN storage_blocks sb ON sb.id = r.block_id
+		WHERE c.id = $1
+	`, chunkID).Scan(
+		&chunkSize,
+		&codec,
+		&plaintextSize,
+		&storedSize,
+		&legacyContainerID,
+		&legacyOffset,
+		&offsetInBlock,
+		&sizeInBlock,
+		&packedContainerID,
+		&packedContainerOffset,
+		&packedPlaintextSize,
+		&totalReferencedBytes,
+	); err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf(
+		"chunk_size=%d codec=%s plaintext_size=%d stored_size=%d legacy_container=%d legacy_offset=%d offset_in_block=%d size_in_block=%d packed_container=%d packed_offset=%d packed_plaintext_size=%d total_referenced=%d derived_prefix=%d expected_legacy_offset=%d",
+		chunkSize,
+		codec,
+		plaintextSize,
+		storedSize,
+		legacyContainerID,
+		legacyOffset,
+		offsetInBlock,
+		sizeInBlock,
+		packedContainerID,
+		packedContainerOffset,
+		packedPlaintextSize,
+		totalReferencedBytes,
+		packedPlaintextSize-totalReferencedBytes,
+		packedContainerOffset+packedPlaintextSize-totalReferencedBytes+offsetInBlock,
+	)
+}
+
+func sharedPackedBlockSnapshotsEqual(left, right sharedPackedBlockSnapshot) bool {
+	return left.blockExists == right.blockExists &&
+		slices.Equal(left.relationalMembers, right.relationalMembers) &&
+		slices.Equal(left.companionMembers, right.companionMembers) &&
+		slices.Equal(left.encodedMembers, right.encodedMembers) &&
+		slices.Equal(left.chunkStatuses, right.chunkStatuses) &&
+		left.storageMetadata == right.storageMetadata &&
+		left.physicalFileRows == right.physicalFileRows &&
+		left.physicalVerified == right.physicalVerified &&
+		left.physicalError == right.physicalError
+}
+
+func assertSharedRebuildRefusalHookSequence(t *testing.T, events []TestStoreInterleavingHookEvent, chunkID int64) {
+	t.Helper()
+	if len(events) != 1 || events[0].Event != TestStoreInterleavingEventBeforeMarkChunkForRebuild || events[0].ChunkID != chunkID {
+		t.Fatalf("expected rebuild refusal before-mutation hook only, got %+v", events)
+	}
 }
 
 func seedSharedRebuildCleanupFixture(t *testing.T, dbconn *sql.DB, containersDir string) (int64, int64, string) {
@@ -159,40 +560,6 @@ func assertSharedStorageBlockRetained(t *testing.T, dbconn *sql.DB, blockID int6
 	))
 	if blockRows != 1 {
 		t.Fatalf("expected shared storage block to remain for winner, got %d rows", blockRows)
-	}
-}
-
-func assertSharedRebuildSurvivorState(t *testing.T, dbconn *sql.DB, winningHash string, losingChunkID int64) {
-	t.Helper()
-	// This synthetic fixture intentionally seeds one packed payload that still
-	// encodes both chunks, then removes only one chunk_block_refs row. That
-	// leaves the surviving storage_blocks row still referenced, which is the
-	// cleanup-retention property under test, but the packed payload can no longer
-	// satisfy full payload-level verification for the deleted chunk entry.
-	gotWinner := loadInterleavingChunkFinalState(t, dbconn, winningHash, 64)
-	wantWinner := interleavingChunkFinalState{
-		chunkStatus:         filestate.ChunkCompleted,
-		packedMappings:      1,
-		legacyMappings:      0,
-		logicalFileRefs:     0,
-		physicalFileRefs:    0,
-		storageBlockRefs:    1,
-		storageBlocks:       1,
-		orphanStorageBlocks: 0,
-		sealedContainers:    0,
-		quarantinedConts:    0,
-		validCompanionState: false,
-	}
-	if comparableInterleavingState(gotWinner) != comparableInterleavingState(wantWinner) {
-		t.Fatalf("unexpected shared-reference survivor state: got=%+v want=%+v", gotWinner, wantWinner)
-	}
-
-	var losingStatus string
-	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, losingChunkID).Scan(&losingStatus); err != nil {
-		t.Fatalf("load losing chunk status: %v", err)
-	}
-	if losingStatus != filestate.ChunkAborted {
-		t.Fatalf("expected losing chunk status ABORTED, got %s", losingStatus)
 	}
 }
 

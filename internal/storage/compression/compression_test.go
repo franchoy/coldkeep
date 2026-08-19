@@ -77,6 +77,37 @@ func TestNoneRoundTripUnchanged(t *testing.T) {
 	}
 }
 
+func TestNoneDecompressRequiresExactExpectedSize(t *testing.T) {
+	compressor, err := Lookup(CompressionNone)
+	if err != nil {
+		t.Fatalf("Lookup none: %v", err)
+	}
+
+	input := []byte("identity-no-copy")
+	recovered, err := compressor.Decompress(input, int64(len(input)))
+	if err != nil {
+		t.Fatalf("exact none decompress: %v", err)
+	}
+	if len(input) > 0 && &recovered[0] != &input[0] {
+		t.Fatal("none decompression copied the input")
+	}
+
+	for _, expectedSize := range []int64{-1, int64(len(input) - 1), int64(len(input) + 1), MaxDecompressedBlockSize + 1} {
+		_, err := compressor.Decompress(input, expectedSize)
+		if !errors.Is(err, ErrCompressionSizeMismatch) {
+			t.Fatalf("expected size mismatch for expected=%d, got: %v", expectedSize, err)
+		}
+	}
+
+	empty, err := compressor.Decompress([]byte{}, 0)
+	if err != nil {
+		t.Fatalf("empty none decompress: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("empty none output length: got=%d", len(empty))
+	}
+}
+
 func TestZstdRoundTripExact(t *testing.T) {
 	compressor, err := Lookup(CompressionZstd)
 	if err != nil {

@@ -98,6 +98,9 @@ func (e *DefaultEngine) Inspect(ctx context.Context, req InspectRequest) (Inspec
 }
 
 func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return VerifyResult{}, err
+	}
 	level, err := verifyLevelFromString(req.Level)
 	if err != nil {
 		return VerifyResult{}, err
@@ -229,7 +232,11 @@ func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowReques
 	}
 	var snapshotQ *snapshot.SnapshotQuery
 	if req.Query != (SnapshotQuery{}) {
-		snapshotQ = engineQueryToSnapshotQuery(req.Query)
+		var err error
+		snapshotQ, err = engineQueryToSnapshotQuery(req.Query)
+		if err != nil {
+			return SnapshotShowResult{}, err
+		}
 	}
 	entries, err := snapshot.ListSnapshotFiles(ctx, e.config.DB, req.SnapshotID, req.Query.Limit, snapshotQ)
 	if err != nil {
@@ -325,7 +332,7 @@ func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (Restor
 
 // engineQueryToSnapshotQuery maps an engine-level SnapshotQuery to the
 // snapshot package's equivalent type.
-func engineQueryToSnapshotQuery(q SnapshotQuery) *snapshot.SnapshotQuery {
+func engineQueryToSnapshotQuery(q SnapshotQuery) (*snapshot.SnapshotQuery, error) {
 	sq := &snapshot.SnapshotQuery{
 		Pattern:        q.Pattern,
 		MinSize:        q.MinSize,
@@ -340,9 +347,11 @@ func engineQueryToSnapshotQuery(q SnapshotQuery) *snapshot.SnapshotQuery {
 		sq.Prefixes = []string{q.Prefix}
 	}
 	if q.Regex != "" {
-		if compiled, err := regexp.Compile(q.Regex); err == nil {
-			sq.Regex = compiled
+		compiled, err := regexp.Compile(q.Regex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid snapshot query regex %q: %w", q.Regex, err)
 		}
+		sq.Regex = compiled
 	}
-	return sq
+	return sq, nil
 }

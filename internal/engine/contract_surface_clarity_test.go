@@ -3,15 +3,16 @@ package engine
 import "testing"
 
 func TestSnapshotQueryOrNilReturnsNilForEmptyQuery(t *testing.T) {
-	if got := snapshotQueryOrNil(SnapshotQuery{}); got != nil {
-		t.Fatalf("snapshotQueryOrNil(empty): got %#v, want nil", got)
+	got, err := snapshotQueryOrNil(SnapshotQuery{})
+	if err != nil || got != nil {
+		t.Fatalf("snapshotQueryOrNil(empty): got (%#v, %v), want (nil, nil)", got, err)
 	}
 }
 
 func TestEngineQueryToSnapshotQueryPreservesSinglePathAndPrefixShape(t *testing.T) {
 	min := int64(1)
 	max := int64(8)
-	got := engineQueryToSnapshotQuery(SnapshotQuery{
+	got, err := engineQueryToSnapshotQuery(SnapshotQuery{
 		Path:    "docs/a.txt",
 		Prefix:  "docs/",
 		Pattern: "*.txt",
@@ -20,6 +21,9 @@ func TestEngineQueryToSnapshotQueryPreservesSinglePathAndPrefixShape(t *testing.
 		MaxSize: &max,
 		Limit:   5,
 	})
+	if err != nil {
+		t.Fatalf("engineQueryToSnapshotQuery: %v", err)
+	}
 	if got == nil {
 		t.Fatal("engineQueryToSnapshotQuery: got nil")
 	}
@@ -31,6 +35,12 @@ func TestEngineQueryToSnapshotQueryPreservesSinglePathAndPrefixShape(t *testing.
 	}
 	if len(got.Prefixes) != 1 || got.Prefixes[0] != "docs/" {
 		t.Fatalf("expected exactly one prefix docs/, got %#v", got.Prefixes)
+	}
+}
+
+func TestEngineQueryToSnapshotQueryRejectsInvalidRegex(t *testing.T) {
+	if _, err := engineQueryToSnapshotQuery(SnapshotQuery{Regex: "("}); err == nil {
+		t.Fatal("expected invalid regex error")
 	}
 }
 

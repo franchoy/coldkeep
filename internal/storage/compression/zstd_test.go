@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"math"
 	"math/rand"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestZstdInvalidCompressedInputReturnsCleanError(t *testing.T) {
 		t.Fatalf("NewZstdCompressor: %v", err)
 	}
 
-	_, err = compressor.Decompress([]byte("not-zstd"), -1)
+	_, err = compressor.Decompress([]byte("not-zstd"), 1)
 	if err == nil {
 		t.Fatal("expected error for invalid zstd payload")
 	}
@@ -75,6 +76,88 @@ func TestZstdInvalidCompressedInputReturnsCleanError(t *testing.T) {
 	}
 	if !strings.Contains(msg, "invalid compressed input") {
 		t.Fatalf("expected clean invalid-input marker, got: %v", err)
+	}
+}
+
+func TestZstdDecompressRejectsExpectedSizeOutsideAbsoluteBound(t *testing.T) {
+	tests := []struct {
+		expectedSize int64
+		maxOutput    int64
+	}{
+		{expectedSize: -1, maxOutput: MaxDecompressedBlockSize},
+		{expectedSize: MaxDecompressedBlockSize + 1, maxOutput: MaxDecompressedBlockSize},
+		{expectedSize: math.MaxInt64, maxOutput: 64},
+	}
+	for _, tc := range tests {
+		_, err := decompressZstdBounded([]byte("not-zstd"), tc.expectedSize, tc.maxOutput)
+		if !errors.Is(err, ErrCompressionSizeMismatch) {
+			t.Fatalf("expected pre-decode size mismatch for expected=%d max=%d, got: %v", tc.expectedSize, tc.maxOutput, err)
+		}
+		if errors.Is(err, ErrDecompressionFailed) {
+			t.Fatalf("decoder ran before expectation validation for expected=%d max=%d: %v", tc.expectedSize, tc.maxOutput, err)
+		}
+	}
+}
+
+func TestZstdDecompressRejectsOutputBeyondExpectedSize(t *testing.T) {
+	compressor, err := NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("NewZstdCompressor: %v", err)
+	}
+	payload := bytes.Repeat([]byte("a"), 1024)
+	compressed, err := compressor.Compress(payload)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	_, err = decompressZstdBounded(compressed, 64, 64<<10)
+	if !errors.Is(err, ErrCompressionSizeMismatch) {
+		t.Fatalf("expected bounded size mismatch, got: %v", err)
+	}
+}
+
+func TestZstdDecompressRejectsTruncatedInput(t *testing.T) {
+	compressor, err := NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("NewZstdCompressor: %v", err)
+	}
+	payload := bytes.Repeat([]byte("truncated-zstd"), 32)
+	compressed, err := compressor.Compress(payload)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+	compressed = compressed[:len(compressed)-1]
+
+	_, err = compressor.Decompress(compressed, int64(len(payload)))
+	if !errors.Is(err, ErrDecompressionFailed) {
+		t.Fatalf("expected ErrDecompressionFailed, got: %v", err)
+	}
+}
+
+func TestZstdDecompressBoundsConcatenatedFramesAcrossAggregateOutput(t *testing.T) {
+	compressor, err := NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("NewZstdCompressor: %v", err)
+	}
+	payload := bytes.Repeat([]byte("frame"), 32)
+	frame, err := compressor.Compress(payload)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+	concatenated := append(append([]byte(nil), frame...), frame...)
+
+	_, err = decompressZstdBounded(concatenated, int64(len(payload)), 64<<10)
+	if !errors.Is(err, ErrCompressionSizeMismatch) {
+		t.Fatalf("expected aggregate output bound failure, got: %v", err)
+	}
+
+	want := append(append([]byte(nil), payload...), payload...)
+	got, err := decompressZstdBounded(concatenated, int64(len(want)), 64<<10)
+	if err != nil {
+		t.Fatalf("exact concatenated decode: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("concatenated decode mismatch")
 	}
 }
 

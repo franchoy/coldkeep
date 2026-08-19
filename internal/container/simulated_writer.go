@@ -130,12 +130,15 @@ func (w *SimulatedWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacem
 }
 
 func (w *SimulatedWriter) SealContainer(tx db.DBTX, containerID int64, _ string, _ string) error {
-	_, err := tx.Exec(
+	result, err := tx.Exec(
 		`UPDATE container SET sealed = TRUE, container_hash = $1 WHERE id = $2`,
 		"SIMULATED",
 		containerID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return db.RequireExactlyOneRow(result, "seal simulated container")
 }
 
 func (w *SimulatedWriter) ensureActive(tx db.DBTX) error {

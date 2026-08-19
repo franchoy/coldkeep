@@ -80,7 +80,7 @@ WHERE ($1 = '' OR type = $1)
   AND ($2 = '' OR label LIKE $2)
   AND ($3 = 0 OR created_at >= $4)
   AND ($5 = 0 OR created_at <= $6)
-ORDER BY created_at DESC`, values...)
+ORDER BY created_at DESC, id DESC`, values...)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list snapshots: %w", err)
 	}
@@ -97,7 +97,7 @@ WHERE ($1 = '' OR type = $1)
   AND ($2 = '' OR label LIKE $2)
   AND ($3 = 0 OR created_at >= $4)
   AND ($5 = 0 OR created_at <= $6)
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 LIMIT $7`, values...)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list snapshots: %w", err)

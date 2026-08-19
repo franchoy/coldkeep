@@ -7,6 +7,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -25,6 +26,8 @@ func (failingReader) Read(_ []byte) (int, error) {
 type trackingQueryDriver struct {
 	queryCount *int32
 }
+
+var trackingQueryDriverSequence uint64
 
 type trackingQueryConn struct {
 	queryCount *int32
@@ -54,14 +57,69 @@ func (c trackingQueryConn) QueryContext(context.Context, string, []driver.NamedV
 func openTrackingQueryDB(t *testing.T, queryCount *int32) *sql.DB {
 	t.Helper()
 
-	driverName := "snapshot-create-routing-driver-" + strings.ReplaceAll(t.Name(), "/", "-")
-	sql.Register(driverName, trackingQueryDriver{queryCount: queryCount})
-	dbconn, err := sql.Open(driverName, "")
+	dbconn, err := newTrackingQueryDB(queryCount)
 	if err != nil {
 		t.Fatalf("sql.Open tracking driver: %v", err)
 	}
 	t.Cleanup(func() { _ = dbconn.Close() })
 	return dbconn
+}
+
+func newTrackingQueryDB(queryCount *int32) (*sql.DB, error) {
+	// database/sql registrations are process-global. The driver retains the
+	// caller's counter pointer, so every fixture needs its own driver instance.
+	driverName := fmt.Sprintf(
+		"snapshot-create-routing-driver-%d",
+		atomic.AddUint64(&trackingQueryDriverSequence, 1),
+	)
+	sql.Register(driverName, trackingQueryDriver{queryCount: queryCount})
+	return sql.Open(driverName, "")
+}
+
+func TestTrackingQueryDBFixtureIsRepeatableAndIsolated(t *testing.T) {
+	var firstCount, secondCount int32
+	first := openTrackingQueryDB(t, &firstCount)
+	_ = openTrackingQueryDB(t, &secondCount)
+
+	if _, err := first.QueryContext(context.Background(), "SELECT legacy_count"); err == nil {
+		t.Fatal("expected tracking driver query to fail")
+	}
+	if got := atomic.LoadInt32(&firstCount); got != 1 {
+		t.Fatalf("expected first fixture to observe one query, got %d", got)
+	}
+	if got := atomic.LoadInt32(&secondCount); got != 0 {
+		t.Fatalf("expected second fixture to remain isolated, got %d queries", got)
+	}
+}
+
+func TestTrackingQueryDBFixtureParallelCreation(t *testing.T) {
+	const fixtureCount = 16
+	errs := make(chan error, fixtureCount)
+	for range fixtureCount {
+		go func() {
+			var queryCount int32
+			dbconn, err := newTrackingQueryDB(&queryCount)
+			if err != nil {
+				errs <- fmt.Errorf("create fixture: %w", err)
+				return
+			}
+			defer func() { _ = dbconn.Close() }()
+			if _, err := dbconn.QueryContext(context.Background(), "SELECT legacy_count"); err == nil {
+				errs <- errors.New("expected tracking driver query to fail")
+				return
+			}
+			if got := atomic.LoadInt32(&queryCount); got != 1 {
+				errs <- fmt.Errorf("expected isolated fixture query count 1, got %d", got)
+				return
+			}
+			errs <- nil
+		}()
+	}
+	for range fixtureCount {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestRunSnapshotCommandCreateOmitsIDForEngineGeneration(t *testing.T) {

@@ -345,8 +345,12 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	}
 
 	// Remove logical file
-	_, err = tx.ExecContext(ctx, `DELETE FROM logical_file WHERE id = $1`, fileID)
+	deleteResult, err := tx.ExecContext(ctx, `DELETE FROM logical_file WHERE id = $1`, fileID)
 	if err != nil {
+		_ = tx.Rollback()
+		return RemoveFileResult{}, err
+	}
+	if err := db.RequireExactlyOneRow(deleteResult, "delete logical file"); err != nil {
 		_ = tx.Rollback()
 		return RemoveFileResult{}, err
 	}

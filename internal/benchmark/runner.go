@@ -3,6 +3,7 @@ package benchmark
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +24,17 @@ type BenchmarkCase struct {
 type BenchmarkContext struct {
 	RepoPath string
 	DataPath string
+	ExtraEnv map[string]string
 }
+
+// CaseEnvironmentFactory creates per-case environment overrides and cleanup.
+// It runs before the case timer starts.
+type CaseEnvironmentFactory func(caseName string) (map[string]string, func() error, error)
+
+// FinalStateObserver captures benchmark-only evidence after a case finishes and
+// before its external resources and temporary paths are cleaned up. The raw
+// message must encode one sanitized JSON object.
+type FinalStateObserver func(caseName string, ctx BenchmarkContext) (json.RawMessage, error)
 
 // Result captures one benchmark case execution outcome.
 type Result struct {
@@ -32,8 +43,11 @@ type Result struct {
 	Metrics   Metrics
 	Execution execution.Options
 	ExecStats execution.ExecutionStats
-	Success   bool
-	Error     string
+	// DiagnosticFinalState is separately versioned diagnostic evidence. It does
+	// not change the surrounding benchmark report schema.
+	DiagnosticFinalState json.RawMessage
+	Success              bool
+	Error                string
 }
 
 type ioDebugProcessRecord struct {
@@ -48,86 +62,225 @@ type ioDebugProcessRecord struct {
 
 // RunBenchmark executes benchmark cases sequentially with isolated temp paths.
 func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
+	return runBenchmark(cases, nil, nil)
+}
+
+// RunBenchmarkWithEnvironmentFactory executes cases with per-case external
+// resources, such as isolated benchmark databases.
+func RunBenchmarkWithEnvironmentFactory(cases []BenchmarkCase, factory CaseEnvironmentFactory) ([]Result, error) {
+	if factory == nil {
+		return nil, fmt.Errorf("case environment factory cannot be nil")
+	}
+	return runBenchmark(cases, factory, nil)
+}
+
+// RunBenchmarkWithEnvironmentFactoryAndObserver executes cases with per-case
+// external resources and captures final state before any cleanup runs.
+func RunBenchmarkWithEnvironmentFactoryAndObserver(
+	cases []BenchmarkCase,
+	factory CaseEnvironmentFactory,
+	observer FinalStateObserver,
+) ([]Result, error) {
+	if factory == nil {
+		return nil, fmt.Errorf("case environment factory cannot be nil")
+	}
+	if observer == nil {
+		return nil, fmt.Errorf("final state observer cannot be nil")
+	}
+	return runBenchmark(cases, factory, observer)
+}
+
+func runBenchmark(cases []BenchmarkCase, factory CaseEnvironmentFactory, observer FinalStateObserver) ([]Result, error) {
 	results := make([]Result, 0, len(cases))
 	for index, bc := range cases {
-		if strings.TrimSpace(bc.Name) == "" {
-			return results, fmt.Errorf("benchmark case at index %d has empty name", index)
+		if err := validateBenchmarkCase(index, bc); err != nil {
+			return results, err
 		}
-		if bc.Run == nil {
-			return results, fmt.Errorf("benchmark case %q has nil run function", bc.Name)
+		result, completed, err := runBenchmarkCase(bc, factory, observer)
+		if completed {
+			results = append(results, result)
 		}
-
-		ctx, cleanup, err := newBenchmarkContext()
 		if err != nil {
-			return results, fmt.Errorf("create context for benchmark case %q: %w", bc.Name, err)
-		}
-
-		ioCountersPath := filepath.Join(ctx.RepoPath, fmt.Sprintf(".io-debug-%s.jsonl", strings.ReplaceAll(bc.Name, " ", "_")))
-		metrics, runErr := Measure(func() error {
-			_ = os.Remove(ioCountersPath)
-
-			prevPath, hadPath := os.LookupEnv("COLDKEEP_IO_COUNTERS_FILE")
-			if err := os.Setenv("COLDKEEP_IO_COUNTERS_FILE", ioCountersPath); err != nil {
-				return fmt.Errorf("set io debug env: %w", err)
-			}
-			defer func() {
-				if hadPath {
-					_ = os.Setenv("COLDKEEP_IO_COUNTERS_FILE", prevPath)
-				} else {
-					_ = os.Unsetenv("COLDKEEP_IO_COUNTERS_FILE")
-				}
-			}()
-
-			return bc.Run(ctx)
-		})
-
-		ioStats, ioErr := readAggregatedIOCounters(ioCountersPath)
-		if ioErr != nil {
-			return results, fmt.Errorf("read io counters for benchmark case %q: %w", bc.Name, ioErr)
-		}
-
-		cleanupErr := cleanup()
-
-		result := Result{
-			Name:      bc.Name,
-			Duration:  metrics.Duration,
-			Metrics:   metrics,
-			Execution: bc.Execution,
-			ExecStats: execution.ExecutionStats{
-				TotalFilesProcessed:    metrics.FilesProcessed,
-				TotalBytesProcessed:    metrics.BytesProcessed,
-				WorkersUsed:            bc.Execution.StoreFolderWorkers,
-				ContainerAppendCount:   ioStats.ContainerAppendCount,
-				FsyncCount:             ioStats.FsyncCount,
-				ContainerOpenCount:     ioStats.ContainerOpenCount,
-				ContainerCloseCount:    ioStats.ContainerCloseCount,
-				BytesWritten:           ioStats.BytesWritten,
-				BytesRead:              ioStats.BytesRead,
-				SnapshotMetadataWrites: ioStats.SnapshotMetadataWrites,
-			},
-			Success: runErr == nil && cleanupErr == nil,
-		}
-		if runErr != nil {
-			result.Error = runErr.Error()
-		}
-		if cleanupErr != nil {
-			if result.Error == "" {
-				result.Error = cleanupErr.Error()
-			} else {
-				result.Error = result.Error + "; " + cleanupErr.Error()
-			}
-		}
-		results = append(results, result)
-
-		if runErr != nil {
-			return results, fmt.Errorf("run benchmark case %q: %w", bc.Name, runErr)
-		}
-		if cleanupErr != nil {
-			return results, fmt.Errorf("cleanup benchmark case %q context: %w", bc.Name, cleanupErr)
+			return results, err
 		}
 	}
 
 	return results, nil
+}
+
+func validateBenchmarkCase(index int, bc BenchmarkCase) error {
+	if strings.TrimSpace(bc.Name) == "" {
+		return fmt.Errorf("benchmark case at index %d has empty name", index)
+	}
+	if bc.Run == nil {
+		return fmt.Errorf("benchmark case %q has nil run function", bc.Name)
+	}
+	return nil
+}
+
+func runBenchmarkCase(
+	bc BenchmarkCase,
+	factory CaseEnvironmentFactory,
+	observer FinalStateObserver,
+) (Result, bool, error) {
+	ctx, cleanup, externalCleanup, err := prepareBenchmarkCase(bc.Name, factory)
+	if err != nil {
+		return Result{}, false, err
+	}
+
+	ioCountersPath := benchmarkIOCountersPath(ctx, bc.Name)
+	metrics, runErr := measureBenchmarkCase(bc, ctx, ioCountersPath)
+	ioStats, ioErr := readAggregatedIOCounters(ioCountersPath)
+	diagnosticFinalState, observerErr := observeBenchmarkFinalState(observer, bc.Name, ctx)
+	cleanupErr := cleanupBenchmarkCase(externalCleanup, cleanup)
+	if ioErr != nil {
+		return Result{}, false, benchmarkIOCountersError(bc.Name, ioErr, cleanupErr)
+	}
+
+	operationErr := errors.Join(runErr, observerErr)
+	result := benchmarkCaseResult(bc, metrics, ioStats, diagnosticFinalState, operationErr, cleanupErr)
+	return result, true, benchmarkCaseError(bc.Name, operationErr, cleanupErr)
+}
+
+func prepareBenchmarkCase(
+	caseName string,
+	factory CaseEnvironmentFactory,
+) (BenchmarkContext, func() error, func() error, error) {
+	ctx, cleanup, err := newBenchmarkContext()
+	if err != nil {
+		return BenchmarkContext{}, nil, nil, fmt.Errorf("create context for benchmark case %q: %w", caseName, err)
+	}
+	externalCleanup := func() error { return nil }
+	if factory == nil {
+		return ctx, cleanup, externalCleanup, nil
+	}
+
+	extraEnv, cleanupExternal, factoryErr := factory(caseName)
+	if factoryErr != nil {
+		_ = cleanup()
+		return BenchmarkContext{}, nil, nil, fmt.Errorf("create environment for benchmark case %q: %w", caseName, factoryErr)
+	}
+	ctx.ExtraEnv = extraEnv
+	if cleanupExternal != nil {
+		externalCleanup = cleanupExternal
+	}
+	return ctx, cleanup, externalCleanup, nil
+}
+
+func benchmarkIOCountersPath(ctx BenchmarkContext, caseName string) string {
+	return filepath.Join(ctx.RepoPath, fmt.Sprintf(".io-debug-%s.jsonl", strings.ReplaceAll(caseName, " ", "_")))
+}
+
+func measureBenchmarkCase(bc BenchmarkCase, ctx BenchmarkContext, ioCountersPath string) (Metrics, error) {
+	return Measure(func() error {
+		_ = os.Remove(ioCountersPath)
+		prevPath, hadPath := os.LookupEnv("COLDKEEP_IO_COUNTERS_FILE")
+		if err := os.Setenv("COLDKEEP_IO_COUNTERS_FILE", ioCountersPath); err != nil {
+			return fmt.Errorf("set io debug env: %w", err)
+		}
+		defer restoreBenchmarkIOCountersPath(prevPath, hadPath)
+		return bc.Run(ctx)
+	})
+}
+
+func restoreBenchmarkIOCountersPath(previous string, existed bool) {
+	if existed {
+		_ = os.Setenv("COLDKEEP_IO_COUNTERS_FILE", previous)
+		return
+	}
+	_ = os.Unsetenv("COLDKEEP_IO_COUNTERS_FILE")
+}
+
+func observeBenchmarkFinalState(
+	observer FinalStateObserver,
+	caseName string,
+	ctx BenchmarkContext,
+) (json.RawMessage, error) {
+	if observer == nil {
+		return nil, nil
+	}
+	diagnosticFinalState, err := observer(caseName, ctx)
+	if err != nil {
+		return diagnosticFinalState, err
+	}
+	if !json.Valid(diagnosticFinalState) {
+		return diagnosticFinalState, fmt.Errorf("observer returned invalid JSON")
+	}
+	var object map[string]any
+	if err := json.Unmarshal(diagnosticFinalState, &object); err != nil || object == nil {
+		return diagnosticFinalState, fmt.Errorf("observer must return a JSON object")
+	}
+	return diagnosticFinalState, nil
+}
+
+func cleanupBenchmarkCase(externalCleanup, cleanup func() error) error {
+	externalCleanupErr := externalCleanup()
+	cleanupErr := cleanup()
+	if externalCleanupErr != nil && cleanupErr != nil {
+		return errors.Join(externalCleanupErr, cleanupErr)
+	}
+	if externalCleanupErr != nil {
+		return externalCleanupErr
+	}
+	return cleanupErr
+}
+
+func benchmarkIOCountersError(caseName string, ioErr, cleanupErr error) error {
+	if cleanupErr != nil {
+		ioErr = errors.Join(ioErr, cleanupErr)
+	}
+	return fmt.Errorf("read io counters for benchmark case %q: %w", caseName, ioErr)
+}
+
+func benchmarkCaseResult(
+	bc BenchmarkCase,
+	metrics Metrics,
+	ioStats ioDebugProcessRecord,
+	diagnosticFinalState json.RawMessage,
+	operationErr error,
+	cleanupErr error,
+) Result {
+	result := Result{
+		Name:      bc.Name,
+		Duration:  metrics.Duration,
+		Metrics:   metrics,
+		Execution: bc.Execution,
+		ExecStats: execution.ExecutionStats{
+			TotalFilesProcessed:    metrics.FilesProcessed,
+			TotalBytesProcessed:    metrics.BytesProcessed,
+			WorkersUsed:            bc.Execution.StoreFolderWorkers,
+			ContainerAppendCount:   ioStats.ContainerAppendCount,
+			FsyncCount:             ioStats.FsyncCount,
+			ContainerOpenCount:     ioStats.ContainerOpenCount,
+			ContainerCloseCount:    ioStats.ContainerCloseCount,
+			BytesWritten:           ioStats.BytesWritten,
+			BytesRead:              ioStats.BytesRead,
+			SnapshotMetadataWrites: ioStats.SnapshotMetadataWrites,
+		},
+		DiagnosticFinalState: diagnosticFinalState,
+		Success:              operationErr == nil && cleanupErr == nil,
+	}
+	if operationErr != nil {
+		result.Error = operationErr.Error()
+	}
+	if cleanupErr != nil {
+		if result.Error == "" {
+			result.Error = cleanupErr.Error()
+		} else {
+			result.Error += "; " + cleanupErr.Error()
+		}
+	}
+	return result
+}
+
+func benchmarkCaseError(caseName string, operationErr, cleanupErr error) error {
+	if operationErr != nil {
+		return fmt.Errorf("run benchmark case %q: %w", caseName, operationErr)
+	}
+	if cleanupErr != nil {
+		return fmt.Errorf("cleanup benchmark case %q context: %w", caseName, cleanupErr)
+	}
+	return nil
 }
 
 func readAggregatedIOCounters(path string) (ioDebugProcessRecord, error) {

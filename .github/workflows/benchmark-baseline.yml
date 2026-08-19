@@ -1,0 +1,206 @@
+name: Benchmark Gate Calibration and Baseline Capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Calibration uses two ten-sample replicas; capture uses one five-sample profile.
+        required: true
+        type: choice
+        options:
+          - calibration
+          - capture
+      source_sha:
+        description: Confirm the exact protected-main dispatch SHA to build and measure.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  COLDKEEP_AES_GCM_FIXTURE_HEX: ${{ format('{0}{1}{0}{1}{0}{1}{0}{1}', '01234567', '89abcdef') }}
+  POSTGRES_IMAGE_DIGEST: sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+
+jobs:
+  authorize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate trusted benchmark source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TRUSTED_REF: ${{ github.ref }}
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${TRUSTED_REF}" != "refs/heads/main" ]]; then
+            echo "benchmark calibration must be dispatched from refs/heads/main" >&2
+            exit 2
+          fi
+          if ! [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase commit SHA" >&2
+            exit 2
+          fi
+          if [[ "${SOURCE_SHA}" != "${TRUSTED_SHA}" ]]; then
+            echo "source_sha must equal the trusted workflow dispatch SHA" >&2
+            exit 2
+          fi
+
+  sample:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+        env:
+          POSTGRES_USER: coldkeep
+          POSTGRES_PASSWORD: coldkeep
+          POSTGRES_DB: coldkeep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coldkeep -d coldkeep"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    strategy:
+      fail-fast: false
+      matrix:
+        compression: [none, zstd]
+        workers: [1, 4]
+        replicate: [1, 2]
+
+    steps:
+      - name: Checkout trusted source
+        if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted checkout
+        if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "${TRUSTED_SHA}"
+
+      - name: Setup exact Go toolchain
+        if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.12'
+          cache: false
+
+      - name: Build benchmark binary once
+        if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
+        run: go build -o coldkeep ./cmd/coldkeep
+
+      - name: Capture fixed benchmark samples
+        if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          CAPTURE_MODE: ${{ inputs.mode }}
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: aes-gcm
+          COLDKEEP_COMPRESSION: ${{ matrix.compression }}
+          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
+          COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
+          COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
+          COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS: 900
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          sample_count=10
+          if [ "${CAPTURE_MODE}" = "capture" ]; then
+            sample_count=5
+          fi
+          profile="${{ matrix.compression }}-w${{ matrix.workers }}-r${{ matrix.replicate }}"
+          postgres_version="$(docker exec '${{ job.services.postgres.id }}' postgres --version)"
+          python3 scripts/benchmark_gate.py sample \
+            --binary ./coldkeep \
+            --output-dir "evidence/${profile}" \
+            --compression '${{ matrix.compression }}' \
+            --workers '${{ matrix.workers }}' \
+            --dataset ci-stable-v1 \
+            --warmups 1 \
+            --samples "${sample_count}" \
+            --source-commit "${SOURCE_SHA}" \
+            --go-version "$(go version)" \
+            --postgres-version "${postgres_version}" \
+            --database-image-digest "${POSTGRES_IMAGE_DIGEST}"
+
+      - name: Upload immutable sample evidence
+        if: ${{ always() && (inputs.mode == 'calibration' || matrix.replicate == 1) }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-${{ inputs.mode }}-${{ matrix.compression }}-w${{ matrix.workers }}-r${{ matrix.replicate }}
+          path: evidence/${{ matrix.compression }}-w${{ matrix.workers }}-r${{ matrix.replicate }}
+          if-no-files-found: error
+
+  calibration:
+    if: ${{ inputs.mode == 'calibration' }}
+    runs-on: ubuntu-24.04
+    needs: sample
+    timeout-minutes: 10
+    steps:
+      - name: Checkout calibration harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download calibration evidence
+        uses: actions/download-artifact@v8
+        with:
+          pattern: benchmark-calibration-*
+          path: ${{ runner.temp }}/benchmark-calibration-input
+
+      - name: Evaluate the fixed calibration matrix
+        run: |
+          mapfile -t aggregates < <(
+            find "${RUNNER_TEMP}/benchmark-calibration-input" \
+              -mindepth 2 -maxdepth 2 -name aggregate.json -print | sort
+          )
+          args=()
+          for aggregate in "${aggregates[@]}"; do
+            artifact="$(basename "$(dirname "${aggregate}")")"
+            profile="${artifact#benchmark-calibration-}"
+            args+=(--aggregate "${profile}=${aggregate}")
+          done
+          python3 - "${GITHUB_SHA}" "${aggregates[@]}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          expected = sys.argv[1]
+          for raw_path in sys.argv[2:]:
+              path = pathlib.Path(raw_path)
+              with path.open(encoding="utf-8") as handle:
+                  report = json.load(handle)
+              actual = report.get("provenance", {}).get("source_commit")
+              if actual != expected:
+                  raise SystemExit(
+                      f"{path}: source_commit {actual!r} does not match trusted SHA {expected}"
+                  )
+          PY
+          python3 scripts/benchmark_gate.py calibrate \
+            "${args[@]}" \
+            --thresholds benchmarks/v1.9/regression-thresholds.yaml \
+            --output calibration-report.json
+
+      - name: Upload calibration decision
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-calibration-decision
+          path: calibration-report.json
+          if-no-files-found: error

@@ -237,7 +237,7 @@ func recoverOneSealingContainer(ctx context.Context, dbconn *sql.DB, id int64, f
 	fileInfo, statErr := fsys.Stat(path)
 	if statErr == nil && fileInfo.Size() != currentSize {
 		if _, qErr := dbconn.ExecContext(ctx,
-			`UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`,
+			`UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2 WHERE id = $1`,
 			id,
 			fileInfo.Size(),
 		); qErr != nil {
@@ -483,7 +483,7 @@ func checkActiveContainerIntegrity(ctx context.Context, dbconn *sql.DB, id int64
 // quarantineOneActiveCorruptTail marks a container as quarantined in the DB
 // and logs the corrective-recovery event.
 func quarantineOneActiveCorruptTail(ctx context.Context, dbconn *sql.DB, id int64, filename string, currentSize, physicalSize int64, reason string, stats *recoveryStats) error {
-	_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`, id, physicalSize)
+	_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2 WHERE id = $1`, id, physicalSize)
 	if err != nil {
 		return fmt.Errorf("query update active container to quarantine due to corrupt tail: %w", err)
 	}
@@ -609,13 +609,29 @@ func resolveOrphanConflictWithFS(ctx context.Context, dbconn *sql.DB, backend db
 	}
 
 	if existingQuarantine {
-		resyncQuery := `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
+		resyncQuery := `UPDATE container SET current_size = $2 WHERE filename = $1`
 		resyncArgs := []any{name, fileSize}
 		if backend == db.BackendSQLite {
-			resyncQuery = `UPDATE container SET current_size = ?, max_size = ? WHERE filename = ?`
-			resyncArgs = []any{fileSize, fileSize, name}
+			resyncQuery = `UPDATE container SET current_size = ? WHERE filename = ?`
+			resyncArgs = []any{fileSize, name}
 		}
-		if _, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...); err != nil {
+		// Orphan quarantine rows use max_size as a physical-size marker because
+		// there is no trusted container header. Keep that marker synchronized
+		// when both stored sizes still identify the same orphan artifact. A real
+		// container row has a distinct persisted capacity and must retain it.
+		if existingMaxSize == existingCurrentSize {
+			resyncQuery = `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
+			resyncArgs = []any{name, fileSize}
+			if backend == db.BackendSQLite {
+				resyncQuery = `UPDATE container SET current_size = ?, max_size = ? WHERE filename = ?`
+				resyncArgs = []any{fileSize, fileSize, name}
+			}
+		}
+		result, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...)
+		if err != nil {
+			return false, false, fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
+		}
+		if err := db.RequireExactlyOneRow(result, "resync quarantined orphan container"); err != nil {
 			return false, false, fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
 		}
 		logRecoveryEvent(

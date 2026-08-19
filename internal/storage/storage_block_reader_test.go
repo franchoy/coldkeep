@@ -296,6 +296,9 @@ func TestStorageBlockReaderLoadBlockMetadataIncludesTransformAwareFields(t *test
 	if meta.Metadata.Sizes.PlaintextSize != 100 {
 		t.Fatalf("plaintext size: got %d want %d", meta.Metadata.Sizes.PlaintextSize, 100)
 	}
+	if meta.ContainerMaxSize != 1048576 {
+		t.Fatalf("container max size: got %d want %d", meta.ContainerMaxSize, 1048576)
+	}
 }
 
 func TestStorageBlockReaderLoadBlockMetadataRejectsInvalidCompressionContract(t *testing.T) {
@@ -310,7 +313,8 @@ func TestStorageBlockReaderLoadBlockMetadataRejectsInvalidCompressionContract(t 
 	if _, err := dbconn.ExecContext(context.Background(), `
 		CREATE TABLE container (
 			id INTEGER PRIMARY KEY,
-			filename TEXT NOT NULL
+			filename TEXT NOT NULL,
+			max_size INTEGER NOT NULL
 		);
 	`); err != nil {
 		t.Fatalf("create container table: %v", err)
@@ -335,7 +339,7 @@ func TestStorageBlockReaderLoadBlockMetadataRejectsInvalidCompressionContract(t 
 		t.Fatalf("create storage_blocks table: %v", err)
 	}
 
-	if _, err := dbconn.ExecContext(context.Background(), `INSERT INTO container (id, filename) VALUES (1, 'test.bin')`); err != nil {
+	if _, err := dbconn.ExecContext(context.Background(), `INSERT INTO container (id, filename, max_size) VALUES (1, 'test.bin', 1048576)`); err != nil {
 		t.Fatalf("insert container row: %v", err)
 	}
 	if _, err := dbconn.ExecContext(context.Background(), `
@@ -363,6 +367,51 @@ func TestStorageBlockReaderLoadBlockMetadataRejectsInvalidCompressionContract(t 
 func setupStoredBlockForReaderCorruption(t *testing.T, codec blocks.Codec) (*sql.DB, string, int64, string, int64, int64) {
 	_, dbconn, workDir, blockID, containerFilename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, codec, storagecompression.CompressionNone)
 	return dbconn, workDir, blockID, containerFilename, offset, storedSize
+}
+
+func TestStorageBlockReaderUsesCatalogContainerMaxSize(t *testing.T) {
+	dbconn, workDir, blockID, _, _, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+
+	var catalogMaxSize int64
+	if err := dbconn.QueryRow(`
+		SELECT c.max_size
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		WHERE sb.id = $1
+	`, blockID).Scan(&catalogMaxSize); err != nil {
+		t.Fatalf("load catalog container maximum: %v", err)
+	}
+
+	originalMaxSize := container.GetContainerMaxSize()
+	changedMaxSize := catalogMaxSize / 2
+	if changedMaxSize <= container.ContainerHdrLen {
+		changedMaxSize = catalogMaxSize + 1
+	}
+	container.SetContainerMaxSize(changedMaxSize)
+	t.Cleanup(func() { container.SetContainerMaxSize(originalMaxSize) })
+
+	reader := NewStorageBlockReader(dbconn, workDir)
+	if _, err := reader.ReadBlock(context.Background(), blockID); err != nil {
+		t.Fatalf("read block with process-global maximum %d and catalog maximum %d: %v", changedMaxSize, catalogMaxSize, err)
+	}
+}
+
+func TestStorageBlockReaderRejectsContainerHeaderCatalogMaxSizeMismatch(t *testing.T) {
+	dbconn, workDir, blockID, _, _, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+
+	if _, err := dbconn.Exec(`
+		UPDATE container
+		SET max_size = max_size + 1
+		WHERE id = (SELECT container_id FROM storage_blocks WHERE id = $1)
+	`, blockID); err != nil {
+		t.Fatalf("mutate catalog container maximum: %v", err)
+	}
+
+	reader := NewStorageBlockReader(dbconn, workDir)
+	_, err := reader.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "container max size mismatch") {
+		t.Fatalf("expected header/catalog maximum mismatch, got: %v", err)
+	}
 }
 
 func setupStoredBlockFixtureForReaderCorruption(t *testing.T, codec blocks.Codec, compressionCodec string) (int64, *sql.DB, string, int64, string, int64, int64) {
@@ -535,13 +584,17 @@ func TestStorageBlockReaderPhysicalHashMismatchOnTruncatedPayload(t *testing.T) 
 }
 
 func TestStorageBlockReaderPhysicalHashMismatchOnWrongOffset(t *testing.T) {
-	dbconn, workDir, blockID, _, offset, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+	dbconn, workDir, blockID, _, offset, storedSize := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
 
-	if offset <= 0 {
-		t.Fatalf("unexpected non-positive offset for wrong-offset test: %d", offset)
+	if storedSize <= 1 {
+		t.Fatalf("unexpected stored size for wrong-offset test: %d", storedSize)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE storage_blocks SET container_offset = $1 WHERE id = $2`, offset-1, blockID); err != nil {
+	if _, err := dbconn.Exec(`
+		UPDATE storage_blocks
+		SET container_offset = $1, stored_size = $2
+		WHERE id = $3
+	`, offset+1, storedSize-1, blockID); err != nil {
 		t.Fatalf("update container_offset: %v", err)
 	}
 
@@ -900,7 +953,7 @@ func TestStorageBlockReaderDecompressionFailureAfterCompressedHashFixtureUpdate(
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-decompression-failure.restore", "decompress codec=zstd")
 }
 
-func TestStorageBlockReaderEncryptedPlaintextSizeMismatchDetectedWithoutPartialOutput(t *testing.T) {
+func TestStorageBlockReaderRejectsZstdOutputBeyondExpectedSizeAfterAESGCMDecrypt(t *testing.T) {
 	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
 	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
 
@@ -927,6 +980,45 @@ func TestStorageBlockReaderEncryptedPlaintextSizeMismatchDetectedWithoutPartialO
 	}
 	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
 		t.Fatalf("expected restore output to be absent after failure, stat err=%v", statErr)
+	}
+}
+
+func TestRestorePackedZstdBoundFailurePreservesDestinationAndCleansTemp(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET plaintext_size = $1 WHERE id = $2`, int64(1), blockID); err != nil {
+		t.Fatalf("update plaintext_size for bound fixture: %v", err)
+	}
+
+	outputDir := t.TempDir()
+	outPath := filepath.Join(outputDir, "bounded-restore.bin")
+	original := []byte("existing-destination-must-survive")
+	if err := os.WriteFile(outPath, original, 0o600); err != nil {
+		t.Fatalf("write existing destination: %v", err)
+	}
+
+	_, err := restoreFileWithDBAndDir(dbconn, fileID, outPath, workDir, RestoreOptions{Overwrite: true})
+	if err == nil || (!strings.Contains(err.Error(), "decompress codec=\"zstd\"") && !strings.Contains(err.Error(), "decompress codec=zstd")) {
+		t.Fatalf("expected bounded zstd restore failure, got: %v", err)
+	}
+
+	got, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		t.Fatalf("read preserved destination: %v", readErr)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("destination changed after bound failure: got=%q want=%q", got, original)
+	}
+
+	entries, readDirErr := os.ReadDir(outputDir)
+	if readDirErr != nil {
+		t.Fatalf("read output directory: %v", readDirErr)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".coldkeep-restore-") {
+			t.Fatalf("stale restore temporary file: %s", entry.Name())
+		}
 	}
 }
 

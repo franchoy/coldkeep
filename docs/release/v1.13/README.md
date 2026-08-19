@@ -71,11 +71,89 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   and release/tag CI passed.
 - `release/v1.13.9` was deleted locally and remotely. No Phase 25 was
   required, and no mandatory v1.x runtime remediation remained.
-- `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is ready for
-  release after completing all eight phases and the local pre-release gate.
-- `v1.13.10-release-train-reconciliation.md` is the canonical disposition of
-  retired historical v1.13.10–v1.13.13 allocations.
-- `v1.13.10-engine-contract-documentation-truthfulness.md` records the active
+- `v1.13.10 — v1.x Closure Integrity and CI Runtime Hygiene` is released and
+  operationally closed. It is a valid closure-integrity and CI-runtime-hygiene
+  baseline, not the final v1.x release.
+- A post-release roadmap-to-code audit superseded the narrower final-v1.x
+  conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
+- `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
+  release ready for pre-release validation. Phases 0–20 are complete. Phase 12 implements the
+  repository-wide exclusive fail-fast Lease and proves native runtime plus the
+  production Coordinator lifecycle on Linux, macOS, and Windows. Phase 13
+  preserves strengthened G6 integrity coverage and proves deterministic Linux
+  independent-process contention, killed-holder release with immediate
+  reacquisition, real live-GC cross-process exclusion, and dedicated
+  PostgreSQL advisory-session ownership. Its platform and same-host proof
+  limits are recorded in
+  [v1.13.11-phase13-closure.md](v1.13.11-phase13-closure.md). Phase 14 now
+  validates outer ranges before allocation/read, enforces supported-header,
+  catalog-maximum, and physical-size consistency, and preserves persisted
+  maxima across packed reads and recovery without changing format bytes. Its
+  evidence is recorded in
+  [v1.13.11-phase14-container-range-header-consistency.md](v1.13.11-phase14-container-range-header-consistency.md).
+  Phase 15 now validates exact decompression expectations before allocation,
+  caps complete CKBL output and zstd decoder memory/window resources at 4 MiB,
+  and applies the same intrinsic contract to identity and zstd codecs. Restore,
+  system Verify, and Store semantic reuse inherit the shared bounded path. Its
+  evidence is recorded in
+  [v1.13.11-phase15-bounded-decompression.md](v1.13.11-phase15-bounded-decompression.md).
+  Phase 16 now preserves exact integer tokens throughout the stable v1.7
+  stats, inspect, and simulate-GC JSON envelope path without changing JSON
+  number types, schemas, APIs, storage, coordination, or error behavior. Its
+  evidence is recorded in
+  [v1.13.11-phase16-json-integer-fidelity.md](v1.13.11-phase16-json-integer-fidelity.md).
+  Phase 17 now inventories all 70 non-DDL production mutations and hardens the
+  20 required-row gaps without changing valid zero-row cleanup, recovery, CAS,
+  upsert, bulk, or GC semantics. SQLite/PostgreSQL parity and rollback are
+  proven, including no physical GC deletion after a missed metadata delete.
+  Its evidence is recorded in
+  [v1.13.11-phase17-fail-closed-sql-mutations.md](v1.13.11-phase17-fail-closed-sql-mutations.md).
+  Phase 18 now makes selected existing PostgreSQL mutation-cardinality,
+  storage/recovery, and Linux coordination execution proof fail closed in
+  required CI without changing product semantics or job topology. Its evidence
+  is recorded in
+  [v1.13.11-phase18-required-backend-coordination-ci.md](v1.13.11-phase18-required-backend-coordination-ci.md).
+  Phase 19 reconciles the validation matrix, backend claim matrix, reusable
+  release checklist, active trackers, Phase 18 closure chronology, proof
+  boundaries, deferred items, and evidence links. Its documentation-only
+  evidence is recorded in
+  [v1.13.11-phase19-validation-evidence-reconciliation.md](v1.13.11-phase19-validation-evidence-reconciliation.md).
+  Phase 20 freezes the prospective exact-head gate contract and pre-release
+  state. The immutable commit containing that record must pass candidate-head
+  CI, Required Gate, CodeQL, and the complete clean local Profile A gate before
+  one pull request to `main` is authorized. BKC-016 remains
+  `Deferred — documented`. Phase 12 closure remains recorded in
+  [v1.13.11-phase12-closure.md](v1.13.11-phase12-closure.md). The diagnostic
+  benchmark-gate bootstrap remains recorded in
+  [v1.13.11-phase11-benchmark-gate-integrity-remediation.md](v1.13.11-phase11-benchmark-gate-integrity-remediation.md).
+  Phase 10 implementation `ad82c959` passed exact-head CI run `30148670910`,
+  including all five PostgreSQL events in plain job `89655223183` and required
+  gate `89656972706`. A first benchmark variance was resolved by successful
+  same-head rerun `89656813012` without any benchmark accommodation. BKC-003
+  and BKC-015 are backend-specific — proven within their documented bounds.
+  Phase 9 exact-head
+  CI run `30114444798` at `848e579b` proved scoped active, uncontended Engine
+  mutation and GC dry-run parity, including all five required PostgreSQL events
+  in plain job `89551564893` and required-gate job `89555865026`. Phase 8 exact-head CI run `30109561344` at `bcae3576` proved
+  its scoped snapshot selector and tree-presentation contracts, including both
+  required PostgreSQL selector events and the aggregate required gate. Phase 7 exact-head CI run `29993172886` at `313d0069`
+  proved the scoped engine read-side contracts across SQLite and PostgreSQL,
+  including the SQLite deep-verification single-connection correction. Phase 6
+  exact-head CI run `29983479388` proved the scoped
+  implemented catalog contracts across SQLite and PostgreSQL, including
+  deterministic snapshot ordering. Selected schema/bootstrap/migration
+  contracts and the G6 fail-closed remediation also have exact-head CI
+  evidence, while broad backend parity remains intentionally unclaimed.
+  v1.13.11 is ready for exact-head pre-release validation; the latest released
+  version remains v1.13.10. Merge, tag, and publication remain later
+  operations. Its canonical trackers are
+  `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
+  `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
+  `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.
+- The updated `v1.13.x-release-train.md` is the authoritative current plan;
+  final v1.x completion is gated by v1.13.11–v1.13.13. v2.0 implementation has
+  not started.
+- `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
 - `v1.13.10-release-state-validator-contract.md` freezes the lifecycle,
   evidence, parsing, CKRS rule, output, fixture, and CI integration contract.
@@ -85,10 +163,5 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   upload-artifact v7 migration and semantic-preservation evidence.
 - `v1.13.10-v1x-closure-summary-and-v2.0-handoff-freeze.md` freezes the final
   v1.x baseline, explicit v2.0 inputs, and v2/v3 scope boundary.
-- The release gate records the initial benchmark blocker, its bounded
-  benchmark-infrastructure correction, the later package-interaction test
-  isolation correction, and a fresh passed Profile A gate on `53b66dda`.
-  The evidence-restoration candidate remains subject to its required clean
-  exact-head gate before one pull request from `release/v1.13.10` to `main` is
-  authorized. External PR, merge, tag, and publication evidence remains
-  unavailable.
+- v1.13.10's public release, tag, merge, tag-CI, and deleted-release-branch
+  evidence is recorded separately from its historical pre-release gate narrative.

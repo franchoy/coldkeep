@@ -1,16 +1,27 @@
 # Benchmark Baselines v1.9 (Internal)
 
-Status: Frozen
+Status: Frozen historical single-observation advisory evidence
 Date: 2026-05-09
-Scope: Official benchmark reference point for post-v1.9 work
+Scope: Historical/informational evidence; no Phase 11 performance authority
 
 ## Purpose
 
-This document freezes the official v1.9 benchmark baselines and the policy used
-to compare future results against them.
+This document freezes the historical v1.9 benchmark artifacts and records the
+policy that originally compared later results against them.
 
-The goal is to ensure that v1.10+ architectural work measures regressions
-against one stable reference point instead of silently moving the floor.
+The Phase 11 benchmark-gate investigation found that these files do not contain
+distribution or resolved-environment provenance and that the active and
+worker-specific manifests contain stale hashes. Their measurement content and
+3%/5% thresholds remain frozen historical policy, but they must not be treated
+as schema-v2 aggregate evidence or reinterpreted as paired-ratio thresholds.
+Required CI may read them only as `historical_v1.9_absolute` advisory inputs
+after validating their established legacy shape. A threshold crossing is
+`BENCHMARK_TIMING_WARNING`, not a hard performance failure or pass.
+
+The artifacts continue to document earlier decisions. They do not select a
+Phase 11 production reference or hard performance endpoint. Missing or malformed
+baseline evidence remains an advisory-evaluation integrity error and fails the
+job; advisory authority does not weaken evidence validation.
 
 These baselines are the reference for:
 
@@ -39,7 +50,7 @@ Machine-readable manifests:
 - `benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w1-r1.json` (frozen `w1` profile)
 - `benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w4-r1.json` (frozen `w4` profile)
 
-The authoritative regression-threshold policy is:
+The historical v1.9 regression-threshold policy is:
 
 - `benchmarks/v1.9/regression-thresholds.yaml`
 
@@ -76,9 +87,11 @@ Each baseline manifest must continue to prove:
 - same logical totals
 - same case set
 
-## Regression Threshold Contract
+## Historical Regression Threshold Contract
 
-Thresholds are frozen in `benchmarks/v1.9/regression-thresholds.yaml`.
+Thresholds are frozen in `benchmarks/v1.9/regression-thresholds.yaml` for
+historical advisory interpretation only. They have no paired-gate or hard
+performance authority.
 
 Policy summary:
 
@@ -108,9 +121,9 @@ Requirements:
 
 ## Freeze Statement
 
-These v1.9 baseline artifacts are the official reference point for future
-regression detection until an explicit baseline-refresh decision supersedes
-them.
-
-Architecture may change in v1.10+, but benchmark comparison authority remains
-anchored to this v1.9 baseline set.
+These v1.9 artifacts remain immutable historical evidence. Required CI cites
+them only under the hosted timing advisory policy and preserves their content,
+manifests, hashes, and thresholds byte-for-byte. They cannot be reused as paired
+samples. Future hard performance authority requires separately authorized
+controlled infrastructure, qualification, reference governance, and numeric
+threshold policy.

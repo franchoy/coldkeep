@@ -36,6 +36,8 @@ type payloadStatefulWriter interface {
 
 type storeInterleavingEvent string
 
+var errSharedPackedBlockPartialRebuild = errors.New("partial rebuild of shared packed block refused")
+
 const (
 	storeInterleavingEventAfterChunkClaim            storeInterleavingEvent = "after_chunk_claim"
 	storeInterleavingEventBeforePackedFlush          storeInterleavingEvent = "before_packed_flush"
@@ -422,12 +424,20 @@ func commitPreparedChunksWithContext(
 					return err
 				}
 
-				if _, err := tx.ExecContext(
+				result, err := tx.ExecContext(
 					ctx,
 					`UPDATE chunk SET status = $1 WHERE id = $2`,
 					filestate.ChunkCompleted,
 					pending.chunkID,
-				); err != nil {
+				)
+				if err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+				if err := db.RequireExactlyOneRow(result, "complete packed chunk"); err != nil {
 					_ = tx.Rollback()
 					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return errors.Join(err, rbErr)
@@ -680,7 +690,12 @@ func commitPreparedChunksWithContext(
 					return StoreFileResult{}, err
 				}
 
-				if _, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err != nil {
+				result, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID)
+				if err != nil {
+					_ = tx.Rollback()
+					return StoreFileResult{}, err
+				}
+				if err := db.RequireExactlyOneRow(result, "complete reclaimed chunk"); err != nil {
 					_ = tx.Rollback()
 					return StoreFileResult{}, err
 				}
@@ -909,7 +924,11 @@ func markContainerSealingInTx(tx *sql.Tx, containerID int64) error {
 	if tx == nil || containerID <= 0 {
 		return nil
 	}
-	if _, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, containerID); err != nil {
+	result, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, containerID)
+	if err != nil {
+		return fmt.Errorf("mark container %d sealing in tx: %w", containerID, err)
+	}
+	if err := db.RequireExactlyOneRow(result, "mark container sealing"); err != nil {
 		return fmt.Errorf("mark container %d sealing in tx: %w", containerID, err)
 	}
 	return nil
@@ -1514,6 +1533,96 @@ func validateReusableChunkCompanionMappingWithContext(ctx context.Context, dbcon
 	}
 }
 
+func lockAndValidateChunkRebuildCandidatesWithContext(
+	ctx context.Context,
+	dbconn *sql.DB,
+	tx *sql.Tx,
+	chunkID int64,
+) ([]int64, error) {
+	candidateQuery := db.QueryWithOptionalForUpdate(dbconn, `
+		SELECT sb.id
+		FROM storage_blocks sb
+		JOIN chunk_block_refs target ON target.block_id = sb.id
+		WHERE target.chunk_id = $1
+		ORDER BY sb.id
+	`)
+	rows, err := tx.QueryContext(ctx, candidateQuery, chunkID)
+	if err != nil {
+		return nil, fmt.Errorf("query and lock storage_blocks for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	candidateBlockIDs, err := scanLockedBlockIDs(rows, chunkID)
+	if err != nil {
+		return nil, err
+	}
+
+	memberQuery := db.QueryWithOptionalForUpdate(dbconn, `
+		SELECT chunk_id
+		FROM chunk_block_refs
+		WHERE block_id = $1
+		ORDER BY chunk_id
+	`)
+	for _, blockID := range candidateBlockIDs {
+		memberRows, err := tx.QueryContext(ctx, memberQuery, blockID)
+		if err != nil {
+			return nil, fmt.Errorf("query and lock members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+		}
+		memberCount, err := countLockedBlockMembers(memberRows, blockID, chunkID)
+		if err != nil {
+			return nil, err
+		}
+		if memberCount > 1 {
+			return nil, fmt.Errorf(
+				"cannot rebuild chunk %d independently: packed block %d has %d active members: %w",
+				chunkID,
+				blockID,
+				memberCount,
+				errSharedPackedBlockPartialRebuild,
+			)
+		}
+	}
+	return candidateBlockIDs, nil
+}
+
+func scanLockedBlockIDs(rows *sql.Rows, chunkID int64) ([]int64, error) {
+	var blockIDs []int64
+	for rows.Next() {
+		var blockID int64
+		if err := rows.Scan(&blockID); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan storage_block id for chunk %d rebuild cleanup: %w", chunkID, err)
+		}
+		blockIDs = append(blockIDs, blockID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate storage_block ids for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close storage_block ids rows for chunk %d rebuild cleanup: %w", chunkID, err)
+	}
+	return blockIDs, nil
+}
+
+func countLockedBlockMembers(rows *sql.Rows, blockID, chunkID int64) (int, error) {
+	count := 0
+	for rows.Next() {
+		var memberChunkID int64
+		if err := rows.Scan(&memberChunkID); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("scan member for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, fmt.Errorf("iterate members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close members for storage_block %d during chunk %d rebuild cleanup: %w", blockID, chunkID, err)
+	}
+	return count, nil
+}
+
 func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
 	state := storeInterleavingStateFromContext(ctx)
 	storeOpID := ""
@@ -1539,25 +1648,9 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.QueryContext(ctx, `SELECT block_id FROM chunk_block_refs WHERE chunk_id = $1`, chunkID)
+	candidateBlockIDs, err := lockAndValidateChunkRebuildCandidatesWithContext(ctx, dbconn, tx, chunkID)
 	if err != nil {
-		return fmt.Errorf("query storage_blocks for chunk %d rebuild cleanup: %w", chunkID, err)
-	}
-	var candidateBlockIDs []int64
-	for rows.Next() {
-		var blockID int64
-		if err := rows.Scan(&blockID); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan storage_block id for chunk %d rebuild cleanup: %w", chunkID, err)
-		}
-		candidateBlockIDs = append(candidateBlockIDs, blockID)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("iterate storage_block ids for chunk %d rebuild cleanup: %w", chunkID, err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close storage_block ids rows for chunk %d rebuild cleanup: %w", chunkID, err)
+		return err
 	}
 
 	result, err := tx.ExecContext(ctx,
@@ -2602,7 +2695,11 @@ func linkFileChunkWithContext(ctx context.Context, tx *sql.Tx, fileID int64, chu
 	}
 
 	if rowsAffected > 0 && incrementRefCount {
-		if _, err := tx.ExecContext(ctx, `UPDATE chunk SET live_ref_count = live_ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+		result, err := tx.ExecContext(ctx, `UPDATE chunk SET live_ref_count = live_ref_count + 1 WHERE id = $1`, chunkID)
+		if err != nil {
+			return err
+		}
+		if err := db.RequireExactlyOneRow(result, "increment linked chunk live refcount"); err != nil {
 			return err
 		}
 	}
@@ -2651,12 +2748,16 @@ func finalizeLogicalFileStorageWithContext(ctx context.Context, dbconn *sql.DB, 
 	}
 
 	// All verification passed; mark file complete in the same transaction.
-	if _, err := tx.ExecContext(
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE logical_file SET status = $1 WHERE id = $2`,
 		filestate.LogicalFileCompleted,
 		fileID,
-	); err != nil {
+	)
+	if err != nil {
+		return fmt.Errorf("update logical_file to COMPLETED: %w", err)
+	}
+	if err := db.RequireExactlyOneRow(result, "finalize logical file storage"); err != nil {
 		return fmt.Errorf("update logical_file to COMPLETED: %w", err)
 	}
 

@@ -23,7 +23,12 @@ Guarantee IDs (G1–G17+) are part of the public validation contract.
 
 This prevents future "renumbering drift".
 
-All guarantees below are enforced through integration tests and verified under repeated GC / restart / restore cycles.
+Guarantees below map to the strongest applicable evidence in the current tree.
+That evidence is intentionally heterogeneous: unit, package integration,
+adversarial, cross-platform, required hosted CI, manual/local, documentation-
+only, and deferred boundaries are distinguished instead of being collapsed
+into one `covered` label. A test's existence does not by itself establish that
+its execution is required and fail-closed in hosted CI.
 
 This document originated from the v0.9/v0.10 trust-validation work and is now
 the maintained v1.x guarantee-to-evidence contract: v1.0 storage-core
@@ -32,13 +37,16 @@ graph coherence guarantees (G10-G13), and v1.3 snapshot-retention guarantees (G1
 with v1.4 clarifying lineage semantics, v1.5 adding chunker-evolution compatibility
 contract clarity, v1.6 adding observability and simulation contract hardening,
 v1.7 adding controlled-execution performance validation language, v1.8 adding
-packed block abstraction and AES-GCM packed-block integration, and v1.9 freezing
-transform/verification semantics —
+packed block abstraction and AES-GCM packed-block integration, v1.9 freezing
+transform/verification semantics, and v1.13.11 adding bounded coordination,
+container, decompression, JSON-fidelity, SQL-mutation, and required-CI proof —
 none of which introduce new guarantee IDs.
 
 ## Scope
 
-- Target: single-node trust model for v1.0 core plus v1.1+/v1.2+/v1.3+/v1.4+/v1.5+/v1.6+/v1.7+/v1.8+/v1.9+ interface, observability, and block-abstraction contracts
+- Target: single-node trust model for v1.0 core plus maintained v1.x
+  interface, observability, block-abstraction, same-host coordination, and
+  integrity-hardening contracts
 - Surface: existing `verify` and `doctor` contracts (no new top-level validate command)
 - Goal: each guarantee maps to automated evidence (verify checks, tests, or both)
 
@@ -51,6 +59,8 @@ Reading note:
 - `Primary verify evidence` names the main runtime verification surface, not every internal helper involved
 - `Primary test evidence` highlights the most representative automated coverage, not an exhaustive list of all related tests
 - `covered` means the guarantee is intentionally mapped to concrete automated evidence in the current tree
+- `required CI` means hosted workflow policy requires the relevant job or named
+  pass event; broad job success and named-event proof are recorded separately
 
 ## Guarantees to Evidence
 
@@ -61,7 +71,7 @@ Reading note:
 | G3 | No exposure of partially written or inconsistent data | Recovery + verify model excludes/processes invalid lifecycle states, including standard verify enforcement that each COMPLETED chunk has exactly one blocks row, rollback-safe sealing-marker transitions, quarantine of damaged active containers without harming unrelated live data, ghost-byte sealing-container quarantine with preserved live data, and strict-recovery resynchronization of already-quarantined orphan container size drift instead of surfacing stale metadata as healthy state | `TestStartupRecoverySimulation`, `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`, `TestVerifyStandard/detects completed chunk missing block row`, `TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers`, `TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveData`, `TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiveData`, `TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState`, `TestAdversarialG2PreexistingQuarantinedOrphanSizeDriftResyncsAndPreservesHealthyRestore` | covered |
 | G4 | GC is reference-safe: no reachable chunk is ever deleted | GC liveness checks use `live_ref_count OR pin_count`; verify post-GC integrity | `TestStoreGCRestore`, `TestGCRestorePinRaceContainerNotDeleted`, `TestStoreLifecycleSeededRandomizedOperationOrder` | covered |
 | G5 | Atomic restore replacement (within single-node local filesystem semantics) | Restore path writes temp + fsync + atomic rename | `TestRestoreFailurePreservesExistingOutput` (explicit atomicity and cleanup), `TestRestoreAtomicityWithTestHook`, `TestRestoreAtomicityWithCorruption`, `TestStoreGCRestore`, `TestSampleDatasetEndToEnd` | covered |
-| G6 | Safe in-process concurrent storage operations | Verify catches graph/reference corruption; transactional claims/retries in write path | `TestConcurrentStoreSameFile`, `TestConcurrentStoreSameChunk`, `TestConcurrentStoreFolderStress`, `TestRepeatedJitteredStoreGCRestoreInterleaving`, `TestRepeatedJitteredStoreGCRestoreRemoveInterleaving` (all in-process, shared DB and store path, dedup races, stress) | covered (multi-process contention and external crash overlap not covered; see open work) |
+| G6 | Safe in-process concurrent storage operations | Verify catches graph/reference corruption; transactional claims/retries protect in-process writes; the production Coordinator adds an exclusive, fail-fast outer Lease for participating same-host repository operations | In-process: `TestConcurrentStoreSameFile`, `TestConcurrentStoreSameChunk`, `TestConcurrentStoreFolderStress`, `TestRepeatedJitteredStoreGCRestoreInterleaving`, `TestRepeatedJitteredStoreGCRestoreRemoveInterleaving`. Native/Coordinator: `TestNativeLockContentionAndReacquire`, `TestWindowsNativeLockContentionAndReacquire`, `TestProductionCoordinatorIntegratedNativeLifecycle`. Linux process proof: `TestAdversarialG6IndependentProcessRepositoryContention`, `TestAdversarialG6KilledLeaseHolderReleasesRepository`, `TestAdversarialG6LiveGCExcludesIndependentStoreProcess` | covered; required CI names the Linux process events and preserves native Linux/macOS/Windows runtime proof. macOS/Windows subprocess semantics are not separately proven; cross-host and network-filesystem coordination are not claimed |
 | G7 | Deep corruption detection (payload/offset/tail) | Verify deep validates decoded payload hashes and container continuity, including authenticated AES-GCM decode failures on tampered ciphertext, tampered nonce metadata, wrong-key mismatch, and malformed key configuration (invalid length and invalid encoding) | `TestVerifySystemDeepDetectsChunkDataCorruption`, `TestVerifySystemDeepDetectsAESGCMTamperedCiphertext`, `TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering`, `TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch`, `TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration`, `TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration`, `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock`, `TestVerifySystemDeepAggregatesChunkErrors` | covered |
 | G8 | Corrective health gate contract stability | Doctor phase model and JSON/exit-code contract tests | `TestDoctorCommand`, `TestDoctorJSONContractConsistency`, `TestDoctorJSONFailureShortPathSingleMachineReadablePayload`, `TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData` | covered |
 
@@ -91,9 +101,9 @@ Use this section for branch-specific additions that are not yet fully covered.
 | Item | Target evidence | Owner | Status |
 | --- | --- | --- | --- |
 | Long-run randomized fault loop expansion | Stress-tier seeded randomized lifecycle loop (`TestStoreLifecycleSeededRandomizedOperationOrder`) plus dedicated long-run soak (`TestRandomizedLongRunLifecycleSoak`) and repeated CI long-run passes | TBD | completed |
-| Multi-process contention (non-goal for v1.0 baseline) | Separate post-v1.0 track | TBD | deferred |
+| Multi-process contention (non-goal for v1.0 baseline) | Phase 12 native runtime plus Phase 13 Linux independent-process contention, killed-holder release, live-GC exclusion, and PostgreSQL advisory-session evidence | Phases 12–13; named required-CI preservation in Phase 18 | completed within the documented platform boundary |
 | Atomic restore explicit failure-mode and atomicity | Simulate restore failures before/after rename; verify original output file is preserved, no partial/corrupt final file is visible, and temp files are cleaned up; assert destination file is byte-identical and no temp files remain after failure | `TestRestoreFailurePreservesExistingOutput`, `TestRestoreAtomicityWithTestHook`, `TestRestoreAtomicityWithCorruption`, `TestRestoreFailureDoesNotCorruptDestination` | completed |
-| Dry-run support for `remove --stored-path` (deferred beyond v1.2) | Extend remove tx primitive to support rollback-safe preview mode; implement in CLI with `--dry-run` flag; add integration tests validating preview output matches dry-run semantics | Post-v1.2 roadmap | deferred |
+| Dry-run support for `remove --stored-path` (deferred beyond v1.2) | Active `Engine.RemoveStoredPaths` dry-run path, production CLI routing, deterministic result reporting, and non-mutation regressions including `TestRemoveStoredPathsDryRunPlansExistingMapping`, `TestRemoveStoredPathsDryRunDoesNotMutateCatalog`, and `TestRemoveStoredPathsDryRunPreservesSnapshotRetentionParityGap` | Completed in v1.13.8 | completed |
 | Batch delete optimization for remove cascade (v1.4+ optimization) | Current v1.2 implementation uses O(N) per-path delete + invariant check; optimize to batch DELETE + single post-batch invariant check; add micro-benchmarks comparing per-path vs batch semantics; ensure no correctness regression | v1.4 performance enhancement | deferred |
 | Optional post-batch invariant enforcement strategy | Current v1.2 batch operations preserve invariants per item; future performance-oriented mode may allow post-batch invariant validation while keeping deterministic error semantics | v1.4+ performance track | deferred |
 | Structured logging for invariant violations (deferred beyond v1.2) | Add optional structured event emission for invariant failures such as `INVARIANT_VIOLATION logical_file_ref_count_mismatch`; cover via CLI/logging contract tests without weakening hard-fail behavior | Post-v1.2 observability track | deferred |
@@ -101,8 +111,31 @@ Use this section for branch-specific additions that are not yet fully covered.
 | Automatic physical-layer repair inside doctor | Keep verify/doctor detect-only for `physical_file` drift even though explicit `repair ref-counts` exists; preserve operator intent and avoid hidden metadata mutation during health checks | Post-v1.2 repair strategy track | deferred |
 | GC dry-run physical integrity bypass flag | Allow `--force` to skip `CheckPhysicalFileGraphIntegrity` pre-flight for advanced operator scenarios | Future operator tooling sprint | deferred |
 
+## v1.13.11 Hardening and Required Evidence
+
+These validation groups extend the existing G1-G17 mapping without assigning
+new guarantee IDs. They record the difference between automated test coverage
+and fail-closed hosted execution proof.
+
+| Validation group | Contract | Representative evidence | Evidence classification | Hosted requirement and boundary |
+| --- | --- | --- | --- | --- |
+| Storage and recovery (G1-G5) | Deterministic restore, fail-closed recovery, reference-safe GC, and atomic local replacement | Existing unit/integration/adversarial suites; Phase 18 names `TestRoundTripStoreRestore`, `TestRemoveWithSharedChunksRefCount`, and `TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState` | unit, integration, adversarial, required CI | Selected named events fail closed; broad required jobs remain additional evidence. Single-node/local-filesystem semantics only |
+| Coordination (G6) | Same-process protection, supported native primitives, production Coordinator lifecycle, and representative Linux process semantics | Phase 12 native/Coordinator tests; Phase 13 independent-process, killed-holder, live-GC, and advisory-session tests | integration, adversarial, cross-platform, required CI | Native Linux/macOS/Windows plus named Linux process events. No separate macOS/Windows subprocess, cross-host, distributed, or network-filesystem proof |
+| Corruption and health (G7-G8) | Deep transform-aware corruption detection and stable doctor/verify contracts | Existing package, integration, and adversarial suites | unit, integration, adversarial, required CI | Broad required jobs execute the suites; not every test has an individual pass-event requirement |
+| CLI and physical graph (G9-G13) | Deterministic batch behavior, physical-graph audit, GC refusal, and invariant-aware reporting | Existing command, maintenance, integration, and adversarial suites | unit, integration, adversarial, required CI | Required jobs execute the covered packages; no batch optimization, hidden repair, or bypass behavior is claimed |
+| Snapshot retention (G14-G17) | Snapshot roots remain GC-safe and auditable | G14-G17 package/integration tests and explicit adversarial selector | unit, integration, adversarial, required CI | Required adversarial execution retains the G14-G17 family; scope is snapshot-retention correctness only |
+| Container integrity (Phase 14) | Validate outer ranges before allocation/I/O; reject header overlap; require header/catalog/physical maximum consistency; preserve persisted maximum; use overflow-safe append; detect short header writes; preserve v0/v1 compatibility | `TestValidateContainerRangeBoundaries`, `TestFileContainerReadAtRejectsInvalidRangeBeforeAllocation`, `TestOpenExistingContainerRejectsHeaderCatalogMaxSizeMismatch`, `TestFileContainerAppendRejectsOverflowAsContainerFull`, `TestStorageBlockReaderUsesCatalogContainerMaxSize` | unit, integration, required CI | Broad required matrix; this is container range/header proof, not decompression proof |
+| Bounded decompression (Phase 15) | Enforce exact expected size and the absolute 4 MiB decompression ceiling before decoder/allocation; bound zstd output and decoder memory/window; preserve identity exactness | `TestNoneDecompressRequiresExactExpectedSize`, `TestZstdDecompressRejectsOutputBeyondExpectedSize`, `TestZstdDecompressBoundsConcatenatedFramesAcrossAggregateOutput`, Restore/Verify/reuse bound regressions | unit, integration, adversarial, required CI | Broad required matrix; 4 MiB is a decompression ceiling, not a container maximum |
+| JSON integer fidelity (Phase 16) | Preserve exact integer tokens recursively with `UseNumber` and strict EOF for stats, inspect, and simulate-GC | `TestToObjectMapPreservesExactJSONNumbers`, `TestRunStatsCommandJSONPreservesExactLargeIntegers` | unit, integration, required CI | Integers remain JSON numbers and output shape is unchanged; downstream JavaScript precision is not claimed |
+| SQL mutation cardinality (Phase 17) | Audit 70 production mutations; harden 20 required-row sites; retain 18 zero-safe and 32 already-safe sites; validate affected rows without imposing blanket exact-one semantics | `TestMutationRowsAffectedContractAcrossBackends`, required container/storage/recovery/repair/remove/GC rollback regressions | unit, dual-backend integration, rollback/adversarial, named required CI | The PostgreSQL cardinality event is required. No claim that every mutation must affect exactly one row |
+| CI execution proof (Phase 18) | Reject missing, malformed, skipped, or non-passing selected backend/storage/recovery/coordination events | CI JSON parsers plus `scripts/audit_ci_enforcement.sh` and its regression suite | required CI | Named pass-event proof supplements, rather than replaces, broad job success |
+| Benchmarks | Require valid four-profile candidate integrity while treating hosted timing as informational | `benchmark_gate.py integrity`; hosted-advisory comparator and exit verification | required CI integrity, advisory timing, deferred hard performance enforcement | Integrity/evaluator failures block; valid timing threshold crossings do not. Hard timing enforcement is deferred to controlled infrastructure |
+
 ## Exit Criteria
 
 1. Every guarantee row remains mapped to at least one automated test and/or verify check.
-2. Quality, correctness-matrix, integration-stress, integration-long-run, legacy-compatibility, benchmark-matrix, and smoke all pass.
+2. Quality, correctness-matrix, integration-stress, integration-long-run,
+   adversarial, legacy-compatibility, smoke, cross-platform, benchmark-integrity,
+   and benchmark-timing-advisory evaluation all complete successfully; required
+   named pass events are present with no matching required skip.
 3. Contract-sensitive checks (doctor and verify JSON shape, exit codes, failure typing) stay stable.

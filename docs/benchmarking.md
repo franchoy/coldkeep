@@ -25,6 +25,220 @@ evaluation in v1.7.
 
 ## Running benchmarks
 
+### v1.13.11 release-gate policy
+
+The final Phase 11 benchmark governance policy is documented in
+`docs/release/v1.13/v1.13.11-phase11-benchmark-governance-policy.md`.
+Required CI treats functional evidence as hard and GitHub-hosted timing as
+advisory:
+
+- `benchmark-integrity` runs the four bounded v2 profiles with exactly two
+  candidate-only samples and no warmup. Schema, fixture, execution, semantic
+  state, counters, cleanup, confidentiality, inventory, and checksums are hard.
+- `benchmark-timing-advisory` retains all four historical `small` observations.
+  Valid threshold crossings are explicit `BENCHMARK_TIMING_WARNING` results,
+  never hard performance failures or passes. The ordinary `small` path does
+  not capture `diagnostic_final_state`; that hard semantic authority belongs
+  only to `benchmark-integrity`.
+- `CI Required Gate` requires both families to complete successfully. Missing,
+  malformed, unverified, skipped, or failed evidence remains blocking.
+
+Hard performance enforcement is `deferred_to_controlled_infrastructure`.
+Historical v1.9 inputs are `historical_v1.9_absolute` advisory material only.
+No paired required job, production paired mode, paired manifest, or numeric
+paired threshold policy is active.
+
+The historical command's successful completion establishes that its temporary
+benchmark database cleanup completed. Explicit per-case and repeat cleanup
+evidence, semantic final state, and repeat hard-state equality remain integrity
+responsibilities. Candidate/configuration/I/O/contract failures produce a
+machine-readable `BENCHMARK_TIMING_EVALUATION_FAILURE` report and exit 2 after
+evidence finalization; they are never converted to an advisory warning or
+`BENCHMARK_TIMING_NOT_EVALUATED`.
+
+### Retained paired diagnostic tooling
+
+The same-run paired contract in
+`docs/release/v1.13/v1.13.11-phase11-paired-benchmark-gate-contract.md` remains
+non-production diagnostic/controlled-runner tooling.
+The rejected oversized candidates `ci-paired-w1-v1` and `ci-paired-w4-v1`
+remain immutable historical inputs. The bounded diagnostic candidates
+`ci-paired-w1-v2` and `ci-paired-w4-v2` execute the same complete ordered
+nine-case schema-v2 suite with per-case isolation. `scripts/paired_benchmark_gate.py`
+owns the fixed `C R` warmups, fixed five-pair production or ten-pair diagnostic
+inventory, paired ratio/MAD comparison, hard-state equivalence, checksums, and
+four-profile decision aggregation. Diagnostic aggregation requires the trusted
+caller to select its authority explicitly:
+
+```bash
+python3 scripts/paired_benchmark_gate.py decision \
+  --mode diagnostic \
+  --profile none-w1=/controlled/none-w1 \
+  --profile none-w4=/controlled/none-w4 \
+  --profile zstd-w1=/controlled/zstd-w1 \
+  --profile zstd-w4=/controlled/zstd-w4 \
+  --output-dir /controlled/decision
+```
+
+The exact `/controlled/decision` child must not exist before invocation. The
+caller may create `/controlled`, verifies the child is absent, and then lets
+the harness create and exclusively own the child. The same rule applies to
+every `sample --output-dir`: workflow-owned parent, nonexistent harness-owned
+child, and artifact upload from that exact child after the command returns.
+Pre-creating an empty child is an evidence-integrity failure; deleting and
+recreating a populated child does not repair ownership.
+
+A successful diagnostic sample and four-profile decision are classified
+`DIAGNOSTIC_QUALIFIED`, never production `PASS`. The decision reconstructs
+statistics and correctness evidence from checksummed raw reports, requires
+byte-identical reference/candidate binaries, and records diagnostic-only scope,
+authority, and sampler-owned per-profile elapsed time.
+
+No production reference manifest or numeric paired threshold is authorized.
+The harness contract requires production sampling and production decisions to
+remain hard-disabled even if ungoverned files appear; enabling them requires a
+later authorized governance and trusted-base integration change. Diagnostic
+mode qualifies the architecture only and cannot consume production artifacts;
+production decisions cannot consume diagnostic artifacts. Diagnostic sampling
+and aggregation are implemented. Binary-identical run `30696834430` accepted
+the bounded fixtures and functional evidence lifecycle but rejected
+GitHub-hosted paired timing as a 5% hard endpoint. A future
+separately authorized launcher will use this command shape:
+
+```bash
+profile_parent=/controlled/profile-parent
+profile_output="${profile_parent}/artifact"
+mkdir -p "${profile_parent}"
+test ! -e "${profile_output}"
+
+COLDKEEP_CODEC=aes-gcm python3 scripts/paired_benchmark_gate.py sample \
+  --reference-binary /controlled/reference/coldkeep \
+  --candidate-binary /controlled/candidate/coldkeep \
+  --reference-sha <40-character-sha> \
+  --candidate-sha <40-character-sha> \
+  --output-dir "${profile_output}" \
+  --dataset ci-paired-w4-v2 \
+  --compression none \
+  --workers 4 \
+  --mode diagnostic \
+  --pairs 10 \
+  --go-version '<pinned-version>' \
+  --postgres-version '<pinned-version>' \
+  --database-image-digest 'sha256:<pinned-digest>'
+```
+
+The command timeout is fixed at 600 seconds and is capped by the remaining
+35-minute sampler-owned profile budget. The harness terminates and reaps the
+active process group when that budget expires, performs compensating cleanup,
+and emits a checksummed non-authoritative
+`DIAGNOSTIC_TIME_BUDGET_EXCEEDED` artifact. Qualification requires all ten
+pairs, median ratios within 0.95–1.05, paired MAD no greater than 2.5%, exact
+hard state, valid counters and cleanup, no timeout, and completion within the
+35-minute diagnostic profile limit. A failure decision is also checksummed and
+records missing, invalid, failed, verified, and not-evaluated profiles without
+claiming absent evidence was verified. Exact bounds pass. Samples cannot be
+discarded or extended. No paired reference manifest or numeric production
+threshold policy exists.
+
+The v2 fixtures retain seed 1701, 1 KiB small files, the 1–256 KiB mixed range,
+`remove_every=4`, all nine cases, and ten diagnostic pairs. Both use a 64 MiB
+large file and 400 small files; w1 retains 400 mixed files and w4 retains 800.
+The earlier v1 definitions remain parseable for historical evidence but are no
+longer selected by the four-profile diagnostic matrix.
+
+Any future temporary launcher must keep sensitive values out of YAML `env:`
+blocks, mask runner roots before checkout, provision its isolated container
+only after masking, generate credentials and fixture material inside a
+tracing-disabled shell, and upload already-finalized evidence with
+`if: always()`. `scripts/audit_ci_enforcement.sh --paired-launcher <path>`
+checks this source contract without adding or authorizing a workflow. Static
+GitHub-managed container aliases such as `/github/workspace`,
+`/github/runner_temp`, `/github/home`, and `/github/workflow` are allowed
+runtime metadata; they are not credentials or benchmark-generated paths.
+Actual host paths, dynamically generated roots and evidence paths, database
+and container identifiers, namespaces, credentials, ports, DSNs, and key
+material remain confidential and must be masked before possible output.
+
+The first bounded-v2 launcher attempt, run `30693345495`, failed before any
+benchmark invocation because it created each exact sample output child before
+calling the harness. It produced no fixture, paired-statistic, hard-state,
+counter, cleanup, or time-budget result. Its decision command correctly
+preserved a checksummed failure-shaped decision after the four profile
+artifacts were absent. The corrected run `30696834430` later completed all four
+profiles with valid checksums, equal hard state, valid counters, and complete
+cleanup. Its timing variation rejected hosted performance authority. No
+additional remote performance diagnostic is required by the final policy.
+
+The stopped local A/A probe completed only its two excluded warmups and is
+non-authoritative, non-PASS partial evidence. It is not qualification evidence
+and made no reference or threshold decision. The completed four-profile remote
+ten-pair A/A run is diagnostic evidence only.
+
+The legacy `ci-stable-v1` material below remains historical diagnostic
+compatibility and has no paired performance authority.
+
+The superseded `ci-stable-v1` proposal used fixed larger fixtures and one
+isolated PostgreSQL database per case. It still requires `--repeat 1` and can
+be captured for historical diagnostics by:
+
+```bash
+python3 scripts/benchmark_gate.py sample \
+  --binary ./coldkeep \
+  --output-dir /tmp/coldkeep-gate-none-w4 \
+  --compression none \
+  --workers 4 \
+  --warmups 1 \
+  --samples 5 \
+  --postgres-version "PostgreSQL 16.14" \
+  --database-image-digest "sha256:<reviewed-digest>"
+```
+
+The legacy sampler rejects malformed, repeated, trailing, incomplete,
+reordered, or fixture-inconsistent reports and preserves every raw sample. Its
+absolute duration median is not a Phase 11 performance endpoint.
+
+#### Outcome E evidence contract
+
+Preserved calibration run `30176935742` showed stable workers=1 counters and
+scheduling-sensitive workers=4 container open, close, and fsync counts. A
+bounded local final-state diagnostic then showed exact fixture, logical-file,
+ordered chunk-graph, restored-tree, snapshot-membership, GC, verification, and
+canonical physical-content evidence. Only execution allocation and physical
+layout observations varied. This is Outcome E: the former all-counters-equal
+calibration rule was over-constrained; it is not evidence of a product,
+fixture, isolation, or aggregation correctness defect.
+
+Raw benchmark schema remains version 2. Every corrected-contract raw report
+must contain `diagnostic_final_state` schema version 2. Reports that omit that
+object, including the preserved GitHub workers=4 artifacts, remain useful
+historical diagnostics but cannot enter paired comparison evidence.
+Diagnostic-final-state schema-v1 evidence is historical only. Unknown fields in
+validated sections fail closed until a schema and policy update classifies
+them.
+
+Evidence policy version 2 assigns fields by semantics:
+
+| Policy | Fields and validation |
+| --- | --- |
+| `hard_equal` | Raw and aggregate schema/kind/status; capture source/binary and hard environment identity; codec, compression, dataset, workers, pipeline depth, and deterministic mode; every fixture constant and ordered case seed; warmup/sample counts; per-case processed file/byte totals; operation success/failure/skipped totals; expected restored totals; logical/status, ordered chunk-graph, restored-tree, snapshot, GC, verification, and placement-independent physical-content fingerprints/totals; cleanup success and zero leaked databases, processes, or temporary resources. |
+| `derived_equal` | Throughput; aggregate execution totals; median, mean, min/max, sample standard deviation, MAD, MAD ratio, CV, sample order/count relationships, command p95, duplicated outer/I/O counters, snapshot-write sums, open/close balance, and applicable artifact/manifest hashes. Each value is recomputed from its source fields. |
+| `bounded_nonnegative` | Mandatory signed-64-bit nonnegative per-case container opens, appends, fsyncs, bytes written, bytes read, and container closes. Values remain present and retained; append/read/write contradictions and open/close imbalance fail. No unsupported percentage bound is imposed. Raw-v2 zero-valued snapshot-write fields are omitted by the established schema, normalized to zero, retained operationally, and checked through their operation-specific and aggregate-sum relationships. |
+| `informational` | Raw timings, retained operational samples and distributions, container/block allocation counts, container bytes, physical-layout digest, host load, free disk, hosted-runner image warning, and command timing distributions. These remain well-formed and sanitized but are not exact across samples. |
+| `excluded_sensitive` | Credentials, passwords, encryption keys, DSNs, usernames, database names, repository or temporary paths, sensitive command arguments, environment dumps, and raw internal identifiers. Names and values are rejected before report acceptance. |
+
+The canonical physical-content digest is hard evidence. It includes logical
+chunk identity, payload size, codec/compression transforms, and unreferenced
+payload identity without database IDs, container IDs, or placement. Payload
+bytes and chunk-reference totals are also hard. Container/block allocation and
+the separate layout digest are informational only after every semantic and
+canonical physical-content field matches.
+
+`revalidate-raw` applies the policy to preserved diagnostic samples and writes
+a separately identified revalidation report. It retains every operational
+sample and distribution and always records
+`performance_calibration_status: not_evaluated`; it does not create a baseline
+or claim calibration acceptance.
+
 Phase 8 benchmark execution is script-only for v1.8 release hardening.
 
 The `coldkeep benchmark` command is available in the shipped CLI for ad-hoc
@@ -135,19 +349,18 @@ JSON output exposes both per-case worker usage and an aggregate
 }
 ```
 
-## Current baseline
+## Historical v1.9 baseline
 
-The repository now maintains an official v1.9 baseline set for the
-recommended packed production family (`aes-gcm` encryption):
+The repository retains the v1.9 baseline set for historical interpretation of
+the recommended packed production family (`aes-gcm` encryption):
 
 - compression modes: `none`, `zstd`
 - worker profiles: `w1`, `w4`
 - contract shape: `none/zstd × w1/w4` (four baseline JSON artifacts total)
 
-These artifacts are now the frozen performance reference point for v1.10+
-architectural work. Future releases may reorganize benchmark runners or CI
-gates, but they must compare against this frozen set unless an explicit
-baseline-refresh decision is documented.
+These artifacts preserve earlier release decisions. They have no performance
+authority for the v1.13.11 paired gate, cannot be reused as paired samples, and
+their absolute thresholds cannot be reinterpreted as ratio thresholds.
 
 Official v1.9 baseline files:
 
@@ -270,18 +483,17 @@ retained for historical v1.6/v1.7 context.
    an identical `relative-path → digest` map across isolated runs, proving that
    user-visible restore output is byte-for-bit stable.
 
-## Regression Thresholds (v1.9)
+## Historical Regression Thresholds (v1.9)
 
 Benchmarks are now actionable through defined regression thresholds. Thresholds are
 mode-specific (uncompressed vs. compressed) and case-specific, balancing detection
 sensitivity with normal run-to-run variance.
 
-**Official policy:** See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
-for the authoritative threshold definition.
+**Historical policy:** See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
+for the frozen v1.9 threshold definition.
 
-These thresholds are frozen for the v1.9 baseline set and are the reference
-policy for v1.10+ regression detection until an explicit threshold-refresh
-decision is approved.
+These thresholds are frozen with the v1.9 baseline set. They do not define
+paired-regression sensitivity.
 
 ### Uncompressed mode (packed + aes-gcm + none)
 
@@ -294,7 +506,8 @@ decision is approved.
 | Metadata operation regression | > 3% | snapshot-creation, gc-after-churn, stats-inspect |
 | Memory increase | > 10% | Not yet enforced via CLI but monitored |
 
-Any regression exceeding these thresholds **fails CI** and must be investigated or reverted.
+Under the historical gate, a regression exceeding these thresholds failed CI
+and required investigation.
 
 ### Compressed mode (packed + aes-gcm + zstd)
 
@@ -713,16 +926,23 @@ Key assertions include:
 - ✓ **New blocks coexist safely:** new compressed packed blocks store/restore/verify alongside old legacy data
 - ✓ **Migration only additive:** old metadata path remains intact while new packed metadata is added for new chunks
 
-## CI policy
+## Historical absolute timing advisory
 
-CI now separates correctness checks from benchmark measurement:
+Required CI preserves the old observations without granting them hard timing
+authority:
 
-1. The correctness matrix runs independently from benchmarks and covers the supported codec combinations.
-2. The benchmark matrix runs the small dataset only for the recommended packed `aes-gcm` production modes with `COLDKEEP_COMPRESSION=none` and `COLDKEEP_COMPRESSION=zstd`.
-3. Benchmark outputs are captured as artifacts for inspection. Threshold-based regression comparison is enforced via `--compare` with mode-specific thresholds; violations are reported per the v1.9 regression thresholds policy above.
+1. The correctness matrix and `benchmark-integrity` jobs enforce functional
+   contracts independently from timing.
+2. `benchmark-timing-advisory` runs the `small` dataset for all `none/zstd ×
+   w1/w4` packed `aes-gcm` profiles.
+3. The candidate raw envelope and frozen baseline shape are validated before
+   comparison. Threshold crossings are recorded as
+   `BENCHMARK_TIMING_WARNING`; comparator or evidence defects still fail CI.
+4. Artifacts preserve the raw observation, advisory report, input hashes,
+   violations, and exhaustive checksums.
 
 See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
-and CI workflow for authoritative threshold application.
+and the CI workflow for historical implementation detail.
 
 ## Phase 4 implementation order
 

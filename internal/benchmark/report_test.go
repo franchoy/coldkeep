@@ -1,6 +1,9 @@
 package benchmark
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestParseDatasetPreset(t *testing.T) {
 	preset, err := ParseDatasetPreset("")
@@ -19,6 +22,26 @@ func TestParseDatasetPreset(t *testing.T) {
 		t.Fatalf("expected medium, got %q", preset)
 	}
 
+	preset, err = ParseDatasetPreset("CI-STABLE-V1")
+	if err != nil {
+		t.Fatalf("ParseDatasetPreset ci-stable-v1: %v", err)
+	}
+	if preset != DatasetPresetCIStableV1 {
+		t.Fatalf("expected ci-stable-v1, got %q", preset)
+	}
+
+	for raw, want := range map[string]DatasetPreset{
+		"CI-PAIRED-W1-V1": DatasetPresetCIPairedW1V1,
+		"ci-paired-w4-v1": DatasetPresetCIPairedW4V1,
+		"CI-PAIRED-W1-V2": DatasetPresetCIPairedW1V2,
+		"ci-paired-w4-v2": DatasetPresetCIPairedW4V2,
+	} {
+		preset, err = ParseDatasetPreset(raw)
+		if err != nil || preset != want {
+			t.Fatalf("ParseDatasetPreset(%q): got=%q err=%v", raw, preset, err)
+		}
+	}
+
 	if _, err := ParseDatasetPreset("xlarge"); err == nil {
 		t.Fatal("expected invalid preset error")
 	}
@@ -28,6 +51,26 @@ func TestRunPresetValidatesRepeat(t *testing.T) {
 	_, err := RunPreset(DatasetPresetSmall, 0, ScenarioConfig{})
 	if err == nil {
 		t.Fatal("expected repeat validation error")
+	}
+}
+
+func TestRunPresetCIStableV1RequiresCaseEnvironmentFactory(t *testing.T) {
+	_, err := RunPreset(DatasetPresetCIStableV1, 1, ScenarioConfig{})
+	if err == nil || err.Error() != `preset "ci-stable-v1" requires a per-case environment factory` {
+		t.Fatalf("expected case isolation requirement, got: %v", err)
+	}
+}
+
+func TestRunPresetPairedRequiresCaseEnvironmentFactory(t *testing.T) {
+	for _, preset := range []DatasetPreset{
+		DatasetPresetCIPairedW1V1, DatasetPresetCIPairedW4V1,
+		DatasetPresetCIPairedW1V2, DatasetPresetCIPairedW4V2,
+	} {
+		_, err := RunPreset(preset, 1, ScenarioConfig{})
+		want := fmt.Sprintf("preset %q requires a per-case environment factory", preset)
+		if err == nil || err.Error() != want {
+			t.Fatalf("expected case isolation requirement for %q, got: %v", preset, err)
+		}
 	}
 }
 
@@ -45,6 +88,9 @@ func TestRunPresetWithStubRunner(t *testing.T) {
 	}
 	if report.Dataset != DatasetPresetSmall || report.Repeat != 2 {
 		t.Fatalf("unexpected report header: %+v", report)
+	}
+	if report.Fixture.ID != string(DatasetPresetSmall) {
+		t.Fatalf("unexpected fixture descriptor: %+v", report.Fixture)
 	}
 	if len(report.Iterations) != 2 {
 		t.Fatalf("expected 2 iterations, got %d", len(report.Iterations))

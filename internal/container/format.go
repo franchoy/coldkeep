@@ -72,6 +72,10 @@ type Header struct {
 }
 
 func writeNewContainerHeader(f fsx.File, maxSize int64) error {
+	if maxSize <= ContainerHdrLen {
+		return fmt.Errorf("invalid container max size: %d", maxSize)
+	}
+
 	h := make([]byte, ContainerHdrLen)
 
 	// 0..7 magic
@@ -105,8 +109,14 @@ func writeNewContainerHeader(f fsx.File, maxSize int64) error {
 
 	// 56..63 reserved (left as zero)
 
-	_, err := f.Write(h)
-	return err
+	n, err := f.Write(h)
+	if err != nil {
+		return err
+	}
+	if n != len(h) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func readAndValidateContainerHeader(f fsx.File) (Header, error) {
@@ -145,13 +155,18 @@ func readAndValidateContainerHeader(f fsx.File) (Header, error) {
 		codecID = binary.LittleEndian.Uint16(h[hdrCodecID : hdrCodecID+2])
 	}
 
+	maxSize := int64(binary.LittleEndian.Uint64(h[hdrMaxSize:hdrUIDStart]))
+	if maxSize <= ContainerHdrLen {
+		return Header{}, fmt.Errorf("invalid container max size: %d", maxSize)
+	}
+
 	return Header{
 		FormatMajor: major,
 		FormatMinor: minor,
 		HeaderLen:   hdrLen,
 		Flags:       binary.LittleEndian.Uint32(h[hdrFlags:hdrCreatedAt]),
 		CreatedAt:   int64(binary.LittleEndian.Uint64(h[hdrCreatedAt:hdrMaxSize])),
-		MaxSize:     int64(binary.LittleEndian.Uint64(h[hdrMaxSize:hdrUIDStart])),
+		MaxSize:     maxSize,
 		CodecID:     codecID,
 	}, nil
 }

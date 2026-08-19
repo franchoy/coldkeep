@@ -53,7 +53,7 @@ func RepairChunkLiveRefCountsResultWithDB(dbconn *sql.DB) (result RepairChunkLiv
 	}
 
 	if result.UpdatedChunks > 0 {
-		if _, err := tx.ExecContext(ctx, `
+		mutationResult, err := tx.ExecContext(ctx, `
 			UPDATE chunk
 			SET live_ref_count = (
 				SELECT COUNT(*)
@@ -65,7 +65,11 @@ func RepairChunkLiveRefCountsResultWithDB(dbconn *sql.DB) (result RepairChunkLiv
 				FROM file_chunk fc
 				WHERE fc.chunk_id = chunk.id
 			)
-		`); err != nil {
+		`)
+		if err != nil {
+			return RepairChunkLiveRefCountsResult{}, fmt.Errorf("update chunk.live_ref_count from file_chunk rows: %w", err)
+		}
+		if err := db.RequireRowsAffected(mutationResult, "repair chunk live refcounts", result.UpdatedChunks); err != nil {
 			return RepairChunkLiveRefCountsResult{}, fmt.Errorf("update chunk.live_ref_count from file_chunk rows: %w", err)
 		}
 	}

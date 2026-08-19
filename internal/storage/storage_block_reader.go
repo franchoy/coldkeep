@@ -137,12 +137,13 @@ type storageVerifyContainerReader struct {
 
 func (r storageVerifyContainerReader) ReadStoredPayload(_ context.Context, meta verify.BlockStorageMetadata) ([]byte, error) {
 	converted := &blockMetadata{
-		ID:              meta.BlockID,
-		FormatVersion:   int(meta.FormatVersion),
-		Codec:           meta.Codec,
-		ContainerID:     meta.ContainerID,
-		ContainerName:   meta.ContainerName,
-		ContainerOffset: meta.ContainerOffset,
+		ID:               meta.BlockID,
+		FormatVersion:    int(meta.FormatVersion),
+		Codec:            meta.Codec,
+		ContainerID:      meta.ContainerID,
+		ContainerName:    meta.ContainerName,
+		ContainerMaxSize: meta.ContainerMaxSize,
+		ContainerOffset:  meta.ContainerOffset,
 		Metadata: storagemetadata.BlockStorageMetadata{
 			Compression: storagemetadata.CompressionMetadata{
 				Codec: meta.CompressionCodec,
@@ -174,7 +175,7 @@ func toVerifyBlockStorageMetadata(meta *blockMetadata) verify.BlockStorageMetada
 		ContainerID:      meta.ContainerID,
 		ContainerOffset:  meta.ContainerOffset,
 		ContainerName:    meta.ContainerName,
-		ContainerMaxSize: container.GetContainerMaxSize(),
+		ContainerMaxSize: meta.ContainerMaxSize,
 		FormatVersion:    int64(meta.FormatVersion),
 		Codec:            meta.Codec,
 		PlaintextSize:    meta.Metadata.Sizes.PlaintextSize,
@@ -236,14 +237,15 @@ func (r *StorageBlockReader) mapVerifyPipelineFailure(err error) error {
 
 // blockMetadata represents the persistent metadata about a block.
 type blockMetadata struct {
-	ID              int64
-	FormatVersion   int
-	Codec           string
-	Metadata        storagemetadata.BlockStorageMetadata
-	ContainerID     int64
-	ContainerName   string
-	ContainerOffset int64
-	Nonce           []byte
+	ID               int64
+	FormatVersion    int
+	Codec            string
+	Metadata         storagemetadata.BlockStorageMetadata
+	ContainerID      int64
+	ContainerName    string
+	ContainerMaxSize int64
+	ContainerOffset  int64
+	Nonce            []byte
 }
 
 // loadBlockMetadata queries storage_blocks and container tables to get full block metadata.
@@ -257,7 +259,7 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 			b.id, b.format_version, b.codec, b.plaintext_size,
 			b.compression_codec, b.compression_level, b.compressed_size,
 			b.stored_size, b.container_id, b.container_offset, b.block_hash,
-			b.compressed_hash, b.physical_hash, c.filename
+			b.compressed_hash, b.physical_hash, c.filename, c.max_size
 		FROM storage_blocks b
 		JOIN container c ON b.container_id = c.id
 		WHERE b.id = $1
@@ -287,6 +289,7 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 		&compressedHash,
 		&physicalHash,
 		&meta.ContainerName,
+		&meta.ContainerMaxSize,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("block %d not found", blockID)
@@ -355,9 +358,9 @@ func (r *StorageBlockReader) readStoredPayload(meta *blockMetadata) ([]byte, err
 		return nil, fmt.Errorf("invalid container filename %q: %w", meta.ContainerName, err)
 	}
 
-	// Open container file for reading
-	// Note: We use the maximum container size here; this is just for validation purposes
-	fc, err := container.OpenReadOnlyContainer(containerPath, container.GetContainerMaxSize())
+	// Open against the maximum persisted with this container. The process-global
+	// setting may have changed since the repository artifact was created.
+	fc, err := container.OpenReadOnlyContainer(containerPath, meta.ContainerMaxSize)
 	if err != nil {
 		return nil, fmt.Errorf("open container %s: %w", meta.ContainerName, err)
 	}

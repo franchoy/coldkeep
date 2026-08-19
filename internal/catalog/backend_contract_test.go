@@ -4,577 +4,403 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
 )
 
-// catalogFixtureBase is the fixed UTC base timestamp used by the fixture so that
-// timestamp behavior is deterministic across SQLite and PostgreSQL.
 var catalogFixtureBase = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
-// seedCatalogFixture inserts an identical logical fixture into either backend
-// using backend-neutral SQL. All values are bound through $1-style placeholders
-// with appropriate Go types (bool for the boolean column, time.Time for
-// timestamps) so neither backend's literal conventions leak in.
-//
-// Fixture shape:
-//
-//	logical_file:
-//	  1 current-file.txt    COMPLETED size=11 hash=h1
-//	  2 snapshot-only-file  COMPLETED size=22 hash=h2
-//	physical_file:
-//	  /current/a.txt -> lf 1 (mtime set, is_metadata_complete=true)
-//	  /current/b.txt -> lf 1 (mtime NULL, is_metadata_complete=false)
-//	snapshot:
-//	  snap-full  (full,    label "alpha", created base)
-//	  snap-child (partial, label "beta",  created base+1h, parent snap-full)
-//	snapshot_path:
-//	  /snapshot/file.txt
-//	snapshot_file:
-//	  snap-full -> path -> lf 2
+const catalogFixtureLargeID int64 = 4_000_000_000
+
+// seedCatalogFixture is one backend-neutral fixture for every CAT contract.
+// It deliberately includes null values, duplicate root inputs, equal snapshot
+// timestamps, both reachability sources, and an unreferenced logical file.
 func seedCatalogFixture(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
-	exec := newCatalogFixtureExec(t, dbconn)
-	seedCatalogLogicalFiles(exec)
-	seedCatalogPhysicalFiles(exec)
-	seedCatalogSnapshots(exec)
-	seedCatalogSnapshotFiles(exec)
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := dbconn.ExecContext(context.Background(), query, args...); err != nil {
+			t.Fatalf("seed exec failed: %v\nquery: %s", err, query)
+		}
+	}
+
+	logicalFiles := []struct {
+		id       int64
+		name     string
+		size     int64
+		hash     string
+		refCount int
+		status   string
+	}{
+		{1, "current-file.txt", 11, "h1", 7, "COMPLETED"},
+		{2, "snapshot-only-file.txt", 22, "h2", 1, "COMPLETED"},
+		{3, "both-roots-file.txt", 33, "h3", 2, "COMPLETED"},
+		{4, "unreferenced-file.txt", 44, "h4", 0, "ABORTED"},
+		{5, "incomplete-current-file.txt", 55, "h5", 1, "PROCESSING"},
+		{catalogFixtureLargeID, "large-id-file.txt", 4_000_000_001, "h-large", 9, "COMPLETED"},
+	}
+	for _, row := range logicalFiles {
+		exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
+              VALUES ($1, $2, $3, $4, $5, $6)`,
+			row.id, row.name, row.size, row.hash, row.refCount, row.status)
+	}
+
+	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
+          VALUES ($1, $2, $3, $4, $5)`, "/current/a.txt", 1, 0o644, catalogFixtureBase, true)
+	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
+          VALUES ($1, $2, $3, $4, $5)`, "/current/b.txt", 1, nil, nil, false)
+	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
+          VALUES ($1, $2, $3, $4, $5)`, "/current/both.txt", 3, 0o600, catalogFixtureBase.Add(time.Minute), true)
+	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
+          VALUES ($1, $2, $3, $4, $5)`, "/current/incomplete.txt", 5, nil, nil, false)
+
+	type snapshotRow struct {
+		id, typ       string
+		created       time.Time
+		label, parent any
+	}
+	for _, row := range []snapshotRow{
+		{"snap-full", "full", catalogFixtureBase, "alpha", nil},
+		{"snap-tie-a", "full", catalogFixtureBase, "tie-a", nil},
+		{"snap-tie-b", "full", catalogFixtureBase, "tie-b", nil},
+		{"snap-child", "partial", catalogFixtureBase.Add(time.Hour), "beta", "snap-full"},
+		{"snap-null-label", "full", catalogFixtureBase.Add(2 * time.Hour), nil, nil},
+	} {
+		exec(`INSERT INTO snapshot (id, created_at, type, label, parent_id)
+              VALUES ($1, $2, $3, $4, $5)`, row.id, row.created, row.typ, row.label, row.parent)
+	}
+	for _, row := range []struct {
+		id   int64
+		path string
+	}{
+		{1, "/snapshot/one.txt"},
+		{2, "/snapshot/two.txt"},
+		{3, "/snapshot/both.txt"},
+	} {
+		exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)`, row.id, row.path)
+	}
+	for _, row := range []struct {
+		snapshotID            string
+		pathID, logicalFileID int64
+	}{
+		{"snap-full", 1, 2},
+		{"snap-tie-a", 2, 2},
+		{"snap-child", 3, 3},
+	} {
+		exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)`,
+			row.snapshotID, row.pathID, row.logicalFileID)
+	}
 }
 
-type catalogFixtureExec func(string, ...any)
+// CAT-001 proves logical-file lookup, missing results, large int64 values,
+// deterministic reads, and non-mutation on both backends.
+func TestCatalogContractFindLogicalFileAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+		assertNilLogicalFile(t, svc, 9999)
+		assertLogicalFile(t, svc, 1, catalog.LogicalFileRef{ID: 1, OriginalName: "current-file.txt", TotalSize: 11, FileHash: "h1", RefCount: 7, Status: "COMPLETED"})
+		assertLogicalFile(t, svc, catalogFixtureLargeID, catalog.LogicalFileRef{ID: catalogFixtureLargeID, OriginalName: "large-id-file.txt", TotalSize: 4_000_000_001, FileHash: "h-large", RefCount: 9, Status: "COMPLETED"})
+		assertCancelledCatalogErrors(t, svc, backend.DB)
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("CAT-001 reads mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
+}
 
-func newCatalogFixtureExec(t *testing.T, dbconn *sql.DB) catalogFixtureExec {
+func assertNilLogicalFile(t *testing.T, svc interface {
+	FindLogicalFile(context.Context, int64) (*catalog.LogicalFileRef, error)
+}, id int64) {
 	t.Helper()
-	ctx := context.Background()
-	return func(query string, args ...any) {
-		t.Helper()
-		if _, err := dbconn.ExecContext(ctx, query, args...); err != nil {
-			t.Fatalf("seed exec failed: %v\nquery: %s", err, query)
+	got, err := svc.FindLogicalFile(context.Background(), id)
+	if err != nil || got != nil {
+		t.Fatalf("FindLogicalFile(%d): got (%+v, %v), want (nil, nil)", id, got, err)
+	}
+}
+
+func assertLogicalFile(t *testing.T, svc interface {
+	FindLogicalFile(context.Context, int64) (*catalog.LogicalFileRef, error)
+}, id int64, want catalog.LogicalFileRef) {
+	t.Helper()
+	first, err := svc.FindLogicalFile(context.Background(), id)
+	if err != nil || first == nil {
+		t.Fatalf("FindLogicalFile(%d): got (%+v, %v)", id, first, err)
+	}
+	second, err := svc.FindLogicalFile(context.Background(), id)
+	if err != nil || second == nil {
+		t.Fatalf("FindLogicalFile(%d) repeated: got (%+v, %v)", id, second, err)
+	}
+	if !reflect.DeepEqual(*first, want) || !reflect.DeepEqual(*second, want) {
+		t.Fatalf("FindLogicalFile(%d): got %+v then %+v, want %+v", id, first, second, want)
+	}
+}
+
+// CAT-002 proves deterministic physical-file ordering and nullable/boolean
+// semantics. The public contract normalizes a NULL mode to zero.
+func TestCatalogContractFindPhysicalFilesAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+		empty, err := svc.FindPhysicalFilesForLogicalFile(context.Background(), 9999)
+		if err != nil || len(empty) != 0 {
+			t.Fatalf("FindPhysicalFilesForLogicalFile(missing): got (%+v, %v), want empty nil-error result", empty, err)
+		}
+		refs := requirePhysicalFiles(t, svc, 1)
+		if got := []string{refs[0].Path, refs[1].Path}; !reflect.DeepEqual(got, []string{"/current/a.txt", "/current/b.txt"}) {
+			t.Fatalf("physical-file ordering: got %v", got)
+		}
+		if refs[0].LogicalFileID != 1 || refs[0].Mode != 0o644 || refs[0].MTime == nil || !refs[0].MTime.Equal(catalogFixtureBase) || !refs[0].IsMetadataComplete {
+			t.Fatalf("complete physical file: got %+v", refs[0])
+		}
+		if refs[1].LogicalFileID != 1 || refs[1].Mode != 0 || refs[1].MTime != nil || refs[1].IsMetadataComplete {
+			t.Fatalf("incomplete physical file: got %+v", refs[1])
+		}
+		if repeated := requirePhysicalFiles(t, svc, 1); !reflect.DeepEqual(refs, repeated) {
+			t.Fatalf("physical-file reads are not deterministic: first=%+v repeated=%+v", refs, repeated)
+		}
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("CAT-002 reads mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
+}
+
+func requirePhysicalFiles(t *testing.T, svc interface {
+	FindPhysicalFilesForLogicalFile(context.Context, int64) ([]catalog.PhysicalFileRef, error)
+}, id int64) []catalog.PhysicalFileRef {
+	t.Helper()
+	refs, err := svc.FindPhysicalFilesForLogicalFile(context.Background(), id)
+	if err != nil || len(refs) != 2 {
+		t.Fatalf("FindPhysicalFilesForLogicalFile(%d): got (%+v, %v), want two rows", id, refs, err)
+	}
+	return refs
+}
+
+// CAT-003 proves snapshot lookup of root/child/null-label records, timestamp
+// normalization, stable missing results, and repeatability.
+func TestCatalogContractFindSnapshotAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+		missing, err := svc.FindSnapshot(context.Background(), "does-not-exist")
+		if err != nil || missing != nil {
+			t.Fatalf("FindSnapshot(missing): got (%+v, %v), want (nil, nil)", missing, err)
+		}
+		assertSnapshot(t, svc, "snap-full", "full", "alpha", "", catalogFixtureBase)
+		assertSnapshot(t, svc, "snap-child", "partial", "beta", "snap-full", catalogFixtureBase.Add(time.Hour))
+		assertSnapshot(t, svc, "snap-null-label", "full", "", "", catalogFixtureBase.Add(2*time.Hour))
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("CAT-003 reads mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
+}
+
+func assertSnapshot(t *testing.T, svc interface {
+	FindSnapshot(context.Context, string) (*catalog.SnapshotRef, error)
+}, id, typ, label, parent string, created time.Time) {
+	t.Helper()
+	first, err := svc.FindSnapshot(context.Background(), id)
+	if err != nil || first == nil {
+		t.Fatalf("FindSnapshot(%q): got (%+v, %v)", id, first, err)
+	}
+	second, err := svc.FindSnapshot(context.Background(), id)
+	if err != nil || !reflect.DeepEqual(first, second) {
+		t.Fatalf("FindSnapshot(%q) repeat: got (%+v, %v), first=%+v", id, second, err, first)
+	}
+	if first.ID != id || first.Type != typ || first.Label != label || first.ParentID != parent || !first.CreatedAt.Equal(created) {
+		t.Fatalf("FindSnapshot(%q): got %+v", id, first)
+	}
+}
+
+// CAT-004 proves list ordering, equal-time tie breaking, filters, inclusive
+// time bounds, ordinary literal substring behavior, and limit semantics.
+func TestCatalogContractListSnapshotsAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{}, "snap-null-label", "snap-child", "snap-tie-b", "snap-tie-a", "snap-full")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{Type: "full", LabelSubstring: "tie"}, "snap-tie-b", "snap-tie-a")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{LabelSubstring: "bet"}, "snap-child")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{Since: timePointer(catalogFixtureBase.Add(time.Hour))}, "snap-null-label", "snap-child")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{Until: timePointer(catalogFixtureBase)}, "snap-tie-b", "snap-tie-a", "snap-full")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{Limit: 2}, "snap-null-label", "snap-child")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{Limit: 0}, "snap-null-label", "snap-child", "snap-tie-b", "snap-tie-a", "snap-full")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{Limit: -1}, "snap-null-label", "snap-child", "snap-tie-b", "snap-tie-a", "snap-full")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{LabelSubstring: "absent"})
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("CAT-004 reads mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
+}
+
+func timePointer(value time.Time) *time.Time { return &value }
+
+func assertSnapshotIDs(t *testing.T, svc interface {
+	ListSnapshots(context.Context, catalog.SnapshotFilter) ([]catalog.SnapshotRef, error)
+}, filter catalog.SnapshotFilter, want ...string) {
+	t.Helper()
+	refs, err := svc.ListSnapshots(context.Background(), filter)
+	if err != nil {
+		t.Fatalf("ListSnapshots(%+v): %v", filter, err)
+	}
+	got := make([]string, len(refs))
+	for i, ref := range refs {
+		got[i] = ref.ID
+	}
+	if len(want) == 0 && len(got) == 0 {
+		return
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListSnapshots(%+v): got %v, want %v", filter, got, want)
+	}
+	for _, ref := range refs {
+		if ref.ID == "snap-null-label" && ref.Label != "" {
+			t.Fatalf("ListSnapshots null label: got %q, want public empty representation", ref.Label)
 		}
 	}
 }
 
-func seedCatalogLogicalFiles(exec catalogFixtureExec) {
-	exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
-	      VALUES ($1, $2, $3, $4, $5, $6)
-	      ON CONFLICT (id) DO UPDATE SET
-	        original_name = EXCLUDED.original_name,
-	        total_size = EXCLUDED.total_size,
-	        file_hash = EXCLUDED.file_hash,
-	        ref_count = EXCLUDED.ref_count,
-	        status = EXCLUDED.status`,
-		1, "current-file.txt", 11, "h1", 1, "COMPLETED")
-	exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status)
-	      VALUES ($1, $2, $3, $4, $5, $6)
-	      ON CONFLICT (id) DO UPDATE SET
-	        original_name = EXCLUDED.original_name,
-	        total_size = EXCLUDED.total_size,
-	        file_hash = EXCLUDED.file_hash,
-	        ref_count = EXCLUDED.ref_count,
-	        status = EXCLUDED.status`,
-		2, "snapshot-only-file.txt", 22, "h2", 1, "COMPLETED")
-}
-
-func seedCatalogPhysicalFiles(exec catalogFixtureExec) {
-	// Physical file with full metadata (non-null mtime, is_metadata_complete=true).
-	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
-	      VALUES ($1, $2, $3, $4, $5)
-	      ON CONFLICT (path) DO UPDATE SET
-	        logical_file_id = EXCLUDED.logical_file_id,
-	        mode = EXCLUDED.mode,
-	        mtime = EXCLUDED.mtime,
-	        is_metadata_complete = EXCLUDED.is_metadata_complete`,
-		"/current/a.txt", 1, 0o644, catalogFixtureBase, true)
-	// Physical file with NULL mtime and is_metadata_complete=false (nullable case).
-	exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete)
-	      VALUES ($1, $2, $3, $4, $5)
-	      ON CONFLICT (path) DO UPDATE SET
-	        logical_file_id = EXCLUDED.logical_file_id,
-	        mode = EXCLUDED.mode,
-	        mtime = EXCLUDED.mtime,
-	        is_metadata_complete = EXCLUDED.is_metadata_complete`,
-		"/current/b.txt", 1, nil, nil, false)
-}
-
-func seedCatalogSnapshots(exec catalogFixtureExec) {
-	exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)
-	      ON CONFLICT (id) DO UPDATE SET
-	        created_at = EXCLUDED.created_at,
-	        type = EXCLUDED.type,
-	        label = EXCLUDED.label,
-	        parent_id = NULL`,
-		"snap-full", catalogFixtureBase, "full", "alpha")
-	exec(`INSERT INTO snapshot (id, created_at, type, label, parent_id) VALUES ($1, $2, $3, $4, $5)
-	      ON CONFLICT (id) DO UPDATE SET
-	        created_at = EXCLUDED.created_at,
-	        type = EXCLUDED.type,
-	        label = EXCLUDED.label,
-	        parent_id = EXCLUDED.parent_id`,
-		"snap-child", catalogFixtureBase.Add(time.Hour), "partial", "beta", "snap-full")
-}
-
-func seedCatalogSnapshotFiles(exec catalogFixtureExec) {
-	exec(`INSERT INTO snapshot_path (id, path) VALUES ($1, $2)
-	      ON CONFLICT (id) DO UPDATE SET path = EXCLUDED.path`,
-		1, "/snapshot/file.txt")
-	exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)
-	      ON CONFLICT (snapshot_id, path_id) DO UPDATE SET logical_file_id = EXCLUDED.logical_file_id`,
-		"snap-full", 1, 2)
-}
-
-type logicalFileFinder interface {
-	FindLogicalFile(context.Context, int64) (*catalog.LogicalFileRef, error)
-}
-
-// TestCatalogContractFindLogicalFileAcrossBackends verifies FindLogicalFile
-// returns identical results on every backend.
-func TestCatalogContractFindLogicalFileAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogFindLogicalFile(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
-}
-
-func assertCatalogFindLogicalFile(t *testing.T, svc logicalFileFinder) {
-	t.Helper()
-	ctx := context.Background()
-	assertMissingLogicalFile(t, svc, ctx, 9999)
-	assertLogicalFileRef(t, svc, ctx, 1)
-}
-
-func assertMissingLogicalFile(t *testing.T, svc logicalFileFinder, ctx context.Context, id int64) {
-	t.Helper()
-	missing, err := svc.FindLogicalFile(ctx, id)
-	if err != nil {
-		t.Fatalf("FindLogicalFile(missing): %v", err)
-	}
-	if missing != nil {
-		t.Fatalf("FindLogicalFile(missing): want nil, got %+v", missing)
-	}
-}
-
-func assertLogicalFileRef(t *testing.T, svc logicalFileFinder, ctx context.Context, id int64) {
-	t.Helper()
-	got := requireLogicalFileRef(t, svc, ctx, id)
-	assertLogicalFileFields(t, got, expectedLogicalFileRef())
-}
-
-func requireLogicalFileRef(t *testing.T, svc logicalFileFinder, ctx context.Context, id int64) *catalog.LogicalFileRef {
-	t.Helper()
-	got, err := svc.FindLogicalFile(ctx, id)
-	if err != nil {
-		t.Fatalf("FindLogicalFile(%d): %v", id, err)
-	}
-	if got == nil {
-		t.Fatalf("FindLogicalFile(%d): want ref, got nil", id)
-	}
-	return got
-}
-
-func expectedLogicalFileRef() catalog.LogicalFileRef {
-	return catalog.LogicalFileRef{
-		ID:           1,
-		OriginalName: "current-file.txt",
-		TotalSize:    11,
-		FileHash:     "h1",
-		RefCount:     1,
-		Status:       "COMPLETED",
-	}
-}
-
-func assertLogicalFileFields(t *testing.T, got *catalog.LogicalFileRef, want catalog.LogicalFileRef) {
-	t.Helper()
-	if got.ID != want.ID {
-		t.Errorf("ID: got %d, want %d", got.ID, want.ID)
-	}
-	if got.OriginalName != want.OriginalName {
-		t.Errorf("OriginalName: got %q, want %q", got.OriginalName, want.OriginalName)
-	}
-	if got.TotalSize != want.TotalSize {
-		t.Errorf("TotalSize: got %d, want %d", got.TotalSize, want.TotalSize)
-	}
-	if got.FileHash != want.FileHash {
-		t.Errorf("FileHash: got %q, want %q", got.FileHash, want.FileHash)
-	}
-	if got.RefCount != want.RefCount {
-		t.Errorf("RefCount: got %d, want %d", got.RefCount, want.RefCount)
-	}
-	if got.Status != want.Status {
-		t.Errorf("Status: got %q, want %q", got.Status, want.Status)
-	}
-}
-
-// TestCatalogContractFindPhysicalFilesAcrossBackends verifies ordering, nullable
-// metadata, and boolean handling (the most common SQLite/PostgreSQL trap) are
-// consistent across backends.
-func TestCatalogContractFindPhysicalFilesAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogFindPhysicalFiles(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
-}
-
-type physicalFileFinder interface {
-	FindPhysicalFilesForLogicalFile(context.Context, int64) ([]catalog.PhysicalFileRef, error)
-}
-
-func assertCatalogFindPhysicalFiles(t *testing.T, svc physicalFileFinder) {
-	t.Helper()
-	ctx := context.Background()
-	assertMissingPhysicalFiles(t, svc, ctx, 9999)
-	refs := requirePhysicalFiles(t, svc, ctx, 1, 2)
-	assertPhysicalFileOrdering(t, refs)
-	assertCompletePhysicalFile(t, refs[0])
-	assertIncompletePhysicalFile(t, refs[1])
-}
-
-func assertMissingPhysicalFiles(t *testing.T, svc physicalFileFinder, ctx context.Context, id int64) {
-	t.Helper()
-	refs := requirePhysicalFiles(t, svc, ctx, id, 0)
-	if len(refs) != 0 {
-		t.Fatalf("FindPhysicalFilesForLogicalFile(missing): want empty, got %d", len(refs))
-	}
-}
-
-func requirePhysicalFiles(
-	t *testing.T,
-	svc physicalFileFinder,
-	ctx context.Context,
-	id int64,
-	wantRows int,
-) []catalog.PhysicalFileRef {
-	t.Helper()
-	refs, err := svc.FindPhysicalFilesForLogicalFile(ctx, id)
-	if err != nil {
-		t.Fatalf("FindPhysicalFilesForLogicalFile(%d): %v", id, err)
-	}
-	if len(refs) != wantRows {
-		t.Fatalf("FindPhysicalFilesForLogicalFile(%d): want %d rows, got %d", id, wantRows, len(refs))
-	}
-	return refs
-}
-
-func assertPhysicalFileOrdering(t *testing.T, refs []catalog.PhysicalFileRef) {
-	t.Helper()
-	if refs[0].Path != "/current/a.txt" || refs[1].Path != "/current/b.txt" {
-		t.Fatalf("ordering: got %q then %q", refs[0].Path, refs[1].Path)
-	}
-}
-
-func assertCompletePhysicalFile(t *testing.T, ref catalog.PhysicalFileRef) {
-	t.Helper()
-	if ref.MTime == nil {
-		t.Errorf("row a: expected non-nil MTime")
-	} else if !ref.MTime.Equal(catalogFixtureBase) {
-		t.Errorf("row a: MTime = %v, want %v", ref.MTime, catalogFixtureBase)
-	}
-	if !ref.IsMetadataComplete {
-		t.Errorf("row a: IsMetadataComplete = false, want true")
-	}
-}
-
-func assertIncompletePhysicalFile(t *testing.T, ref catalog.PhysicalFileRef) {
-	t.Helper()
-	if ref.MTime != nil {
-		t.Errorf("row b: expected nil MTime for NULL, got %v", ref.MTime)
-	}
-	if ref.IsMetadataComplete {
-		t.Errorf("row b: IsMetadataComplete = true, want false")
-	}
-}
-
-// TestCatalogContractFindSnapshotAcrossBackends verifies snapshot identity,
-// nullable parent/label, and timestamp parsing are consistent across backends.
-func TestCatalogContractFindSnapshotAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogFindSnapshot(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
-}
-
-type snapshotFinder interface {
-	FindSnapshot(context.Context, string) (*catalog.SnapshotRef, error)
-}
-
-func assertCatalogFindSnapshot(t *testing.T, svc snapshotFinder) {
-	t.Helper()
-	ctx := context.Background()
-	assertMissingCatalogSnapshot(t, svc, ctx, "does-not-exist")
-	assertRootCatalogSnapshot(t, requireCatalogSnapshot(t, svc, ctx, "snap-full"))
-	assertChildCatalogSnapshot(t, requireCatalogSnapshot(t, svc, ctx, "snap-child"))
-}
-
-func assertMissingCatalogSnapshot(t *testing.T, svc snapshotFinder, ctx context.Context, id string) {
-	t.Helper()
-	missing, err := svc.FindSnapshot(ctx, id)
-	if err != nil {
-		t.Fatalf("FindSnapshot(missing): %v", err)
-	}
-	if missing != nil {
-		t.Fatalf("FindSnapshot(missing): want nil, got %+v", missing)
-	}
-}
-
-func requireCatalogSnapshot(t *testing.T, svc snapshotFinder, ctx context.Context, id string) *catalog.SnapshotRef {
-	t.Helper()
-	ref, err := svc.FindSnapshot(ctx, id)
-	if err != nil {
-		t.Fatalf("FindSnapshot(%s): %v", id, err)
-	}
-	if ref == nil {
-		t.Fatalf("FindSnapshot(%s): want ref, got nil", id)
-	}
-	return ref
-}
-
-func assertRootCatalogSnapshot(t *testing.T, ref *catalog.SnapshotRef) {
-	t.Helper()
-	if ref.ID != "snap-full" || ref.Type != "full" || ref.Label != "alpha" {
-		t.Fatalf("FindSnapshot(snap-full): unexpected ref %+v", ref)
-	}
-	if ref.ParentID != "" {
-		t.Errorf("FindSnapshot(snap-full): ParentID = %q, want empty", ref.ParentID)
-	}
-	if !ref.CreatedAt.Equal(catalogFixtureBase) {
-		t.Errorf("FindSnapshot(snap-full): CreatedAt = %v, want %v", ref.CreatedAt, catalogFixtureBase)
-	}
-}
-
-func assertChildCatalogSnapshot(t *testing.T, ref *catalog.SnapshotRef) {
-	t.Helper()
-	if ref.Type != "partial" || ref.Label != "beta" || ref.ParentID != "snap-full" {
-		t.Fatalf("FindSnapshot(snap-child): unexpected ref %+v", ref)
-	}
-}
-
-type snapshotLister interface {
-	ListSnapshots(context.Context, catalog.SnapshotFilter) ([]catalog.SnapshotRef, error)
-}
-
-// TestCatalogContractListSnapshotsAcrossBackends verifies ordering (newest
-// first), type filtering, label substring matching (LIKE), Since/Until bounds,
-// and Limit are consistent across backends.
-func TestCatalogContractListSnapshotsAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogListSnapshots(t, catalog.NewServiceFromSQL(dbconn))
-		})
-	}
-}
-
-func assertCatalogListSnapshots(t *testing.T, svc snapshotLister) {
-	t.Helper()
-	ctx := context.Background()
-	assertAllSnapshots(t, svc, ctx)
-	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{Type: "full"}, "type=full", "snap-full")
-	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{LabelSubstring: "alph"}, "label~alph", "snap-full")
-	assertSnapshotTimeBounds(t, svc, ctx)
-	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{Limit: 1}, "limit=1", "snap-child")
-}
-
-func assertAllSnapshots(t *testing.T, svc snapshotLister, ctx context.Context) {
-	t.Helper()
-	all := requireSnapshots(t, svc, ctx, catalog.SnapshotFilter{}, "all")
-	if len(all) != 2 {
-		t.Fatalf("ListSnapshots(all): want 2, got %d", len(all))
-	}
-	if all[0].ID != "snap-child" || all[1].ID != "snap-full" {
-		t.Fatalf("ListSnapshots(all): ordering got %q then %q", all[0].ID, all[1].ID)
-	}
-}
-
-func assertSnapshotTimeBounds(t *testing.T, svc snapshotLister, ctx context.Context) {
-	t.Helper()
-	since := catalogFixtureBase.Add(30 * time.Minute)
-	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{Since: &since}, "since", "snap-child")
-
-	until := catalogFixtureBase.Add(30 * time.Minute)
-	assertFilteredSnapshot(t, svc, ctx, catalog.SnapshotFilter{Until: &until}, "until", "snap-full")
-}
-
-func assertFilteredSnapshot(
-	t *testing.T,
-	svc snapshotLister,
-	ctx context.Context,
-	filter catalog.SnapshotFilter,
-	label string,
-	wantID string,
-) {
-	t.Helper()
-	refs := requireSnapshots(t, svc, ctx, filter, label)
-	if len(refs) != 1 || refs[0].ID != wantID {
-		t.Fatalf("ListSnapshots(%s): got %+v", label, refs)
-	}
-}
-
-func requireSnapshots(
-	t *testing.T,
-	svc snapshotLister,
-	ctx context.Context,
-	filter catalog.SnapshotFilter,
-	label string,
-) []catalog.SnapshotRef {
-	t.Helper()
-	refs, err := svc.ListSnapshots(ctx, filter)
-	if err != nil {
-		t.Fatalf("ListSnapshots(%s): %v", label, err)
-	}
-	return refs
-}
-
-// TestCatalogContractLoadReachabilityRootsAcrossBackends verifies the current
-// and snapshot reachability sets are populated from the correct sources and
-// remain separate. This boundary is safety-critical for Phase 6 GC planning.
+// CAT-005 proves GC-safety root sets are unique, separated by source, include
+// a legitimately both-reachable file in both sets, and are independent maps.
 func TestCatalogContractLoadReachabilityRootsAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			seedCatalogFixture(t, dbconn)
-			assertCatalogReachabilityRoots(t, catalog.NewServiceFromSQL(dbconn))
-		})
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+		roots, err := svc.LoadReachabilityRoots(context.Background())
+		if err != nil || roots == nil {
+			t.Fatalf("LoadReachabilityRoots: got (%+v, %v)", roots, err)
+		}
+		assertIDSet(t, roots.Current, 1, 3, 5)
+		assertIDSet(t, roots.Snapshot, 2, 3)
+		if _, ok := roots.Current[4]; ok {
+			t.Fatal("unreferenced logical file appears in current roots")
+		}
+		if _, ok := roots.Snapshot[1]; ok {
+			t.Fatal("current-only logical file appears in snapshot roots")
+		}
+		roots.Current[99] = struct{}{}
+		if _, ok := roots.Snapshot[99]; ok {
+			t.Fatal("current and snapshot root maps alias each other")
+		}
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("CAT-005 reads mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
+}
+
+func assertIDSet(t *testing.T, got map[int64]struct{}, want ...int64) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("root set length: got %d, want %d (%v)", len(got), len(want), want)
+	}
+	for _, id := range want {
+		if _, ok := got[id]; !ok {
+			t.Fatalf("root set missing %d: got %v", id, got)
+		}
 	}
 }
 
-type reachabilityRootLoader interface {
-	LoadReachabilityRoots(context.Context) (*catalog.ReachabilityRoots, error)
-}
-
-func assertCatalogReachabilityRoots(t *testing.T, svc reachabilityRootLoader) {
-	t.Helper()
-	roots := requireCatalogReachabilityRoots(t, svc)
-	assertCatalogCurrentReachabilityRoots(t, roots.Current)
-	assertCatalogSnapshotReachabilityRoots(t, roots.Snapshot)
-}
-
-func requireCatalogReachabilityRoots(t *testing.T, svc reachabilityRootLoader) *catalog.ReachabilityRoots {
-	t.Helper()
-	roots, err := svc.LoadReachabilityRoots(context.Background())
-	if err != nil {
-		t.Fatalf("LoadReachabilityRoots: %v", err)
-	}
-	if roots == nil {
-		t.Fatal("LoadReachabilityRoots: want non-nil")
-	}
-	return roots
-}
-
-func assertCatalogCurrentReachabilityRoots(t *testing.T, current map[int64]struct{}) {
-	t.Helper()
-	assertCatalogReachabilityContains(t, current, 1, "Current should contain logical file 1")
-	assertCatalogReachabilityMissing(t, current, 2, "Current should NOT contain logical file 2 (snapshot-only)")
-	assertCatalogReachabilitySize(t, current, 1, "Current")
-}
-
-func assertCatalogSnapshotReachabilityRoots(t *testing.T, snapshot map[int64]struct{}) {
-	t.Helper()
-	assertCatalogReachabilityContains(t, snapshot, 2, "Snapshot should contain logical file 2")
-	assertCatalogReachabilityMissing(t, snapshot, 1, "Snapshot should NOT contain logical file 1 (current-only)")
-	assertCatalogReachabilitySize(t, snapshot, 1, "Snapshot")
-}
-
-func assertCatalogReachabilityContains(t *testing.T, set map[int64]struct{}, id int64, message string) {
-	t.Helper()
-	if _, ok := set[id]; !ok {
-		t.Error(message)
-	}
-}
-
-func assertCatalogReachabilityMissing(t *testing.T, set map[int64]struct{}, id int64, message string) {
-	t.Helper()
-	if _, ok := set[id]; ok {
-		t.Error(message)
-	}
-}
-
-func assertCatalogReachabilitySize(t *testing.T, set map[int64]struct{}, want int, label string) {
-	t.Helper()
-	if len(set) != want {
-		t.Errorf("%s should hold exactly %d unique id, got %d", label, want, len(set))
-	}
-}
-
-// TestCatalogContractDeferredMethodsAcrossBackends verifies every deferred
-// catalog method returns ErrNotImplemented consistently on both backends, making
-// the incomplete boundary explicit rather than silently succeeding.
+// CAT-006 preserves the deliberately deferred API boundary and proves those
+// methods cannot return partial results or mutate the catalog.
 func TestCatalogContractDeferredMethodsAcrossBackends(t *testing.T) {
-	for _, backend := range catalogBackends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			dbconn := backend.Open(t)
-			svc := catalog.NewServiceFromSQL(dbconn)
-			ctx := context.Background()
-			before := countCatalogLogicalFilesBackend(t, dbconn)
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+		graph, err := svc.LoadSnapshotGraph(context.Background())
+		assertDeferred(t, "LoadSnapshotGraph", err, graph)
+		placements, err := svc.LoadChunkPlacements(context.Background(), 1)
+		assertDeferred(t, "LoadChunkPlacements", err, placements)
+		restorePlan, err := svc.LoadRestorePlanMetadata(context.Background(), catalog.RestorePlanInput{FileID: 1})
+		assertDeferred(t, "LoadRestorePlanMetadata", err, restorePlan)
+		gcPlan, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{})
+		assertDeferred(t, "LoadGCPlanMetadata", err, gcPlan)
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("deferred catalog methods mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
+}
 
-			graph, err := svc.LoadSnapshotGraph(ctx)
-			if !errors.Is(err, catalog.ErrNotImplemented) {
-				t.Errorf("LoadSnapshotGraph: want ErrNotImplemented via errors.Is, got %v", err)
-			}
-			if !catalog.IsDeferred(err) {
-				t.Errorf("LoadSnapshotGraph: want catalog.IsDeferred=true, got %v", err)
-			}
-			if graph != nil {
-				t.Errorf("LoadSnapshotGraph: want nil graph on deferred path, got %+v", graph)
-			}
-
-			placements, err := svc.LoadChunkPlacements(ctx, 1)
-			if !errors.Is(err, catalog.ErrNotImplemented) {
-				t.Errorf("LoadChunkPlacements: want ErrNotImplemented via errors.Is, got %v", err)
-			}
-			if !catalog.IsDeferred(err) {
-				t.Errorf("LoadChunkPlacements: want catalog.IsDeferred=true, got %v", err)
-			}
-			if placements != nil {
-				t.Errorf("LoadChunkPlacements: want nil placements on deferred path, got %+v", placements)
-			}
-
-			restorePlan, err := svc.LoadRestorePlanMetadata(ctx, catalog.RestorePlanInput{FileID: 1})
-			if !errors.Is(err, catalog.ErrNotImplemented) {
-				t.Errorf("LoadRestorePlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
-			}
-			if !catalog.IsDeferred(err) {
-				t.Errorf("LoadRestorePlanMetadata: want catalog.IsDeferred=true, got %v", err)
-			}
-			if restorePlan != nil {
-				t.Errorf("LoadRestorePlanMetadata: want nil metadata on deferred path, got %+v", restorePlan)
-			}
-
-			gcPlan, err := svc.LoadGCPlanMetadata(ctx, catalog.GCPlanInput{})
-			if !errors.Is(err, catalog.ErrNotImplemented) {
-				t.Errorf("LoadGCPlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
-			}
-			if !catalog.IsDeferred(err) {
-				t.Errorf("LoadGCPlanMetadata: want catalog.IsDeferred=true, got %v", err)
-			}
-			if gcPlan != nil {
-				t.Errorf("LoadGCPlanMetadata: want nil metadata on deferred path, got %+v", gcPlan)
-			}
-
-			after := countCatalogLogicalFilesBackend(t, dbconn)
-			if after != before {
-				t.Fatalf("deferred catalog methods should not mutate logical_file rows: before=%d after=%d", before, after)
-			}
-		})
+func assertDeferred(t *testing.T, name string, err error, result any) {
+	t.Helper()
+	if !errors.Is(err, catalog.ErrNotImplemented) || !catalog.IsDeferred(err) {
+		t.Errorf("%s: want catalog.ErrNotImplemented, got %v", name, err)
+	}
+	if !isNil(result) {
+		t.Errorf("%s: want nil result, got %#v", name, result)
 	}
 }
 
-func countCatalogLogicalFilesBackend(t *testing.T, dbconn *sql.DB) int {
-	t.Helper()
-
-	var count int
-	if err := dbconn.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM logical_file`).Scan(&count); err != nil {
-		t.Fatalf("count logical_file rows: %v", err)
+func isNil(value any) bool {
+	if value == nil {
+		return true
 	}
-	return count
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Slice, reflect.Map, reflect.Interface:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+// CAT-007 adds bounded portable cancelled-context assertions. Errors must not
+// be converted to not-found results, and cancelled reads must not mutate state.
+func assertCancelledCatalogErrors(t *testing.T, svc catalog.Catalog, dbconn *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := catalogStateCounts(t, dbconn)
+	if ref, err := svc.FindLogicalFile(ctx, 1); err == nil || ref != nil {
+		t.Errorf("cancelled FindLogicalFile: got (%+v, %v), want (nil, error)", ref, err)
+	}
+	if refs, err := svc.FindPhysicalFilesForLogicalFile(ctx, 1); err == nil || refs != nil {
+		t.Errorf("cancelled FindPhysicalFilesForLogicalFile: got (%+v, %v), want (nil, error)", refs, err)
+	}
+	if ref, err := svc.FindSnapshot(ctx, "snap-full"); err == nil || ref != nil {
+		t.Errorf("cancelled FindSnapshot: got (%+v, %v), want (nil, error)", ref, err)
+	}
+	if refs, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{}); err == nil || refs != nil {
+		t.Errorf("cancelled ListSnapshots: got (%+v, %v), want (nil, error)", refs, err)
+	}
+	if roots, err := svc.LoadReachabilityRoots(ctx); err == nil || roots != nil {
+		t.Errorf("cancelled LoadReachabilityRoots: got (%+v, %v), want (nil, error)", roots, err)
+	}
+	if after := catalogStateCounts(t, dbconn); after != before {
+		t.Errorf("cancelled catalog reads mutated catalog state: before=%+v after=%+v", before, after)
+	}
+}
+
+type catalogStateCount struct {
+	logicalFiles  int
+	physicalFiles int
+	snapshots     int
+	snapshotFiles int
+}
+
+func catalogStateCounts(t *testing.T, dbconn *sql.DB) catalogStateCount {
+	t.Helper()
+	var result catalogStateCount
+	for _, count := range []struct {
+		table string
+		dest  *int
+	}{
+		{"logical_file", &result.logicalFiles},
+		{"physical_file", &result.physicalFiles},
+		{"snapshot", &result.snapshots},
+		{"snapshot_file", &result.snapshotFiles},
+	} {
+		if err := dbconn.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM `+count.table).Scan(count.dest); err != nil {
+			t.Fatalf("count %s rows: %v", count.table, err)
+		}
+	}
+	return result
 }
