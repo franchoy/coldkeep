@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.11%20ready%20for%20release-blue)
+![Status](https://img.shields.io/badge/status-v1.13.12%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -35,14 +35,15 @@ a valid released baseline, but its earlier final-v1.x conclusion was superseded
 after release by a roadmap-to-code audit that identified remaining
 must-before-v2 work.
 
-v1.13.11 has completed Phases 0–20 and is ready as a pre-release candidate for safety
-and backend compatibility gate closure. One pull request is authorized only
-after the immutable commit containing the final gate contract passes
-candidate-head CI, Required Gate, CodeQL, and the complete clean local Profile
-A gate. Merge, tag, and publication remain later operations. v1.13.12 and
-v1.13.13 remain required follow-on releases; SQLite-first remains a future
-local-product direction, PostgreSQL compatibility remains required, and v2.0
-implementation has not started.
+v1.13.11 is complete, merged, tagged, and published. It closed the safety and
+backend-compatibility gate at merge commit
+`507859daccf25594142c61e5ab8209a751fb579a` without closing v1.x as a whole.
+
+v1.13.12 is the active release for mandatory engine and catalog completion.
+v1.13.13 remains the required final independent v1.x and v2 handoff gate.
+SQLite-default portable-repository productization remains a future v2.x
+objective, PostgreSQL compatibility remains required, and v2.x implementation
+is not authorized.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.

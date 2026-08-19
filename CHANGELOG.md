@@ -20,7 +20,12 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.11 - 2026-08-18 — Safety and Backend Compatibility Gate Closure
+## v1.13.11 - 2026-08-19 — Safety and Backend Compatibility Gate Closure
+
+- Published the stable v1.13.11 release from merge commit
+  `507859daccf25594142c61e5ab8209a751fb579a` after exact-head candidate,
+  hosted PR, main, tag, and release validation. This completes v1.13.11 but
+  does not close v1.x; v1.13.12 and v1.13.13 remain mandatory.
 
 - Completed the Phase 20 pre-release state transition and froze the exact-head
   candidate contract. The commit containing that contract must pass

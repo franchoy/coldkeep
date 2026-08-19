@@ -76,8 +76,9 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   baseline, not the final v1.x release.
 - A post-release roadmap-to-code audit superseded the narrower final-v1.x
   conclusion and restored v1.13.11–v1.13.13 for remaining must-before-v2 work.
-- `v1.13.11 — Safety and Backend Compatibility Gate Closure` is the single
-  release ready for pre-release validation. Phases 0–20 are complete. Phase 12 implements the
+- `v1.13.11 — Safety and Backend Compatibility Gate Closure` is complete,
+  merged as `507859daccf25594142c61e5ab8209a751fb579a`, annotated-tagged, and
+  published. Phases 0–20 are complete. Phase 12 implements the
   repository-wide exclusive fail-fast Lease and proves native runtime plus the
   production Coordinator lifecycle on Linux, macOS, and Windows. Phase 13
   preserves strengthened G6 integrity coverage and proves deterministic Linux
@@ -144,15 +145,19 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   deterministic snapshot ordering. Selected schema/bootstrap/migration
   contracts and the G6 fail-closed remediation also have exact-head CI
   evidence, while broad backend parity remains intentionally unclaimed.
-  v1.13.11 is ready for exact-head pre-release validation; the latest released
-  version remains v1.13.10. Merge, tag, and publication remain later
-  operations. Its canonical trackers are
+  Its final exact-head evidence, PR #106 merge, main validation, annotated tag,
+  tag validation, stable publication, and release-branch deletion are
+  reconciled as completed release operations. Its canonical trackers are
   `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
   `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
   `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.
+- `v1.13.12 — Engine and Catalog Completion` is active from exact baseline
+  `507859daccf25594142c61e5ab8209a751fb579a`. It must complete the deferred
+  catalog planning APIs, production engine ownership, neutral contracts, and
+  enforceable thin-CLI boundary without changing storage semantics.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan;
-  final v1.x completion is gated by v1.13.11–v1.13.13. v2.0 implementation has
-  not started.
+  final v1.x completion remains gated by v1.13.12 and v1.13.13. v1.13.13 is an
+  audit-only final handoff gate, and v2.x implementation is not authorized.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
 - `v1.13.10-release-state-validator-contract.md` freezes the lifecycle,

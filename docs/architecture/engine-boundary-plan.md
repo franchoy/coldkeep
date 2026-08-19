@@ -92,15 +92,22 @@ retained content, and snapshot restore retains explicit destination and
 selection semantics. This activation does not make every snapshot read-side
 workflow or the daemon/API contract complete.
 
-## Current deferred boundaries
+## Current mandatory completion boundaries
 
-- `Engine.Store` remains single-file only; recursive/folder store is outside
-  the active route and returns `ErrNotImplemented` when requested there.
+- `Engine.Store` remains single-file only; v1.13.12 must add a distinct
+  engine-owned folder/recursive store operation and remove the misleading
+  unsupported recursive request surface.
 - Snapshot list/show/stats/diff remain active but provisional mixed read-side
-  seams whose ownership and shape require an explicit v2.0 decision.
-- Repair and recovery remain CLI/domain-owned corrective work; their
-  request/result types are candidate-only and neither is an active Engine
-  method.
+  seams. v1.13.12 must complete their engine ownership and neutral contracts.
+- Repair, recovery, startup recovery, and doctor remain CLI/domain-owned
+  corrective work. v1.13.12 must activate explicit headless engine operations
+  and move correctness sequencing behind them.
+- Snapshot graph, placement, restore-plan, and GC-plan catalog surfaces remain
+  unimplemented. v1.13.12 must implement and adopt all four in production.
+
+These items are mandatory v1.x architecture work. They are not v2.x
+deferrals. SQLite-default productization and broader distributed coordination
+remain the separate v2.x boundaries.
 
 ## Migration rule
 
