@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 )
+
+var restoreChunkerVersionPattern = regexp.MustCompile(`^v[0-9]+(?:-[a-z0-9]+)+$`)
 
 // LoadRestorePlanMetadata resolves one selector and constructs a complete
 // immutable recipe using the Service's injected DB or caller-owned transaction.
@@ -29,12 +33,12 @@ func (s *Service) LoadRestorePlanMetadata(ctx context.Context, input RestorePlan
 	if err != nil {
 		return nil, err
 	}
+	if logical.Status != "COMPLETED" {
+		return nil, NewError(ErrorConflict, "load restore plan", "completed_logical_file", fmt.Sprintf("logical file %d is not completed", logicalID), nil)
+	}
 	placements, err := s.LoadChunkPlacements(ctx, logicalID)
 	if err != nil {
 		return nil, err
-	}
-	if logical.Status != "COMPLETED" {
-		return nil, NewError(ErrorConflict, "load restore plan", "completed_logical_file", fmt.Sprintf("logical file %d is not completed", logicalID), nil)
 	}
 	if (logical.TotalSize == 0 && len(placements) != 0) || (logical.TotalSize > 0 && len(placements) == 0) {
 		return nil, NewError(ErrorInvariantViolation, "load restore plan", "recipe_matches_logical_file_size", fmt.Sprintf("logical file %d has inconsistent zero-length recipe metadata", logicalID), nil)
@@ -101,8 +105,15 @@ FROM logical_file WHERE id = $1`, id).Scan(&ref.ID, &ref.OriginalName, &ref.Tota
 		}
 		return RestoreLogicalFileRef{}, restoreCatalogError(fmt.Errorf("load logical file %d: %w", id, err))
 	}
-	if ref.OriginalName == "" || ref.FileHash == "" || ref.ChunkerVersion == "" || ref.TotalSize < 0 {
+	if ref.OriginalName == "" || ref.FileHash == "" || ref.TotalSize < 0 {
 		return RestoreLogicalFileRef{}, NewError(ErrorInvariantViolation, "load restore plan", "complete_logical_file_metadata", fmt.Sprintf("logical file %d metadata is incomplete", id), nil)
+	}
+	trimmedChunkerVersion := strings.TrimSpace(ref.ChunkerVersion)
+	if trimmedChunkerVersion == "" {
+		return RestoreLogicalFileRef{}, NewError(ErrorInvariantViolation, "load restore plan", "complete_logical_file_metadata", fmt.Sprintf("logical file %d has empty chunker_version (repository corruption or incomplete migration)", id), nil)
+	}
+	if !restoreChunkerVersionPattern.MatchString(trimmedChunkerVersion) {
+		return RestoreLogicalFileRef{}, NewError(ErrorInvariantViolation, "load restore plan", "complete_logical_file_metadata", fmt.Sprintf("logical file %d has malformed chunker_version %q (expected format like v1-simple-rolling)", id, ref.ChunkerVersion), nil)
 	}
 	return ref, nil
 }

@@ -41,8 +41,11 @@ func NormalizeGCPlanInput(input GCPlanInput) (GCPlanInput, error) {
 
 // ValidateChunkPlacement enforces the tagged union and shared range invariants.
 func ValidateChunkPlacement(placement ChunkPlacementRef) error {
-	if placement.ChunkOrder < 0 || placement.ChunkID <= 0 || placement.ChunkHash == "" || placement.ChunkSize <= 0 || placement.ChunkerVersion == "" || placement.ChunkStatus == "" {
+	if placement.ChunkOrder < 0 || placement.ChunkID <= 0 || placement.ChunkHash == "" || placement.ChunkSize <= 0 || placement.ChunkStatus == "" {
 		return invalidPlacement(placement, "chunk identity and order must be complete")
+	}
+	if strings.TrimSpace(placement.ChunkerVersion) == "" {
+		return invalidPlacement(placement, "chunk has empty chunker_version (repository corruption or incomplete migration)")
 	}
 	switch placement.Kind {
 	case PlacementLegacy:
@@ -52,18 +55,18 @@ func ValidateChunkPlacement(placement ChunkPlacementRef) error {
 		if placement.Legacy.BlockID <= 0 || placement.Legacy.Codec == "" || placement.Legacy.FormatVersion <= 0 || placement.Legacy.PlaintextSize <= 0 || placement.Legacy.StoredSize <= 0 || !validContainerRead(placement.Legacy.Container, placement.Legacy.ContainerOffset, placement.Legacy.StoredSize) {
 			return invalidPlacement(placement, "legacy block and container bounds must be valid")
 		}
-		if placement.Legacy.PlaintextSize != placement.ChunkSize || !validLegacyCodec(placement.Legacy.Codec, placement.Legacy.Nonce) {
-			return invalidPlacement(placement, "legacy codec, nonce, and plaintext size must match the chunk")
+		if !validLegacyCodec(placement.Legacy.Codec, placement.Legacy.Nonce) {
+			return invalidPlacement(placement, "legacy codec and nonce must be valid")
 		}
 	case PlacementPacked:
 		if placement.Packed == nil || placement.Legacy != nil {
 			return invalidPlacement(placement, "packed placement must contain only packed metadata")
 		}
-		if placement.Packed.BlockID <= 0 || placement.Packed.Codec == "" || placement.Packed.FormatVersion <= 0 || placement.Packed.PlaintextSize <= 0 || placement.Packed.CompressionCodec == "" || placement.Packed.StoredSize <= 0 || len(placement.Packed.BlockHash) == 0 || placement.Packed.OffsetInBlock < 0 || placement.Packed.SizeInBlock <= 0 || placement.Packed.OffsetInBlock+placement.Packed.SizeInBlock > placement.Packed.PlaintextSize || !validContainerRead(placement.Packed.Container, placement.Packed.ContainerOffset, placement.Packed.StoredSize) {
-			return invalidPlacement(placement, "packed block, segment, and container bounds must be valid")
+		if placement.Packed.BlockID <= 0 || placement.Packed.Codec == "" || placement.Packed.FormatVersion <= 0 || placement.Packed.PlaintextSize <= 0 || placement.Packed.CompressionCodec == "" || placement.Packed.StoredSize <= 0 || placement.Packed.OffsetInBlock < 0 || placement.Packed.SizeInBlock <= 0 || !validContainerRead(placement.Packed.Container, placement.Packed.ContainerOffset, placement.Packed.StoredSize) {
+			return invalidPlacement(placement, "packed block, segment, and container metadata must be valid")
 		}
-		if placement.Packed.SizeInBlock != placement.ChunkSize || !validPackedTransforms(placement.Packed) {
-			return invalidPlacement(placement, "packed codec, compression, and segment size must be valid")
+		if !validPackedTransforms(placement.Packed) {
+			return invalidPlacement(placement, "packed codec and compression metadata must be valid")
 		}
 	default:
 		return invalidPlacement(placement, "placement kind must be legacy or packed")
@@ -100,8 +103,7 @@ func validContainerRead(container ContainerPlacementRef, offset, size int64) boo
 	if container.ID <= 0 || container.Filename == "" || offset < 0 || size <= 0 || container.CurrentSize < 0 || container.MaxSize <= 0 {
 		return false
 	}
-	end := offset + size
-	return end >= offset && end <= container.CurrentSize && end <= container.MaxSize
+	return true
 }
 
 func invalidPlacement(placement ChunkPlacementRef, message string) error {

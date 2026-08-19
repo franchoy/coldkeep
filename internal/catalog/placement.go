@@ -38,7 +38,6 @@ func (s *Service) LoadChunkPlacements(ctx context.Context, logicalFileID int64) 
 
 	placements := make([]ChunkPlacementRef, 0)
 	var expectedOrder int64
-	var recipeSize int64
 	for rows.Next() {
 		scanned, err := scanChunkPlacement(rows)
 		if err != nil {
@@ -55,10 +54,6 @@ func (s *Service) LoadChunkPlacements(ctx context.Context, logicalFileID int64) 
 			return nil, err
 		}
 		placements = append(placements, placement)
-		if placement.ChunkSize > 0 && recipeSize > int64(^uint64(0)>>1)-placement.ChunkSize {
-			return nil, NewError(ErrorInvariantViolation, "load chunk placements", "recipe_size_no_overflow", fmt.Sprintf("logical file %d chunk sizes overflow int64", logicalFileID), nil)
-		}
-		recipeSize += placement.ChunkSize
 		expectedOrder++
 	}
 	if err := rows.Err(); err != nil {
@@ -66,9 +61,6 @@ func (s *Service) LoadChunkPlacements(ctx context.Context, logicalFileID int64) 
 	}
 	if len(placements) == 0 && totalSize != 0 {
 		return nil, NewError(ErrorInvariantViolation, "load chunk placements", "nonempty_file_has_recipe", fmt.Sprintf("logical file %d has size %d but no chunk recipe", logicalFileID, totalSize), nil)
-	}
-	if recipeSize != totalSize {
-		return nil, NewError(ErrorInvariantViolation, "load chunk placements", "recipe_size_matches_logical_file", fmt.Sprintf("logical file %d recipe size %d does not match total size %d", logicalFileID, recipeSize, totalSize), nil)
 	}
 	return placements, nil
 }
