@@ -39,13 +39,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"errors"
 )
-
-// ErrNotImplemented is returned by catalog methods whose metadata planning is
-// intentionally deferred to a later migration phase. Production paths must not
-// depend on these methods until they are implemented and tested.
-var ErrNotImplemented = errors.New("catalog operation not implemented")
 
 // DB is the minimal database abstraction the catalog depends on internally.
 // Both *sql.DB and *sql.Tx satisfy it, which keeps the facade testable and
@@ -85,8 +79,11 @@ type SnapshotCatalog interface {
 
 // SnapshotGraphCatalog exposes the snapshot lineage graph.
 //
-// Deferred to Phase 5/6 (snapshot/GC migration). LoadSnapshotGraph returns
-// ErrNotImplemented until then.
+// Phase 5 implements this contract. Until then it returns the typed
+// ErrNotImplemented sentinel and no partial graph.
+// Empty catalogs return empty ordered slices. Historical missing parents are
+// represented by SnapshotParentMissing; malformed cycles return a typed
+// invariant_violation. The catalog never invents or silently repairs edges.
 type SnapshotGraphCatalog interface {
 	LoadSnapshotGraph(ctx context.Context) (*SnapshotGraph, error)
 }
@@ -100,28 +97,37 @@ type ReachabilityCatalog interface {
 
 // PlacementCatalog exposes chunk/block/container placement metadata.
 //
-// Deferred to Phase 7/8 (restore/store migration). LoadChunkPlacements must
-// represent both packed (storage_blocks/chunk_block_refs) and legacy (blocks)
-// roots; that duality is migrated alongside restore/store. Returns
-// ErrNotImplemented until then.
+// Phase 6 implements this contract. It represents packed and legacy roots as a
+// strict tagged union. Until then it returns no partial placement result.
+// A missing logical file returns not_found. A zero-length logical file returns
+// an empty placement slice. Missing, duplicate, mixed, or malformed placement
+// rows return invariant_violation rather than a partial recipe.
 type PlacementCatalog interface {
 	LoadChunkPlacements(ctx context.Context, logicalFileID int64) ([]ChunkPlacementRef, error)
 }
 
 // RestorePlanCatalog exposes restore-plan metadata.
 //
-// Deferred to Phase 7 (restore migration), where the "restore must not write
+// Phase 7 implements this contract, where the "restore must not write
 // outside destination" invariant is enforced at the engine/catalog boundary.
-// Returns ErrNotImplemented until then.
+// Until then it returns no partial restore plan.
+// The service never opens or commits a transaction: constructing it with the
+// caller's *sql.Tx keeps selector resolution and recipe loading in that exact
+// transaction.
+// A missing target returns not_found; a non-exclusive selector returns
+// invalid_argument; ambiguous or incomplete metadata returns conflict or
+// invariant_violation. No partial plan is returned on any error.
 type RestorePlanCatalog interface {
 	LoadRestorePlanMetadata(ctx context.Context, input RestorePlanInput) (*RestorePlanMetadata, error)
 }
 
 // GCPlanCatalog exposes GC-plan metadata.
 //
-// Deferred to Phase 6 (GC migration), where the "GC must never delete
-// reachable data" invariant is tested at the engine/catalog boundary. Returns
-// ErrNotImplemented until then.
+// Phase 9 implements and adopts this contract, where the "GC must never delete
+// reachable data" invariant is tested at the engine/catalog boundary. Until
+// then it returns no partial GC plan.
+// Excluded snapshot IDs are validated before reads; missing IDs return a typed
+// not_found error, while malformed graph rows return invariant_violation.
 type GCPlanCatalog interface {
 	LoadGCPlanMetadata(ctx context.Context, input GCPlanInput) (*GCPlanMetadata, error)
 }
