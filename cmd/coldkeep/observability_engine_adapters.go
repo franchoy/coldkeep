@@ -102,6 +102,42 @@ func statsResultFromEngine(input engine.StatsResult) *observability.StatsResult 
 	}
 }
 
+func inspectResultFromEngine(input engine.InspectResult) (*observability.InspectResult, error) {
+	summary, err := engineValuesToAny(input.Summary)
+	if err != nil {
+		return nil, fmt.Errorf("project inspect summary: %w", err)
+	}
+	metadata, err := engineValuesToAny(input.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("project inspect metadata: %w", err)
+	}
+	relations := make([]observability.Relation, len(input.Relations))
+	for i, item := range input.Relations {
+		relationMetadata, err := engineValuesToAny(item.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("project inspect relation %d: %w", i, err)
+		}
+		relations[i] = observability.Relation{
+			Type: item.Type, Direction: observability.RelationDirection(item.Direction),
+			TargetType: observability.EntityType(item.TargetType), TargetID: item.TargetID,
+			Metadata: relationMetadata,
+		}
+	}
+	warnings := make([]observability.ObservationWarning, len(input.Warnings))
+	for i, item := range input.Warnings {
+		warnings[i] = observability.ObservationWarning{Code: item.Code, Message: item.Message}
+	}
+	return &observability.InspectResult{
+		GeneratedAtUTC: input.GeneratedAtUTC,
+		EntityType:     observability.EntityType(input.Entity),
+		EntityID:       input.EntityID,
+		Summary:        summary,
+		Metadata:       metadata,
+		Relations:      relations,
+		Warnings:       warnings,
+	}, nil
+}
+
 func replayEngineTrace(options observability.TraceOptions, events []engine.TraceEvent) error {
 	if !options.Enabled || options.Sink == nil {
 		return nil

@@ -31,6 +31,9 @@ type stubCommandEngine struct {
 	searchFilesFunc       func(context.Context, engine.SearchFilesRequest) (engine.SearchFilesResult, error)
 	getConfigurationFunc  func(context.Context, engine.GetConfigurationRequest) (engine.GetConfigurationResult, error)
 	setConfigurationFunc  func(context.Context, engine.SetConfigurationRequest) (engine.SetConfigurationResult, error)
+	statsFunc             func(context.Context, engine.StatsRequest) (engine.StatsResult, error)
+	inspectFunc           func(context.Context, engine.InspectRequest) (engine.InspectResult, error)
+	verifyFunc            func(context.Context, engine.VerifyRequest) (engine.VerifyResult, error)
 }
 
 func (s stubCommandEngine) SnapshotCreate(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
@@ -129,6 +132,27 @@ func (s stubCommandEngine) SetConfiguration(ctx context.Context, req engine.SetC
 		return s.setConfigurationFunc(ctx, req)
 	}
 	return engine.SetConfigurationResult{}, errors.New("unexpected SetConfiguration call")
+}
+
+func (s stubCommandEngine) Stats(ctx context.Context, req engine.StatsRequest) (engine.StatsResult, error) {
+	if s.statsFunc != nil {
+		return s.statsFunc(ctx, req)
+	}
+	return engine.StatsResult{}, errors.New("unexpected Stats call")
+}
+
+func (s stubCommandEngine) Inspect(ctx context.Context, req engine.InspectRequest) (engine.InspectResult, error) {
+	if s.inspectFunc != nil {
+		return s.inspectFunc(ctx, req)
+	}
+	return engine.InspectResult{}, errors.New("unexpected Inspect call")
+}
+
+func (s stubCommandEngine) Verify(ctx context.Context, req engine.VerifyRequest) (engine.VerifyResult, error) {
+	if s.verifyFunc != nil {
+		return s.verifyFunc(ctx, req)
+	}
+	return engine.VerifyResult{}, errors.New("unexpected Verify call")
 }
 
 func TestRunStoreFolderCommandUsesEngineJSONParity(t *testing.T) {

@@ -151,14 +151,6 @@ type cliRuntime struct {
 	now             func() time.Time
 }
 
-type verifyOutputSummary struct {
-	BlocksChecked           int64
-	PhysicalHashChecked     int64
-	CompressedHashChecked   int64
-	LogicalHashChecked      int64
-	CompressedBlocksChecked int64
-}
-
 type verifyFailureDetails struct {
 	Stage     string
 	Block     *int64
@@ -329,7 +321,7 @@ var runGCPhase = func(dryRun bool, containersDir string) (maintenance.GCResult, 
 	if err != nil {
 		return maintenance.GCResult{}, err
 	}
-	defer func() { _ = sgctx.DB.Close() }()
+	defer func() { _ = sgctx.Close() }()
 
 	eng, err := engine.New(engine.Config{
 		DB:           sgctx.DB,
@@ -387,7 +379,6 @@ func snapshotMetaToSnapshot(m engine.SnapshotMeta) snapshot.Snapshot {
 	return s
 }
 
-var newObservabilityServicePhase = observability.NewService
 var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
@@ -395,10 +386,7 @@ var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observa
 	}
 	defer func() { _ = sgctx.DB.Close() }()
 
-	eng, err := engine.New(engine.Config{
-		DB:           sgctx.DB,
-		ContainerDir: sgctx.EffectiveContainerDir(),
-	})
+	eng, err := newObservabilityCommandEngine(sgctx)
 	if err != nil {
 		return nil, err
 	}
@@ -417,43 +405,36 @@ var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observa
 	return statsResultFromEngine(result), nil
 }
 var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
-	// Engine.Inspect is active, while this production CLI path intentionally
-	// still calls the observability service directly. Active method presence does
-	// not prove complete read-side workflow ownership; early v2.0 owns any
-	// remaining ownership decision.
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = sgctx.DB.Close() }()
+	defer func() { _ = sgctx.Close() }()
 
-	svc, err := newObservabilityServicePhase(sgctx.DB)
+	eng, err := newObservabilityCommandEngine(sgctx)
 	if err != nil {
 		return nil, err
 	}
-
-	r, err := svc.Inspect(context.Background(), entity, id, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	return r, nil
-}
-var verifyCommandPhase = func(dbconn *sql.DB, target string, fileID int, level verify.VerifyLevel) error {
-	eng, err := engine.New(engine.Config{DB: dbconn, ContainerDir: container.ContainersDir})
-	if err != nil {
-		return err
-	}
-	_, err = eng.Verify(context.Background(), engine.VerifyRequest{
-		Level:  verifyLevelToString(level),
-		Target: target,
-		FileID: fileID,
+	result, err := eng.Inspect(context.Background(), engine.InspectRequest{
+		Entity: engine.InspectEntity(entity), EntityID: id,
+		Options: engine.InspectOptions{
+			Deep: opts.Deep, Relations: opts.Relations, Reverse: opts.Reverse,
+			Limit: opts.Limit, IncludeTrace: opts.Trace.Enabled,
+		},
 	})
-	return err
+	if traceErr := replayEngineTrace(opts.Trace, result.Trace); traceErr != nil {
+		return nil, traceErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	return inspectResultFromEngine(result)
 }
-var verifySummaryPhase = func(dbconn *sql.DB, target string, fileID int64) (verifyOutputSummary, error) {
-	return collectVerifyOutputSummary(dbconn, target, fileID)
-}
+
+// Simulation and benchmark commands are explicitly classified tooling. Their
+// isolated simulated repositories retain the observability service seam; no
+// production inspect, stats, or verify command uses it.
+var newObservabilityServicePhase = observability.NewService
 var runChunkerBenchmarkPhase = runChunkerBenchmark
 var runCoreBenchmarkPhase = runCoreBenchmark
 var runBenchmarkDeterminismPhase = validateBenchmarkDeterminism
@@ -1048,92 +1029,6 @@ func extractVerifyFailureDetails(err error) (verifyFailureDetails, bool) {
 		details.Offset = &v
 	}
 	return details, true
-}
-
-func countVerifySummaryForSystem(dbconn *sql.DB) (verifyOutputSummary, error) {
-	var s verifyOutputSummary
-
-	if err := dbconn.QueryRow(`
-		SELECT
-			COUNT(*),
-			COALESCE(SUM(CASE WHEN physical_hash IS NOT NULL AND length(physical_hash) > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN compressed_hash IS NOT NULL AND length(compressed_hash) > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN block_hash IS NOT NULL AND length(block_hash) > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) != 'none' THEN 1 ELSE 0 END), 0)
-		FROM storage_blocks sb
-		JOIN container c ON c.id = sb.container_id
-		WHERE c.quarantine = FALSE
-	`).Scan(&s.BlocksChecked, &s.PhysicalHashChecked, &s.CompressedHashChecked, &s.LogicalHashChecked, &s.CompressedBlocksChecked); err != nil {
-		return verifyOutputSummary{}, err
-	}
-
-	var legacyBlocks int64
-	if err := dbconn.QueryRow(`
-		SELECT COUNT(*)
-		FROM blocks b
-		JOIN chunk c ON c.id = b.chunk_id
-		WHERE c.status = 'COMPLETED'
-		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id)
-	`).Scan(&legacyBlocks); err != nil {
-		return verifyOutputSummary{}, err
-	}
-
-	s.BlocksChecked += legacyBlocks
-	return s, nil
-}
-
-func countVerifySummaryForFile(dbconn *sql.DB, fileID int64) (verifyOutputSummary, error) {
-	var s verifyOutputSummary
-
-	if err := dbconn.QueryRow(`
-		WITH target_blocks AS (
-			SELECT DISTINCT sb.id, sb.physical_hash, sb.compressed_hash, sb.block_hash, sb.compression_codec
-			FROM file_chunk fc
-			JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
-			JOIN storage_blocks sb ON sb.id = r.block_id
-			JOIN container c ON c.id = sb.container_id
-			WHERE fc.logical_file_id = $1
-			  AND c.quarantine = FALSE
-		)
-		SELECT
-			COUNT(*),
-			COALESCE(SUM(CASE WHEN physical_hash IS NOT NULL AND length(physical_hash) > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN compressed_hash IS NOT NULL AND length(compressed_hash) > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN block_hash IS NOT NULL AND length(block_hash) > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) != 'none' THEN 1 ELSE 0 END), 0)
-		FROM target_blocks
-	`, fileID).Scan(&s.BlocksChecked, &s.PhysicalHashChecked, &s.CompressedHashChecked, &s.LogicalHashChecked, &s.CompressedBlocksChecked); err != nil {
-		return verifyOutputSummary{}, err
-	}
-
-	var legacyBlocks int64
-	if err := dbconn.QueryRow(`
-		SELECT COUNT(*)
-		FROM file_chunk fc
-		JOIN blocks b ON b.chunk_id = fc.chunk_id
-		WHERE fc.logical_file_id = $1
-		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id)
-	`, fileID).Scan(&legacyBlocks); err != nil {
-		return verifyOutputSummary{}, err
-	}
-
-	s.BlocksChecked += legacyBlocks
-	return s, nil
-}
-
-func collectVerifyOutputSummary(dbconn *sql.DB, target string, fileID int64) (verifyOutputSummary, error) {
-	if dbconn == nil {
-		return verifyOutputSummary{}, fmt.Errorf("verify summary DB connection is nil")
-	}
-
-	switch target {
-	case "system":
-		return countVerifySummaryForSystem(dbconn)
-	case "file":
-		return countVerifySummaryForFile(dbconn, fileID)
-	default:
-		return verifyOutputSummary{}, fmt.Errorf("unknown verify target: %s", target)
-	}
 }
 
 func runVersionCommand(mode cliOutputMode) error {
@@ -2382,7 +2277,7 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 
 	r, err := runObservabilityInspectPhase(entityType, entityID, opts)
 	if err != nil {
-		if errors.Is(err, observability.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+		if engine.IsCode(err, engine.ErrorNotFound) || errors.Is(err, observability.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
 			return observabilityErrorf(exitGeneral, "NOT_FOUND", "%s %s not found", entityLabel, entityID)
 		}
 		return observabilityWrappedError(exitGeneral, "INTERNAL", "inspect failed", err)
@@ -2754,56 +2649,16 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 
 	target := parsed.positionals[0]
+	fileID := 0
 	switch target {
 	case "system":
-		sgctx, err := loadDefaultStorageContextPhase()
-		if err != nil {
-			return fmt.Errorf("load storage context: %w", err)
-		}
-		defer func() { _ = sgctx.Close() }()
-
-		verifyErr := verifyCommandPhase(sgctx.DB, target, 0, verifyLevel)
-		if verifyErr != nil {
-			return verifyError(verifyErr)
-		}
-		summary, err := verifySummaryPhase(sgctx.DB, target, 0)
-		if err != nil {
-			return fmt.Errorf("collect verify summary: %w", err)
-		}
-		if outputMode == outputModeJSON {
-			payload := map[string]any{
-				"status":                    "ok",
-				"command":                   "verify",
-				"target":                    target,
-				"level":                     verifyLevelToString(verifyLevel),
-				"verify":                    "ok",
-				"blocks_checked":            summary.BlocksChecked,
-				"physical_hash_checked":     summary.PhysicalHashChecked,
-				"compressed_hash_checked":   summary.CompressedHashChecked,
-				"logical_hash_checked":      summary.LogicalHashChecked,
-				"compressed_blocks_checked": summary.CompressedBlocksChecked,
-			}
-			encoded, _ := json.Marshal(payload)
-			fmt.Println(string(encoded))
-			return nil
-		}
-		fmt.Println("verify ok")
-		fmt.Printf("blocks_checked: %d\n", summary.BlocksChecked)
-		fmt.Printf("physical_hash_checked: %d\n", summary.PhysicalHashChecked)
-		fmt.Printf("compressed_hash_checked: %d\n", summary.CompressedHashChecked)
-		fmt.Printf("logical_hash_checked: %d\n", summary.LogicalHashChecked)
-		fmt.Printf("compressed_blocks_checked: %d\n", summary.CompressedBlocksChecked)
-		if outputMode == outputModeText {
-			fmt.Printf("Hint: %s\n", doctorOperationalHint)
-		}
-		return nil
 	case "file":
 		if len(parsed.positionals) < 2 || len(parsed.positionals) > 3 {
 			return usageErrorf("Usage: coldkeep verify file <fileID> [--fast|--standard|--full|--deep]")
 		}
 
 		fileIDText := parsed.positionals[1]
-		fileID, err := strconv.Atoi(fileIDText)
+		fileID, err = strconv.Atoi(fileIDText)
 		if err != nil {
 			if errors.Is(err, strconv.ErrRange) {
 				return usageErrorf("Invalid fileID: value %s exceeds platform int range", fileIDText)
@@ -2813,52 +2668,60 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		if fileID <= 0 {
 			return usageErrorf("Invalid fileID: must be a positive integer")
 		}
-
-		sgctx, err := loadDefaultStorageContextPhase()
-		if err != nil {
-			return fmt.Errorf("load storage context: %w", err)
-		}
-		defer func() { _ = sgctx.Close() }()
-
-		verifyErr := verifyCommandPhase(sgctx.DB, target, fileID, verifyLevel)
-		if verifyErr != nil {
-			return verifyError(verifyErr)
-		}
-		summary, err := verifySummaryPhase(sgctx.DB, target, int64(fileID))
-		if err != nil {
-			return fmt.Errorf("collect verify summary: %w", err)
-		}
-		if outputMode == outputModeJSON {
-			payload := map[string]any{
-				"status":                    "ok",
-				"command":                   "verify",
-				"target":                    target,
-				"file_id":                   fileID,
-				"level":                     verifyLevelToString(verifyLevel),
-				"verify":                    "ok",
-				"blocks_checked":            summary.BlocksChecked,
-				"physical_hash_checked":     summary.PhysicalHashChecked,
-				"compressed_hash_checked":   summary.CompressedHashChecked,
-				"logical_hash_checked":      summary.LogicalHashChecked,
-				"compressed_blocks_checked": summary.CompressedBlocksChecked,
-			}
-			encoded, _ := json.Marshal(payload)
-			fmt.Println(string(encoded))
-			return nil
-		}
-		fmt.Println("verify ok")
-		fmt.Printf("blocks_checked: %d\n", summary.BlocksChecked)
-		fmt.Printf("physical_hash_checked: %d\n", summary.PhysicalHashChecked)
-		fmt.Printf("compressed_hash_checked: %d\n", summary.CompressedHashChecked)
-		fmt.Printf("logical_hash_checked: %d\n", summary.LogicalHashChecked)
-		fmt.Printf("compressed_blocks_checked: %d\n", summary.CompressedBlocksChecked)
-		if outputMode == outputModeText {
-			fmt.Printf("Hint: %s\n", doctorOperationalHint)
-		}
-		return nil
 	default:
 		return usageErrorf("Unknown target for verify: %s (expected 'system' or 'file <fileID>')", target)
 	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+	eng, err := newVerifyCommandEngine(sgctx)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	result, err := eng.Verify(ctx, engine.VerifyRequest{
+		Target: target, FileID: fileID, Level: verifyLevelToString(verifyLevel),
+	})
+	if err != nil {
+		// Before summary ownership moved into Engine.Verify, a failure collecting
+		// the post-verification counters was a general command failure rather than
+		// a verification-integrity failure. Preserve that exit classification.
+		if engine.IsCode(err, engine.ErrorOperationFailed) && strings.Contains(err.Error(), "collect verify summary") {
+			return err
+		}
+		return verifyError(err)
+	}
+	return renderVerifySuccess(outputMode, target, fileID, verifyLevel, result)
+}
+
+func renderVerifySuccess(outputMode cliOutputMode, target string, fileID int, level verify.VerifyLevel, result engine.VerifyResult) error {
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status": "ok", "command": "verify", "target": target,
+			"level": verifyLevelToString(level), "verify": "ok",
+			"blocks_checked": result.BlocksChecked, "physical_hash_checked": result.PhysicalHashChecked,
+			"compressed_hash_checked": result.CompressedHashChecked, "logical_hash_checked": result.LogicalHashChecked,
+			"compressed_blocks_checked": result.CompressedBlocksChecked,
+		}
+		if target == "file" {
+			payload["file_id"] = fileID
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Println("verify ok")
+	fmt.Printf("blocks_checked: %d\n", result.BlocksChecked)
+	fmt.Printf("physical_hash_checked: %d\n", result.PhysicalHashChecked)
+	fmt.Printf("compressed_hash_checked: %d\n", result.CompressedHashChecked)
+	fmt.Printf("logical_hash_checked: %d\n", result.LogicalHashChecked)
+	fmt.Printf("compressed_blocks_checked: %d\n", result.CompressedBlocksChecked)
+	fmt.Printf("Hint: %s\n", doctorOperationalHint)
+	return nil
 }
 
 // runDoctorCommand implements the doctor corrective recovery command.
@@ -3618,6 +3481,41 @@ type benchmarkDiagnosticVerification struct {
 	SnapshotReachabilityIssues int64 `json:"snapshot_reachability_issues"`
 }
 
+// countBenchmarkVerificationTotals is diagnostic tooling for isolated
+// benchmark final-state comparison. Production verify commands use
+// Engine.Verify and never call this direct metadata query.
+func countBenchmarkVerificationTotals(dbconn *sql.DB) (benchmarkDiagnosticVerification, error) {
+	var result benchmarkDiagnosticVerification
+	if err := dbconn.QueryRow(`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN physical_hash IS NOT NULL AND length(physical_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN compressed_hash IS NOT NULL AND length(compressed_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN block_hash IS NOT NULL AND length(block_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) != 'none' THEN 1 ELSE 0 END), 0)
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		WHERE c.quarantine = FALSE
+	`).Scan(
+		&result.BlocksChecked, &result.PhysicalHashesChecked, &result.CompressedHashesChecked,
+		&result.LogicalHashesChecked, &result.CompressedBlocksChecked,
+	); err != nil {
+		return benchmarkDiagnosticVerification{}, err
+	}
+	var legacyBlocks int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM blocks b
+		JOIN chunk c ON c.id = b.chunk_id
+		WHERE c.status = 'COMPLETED'
+		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id)
+	`).Scan(&legacyBlocks); err != nil {
+		return benchmarkDiagnosticVerification{}, err
+	}
+	result.BlocksChecked += legacyBlocks
+	return result, nil
+}
+
 type benchmarkDiagnosticPhysical struct {
 	ContainerCount      int64  `json:"container_count"`
 	StorageBlockCount   int64  `json:"storage_block_count"`
@@ -4043,7 +3941,7 @@ func buildBenchmarkDiagnosticFinalState(
 	if err != nil {
 		return benchmarkDiagnosticFinalState{}, fmt.Errorf("capture GC reachability totals: %w", err)
 	}
-	verifyTotals, err := countVerifySummaryForSystem(dbconn)
+	verifyTotals, err := countBenchmarkVerificationTotals(dbconn)
 	if err != nil {
 		return benchmarkDiagnosticFinalState{}, fmt.Errorf("capture verification totals: %w", err)
 	}
@@ -4079,8 +3977,8 @@ func buildBenchmarkDiagnosticFinalState(
 			RetainedDeadBytes: gcPlan.Summary.RetainedDeadBytesDueToPackedBlocks,
 		},
 		Verification: benchmarkDiagnosticVerification{
-			BlocksChecked: verifyTotals.BlocksChecked, PhysicalHashesChecked: verifyTotals.PhysicalHashChecked,
-			CompressedHashesChecked: verifyTotals.CompressedHashChecked, LogicalHashesChecked: verifyTotals.LogicalHashChecked,
+			BlocksChecked: verifyTotals.BlocksChecked, PhysicalHashesChecked: verifyTotals.PhysicalHashesChecked,
+			CompressedHashesChecked: verifyTotals.CompressedHashesChecked, LogicalHashesChecked: verifyTotals.LogicalHashesChecked,
 			CompressedBlocksChecked: verifyTotals.CompressedBlocksChecked,
 			PhysicalFileIssues:      physicalAudit.OrphanPhysicalFileRows + physicalAudit.LogicalRefCountMismatches + physicalAudit.NegativeLogicalRefCounts,
 			SnapshotMembershipRows:  snapshotAudit.SnapshotFileRows,

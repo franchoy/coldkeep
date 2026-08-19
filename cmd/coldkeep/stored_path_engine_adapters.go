@@ -44,6 +44,14 @@ var newSnapshotReadCommandEngine = func(sgctx storage.StorageContext) (engine.En
 	return engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
 }
 
+var newVerifyCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
+	return engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
+}
+
+var newObservabilityCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
+	return engine.New(engine.Config{DB: sgctx.DB, ContainerDir: sgctx.EffectiveContainerDir()})
+}
+
 func restoreStoredPathWithEngine(
 	ctx context.Context,
 	eng engine.Engine,
