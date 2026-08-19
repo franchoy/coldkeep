@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
@@ -46,7 +45,7 @@ func TestEngineReadStatsAndInspectAcrossBackends(t *testing.T) {
 		}
 
 		_, err = fixture.engine.Inspect(context.Background(), engine.InspectRequest{Entity: engine.InspectPhysicalFile, EntityID: "1"})
-		if !errors.Is(err, observability.ErrUnsupportedEntity) || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if !errors.Is(err, observability.ErrUnsupportedEntity) || engine.IsUnsupported(err) {
 			t.Fatalf("physical-file inspect classification: %v", err)
 		}
 		assertEngineReadStateUnchanged(t, before, captureEngineReadState(t, backend.DB, fixture.containerDir))
@@ -106,7 +105,7 @@ func TestEngineReadVerifyAcrossBackends(t *testing.T) {
 			t.Fatalf("seed verification inconsistency: %v", err)
 		}
 		_, err := fixture.engine.Verify(context.Background(), engine.VerifyRequest{Target: "system", Level: "standard"})
-		if err == nil || !strings.Contains(err.Error(), "system standard verification failed") || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if err == nil || !strings.Contains(err.Error(), "system standard verification failed") || engine.IsUnsupported(err) {
 			t.Fatalf("Verify inconsistency classification: %v", err)
 		}
 	})
@@ -159,13 +158,13 @@ func TestEngineReadContextAndErrorsAcrossBackends(t *testing.T) {
 				}
 			})
 		}
-		if _, err := fixture.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: "missing"}); err == nil || !strings.Contains(err.Error(), "not found") || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if _, err := fixture.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: "missing"}); err == nil || !strings.Contains(err.Error(), "not found") || engine.IsUnsupported(err) {
 			t.Fatalf("missing snapshot classification: %v", err)
 		}
-		if _, err := fixture.engine.Inspect(context.Background(), engine.InspectRequest{Entity: "unknown", EntityID: "1"}); err == nil || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if _, err := fixture.engine.Inspect(context.Background(), engine.InspectRequest{Entity: "unknown", EntityID: "1"}); err == nil || engine.IsUnsupported(err) {
 			t.Fatalf("invalid inspect classification: %v", err)
 		}
-		if _, err := fixture.engine.Verify(context.Background(), engine.VerifyRequest{Target: "unknown"}); err == nil || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if _, err := fixture.engine.Verify(context.Background(), engine.VerifyRequest{Target: "unknown"}); err == nil || engine.IsUnsupported(err) {
 			t.Fatalf("invalid verify classification: %v", err)
 		}
 		assertEngineReadStateUnchanged(t, before, captureEngineReadState(t, backend.DB, fixture.containerDir))

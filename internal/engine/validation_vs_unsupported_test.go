@@ -2,7 +2,6 @@ package engine_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/container"
@@ -207,31 +206,11 @@ func assertInvalidFileIDFailureSummary(t *testing.T, summary engine.BatchSummary
 	}
 }
 
-func assertUnsupportedBoundary(t *testing.T, err error, wantMessage string) {
-	t.Helper()
-
-	if err == nil {
-		t.Fatal("expected unsupported boundary error")
-	}
-	if !errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented-compatible unsupported error, got %v", err)
-	}
-	if !engine.IsUnsupported(err) {
-		t.Fatalf("expected unsupported boundary to classify as unsupported, got %v", err)
-	}
-	if err.Error() != wantMessage {
-		t.Fatalf("expected unsupported message %q, got %q", wantMessage, err.Error())
-	}
-}
-
 func assertValidationBoundary(t *testing.T, err error, wantMessage string) {
 	t.Helper()
 
 	if err == nil {
 		t.Fatal("expected validation error")
-	}
-	if errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected validation error to remain distinct from ErrNotImplemented: %v", err)
 	}
 	if engine.IsUnsupported(err) {
 		t.Fatalf("expected validation error to remain non-unsupported: %v", err)

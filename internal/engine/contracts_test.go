@@ -1,7 +1,14 @@
 package engine_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,6 +124,145 @@ func TestActiveEngineContractNeutralityCoverage(t *testing.T) {
 			t.Errorf("Engine.%s contract %s is absent from the neutrality walk", method.Name, contractType)
 		}
 	}
+}
+
+func TestEngineOperationSetIsComplete(t *testing.T) {
+	want := []string{
+		"Doctor",
+		"GarbageCollect",
+		"GetConfiguration",
+		"Inspect",
+		"ListFiles",
+		"PlanGarbageCollection",
+		"Recover",
+		"Remove",
+		"RemoveStoredPaths",
+		"Repair",
+		"Restore",
+		"RestoreStoredPath",
+		"SearchFiles",
+		"SetConfiguration",
+		"SnapshotCreate",
+		"SnapshotDelete",
+		"SnapshotDiff",
+		"SnapshotList",
+		"SnapshotRestore",
+		"SnapshotShow",
+		"SnapshotStats",
+		"Stats",
+		"Store",
+		"StoreFolder",
+		"Verify",
+	}
+	interfaceType := reflect.TypeOf((*engine.Engine)(nil)).Elem()
+	if interfaceType.NumMethod() != len(want) {
+		t.Fatalf("engine operation count changed: got=%d want=%d", interfaceType.NumMethod(), len(want))
+	}
+	for i, name := range want {
+		if got := interfaceType.Method(i).Name; got != name {
+			t.Errorf("engine operation %d changed: got=%q want=%q", i, got, name)
+		}
+	}
+}
+
+func TestPromisedProductionSurfacesContainNoDeferredSentinels(t *testing.T) {
+	_, current, _, _ := runtime.Caller(0)
+	for _, dir := range []string{filepath.Dir(current), filepath.Join(filepath.Dir(current), "..", "catalog")} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, forbidden := range []string{"ErrNotImplemented", "operation not implemented"} {
+				if strings.Contains(string(source), forbidden) {
+					t.Errorf("promised production surface retains %q in %s", forbidden, path)
+				}
+			}
+		}
+	}
+}
+
+func TestEveryEngineOperationHasTypedErrorBoundary(t *testing.T) {
+	interfaceType := reflect.TypeOf((*engine.Engine)(nil)).Elem()
+	want := make(map[string]bool, interfaceType.NumMethod())
+	for i := 0; i < interfaceType.NumMethod(); i++ {
+		want[interfaceType.Method(i).Name] = true
+	}
+
+	_, current, _, _ := runtime.Caller(0)
+	dir := filepath.Dir(current)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool, len(want))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, declaration := range file.Decls {
+			method, ok := declaration.(*ast.FuncDecl)
+			if !ok || !want[method.Name.Name] || !hasDefaultEngineReceiver(method) {
+				continue
+			}
+			seen[method.Name.Name] = true
+			if method.Body == nil || len(method.Body.List) == 0 {
+				t.Errorf("Engine.%s has no typed error boundary", method.Name.Name)
+				continue
+			}
+			boundary, ok := method.Body.List[0].(*ast.DeferStmt)
+			if !ok || !deferCallsTranslateError(boundary) {
+				t.Errorf("Engine.%s must begin with a deferred TranslateError boundary", method.Name.Name)
+			}
+		}
+	}
+	for method := range want {
+		if !seen[method] {
+			t.Errorf("Engine.%s implementation was not inspected", method)
+		}
+	}
+}
+
+func hasDefaultEngineReceiver(method *ast.FuncDecl) bool {
+	if method.Recv == nil || len(method.Recv.List) != 1 {
+		return false
+	}
+	receiver, ok := method.Recv.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	name, ok := receiver.X.(*ast.Ident)
+	return ok && name.Name == "DefaultEngine"
+}
+
+func deferCallsTranslateError(statement *ast.DeferStmt) bool {
+	found := false
+	ast.Inspect(statement, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name, ok := call.Fun.(*ast.Ident)
+		if ok && name.Name == "TranslateError" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func activeSnapshotMutationContractTypes() []struct {

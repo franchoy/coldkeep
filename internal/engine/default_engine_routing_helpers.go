@@ -111,7 +111,8 @@ func buildSnapshotDiffResult(req SnapshotDiffRequest, entries []SnapshotDiffEntr
 	return res
 }
 
-func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error) {
+func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRequest) (_ GarbageCollectResult, outErr error) {
+	defer func() { outErr = TranslateError("garbage_collect", outErr) }()
 	containerDir := e.config.ContainerDir
 	if containerDir == "" {
 		containerDir = container.ContainersDir
@@ -133,7 +134,8 @@ func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRe
 	}, nil
 }
 
-func (e *DefaultEngine) PlanGarbageCollection(ctx context.Context, req GarbageCollectionPlanRequest) (GarbageCollectionPlanResult, error) {
+func (e *DefaultEngine) PlanGarbageCollection(ctx context.Context, req GarbageCollectionPlanRequest) (_ GarbageCollectionPlanResult, outErr error) {
+	defer func() { outErr = TranslateError("plan_garbage_collection", outErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -220,15 +222,21 @@ func integerValue(value any) Value {
 	return converted
 }
 
-func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (StoreResult, error) {
+func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (_ StoreResult, outErr error) {
+	defer func() { outErr = TranslateError("store", outErr) }()
 	if err := ctx.Err(); err != nil {
 		return StoreResult{}, err
 	}
 	if strings.TrimSpace(req.SourcePath) == "" {
-		return StoreResult{}, fmt.Errorf("engine: store source path is required")
+		return StoreResult{}, TranslateErrorAs("store", ErrorInvalidArgument, fmt.Errorf("engine: store source path is required"))
 	}
 	if e.config.StoreContext == nil {
 		return StoreResult{}, fmt.Errorf("engine: store requires injected StoreContext")
+	}
+	if strings.TrimSpace(req.Codec) != "" {
+		if _, err := blocks.ParseCodec(req.Codec); err != nil {
+			return StoreResult{}, TranslateErrorAs("store", ErrorInvalidArgument, err)
+		}
 	}
 
 	stored, err := storeWithOptionalCodec(*e.config.StoreContext, req)
@@ -244,7 +252,8 @@ func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (StoreResul
 	}, nil
 }
 
-func (e *DefaultEngine) StoreFolder(ctx context.Context, req StoreFolderRequest) (StoreFolderResult, error) {
+func (e *DefaultEngine) StoreFolder(ctx context.Context, req StoreFolderRequest) (_ StoreFolderResult, outErr error) {
+	defer func() { outErr = TranslateError("store_folder", outErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -252,10 +261,10 @@ func (e *DefaultEngine) StoreFolder(ctx context.Context, req StoreFolderRequest)
 		return StoreFolderResult{}, err
 	}
 	if strings.TrimSpace(req.SourcePath) == "" {
-		return StoreFolderResult{}, fmt.Errorf("engine: store folder source path is required")
+		return StoreFolderResult{}, TranslateErrorAs("store_folder", ErrorInvalidArgument, fmt.Errorf("engine: store folder source path is required"))
 	}
 	if req.Workers < 0 {
-		return StoreFolderResult{}, fmt.Errorf("engine: store folder workers must be zero or greater")
+		return StoreFolderResult{}, TranslateErrorAs("store_folder", ErrorInvalidArgument, fmt.Errorf("engine: store folder workers must be zero or greater"))
 	}
 	if e.config.StoreContext == nil {
 		return StoreFolderResult{}, fmt.Errorf("engine: store folder requires injected StoreContext")
@@ -270,7 +279,7 @@ func (e *DefaultEngine) StoreFolder(ctx context.Context, req StoreFolderRequest)
 		codec, err = blocks.ParseCodec(req.Codec)
 	}
 	if err != nil {
-		return StoreFolderResult{}, err
+		return StoreFolderResult{}, TranslateErrorAs("store_folder", ErrorInvalidArgument, err)
 	}
 	stats, err := storage.StoreFolderWithStorageContextAndCodecAndOptionsWithStatsContext(ctx, *e.config.StoreContext, req.SourcePath, codec, opts)
 	result := StoreFolderResult{SourcePath: req.SourcePath, FilesStored: stats.TotalFilesProcessed, BytesLogical: stats.TotalBytesProcessed, WorkersUsed: stats.WorkersUsed}

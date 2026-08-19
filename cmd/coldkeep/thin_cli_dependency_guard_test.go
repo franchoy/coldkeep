@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -24,23 +25,42 @@ func TestProductionCLIUsesOnlyApplicationAndEngineExecutionBoundaries(t *testing
 	}
 
 	allowed := map[string]bool{
-		"application_session.go:openApplicationSession:application.Open":                     true,
-		"init.go:initCommand:storage.IsRegisteredCompressionCodec":                           true,
-		"main.go:resolveTraceOptions:observability.NewJSONTraceSink":                         true,
-		"main.go:newSimulationObservabilityService:observability.NewService":                 true,
-		"main.go:captureBenchmarkDiagnosticFinalState:db.BuildPostgresConnStringFromEnv":     true,
-		"main.go:createTemporaryBenchmarkDatabase:db.BuildPostgresConnStringFromEnv":         true,
-		"main.go:captureBenchmarkState:db.BuildPostgresConnStringFromEnv":                    true,
-		"main.go:runSimulateCommand:storage.ParseStorageContext":                             true,
-		"main.go:runSimulateCommand:storage.StoreFileWithStorageContext":                     true,
-		"main.go:runSimulateCommand:storage.StoreFileWithStorageContextAndCodec":             true,
-		"main.go:runSimulateCommand:storage.StoreFolderWithStorageContextAndOptions":         true,
-		"main.go:runSimulateCommand:storage.StoreFolderWithStorageContextAndCodecAndOptions": true,
-		"main.go:parseSnapshotQuery:snapshot.NormalizeSnapshotPath":                          true,
-		"main.go:parseSnapshotRestoreExactPathSelectors:snapshot.NormalizeSnapshotPath":      true,
-		"main.go:parseSnapshotRestorePrefixSelectors:snapshot.NormalizeSnapshotPath":         true,
+		"application_session.go:openApplicationSession:application.Open":                       true,
+		"init.go:initCommand:storage.IsRegisteredCompressionCodec":                             true,
+		"main.go:resolveTraceOptions:observability.NewJSONTraceSink":                           true,
+		"main.go:newSimulationObservabilityService:observability.NewService":                   true,
+		"main.go:captureBenchmarkDiagnosticFinalState:db.BuildPostgresConnStringFromEnv":       true,
+		"main.go:createTemporaryBenchmarkDatabase:db.BuildPostgresConnStringFromEnv":           true,
+		"main.go:captureBenchmarkState:db.BuildPostgresConnStringFromEnv":                      true,
+		"main.go:buildBenchmarkDiagnosticFinalState:internalgc.BuildPlan":                      true,
+		"main.go:buildBenchmarkDiagnosticFinalState:verify.CheckPhysicalFileGraphIntegrity":    true,
+		"main.go:buildBenchmarkDiagnosticFinalState:verify.CheckSnapshotReachabilityIntegrity": true,
+		"main.go:runSimulateCommand:storage.ParseStorageContext":                               true,
+		"main.go:runSimulateCommand:storage.StoreFileWithStorageContext":                       true,
+		"main.go:runSimulateCommand:storage.StoreFileWithStorageContextAndCodec":               true,
+		"main.go:runSimulateCommand:storage.StoreFolderWithStorageContextAndOptions":           true,
+		"main.go:runSimulateCommand:storage.StoreFolderWithStorageContextAndCodecAndOptions":   true,
+		"main.go:parseSnapshotQuery:snapshot.NormalizeSnapshotPath":                            true,
+		"main.go:parseSnapshotRestoreExactPathSelectors:snapshot.NormalizeSnapshotPath":        true,
+		"main.go:parseSnapshotRestorePrefixSelectors:snapshot.NormalizeSnapshotPath":           true,
+	}
+	allowedImports := map[string]bool{
+		"init.go:github.com/franchoy/coldkeep/internal/storage":                                true,
+		"init.go:github.com/franchoy/coldkeep/internal/storage/compression":                    true,
+		"main.go:github.com/franchoy/coldkeep/internal/db":                                     true,
+		"main.go:github.com/franchoy/coldkeep/internal/gc":                                     true,
+		"main.go:github.com/franchoy/coldkeep/internal/maintenance":                            true,
+		"main.go:github.com/franchoy/coldkeep/internal/observability":                          true,
+		"main.go:github.com/franchoy/coldkeep/internal/recovery":                               true,
+		"main.go:github.com/franchoy/coldkeep/internal/snapshot":                               true,
+		"main.go:github.com/franchoy/coldkeep/internal/storage":                                true,
+		"main.go:github.com/franchoy/coldkeep/internal/verify":                                 true,
+		"observability_engine_adapters.go:github.com/franchoy/coldkeep/internal/observability": true,
+		"stored_path_engine_adapters.go:github.com/franchoy/coldkeep/internal/recovery":        true,
+		"stored_path_engine_adapters.go:github.com/franchoy/coldkeep/internal/storage":         true,
 	}
 	used := make(map[string]bool)
+	usedImports := make(map[string]bool)
 	var violations []string
 	for _, entry := range entries {
 		name := entry.Name()
@@ -50,6 +70,21 @@ func TestProductionCLIUsesOnlyApplicationAndEngineExecutionBoundaries(t *testing
 		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, imported := range file.Imports {
+			path, err := strconv.Unquote(imported.Path.Value)
+			if err != nil {
+				t.Fatalf("parse import in %s: %v", name, err)
+			}
+			if !isGuardedCLIImport(path) {
+				continue
+			}
+			key := name + ":" + path
+			if allowedImports[key] {
+				usedImports[key] = true
+				continue
+			}
+			violations = append(violations, "unreviewed lower-layer import: "+key)
 		}
 		inspectCalls := func(owner string, body ast.Node) {
 			ast.Inspect(body, func(node ast.Node) bool {
@@ -109,6 +144,11 @@ func TestProductionCLIUsesOnlyApplicationAndEngineExecutionBoundaries(t *testing
 			violations = append(violations, "stale allowlist entry: "+exception)
 		}
 	}
+	for exception := range allowedImports {
+		if !usedImports[exception] {
+			violations = append(violations, "stale import allowlist entry: "+exception)
+		}
+	}
 	sort.Strings(violations)
 	if len(violations) > 0 {
 		t.Fatalf("production CLI bypasses application/engine boundary:\n  %s", strings.Join(violations, "\n  "))
@@ -117,11 +157,30 @@ func TestProductionCLIUsesOnlyApplicationAndEngineExecutionBoundaries(t *testing
 
 func isGuardedCLIPackage(name string) bool {
 	switch name {
-	case "application", "catalog", "db", "maintenance", "observability", "recovery", "snapshot", "storage":
+	case "application", "catalog", "db", "internalgc", "maintenance", "observability", "recovery", "snapshot", "storage", "verify":
 		return true
 	default:
 		return false
 	}
+}
+
+func isGuardedCLIImport(path string) bool {
+	for _, prefix := range []string{
+		"github.com/franchoy/coldkeep/internal/catalog",
+		"github.com/franchoy/coldkeep/internal/db",
+		"github.com/franchoy/coldkeep/internal/gc",
+		"github.com/franchoy/coldkeep/internal/maintenance",
+		"github.com/franchoy/coldkeep/internal/observability",
+		"github.com/franchoy/coldkeep/internal/recovery",
+		"github.com/franchoy/coldkeep/internal/snapshot",
+		"github.com/franchoy/coldkeep/internal/storage",
+		"github.com/franchoy/coldkeep/internal/verify",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func isProjectionOnlyCall(filename, packageName, selector string) bool {

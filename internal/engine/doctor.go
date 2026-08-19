@@ -9,7 +9,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/maintenance"
 )
 
-func (e *DefaultEngine) Doctor(ctx context.Context, req DoctorRequest) (DoctorResult, error) {
+func (e *DefaultEngine) Doctor(ctx context.Context, req DoctorRequest) (_ DoctorResult, outErr error) {
+	defer func() { outErr = TranslateError("doctor", outErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}

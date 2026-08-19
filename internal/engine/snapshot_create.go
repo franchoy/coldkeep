@@ -16,7 +16,8 @@ type preparedSnapshotCreateRequest struct {
 	snapshotType SnapshotType
 }
 
-func (e *DefaultEngine) SnapshotCreate(ctx context.Context, req SnapshotCreateRequest) (SnapshotCreateResult, error) {
+func (e *DefaultEngine) SnapshotCreate(ctx context.Context, req SnapshotCreateRequest) (_ SnapshotCreateResult, outErr error) {
+	defer func() { outErr = TranslateError("snapshot_create", outErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -76,10 +77,10 @@ func (e *DefaultEngine) prepareSnapshotCreateRequest(req SnapshotCreateRequest) 
 		return preparedSnapshotCreateRequest{}, err
 	}
 	if err := validateSnapshotCreateParent(snapshotID, parentID, len(paths) > 0); err != nil {
-		return preparedSnapshotCreateRequest{}, err
+		return preparedSnapshotCreateRequest{}, TranslateErrorAs("snapshot_create", ErrorInvalidArgument, err)
 	}
 	if err := validateSnapshotCreatePaths(paths); err != nil {
-		return preparedSnapshotCreateRequest{}, err
+		return preparedSnapshotCreateRequest{}, TranslateErrorAs("snapshot_create", ErrorInvalidArgument, err)
 	}
 
 	return preparedSnapshotCreateRequest{

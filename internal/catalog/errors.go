@@ -23,7 +23,7 @@ type Error struct {
 	Operation string
 	Invariant string
 	Message   string
-	Cause     error
+	cause     error
 }
 
 func (e *Error) Error() string {
@@ -31,8 +31,8 @@ func (e *Error) Error() string {
 		return "<nil>"
 	}
 	message := e.Message
-	if message == "" && e.Cause != nil {
-		message = e.Cause.Error()
+	if message == "" && e.cause != nil {
+		message = e.cause.Error()
 	}
 	if e.Operation == "" {
 		return message
@@ -47,11 +47,14 @@ func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil
 	}
-	return e.Cause
+	return e.cause
 }
 
 func NewError(code ErrorCode, operation, invariant, message string, cause error) *Error {
-	return &Error{Code: code, Operation: operation, Invariant: invariant, Message: message, Cause: cause}
+	if !validErrorCode(code) {
+		code = ErrorOperationFailed
+	}
+	return &Error{Code: code, Operation: operation, Invariant: invariant, Message: message, cause: cause}
 }
 
 func CodeOf(err error) (ErrorCode, bool) {
@@ -67,17 +70,17 @@ func IsCode(err error, code ErrorCode) bool {
 	return ok && actual == code
 }
 
-var deferredCause = errors.New("catalog operation not implemented")
-
-// ErrNotImplemented is retained for error-taxonomy compatibility. No active
-// catalog operation returns it after Phase 9 completed all four planning APIs.
-var ErrNotImplemented error = NewError(
-	ErrorUnsupported,
-	"deferred planning operation",
-	"catalog_planning_api_must_be_implemented",
-	deferredCause.Error(),
-	deferredCause,
-)
-
-// IsDeferred recognizes only the transitional sentinel, not all unsupported errors.
-func IsDeferred(err error) bool { return errors.Is(err, ErrNotImplemented) }
+func validErrorCode(code ErrorCode) bool {
+	switch code {
+	case ErrorInvalidArgument,
+		ErrorNotFound,
+		ErrorUnsupported,
+		ErrorInvariantViolation,
+		ErrorConflict,
+		ErrorCancelled,
+		ErrorOperationFailed:
+		return true
+	default:
+		return false
+	}
+}

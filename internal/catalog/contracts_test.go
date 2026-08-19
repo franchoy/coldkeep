@@ -95,7 +95,4 @@ func TestCatalogErrorPreservesStableContextAndCause(t *testing.T) {
 	if err.Operation != "load graph" || err.Invariant != "acyclic_snapshot_graph" {
 		t.Fatalf("typed context lost: %+v", err)
 	}
-	if !catalog.IsCode(catalog.ErrNotImplemented, catalog.ErrorUnsupported) || !catalog.IsDeferred(catalog.ErrNotImplemented) {
-		t.Fatalf("deferred sentinel not typed: %v", catalog.ErrNotImplemented)
-	}
 }

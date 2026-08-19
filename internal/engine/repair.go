@@ -10,7 +10,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/maintenance"
 )
 
-func (e *DefaultEngine) Repair(ctx context.Context, req RepairRequest) (RepairResult, error) {
+func (e *DefaultEngine) Repair(ctx context.Context, req RepairRequest) (_ RepairResult, outErr error) {
+	defer func() { outErr = TranslateError("repair", outErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -21,7 +21,8 @@ type preparedSnapshotRestoreRequest struct {
 	restoreSnapshotOpts snapshot.RestoreSnapshotOptions
 }
 
-func (e *DefaultEngine) SnapshotRestore(ctx context.Context, req SnapshotRestoreRequest) (SnapshotRestoreResult, error) {
+func (e *DefaultEngine) SnapshotRestore(ctx context.Context, req SnapshotRestoreRequest) (_ SnapshotRestoreResult, outErr error) {
+	defer func() { outErr = TranslateError("snapshot_restore", outErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -34,7 +35,7 @@ func (e *DefaultEngine) SnapshotRestore(ctx context.Context, req SnapshotRestore
 
 	prepared, err := prepareSnapshotRestoreRequest(req, e.config.StoreContext)
 	if err != nil {
-		return SnapshotRestoreResult{}, err
+		return SnapshotRestoreResult{}, TranslateErrorAs("snapshot_restore", ErrorInvalidArgument, err)
 	}
 
 	result, err := snapshot.RestoreSnapshot(ctx, e.config.DB, prepared.snapshotID, prepared.paths, prepared.restoreSnapshotOpts)

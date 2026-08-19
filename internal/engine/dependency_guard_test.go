@@ -53,6 +53,28 @@ func TestEngineDependencyDirection(t *testing.T) {
 		checkEngineNotDependsOnCLI(t, pkg, enginePkg, cliPkg)
 		checkDomainNotImportsEngine(t, pkg, module, enginePkg, applicationPkg)
 		checkCLINotImportsCatalog(t, pkg, cliPkg, catalogPkg)
+		checkApplicationCompositionImports(t, pkg, module, applicationPkg, enginePkg)
+	}
+}
+
+// checkApplicationCompositionImports keeps application as a narrow composition
+// root rather than a second orchestration layer. It may construct only the
+// engine and its configured DB/storage adapters.
+func checkApplicationCompositionImports(t *testing.T, pkg goListPackage, module, applicationPkg, enginePkg string) {
+	t.Helper()
+	if pkg.ImportPath != applicationPkg {
+		return
+	}
+	allowed := map[string]bool{
+		enginePkg:                    true,
+		module + "/internal/db":      true,
+		module + "/internal/storage": true,
+	}
+	for _, imp := range pkg.Imports {
+		if strings.HasPrefix(imp, module+"/internal/") && !allowed[imp] {
+			t.Errorf("application composition imports unapproved internal package:\n\t%s -> %s",
+				pkg.ImportPath, imp)
+		}
 	}
 }
 

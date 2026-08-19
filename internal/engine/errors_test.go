@@ -6,26 +6,15 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
 )
 
-func TestErrNotImplementedRemainsUnsupportedSentinel(t *testing.T) {
-	if !errors.Is(engine.ErrNotImplemented, engine.ErrNotImplemented) {
-		t.Fatal("expected ErrNotImplemented to remain errors.Is compatible with itself")
-	}
-	if !engine.IsUnsupported(engine.ErrNotImplemented) {
-		t.Fatal("expected ErrNotImplemented to classify as unsupported")
-	}
-}
-
-func TestIsUnsupportedRecognizesWrappedErrNotImplemented(t *testing.T) {
-	err := fmt.Errorf("wrapped unsupported mode: %w", engine.ErrNotImplemented)
-	if !errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected wrapped error to remain ErrNotImplemented-compatible, got %v", err)
-	}
+func TestIsUnsupportedRecognizesTypedError(t *testing.T) {
+	err := engine.NewError(engine.ErrorUnsupported, "operation", "unsupported mode", "", nil)
 	if !engine.IsUnsupported(err) {
-		t.Fatalf("expected wrapped ErrNotImplemented to classify as unsupported, got %v", err)
+		t.Fatalf("expected typed error to classify as unsupported, got %v", err)
 	}
 }
 
@@ -95,7 +84,7 @@ func TestTranslateErrorClassifiesUniversalFailures(t *testing.T) {
 	}{
 		{name: "cancelled", err: context.Canceled, want: engine.ErrorCancelled},
 		{name: "deadline", err: context.DeadlineExceeded, want: engine.ErrorCancelled},
-		{name: "unsupported", err: fmt.Errorf("recursive: %w", engine.ErrNotImplemented), want: engine.ErrorUnsupported},
+		{name: "unsupported", err: catalog.NewError(catalog.ErrorUnsupported, "operation", "", "unsupported mode", nil), want: engine.ErrorUnsupported},
 		{name: "invariant", err: invariant, want: engine.ErrorInvariantViolation, invariantCode: invariants.CodeGCRefusedIntegrity},
 		{name: "ordinary", err: errors.New("disk unavailable"), want: engine.ErrorOperationFailed},
 	}

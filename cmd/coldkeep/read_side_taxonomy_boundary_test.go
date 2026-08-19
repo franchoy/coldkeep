@@ -7,13 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
-func TestReadSideCLIValidationErrorsRemainOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestReadSideCLIValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 	t.Run("inspect unsupported entity", func(t *testing.T) {
 		err := runInspectCommand(parsedCommandLine{
 			method:      "inspect",
@@ -48,7 +47,7 @@ func TestReadSideCLIValidationErrorsRemainOutsideUnsupportedAndDeferredClassific
 	})
 }
 
-func TestSnapshotDiffInvalidRegexRemainsOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestSnapshotDiffInvalidRegexRemainsOutsideUnsupportedClassification(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
 		positionals: []string{"diff", "snap-1", "snap-2"},
@@ -57,7 +56,7 @@ func TestSnapshotDiffInvalidRegexRemainsOutsideUnsupportedAndDeferredClassificat
 	assertCLIReadSideBoundaryError(t, err, "invalid --regex value")
 }
 
-func TestSnapshotShowMissingSnapshotRemainsOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestSnapshotShowMissingSnapshotRemainsOutsideUnsupportedClassification(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalGet := getSnapshotPhase
 	t.Cleanup(func() {
@@ -83,7 +82,7 @@ func TestSnapshotShowMissingSnapshotRemainsOutsideUnsupportedAndDeferredClassifi
 	assertCLIReadSideBoundaryError(t, err, `snapshot "missing-snap" not found`)
 }
 
-func TestSnapshotDiffMissingSnapshotRemainsOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestSnapshotDiffMissingSnapshotRemainsOutsideUnsupportedClassification(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDiff := diffSnapshotsPhase
 	t.Cleanup(func() {
@@ -120,8 +119,5 @@ func assertCLIReadSideBoundaryError(t *testing.T, err error, wantSubstring strin
 	}
 	if engine.IsUnsupported(err) {
 		t.Fatalf("expected CLI read-side error to remain outside unsupported classification: %v", err)
-	}
-	if catalog.IsDeferred(err) {
-		t.Fatalf("expected CLI read-side error to remain outside deferred classification: %v", err)
 	}
 }

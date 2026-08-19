@@ -21,7 +21,8 @@ const (
 	maximumCompressionLevel    = int64(9)
 )
 
-func (e *DefaultEngine) GetConfiguration(ctx context.Context, req GetConfigurationRequest) (GetConfigurationResult, error) {
+func (e *DefaultEngine) GetConfiguration(ctx context.Context, req GetConfigurationRequest) (_ GetConfigurationResult, outErr error) {
+	defer func() { outErr = TranslateError("get configuration", outErr) }()
 	catalogKey, err := configurationCatalogKey(req.Key)
 	if err != nil {
 		return GetConfigurationResult{}, TranslateErrorAs("get configuration", ErrorInvalidArgument, err)
@@ -41,7 +42,8 @@ func (e *DefaultEngine) GetConfiguration(ctx context.Context, req GetConfigurati
 	return result, nil
 }
 
-func (e *DefaultEngine) SetConfiguration(ctx context.Context, req SetConfigurationRequest) (SetConfigurationResult, error) {
+func (e *DefaultEngine) SetConfiguration(ctx context.Context, req SetConfigurationRequest) (_ SetConfigurationResult, outErr error) {
+	defer func() { outErr = TranslateError("set configuration", outErr) }()
 	catalogKey, err := configurationCatalogKey(req.Key)
 	if err != nil {
 		return SetConfigurationResult{}, TranslateErrorAs("set configuration", ErrorInvalidArgument, err)

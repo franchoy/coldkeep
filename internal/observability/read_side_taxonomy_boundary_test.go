@@ -6,14 +6,13 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/observability"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func TestInspectDirectObservabilityFailuresRemainOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestInspectDirectObservabilityFailuresRemainOutsideUnsupportedClassification(t *testing.T) {
 	dbconn := openReadSideObservabilityTestDB(t)
 	svc, err := observability.NewService(dbconn)
 	if err != nil {
@@ -30,12 +29,9 @@ func TestInspectDirectObservabilityFailuresRemainOutsideUnsupportedAndDeferredCl
 	if engine.IsUnsupported(err) {
 		t.Fatalf("expected missing inspect target to stay outside unsupported classification: %v", err)
 	}
-	if catalog.IsDeferred(err) {
-		t.Fatalf("expected missing inspect target to stay outside deferred classification: %v", err)
-	}
 }
 
-func TestInspectInvalidTargetRemainsOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestInspectInvalidTargetRemainsOutsideUnsupportedClassification(t *testing.T) {
 	dbconn := openReadSideObservabilityTestDB(t)
 	svc, err := observability.NewService(dbconn)
 	if err != nil {
@@ -52,12 +48,9 @@ func TestInspectInvalidTargetRemainsOutsideUnsupportedAndDeferredClassification(
 	if engine.IsUnsupported(err) {
 		t.Fatalf("expected invalid target to remain outside unsupported classification: %v", err)
 	}
-	if catalog.IsDeferred(err) {
-		t.Fatalf("expected invalid target to remain outside deferred classification: %v", err)
-	}
 }
 
-func TestInspectUnsupportedEntityRemainsOutsideEngineUnsupportedAndCatalogDeferred(t *testing.T) {
+func TestInspectUnsupportedEntityRemainsOutsideEngineUnsupported(t *testing.T) {
 	dbconn := openReadSideObservabilityTestDB(t)
 	svc, err := observability.NewService(dbconn)
 	if err != nil {
@@ -73,9 +66,6 @@ func TestInspectUnsupportedEntityRemainsOutsideEngineUnsupportedAndCatalogDeferr
 	}
 	if engine.IsUnsupported(err) {
 		t.Fatalf("expected unsupported inspect entity to stay outside engine unsupported classification: %v", err)
-	}
-	if catalog.IsDeferred(err) {
-		t.Fatalf("expected unsupported inspect entity to stay outside catalog deferred classification: %v", err)
 	}
 }
 

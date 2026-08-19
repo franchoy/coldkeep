@@ -10,7 +10,8 @@ import (
 
 // Recover executes real corrective recovery. It intentionally has no dry-run
 // mode: startup and explicit recovery share this exact operation.
-func (e *DefaultEngine) Recover(ctx context.Context, _ RecoverRequest) (RecoverResult, error) {
+func (e *DefaultEngine) Recover(ctx context.Context, _ RecoverRequest) (_ RecoverResult, outErr error) {
+	defer func() { outErr = TranslateError("recover", outErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}

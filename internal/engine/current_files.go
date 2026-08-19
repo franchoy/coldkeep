@@ -8,7 +8,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/catalog"
 )
 
-func (e *DefaultEngine) ListFiles(ctx context.Context, req ListFilesRequest) (ListFilesResult, error) {
+func (e *DefaultEngine) ListFiles(ctx context.Context, req ListFilesRequest) (_ ListFilesResult, outErr error) {
+	defer func() { outErr = TranslateError("list files", outErr) }()
 	if err := validateFileQueryPage(req.Limit, req.Offset); err != nil {
 		return ListFilesResult{}, TranslateErrorAs("list files", ErrorInvalidArgument, err)
 	}
@@ -21,7 +22,8 @@ func (e *DefaultEngine) ListFiles(ctx context.Context, req ListFilesRequest) (Li
 	return ListFilesResult{Files: currentFilesFromCatalog(refs)}, nil
 }
 
-func (e *DefaultEngine) SearchFiles(ctx context.Context, req SearchFilesRequest) (SearchFilesResult, error) {
+func (e *DefaultEngine) SearchFiles(ctx context.Context, req SearchFilesRequest) (_ SearchFilesResult, outErr error) {
+	defer func() { outErr = TranslateError("search files", outErr) }()
 	if err := validateSearchFilesRequest(req); err != nil {
 		return SearchFilesResult{}, TranslateErrorAs("search files", ErrorInvalidArgument, err)
 	}

@@ -69,7 +69,7 @@ VALUES ($1, $2, $3, $4, $5, 1, 'v1-simple-rolling')`, id, path, size, hash, stat
 	}
 	if _, err := dbconn.Exec(`
 INSERT INTO physical_file (path, logical_file_id, is_metadata_complete)
-VALUES ($1, $2, 1)`, path, id); err != nil {
+VALUES ($1, $2, $3)`, path, id, true); err != nil {
 		t.Fatalf("insert physical file: %v", err)
 	}
 }

@@ -1,13 +1,10 @@
 // Package catalog is the behavior-preserving metadata facade for coldkeep.
 //
-// v1.12 Phase 3 — Catalog Facade Skeleton.
-//
 // The catalog owns metadata truth: logical identity, physical-file mapping,
 // snapshot metadata and graph, reachability, chunk/block/container placement,
-// restore-plan metadata, and GC-plan metadata. Storage owns payload bytes;
-// the engine owns operation orchestration. This package introduces the catalog
-// boundary WITHOUT migrating any command orchestration. No snapshot, GC,
-// restore, store, remove, repair, or recovery behavior is moved here in Phase 3.
+// restore-plan metadata, GC-plan metadata, current-file queries, and repository
+// configuration. Storage owns payload bytes; the engine owns correctness and
+// operation orchestration.
 //
 // # Invariants
 //

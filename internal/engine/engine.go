@@ -1,9 +1,10 @@
 // Package engine defines the coldkeep engine boundary.
 //
 // The package owns typed operation requests and results, request-level
-// validation, and behavior-preserving orchestration between CLI callers and
-// lower domain packages. Storage, snapshot, verification, maintenance, and
-// other domain packages retain their execution ownership.
+// validation, and behavior-preserving orchestration between headless callers
+// and lower domain adapters. Lower packages execute injected storage, catalog,
+// verification, maintenance, and recovery details without owning the public
+// operation boundary.
 //
 // # Invariants
 //

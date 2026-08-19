@@ -86,7 +86,8 @@ func secureSnapshotIDGenerator() (string, error) {
 	return "snap-" + hex.EncodeToString(b), nil
 }
 
-func (e *DefaultEngine) Stats(ctx context.Context, req StatsRequest) (StatsResult, error) {
+func (e *DefaultEngine) Stats(ctx context.Context, req StatsRequest) (_ StatsResult, outErr error) {
+	defer func() { outErr = TranslateError("stats", outErr) }()
 	trace, collector := traceOptions(req.IncludeTrace)
 	r, err := e.obs.Stats(ctx, observability.StatsOptions{
 		IncludeContainers: req.IncludeContainers,
@@ -102,7 +103,8 @@ func (e *DefaultEngine) Stats(ctx context.Context, req StatsRequest) (StatsResul
 	return result, nil
 }
 
-func (e *DefaultEngine) Inspect(ctx context.Context, req InspectRequest) (InspectResult, error) {
+func (e *DefaultEngine) Inspect(ctx context.Context, req InspectRequest) (_ InspectResult, outErr error) {
+	defer func() { outErr = TranslateError("inspect", outErr) }()
 	if err := validateInspectRequest(req); err != nil {
 		return InspectResult{}, TranslateErrorAs("inspect", ErrorInvalidArgument, err)
 	}
@@ -127,20 +129,21 @@ func (e *DefaultEngine) Inspect(ctx context.Context, req InspectRequest) (Inspec
 	return result, nil
 }
 
-func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyResult, error) {
+func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (_ VerifyResult, outErr error) {
+	defer func() { outErr = TranslateError("verify", outErr) }()
 	if err := ctx.Err(); err != nil {
 		return VerifyResult{}, err
 	}
 	level, err := verifyLevelFromString(req.Level)
 	if err != nil {
-		return VerifyResult{}, err
+		return VerifyResult{}, TranslateErrorAs("verify", ErrorInvalidArgument, err)
 	}
 	target := req.Target
 	if target == "" {
 		target = "system"
 	}
 	if err := validateVerifyRequest(target, req.FileID); err != nil {
-		return VerifyResult{}, err
+		return VerifyResult{}, TranslateErrorAs("verify", ErrorInvalidArgument, err)
 	}
 	containerDir := e.config.ContainerDir
 	if containerDir == "" {
@@ -217,7 +220,8 @@ func verifyLevelFromString(s string) (verify.VerifyLevel, error) {
 	}
 }
 
-func (e *DefaultEngine) SnapshotList(ctx context.Context, req SnapshotListRequest) (SnapshotListResult, error) {
+func (e *DefaultEngine) SnapshotList(ctx context.Context, req SnapshotListRequest) (_ SnapshotListResult, outErr error) {
+	defer func() { outErr = TranslateError("snapshot_list", outErr) }()
 	var tx *sql.Tx
 	catalogDB := catalog.DB(e.config.DB)
 	if req.Tree {
@@ -318,14 +322,18 @@ func projectSelectedSnapshotGraph(graph *catalog.SnapshotGraph, selected []catal
 	return result, metas
 }
 
-func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowRequest) (SnapshotShowResult, error) {
+func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowRequest) (_ SnapshotShowResult, outErr error) {
+	defer func() { outErr = TranslateError("snapshot_show", outErr) }()
+	if strings.TrimSpace(req.SnapshotID) == "" {
+		return SnapshotShowResult{}, TranslateErrorAs("snapshot_show", ErrorInvalidArgument, fmt.Errorf("snapshot id cannot be empty"))
+	}
 	svc := catalog.NewServiceFromSQL(e.config.DB)
 	ref, err := svc.FindSnapshot(ctx, req.SnapshotID)
 	if err != nil {
 		return SnapshotShowResult{}, err
 	}
 	if ref == nil {
-		return SnapshotShowResult{}, fmt.Errorf("snapshot %q not found", req.SnapshotID)
+		return SnapshotShowResult{}, TranslateErrorAs("snapshot_show", ErrorNotFound, fmt.Errorf("snapshot %q not found", req.SnapshotID))
 	}
 	meta := SnapshotMeta{
 		ID:        ref.ID,
@@ -339,7 +347,7 @@ func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowReques
 		var err error
 		snapshotQ, err = engineQueryToSnapshotQuery(req.Query)
 		if err != nil {
-			return SnapshotShowResult{}, err
+			return SnapshotShowResult{}, TranslateErrorAs("snapshot_show", ErrorInvalidArgument, err)
 		}
 	}
 	entries, err := snapshot.ListSnapshotFiles(ctx, e.config.DB, req.SnapshotID, req.Query.Limit, snapshotQ)
@@ -368,7 +376,8 @@ func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowReques
 	}, nil
 }
 
-func (e *DefaultEngine) SnapshotStats(ctx context.Context, req SnapshotStatsRequest) (SnapshotStatsResult, error) {
+func (e *DefaultEngine) SnapshotStats(ctx context.Context, req SnapshotStatsRequest) (_ SnapshotStatsResult, outErr error) {
+	defer func() { outErr = TranslateError("snapshot_stats", outErr) }()
 	stats, err := snapshot.GetSnapshotStats(ctx, e.config.DB, req.SnapshotID)
 	if err != nil {
 		return SnapshotStatsResult{}, err
@@ -390,30 +399,45 @@ func (e *DefaultEngine) SnapshotStats(ctx context.Context, req SnapshotStatsRequ
 	return result, nil
 }
 
-func (e *DefaultEngine) SnapshotDiff(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error) {
+func (e *DefaultEngine) SnapshotDiff(ctx context.Context, req SnapshotDiffRequest) (_ SnapshotDiffResult, outErr error) {
+	defer func() { outErr = TranslateError("snapshot_diff", outErr) }()
+	if strings.TrimSpace(req.BaseID) == "" {
+		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, fmt.Errorf("base snapshot id cannot be empty"))
+	}
+	if strings.TrimSpace(req.TargetID) == "" {
+		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, fmt.Errorf("target snapshot id cannot be empty"))
+	}
+	if req.Filter != SnapshotDiffAll && req.Filter != SnapshotDiffAdded && req.Filter != SnapshotDiffRemoved && req.Filter != SnapshotDiffModified {
+		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, fmt.Errorf("unknown snapshot diff filter %q", req.Filter))
+	}
+	if _, err := snapshotQueryOrNil(req.Query); err != nil {
+		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, err)
+	}
 	if isSnapshotDiffSummaryFastPath(req) {
 		return e.snapshotDiffSummaryFastPath(ctx, req)
 	}
 	return e.snapshotDiffDetailed(ctx, req)
 }
 
-func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (RemoveResult, error) {
+func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (_ RemoveResult, outErr error) {
+	defer func() { outErr = TranslateError("remove", outErr) }()
 	if err := ctx.Err(); err != nil {
 		return RemoveResult{}, err
 	}
 	if err := validateRemoveRequest(req); err != nil {
-		return RemoveResult{}, err
+		return RemoveResult{}, TranslateErrorAs("remove", ErrorInvalidArgument, err)
 	}
 	return e.removeFileIDs(req), nil
 }
 
-func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredPathsRequest) (RemoveStoredPathsResult, error) {
+func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredPathsRequest) (_ RemoveStoredPathsResult, outErr error) {
+	defer func() { outErr = TranslateError("remove_stored_paths", outErr) }()
 	if err := ctx.Err(); err != nil {
 		return RemoveStoredPathsResult{}, err
 	}
 	preflight, err := preflightRemoveStoredPaths(req)
 	if err != nil {
-		return RemoveStoredPathsResult{}, err
+		return RemoveStoredPathsResult{}, TranslateErrorAs("remove_stored_paths", ErrorInvalidArgument, err)
 	}
 	if !preflight.requiresRepository {
 		return preflight.terminalResult, nil
@@ -424,12 +448,13 @@ func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredP
 	return e.removeStoredPaths(req, preflight.prepared), nil
 }
 
-func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
+func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (_ RestoreResult, outErr error) {
+	defer func() { outErr = TranslateError("restore", outErr) }()
 	if err := ctx.Err(); err != nil {
 		return RestoreResult{}, err
 	}
 	if err := validateRestoreRequest(req); err != nil {
-		return RestoreResult{}, err
+		return RestoreResult{}, TranslateErrorAs("restore", ErrorInvalidArgument, err)
 	}
 	return e.restoreFileIDs(req), nil
 }

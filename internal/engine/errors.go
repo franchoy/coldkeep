@@ -25,11 +25,6 @@ const (
 	ErrorOperationFailed    ErrorCode = "operation_failed"
 )
 
-// ErrNotImplemented is retained while the final v1.13.12 promised surfaces
-// are activated. New engine operations must return a typed ErrorUnsupported
-// instead of adding another untyped unsupported sentinel.
-var ErrNotImplemented = errors.New("engine operation not implemented")
-
 // Error is the stable typed engine failure. Its exported state is deliberately
 // string-only and backend-neutral; cause remains private but is available to
 // errors.Is/errors.As through Unwrap.
@@ -96,8 +91,6 @@ func TranslateError(operation string, err error) error {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		code = ErrorCancelled
-	case errors.Is(err, ErrNotImplemented):
-		code = ErrorUnsupported
 	default:
 		var catalogErr *catalog.Error
 		if errors.As(err, &catalogErr) && catalogErr != nil {
@@ -143,9 +136,6 @@ func TranslateErrorAs(operation string, code ErrorCode, err error) error {
 	if universal := CodeOf(err); universal == ErrorCancelled || universal == ErrorInvariantViolation {
 		return TranslateError(operation, err)
 	}
-	if errors.Is(err, ErrNotImplemented) {
-		code = ErrorUnsupported
-	}
 	invariantCode := ""
 	if value, ok := invariants.Code(err); ok {
 		invariantCode = value
@@ -166,8 +156,6 @@ func CodeOf(err error) ErrorCode {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return ErrorCancelled
-	case errors.Is(err, ErrNotImplemented):
-		return ErrorUnsupported
 	}
 	if _, ok := invariants.Code(err); ok {
 		return ErrorInvariantViolation
@@ -180,10 +168,9 @@ func IsCode(err error, code ErrorCode) bool {
 	return code != "" && CodeOf(err) == code
 }
 
-// IsUnsupported preserves the original sentinel classifier while recognizing
-// the typed replacement used by newly activated operations.
+// IsUnsupported reports the stable typed unsupported classification.
 func IsUnsupported(err error) bool {
-	return errors.Is(err, ErrNotImplemented) || IsCode(err, ErrorUnsupported)
+	return IsCode(err, ErrorUnsupported)
 }
 
 func validErrorCode(code ErrorCode) bool {
