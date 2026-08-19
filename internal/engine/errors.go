@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/invariants"
 )
 
@@ -98,12 +99,35 @@ func TranslateError(operation string, err error) error {
 	case errors.Is(err, ErrNotImplemented):
 		code = ErrorUnsupported
 	default:
-		if value, ok := invariants.Code(err); ok {
+		var catalogErr *catalog.Error
+		if errors.As(err, &catalogErr) && catalogErr != nil {
+			code = engineCodeFromCatalog(catalogErr.Code)
+			invariantCode = catalogErr.Invariant
+		} else if value, ok := invariants.Code(err); ok {
 			code = ErrorInvariantViolation
 			invariantCode = value
 		}
 	}
 	return NewError(code, operation, err.Error(), invariantCode, err)
+}
+
+func engineCodeFromCatalog(code catalog.ErrorCode) ErrorCode {
+	switch code {
+	case catalog.ErrorInvalidArgument:
+		return ErrorInvalidArgument
+	case catalog.ErrorNotFound:
+		return ErrorNotFound
+	case catalog.ErrorUnsupported:
+		return ErrorUnsupported
+	case catalog.ErrorInvariantViolation:
+		return ErrorInvariantViolation
+	case catalog.ErrorConflict:
+		return ErrorConflict
+	case catalog.ErrorCancelled:
+		return ErrorCancelled
+	default:
+		return ErrorOperationFailed
+	}
 }
 
 // TranslateErrorAs applies a caller-selected semantic classification. Context

@@ -208,7 +208,18 @@ func verifyLevelFromString(s string) (verify.VerifyLevel, error) {
 }
 
 func (e *DefaultEngine) SnapshotList(ctx context.Context, req SnapshotListRequest) (SnapshotListResult, error) {
-	svc := catalog.NewServiceFromSQL(e.config.DB)
+	var tx *sql.Tx
+	catalogDB := catalog.DB(e.config.DB)
+	if req.Tree {
+		var err error
+		tx, err = e.config.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return SnapshotListResult{}, TranslateError("snapshot_list", fmt.Errorf("begin tree snapshot: %w", err))
+		}
+		defer func() { _ = tx.Rollback() }()
+		catalogDB = tx
+	}
+	svc := catalog.NewService(catalogDB)
 	filter := catalog.SnapshotFilter{
 		Type:           string(req.Type),
 		LabelSubstring: req.Label,
@@ -230,11 +241,66 @@ func (e *DefaultEngine) SnapshotList(ctx context.Context, req SnapshotListReques
 			CreatedAt: ref.CreatedAt,
 		}
 	}
+	var resultGraph *SnapshotGraph
+	if req.Tree {
+		graph, err := svc.LoadSnapshotGraph(ctx)
+		if err != nil {
+			return SnapshotListResult{}, TranslateError("snapshot_list", err)
+		}
+		resultGraph, metas = projectSelectedSnapshotGraph(graph, refs)
+		if err := tx.Commit(); err != nil {
+			return SnapshotListResult{}, TranslateError("snapshot_list", fmt.Errorf("commit tree snapshot: %w", err))
+		}
+	}
 	return SnapshotListResult{
 		Snapshots: metas,
 		Count:     len(metas),
 		TreeMode:  req.Tree,
+		Graph:     resultGraph,
 	}, nil
+}
+
+func projectSelectedSnapshotGraph(graph *catalog.SnapshotGraph, selected []catalog.SnapshotRef) (*SnapshotGraph, []SnapshotMeta) {
+	selectedIDs := make(map[string]struct{}, len(selected))
+	for _, ref := range selected {
+		selectedIDs[ref.ID] = struct{}{}
+	}
+	result := &SnapshotGraph{Nodes: make([]SnapshotGraphNode, 0, len(selected)), RootIDs: make([]string, 0)}
+	for _, node := range graph.Nodes {
+		if _, ok := selectedIDs[node.Snapshot.ID]; !ok {
+			continue
+		}
+		children := make([]string, 0, len(node.ChildIDs))
+		for _, childID := range node.ChildIDs {
+			if _, ok := selectedIDs[childID]; ok {
+				children = append(children, childID)
+			}
+		}
+		result.Nodes = append(result.Nodes, SnapshotGraphNode{
+			Snapshot: SnapshotMeta{
+				ID:        node.Snapshot.ID,
+				Type:      SnapshotType(node.Snapshot.Type),
+				Label:     node.Snapshot.Label,
+				ParentID:  node.Snapshot.ParentID,
+				CreatedAt: node.Snapshot.CreatedAt,
+			},
+			ParentState: SnapshotParentState(node.ParentState),
+			ChildIDs:    children,
+		})
+	}
+	for _, rootID := range graph.RootIDs {
+		if _, ok := selectedIDs[rootID]; ok {
+			result.RootIDs = append(result.RootIDs, rootID)
+		}
+	}
+
+	// SnapshotList historically returns newest first. Deriving this projection
+	// from the graph consumes catalog ordering while preserving that contract.
+	metas := make([]SnapshotMeta, len(result.Nodes))
+	for i := range result.Nodes {
+		metas[len(result.Nodes)-1-i] = result.Nodes[i].Snapshot
+	}
+	return result, metas
 }
 
 func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowRequest) (SnapshotShowResult, error) {

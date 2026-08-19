@@ -389,24 +389,13 @@ func TestServiceLoadReachabilityRoots(t *testing.T) {
 	assertReachabilityRoots(t, roots)
 }
 
-// TestServiceDeferredMethodsReturnErrNotImplemented verifies all skeleton
-// methods return ErrNotImplemented and not nil or panic.
+// TestServiceDeferredMethodsReturnErrNotImplemented verifies the remaining
+// placement/restore/GC skeleton methods return ErrNotImplemented.
 func TestServiceDeferredMethodsReturnErrNotImplemented(t *testing.T) {
 	dbconn := openTestDB(t)
 	svc := catalog.NewServiceFromSQL(dbconn)
 	ctx := context.Background()
 	before := countCatalogLogicalFiles(t, dbconn)
-
-	graph, err := svc.LoadSnapshotGraph(ctx)
-	if !errors.Is(err, catalog.ErrNotImplemented) {
-		t.Errorf("LoadSnapshotGraph: want ErrNotImplemented via errors.Is, got %v", err)
-	}
-	if !catalog.IsDeferred(err) {
-		t.Errorf("LoadSnapshotGraph: want catalog.IsDeferred=true, got %v", err)
-	}
-	if graph != nil {
-		t.Errorf("LoadSnapshotGraph: want nil graph on deferred path, got %+v", graph)
-	}
 
 	placements, err := svc.LoadChunkPlacements(ctx, 1)
 	if !errors.Is(err, catalog.ErrNotImplemented) {

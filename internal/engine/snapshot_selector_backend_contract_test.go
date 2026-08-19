@@ -31,6 +31,16 @@ func TestEngineSnapshotSelectorsAcrossBackends(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(snapshotIDs(filtered), []string{"snap-target"}) {
 			t.Fatalf("label SnapshotList: got (%+v, %v)", filtered, err)
 		}
+		tree, err := fixture.engine.SnapshotList(context.Background(), engine.SnapshotListRequest{Tree: true})
+		if err != nil || tree.Graph == nil || !tree.TreeMode || !reflect.DeepEqual(snapshotIDs(tree), []string{"snap-target", "snap-base", "snap-root"}) {
+			t.Fatalf("tree SnapshotList: got (%+v, %v)", tree, err)
+		}
+		if got, want := tree.Graph.RootIDs, []string{"snap-root"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("tree roots: got %v want %v", got, want)
+		}
+		if got, want := tree.Graph.Nodes[0].ChildIDs, []string{"snap-base"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("tree root children: got %v want %v", got, want)
+		}
 
 		query := engine.SnapshotQuery{
 			Path:           "docs/added.txt",

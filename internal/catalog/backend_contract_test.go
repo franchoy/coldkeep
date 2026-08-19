@@ -308,15 +308,59 @@ func assertIDSet(t *testing.T, got map[int64]struct{}, want ...int64) {
 	}
 }
 
-// CAT-006 preserves the deliberately deferred API boundary and proves those
-// methods cannot return partial results or mutate the catalog.
+// CAT-006 proves deterministic snapshot graph parity and non-mutation.
+func TestCatalogContractSnapshotGraphAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+		first, err := svc.LoadSnapshotGraph(context.Background())
+		if err != nil {
+			t.Fatalf("LoadSnapshotGraph: %v", err)
+		}
+		second, err := svc.LoadSnapshotGraph(context.Background())
+		if err != nil {
+			t.Fatalf("LoadSnapshotGraph repeated: %v", err)
+		}
+		if !reflect.DeepEqual(first, second) {
+			t.Fatalf("graph is not deterministic: first=%+v second=%+v", first, second)
+		}
+		wantOrder := []string{"snap-full", "snap-tie-a", "snap-tie-b", "snap-child", "snap-null-label"}
+		gotOrder := make([]string, len(first.Nodes))
+		for i, node := range first.Nodes {
+			gotOrder[i] = node.Snapshot.ID
+		}
+		if !reflect.DeepEqual(gotOrder, wantOrder) {
+			t.Fatalf("node order: got %v want %v", gotOrder, wantOrder)
+		}
+		wantRoots := []string{"snap-full", "snap-tie-a", "snap-tie-b", "snap-null-label"}
+		if !reflect.DeepEqual(first.RootIDs, wantRoots) {
+			t.Fatalf("roots: got %v want %v", first.RootIDs, wantRoots)
+		}
+		if first.Nodes[0].ParentState != catalog.SnapshotParentNone || !reflect.DeepEqual(first.Nodes[0].ChildIDs, []string{"snap-child"}) {
+			t.Fatalf("root relation: %+v", first.Nodes[0])
+		}
+		if first.Nodes[3].ParentState != catalog.SnapshotParentPresent || len(first.Nodes[3].ChildIDs) != 0 {
+			t.Fatalf("child relation: %+v", first.Nodes[3])
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if graph, err := svc.LoadSnapshotGraph(cancelled); graph != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled graph: graph=%+v err=%v", graph, err)
+		}
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("graph read mutated state: before=%+v after=%+v", before, after)
+		}
+	})
+}
+
+// CAT-007 preserves the remaining deliberately deferred API boundary and proves
+// those methods cannot return partial results or mutate the catalog.
 func TestCatalogContractDeferredMethodsAcrossBackends(t *testing.T) {
 	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
 		seedCatalogFixture(t, backend.DB)
 		svc := catalog.NewServiceFromSQL(backend.DB)
 		before := catalogStateCounts(t, backend.DB)
-		graph, err := svc.LoadSnapshotGraph(context.Background())
-		assertDeferred(t, "LoadSnapshotGraph", err, graph)
 		placements, err := svc.LoadChunkPlacements(context.Background(), 1)
 		assertDeferred(t, "LoadChunkPlacements", err, placements)
 		restorePlan, err := svc.LoadRestorePlanMetadata(context.Background(), catalog.RestorePlanInput{FileID: 1})

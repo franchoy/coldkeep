@@ -133,6 +133,9 @@ type SnapshotListFilter struct {
 	Since *time.Time
 	Until *time.Time
 	Limit int
+	// Tree requests engine-owned graph planning. The snapshot-domain SQL list
+	// ignores this presentation-neutral routing flag.
+	Tree bool
 }
 
 type SnapshotFileEntry struct {

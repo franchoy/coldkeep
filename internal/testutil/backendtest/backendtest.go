@@ -116,6 +116,7 @@ func openPostgres(t *testing.T, schema SchemaMode) Backend {
 	if _, err := admin.Exec("CREATE DATABASE " + quoteIdentifier(name)); err != nil {
 		t.Fatalf("create PostgreSQL scratch database %q: %v", name, err)
 	}
+	t.Logf("created PostgreSQL scratch database %q", name)
 
 	var tested *sql.DB
 	// This cleanup is registered after the admin close cleanup, so it runs first.
@@ -124,6 +125,7 @@ func openPostgres(t *testing.T, schema SchemaMode) Backend {
 		cleanupScratchDatabase(admin, tested, name, func(format string, args ...any) {
 			t.Errorf(format, args...)
 		})
+		t.Logf("dropped PostgreSQL scratch database %q", name)
 	})
 	tested = openPostgresConnection(t, name, "scratch database")
 	ensureSchema(t, tested, schema, "PostgreSQL")

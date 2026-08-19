@@ -419,6 +419,29 @@ type SnapshotMeta struct {
 	FileCount int
 }
 
+// SnapshotParentState distinguishes a root, a resolved parent, and historical
+// missing-parent metadata without inventing a relationship.
+type SnapshotParentState string
+
+const (
+	SnapshotParentNone    SnapshotParentState = "none"
+	SnapshotParentPresent SnapshotParentState = "present"
+	SnapshotParentMissing SnapshotParentState = "missing"
+)
+
+// SnapshotGraphNode is one renderer-neutral lineage node.
+type SnapshotGraphNode struct {
+	Snapshot    SnapshotMeta
+	ParentState SnapshotParentState
+	ChildIDs    []string
+}
+
+// SnapshotGraph is ordered by created_at ascending, then snapshot ID.
+type SnapshotGraph struct {
+	Nodes   []SnapshotGraphNode
+	RootIDs []string
+}
+
 // SnapshotCreateRequest is the frozen active v1.13.9 Engine snapshot-create
 // request surface.
 //
@@ -446,8 +469,7 @@ type SnapshotCreateResult struct {
 	ParentID      string
 }
 
-// SnapshotListRequest is the active but provisional request contract for
-// Engine.SnapshotList.
+// SnapshotListRequest is the active request contract for Engine.SnapshotList.
 type SnapshotListRequest struct {
 	// Type filters by snapshot type; empty means all.
 	Type SnapshotType
@@ -459,25 +481,19 @@ type SnapshotListRequest struct {
 	// Limit caps the number of results when greater than zero.
 	Limit int
 	// Tree requests lineage-tree ordering/visualization data.
-	// This provisional view-shaping flag does not prove engine ownership of
-	// lineage presentation semantics. Read-side ownership and shape decisions are
-	// deferred to early v2.0.
+	// Rendering remains the caller's responsibility.
 	Tree bool
 }
 
-// SnapshotListResult is the active but provisional result contract for
-// Engine.SnapshotList.
-//
-// TreeMode and TreeLines are provisional view-shaping fields. They do not
-// prove engine ownership of lineage presentation semantics; read-side
-// ownership and shape decisions are deferred to early v2.0.
+// SnapshotListResult is the active result contract for Engine.SnapshotList.
 type SnapshotListResult struct {
 	Snapshots []SnapshotMeta
 	Count     int
 	// TreeMode echoes whether tree data was requested.
 	TreeMode bool
-	// TreeLines holds renderer-neutral lineage rows when TreeMode is set.
-	TreeLines []string
+	// Graph is populated only when TreeMode is true. It contains metadata and
+	// relationships, never rendered lines.
+	Graph *SnapshotGraph
 }
 
 // SnapshotFile is a renderer-neutral file entry within a snapshot.

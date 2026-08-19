@@ -377,6 +377,7 @@ var listSnapshotsPhase = func(ctx context.Context, db *sql.DB, filter snapshot.S
 		Since: filter.Since,
 		Until: filter.Until,
 		Limit: filter.Limit,
+		Tree:  filter.Tree,
 	}
 	if filter.Type != nil {
 		req.Type = engine.SnapshotType(*filter.Type)
@@ -5711,6 +5712,7 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	treeMode := parsed.hasFlag("tree")
 
 	filter := snapshot.SnapshotListFilter{}
+	filter.Tree = treeMode
 	if value, ok := parsed.lastFlagValue("type"); ok {
 		trimmed := strings.ToLower(strings.TrimSpace(value))
 		if trimmed != "full" && trimmed != "partial" {
