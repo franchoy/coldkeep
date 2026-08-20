@@ -161,7 +161,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 0 is Complete. Phase 1 is Next. Its authoritative
+  `release/v1.13.13`. Phase 1 is Complete. Phase 2 is Next. Its authoritative
   mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
   entering the train. v1.x remains open, SQLite-default productization remains
   v2.x scope, PostgreSQL compatibility remains required, and v2.x
@@ -169,6 +169,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 - Its active trackers are [scope](v1.13.13-scope.md),
   [phase list](v1.13.13-phase-list.md), and
   [validation checklist](v1.13.13-validation-checklist.md).
+- Phase 1 freezes current authority and requirements in the
+  [authoritative roadmap and supersession audit](v1.13.13-phase1-authoritative-roadmap-and-supersession-audit.md),
+  [roadmap authority matrix](v1.13.13-roadmap-authority-matrix.md), and
+  [v1.x normative requirement matrix](v1.13.13-v1x-normative-requirements.md).
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.

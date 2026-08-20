@@ -30,6 +30,12 @@ project, do not start here; start with [README.md](README.md).
   Phase 1 is next.
 - Recorded `RESTORE_INSTALL_CONTRACT` as the unresolved blocker family entering
   v1.13.13. Phase 0 changes no restore behavior and authorizes no v2 work.
+- Froze the Phase 1 authority hierarchy and supersession rules, with document-
+  level and stable-ID normative requirement matrices for later audits.
+- Classified SQLite-default portable productization as v2 while retaining
+  SQLite backend and PostgreSQL compatibility requirements through v1.
+- Froze local same-host coordination as the v1 boundary, local daemon/product
+  work as v2, and network/NAS/distributed expansion as v3.
 
 ------------------------------------------------------------------------
 
