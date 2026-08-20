@@ -20,7 +20,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.12 - Unreleased — Engine and Catalog Completion
+## v1.13.12 - 2026-08-20 — Engine and Catalog Completion
 
 - Started the mandatory architecture-completion release from exact v1.13.11
   merge commit `507859daccf25594142c61e5ab8209a751fb579a`.
@@ -44,8 +44,11 @@ project, do not start here; start with [README.md](README.md).
   full PostgreSQL matrix caught and corrected Doctor session-open exit/message
   projection drift; the restarted plain matrix, AES-GCM matrix, G1–G17
   adversarial suite, coordination/advisory-session proofs, legacy fixture, and
-  post-correction full/race suites pass. Phase 21 exact-head candidate evidence
-  remains unrun.
+  post-correction full/race suites pass. Phase 21 passed for exact candidate
+  `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`: local Profile A and hosted
+  exact-head validation both passed. PR #107 merged that candidate into `main`
+  as `7505d7000faef452caeb4c01784f0510960e7240`. Tagging and publication remain
+  separate later operations.
 
 ------------------------------------------------------------------------
 
