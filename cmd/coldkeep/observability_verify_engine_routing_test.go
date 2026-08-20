@@ -82,6 +82,30 @@ func TestStatsAndInspectRouteThroughTypedEngineResults(t *testing.T) {
 	}
 }
 
+func TestInspectDecimalAdapterRetainsBoundedHumanProjection(t *testing.T) {
+	installObservabilityEngineStub(t, stubCommandEngine{
+		inspectFunc: func(context.Context, engine.InspectRequest) (engine.InspectResult, error) {
+			return engine.InspectResult{
+				Entity: engine.InspectRepository,
+				Summary: map[string]engine.Value{
+					"compression_factor": {Kind: engine.ValueDecimal, Decimal: "2.75"},
+				},
+			}, nil
+		},
+	})
+
+	output := captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{
+			method: "inspect", positionals: []string{"repository"}, flags: map[string][]string{},
+		}, outputModeText); err != nil {
+			t.Fatalf("inspect: %v", err)
+		}
+	})
+	if !strings.Contains(output, "compression_factor: 2") {
+		t.Fatalf("inspect decimal human output = %q", output)
+	}
+}
+
 func TestVerifyUsesOneEngineOperationAndItsSummary(t *testing.T) {
 	dbconn := openSnapshotRoutingDB(t)
 	originalLoad := loadDefaultStorageContextPhase
