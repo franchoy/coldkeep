@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.12%20ready-blue)
+![Status](https://img.shields.io/badge/status-v1.13.13%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -39,14 +39,15 @@ v1.13.11 is complete, merged, tagged, and published. It closed the safety and
 backend-compatibility gate at merge commit
 `507859daccf25594142c61e5ab8209a751fb579a` without closing v1.x as a whole.
 
-v1.13.12 Engine and Catalog Completion is complete. Phase 21 passed for final
-candidate `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`, and PR #107 merged it to
-`main` as `7505d7000faef452caeb4c01784f0510960e7240`. v1.13.12 is ready for
-release and tagging after post-merge validation; it is not yet tagged or
-published. v1.x is not closed, and v1.13.13 remains the mandatory independent
-final audit and v2 handoff gate. SQLite-default portable-repository
-productization remains a future v2.x objective, PostgreSQL compatibility
-remains required, and v2.x implementation is not authorized.
+v1.13.12 Engine and Catalog Completion is released, tagged, published, and
+operationally closed. PR #107 merged final candidate
+`33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`; post-merge reconciliation PR
+#108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
+
+v1.13.13 Final v1.x and v2 Handoff Gate is active on
+`release/v1.13.13`. Phase 0 is Complete and Phase 1 is Next. v1.x remains
+open, v2.x implementation is not authorized, SQLite-default productization
+remains v2.x scope, and PostgreSQL compatibility remains required.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.

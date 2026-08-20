@@ -20,6 +20,19 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.13 - Unreleased — Final v1.x and v2 Handoff Gate
+
+- Reconciled canonical v1.13.12 lifecycle truth after its final-main merge,
+  annotated tag, tag validation, stable publication, and temporary-branch
+  cleanup, while preserving the historical Phase 0–21 evidence as frozen.
+- Activated release identity 1.13.13 on `release/v1.13.13` and froze the
+  Phase 0–16 train in `AUDIT_PLUS_REMEDIATION` mode. Phase 0 is complete and
+  Phase 1 is next.
+- Recorded `RESTORE_INSTALL_CONTRACT` as the unresolved blocker family entering
+  v1.13.13. Phase 0 changes no restore behavior and authorizes no v2 work.
+
+------------------------------------------------------------------------
+
 ## v1.13.12 - 2026-08-20 — Engine and Catalog Completion
 
 - Started the mandatory architecture-completion release from exact v1.13.11
@@ -47,8 +60,13 @@ project, do not start here; start with [README.md](README.md).
   post-correction full/race suites pass. Phase 21 passed for exact candidate
   `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`: local Profile A and hosted
   exact-head validation both passed. PR #107 merged that candidate into `main`
-  as `7505d7000faef452caeb4c01784f0510960e7240`. Tagging and publication remain
-  separate later operations.
+  as `7505d7000faef452caeb4c01784f0510960e7240`; post-merge reconciliation PR
+  #108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
+  Annotated tag `v1.13.12` (tag object
+  `f5772657721b6d45e659b4a87e6546988b5bbd86`) peels to that final commit, tag
+  validation passed, the stable GitHub release was published, and the release
+  and post-merge reconciliation branches were deleted. v1.13.12 is released
+  and operationally closed without closing v1.x.
 
 ------------------------------------------------------------------------
 

@@ -151,18 +151,25 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
   `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
   `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.
-- `v1.13.12 — Engine and Catalog Completion` is ready for release. Final
-  candidate `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58` completed the catalog
-  planning APIs, production engine ownership, neutral contracts, and
-  enforceable thin-CLI boundary without changing storage semantics. Phase 21
-  is complete with local Profile A `PASS` and hosted exact-head validation
-  `PASS`; PR #107 merged the candidate to `main` as
-  `7505d7000faef452caeb4c01784f0510960e7240`. Tagging and publication have not
-  occurred yet. Earlier candidate evidence is historical only, v1.13.13
-  remains mandatory, and v1.x remains open.
-- The updated `v1.13.x-release-train.md` is the authoritative current plan;
-  final v1.x completion remains gated by v1.13.12 and v1.13.13. v1.13.13 is an
-  audit-only final handoff gate, and v2.x implementation is not authorized.
+- `v1.13.12 — Engine and Catalog Completion` is released and operationally
+  closed. Final candidate `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`
+  completed the catalog planning APIs, production engine ownership, neutral
+  contracts, and enforceable thin-CLI boundary without changing storage
+  semantics. PR #107 merged it as
+  `7505d7000faef452caeb4c01784f0510960e7240`; PR #108 produced final `main`
+  `fd396cd0c8cf43662881211b8e6b2877eb9a8010`. Annotated tag `v1.13.12`, tag
+  validation, stable publication, and both temporary-branch deletions are
+  complete. Historical Phase 0–21 evidence remains frozen.
+- `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
+  `release/v1.13.13`. Phase 0 is Complete. Phase 1 is Next. Its authoritative
+  mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
+  entering the train. v1.x remains open, SQLite-default productization remains
+  v2.x scope, PostgreSQL compatibility remains required, and v2.x
+  implementation is not authorized.
+- Its active trackers are [scope](v1.13.13-scope.md),
+  [phase list](v1.13.13-phase-list.md), and
+  [validation checklist](v1.13.13-validation-checklist.md).
+- The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
 - `v1.13.10-release-state-validator-contract.md` freezes the lifecycle,
