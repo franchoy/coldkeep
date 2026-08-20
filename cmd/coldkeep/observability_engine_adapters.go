@@ -182,8 +182,8 @@ func engineValueToAny(input engine.Value) (any, error) {
 		if value, err := strconv.ParseInt(input.Integer, 10, 64); err == nil {
 			return value, nil
 		}
-		if value, err := strconv.ParseUint(input.Integer, 10, 64); err == nil {
-			return value, nil
+		if _, err := strconv.ParseUint(input.Integer, 10, 64); err == nil {
+			return json.Number(input.Integer), nil
 		}
 		if _, err := json.Number(input.Integer).Float64(); err != nil {
 			return nil, fmt.Errorf("invalid integer %q", input.Integer)

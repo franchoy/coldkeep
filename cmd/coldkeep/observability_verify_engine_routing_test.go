@@ -106,6 +106,82 @@ func TestInspectDecimalAdapterRetainsBoundedHumanProjection(t *testing.T) {
 	}
 }
 
+func inspectIntegerBoundaryTokens() map[string]string {
+	return map[string]string{
+		"above_max_int64":  "9223372036854775808",
+		"max_uint64":       "18446744073709551615",
+		"above_max_uint64": "18446744073709551616",
+		"below_min_int64":  "-9223372036854775809",
+	}
+}
+
+func installInspectIntegerBoundaryStub(t *testing.T) {
+	integerSummary := map[string]engine.Value{
+		"above_max_int64":  {Kind: engine.ValueInteger, Integer: "9223372036854775808"},
+		"max_uint64":       {Kind: engine.ValueInteger, Integer: "18446744073709551615"},
+		"above_max_uint64": {Kind: engine.ValueInteger, Integer: "18446744073709551616"},
+		"below_min_int64":  {Kind: engine.ValueInteger, Integer: "-9223372036854775809"},
+	}
+	installObservabilityEngineStub(t, stubCommandEngine{
+		inspectFunc: func(context.Context, engine.InspectRequest) (engine.InspectResult, error) {
+			return engine.InspectResult{Entity: engine.InspectRepository, Summary: integerSummary}, nil
+		},
+	})
+}
+
+func TestInspectIntegerAdapterPreservesLargeHumanNumbers(t *testing.T) {
+	installInspectIntegerBoundaryStub(t)
+	humanOutput := captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{
+			method: "inspect", positionals: []string{"repository"}, flags: map[string][]string{},
+		}, outputModeText); err != nil {
+			t.Fatalf("inspect human: %v", err)
+		}
+	})
+	for key, value := range inspectIntegerBoundaryTokens() {
+		if want := key + ": " + value; !strings.Contains(humanOutput, want) {
+			t.Fatalf("inspect human output missing %q: %s", want, humanOutput)
+		}
+	}
+}
+
+func TestInspectIntegerAdapterPreservesLargeJSONNumbers(t *testing.T) {
+	installInspectIntegerBoundaryStub(t)
+	jsonOutput := captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{
+			method: "inspect", positionals: []string{"repository"}, flags: map[string][]string{"output": {"json"}},
+		}, outputModeJSON); err != nil {
+			t.Fatalf("inspect JSON: %v", err)
+		}
+	})
+	summary := decodeInspectJSONSummary(t, jsonOutput)
+	for key, want := range inspectIntegerBoundaryTokens() {
+		got, ok := summary[key].(json.Number)
+		if !ok || string(got) != want {
+			t.Fatalf("inspect JSON summary[%q] = %T(%v), want json.Number(%q)", key, summary[key], summary[key], want)
+		}
+	}
+}
+
+func decodeInspectJSONSummary(t *testing.T, output string) map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(strings.NewReader(output))
+	decoder.UseNumber()
+	var payload map[string]any
+	if err := decoder.Decode(&payload); err != nil {
+		t.Fatalf("decode inspect JSON: %v\n%s", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("inspect JSON data = %T(%v)", payload["data"], payload["data"])
+	}
+	summary, ok := data["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("inspect JSON summary = %T(%v)", data["summary"], data["summary"])
+	}
+	return summary
+}
+
 func TestVerifyUsesOneEngineOperationAndItsSummary(t *testing.T) {
 	dbconn := openSnapshotRoutingDB(t)
 	originalLoad := loadDefaultStorageContextPhase
