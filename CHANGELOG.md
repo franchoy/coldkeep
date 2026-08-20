@@ -47,8 +47,18 @@ project, do not start here; start with [README.md](README.md).
   composition, zero promised production stubs, and zero Phase 2 architecture
   blockers. Catalog planning adoption is complete, while aggregate Catalog
   architecture is partial because five methods lack its stable typed-error
-  boundary (`P2-ARCH-001`). Correctness, backend, coordination, restore, and
-  v1 closure decisions remain later-phase work.
+  boundary (`P2-ARCH-001`). At Phase 2, correctness, backend, coordination,
+  restore, and v1 closure decisions remained later-phase work.
+- Completed the source-first Phase 3 audit of every frozen correctness
+  requirement and every production restore route. The audit confirms
+  `RESTORE_INSTALL_CONTRACT` and records two additional root blockers:
+  concurrent destination-parent symlink replacement and packed/mixed
+  file-deep verification omission. No finding was remediated.
+- Revalidated GC reachability and G6 coherent planning, snapshot safety,
+  recovery/repair, container bounds, bounded decompression, exact numeric
+  fidelity, SQL mutation cardinality, and scoped concurrent GC planning as
+  proven within explicit backend/platform/coordination bounds. Backend
+  equivalence remains Phase 4 and coordination ownership remains Phase 5.
 
 ------------------------------------------------------------------------
 

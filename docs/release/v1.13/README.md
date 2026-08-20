@@ -161,7 +161,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 2 is Complete. Phase 3 is Next. Its authoritative
+  `release/v1.13.13`. Phase 3 is Complete. Phase 4 is Next. Its authoritative
   mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
   entering the train. v1.x remains open, SQLite-default productization remains
   v2.x scope, PostgreSQL compatibility remains required, and v2.x
@@ -182,7 +182,18 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [CLI boundary exception matrix](v1.13.13-cli-boundary-exception-matrix.md).
   Catalog architecture remains `PARTIAL` under `P2-ARCH-001` because five
   aggregate methods lack the stable typed-error boundary.
-  `RESTORE_INSTALL_CONTRACT` remains unresolved for Phase 3.
+  Phase 3 independently confirms `RESTORE_INSTALL_CONTRACT` as a blocker for
+  Phase 6 disposition and later design/remediation.
+- Phase 3 independently records `V1_CORRECTNESS: BLOCKED` with three distinct
+  root findings: the confirmed restore installation contract, a concurrent
+  destination-parent symlink replacement confinement gap, and packed/mixed
+  file-deep verification omission. Its exhaustive evidence is the
+  [correctness and invariant audit](v1.13.13-phase3-correctness-and-invariant-audit.md),
+  [correctness invariant matrix](v1.13.13-correctness-invariant-matrix.md),
+  [restore correctness matrix](v1.13.13-restore-correctness-matrix.md), and
+  [safety subsystem matrix](v1.13.13-safety-subsystem-audit-matrix.md).
+  Phase 3 makes no remediation, backend-equivalence, coordination, or v1
+  closure claim.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
