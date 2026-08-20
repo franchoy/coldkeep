@@ -1,148 +1,123 @@
 package catalog_test
 
 import (
-	"database/sql"
-	"io"
 	"reflect"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
 )
 
-// TestCatalogExportedTypesAreNeutral verifies that exported catalog contract
-// types do not expose any backend-specific or renderer-specific types in their
-// fields.
-//
-// Forbidden field types: *sql.DB, *sql.Tx, sql.Rows, sql.Row, io.Writer,
-// io.Reader, and any cobra/CLI renderer type.
-func TestCatalogExportedTypesAreNeutral(t *testing.T) {
-	types := []any{
-		catalog.LogicalFileRef{},
-		catalog.PhysicalFileRef{},
-		catalog.SnapshotRef{},
-		catalog.SnapshotFilter{},
-		catalog.SnapshotGraph{},
-		catalog.ReachabilityRoots{},
-		catalog.ChunkPlacementRef{},
-		catalog.RestorePlanInput{},
-		catalog.RestorePlanMetadata{},
-		catalog.GCPlanInput{},
-		catalog.GCPlanMetadata{},
-	}
-
-	forbiddenTypes := []reflect.Type{
-		reflect.TypeOf(&sql.DB{}),
-		reflect.TypeOf(&sql.Tx{}),
-		reflect.TypeOf(sql.Rows{}),
-		reflect.TypeOf(sql.Row{}),
-		reflect.TypeOf((*io.Writer)(nil)).Elem(),
-		reflect.TypeOf((*io.Reader)(nil)).Elem(),
-	}
-	forbiddenNames := []string{
-		"*sql.DB", "*sql.Tx", "sql.Rows", "sql.Row",
-		"sql.NullTime", // internal scan type must not leak into exported types
-	}
-
-	for _, v := range types {
-		rt := reflect.TypeOf(v)
-		checkTypeNeutral(t, rt, forbiddenTypes, forbiddenNames, rt.Name())
+// TestCatalogContractGraphsAreNeutral walks every exported request/result
+// graph. It rejects interface/any fields and dependencies on database, storage,
+// domain, CLI, renderer, and stream implementations.
+func TestCatalogContractGraphsAreNeutral(t *testing.T) {
+	for _, root := range allCatalogContractRoots() {
+		seen := make(map[reflect.Type]bool)
+		checkCatalogContractType(t, reflect.TypeOf(root), reflect.TypeOf(root).Name(), seen)
 	}
 }
 
-func checkTypeNeutral(t *testing.T, rt reflect.Type, forbiddenTypes []reflect.Type, forbiddenNames []string, path string) {
+func allCatalogContractRoots() []any {
+	return []any{
+		catalog.Error{},
+		catalog.LogicalFileRef{}, catalog.PhysicalFileRef{},
+		catalog.CurrentFileRef{}, catalog.CurrentFilePage{}, catalog.CurrentFileSearch{},
+		catalog.RepositoryConfigurationRef{}, catalog.SetRepositoryConfigurationResult{},
+		catalog.SnapshotRef{}, catalog.SnapshotFilter{},
+		catalog.SnapshotGraphNode{}, catalog.SnapshotGraph{}, catalog.ReachabilityRoots{},
+		catalog.ContainerPlacementRef{}, catalog.LegacyChunkPlacement{},
+		catalog.PackedChunkPlacement{}, catalog.ChunkPlacementRef{},
+		catalog.RestorePlanInput{}, catalog.RestoreLogicalFileRef{},
+		catalog.RestoreSourceRef{}, catalog.RestorePlanMetadata{},
+		catalog.GCPlanInput{}, catalog.GCReachabilityRoot{}, catalog.GCPlanMetadata{},
+	}
+}
+
+func TestCatalogOperationSetAndNeutralityCoverageAreComplete(t *testing.T) {
+	wantMethods := []string{
+		"FindLogicalFile",
+		"FindPhysicalFilesForLogicalFile",
+		"FindSnapshot",
+		"GetRepositoryConfiguration",
+		"ListCurrentFiles",
+		"ListSnapshots",
+		"LoadChunkPlacements",
+		"LoadGCPlanMetadata",
+		"LoadReachabilityRoots",
+		"LoadRestorePlanMetadata",
+		"LoadSnapshotGraph",
+		"SearchCurrentFiles",
+		"SetRepositoryConfiguration",
+	}
+	covered := make(map[reflect.Type]bool)
+	for _, root := range allCatalogContractRoots() {
+		covered[reflect.TypeOf(root)] = true
+	}
+
+	interfaceType := reflect.TypeOf((*catalog.Catalog)(nil)).Elem()
+	if interfaceType.NumMethod() != len(wantMethods) {
+		t.Fatalf("catalog operation count changed: got=%d want=%d", interfaceType.NumMethod(), len(wantMethods))
+	}
+	for i, want := range wantMethods {
+		method := interfaceType.Method(i)
+		if method.Name != want {
+			t.Errorf("catalog operation %d changed: got=%q want=%q", i, method.Name, want)
+		}
+		for arg := 0; arg < method.Type.NumIn(); arg++ {
+			assertCatalogMethodContractCovered(t, method.Name, method.Type.In(arg), covered)
+		}
+		for result := 0; result < method.Type.NumOut(); result++ {
+			assertCatalogMethodContractCovered(t, method.Name, method.Type.Out(result), covered)
+		}
+	}
+}
+
+func assertCatalogMethodContractCovered(t *testing.T, method string, typ reflect.Type, covered map[reflect.Type]bool) {
 	t.Helper()
-	rt = dereferenceCatalogType(rt)
-	if !isStructType(rt) {
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
+		typ = typ.Elem()
+	}
+	if typ.PkgPath() != "github.com/franchoy/coldkeep/internal/catalog" || typ.Kind() != reflect.Struct {
 		return
 	}
-
-	for _, field := range exportedStructFields(rt) {
-		checkFieldNeutrality(t, field, forbiddenTypes, forbiddenNames, path)
+	if !covered[typ] {
+		t.Errorf("Catalog.%s contract %s is absent from the neutrality walk", method, typ)
 	}
 }
 
-func checkFieldNeutrality(
-	t *testing.T,
-	field reflect.StructField,
-	forbiddenTypes []reflect.Type,
-	forbiddenNames []string,
-	parentPath string,
-) {
+func checkCatalogContractType(t *testing.T, typ reflect.Type, path string, seen map[reflect.Type]bool) {
 	t.Helper()
-	fieldPath := parentPath + "." + field.Name
-	fieldType := field.Type
-
-	checkForbiddenFieldTypes(t, fieldPath, fieldType, forbiddenTypes)
-	checkForbiddenFieldNames(t, fieldPath, fieldType, forbiddenNames)
-	recurseIntoNestedStruct(t, fieldPath, fieldType, forbiddenTypes, forbiddenNames)
-}
-
-func dereferenceCatalogType(rt reflect.Type) reflect.Type {
-	if rt.Kind() == reflect.Ptr {
-		return rt.Elem()
-	}
-	return rt
-}
-
-func isStructType(rt reflect.Type) bool {
-	return rt.Kind() == reflect.Struct
-}
-
-func exportedStructFields(rt reflect.Type) []reflect.StructField {
-	fields := make([]reflect.StructField, 0, rt.NumField())
-	for i := 0; i < rt.NumField(); i++ {
-		field := rt.Field(i)
-		if field.IsExported() {
-			fields = append(fields, field)
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array || typ.Kind() == reflect.Map {
+		if typ.Kind() == reflect.Map {
+			checkCatalogContractType(t, typ.Key(), path+".<key>", seen)
 		}
+		typ = typ.Elem()
 	}
-	return fields
-}
-
-func checkForbiddenFieldTypes(t *testing.T, fieldPath string, fieldType reflect.Type, forbiddenTypes []reflect.Type) {
-	t.Helper()
-	for _, forbidden := range forbiddenTypes {
-		if isForbiddenFieldType(fieldType, forbidden) {
-			t.Errorf("field %s has forbidden type %v", fieldPath, forbidden)
-		}
-	}
-}
-
-func isForbiddenFieldType(fieldType, forbidden reflect.Type) bool {
-	return fieldType == forbidden || implementsForbiddenInterface(fieldType, forbidden)
-}
-
-func implementsForbiddenInterface(fieldType, forbidden reflect.Type) bool {
-	return forbidden.Kind() == reflect.Interface && fieldType.Implements(forbidden)
-}
-
-func checkForbiddenFieldNames(t *testing.T, fieldPath string, fieldType reflect.Type, forbiddenNames []string) {
-	t.Helper()
-	for _, name := range forbiddenNames {
-		if fieldType.String() == name {
-			t.Errorf("field %s has forbidden type %q", fieldPath, name)
-		}
-	}
-}
-
-func recurseIntoNestedStruct(
-	t *testing.T,
-	fieldPath string,
-	fieldType reflect.Type,
-	forbiddenTypes []reflect.Type,
-	forbiddenNames []string,
-) {
-	t.Helper()
-	if nestedStructType(fieldType) == nil {
+	if seen[typ] {
 		return
 	}
-	checkTypeNeutral(t, fieldType, forbiddenTypes, forbiddenNames, fieldPath)
-}
+	seen[typ] = true
 
-func nestedStructType(fieldType reflect.Type) reflect.Type {
-	fieldType = dereferenceCatalogType(fieldType)
-	if isStructType(fieldType) {
-		return fieldType
+	if typ.Kind() == reflect.Interface {
+		t.Errorf("%s exposes interface/any type %v", path, typ)
+		return
 	}
-	return nil
+	if typ.Kind() == reflect.Func || typ.Kind() == reflect.Chan || typ.Kind() == reflect.UnsafePointer {
+		t.Errorf("%s exposes executable or unsafe type %v", path, typ)
+		return
+	}
+	if pkg := typ.PkgPath(); pkg != "" && pkg != "time" && pkg != "github.com/franchoy/coldkeep/internal/catalog" {
+		t.Errorf("%s exposes non-neutral package type %v from %q", path, typ, pkg)
+		return
+	}
+	if typ.Kind() != reflect.Struct || (typ.PkgPath() != "" && typ.PkgPath() != "github.com/franchoy/coldkeep/internal/catalog") {
+		return
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		checkCatalogContractType(t, field.Type, path+"."+field.Name, seen)
+	}
 }

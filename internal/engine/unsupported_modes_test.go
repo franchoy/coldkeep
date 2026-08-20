@@ -11,7 +11,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
-func TestStoreRecursiveReturnsErrNotImplementedWithoutMutation(t *testing.T) {
+func TestStoreFolderPreCancelledWithoutMutation(t *testing.T) {
 	db := openSnapshotTestDB(t)
 	sgctx := storage.StorageContext{
 		DB:           db,
@@ -24,21 +24,19 @@ func TestStoreRecursiveReturnsErrNotImplementedWithoutMutation(t *testing.T) {
 	}
 
 	before := countLogicalFiles(t, db)
-	_, err = eng.Store(context.Background(), engine.StoreRequest{
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = eng.StoreFolder(ctx, engine.StoreFolderRequest{
 		SourcePath: t.TempDir(),
-		Recursive:  true,
 		Workers:    4,
 		Codec:      "plain",
 	})
-	if !errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented for recursive store, got %v", err)
-	}
-	if !engine.IsUnsupported(err) {
-		t.Fatalf("expected recursive store error to classify as unsupported, got %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
 	}
 	after := countLogicalFiles(t, db)
 	if after != before {
-		t.Fatalf("recursive unsupported mode should not mutate logical_file rows: before=%d after=%d", before, after)
+		t.Fatalf("cancelled folder store should not mutate logical_file rows: before=%d after=%d", before, after)
 	}
 }
 

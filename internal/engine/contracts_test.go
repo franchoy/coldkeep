@@ -1,7 +1,14 @@
 package engine_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +28,7 @@ func allEngineContractTypes() []struct {
 		activeCoreContractTypes()...,
 	)
 	types = append(types, activeSnapshotMutationContractTypes()...)
-	return append(types, candidateCorrectiveContractTypes()...)
+	return types
 }
 
 func activeCoreContractTypes() []struct {
@@ -33,10 +40,26 @@ func activeCoreContractTypes() []struct {
 		val  any
 	}{
 		{"OperationWarning", engine.OperationWarning{}},
+		{"Error", engine.Error{}},
+		{"StatsRequest", engine.StatsRequest{}},
+		{"StatsResult", engine.StatsResult{}},
+		{"InspectRequest", engine.InspectRequest{}},
+		{"InspectResult", engine.InspectResult{}},
 		{"BatchSummary", engine.BatchSummary{}},
 		{"SnapshotQuery", engine.SnapshotQuery{}},
 		{"StoreRequest", engine.StoreRequest{}},
 		{"StoreResult", engine.StoreResult{}},
+		{"StoreFolderRequest", engine.StoreFolderRequest{}},
+		{"StoreFolderResult", engine.StoreFolderResult{}},
+		{"CurrentFile", engine.CurrentFile{}},
+		{"ListFilesRequest", engine.ListFilesRequest{}},
+		{"ListFilesResult", engine.ListFilesResult{}},
+		{"SearchFilesRequest", engine.SearchFilesRequest{}},
+		{"SearchFilesResult", engine.SearchFilesResult{}},
+		{"GetConfigurationRequest", engine.GetConfigurationRequest{}},
+		{"GetConfigurationResult", engine.GetConfigurationResult{}},
+		{"SetConfigurationRequest", engine.SetConfigurationRequest{}},
+		{"SetConfigurationResult", engine.SetConfigurationResult{}},
 		{"RestoreRequest", engine.RestoreRequest{}},
 		{"RestoreItemResult", engine.RestoreItemResult{}},
 		{"RestoreResult", engine.RestoreResult{}},
@@ -50,6 +73,21 @@ func activeCoreContractTypes() []struct {
 		{"RemoveStoredPathsResult", engine.RemoveStoredPathsResult{}},
 		{"GarbageCollectRequest", engine.GarbageCollectRequest{}},
 		{"GarbageCollectResult", engine.GarbageCollectResult{}},
+		{"GarbageCollectionPlanRequest", engine.GarbageCollectionPlanRequest{}},
+		{"GarbageCollectionPlanSummary", engine.GarbageCollectionPlanSummary{}},
+		{"GarbageCollectionContainerImpact", engine.GarbageCollectionContainerImpact{}},
+		{"GarbageCollectionPlanResult", engine.GarbageCollectionPlanResult{}},
+		{"VerifyRequest", engine.VerifyRequest{}},
+		{"VerifyResult", engine.VerifyResult{}},
+		{"RepairRequest", engine.RepairRequest{}},
+		{"RepairTargetResult", engine.RepairTargetResult{}},
+		{"RepairResult", engine.RepairResult{}},
+		{"RecoverRequest", engine.RecoverRequest{}},
+		{"RecoverResult", engine.RecoverResult{}},
+		{"DoctorRequest", engine.DoctorRequest{}},
+		{"DoctorPhysicalAudit", engine.DoctorPhysicalAudit{}},
+		{"DoctorSnapshotAudit", engine.DoctorSnapshotAudit{}},
+		{"DoctorResult", engine.DoctorResult{}},
 		{"SnapshotMeta", engine.SnapshotMeta{}},
 		{"SnapshotListRequest", engine.SnapshotListRequest{}},
 		{"SnapshotListResult", engine.SnapshotListResult{}},
@@ -63,6 +101,168 @@ func activeCoreContractTypes() []struct {
 		{"SnapshotDiffSummary", engine.SnapshotDiffSummary{}},
 		{"SnapshotDiffResult", engine.SnapshotDiffResult{}},
 	}
+}
+
+// TestActiveEngineContractNeutralityCoverage prevents a request/result pair
+// from escaping the structural neutrality walk when a method is added.
+func TestActiveEngineContractNeutralityCoverage(t *testing.T) {
+	covered := make(map[reflect.Type]bool)
+	for _, tc := range allEngineContractTypes() {
+		covered[reflect.TypeOf(tc.val)] = true
+	}
+
+	interfaceType := reflect.TypeOf((*engine.Engine)(nil)).Elem()
+	for i := 0; i < interfaceType.NumMethod(); i++ {
+		method := interfaceType.Method(i)
+		if method.Type.NumIn() != 2 || method.Type.NumOut() != 2 {
+			t.Fatalf("Engine.%s has unexpected signature %s", method.Name, method.Type)
+		}
+		for _, contractType := range []reflect.Type{method.Type.In(1), method.Type.Out(0)} {
+			if covered[contractType] {
+				continue
+			}
+			t.Errorf("Engine.%s contract %s is absent from the neutrality walk", method.Name, contractType)
+		}
+	}
+}
+
+func TestEngineOperationSetIsComplete(t *testing.T) {
+	want := []string{
+		"Doctor",
+		"GarbageCollect",
+		"GetConfiguration",
+		"Inspect",
+		"ListFiles",
+		"PlanGarbageCollection",
+		"Recover",
+		"Remove",
+		"RemoveStoredPaths",
+		"Repair",
+		"Restore",
+		"RestoreStoredPath",
+		"SearchFiles",
+		"SetConfiguration",
+		"SnapshotCreate",
+		"SnapshotDelete",
+		"SnapshotDiff",
+		"SnapshotList",
+		"SnapshotRestore",
+		"SnapshotShow",
+		"SnapshotStats",
+		"Stats",
+		"Store",
+		"StoreFolder",
+		"Verify",
+	}
+	interfaceType := reflect.TypeOf((*engine.Engine)(nil)).Elem()
+	if interfaceType.NumMethod() != len(want) {
+		t.Fatalf("engine operation count changed: got=%d want=%d", interfaceType.NumMethod(), len(want))
+	}
+	for i, name := range want {
+		if got := interfaceType.Method(i).Name; got != name {
+			t.Errorf("engine operation %d changed: got=%q want=%q", i, got, name)
+		}
+	}
+}
+
+func TestPromisedProductionSurfacesContainNoDeferredSentinels(t *testing.T) {
+	_, current, _, _ := runtime.Caller(0)
+	for _, dir := range []string{filepath.Dir(current), filepath.Join(filepath.Dir(current), "..", "catalog")} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, forbidden := range []string{"ErrNotImplemented", "operation not implemented"} {
+				if strings.Contains(string(source), forbidden) {
+					t.Errorf("promised production surface retains %q in %s", forbidden, path)
+				}
+			}
+		}
+	}
+}
+
+func TestEveryEngineOperationHasTypedErrorBoundary(t *testing.T) {
+	interfaceType := reflect.TypeOf((*engine.Engine)(nil)).Elem()
+	want := make(map[string]bool, interfaceType.NumMethod())
+	for i := 0; i < interfaceType.NumMethod(); i++ {
+		want[interfaceType.Method(i).Name] = true
+	}
+
+	_, current, _, _ := runtime.Caller(0)
+	dir := filepath.Dir(current)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool, len(want))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, declaration := range file.Decls {
+			method, ok := declaration.(*ast.FuncDecl)
+			if !ok || !want[method.Name.Name] || !hasDefaultEngineReceiver(method) {
+				continue
+			}
+			seen[method.Name.Name] = true
+			if method.Body == nil || len(method.Body.List) == 0 {
+				t.Errorf("Engine.%s has no typed error boundary", method.Name.Name)
+				continue
+			}
+			boundary, ok := method.Body.List[0].(*ast.DeferStmt)
+			if !ok || !deferCallsTranslateError(boundary) {
+				t.Errorf("Engine.%s must begin with a deferred TranslateError boundary", method.Name.Name)
+			}
+		}
+	}
+	for method := range want {
+		if !seen[method] {
+			t.Errorf("Engine.%s implementation was not inspected", method)
+		}
+	}
+}
+
+func hasDefaultEngineReceiver(method *ast.FuncDecl) bool {
+	if method.Recv == nil || len(method.Recv.List) != 1 {
+		return false
+	}
+	receiver, ok := method.Recv.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	name, ok := receiver.X.(*ast.Ident)
+	return ok && name.Name == "DefaultEngine"
+}
+
+func deferCallsTranslateError(statement *ast.DeferStmt) bool {
+	found := false
+	ast.Inspect(statement, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name, ok := call.Fun.(*ast.Ident)
+		if ok && name.Name == "TranslateError" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func activeSnapshotMutationContractTypes() []struct {
@@ -84,22 +284,6 @@ func activeSnapshotMutationContractTypes() []struct {
 		{"SnapshotRestoreResult", engine.SnapshotRestoreResult{}},
 		{"SnapshotDeleteRequest", engine.SnapshotDeleteRequest{}},
 		{"SnapshotDeleteResult", engine.SnapshotDeleteResult{}},
-	}
-}
-
-func candidateCorrectiveContractTypes() []struct {
-	name string
-	val  any
-} {
-	return []struct {
-		name string
-		val  any
-	}{
-		{"RepairRequest", engine.RepairRequest{}},
-		{"RepairTargetResult", engine.RepairTargetResult{}},
-		{"RepairResult", engine.RepairResult{}},
-		{"RecoverRequest", engine.RecoverRequest{}},
-		{"RecoverResult", engine.RecoverResult{}},
 	}
 }
 
@@ -394,8 +578,8 @@ func snapshotContractQuery() (engine.SnapshotQuery, time.Time, time.Time) {
 	after := time.Unix(0, 0)
 	before := time.Unix(1000, 0)
 	q := engine.SnapshotQuery{
-		Path:           "p",
-		Prefix:         "pre",
+		Paths:          []string{"p", "q"},
+		Prefixes:       []string{"pre/", "other/"},
 		Pattern:        "*.txt",
 		Regex:          ".*",
 		MinSize:        &min,
@@ -562,27 +746,22 @@ func assertSnapshotRestoreContract(t *testing.T, after time.Time, before time.Ti
 // TestRepairContractRepresentsTargetsAndBatch proves repair can express the
 // single targets and batch/fail-fast behavior.
 func TestRepairContractRepresentsTargetsAndBatch(t *testing.T) {
-	single := engine.RepairRequest{Target: engine.RepairTargetRefCounts}
-	if single.Target != engine.RepairTargetRefCounts {
-		t.Error("single ref-counts repair not representable")
+	request := engine.RepairRequest{
+		Targets:  []string{" ref-counts ", "chunk-live-ref-counts", "ref-counts"},
+		FailFast: true,
 	}
-	batch := engine.RepairRequest{
-		Batch:     true,
-		Targets:   []engine.RepairTarget{engine.RepairTargetRefCounts, engine.RepairTargetChunkLiveRefCounts},
-		FailFast:  true,
-		InputPath: "/in",
-	}
-	if !batch.Batch || len(batch.Targets) != 2 {
+	if !request.FailFast || len(request.Targets) != 3 {
 		t.Error("batch repair not representable")
 	}
 	res := engine.RepairResult{
 		Targets: []engine.RepairTargetResult{
-			{Target: engine.RepairTargetRefCounts, ScannedRows: 10, UpdatedRows: 2, OrphanRows: 1, Status: engine.BatchItemOK},
-			{Target: engine.RepairTargetChunkLiveRefCounts, ScannedRows: 5, UpdatedRows: 0, Status: engine.BatchItemOK},
+			{RawTarget: "ref-counts", Target: engine.RepairTargetRefCounts, ScannedRows: 10, UpdatedRows: 2, OrphanRows: 1, Status: engine.BatchItemOK},
+			{RawTarget: "chunk-live-ref-counts", Target: engine.RepairTargetChunkLiveRefCounts, ScannedRows: 5, UpdatedRows: 0, Status: engine.BatchItemOK},
+			{RawTarget: "ref-counts", Target: engine.RepairTargetRefCounts, Status: engine.BatchItemSkipped, Message: "duplicate target"},
 		},
-		Summary: engine.BatchSummary{OK: 2},
+		Summary: engine.BatchSummary{OK: 2, Skipped: 1},
 	}
-	if len(res.Targets) != 2 {
+	if len(res.Targets) != 3 {
 		t.Fatalf("repair result not representable: %+v", res)
 	}
 }
@@ -590,10 +769,7 @@ func TestRepairContractRepresentsTargetsAndBatch(t *testing.T) {
 // TestRecoverContractRepresentsCorrectiveReport proves the recovery contract
 // models a corrective integrity report rather than a restore.
 func TestRecoverContractRepresentsCorrectiveReport(t *testing.T) {
-	req := engine.RecoverRequest{DryRun: true}
-	if !req.DryRun {
-		t.Error("recover dry-run not representable")
-	}
+	req := engine.RecoverRequest{}
 	res := engine.RecoverResult{
 		AbortedLogicalFiles:    1,
 		AbortedChunks:          2,
@@ -609,33 +785,33 @@ func TestRecoverContractRepresentsCorrectiveReport(t *testing.T) {
 	if res.AbortedLogicalFiles != 1 || res.SealingQuarantined != 10 {
 		t.Fatalf("recovery report not representable: %+v", res)
 	}
-	assertRecoverRequestIsCorrectiveOnly(t, req)
-}
-
-func assertRecoverRequestIsCorrectiveOnly(t *testing.T, req engine.RecoverRequest) {
-	t.Helper()
-	if !req.DryRun {
-		t.Error("recover request should represent corrective dry-run mode")
+	if req != (engine.RecoverRequest{}) {
+		t.Fatalf("recover request unexpectedly carries options: %+v", req)
 	}
 }
 
-// TestStoreContractRepresentsFileAndFolder proves store covers single file and
-// recursive folder store with codec and workers.
-func TestStoreContractRepresentsFileAndFolder(t *testing.T) {
+// TestStoreContractsSeparateFileAndFolder proves recursive traversal is a
+// distinct operation rather than dormant fields on the single-file request.
+func TestStoreContractsSeparateFileAndFolder(t *testing.T) {
 	file := engine.StoreRequest{SourcePath: "f.txt", Codec: "aes-gcm"}
-	folder := engine.StoreRequest{SourcePath: "dir", Recursive: true, Workers: 8, Codec: "plain"}
-	if file.Recursive || !folder.Recursive || folder.Workers != 8 {
+	folder := engine.StoreFolderRequest{SourcePath: "dir", Workers: 8, Codec: "plain"}
+	if file.SourcePath != "f.txt" || folder.SourcePath != "dir" || folder.Workers != 8 {
 		t.Fatalf("store contract not representable: file=%+v folder=%+v", file, folder)
 	}
-	res := engine.StoreResult{
+	fileResult := engine.StoreResult{
 		SourcePath:    "f.txt",
 		StoredPath:    "f.txt",
 		LogicalFileID: 1,
 		FileHash:      "h",
 		AlreadyStored: true,
-		ChunksReused:  3,
 	}
-	if !res.AlreadyStored || res.ChunksReused != 3 {
-		t.Fatalf("store result not representable: %+v", res)
+	folderResult := engine.StoreFolderResult{
+		SourcePath:   "dir",
+		FilesStored:  3,
+		BytesLogical: 42,
+		WorkersUsed:  2,
+	}
+	if !fileResult.AlreadyStored || folderResult.FilesStored != 3 || folderResult.BytesLogical != 42 {
+		t.Fatalf("store results not representable: file=%+v folder=%+v", fileResult, folderResult)
 	}
 }

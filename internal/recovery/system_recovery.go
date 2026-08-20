@@ -71,35 +71,53 @@ func SystemRecoveryWithContainersDir(containersDir string) error {
 // changed row counts in the returned Report as expected, successful corrective
 // outcomes, not as errors.
 func SystemRecoveryReportWithContainersDir(containersDir string) (Report, error) {
-	stats := &recoveryStats{}
-	logRecoveryEvent("start", "containers_dir="+containersDir)
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return buildReport(stats), fmt.Errorf("failed to connect to DB: %w", err)
+		return Report{}, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return SystemRecoveryReportWithDBContext(ctx, dbconn, containersDir)
+}
 
-	err = abortProcessingLogicalFiles(dbconn, stats)
+// SystemRecoveryReportWithDBContext executes corrective recovery with a
+// caller-owned database and operation context. The caller retains connection
+// lifetime ownership.
+func SystemRecoveryReportWithDBContext(ctx context.Context, dbconn *sql.DB, containersDir string) (Report, error) {
+	stats := &recoveryStats{}
+	if dbconn == nil {
+		return buildReport(stats), fmt.Errorf("db connection is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return buildReport(stats), err
+	}
+	logRecoveryEvent("start", "containers_dir="+containersDir)
+
+	err := abortProcessingLogicalFilesWithContext(ctx, dbconn, stats)
 	if err != nil {
 		return buildReport(stats), err
 	}
-	err = abortProcessingChunks(dbconn, stats)
+	err = abortProcessingChunksWithContext(ctx, dbconn, stats)
 	if err != nil {
 		return buildReport(stats), err
 	}
-	err = recoverSealingContainers(dbconn, containersDir, stats)
+	err = recoverSealingContainersWithContext(ctx, dbconn, containersDir, stats)
 	if err != nil {
 		return buildReport(stats), err
 	}
-	err = quarantineMissingContainers(dbconn, containersDir, stats)
+	err = quarantineMissingContainersWithContext(ctx, dbconn, containersDir, stats)
 	if err != nil {
 		return buildReport(stats), err
 	}
-	err = quarantineCorruptActiveContainerTails(dbconn, containersDir, stats)
+	err = quarantineCorruptActiveContainerTailsWithContext(ctx, dbconn, containersDir, stats)
 	if err != nil {
 		return buildReport(stats), err
 	}
-	err = quarantineOrphanContainers(dbconn, containersDir, stats)
+	err = quarantineOrphanContainersWithContext(ctx, dbconn, containersDir, stats)
 	if err != nil {
 		return buildReport(stats), err
 	}
@@ -139,7 +157,10 @@ func buildReport(stats *recoveryStats) Report {
 func abortProcessingLogicalFiles(dbconn *sql.DB, stats *recoveryStats) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return abortProcessingLogicalFilesWithContext(ctx, dbconn, stats)
+}
 
+func abortProcessingLogicalFilesWithContext(ctx context.Context, dbconn *sql.DB, stats *recoveryStats) error {
 	logRecoveryEvent("abort_processing_logical_files_start")
 	result, err := dbconn.ExecContext(ctx, `UPDATE logical_file SET status = $1 WHERE status = $2`, filestate.LogicalFileAborted, filestate.LogicalFileProcessing)
 	if err != nil {
@@ -157,7 +178,10 @@ func abortProcessingLogicalFiles(dbconn *sql.DB, stats *recoveryStats) error {
 func abortProcessingChunks(dbconn *sql.DB, stats *recoveryStats) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return abortProcessingChunksWithContext(ctx, dbconn, stats)
+}
 
+func abortProcessingChunksWithContext(ctx context.Context, dbconn *sql.DB, stats *recoveryStats) error {
 	logRecoveryEvent("abort_processing_chunks_start")
 	result, err := dbconn.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE status = $2`, filestate.ChunkAborted, filestate.ChunkProcessing)
 	if err != nil {
@@ -172,14 +196,11 @@ func abortProcessingChunks(dbconn *sql.DB, stats *recoveryStats) error {
 	return nil
 }
 
-func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
-	return recoverSealingContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+func recoverSealingContainersWithContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return recoverSealingContainersWithFSContext(ctx, dbconn, containersDir, stats, fsx.Default())
 }
 
-func recoverSealingContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
-
+func recoverSealingContainersWithFSContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	logRecoveryEvent("recover_sealing_containers_start")
 
 	// Clean up stale markers where a previous run sealed successfully but did not
@@ -308,13 +329,22 @@ func quarantineMissingContainerIfNeeded(ctx context.Context, dbconn *sql.DB, id 
 }
 
 func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
-	return quarantineMissingContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return quarantineMissingContainersWithFSContext(ctx, dbconn, containersDir, stats, fsx.Default())
+}
+
+func quarantineMissingContainersWithContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineMissingContainersWithFSContext(ctx, dbconn, containersDir, stats, fsx.Default())
 }
 
 func quarantineMissingContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return quarantineMissingContainersWithFSContext(ctx, dbconn, containersDir, stats, fsys)
+}
 
+func quarantineMissingContainersWithFSContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	logRecoveryEvent("quarantine_missing_containers_start")
 	rows, err := dbconn.QueryContext(ctx, `SELECT id, filename FROM container WHERE quarantine = FALSE`)
 	if err != nil {
@@ -352,14 +382,17 @@ func quarantineMissingContainersWithFS(dbconn *sql.DB, containersDir string, sta
 	return nil
 }
 
-func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
-	return quarantineCorruptActiveContainerTailsWithFS(dbconn, containersDir, stats, fsx.Default())
+func quarantineCorruptActiveContainerTailsWithContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineCorruptActiveContainerTailsWithFSContext(ctx, dbconn, containersDir, stats, fsx.Default())
 }
 
 func quarantineCorruptActiveContainerTailsWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return quarantineCorruptActiveContainerTailsWithFSContext(ctx, dbconn, containersDir, stats, fsys)
+}
 
+func quarantineCorruptActiveContainerTailsWithFSContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	logRecoveryEvent("quarantine_corrupt_active_container_tails_start")
 
 	rows, err := dbconn.QueryContext(ctx, `
@@ -500,12 +533,22 @@ func quarantineOneActiveCorruptTail(ctx context.Context, dbconn *sql.DB, id int6
 }
 
 func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
-	return quarantineOrphanContainersWithFS(dbconn, containersDir, stats, fsx.Default())
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return quarantineOrphanContainersWithFSContext(ctx, dbconn, containersDir, stats, fsx.Default())
+}
+
+func quarantineOrphanContainersWithContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	return quarantineOrphanContainersWithFSContext(ctx, dbconn, containersDir, stats, fsx.Default())
 }
 
 func quarantineOrphanContainersWithFS(dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return quarantineOrphanContainersWithFSContext(ctx, dbconn, containersDir, stats, fsys)
+}
+
+func quarantineOrphanContainersWithFSContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	backend := db.BackendFromDB(dbconn)
 
 	var reusedCount int64

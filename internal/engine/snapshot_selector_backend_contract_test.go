@@ -31,10 +31,27 @@ func TestEngineSnapshotSelectorsAcrossBackends(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(snapshotIDs(filtered), []string{"snap-target"}) {
 			t.Fatalf("label SnapshotList: got (%+v, %v)", filtered, err)
 		}
+		tree, err := fixture.engine.SnapshotList(context.Background(), engine.SnapshotListRequest{Tree: true})
+		if err != nil || tree.Graph == nil || !tree.TreeMode || !reflect.DeepEqual(snapshotIDs(tree), []string{"snap-target", "snap-base", "snap-root"}) {
+			t.Fatalf("tree SnapshotList: got (%+v, %v)", tree, err)
+		}
+		if got, want := tree.Graph.RootIDs, []string{"snap-root"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("tree roots: got %v want %v", got, want)
+		}
+		if got, want := tree.Graph.Nodes[0].ChildIDs, []string{"snap-base"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("tree root children: got %v want %v", got, want)
+		}
+		filteredTree, err := fixture.engine.SnapshotList(context.Background(), engine.SnapshotListRequest{Label: "target", Tree: true})
+		if err != nil || filteredTree.Graph == nil || !reflect.DeepEqual(filteredTree.Graph.RootIDs, []string{"snap-target"}) {
+			t.Fatalf("filtered tree projection: got (%+v, %v)", filteredTree, err)
+		}
+		if filteredTree.Graph.Nodes[0].ParentState != engine.SnapshotParentPresent {
+			t.Fatalf("filtered tree lost existing-parent state: %+v", filteredTree.Graph.Nodes[0])
+		}
 
 		query := engine.SnapshotQuery{
-			Path:           "docs/added.txt",
-			Prefix:         "docs/",
+			Paths:          []string{"docs/added.txt"},
+			Prefixes:       []string{"docs/"},
 			Pattern:        "docs/*.txt",
 			Regex:          "added\\.txt$",
 			MinSize:        int64Pointer(10),
@@ -78,6 +95,12 @@ func TestEngineSnapshotSelectorErrorsAcrossBackends(t *testing.T) {
 		}
 		if _, err := fixture.engine.SnapshotDiff(context.Background(), engine.SnapshotDiffRequest{BaseID: "snap-base", TargetID: "snap-target", Query: invalid}); err == nil || !strings.Contains(err.Error(), "invalid snapshot query regex") {
 			t.Fatalf("invalid SnapshotDiff regex: %v", err)
+		}
+		if _, err := fixture.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: "snap-target", Query: engine.SnapshotQuery{Paths: []string{" docs/common.txt"}}}); err == nil || !strings.Contains(err.Error(), "leading or trailing whitespace") {
+			t.Fatalf("invalid SnapshotShow path: %v", err)
+		}
+		if _, err := fixture.engine.SnapshotDiff(context.Background(), engine.SnapshotDiffRequest{BaseID: "snap-base", TargetID: "snap-target", Query: engine.SnapshotQuery{Prefixes: []string{"docs"}}}); err == nil || !strings.Contains(err.Error(), "must end with '/'") {
+			t.Fatalf("invalid SnapshotDiff prefix: %v", err)
 		}
 		cancelled, cancel := context.WithCancel(context.Background())
 		cancel()

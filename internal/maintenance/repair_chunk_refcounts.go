@@ -19,12 +19,21 @@ type RepairChunkLiveRefCountsResult struct {
 }
 
 func RepairChunkLiveRefCountsResultWithDB(dbconn *sql.DB) (result RepairChunkLiveRefCountsResult, err error) {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return RepairChunkLiveRefCountsResultWithDBContext(ctx, dbconn)
+}
+
+func RepairChunkLiveRefCountsResultWithDBContext(ctx context.Context, dbconn *sql.DB) (result RepairChunkLiveRefCountsResult, err error) {
 	if dbconn == nil {
 		return RepairChunkLiveRefCountsResult{}, fmt.Errorf("db connection is nil")
 	}
-
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return RepairChunkLiveRefCountsResult{}, err
+	}
 
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {

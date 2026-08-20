@@ -3,7 +3,6 @@ package catalog_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"testing"
 	"time"
 
@@ -389,61 +388,23 @@ func TestServiceLoadReachabilityRoots(t *testing.T) {
 	assertReachabilityRoots(t, roots)
 }
 
-// TestServiceDeferredMethodsReturnErrNotImplemented verifies all skeleton
-// methods return ErrNotImplemented and not nil or panic.
-func TestServiceDeferredMethodsReturnErrNotImplemented(t *testing.T) {
+func TestServiceLoadGCPlanMetadataEmptyCatalog(t *testing.T) {
 	dbconn := openTestDB(t)
 	svc := catalog.NewServiceFromSQL(dbconn)
 	ctx := context.Background()
 	before := countCatalogLogicalFiles(t, dbconn)
 
-	graph, err := svc.LoadSnapshotGraph(ctx)
-	if !errors.Is(err, catalog.ErrNotImplemented) {
-		t.Errorf("LoadSnapshotGraph: want ErrNotImplemented via errors.Is, got %v", err)
-	}
-	if !catalog.IsDeferred(err) {
-		t.Errorf("LoadSnapshotGraph: want catalog.IsDeferred=true, got %v", err)
-	}
-	if graph != nil {
-		t.Errorf("LoadSnapshotGraph: want nil graph on deferred path, got %+v", graph)
-	}
-
-	placements, err := svc.LoadChunkPlacements(ctx, 1)
-	if !errors.Is(err, catalog.ErrNotImplemented) {
-		t.Errorf("LoadChunkPlacements: want ErrNotImplemented via errors.Is, got %v", err)
-	}
-	if !catalog.IsDeferred(err) {
-		t.Errorf("LoadChunkPlacements: want catalog.IsDeferred=true, got %v", err)
-	}
-	if placements != nil {
-		t.Errorf("LoadChunkPlacements: want nil placements on deferred path, got %+v", placements)
-	}
-
-	restorePlan, err := svc.LoadRestorePlanMetadata(ctx, catalog.RestorePlanInput{FileID: 1})
-	if !errors.Is(err, catalog.ErrNotImplemented) {
-		t.Errorf("LoadRestorePlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
-	}
-	if !catalog.IsDeferred(err) {
-		t.Errorf("LoadRestorePlanMetadata: want catalog.IsDeferred=true, got %v", err)
-	}
-	if restorePlan != nil {
-		t.Errorf("LoadRestorePlanMetadata: want nil metadata on deferred path, got %+v", restorePlan)
-	}
-
 	gcPlan, err := svc.LoadGCPlanMetadata(ctx, catalog.GCPlanInput{})
-	if !errors.Is(err, catalog.ErrNotImplemented) {
-		t.Errorf("LoadGCPlanMetadata: want ErrNotImplemented via errors.Is, got %v", err)
+	if err != nil {
+		t.Fatalf("LoadGCPlanMetadata: %v", err)
 	}
-	if !catalog.IsDeferred(err) {
-		t.Errorf("LoadGCPlanMetadata: want catalog.IsDeferred=true, got %v", err)
-	}
-	if gcPlan != nil {
-		t.Errorf("LoadGCPlanMetadata: want nil metadata on deferred path, got %+v", gcPlan)
+	if gcPlan == nil || gcPlan.Roots == nil || gcPlan.ProtectedSnapshots == nil || len(gcPlan.Roots) != 0 || len(gcPlan.ProtectedSnapshots) != 0 {
+		t.Fatalf("LoadGCPlanMetadata: want non-nil empty slices, got %+v", gcPlan)
 	}
 
 	after := countCatalogLogicalFiles(t, dbconn)
 	if after != before {
-		t.Fatalf("deferred catalog methods should not mutate logical_file rows: before=%d after=%d", before, after)
+		t.Fatalf("GC plan read should not mutate logical_file rows: before=%d after=%d", before, after)
 	}
 }
 

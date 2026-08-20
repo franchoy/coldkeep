@@ -2,36 +2,12 @@ package engine_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
-
-func TestUnsupportedEngineModesRemainUnsupportedBoundaries(t *testing.T) {
-	t.Run("recursive store", func(t *testing.T) {
-		db := openSnapshotTestDB(t)
-		sgctx := storage.StorageContext{
-			DB:           db,
-			Writer:       container.NewSimulatedWriter(1024 * 1024),
-			ContainerDir: t.TempDir(),
-		}
-		eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: &sgctx})
-		if err != nil {
-			t.Fatalf("engine.New: %v", err)
-		}
-
-		_, err = eng.Store(context.Background(), engine.StoreRequest{
-			SourcePath: t.TempDir(),
-			Recursive:  true,
-			Workers:    2,
-			Codec:      "plain",
-		})
-		assertUnsupportedBoundary(t, err, engine.ErrNotImplemented.Error())
-	})
-}
 
 func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 	t.Run("store requires source path", func(t *testing.T) {
@@ -48,6 +24,56 @@ func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {
 
 		_, err = eng.Store(context.Background(), engine.StoreRequest{SourcePath: "", Codec: "plain"})
 		assertValidationBoundary(t, err, "engine: store source path is required")
+	})
+
+	t.Run("store folder requires source path", func(t *testing.T) {
+		db := openSnapshotTestDB(t)
+		sgctx := storage.StorageContext{
+			DB:           db,
+			Writer:       container.NewSimulatedWriter(1024 * 1024),
+			ContainerDir: t.TempDir(),
+		}
+		eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: &sgctx})
+		if err != nil {
+			t.Fatalf("engine.New: %v", err)
+		}
+
+		_, err = eng.StoreFolder(context.Background(), engine.StoreFolderRequest{Codec: "plain"})
+		assertValidationBoundary(t, err, "engine: store folder source path is required")
+	})
+
+	t.Run("store folder rejects negative workers", func(t *testing.T) {
+		db := openSnapshotTestDB(t)
+		sgctx := storage.StorageContext{
+			DB:           db,
+			Writer:       container.NewSimulatedWriter(1024 * 1024),
+			ContainerDir: t.TempDir(),
+		}
+		eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: &sgctx})
+		if err != nil {
+			t.Fatalf("engine.New: %v", err)
+		}
+
+		_, err = eng.StoreFolder(context.Background(), engine.StoreFolderRequest{
+			SourcePath: t.TempDir(),
+			Codec:      "plain",
+			Workers:    -1,
+		})
+		assertValidationBoundary(t, err, "engine: store folder workers must be zero or greater")
+	})
+
+	t.Run("store folder requires injected StoreContext", func(t *testing.T) {
+		db := openSnapshotTestDB(t)
+		eng, err := engine.New(engine.Config{DB: db, ContainerDir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("engine.New: %v", err)
+		}
+
+		_, err = eng.StoreFolder(context.Background(), engine.StoreFolderRequest{
+			SourcePath: t.TempDir(),
+			Codec:      "plain",
+		})
+		assertValidationBoundary(t, err, "engine: store folder requires injected StoreContext")
 	})
 
 	t.Run("store requires injected StoreContext", func(t *testing.T) {
@@ -180,31 +206,11 @@ func assertInvalidFileIDFailureSummary(t *testing.T, summary engine.BatchSummary
 	}
 }
 
-func assertUnsupportedBoundary(t *testing.T, err error, wantMessage string) {
-	t.Helper()
-
-	if err == nil {
-		t.Fatal("expected unsupported boundary error")
-	}
-	if !errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented-compatible unsupported error, got %v", err)
-	}
-	if !engine.IsUnsupported(err) {
-		t.Fatalf("expected unsupported boundary to classify as unsupported, got %v", err)
-	}
-	if err.Error() != wantMessage {
-		t.Fatalf("expected unsupported message %q, got %q", wantMessage, err.Error())
-	}
-}
-
 func assertValidationBoundary(t *testing.T, err error, wantMessage string) {
 	t.Helper()
 
 	if err == nil {
 		t.Fatal("expected validation error")
-	}
-	if errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected validation error to remain distinct from ErrNotImplemented: %v", err)
 	}
 	if engine.IsUnsupported(err) {
 		t.Fatalf("expected validation error to remain non-unsupported: %v", err)

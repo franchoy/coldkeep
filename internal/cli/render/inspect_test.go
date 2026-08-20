@@ -3,6 +3,8 @@ package render
 import (
 	"bytes"
 	"encoding/json"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -137,5 +139,109 @@ func TestRenderInspectJSONIsDeterministic(t *testing.T) {
 	firstRel := relations[0].(map[string]any)
 	if got, _ := firstRel["target_id"].(string); got != "10" {
 		t.Fatalf("expected sorted relations by target_id, got %v", got)
+	}
+}
+
+func TestToInt64UnsignedBoundaries(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  any
+		want   int64
+		wantOK bool
+	}{
+		{name: "normal uint", value: uint(42), want: 42, wantOK: true},
+		{name: "maximum int64 as uint64", value: uint64(math.MaxInt64), want: math.MaxInt64, wantOK: true},
+		{name: "one above maximum int64 as uint64", value: uint64(math.MaxInt64) + 1, wantOK: false},
+		{name: "maximum uint64", value: uint64(math.MaxUint64), wantOK: false},
+	}
+	if strconv.IntSize == 64 {
+		tests = append(tests, struct {
+			name   string
+			value  any
+			want   int64
+			wantOK bool
+		}{name: "one above maximum int64 as uint", value: uint(uint64(math.MaxInt64) + 1), wantOK: false})
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := toInt64(tc.value)
+			if got != tc.want || ok != tc.wantOK {
+				t.Fatalf("toInt64(%T(%v)) = (%d, %t), want (%d, %t)", tc.value, tc.value, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestToInt64FloatBoundaries(t *testing.T) {
+	const (
+		minInt64Float = -9223372036854775808.0
+		maxInt64Float = 9223372036854775808.0
+	)
+	largestBelowMax := math.Nextafter(maxInt64Float, 0)
+	tests := []struct {
+		name   string
+		value  any
+		want   int64
+		wantOK bool
+	}{
+		{name: "float64 fractional positive truncates", value: float64(42.75), want: 42, wantOK: true},
+		{name: "float64 fractional negative truncates", value: float64(-42.75), want: -42, wantOK: true},
+		{name: "float64 minimum inclusive", value: float64(minInt64Float), want: math.MinInt64, wantOK: true},
+		{name: "float64 largest representable below maximum", value: largestBelowMax, want: math.MaxInt64 - 1023, wantOK: true},
+		{name: "float64 maximum exclusive", value: float64(maxInt64Float), wantOK: false},
+		{name: "float64 below minimum", value: math.Nextafter(minInt64Float, math.Inf(-1)), wantOK: false},
+		{name: "float64 positive infinity", value: math.Inf(1), wantOK: false},
+		{name: "float64 negative infinity", value: math.Inf(-1), wantOK: false},
+		{name: "float64 NaN", value: math.NaN(), wantOK: false},
+		{name: "float32 fractional positive truncates", value: float32(42.75), want: 42, wantOK: true},
+		{name: "float32 fractional negative truncates", value: float32(-42.75), want: -42, wantOK: true},
+		{name: "float32 minimum inclusive", value: float32(minInt64Float), want: math.MinInt64, wantOK: true},
+		{name: "float32 below minimum", value: math.Nextafter32(float32(minInt64Float), float32(math.Inf(-1))), wantOK: false},
+		{name: "float32 maximum exclusive", value: float32(maxInt64Float), wantOK: false},
+		{name: "float32 positive infinity", value: float32(math.Inf(1)), wantOK: false},
+		{name: "float32 NaN", value: float32(math.NaN()), wantOK: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := toInt64(tc.value)
+			if got != tc.want || ok != tc.wantOK {
+				t.Fatalf("toInt64(%T(%v)) = (%d, %t), want (%d, %t)", tc.value, tc.value, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestSummaryValueStringFloatSafetyAndCompatibility(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value any
+		want  string
+	}{
+		{name: "fractional human summary retains truncation", key: "compression_factor", value: 2.75, want: "2"},
+		{name: "fractional byte value retains truncation", key: "size_bytes", value: 2048.75, want: "2.0 KiB"},
+		{name: "positive infinity is not narrowed", key: "compression_factor", value: math.Inf(1), want: "+Inf"},
+		{name: "negative infinity is not narrowed", key: "compression_factor", value: math.Inf(-1), want: "-Inf"},
+		{name: "NaN is not narrowed", key: "compression_factor", value: math.NaN(), want: "NaN"},
+		{name: "exclusive upper bound is not narrowed", key: "compression_factor", value: float64(9223372036854775808.0), want: "9223372036854775808.00"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := summaryValueString(tc.key, tc.value); got != tc.want {
+				t.Fatalf("summaryValueString(%q, %T(%v)) = %q, want %q", tc.key, tc.value, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSummaryValueStringOversizedUnsignedDoesNotNarrow(t *testing.T) {
+	value := uint64(math.MaxInt64) + 1
+	if got, want := summaryValueString("chunk_count", value), strconv.FormatUint(value, 10); got != want {
+		t.Fatalf("summaryValueString() = %q, want exact unsigned fallback %q", got, want)
+	}
+	if got := summaryValueString("chunk_count", uint64(math.MaxUint64)); strings.HasPrefix(got, "-") {
+		t.Fatalf("maximum uint64 rendered as negative value: %q", got)
 	}
 }

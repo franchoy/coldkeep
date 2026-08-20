@@ -74,6 +74,7 @@ CODEQL_WORKFLOW_FILE="${COLDKEEP_CODEQL_WORKFLOW_FILE:-$REPO_ROOT/.github/workfl
 BENCHMARK_BASELINE_WORKFLOW_FILE="${COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE:-$REPO_ROOT/.github/workflows/benchmark-baseline.yml}"
 BENCHMARK_GATE_FILE="${COLDKEEP_BENCHMARK_GATE_FILE:-$REPO_ROOT/scripts/benchmark_gate.py}"
 TIMING_VALIDATOR_FILE="${COLDKEEP_TIMING_VALIDATOR_FILE:-$REPO_ROOT/scripts/validate_regression_thresholds.py}"
+CANDIDATE_LINT_GATE_FILE="${COLDKEEP_CANDIDATE_LINT_GATE_FILE:-$REPO_ROOT/scripts/run_candidate_lint_gate.sh}"
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
 PAIRED_REFERENCE_MANIFEST_FILE="${COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE:-$REPO_ROOT/benchmarks/paired/reference-v1.13.json}"
 PAIRED_THRESHOLD_POLICY_FILE="${COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE:-$REPO_ROOT/benchmarks/paired/threshold-policy-v1.13.json}"
@@ -449,6 +450,19 @@ check_local_workflow() {
 
   echo "[audit] checking local workflow invariants"
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'uses:\s*golangci/golangci-lint-action@v9' 'hosted quality uses golangci-lint action v9' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'version:\s*v2\.6\.2' 'hosted quality pins golangci-lint v2.6.2' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Test candidate lint gate contract' 'hosted quality tests the candidate lint gate contract' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test -count=1 ./scripts -run '\^TestCandidateLintGate'" 'hosted quality runs candidate lint gate regression tests' || check_status=1
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" '^set -Eeuo pipefail$' 'candidate lint gate enables fail-closed shell semantics' || check_status=1
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" '^set -o pipefail$' 'candidate lint gate preserves pipeline failures' || check_status=1
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" '^readonly EXPECTED_GOLANGCI_LINT_VERSION="2\.6\.2"$' 'candidate lint gate pins golangci-lint v2.6.2' || check_status=1
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" 'config path' 'candidate lint gate resolves the effective repository config' || check_status=1
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" 'config verify' 'candidate lint gate verifies the effective repository config' || check_status=1
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 'candidate lint gate captures lint and tee pipeline statuses' || check_status=1
+  # shellcheck disable=SC2016 # The audit pattern must match the literal gate variables.
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" 'grep -Eq -- "\$FINDING_PATTERN" "\$LINT_LOG"' 'candidate lint gate rejects findings independently of wrapper status' || check_status=1
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" 'LOCAL_CANDIDATE_LINT=PASS' 'candidate lint gate emits PASS only after evidence verification' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^name: Benchmark Gate Calibration and Baseline Capture$' 'manual benchmark calibration workflow' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  workflow_dispatch:$' 'benchmark calibration is manually dispatched' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  contents: read$' 'benchmark calibration has read-only repository permission' || check_status=1
@@ -787,6 +801,18 @@ check_local_workflow() {
 	    require_content_pattern "$postgres_internal_contracts_block" 'expected PostgreSQL pass missing' 'PostgreSQL internal package contracts require PostgreSQL test pass events' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestSCH001AndSCH002BootstrapVersionAndIdempotency/postgres' 'PostgreSQL internal package contracts prove Phase 5 bootstrap execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestSCH009PostgresVersionElevenAutoMigration/postgres' 'PostgreSQL internal package contracts prove Phase 5 migration execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestCatalogContractCurrentFileQueriesAcrossBackends/postgres' 'PostgreSQL internal package contracts prove catalog current-file execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestCatalogContractRepositoryConfigurationAcrossBackends/postgres' 'PostgreSQL internal package contracts prove catalog configuration execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestCatalogContractSnapshotGraphAcrossBackends/postgres' 'PostgreSQL internal package contracts prove catalog graph execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestCatalogContractChunkPlacementsAcrossBackends/postgres' 'PostgreSQL internal package contracts prove catalog placement execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestCatalogContractRestorePlansAcrossBackends/postgres' 'PostgreSQL internal package contracts prove catalog restore-plan execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestCatalogContractGCPlansAcrossBackends/postgres' 'PostgreSQL internal package contracts prove catalog GC-plan execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineCurrentFilesAndConfigurationAcrossBackends/postgres' 'PostgreSQL internal package contracts prove engine current-file and configuration execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineStoreFolderAcrossBackends/postgres' 'PostgreSQL internal package contracts prove engine folder-store execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineGarbageCollectionPlanAcrossBackends/postgres' 'PostgreSQL internal package contracts prove engine GC-plan execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineRepairAcrossBackends/postgres' 'PostgreSQL internal package contracts prove engine repair execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineRecoverAcrossBackendsAndIsIdempotent/postgres' 'PostgreSQL internal package contracts prove engine recovery execution' || check_status=1
+	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineDoctorAcrossBackends/postgres' 'PostgreSQL internal package contracts prove engine Doctor execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineReadStatsAndInspectAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 7 stats and inspect execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineReadSnapshotViewsAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 7 snapshot-view execution' || check_status=1
 	    require_content_pattern "$postgres_internal_contracts_block" 'TestEngineReadVerifyAcrossBackends/postgres' 'PostgreSQL internal package contracts prove Phase 7 verification execution' || check_status=1

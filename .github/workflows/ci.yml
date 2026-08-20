@@ -83,6 +83,9 @@ jobs:
 
       - name: Enforce versioned row writer scope
         run: bash scripts/check_versioned_row_writers.sh
+
+      - name: Test candidate lint gate contract
+        run: go test -count=1 ./scripts -run '^TestCandidateLintGate'
           
       - name: Lint
         uses: golangci/golangci-lint-action@v9
@@ -298,10 +301,15 @@ jobs:
               "github.com/franchoy/coldkeep/internal/catalog": [
                   r"^TestCatalogContractFindLogicalFileAcrossBackends/postgres$",
                   r"^TestCatalogContractFindPhysicalFilesAcrossBackends/postgres$",
+                  r"^TestCatalogContractCurrentFileQueriesAcrossBackends/postgres$",
+                  r"^TestCatalogContractRepositoryConfigurationAcrossBackends/postgres$",
                   r"^TestCatalogContractFindSnapshotAcrossBackends/postgres$",
                   r"^TestCatalogContractListSnapshotsAcrossBackends/postgres$",
                   r"^TestCatalogContractLoadReachabilityRootsAcrossBackends/postgres$",
-                  r"^TestCatalogContractDeferredMethodsAcrossBackends/postgres$",
+                  r"^TestCatalogContractSnapshotGraphAcrossBackends/postgres$",
+                  r"^TestCatalogContractGCPlansAcrossBackends/postgres$",
+                  r"^TestCatalogContractChunkPlacementsAcrossBackends/postgres$",
+                  r"^TestCatalogContractRestorePlansAcrossBackends/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/db": [
                   r"^TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve$",
@@ -321,6 +329,10 @@ jobs:
               ],
               "github.com/franchoy/coldkeep/internal/engine": [
                   r"^TestRemoveByIDPostgresPreservesSharedChunks$",
+                  r"^TestEngineCurrentFilesAndConfigurationAcrossBackends/postgres$",
+                  r"^TestEngineDoctorAcrossBackends/postgres$",
+                  r"^TestEngineGarbageCollectionPlanAcrossBackends/postgres$",
+                  r"^TestEngineStoreFolderAcrossBackends/postgres$",
                   r"^TestEngineReadStatsAndInspectAcrossBackends/postgres$",
                   r"^TestEngineReadSnapshotViewsAcrossBackends/postgres$",
                   r"^TestEngineReadVerifyAcrossBackends/postgres$",
@@ -332,6 +344,12 @@ jobs:
                   r"^TestEngineMutationRestoreAcrossBackends/postgres$",
                   r"^TestEngineMutationErrorsAcrossBackends/postgres$",
                   r"^TestEngineGCDryRunAcrossBackends/postgres$",
+                  r"^TestEngineRecoverAcrossBackendsAndIsIdempotent/postgres$",
+                  r"^TestEngineRecoverFaultAndCancellationAcrossBackends/postgres$",
+                  r"^TestEngineRepairAcrossBackends/postgres$",
+                  r"^TestEngineRepairValidationOrderingAcrossBackends/postgres$",
+                  r"^TestEngineRepairTypedBoundaryErrors/postgres$",
+                  r"^TestEngineRepairFailFastOnInvariantViolation/postgres$",
               ],
               "github.com/franchoy/coldkeep/internal/maintenance": [
                   r"^TestGCAdvisoryLockUsesDedicatedSessionAndReleases$",

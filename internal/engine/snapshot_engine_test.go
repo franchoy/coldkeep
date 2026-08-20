@@ -3,6 +3,8 @@ package engine_test
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -186,6 +188,68 @@ func TestSnapshotListLabelAndMeta(t *testing.T) {
 	}
 	if child.ParentID != "snap-parent" {
 		t.Errorf("ParentID: got %q, want snap-parent", child.ParentID)
+	}
+}
+
+func TestSnapshotListTreeConsumesCatalogGraphAndPreservesListOrder(t *testing.T) {
+	db := openSnapshotTestDB(t)
+	base := time.Date(2026, 8, 19, 8, 0, 0, 0, time.UTC)
+	insertTestSnapshot(t, db, "root", "full", "root", "", base)
+	insertTestSnapshot(t, db, "child-b", "full", "b", "root", base.Add(time.Hour))
+	insertTestSnapshot(t, db, "child-a", "full", "a", "root", base.Add(time.Hour))
+
+	eng, err := engine.New(engine.Config{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.SnapshotList(context.Background(), engine.SnapshotListRequest{Tree: true})
+	if err != nil {
+		t.Fatalf("SnapshotList tree: %v", err)
+	}
+	if !result.TreeMode || result.Graph == nil {
+		t.Fatalf("missing tree graph: %+v", result)
+	}
+	if got, want := []string{result.Snapshots[0].ID, result.Snapshots[1].ID, result.Snapshots[2].ID}, []string{"child-b", "child-a", "root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("list order got=%v want=%v", got, want)
+	}
+	if got, want := result.Graph.RootIDs, []string{"root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("roots got=%v want=%v", got, want)
+	}
+	if got, want := result.Graph.Nodes[0].ChildIDs, []string{"child-a", "child-b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("children got=%v want=%v", got, want)
+	}
+	if result.Graph.Nodes[1].ParentState != engine.SnapshotParentPresent {
+		t.Fatalf("parent state: %+v", result.Graph.Nodes[1])
+	}
+
+	plain, err := eng.SnapshotList(context.Background(), engine.SnapshotListRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.TreeMode || plain.Graph != nil {
+		t.Fatalf("non-tree list exposed graph: %+v", plain)
+	}
+}
+
+func TestSnapshotListTreeTranslatesCatalogGraphInvariant(t *testing.T) {
+	db := openSnapshotTestDB(t)
+	base := time.Date(2026, 8, 19, 8, 0, 0, 0, time.UTC)
+	insertTestSnapshot(t, db, "a", "full", "", "", base)
+	insertTestSnapshot(t, db, "b", "full", "", "a", base.Add(time.Hour))
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = 'b' WHERE id = 'a'`); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := engine.New(engine.Config{DB: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.SnapshotList(context.Background(), engine.SnapshotListRequest{Tree: true})
+	if !engine.IsCode(err, engine.ErrorInvariantViolation) {
+		t.Fatalf("cycle error classification: %v", err)
+	}
+	var typed *engine.Error
+	if !errors.As(err, &typed) || typed.InvariantCode != "acyclic_snapshot_graph" {
+		t.Fatalf("cycle invariant context: %v", err)
 	}
 }
 

@@ -2,136 +2,235 @@ package catalog
 
 import "time"
 
-// LogicalFileRef is the catalog's neutral representation of a logical_file row.
-// Field names and types are aligned with the logical_file table schema.
 type LogicalFileRef struct {
 	ID           int64
 	OriginalName string
 	TotalSize    int64
 	FileHash     string
 	RefCount     int
-	Status       string // "PROCESSING" | "COMPLETED" | "ABORTED"
+	Status       string
 }
 
-// PhysicalFileRef is the catalog's neutral representation of a physical_file
-// row. Path is the primary key in the schema.
-// MTime is nil when the mtime column is NULL; Mode is zero when NULL.
-// IsMetadataComplete maps to is_metadata_complete (bool/INTEGER 0-1).
+// PhysicalFileRef preserves the historical lookup projection: Mode is zero
+// when the database value is NULL. RestoreSourceRef preserves exact nullness.
 type PhysicalFileRef struct {
 	Path               string
 	LogicalFileID      int64
 	Mode               int
-	MTime              *time.Time // nil when NULL in DB
+	MTime              *time.Time
 	IsMetadataComplete bool
 }
 
-// SnapshotRef is the catalog's neutral representation of a snapshot row.
-// Type is "full" or "partial". ParentID and Label are empty when NULL in the DB.
+const MaxCurrentFilePageSize int64 = 10000
+
+// CurrentFileRef is one completed current-state physical path joined to its
+// logical identity. Snapshot-only and non-completed logical files are excluded.
+type CurrentFileRef struct {
+	LogicalFileID int64
+	Path          string
+	FileHash      string
+	SizeBytes     int64
+	CreatedAt     time.Time
+}
+
+type CurrentFilePage struct {
+	Limit  *int64
+	Offset *int64
+}
+
+// CurrentFileSearch preserves repeated CLI filters. Repeated name and size
+// constraints are combined with AND, matching the historical query behavior.
+type CurrentFileSearch struct {
+	NameContains []string
+	MinSizeBytes []int64
+	MaxSizeBytes []int64
+	Page         CurrentFilePage
+}
+
+type RepositoryConfigurationRef struct {
+	Key    string
+	Value  string
+	Exists bool
+}
+
+type SetRepositoryConfigurationResult struct {
+	Key           string
+	Value         string
+	PreviousValue string
+	PreviouslySet bool
+	Changed       bool
+}
+
 type SnapshotRef struct {
 	ID        string
-	Type      string // "full" | "partial"
+	Type      string
 	Label     string
 	ParentID  string
 	CreatedAt time.Time
 }
 
-// SnapshotFilter constrains the result set of ListSnapshots. Zero values mean
-// "no filter on this dimension".
 type SnapshotFilter struct {
-	// Type filters by snapshot type; empty means all.
-	Type string
-	// LabelSubstring filters snapshots whose label contains the substring.
+	Type           string
 	LabelSubstring string
-	// Since and Until bound the created_at range (inclusive).
-	Since *time.Time
-	Until *time.Time
-	// Limit caps the result count when greater than zero.
-	Limit int
+	Since          *time.Time
+	Until          *time.Time
+	Limit          int
 }
 
-// SnapshotGraph is a renderer-neutral representation of the snapshot lineage.
-// Deferred to Phase 5/6; fields are minimal so the skeleton compiles without
-// committing to the graph traversal shape.
+// SnapshotParentState distinguishes roots from historical missing-parent rows.
+// Missing parents never create invented edges and do not turn children into roots.
+type SnapshotParentState string
+
+const (
+	SnapshotParentNone    SnapshotParentState = "none"
+	SnapshotParentPresent SnapshotParentState = "present"
+	SnapshotParentMissing SnapshotParentState = "missing"
+)
+
+// SnapshotGraphNode contains child IDs ordered by created_at, then ID.
+type SnapshotGraphNode struct {
+	Snapshot    SnapshotRef
+	ParentState SnapshotParentState
+	ChildIDs    []string
+}
+
+// SnapshotGraph nodes and roots are ordered by created_at ascending, then ID.
 type SnapshotGraph struct {
-	// Roots are the snapshot IDs with no parent.
-	Roots []string
-	// Edges maps snapshot ID to parent snapshot ID.
-	Edges map[string]string
+	Nodes   []SnapshotGraphNode
+	RootIDs []string
 }
 
-// ReachabilityRoots holds the logical file ID sets used by GC and verification.
-// Current is the set reachable from physical_file (active working set);
-// Snapshot is the set reachable from snapshot_file (snapshot-protected).
-//
-// Both packed and legacy storage roots contribute to the same reachability sets
-// because reachability is expressed in terms of logical file IDs, not storage
-// format.
+// ReachabilityRoots is the compatibility shape used by existing callers.
 type ReachabilityRoots struct {
-	// Current is the set of logical file IDs referenced by physical_file rows.
-	Current map[int64]struct{}
-	// Snapshot is the set of logical file IDs referenced by snapshot_file rows.
+	Current  map[int64]struct{}
 	Snapshot map[int64]struct{}
 }
 
-// ChunkPlacementRef describes where a single chunk is stored.
-// It covers both packed storage (storage_blocks/chunk_block_refs) and legacy
-// storage (blocks). The Packed field distinguishes the two paths.
-//
-// Deferred to Phase 7/8.
+type PlacementKind string
+
+const (
+	PlacementLegacy PlacementKind = "legacy"
+	PlacementPacked PlacementKind = "packed"
+)
+
+// ContainerPlacementRef contains the facts required for bounded reads.
+type ContainerPlacementRef struct {
+	ID            int64
+	Filename      string
+	Sealed        bool
+	Sealing       bool
+	ContainerHash string
+	Quarantined   bool
+	CurrentSize   int64
+	MaxSize       int64
+}
+
+type LegacyChunkPlacement struct {
+	BlockID         int64
+	Codec           string
+	FormatVersion   int
+	PlaintextSize   int64
+	StoredSize      int64
+	Nonce           []byte
+	Container       ContainerPlacementRef
+	ContainerOffset int64
+}
+
+type PackedChunkPlacement struct {
+	BlockID          int64
+	FormatVersion    int
+	Codec            string
+	PlaintextSize    int64
+	CompressionCodec string
+	CompressionLevel *int
+	CompressedSize   *int64
+	StoredSize       int64
+	BlockHash        []byte
+	CompressedHash   []byte
+	PhysicalHash     []byte
+	Container        ContainerPlacementRef
+	ContainerOffset  int64
+	OffsetInBlock    int64
+	SizeInBlock      int64
+}
+
+// ChunkPlacementRef is one ordered logical-file recipe entry. Kind and the
+// placement pointers form a strict tagged union. Results are contiguous from 0.
 type ChunkPlacementRef struct {
-	ChunkID     int64
-	ChunkHash   string
-	ContainerID int64
-	// BlockID is storage_blocks.id (packed) or blocks.id (legacy).
-	BlockID       int64
-	Offset        int64 // container_offset (packed) or block_offset (legacy)
-	Size          int64 // stored_size
-	OffsetInBlock int64 // offset_in_block (packed only; zero for legacy)
-	SizeInBlock   int64 // size_in_block (packed only; zero for legacy)
-	Packed        bool  // true=packed (storage_blocks); false=legacy (blocks)
+	ChunkOrder     int64
+	ChunkID        int64
+	ChunkHash      string
+	ChunkSize      int64
+	ChunkerVersion string
+	ChunkStatus    string
+	Kind           PlacementKind
+	Legacy         *LegacyChunkPlacement
+	Packed         *PackedChunkPlacement
 }
 
-// RestorePlanInput selects a restore target. Exactly one of FileID,
-// SnapshotID, or StoredPath should be populated for a given lookup.
-//
-// Deferred to Phase 7 (restore migration).
+type RestoreSelector string
+
+const (
+	RestoreByFileID       RestoreSelector = "file_id"
+	RestoreByStoredPath   RestoreSelector = "stored_path"
+	RestoreBySnapshotPath RestoreSelector = "snapshot_path"
+)
+
+// RestorePlanInput is a strict selector union: FileID; StoredPath; or
+// SnapshotID plus SnapshotPath, selected by Selector.
 type RestorePlanInput struct {
-	FileID     int64
-	SnapshotID string
-	StoredPath string
+	Selector     RestoreSelector
+	FileID       int64
+	StoredPath   string
+	SnapshotID   string
+	SnapshotPath string
 }
 
-// RestorePlanMetadata is the catalog-level resolution of a restore target.
-//
-// Safety note: "restore must not write outside the intended destination" will
-// be enforced by the engine using this metadata. The catalog provides complete
-// and accurate metadata; the engine enforces destination safety.
-//
-// Deferred to Phase 7.
+type RestoreLogicalFileRef struct {
+	ID             int64
+	OriginalName   string
+	TotalSize      int64
+	FileHash       string
+	ChunkerVersion string
+	Status         string
+}
+
+// RestoreSourceRef preserves nullable current-file and snapshot metadata.
+type RestoreSourceRef struct {
+	StoredPath         string
+	SnapshotID         string
+	SnapshotPath       string
+	Size               *int64
+	Mode               *int64
+	MTime              *time.Time
+	UID                *int64
+	GID                *int64
+	IsMetadataComplete bool
+}
+
+// RestorePlanMetadata is a complete immutable recipe; payload I/O stays below
+// the catalog boundary.
 type RestorePlanMetadata struct {
-	LogicalFile   LogicalFileRef
-	PhysicalFiles []PhysicalFileRef
-	Placements    []ChunkPlacementRef
+	Selector    RestorePlanInput
+	LogicalFile RestoreLogicalFileRef
+	Source      RestoreSourceRef
+	Placements  []ChunkPlacementRef
 }
 
-// GCPlanInput parameterises a GC-plan metadata query. ExcludeSnapshotIDs lists
-// snapshot IDs excluded from the reachability roots (e.g. being deleted).
-//
-// Deferred to Phase 6 (GC migration).
 type GCPlanInput struct {
 	ExcludeSnapshotIDs []string
 }
 
-// GCPlanMetadata is the catalog-level metadata needed to plan a GC run.
-// Reachability is expressed in terms of logical file IDs so the engine can
-// compute chunk/block/container deletion lists without knowing the storage
-// format. Both packed and legacy roots are included.
-//
-// Deferred to Phase 6.
+// GCReachabilityRoot records all reasons a logical file remains protected.
+type GCReachabilityRoot struct {
+	LogicalFileID int64
+	Current       bool
+	SnapshotIDs   []string
+}
+
+// GCPlanMetadata contains deterministic mark roots, never sweep instructions.
+// Roots are ordered by logical ID; snapshots by created_at, then ID.
 type GCPlanMetadata struct {
-	// ReachableLogicalFileIDs is the set of all retained logical file IDs.
-	ReachableLogicalFileIDs map[int64]struct{}
-	// ProtectedSnapshotIDs is the set of snapshot IDs that contribute to
-	// reachability.
-	ProtectedSnapshotIDs []string
+	Roots              []GCReachabilityRoot
+	ProtectedSnapshots []SnapshotRef
 }

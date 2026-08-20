@@ -39,10 +39,15 @@ func openSnapshotRoutingDB(t *testing.T) *sql.DB {
 func injectSnapshotRoutingDB(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
 	orig := loadDefaultStorageContextPhase
-	t.Cleanup(func() { loadDefaultStorageContextPhase = orig })
+	origEngine := newSnapshotReadCommandEngine
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = orig
+		newSnapshotReadCommandEngine = origEngine
+	})
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
 		return storage.StorageContext{DB: dbconn}, nil
 	}
+	newSnapshotReadCommandEngine = productionSnapshotReadCommandEngine
 }
 
 // insertRoutingSnapshot inserts a minimal snapshot row for routing tests.

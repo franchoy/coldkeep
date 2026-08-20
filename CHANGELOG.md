@@ -20,7 +20,41 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.11 - 2026-08-18 — Safety and Backend Compatibility Gate Closure
+## v1.13.12 - Unreleased — Engine and Catalog Completion
+
+- Started the mandatory architecture-completion release from exact v1.13.11
+  merge commit `507859daccf25594142c61e5ab8209a751fb579a`.
+- Activated version 1.13.12 and froze the production ownership, compatibility,
+  catalog-adoption, and thin-CLI acceptance baseline.
+- Added the stable backend-neutral engine error taxonomy, deterministic
+  translation helpers, invariant/cancellation preservation, and exhaustive
+  active-contract neutrality coverage with only the four explicit Phase 3
+  observability DTO debts temporarily allowlisted.
+- Replaced Stats and Inspect observability-backed contracts with complete
+  engine-owned DTOs, exact tagged dynamic values, ordered trace events, and a
+  complete Verify summary while preserving the existing renderer output
+  through compatibility projection.
+- Completed the catalog graph, placement, restore-plan, and GC-plan contracts
+  on SQLite and PostgreSQL and adopted each in its production path. Completed
+  engine ownership for folder store, list/search, configuration, snapshots,
+  inspect/stats/verify, repair, recovery/startup recovery, Doctor, and live GC
+  planning behind an application composition boundary and enforced thin-CLI
+  dependency guards.
+- Completed the isolated compatibility and adversarial regression phase. Its
+  full PostgreSQL matrix caught and corrected Doctor session-open exit/message
+  projection drift; the restarted plain matrix, AES-GCM matrix, G1–G17
+  adversarial suite, coordination/advisory-session proofs, legacy fixture, and
+  post-correction full/race suites pass. Phase 21 exact-head candidate evidence
+  remains unrun.
+
+------------------------------------------------------------------------
+
+## v1.13.11 - 2026-08-19 — Safety and Backend Compatibility Gate Closure
+
+- Published the stable v1.13.11 release from merge commit
+  `507859daccf25594142c61e5ab8209a751fb579a` after exact-head candidate,
+  hosted PR, main, tag, and release validation. This completes v1.13.11 but
+  does not close v1.x; v1.13.12 and v1.13.13 remain mandatory.
 
 - Completed the Phase 20 pre-release state transition and froze the exact-head
   candidate contract. The commit containing that contract must pass

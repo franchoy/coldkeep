@@ -2,7 +2,6 @@ package engine_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,7 +44,7 @@ func TestStoreByFileThroughEngine(t *testing.T) {
 	}
 }
 
-func TestStoreFolderDeferred(t *testing.T) {
+func TestStoreFolderThroughEngine(t *testing.T) {
 	db := openSnapshotTestDB(t)
 	sgctx := storage.StorageContext{
 		DB:           db,
@@ -57,9 +56,32 @@ func TestStoreFolderDeferred(t *testing.T) {
 		t.Fatalf("engine.New: %v", err)
 	}
 
-	_, err = eng.Store(context.Background(), engine.StoreRequest{SourcePath: t.TempDir(), Recursive: true, Codec: "plain"})
-	if !errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented for recursive store, got %v", err)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o700); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+	for path, payload := range map[string][]byte{
+		filepath.Join(root, "a.txt"):           []byte("alpha"),
+		filepath.Join(root, "nested", "b.txt"): []byte("bravo"),
+	} {
+		if err := os.WriteFile(path, payload, 0o600); err != nil {
+			t.Fatalf("write input %q: %v", path, err)
+		}
+	}
+
+	res, err := eng.StoreFolder(context.Background(), engine.StoreFolderRequest{
+		SourcePath: root,
+		Codec:      "plain",
+		Workers:    4,
+	})
+	if err != nil {
+		t.Fatalf("StoreFolder: %v", err)
+	}
+	if res.SourcePath != root || res.FilesStored != 2 || res.BytesLogical != 10 || res.WorkersUsed != 1 {
+		t.Fatalf("unexpected StoreFolder result: %+v", res)
+	}
+	if got := countLogicalFiles(t, db); got != 2 {
+		t.Fatalf("logical file count: got %d want 2", got)
 	}
 }
 

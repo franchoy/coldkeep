@@ -6,20 +6,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/engine"
 )
 
-func TestReadSideStatsFailuresRemainOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestReadSideStatsFailuresRemainOutsideUnsupportedClassification(t *testing.T) {
 	t.Run("engine construction requires db", func(t *testing.T) {
 		_, err := engine.New(engine.Config{})
 		if err == nil {
 			t.Fatal("expected engine.New to fail with nil db")
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 
-	t.Run("active success path stays outside unsupported and deferred", func(t *testing.T) {
+	t.Run("active success path stays outside unsupported", func(t *testing.T) {
 		db := openSnapshotTestDB(t)
 		eng, err := engine.New(engine.Config{DB: db})
 		if err != nil {
@@ -30,10 +29,10 @@ func TestReadSideStatsFailuresRemainOutsideUnsupportedAndDeferredClassification(
 		if err != nil {
 			t.Fatalf("Stats: %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 
-	t.Run("runtime db failure stays outside unsupported and deferred", func(t *testing.T) {
+	t.Run("runtime db failure stays outside unsupported", func(t *testing.T) {
 		db := openSnapshotTestDB(t)
 		eng, err := engine.New(engine.Config{DB: db})
 		if err != nil {
@@ -47,12 +46,12 @@ func TestReadSideStatsFailuresRemainOutsideUnsupportedAndDeferredClassification(
 		if err == nil {
 			t.Fatal("expected Stats to fail after db close")
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 }
 
-func TestReadSideSnapshotShowFailuresRemainOutsideUnsupportedAndDeferredClassification(t *testing.T) {
-	t.Run("missing snapshot remains non-unsupported and non-deferred", func(t *testing.T) {
+func TestReadSideSnapshotShowFailuresRemainOutsideUnsupportedClassification(t *testing.T) {
+	t.Run("missing snapshot remains non-unsupported", func(t *testing.T) {
 		db := openSnapshotTestDB(t)
 		eng, err := engine.New(engine.Config{DB: db})
 		if err != nil {
@@ -66,10 +65,10 @@ func TestReadSideSnapshotShowFailuresRemainOutsideUnsupportedAndDeferredClassifi
 		if !strings.Contains(err.Error(), "not found") {
 			t.Fatalf("expected not found error, got %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 
-	t.Run("active success path stays outside unsupported and deferred", func(t *testing.T) {
+	t.Run("active success path stays outside unsupported", func(t *testing.T) {
 		db := openSnapshotTestDB(t)
 		now := time.Now().UTC().Truncate(time.Second)
 		insertTestSnapshot(t, db, "snap-show-boundary", "full", "boundary", "", now)
@@ -84,11 +83,11 @@ func TestReadSideSnapshotShowFailuresRemainOutsideUnsupportedAndDeferredClassifi
 		if err != nil {
 			t.Fatalf("SnapshotShow: %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 }
 
-func TestReadSideSnapshotDiffFailuresRemainOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestReadSideSnapshotDiffFailuresRemainOutsideUnsupportedClassification(t *testing.T) {
 	t.Run("missing base snapshot", func(t *testing.T) {
 		db := openSnapshotTestDB(t)
 		now := time.Now().UTC().Truncate(time.Second)
@@ -109,7 +108,7 @@ func TestReadSideSnapshotDiffFailuresRemainOutsideUnsupportedAndDeferredClassifi
 		if !strings.Contains(err.Error(), `snapshot "missing-base" not found`) {
 			t.Fatalf("expected missing base snapshot error, got %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 
 	t.Run("missing target snapshot", func(t *testing.T) {
@@ -132,10 +131,10 @@ func TestReadSideSnapshotDiffFailuresRemainOutsideUnsupportedAndDeferredClassifi
 		if !strings.Contains(err.Error(), `snapshot "missing-target" not found`) {
 			t.Fatalf("expected missing target snapshot error, got %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 
-	t.Run("summary fast path success stays outside unsupported and deferred", func(t *testing.T) {
+	t.Run("summary fast path success stays outside unsupported", func(t *testing.T) {
 		db := openSnapshotTestDB(t)
 		now := time.Now().UTC().Truncate(time.Second)
 		insertTestSnapshot(t, db, "snap-diff-base-boundary", "full", "", "", now)
@@ -158,10 +157,10 @@ func TestReadSideSnapshotDiffFailuresRemainOutsideUnsupportedAndDeferredClassifi
 		if err != nil {
 			t.Fatalf("SnapshotDiff summary: %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 
-	t.Run("detailed success stays outside unsupported and deferred", func(t *testing.T) {
+	t.Run("detailed success stays outside unsupported", func(t *testing.T) {
 		db := openSnapshotTestDB(t)
 		seedSnapshotDiffFullFixture(t, db)
 
@@ -177,11 +176,11 @@ func TestReadSideSnapshotDiffFailuresRemainOutsideUnsupportedAndDeferredClassifi
 		if err != nil {
 			t.Fatalf("SnapshotDiff detailed: %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 }
 
-func TestReadSideSnapshotDiffValidationFailuresRemainOutsideUnsupportedAndDeferredClassification(t *testing.T) {
+func TestReadSideSnapshotDiffValidationFailuresRemainOutsideUnsupportedClassification(t *testing.T) {
 	db := openSnapshotTestDB(t)
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
@@ -199,7 +198,7 @@ func TestReadSideSnapshotDiffValidationFailuresRemainOutsideUnsupportedAndDeferr
 		if !strings.Contains(err.Error(), "base snapshot id cannot be empty") {
 			t.Fatalf("expected empty base id error, got %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 
 	t.Run("empty target id", func(t *testing.T) {
@@ -213,17 +212,14 @@ func TestReadSideSnapshotDiffValidationFailuresRemainOutsideUnsupportedAndDeferr
 		if !strings.Contains(err.Error(), "target snapshot id cannot be empty") {
 			t.Fatalf("expected empty target id error, got %v", err)
 		}
-		assertReadSideNonUnsupportedAndDeferred(t, err)
+		assertReadSideNonUnsupported(t, err)
 	})
 }
 
-func assertReadSideNonUnsupportedAndDeferred(t *testing.T, err error) {
+func assertReadSideNonUnsupported(t *testing.T, err error) {
 	t.Helper()
 
 	if engine.IsUnsupported(err) {
 		t.Fatalf("expected read-side error to remain outside unsupported classification: %v", err)
-	}
-	if catalog.IsDeferred(err) {
-		t.Fatalf("expected read-side error to remain outside deferred classification: %v", err)
 	}
 }

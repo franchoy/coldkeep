@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,19 +9,41 @@ import (
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
-var newCommandEngine = func(dbconn *sql.DB, containerDir string) (engine.Engine, error) {
-	return engine.New(engine.Config{DB: dbconn, ContainerDir: containerDir})
+func runRecoveryThroughEngine(containersDir string) (recovery.Report, error) {
+	session, err := openCommandSession("recovery", false, containersDir)
+	if err != nil {
+		return recovery.Report{}, fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer func() { _ = session.Close() }()
+	ctx, cancel := session.OperationContext(context.Background())
+	defer cancel()
+	result, err := session.Engine().Recover(ctx, engine.RecoverRequest{})
+	return recoveryReportFromEngine(result), err
 }
 
-var newSnapshotRestoreCommandEngine = func(sgctx storage.StorageContext) (engine.Engine, error) {
-	return engine.New(engine.Config{
-		DB:           sgctx.DB,
-		ContainerDir: sgctx.EffectiveContainerDir(),
-		StoreContext: &sgctx,
-	})
+func recoveryReportFromEngine(result engine.RecoverResult) recovery.Report {
+	return recovery.Report{
+		AbortedLogicalFiles: result.AbortedLogicalFiles, AbortedChunks: result.AbortedChunks,
+		QuarantinedMissing: result.QuarantinedMissing, QuarantinedCorruptTail: result.QuarantinedCorruptTail,
+		QuarantinedOrphan: result.QuarantinedOrphan, SkippedDirEntries: result.SkippedDirEntries,
+		CheckedContainerRecord: result.CheckedContainerRecord, CheckedDiskFiles: result.CheckedDiskFiles,
+		SealingCompleted: result.SealingCompleted, SealingQuarantined: result.SealingQuarantined,
+	}
+}
+
+func executeDoctorEngine(containersDir, verifyLevel string) (engine.DoctorResult, error) {
+	session, err := openCommandSession("doctor", false, containersDir)
+	if err != nil {
+		return engine.DoctorResult{FailedStage: engine.DoctorStageRecovery}, fmt.Errorf("doctor recovery phase failed: failed to connect to DB: %w", err)
+	}
+	defer func() { _ = session.Close() }()
+	ctx, cancel := session.OperationContext(context.Background())
+	defer cancel()
+	return session.Engine().Doctor(ctx, engine.DoctorRequest{VerifyLevel: verifyLevel})
 }
 
 func restoreStoredPathWithEngine(

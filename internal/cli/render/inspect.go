@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -202,8 +203,8 @@ func summaryValueString(key string, value any) string {
 		return strconv.FormatInt(n, 10)
 	}
 	if f, ok := toFloat64(value); ok {
-		if f == float64(int64(f)) {
-			return strconv.FormatInt(int64(f), 10)
+		if n, ok := truncateFiniteFloatToInt64(f); ok && f == float64(n) {
+			return strconv.FormatInt(n, 10)
 		}
 		return fmt.Sprintf("%.2f", f)
 	}
@@ -269,6 +270,9 @@ func toInt64(v any) (int64, bool) {
 	case int64:
 		return n, true
 	case uint:
+		if uint64(n) > uint64(math.MaxInt64) {
+			return 0, false
+		}
 		return int64(n), true
 	case uint8:
 		return int64(n), true
@@ -277,17 +281,28 @@ func toInt64(v any) (int64, bool) {
 	case uint32:
 		return int64(n), true
 	case uint64:
-		if n > uint64(^uint64(0)>>1) {
+		if n > uint64(math.MaxInt64) {
 			return 0, false
 		}
 		return int64(n), true
 	case float64:
-		return int64(n), true
+		return truncateFiniteFloatToInt64(n)
 	case float32:
-		return int64(n), true
+		return truncateFiniteFloatToInt64(float64(n))
 	default:
 		return 0, false
 	}
+}
+
+func truncateFiniteFloatToInt64(value float64) (int64, bool) {
+	const (
+		minInt64Inclusive = -9223372036854775808.0
+		maxInt64Exclusive = 9223372036854775808.0
+	)
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < minInt64Inclusive || value >= maxInt64Exclusive {
+		return 0, false
+	}
+	return int64(value), true
 }
 
 func toFloat64(v any) (float64, bool) {

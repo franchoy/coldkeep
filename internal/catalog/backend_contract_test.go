@@ -170,6 +170,94 @@ func TestCatalogContractFindPhysicalFilesAcrossBackends(t *testing.T) {
 	})
 }
 
+func TestCatalogContractCurrentFileQueriesAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+
+		all, err := svc.ListCurrentFiles(context.Background(), catalog.CurrentFilePage{})
+		if err != nil {
+			t.Fatalf("ListCurrentFiles: %v", err)
+		}
+		paths := make([]string, len(all))
+		for i, ref := range all {
+			paths[i] = ref.Path
+			if ref.CreatedAt.IsZero() {
+				t.Fatalf("current file has zero creation time: %+v", ref)
+			}
+		}
+		if want := []string{"/current/a.txt", "/current/b.txt", "/current/both.txt"}; !reflect.DeepEqual(paths, want) {
+			t.Fatalf("current-file ordering/filtering: got %v want %v", paths, want)
+		}
+
+		limit, offset := int64(1), int64(1)
+		page, err := svc.ListCurrentFiles(context.Background(), catalog.CurrentFilePage{Limit: &limit, Offset: &offset})
+		if err != nil || len(page) != 1 || page[0].Path != "/current/b.txt" {
+			t.Fatalf("paginated current files: got (%+v, %v)", page, err)
+		}
+		offsetOnly, err := svc.ListCurrentFiles(context.Background(), catalog.CurrentFilePage{Offset: &offset})
+		if err != nil || len(offsetOnly) != 2 || offsetOnly[0].Path != "/current/b.txt" {
+			t.Fatalf("offset-only current files: got (%+v, %v)", offsetOnly, err)
+		}
+
+		matches, err := svc.SearchCurrentFiles(context.Background(), catalog.CurrentFileSearch{
+			NameContains: []string{"current", "both"},
+			MinSizeBytes: []int64{30},
+			MaxSizeBytes: []int64{40},
+		})
+		if err != nil || len(matches) != 1 || matches[0].Path != "/current/both.txt" || matches[0].LogicalFileID != 3 {
+			t.Fatalf("searched current files: got (%+v, %v)", matches, err)
+		}
+
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if refs, err := svc.ListCurrentFiles(cancelled, catalog.CurrentFilePage{}); refs != nil || !catalog.IsCode(err, catalog.ErrorCancelled) {
+			t.Fatalf("cancelled list current files: got (%+v, %v)", refs, err)
+		}
+		negative := int64(-1)
+		if refs, err := svc.SearchCurrentFiles(context.Background(), catalog.CurrentFileSearch{Page: catalog.CurrentFilePage{Limit: &negative}}); refs != nil || !catalog.IsCode(err, catalog.ErrorInvalidArgument) {
+			t.Fatalf("invalid current-file page: got (%+v, %v)", refs, err)
+		}
+
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("current-file reads mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
+}
+
+func TestCatalogContractRepositoryConfigurationAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		missing, err := svc.GetRepositoryConfiguration(context.Background(), "phase12_missing")
+		if err != nil || missing.Exists || missing.Key != "phase12_missing" || missing.Value != "" {
+			t.Fatalf("missing repository configuration: got (%+v, %v)", missing, err)
+		}
+
+		first, err := svc.SetRepositoryConfiguration(context.Background(), "compression", "zstd")
+		if err != nil || !first.PreviouslySet || !first.Changed || first.Value != "zstd" || first.PreviousValue != "none" {
+			t.Fatalf("first repository configuration set: got (%+v, %v)", first, err)
+		}
+		second, err := svc.SetRepositoryConfiguration(context.Background(), "compression", "zstd")
+		if err != nil || !second.PreviouslySet || second.Changed || second.PreviousValue != "zstd" {
+			t.Fatalf("unchanged repository configuration set: got (%+v, %v)", second, err)
+		}
+		got, err := svc.GetRepositoryConfiguration(context.Background(), "compression")
+		if err != nil || !got.Exists || got.Value != "zstd" {
+			t.Fatalf("repository configuration round trip: got (%+v, %v)", got, err)
+		}
+
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := svc.GetRepositoryConfiguration(cancelled, "compression"); !catalog.IsCode(err, catalog.ErrorCancelled) {
+			t.Fatalf("cancelled repository configuration get: %v", err)
+		}
+		if _, err := svc.SetRepositoryConfiguration(context.Background(), " ", "x"); !catalog.IsCode(err, catalog.ErrorInvalidArgument) {
+			t.Fatalf("blank repository configuration key: %v", err)
+		}
+	})
+}
+
 func requirePhysicalFiles(t *testing.T, svc interface {
 	FindPhysicalFilesForLogicalFile(context.Context, int64) ([]catalog.PhysicalFileRef, error)
 }, id int64) []catalog.PhysicalFileRef {
@@ -308,48 +396,114 @@ func assertIDSet(t *testing.T, got map[int64]struct{}, want ...int64) {
 	}
 }
 
-// CAT-006 preserves the deliberately deferred API boundary and proves those
-// methods cannot return partial results or mutate the catalog.
-func TestCatalogContractDeferredMethodsAcrossBackends(t *testing.T) {
+// CAT-006 proves deterministic snapshot graph parity and non-mutation.
+func TestCatalogContractSnapshotGraphAcrossBackends(t *testing.T) {
 	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
 		seedCatalogFixture(t, backend.DB)
 		svc := catalog.NewServiceFromSQL(backend.DB)
 		before := catalogStateCounts(t, backend.DB)
-		graph, err := svc.LoadSnapshotGraph(context.Background())
-		assertDeferred(t, "LoadSnapshotGraph", err, graph)
-		placements, err := svc.LoadChunkPlacements(context.Background(), 1)
-		assertDeferred(t, "LoadChunkPlacements", err, placements)
-		restorePlan, err := svc.LoadRestorePlanMetadata(context.Background(), catalog.RestorePlanInput{FileID: 1})
-		assertDeferred(t, "LoadRestorePlanMetadata", err, restorePlan)
-		gcPlan, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{})
-		assertDeferred(t, "LoadGCPlanMetadata", err, gcPlan)
+		first, err := svc.LoadSnapshotGraph(context.Background())
+		if err != nil {
+			t.Fatalf("LoadSnapshotGraph: %v", err)
+		}
+		second, err := svc.LoadSnapshotGraph(context.Background())
+		if err != nil {
+			t.Fatalf("LoadSnapshotGraph repeated: %v", err)
+		}
+		if !reflect.DeepEqual(first, second) {
+			t.Fatalf("graph is not deterministic: first=%+v second=%+v", first, second)
+		}
+		wantOrder := []string{"snap-full", "snap-tie-a", "snap-tie-b", "snap-child", "snap-null-label"}
+		gotOrder := make([]string, len(first.Nodes))
+		for i, node := range first.Nodes {
+			gotOrder[i] = node.Snapshot.ID
+		}
+		if !reflect.DeepEqual(gotOrder, wantOrder) {
+			t.Fatalf("node order: got %v want %v", gotOrder, wantOrder)
+		}
+		wantRoots := []string{"snap-full", "snap-tie-a", "snap-tie-b", "snap-null-label"}
+		if !reflect.DeepEqual(first.RootIDs, wantRoots) {
+			t.Fatalf("roots: got %v want %v", first.RootIDs, wantRoots)
+		}
+		if first.Nodes[0].ParentState != catalog.SnapshotParentNone || !reflect.DeepEqual(first.Nodes[0].ChildIDs, []string{"snap-child"}) {
+			t.Fatalf("root relation: %+v", first.Nodes[0])
+		}
+		if first.Nodes[3].ParentState != catalog.SnapshotParentPresent || len(first.Nodes[3].ChildIDs) != 0 {
+			t.Fatalf("child relation: %+v", first.Nodes[3])
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if graph, err := svc.LoadSnapshotGraph(cancelled); graph != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled graph: graph=%+v err=%v", graph, err)
+		}
 		if after := catalogStateCounts(t, backend.DB); after != before {
-			t.Fatalf("deferred catalog methods mutated catalog state: before=%+v after=%+v", before, after)
+			t.Fatalf("graph read mutated state: before=%+v after=%+v", before, after)
 		}
 	})
 }
 
-func assertDeferred(t *testing.T, name string, err error, result any) {
-	t.Helper()
-	if !errors.Is(err, catalog.ErrNotImplemented) || !catalog.IsDeferred(err) {
-		t.Errorf("%s: want catalog.ErrNotImplemented, got %v", name, err)
-	}
-	if !isNil(result) {
-		t.Errorf("%s: want nil result, got %#v", name, result)
-	}
+// CAT-007 proves deterministic current/snapshot GC roots on both backends.
+func TestCatalogContractGCPlansAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		before := catalogStateCounts(t, backend.DB)
+		first, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{})
+		if err != nil {
+			t.Fatalf("LoadGCPlanMetadata: %v", err)
+		}
+		second, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{})
+		if err != nil || !reflect.DeepEqual(first, second) {
+			t.Fatalf("GC plan not deterministic: first=%+v second=%+v err=%v", first, second, err)
+		}
+		wantSnapshots := []string{"snap-full", "snap-tie-a", "snap-tie-b", "snap-child", "snap-null-label"}
+		gotSnapshots := make([]string, len(first.ProtectedSnapshots))
+		for i, snapshot := range first.ProtectedSnapshots {
+			gotSnapshots[i] = snapshot.ID
+		}
+		if !reflect.DeepEqual(gotSnapshots, wantSnapshots) {
+			t.Fatalf("protected snapshots=%v want=%v", gotSnapshots, wantSnapshots)
+		}
+		wantRoots := []catalog.GCReachabilityRoot{
+			{LogicalFileID: 1, Current: true, SnapshotIDs: []string{}},
+			{LogicalFileID: 2, SnapshotIDs: []string{"snap-full", "snap-tie-a"}},
+			{LogicalFileID: 3, Current: true, SnapshotIDs: []string{"snap-child"}},
+			{LogicalFileID: 5, Current: true, SnapshotIDs: []string{}},
+		}
+		if !reflect.DeepEqual(first.Roots, wantRoots) {
+			t.Fatalf("GC roots=%+v want=%+v", first.Roots, wantRoots)
+		}
+		excluded, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{ExcludeSnapshotIDs: []string{"snap-full", "snap-full"}})
+		if err != nil {
+			t.Fatalf("excluded GC plan: %v", err)
+		}
+		if containsSnapshot(excluded.ProtectedSnapshots, "snap-full") || !reflect.DeepEqual(excluded.Roots[1].SnapshotIDs, []string{"snap-tie-a"}) {
+			t.Fatalf("excluded GC plan retained snap-full: %+v", excluded)
+		}
+		if plan, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{ExcludeSnapshotIDs: []string{"missing"}}); plan != nil || !catalog.IsCode(err, catalog.ErrorNotFound) {
+			t.Fatalf("missing excluded snapshot: plan=%+v err=%v", plan, err)
+		}
+		if plan, err := svc.LoadGCPlanMetadata(context.Background(), catalog.GCPlanInput{ExcludeSnapshotIDs: []string{" "}}); plan != nil || !catalog.IsCode(err, catalog.ErrorInvalidArgument) {
+			t.Fatalf("empty excluded snapshot: plan=%+v err=%v", plan, err)
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if plan, err := svc.LoadGCPlanMetadata(cancelled, catalog.GCPlanInput{}); plan != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled GC plan: plan=%+v err=%v", plan, err)
+		}
+		if after := catalogStateCounts(t, backend.DB); after != before {
+			t.Fatalf("GC plan read mutated catalog state: before=%+v after=%+v", before, after)
+		}
+	})
 }
 
-func isNil(value any) bool {
-	if value == nil {
-		return true
+func containsSnapshot(snapshots []catalog.SnapshotRef, id string) bool {
+	for _, snapshot := range snapshots {
+		if snapshot.ID == id {
+			return true
+		}
 	}
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
-	case reflect.Ptr, reflect.Slice, reflect.Map, reflect.Interface:
-		return v.IsNil()
-	default:
-		return false
-	}
+	return false
 }
 
 // CAT-007 adds bounded portable cancelled-context assertions. Errors must not

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -160,17 +161,6 @@ type restoreChunkRow struct {
 	chunkStatus         string
 	maxSize             int64
 	chunkID             int64
-}
-
-type restoreLogicalFileRow struct {
-	id           int64
-	originalName string
-	totalSize    int64
-	fileHash     string
-	status       string
-	// chunkerVersion identifies the provenance of the persisted file recipe.
-	// It is metadata about how the logical recipe was originally produced.
-	chunkerVersion string
 }
 
 // ================================================================
@@ -465,36 +455,6 @@ func buildBlockReadPlan(chunkSegments []*blocks.ChunkSegment) *blockReadPlan {
 	return plan
 }
 
-func loadCompletedLogicalFileRowForRestore(ctx context.Context, tx *sql.Tx, fileID int64) (restoreLogicalFileRow, error) {
-	var row restoreLogicalFileRow
-	err := tx.QueryRowContext(
-		ctx,
-		`SELECT id, original_name, total_size, file_hash, status, chunker_version
-		FROM logical_file
-		WHERE status = $1 AND id = $2`,
-		filestate.LogicalFileCompleted,
-		fileID,
-	).Scan(
-		&row.id,
-		&row.originalName,
-		&row.totalSize,
-		&row.fileHash,
-		&row.status,
-		&row.chunkerVersion,
-	)
-	if err == sql.ErrNoRows {
-		return restoreLogicalFileRow{}, fmt.Errorf("logical file id %d not found", fileID)
-	}
-	if err != nil {
-		return restoreLogicalFileRow{}, fmt.Errorf("query logical_file: %w", err)
-	}
-	if err := validateRestoreLogicalFileChunkerVersion(fileID, row.chunkerVersion); err != nil {
-		return restoreLogicalFileRow{}, err
-	}
-
-	return row, nil
-}
-
 func pinLogicalFileRestoreChunks(dbconn *sql.DB, fileID int64) (string, string, []restoreChunkRow, []int64, error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
@@ -512,125 +472,37 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		}
 	}()
 
-	logicalFileRow, err := loadCompletedLogicalFileRowForRestore(ctx, tx, fileID)
+	plan, err := catalog.NewService(tx).LoadRestorePlanMetadata(ctx, catalog.RestorePlanInput{
+		Selector: catalog.RestoreByFileID,
+		FileID:   fileID,
+	})
+	if err != nil {
+		if catalog.IsCode(err, catalog.ErrorNotFound) || catalog.IsCode(err, catalog.ErrorConflict) {
+			return "", "", nil, nil, fmt.Errorf("logical file id %d not found", fileID)
+		}
+		var catalogErr *catalog.Error
+		if errors.As(err, &catalogErr) {
+			if strings.Contains(catalogErr.Message, "empty chunker_version") {
+				return "", "", nil, nil, errors.New(catalogErr.Message)
+			}
+			switch catalogErr.Invariant {
+			case "nonempty_file_has_recipe", "exactly_one_valid_placement_per_chunk":
+				return "", "", nil, nil, fmt.Errorf("no restorable chunks found for file %d (all referenced containers missing or quarantined)", fileID)
+			case "contiguous_chunk_order":
+				return "", "", nil, nil, fmt.Errorf("invalid restore recipe ordering: non-contiguous restore chunk order: %s", catalogErr.Message)
+			}
+		}
+		return "", "", nil, nil, fmt.Errorf("load catalog restore plan for logical file %d: %w", fileID, err)
+	}
+	if err := validateRestoreLogicalFileChunkerVersion(fileID, plan.LogicalFile.ChunkerVersion); err != nil {
+		return "", "", nil, nil, err
+	}
+	chunkRows, pinnedChunkIDs, err := restoreRowsFromCatalogPlan(plan)
 	if err != nil {
 		return "", "", nil, nil, err
 	}
-
-	// ================================================================
-	// DESIGN PRINCIPLE: One ordered chunk recipe query per file
-	// ================================================================
-	// This is a performance-critical optimization:
-	// - Single query loads ALL chunk metadata for the file (ordered by chunk_order)
-	// - Result includes: offsets, sizes, hashes, codecs, container locations
-	// - Loop below iterates pre-loaded rows with NO additional DB queries
-	// - This ensures O(1) DB operations per file, not O(n) per chunk
-	//
-	// DO NOT refactor this into:
-	// - per-chunk lookup loops (n queries per file x files)
-	// - lazy-load patterns (defeats tuple prefetching, adds latency)
-	// - separate queries for offset/hash/codec (cache-unfriendly)
-	//
-	// STAGE 2-4: Pin chunks + load metadata/recipe (atomic transaction)
-	// ================================================================
-	// Query: ordered chunks for this logical file + blocks metadata
-	// Action: INCREMENT pin_count for each chunk (GC protection)
-	// Result: snapshot of deterministic chunk recipe + pinned IDs
-	// Guarantee: ✓ If commit succeeds, chunks are pinned and cannot be GC'd
-	// Guarantee: ✓ Query is ordered by chunk_order for deterministic restore
-	//
-	rows, err := tx.QueryContext(ctx, `
-		SELECT
-			fc.chunk_order,
-			COALESCE(b.block_offset, 0),
-			COALESCE(b.plaintext_size, c.size),
-			COALESCE(b.stored_size, c.size),
-			c.chunk_hash,
-			sb.block_hash,
-			sb.compressed_hash,
-			sb.physical_hash,
-			c.chunker_version,
-			c.size,
-			COALESCE(b.codec, 'plain'),
-			COALESCE(b.format_version, 1),
-			b.nonce,
-			COALESCE(b.container_id, 0),
-			ctr.filename,
-			c.status,
-			ctr.max_size,
-			c.id
-		FROM file_chunk fc
-		JOIN chunk c ON c.id = fc.chunk_id
-		LEFT JOIN blocks b ON b.chunk_id = c.id
-		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
-		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
-		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
-		WHERE fc.logical_file_id = $1 AND c.status = $2
-		ORDER BY fc.chunk_order ASC
-	`, fileID, filestate.ChunkCompleted)
-	if err != nil {
-		return "", "", nil, nil, fmt.Errorf("query file chunks: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	chunkRows := make([]restoreChunkRow, 0)
-	pinnedChunkIDs := make([]int64, 0)
-	for rows.Next() {
-		var row restoreChunkRow
-		if err := rows.Scan(
-			&row.chunkOrder,
-			&row.blockOffset,
-			&row.plaintextSize,
-			&row.storedSize,
-			&row.expectedChunkHash,
-			&row.blockHash,
-			&row.compressedHash,
-			&row.physicalHash,
-			&row.chunkerVersion,
-			&row.chunkSize,
-			&row.blocksCodec,
-			&row.blocksFormatVersion,
-			&row.blocksNonce,
-			&row.blocksContainerID,
-			&row.filename,
-			&row.chunkStatus,
-			&row.maxSize,
-			&row.chunkID,
-		); err != nil {
-			return "", "", nil, nil, fmt.Errorf("scan chunk row: %w", err)
-		}
-		trimmedChunkVersion := strings.TrimSpace(row.chunkerVersion)
-		if trimmedChunkVersion == "" {
-			return "", "", nil, nil, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", row.chunkID)
-		}
-		if !chunk.IsWellFormedVersion(chunk.Version(trimmedChunkVersion)) {
-			return "", "", nil, nil, fmt.Errorf("chunk %d has malformed chunker_version %q (expected format like v1-simple-rolling)", row.chunkID, trimmedChunkVersion)
-		}
-		// Phase 4 compatibility rule: restore only requires chunk-level version
-		// metadata sanity/presence. It must not enforce per-file equality between
-		// logical_file.chunker_version and chunk.chunker_version because chunk rows
-		// are content-addressed and can be legitimately reused across version eras.
-		//
-		// chunk.chunker_version is origin metadata for the chunk row, not a restore
-		// compatibility constraint for every logical file that references it.
-		// If the container is missing (quarantined), filename will be NULL
-		// Allow the chunk row, but mark filename as empty string
-		if row.filename == "" {
-			row.filename = ""
-		}
-		chunkRows = append(chunkRows, row)
-		pinnedChunkIDs = append(pinnedChunkIDs, row.chunkID)
-	}
-	if err := rows.Err(); err != nil {
-		return "", "", nil, nil, fmt.Errorf("iterate chunk rows: %w", err)
-	}
-
 	for _, chunkID := range pinnedChunkIDs {
-		result, execErr := tx.ExecContext(
-			ctx,
-			`UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`,
-			chunkID,
-		)
+		result, execErr := tx.ExecContext(ctx, `UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`, chunkID)
 		if execErr != nil {
 			return "", "", nil, nil, fmt.Errorf("pin chunk %d for restore: %w", chunkID, execErr)
 		}
@@ -642,13 +514,47 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			return "", "", nil, nil, fmt.Errorf("chunk %d disappeared while pinning restore", chunkID)
 		}
 	}
-
 	if err := tx.Commit(); err != nil {
 		return "", "", nil, nil, err
 	}
 	tx = nil
+	return plan.LogicalFile.OriginalName, plan.LogicalFile.FileHash, chunkRows, pinnedChunkIDs, nil
+}
 
-	return logicalFileRow.originalName, logicalFileRow.fileHash, chunkRows, pinnedChunkIDs, nil
+func restoreRowsFromCatalogPlan(plan *catalog.RestorePlanMetadata) ([]restoreChunkRow, []int64, error) {
+	if plan == nil {
+		return nil, nil, errors.New("catalog restore plan is nil")
+	}
+	rows := make([]restoreChunkRow, 0, len(plan.Placements))
+	pinned := make([]int64, 0, len(plan.Placements))
+	for _, placement := range plan.Placements {
+		trimmedVersion := strings.TrimSpace(placement.ChunkerVersion)
+		if trimmedVersion == "" {
+			return nil, nil, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", placement.ChunkID)
+		}
+		if !chunk.IsWellFormedVersion(chunk.Version(trimmedVersion)) {
+			return nil, nil, fmt.Errorf("chunk %d has malformed chunker_version %q (expected format like v1-simple-rolling)", placement.ChunkID, trimmedVersion)
+		}
+		row := restoreChunkRow{chunkOrder: placement.ChunkOrder, expectedChunkHash: placement.ChunkHash, chunkerVersion: placement.ChunkerVersion, chunkSize: placement.ChunkSize, chunkStatus: placement.ChunkStatus, chunkID: placement.ChunkID}
+		switch placement.Kind {
+		case catalog.PlacementLegacy:
+			legacy := placement.Legacy
+			row.blockOffset, row.plaintextSize, row.storedSize = legacy.ContainerOffset, legacy.PlaintextSize, legacy.StoredSize
+			row.blocksCodec, row.blocksFormatVersion, row.blocksNonce = legacy.Codec, legacy.FormatVersion, append([]byte(nil), legacy.Nonce...)
+			row.blocksContainerID, row.filename, row.maxSize = legacy.Container.ID, legacy.Container.Filename, legacy.Container.MaxSize
+		case catalog.PlacementPacked:
+			packed := placement.Packed
+			row.blockOffset, row.plaintextSize, row.storedSize = packed.ContainerOffset, placement.ChunkSize, packed.StoredSize
+			row.blockHash, row.compressedHash, row.physicalHash = append([]byte(nil), packed.BlockHash...), append([]byte(nil), packed.CompressedHash...), append([]byte(nil), packed.PhysicalHash...)
+			row.blocksCodec, row.blocksFormatVersion = packed.Codec, packed.FormatVersion
+			row.blocksContainerID, row.filename, row.maxSize = packed.Container.ID, packed.Container.Filename, packed.Container.MaxSize
+		default:
+			return nil, nil, fmt.Errorf("chunk %d has unsupported catalog placement %q", placement.ChunkID, placement.Kind)
+		}
+		rows = append(rows, row)
+		pinned = append(pinned, placement.ChunkID)
+	}
+	return rows, pinned, nil
 }
 
 func unpinRestoreChunks(dbconn *sql.DB, chunkIDs []int64) error {

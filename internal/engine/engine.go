@@ -1,9 +1,10 @@
 // Package engine defines the coldkeep engine boundary.
 //
 // The package owns typed operation requests and results, request-level
-// validation, and behavior-preserving orchestration between CLI callers and
-// lower domain packages. Storage, snapshot, verification, maintenance, and
-// other domain packages retain their execution ownership.
+// validation, and behavior-preserving orchestration between headless callers
+// and lower domain adapters. Lower packages execute injected storage, catalog,
+// verification, maintenance, and recovery details without owning the public
+// operation boundary.
 //
 // # Invariants
 //
@@ -24,14 +25,7 @@
 //	domain packages must not import internal/engine
 package engine
 
-import (
-	"context"
-	"errors"
-)
-
-// ErrNotImplemented is returned by active engine methods when a genuinely
-// deferred mode remains outside the implemented surface.
-var ErrNotImplemented = errors.New("engine operation not implemented")
+import "context"
 
 // Engine is the behavior-preserving facade for coldkeep operations.
 //
@@ -81,10 +75,42 @@ type Engine interface {
 	// on both backends.
 	GarbageCollect(ctx context.Context, req GarbageCollectRequest) (GarbageCollectResult, error)
 
+	// PlanGarbageCollection computes live-repository reachability and reclaim
+	// impact without mutating database or storage state.
+	PlanGarbageCollection(ctx context.Context, req GarbageCollectionPlanRequest) (GarbageCollectionPlanResult, error)
+
 	// Store stores a file into the repository.
 	// Safety invariant: Store must not create inconsistent catalog/storage state.
 	// Active semantics are limited to single-file store.
 	Store(ctx context.Context, req StoreRequest) (StoreResult, error)
+
+	// StoreFolder recursively stores a directory with deterministic discovery,
+	// bounded workers, aggregate results, and worker-writer finalization owned
+	// below this engine boundary.
+	StoreFolder(ctx context.Context, req StoreFolderRequest) (StoreFolderResult, error)
+
+	// ListFiles returns completed current-state stored paths in path order.
+	ListFiles(ctx context.Context, req ListFilesRequest) (ListFilesResult, error)
+
+	// SearchFiles returns completed current-state paths matching typed filters.
+	SearchFiles(ctx context.Context, req SearchFilesRequest) (SearchFilesResult, error)
+
+	// GetConfiguration returns one validated repository write default.
+	GetConfiguration(ctx context.Context, req GetConfigurationRequest) (GetConfigurationResult, error)
+
+	// SetConfiguration validates and persists one repository write default.
+	SetConfiguration(ctx context.Context, req SetConfigurationRequest) (SetConfigurationResult, error)
+
+	// Repair validates, normalizes, deduplicates, and executes ordered catalog
+	// integrity recomputations. Each target remains transactionally independent;
+	// FailFast stops after the first execution failure.
+	Repair(ctx context.Context, req RepairRequest) (RepairResult, error)
+	// Recover executes the corrective repository recovery pass against the
+	// injected database and configured container directory.
+	Recover(ctx context.Context, req RecoverRequest) (RecoverResult, error)
+	// Doctor executes recovery, schema validation, system verification, and
+	// integrity audit in order, stopping on the first failed stage.
+	Doctor(ctx context.Context, req DoctorRequest) (DoctorResult, error)
 
 	// Remove removes logical files from the repository by logical file ID.
 	// Safety invariant: Remove must never make valid data unrecoverable.

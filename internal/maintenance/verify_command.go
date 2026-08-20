@@ -21,10 +21,12 @@ func CollectSystemAuditSummary() (SystemAuditSummary, error) {
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	return collectSystemAuditSummaryWithDB(dbconn)
+	return CollectSystemAuditSummaryWithDB(dbconn)
 }
 
-func collectSystemAuditSummaryWithDB(dbconn *sql.DB) (SystemAuditSummary, error) {
+// CollectSystemAuditSummaryWithDB collects the Doctor audit summaries through
+// a caller-owned database connection.
+func CollectSystemAuditSummaryWithDB(dbconn *sql.DB) (SystemAuditSummary, error) {
 	physical, err := verify.CheckPhysicalFileGraphIntegrity(dbconn)
 	if err != nil {
 		return SystemAuditSummary{}, err

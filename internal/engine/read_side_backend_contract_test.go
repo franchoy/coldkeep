@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
@@ -24,29 +23,29 @@ func TestEngineReadStatsAndInspectAcrossBackends(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stats: %v", err)
 		}
-		if stats.Raw == nil || stats.Raw.Logical.TotalFiles != 2 || len(stats.Raw.Containers.Records) != 1 || stats.Raw.Snapshots.TotalSnapshots != 3 {
-			t.Fatalf("Stats result: %+v", stats.Raw)
+		if stats.Logical.TotalFiles != 2 || len(stats.Containers.Records) != 1 || stats.Snapshots.TotalSnapshots != 3 {
+			t.Fatalf("Stats result: %+v", stats)
 		}
-		if again, err := fixture.engine.Stats(context.Background(), engine.StatsRequest{IncludeContainers: true}); err != nil || !equivalentStats(stats.Raw, again.Raw) {
-			t.Fatalf("repeated Stats: got (%+v, %v)", again.Raw, err)
+		if again, err := fixture.engine.Stats(context.Background(), engine.StatsRequest{IncludeContainers: true}); err != nil || !equivalentStats(stats, again) {
+			t.Fatalf("repeated Stats: got (%+v, %v)", again, err)
 		}
 
-		assertInspectSummary(t, fixture, observability.EntityRepository, "", "total_snapshots", int64(3))
-		assertInspectSummary(t, fixture, observability.EntityLogicalFile, fmt.Sprint(fixture.logicalA), "file_id", fixture.logicalA)
-		assertInspectSummary(t, fixture, observability.EntityChunk, fmt.Sprint(fixture.chunkA), "chunk_id", fixture.chunkA)
-		assertInspectSummary(t, fixture, observability.EntityContainer, fmt.Sprint(fixture.containerID), "container_id", fixture.containerID)
-		assertInspectSummary(t, fixture, observability.EntitySnapshot, "snap-target", "snapshot_id", "snap-target")
+		assertInspectSummary(t, fixture, engine.InspectRepository, "", "total_snapshots", int64(3))
+		assertInspectSummary(t, fixture, engine.InspectLogicalFile, fmt.Sprint(fixture.logicalA), "file_id", fixture.logicalA)
+		assertInspectSummary(t, fixture, engine.InspectChunk, fmt.Sprint(fixture.chunkA), "chunk_id", fixture.chunkA)
+		assertInspectSummary(t, fixture, engine.InspectContainer, fmt.Sprint(fixture.containerID), "container_id", fixture.containerID)
+		assertInspectSummary(t, fixture, engine.InspectSnapshot, "snap-target", "snapshot_id", "snap-target")
 
 		withRelations, err := fixture.engine.Inspect(context.Background(), engine.InspectRequest{
-			Entity: observability.EntitySnapshot, EntityID: "snap-target",
-			Options: observability.InspectOptions{Relations: true, Deep: true, Limit: 10},
+			Entity: engine.InspectSnapshot, EntityID: "snap-target",
+			Options: engine.InspectOptions{Relations: true, Deep: true, Limit: 10},
 		})
-		if err != nil || withRelations.Raw == nil || !relationsSorted(withRelations.Raw.Relations) {
-			t.Fatalf("Inspect snapshot relations: got (%+v, %v)", withRelations.Raw, err)
+		if err != nil || !relationsSorted(withRelations.Relations) {
+			t.Fatalf("Inspect snapshot relations: got (%+v, %v)", withRelations, err)
 		}
 
-		_, err = fixture.engine.Inspect(context.Background(), engine.InspectRequest{Entity: observability.EntityPhysicalFile, EntityID: "1"})
-		if !errors.Is(err, observability.ErrUnsupportedEntity) || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		_, err = fixture.engine.Inspect(context.Background(), engine.InspectRequest{Entity: engine.InspectPhysicalFile, EntityID: "1"})
+		if !errors.Is(err, observability.ErrUnsupportedEntity) || engine.IsUnsupported(err) {
 			t.Fatalf("physical-file inspect classification: %v", err)
 		}
 		assertEngineReadStateUnchanged(t, before, captureEngineReadState(t, backend.DB, fixture.containerDir))
@@ -106,7 +105,7 @@ func TestEngineReadVerifyAcrossBackends(t *testing.T) {
 			t.Fatalf("seed verification inconsistency: %v", err)
 		}
 		_, err := fixture.engine.Verify(context.Background(), engine.VerifyRequest{Target: "system", Level: "standard"})
-		if err == nil || !strings.Contains(err.Error(), "system standard verification failed") || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if err == nil || !strings.Contains(err.Error(), "system standard verification failed") || engine.IsUnsupported(err) {
 			t.Fatalf("Verify inconsistency classification: %v", err)
 		}
 	})
@@ -127,7 +126,7 @@ func TestEngineReadContextAndErrorsAcrossBackends(t *testing.T) {
 				return err
 			}},
 			{"Inspect", func(ctx context.Context) error {
-				_, err := fixture.engine.Inspect(ctx, engine.InspectRequest{Entity: observability.EntityRepository})
+				_, err := fixture.engine.Inspect(ctx, engine.InspectRequest{Entity: engine.InspectRepository})
 				return err
 			}},
 			{"Verify", func(ctx context.Context) error {
@@ -159,38 +158,46 @@ func TestEngineReadContextAndErrorsAcrossBackends(t *testing.T) {
 				}
 			})
 		}
-		if _, err := fixture.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: "missing"}); err == nil || !strings.Contains(err.Error(), "not found") || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if _, err := fixture.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: "missing"}); err == nil || !strings.Contains(err.Error(), "not found") || engine.IsUnsupported(err) {
 			t.Fatalf("missing snapshot classification: %v", err)
 		}
-		if _, err := fixture.engine.Inspect(context.Background(), engine.InspectRequest{Entity: "unknown", EntityID: "1"}); err == nil || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if _, err := fixture.engine.Inspect(context.Background(), engine.InspectRequest{Entity: "unknown", EntityID: "1"}); err == nil || engine.IsUnsupported(err) {
 			t.Fatalf("invalid inspect classification: %v", err)
 		}
-		if _, err := fixture.engine.Verify(context.Background(), engine.VerifyRequest{Target: "unknown"}); err == nil || engine.IsUnsupported(err) || catalog.IsDeferred(err) {
+		if _, err := fixture.engine.Verify(context.Background(), engine.VerifyRequest{Target: "unknown"}); err == nil || engine.IsUnsupported(err) {
 			t.Fatalf("invalid verify classification: %v", err)
 		}
 		assertEngineReadStateUnchanged(t, before, captureEngineReadState(t, backend.DB, fixture.containerDir))
 	})
 }
 
-func equivalentStats(first, second *observability.StatsResult) bool {
-	if first == nil || second == nil {
-		return first == second
-	}
-	a, b := *first, *second
+func equivalentStats(first, second engine.StatsResult) bool {
+	a, b := first, second
 	a.GeneratedAtUTC = time.Time{}
 	b.GeneratedAtUTC = time.Time{}
 	return reflect.DeepEqual(a, b)
 }
 
-func assertInspectSummary(t *testing.T, fixture engineReadFixture, entity observability.EntityType, id, key string, want any) {
+func assertInspectSummary(t *testing.T, fixture engineReadFixture, entity engine.InspectEntity, id, key string, want any) {
 	t.Helper()
 	result, err := fixture.engine.Inspect(context.Background(), engine.InspectRequest{Entity: entity, EntityID: id})
-	if err != nil || result.Raw == nil || !reflect.DeepEqual(result.Raw.Summary[key], want) {
-		t.Fatalf("Inspect %s/%s: got (%+v, %v), want summary[%q]=%v", entity, id, result.Raw, err, key, want)
+	if value, ok := result.Summary[key]; err != nil || !ok || !engineValueMatches(value, want) {
+		t.Fatalf("Inspect %s/%s: got (%+v, %v), want summary[%q]=%v", entity, id, result, err, key, want)
 	}
 }
 
-func relationsSorted(relations []observability.Relation) bool {
+func engineValueMatches(value engine.Value, want any) bool {
+	switch expected := want.(type) {
+	case int64:
+		return value.Kind == engine.ValueInteger && value.Integer == fmt.Sprint(expected)
+	case string:
+		return value.Kind == engine.ValueString && value.String == expected
+	default:
+		return false
+	}
+}
+
+func relationsSorted(relations []engine.InspectRelation) bool {
 	for i := 1; i < len(relations); i++ {
 		left := fmt.Sprintf("%s|%s|%s|%s", relations[i-1].Direction, relations[i-1].Type, relations[i-1].TargetType, relations[i-1].TargetID)
 		right := fmt.Sprintf("%s|%s|%s|%s", relations[i].Direction, relations[i].Type, relations[i].TargetType, relations[i].TargetID)

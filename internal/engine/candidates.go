@@ -4,12 +4,10 @@ import "time"
 
 // Engine operation contracts.
 //
-// This historically named file contains both active Engine request/result
-// contracts and the candidate-only corrective Repair and Recover contracts.
-// Active method ownership is defined by the Engine interface, not by this file
-// name. Some active read-side contracts remain provisional and may still
-// participate in mixed CLI/domain workflows; active does not imply a frozen
-// daemon/API-ready contract.
+// This historically named file contains active Engine request/result contracts
+// plus corrective Repair and Recover contracts that later v1.13.12 phases
+// activate. Active method ownership is defined by the Engine interface, not by
+// this file name.
 //
 // Contract rules (see docs/release/v1.12/engine-baseline.md):
 //   - Requests represent operation intent, not CLI syntax.
@@ -80,18 +78,11 @@ type BatchSummary struct {
 // snapshot show and diff. All fields are optional; zero values mean
 // "no filter on this dimension". Size and time fields use pointers so that a
 // zero value can be distinguished from "unset".
-//
-// Only one exact Path and one Prefix can cross the current read-side seam,
-// even though CLI parsing may accept richer repeated path/prefix inputs before
-// narrowing. Broader read-side shape and ownership decisions are deferred to
-// early v2.0.
 type SnapshotQuery struct {
-	// Path matches an exact stored path.
-	// Only one exact path is preserved at the current engine seam.
-	Path string
-	// Prefix matches stored paths by prefix.
-	// Only one prefix is preserved at the current engine seam.
-	Prefix string
+	// Paths match exact normalized stored paths.
+	Paths []string
+	// Prefixes match normalized stored paths by directory prefix.
+	Prefixes []string
 	// Pattern is a glob-style match against stored paths.
 	Pattern string
 	// Regex is a regular-expression match against stored paths.
@@ -114,26 +105,14 @@ type SnapshotQuery struct {
 
 // StoreRequest is the active request contract for Engine.Store.
 //
-// Active semantics are single-file only. Recursive/folder-store ownership
-// remains outside the active route, and Engine.Store returns ErrNotImplemented
-// when Recursive is true. Any future contract split or narrowing requires an
-// explicit v2.0 design.
+// Store is intentionally single-file only. Folder traversal and aggregation
+// use the distinct StoreFolder operation.
 type StoreRequest struct {
-	// SourcePath is the file or folder to store.
+	// SourcePath is the file to store.
 	SourcePath string
 	// Codec selects the storage codec (e.g. "plain", "aes-gcm"). Empty means
 	// the repository default.
 	Codec string
-	// Recursive requests folder store semantics (store-folder).
-	// Active Engine.Store callers must leave this false; true returns
-	// ErrNotImplemented.
-	Recursive bool
-	// Workers is the parallelism for folder store; zero means the default.
-	// This remains outside the active route until an explicit v2.0 contract
-	// decision addresses recursive folder-store ownership.
-	Workers int
-	// Tags carries optional caller-supplied tags.
-	Tags []string
 }
 
 // StoreResult is the active result contract for Engine.Store.
@@ -144,21 +123,94 @@ type StoreResult struct {
 	StoredPath string
 	// LogicalFileID identifies the stored logical file.
 	LogicalFileID int64
-	// PhysicalFileID identifies the underlying physical file when applicable.
-	PhysicalFileID int64
 	// FileHash is the content hash (e.g. SHA-256) of the stored file.
 	FileHash string
 	// AlreadyStored indicates the content was already present (dedup hit).
 	AlreadyStored bool
-	// BytesLogical is the logical (pre-transform) size in bytes.
+}
+
+// StoreFolderRequest is the recursive folder-store contract. Workers zero
+// selects the established default; positive values request bounded file-level
+// fan-out subject to writer capability.
+type StoreFolderRequest struct {
+	SourcePath string
+	Codec      string
+	Workers    int
+}
+
+// StoreFolderResult reports deterministic aggregate execution statistics.
+// Partial statistics are returned with an error when work fails after some
+// files have completed.
+type StoreFolderResult struct {
+	SourcePath   string
+	FilesStored  int
 	BytesLogical int64
-	// BytesStored is the physical (post-transform) size in bytes.
-	BytesStored int64
-	// ChunksCreated and ChunksReused describe chunk-level dedup outcomes.
-	ChunksCreated int
-	ChunksReused  int
-	// Warnings carries structured, non-fatal warnings.
-	Warnings []OperationWarning
+	WorkersUsed  int
+}
+
+const MaxFileQueryLimit int64 = 10000
+
+// CurrentFile is a presentation-neutral completed current-state path.
+// JSON tags preserve the established CLI projection when the CLI embeds it.
+type CurrentFile struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	FileHash  string `json:"file_hash"`
+	SizeBytes int64  `json:"size_bytes"`
+	CreatedAt string `json:"created_at"`
+}
+
+type ListFilesRequest struct {
+	Limit  *int64
+	Offset *int64
+}
+
+type ListFilesResult struct {
+	Files []CurrentFile
+}
+
+// SearchFilesRequest preserves repeated filters and their historical AND
+// semantics without exposing raw CLI tokens to the engine or catalog.
+type SearchFilesRequest struct {
+	NameContains []string
+	MinSizeBytes []int64
+	MaxSizeBytes []int64
+	Limit        *int64
+	Offset       *int64
+}
+
+type SearchFilesResult struct {
+	Files []CurrentFile
+}
+
+type ConfigurationKey string
+
+const (
+	ConfigurationDefaultChunker   ConfigurationKey = "default-chunker"
+	ConfigurationCompression      ConfigurationKey = "compression"
+	ConfigurationCompressionLevel ConfigurationKey = "compression-level"
+)
+
+type GetConfigurationRequest struct {
+	Key ConfigurationKey
+}
+
+type GetConfigurationResult struct {
+	Key          ConfigurationKey
+	Value        string
+	IntegerValue *int64
+}
+
+type SetConfigurationRequest struct {
+	Key   ConfigurationKey
+	Value string
+}
+
+type SetConfigurationResult struct {
+	Key          ConfigurationKey
+	Value        string
+	IntegerValue *int64
+	Changed      bool
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +251,10 @@ type RestoreRequest struct {
 type RestoreItemResult struct {
 	// FileID is the restored logical file ID.
 	FileID int64
+	// OriginalName is the persisted logical-file name used to derive the
+	// destination. It lets adapters preserve the established batch projection
+	// without querying storage metadata outside the engine boundary.
+	OriginalName string
 	// DestinationPath is the path the file was (or would be) written to.
 	DestinationPath string
 	// RestoredHash is the content hash of the restored file.
@@ -395,6 +451,50 @@ type GarbageCollectResult struct {
 	Warnings []OperationWarning
 }
 
+// GarbageCollectionPlanRequest describes a read-only live-repository GC plan.
+type GarbageCollectionPlanRequest struct {
+	SnapshotIDsToOmit []string
+	IncludeTrace      bool
+}
+
+// GarbageCollectionContainerImpact is a presentation-neutral container plan.
+type GarbageCollectionContainerImpact struct {
+	ContainerID        int64
+	Filename           string
+	TotalBytes         int64
+	LiveBytesAfterGC   int64
+	ReclaimableBytes   int64
+	ReclaimableChunks  int64
+	TotalChunks        int64
+	FullyReclaimable   bool
+	RequiresCompaction bool
+}
+
+// GarbageCollectionPlanSummary preserves exact GC planner counters.
+type GarbageCollectionPlanSummary struct {
+	TotalChunks                        int64
+	ReachableChunks                    int64
+	UnreachableChunks                  int64
+	LogicallyReclaimableBytes          int64
+	PhysicallyReclaimableBytes         int64
+	FullyReclaimableContainers         int64
+	PartiallyDeadContainers            int64
+	PackedBlocksLive                   int64
+	PackedBlocksDead                   int64
+	PackedBytesLive                    int64
+	PackedBytesReclaimable             int64
+	RetainedDeadBytesDueToPackedBlocks int64
+}
+
+// GarbageCollectionPlanResult is the immutable read-only plan projection.
+type GarbageCollectionPlanResult struct {
+	SnapshotIDsToOmit []string
+	Summary           GarbageCollectionPlanSummary
+	Containers        []GarbageCollectionContainerImpact
+	Warnings          []OperationWarning
+	Trace             []TraceEvent
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot operations
 // ---------------------------------------------------------------------------
@@ -417,6 +517,29 @@ type SnapshotMeta struct {
 	ParentID  string
 	CreatedAt time.Time
 	FileCount int
+}
+
+// SnapshotParentState distinguishes a root, a resolved parent, and historical
+// missing-parent metadata without inventing a relationship.
+type SnapshotParentState string
+
+const (
+	SnapshotParentNone    SnapshotParentState = "none"
+	SnapshotParentPresent SnapshotParentState = "present"
+	SnapshotParentMissing SnapshotParentState = "missing"
+)
+
+// SnapshotGraphNode is one renderer-neutral lineage node.
+type SnapshotGraphNode struct {
+	Snapshot    SnapshotMeta
+	ParentState SnapshotParentState
+	ChildIDs    []string
+}
+
+// SnapshotGraph is ordered by created_at ascending, then snapshot ID.
+type SnapshotGraph struct {
+	Nodes   []SnapshotGraphNode
+	RootIDs []string
 }
 
 // SnapshotCreateRequest is the frozen active v1.13.9 Engine snapshot-create
@@ -446,8 +569,7 @@ type SnapshotCreateResult struct {
 	ParentID      string
 }
 
-// SnapshotListRequest is the active but provisional request contract for
-// Engine.SnapshotList.
+// SnapshotListRequest is the active request contract for Engine.SnapshotList.
 type SnapshotListRequest struct {
 	// Type filters by snapshot type; empty means all.
 	Type SnapshotType
@@ -459,50 +581,38 @@ type SnapshotListRequest struct {
 	// Limit caps the number of results when greater than zero.
 	Limit int
 	// Tree requests lineage-tree ordering/visualization data.
-	// This provisional view-shaping flag does not prove engine ownership of
-	// lineage presentation semantics. Read-side ownership and shape decisions are
-	// deferred to early v2.0.
+	// Rendering remains the caller's responsibility.
 	Tree bool
 }
 
-// SnapshotListResult is the active but provisional result contract for
-// Engine.SnapshotList.
-//
-// TreeMode and TreeLines are provisional view-shaping fields. They do not
-// prove engine ownership of lineage presentation semantics; read-side
-// ownership and shape decisions are deferred to early v2.0.
+// SnapshotListResult is the active result contract for Engine.SnapshotList.
 type SnapshotListResult struct {
 	Snapshots []SnapshotMeta
 	Count     int
 	// TreeMode echoes whether tree data was requested.
 	TreeMode bool
-	// TreeLines holds renderer-neutral lineage rows when TreeMode is set.
-	TreeLines []string
+	// Graph is populated only when TreeMode is true. It contains metadata and
+	// relationships, never rendered lines.
+	Graph *SnapshotGraph
 }
 
 // SnapshotFile is a renderer-neutral file entry within a snapshot.
 type SnapshotFile struct {
 	StoredPath    string
 	LogicalFileID int64
-	Size          int64
-	Mode          uint32
-	ModTime       time.Time
+	Size          *int64
+	Mode          *int64
+	ModTime       *time.Time
 }
 
-// SnapshotShowRequest is the active but provisional request contract for
-// Engine.SnapshotShow.
+// SnapshotShowRequest is the active request contract for Engine.SnapshotShow.
 type SnapshotShowRequest struct {
 	SnapshotID string
 	// Query filters which files are returned.
 	Query SnapshotQuery
 }
 
-// SnapshotShowResult is the active but provisional result contract for
-// Engine.SnapshotShow.
-//
-// This coherent result shape does not prove fully unified engine ownership.
-// Metadata, listing, and counts may still come from mixed seams; read-side
-// ownership and shape decisions are deferred to early v2.0.
+// SnapshotShowResult is the active result contract for Engine.SnapshotShow.
 type SnapshotShowResult struct {
 	Snapshot SnapshotMeta
 	Files    []SnapshotFile
@@ -512,20 +622,15 @@ type SnapshotShowResult struct {
 	TotalFileCount int
 }
 
-// SnapshotStatsRequest is the active but provisional request contract for
-// Engine.SnapshotStats.
+// SnapshotStatsRequest is the active request contract for Engine.SnapshotStats.
 //
 // SnapshotID is optional; empty means aggregate stats across all snapshots.
 type SnapshotStatsRequest struct {
 	SnapshotID string
 }
 
-// SnapshotStatsResult is the active but provisional result contract for
-// Engine.SnapshotStats.
-//
+// SnapshotStatsResult is the active result contract for Engine.SnapshotStats.
 // Reuse fields are populated only for a specific snapshot that has a parent.
-// Aggregate, metadata, and rendering workflows may still use mixed seams;
-// read-side ownership and shape decisions are deferred to early v2.0.
 type SnapshotStatsResult struct {
 	SnapshotCount     int
 	SnapshotFileCount int
@@ -569,17 +674,13 @@ const (
 
 // SnapshotDiffEntry is a renderer-neutral diff entry.
 type SnapshotDiffEntry struct {
-	StoredPath string
-	Change     SnapshotDiffChange
+	StoredPath      string
+	Change          SnapshotDiffChange
+	BaseLogicalID   *int64
+	TargetLogicalID *int64
 }
 
-// SnapshotDiffRequest is the active but provisional request contract for
-// Engine.SnapshotDiff.
-//
-// Summary fast-path behavior and query/filter semantics remain provisional.
-// The CLI can parse richer repeated path/prefix inputs than the current engine
-// seam preserves; read-side ownership and shape decisions are deferred to
-// early v2.0.
+// SnapshotDiffRequest is the active request contract for Engine.SnapshotDiff.
 type SnapshotDiffRequest struct {
 	BaseID   string
 	TargetID string
@@ -588,8 +689,6 @@ type SnapshotDiffRequest struct {
 	// semantics rather than a full entry list.
 	Summary bool
 	// Filter narrows the diff to a single change class.
-	// Filter behavior is layered on top of a provisional diff seam and is not yet
-	// a frozen daemon/API-ready contract.
 	Filter SnapshotDiffFilter
 	// Query filters which entries are considered.
 	Query SnapshotQuery
@@ -602,13 +701,7 @@ type SnapshotDiffSummary struct {
 	Modified int
 }
 
-// SnapshotDiffResult is the active but provisional result contract for
-// Engine.SnapshotDiff.
-//
-// SummaryMode, MatchedEntryCount, and TotalEntryCount are provisional
-// read-side semantics. They reflect the current summary-versus-detailed seam
-// and filtering behavior, not a frozen daemon/API-ready diff contract.
-// Read-side ownership and shape decisions are deferred to early v2.0.
+// SnapshotDiffResult is the complete result contract for Engine.SnapshotDiff.
 type SnapshotDiffResult struct {
 	BaseID   string
 	TargetID string
@@ -782,51 +875,33 @@ const (
 	RepairTargetChunkLiveRefCounts RepairTarget = "chunk-live-ref-counts"
 )
 
-// RepairRequest is a candidate-only request contract for a future Repair
-// operation. Repair is not a method on the current Engine interface.
-//
-// Request/result presence must not be mistaken for active engine ownership.
-// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
-// ownership. Any early-v2.0 activation design must be explicit and
-// behavior-preserving.
+// RepairRequest is the active ordered repair contract. Targets contain raw
+// caller values so validation, normalization, duplicate detection, and
+// deterministic reporting remain engine-owned. Input-file ingestion remains a
+// caller responsibility.
 type RepairRequest struct {
-	// Target selects the single-target repair (when Batch is false).
-	Target RepairTarget
-	// Batch processes multiple targets.
-	Batch bool
-	// Targets is the explicit batch target list.
-	Targets []RepairTarget
+	Targets []string
 	// FailFast stops a batch on the first failure.
 	FailFast bool
-	// InputPath is an optional batch-input source.
-	//
-	// Batch-input parsing remains caller-side under current ownership and would
-	// require an explicit decision if Repair were activated.
-	InputPath string
-	// DryRun simulates without mutating, where supported.
-	DryRun bool
-	// Limit caps the number of rows processed when greater than zero.
-	Limit int
 }
 
 // RepairTargetResult is the outcome of a single repair target.
 type RepairTargetResult struct {
-	Target RepairTarget
+	RawTarget string
+	Target    RepairTarget
 	// ScannedRows and UpdatedRows are generic counters covering both
 	// logical-file and chunk recomputations.
-	ScannedRows int
-	UpdatedRows int
+	ScannedRows int64
+	UpdatedRows int64
 	// OrphanRows captures orphan physical-file rows for ref-count repair.
-	OrphanRows int
-	Status     BatchItemStatus
-	Error      string
+	OrphanRows        int64
+	Status            BatchItemStatus
+	Message           string
+	InvariantCode     string
+	RecommendedAction string
 }
 
-// RepairResult is a candidate-only result contract for a future Repair
-// operation. Repair is not a method on the current Engine interface.
-// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
-// ownership; any early-v2.0 activation design must be explicit and
-// behavior-preserving.
+// RepairResult is the complete aggregate result of the processed targets.
 type RepairResult struct {
 	// Targets holds per-target outcomes.
 	Targets []RepairTargetResult
@@ -839,41 +914,73 @@ type RepairResult struct {
 // Recovery
 // ---------------------------------------------------------------------------
 
-// RecoverRequest is a candidate-only request contract for a future corrective
-// Recover operation. Recover is not a method on the current Engine interface.
-//
-// Request/result presence must not be mistaken for active engine ownership.
-// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
-// ownership. Any early-v2.0 activation design must be explicit and
-// behavior-preserving.
-//
 // Safety invariant: Recovery must not legitimize corrupt mappings. Recovery is
 // a corrective integrity pass (abort dangling writes, clear stale sealing
-// markers, quarantine corrupt/orphaned data), NOT a restore. The previous
-// placeholder modeled it like a restore; that was incorrect.
-type RecoverRequest struct {
-	// DryRun reports what recovery would do without mutating.
-	DryRun bool
+// markers, quarantine corrupt/orphaned data), not a restore or simulation.
+// RecoverRequest deliberately has no unsupported dry-run/input/limit surface.
+type RecoverRequest struct{}
+
+// RecoverResult is the neutral corrective recovery report.
+type RecoverResult struct {
+	AbortedLogicalFiles    int64
+	AbortedChunks          int64
+	QuarantinedMissing     int64
+	QuarantinedCorruptTail int64
+	QuarantinedOrphan      int64
+	SkippedDirEntries      int64
+	CheckedContainerRecord int64
+	CheckedDiskFiles       int64
+	SealingCompleted       int64
+	SealingQuarantined     int64
+	Warnings               []OperationWarning
 }
 
-// RecoverResult is a candidate-only result contract for a future Recover
-// operation. Recover is not a method on the current Engine interface.
-// Phase 14 and the Phase 16 honesty proof confirmed current CLI/domain
-// ownership; any early-v2.0 activation design must be explicit and
-// behavior-preserving.
-//
-// Fields mirror the existing recovery report so the corrective outcome can be
-// represented without CLI rendering.
-type RecoverResult struct {
-	AbortedLogicalFiles    int
-	AbortedChunks          int
-	QuarantinedMissing     int
-	QuarantinedCorruptTail int
-	QuarantinedOrphan      int
-	SkippedDirEntries      int
-	CheckedContainerRecord int
-	CheckedDiskFiles       int
-	SealingCompleted       int
-	SealingQuarantined     int
-	Warnings               []OperationWarning
+// DoctorRequest selects the verification strength for the corrective health
+// gate. Empty VerifyLevel means standard.
+type DoctorRequest struct {
+	VerifyLevel string
+}
+
+// DoctorPhysicalAudit is the neutral current-path integrity summary.
+type DoctorPhysicalAudit struct {
+	OrphanPhysicalFileRows    int64
+	LogicalRefCountMismatches int64
+	NegativeLogicalRefCounts  int64
+}
+
+// DoctorSnapshotAudit is the neutral snapshot-retention integrity summary.
+type DoctorSnapshotAudit struct {
+	SnapshotFileRows               int64
+	OrphanSnapshotPathRefs         int64
+	DuplicateSnapshotPathPairs     int64
+	SnapshotReferencedLogicalFiles int64
+	SnapshotOnlyLogicalFiles       int64
+	SharedLogicalFiles             int64
+	OrphanSnapshotLogicalRefs      int64
+	InvalidLifecycleStates         int64
+	RetainedMissingChunkGraph      int64
+}
+
+// DoctorStage identifies one ordered Doctor stage.
+type DoctorStage string
+
+const (
+	DoctorStageRecovery DoctorStage = "recovery"
+	DoctorStageSchema   DoctorStage = "schema"
+	DoctorStageVerify   DoctorStage = "verify"
+	DoctorStageAudit    DoctorStage = "audit"
+)
+
+// DoctorResult is the presentation-neutral ordered recovery, schema,
+// verification, and audit report. Status strings retain the stable CLI values.
+type DoctorResult struct {
+	Recovery       RecoverResult
+	VerifyLevel    string
+	SchemaVersion  int64
+	RecoveryStatus string
+	VerifyStatus   string
+	SchemaStatus   string
+	PhysicalAudit  DoctorPhysicalAudit
+	SnapshotAudit  DoctorSnapshotAudit
+	FailedStage    DoctorStage
 }

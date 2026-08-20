@@ -23,8 +23,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/engine"
 	"github.com/franchoy/coldkeep/internal/execution"
-	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
@@ -13645,10 +13645,15 @@ func TestSearchListConsistencyWithFilters(t *testing.T) {
 		stored[id] = f
 	}
 
-	listRows, err := listing.ListFilesResultWithDB(dbconn, nil)
+	eng, err := engine.New(engine.Config{DB: dbconn, ContainerDir: container.ContainersDir, StoreContext: &sgctx})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	listResult, err := eng.ListFiles(context.Background(), engine.ListFilesRequest{})
 	if err != nil {
 		t.Fatalf("list files: %v", err)
 	}
+	listRows := listResult.Files
 	if len(listRows) != len(files) {
 		t.Fatalf("list row count mismatch: want %d got %d", len(files), len(listRows))
 	}
@@ -13658,10 +13663,11 @@ func TestSearchListConsistencyWithFilters(t *testing.T) {
 		listIDs[row.ID] = struct{}{}
 	}
 
-	searchAlpha, err := listing.SearchFilesResultWithDB(dbconn, []string{"--name", "alpha"})
+	searchAlphaResult, err := eng.SearchFiles(context.Background(), engine.SearchFilesRequest{NameContains: []string{"alpha"}})
 	if err != nil {
 		t.Fatalf("search --name alpha: %v", err)
 	}
+	searchAlpha := searchAlphaResult.Files
 	if len(searchAlpha) != 3 {
 		t.Fatalf("expected 3 alpha search rows, got %d", len(searchAlpha))
 	}
@@ -13674,10 +13680,14 @@ func TestSearchListConsistencyWithFilters(t *testing.T) {
 		}
 	}
 
-	searchSized, err := listing.SearchFilesResultWithDB(dbconn, []string{"--min-size", "60000", "--max-size", "100000"})
+	minSize, maxSize := int64(60000), int64(100000)
+	searchSizedResult, err := eng.SearchFiles(context.Background(), engine.SearchFilesRequest{
+		MinSizeBytes: []int64{minSize}, MaxSizeBytes: []int64{maxSize},
+	})
 	if err != nil {
 		t.Fatalf("search by Size range: %v", err)
 	}
+	searchSized := searchSizedResult.Files
 	if len(searchSized) != 2 {
 		t.Fatalf("expected 2 files in Size range, got %d", len(searchSized))
 	}

@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -130,23 +129,23 @@ func TestValidateInspectRequest(t *testing.T) {
 		req     InspectRequest
 		wantErr bool
 	}{
-		{"repository no id", InspectRequest{Entity: observability.EntityRepository}, false},
-		{"repository id ignored", InspectRequest{Entity: observability.EntityRepository, EntityID: "99"}, false},
-		{"file positive int", InspectRequest{Entity: observability.EntityFile, EntityID: "42"}, false},
-		{"file zero", InspectRequest{Entity: observability.EntityFile, EntityID: "0"}, true},
-		{"file negative", InspectRequest{Entity: observability.EntityFile, EntityID: "-1"}, true},
-		{"file non-numeric", InspectRequest{Entity: observability.EntityFile, EntityID: "abc"}, true},
-		{"file empty id", InspectRequest{Entity: observability.EntityFile, EntityID: ""}, true},
-		{"file whitespace id", InspectRequest{Entity: observability.EntityFile, EntityID: "  "}, true},
-		{"logical_file positive int", InspectRequest{Entity: observability.EntityLogicalFile, EntityID: "1"}, false},
-		{"physical_file positive int", InspectRequest{Entity: observability.EntityPhysicalFile, EntityID: "1"}, false},
-		{"chunk positive int", InspectRequest{Entity: observability.EntityChunk, EntityID: "7"}, false},
-		{"container positive int", InspectRequest{Entity: observability.EntityContainer, EntityID: "3"}, false},
-		{"snapshot string id", InspectRequest{Entity: observability.EntitySnapshot, EntityID: "snap-123"}, false},
-		{"snapshot empty id", InspectRequest{Entity: observability.EntitySnapshot, EntityID: ""}, true},
-		{"snapshot whitespace id", InspectRequest{Entity: observability.EntitySnapshot, EntityID: "  "}, true},
-		{"unknown entity", InspectRequest{Entity: observability.EntityType("bogus")}, true},
-		{"empty entity", InspectRequest{Entity: observability.EntityType("")}, true},
+		{"repository no id", InspectRequest{Entity: InspectRepository}, false},
+		{"repository id ignored", InspectRequest{Entity: InspectRepository, EntityID: "99"}, false},
+		{"file positive int", InspectRequest{Entity: InspectFile, EntityID: "42"}, false},
+		{"file zero", InspectRequest{Entity: InspectFile, EntityID: "0"}, true},
+		{"file negative", InspectRequest{Entity: InspectFile, EntityID: "-1"}, true},
+		{"file non-numeric", InspectRequest{Entity: InspectFile, EntityID: "abc"}, true},
+		{"file empty id", InspectRequest{Entity: InspectFile, EntityID: ""}, true},
+		{"file whitespace id", InspectRequest{Entity: InspectFile, EntityID: "  "}, true},
+		{"logical_file positive int", InspectRequest{Entity: InspectLogicalFile, EntityID: "1"}, false},
+		{"physical_file positive int", InspectRequest{Entity: InspectPhysicalFile, EntityID: "1"}, false},
+		{"chunk positive int", InspectRequest{Entity: InspectChunk, EntityID: "7"}, false},
+		{"container positive int", InspectRequest{Entity: InspectContainer, EntityID: "3"}, false},
+		{"snapshot string id", InspectRequest{Entity: InspectSnapshot, EntityID: "snap-123"}, false},
+		{"snapshot empty id", InspectRequest{Entity: InspectSnapshot, EntityID: ""}, true},
+		{"snapshot whitespace id", InspectRequest{Entity: InspectSnapshot, EntityID: "  "}, true},
+		{"unknown entity", InspectRequest{Entity: InspectEntity("bogus")}, true},
+		{"empty entity", InspectRequest{Entity: InspectEntity("")}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

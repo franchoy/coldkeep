@@ -3487,8 +3487,8 @@ func runParsedCommandForParserPathValidation(parsed parsedCommandLine) error {
 	}
 }
 
-func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
-	args := searchArgs(parsedCommandLine{
+func TestSearchFilesRequestUsesLastPaginationValues(t *testing.T) {
+	req, err := searchFilesRequest(parsedCommandLine{
 		method: "search",
 		flags: map[string][]string{
 			"name":   {"report"},
@@ -3497,28 +3497,27 @@ func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
 		},
 		positionals: []string{"ignored-positional"},
 	})
-
-	encoded := strings.Join(args, " ")
-	if !strings.Contains(encoded, "--limit 50") {
-		t.Fatalf("expected last limit value to be forwarded, got %q", encoded)
+	if err != nil {
+		t.Fatalf("searchFilesRequest: %v", err)
 	}
-	if strings.Contains(encoded, "--limit 25") {
-		t.Fatalf("expected earlier limit values to be ignored, got %q", encoded)
+	if req.Limit == nil || *req.Limit != 50 {
+		t.Fatalf("expected last limit value to be forwarded, got %+v", req.Limit)
 	}
-	if !strings.Contains(encoded, "--offset 100") {
-		t.Fatalf("expected offset value to be forwarded, got %q", encoded)
+	if req.Offset == nil || *req.Offset != 100 {
+		t.Fatalf("expected offset value to be forwarded, got %+v", req.Offset)
 	}
 }
 
-func TestSearchArgsPreservesValidNameValue(t *testing.T) {
-	args := searchArgs(parsedCommandLine{
+func TestSearchFilesRequestPreservesValidNameValue(t *testing.T) {
+	req, err := searchFilesRequest(parsedCommandLine{
 		method: "search",
 		flags:  map[string][]string{"name": {"report"}},
 	})
-
-	encoded := strings.Join(args, " ")
-	if encoded != "--name report" {
-		t.Fatalf("expected valid search name to be forwarded unchanged, got %q", encoded)
+	if err != nil {
+		t.Fatalf("searchFilesRequest: %v", err)
+	}
+	if len(req.NameContains) != 1 || req.NameContains[0] != "report" {
+		t.Fatalf("expected valid search name to be forwarded unchanged, got %+v", req.NameContains)
 	}
 }
 
@@ -4722,49 +4721,6 @@ func TestRunConfigCommandSetRejectsUnknownVersion(t *testing.T) {
 	}, outputModeText)
 	if err == nil || !strings.Contains(err.Error(), "unknown chunker version") {
 		t.Fatalf("expected unknown-version error, got: %v", err)
-	}
-	if got := classifyExitCode(err); got != exitUsage {
-		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
-	}
-}
-
-func TestRunConfigCommandSetRejectsDeprecatedVersion(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalDeprecation := isDeprecatedChunkerVersionPhase
-	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		isDeprecatedChunkerVersionPhase = originalDeprecation
-	})
-
-	dbPath := filepath.Join(t.TempDir(), "config_deprecated.sqlite")
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", dbPath)
-		if err != nil {
-			return storage.StorageContext{}, err
-		}
-		if err := dbpkg.RunMigrations(dbconn); err != nil {
-			_ = dbconn.Close()
-			return storage.StorageContext{}, err
-		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
-		if v == chunk.VersionV2FastCDC {
-			return true, "scheduled removal"
-		}
-		return false, ""
-	}
-
-	err := runConfigCommand(parsedCommandLine{
-		method:      "config",
-		positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
-	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "deprecated chunker version") {
-		t.Fatalf("expected deprecated-version error, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "scheduled removal") {
-		t.Fatalf("expected deprecated-version reason in error, got: %v", err)
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)

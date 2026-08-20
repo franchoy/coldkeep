@@ -9,17 +9,17 @@ func TestSnapshotQueryOrNilReturnsNilForEmptyQuery(t *testing.T) {
 	}
 }
 
-func TestEngineQueryToSnapshotQueryPreservesSinglePathAndPrefixShape(t *testing.T) {
+func TestEngineQueryToSnapshotQueryPreservesRepeatedPathAndPrefixShape(t *testing.T) {
 	min := int64(1)
 	max := int64(8)
 	got, err := engineQueryToSnapshotQuery(SnapshotQuery{
-		Path:    "docs/a.txt",
-		Prefix:  "docs/",
-		Pattern: "*.txt",
-		Regex:   "^docs/",
-		MinSize: &min,
-		MaxSize: &max,
-		Limit:   5,
+		Paths:    []string{"docs/a.txt", "docs/b.txt"},
+		Prefixes: []string{"docs/", "images/"},
+		Pattern:  "*.txt",
+		Regex:    "^docs/",
+		MinSize:  &min,
+		MaxSize:  &max,
+		Limit:    5,
 	})
 	if err != nil {
 		t.Fatalf("engineQueryToSnapshotQuery: %v", err)
@@ -27,14 +27,14 @@ func TestEngineQueryToSnapshotQueryPreservesSinglePathAndPrefixShape(t *testing.
 	if got == nil {
 		t.Fatal("engineQueryToSnapshotQuery: got nil")
 	}
-	if len(got.ExactPaths) != 1 {
-		t.Fatalf("expected exactly one exact path, got %#v", got.ExactPaths)
+	if len(got.ExactPaths) != 2 {
+		t.Fatalf("expected two exact paths, got %#v", got.ExactPaths)
 	}
 	if _, ok := got.ExactPaths["docs/a.txt"]; !ok {
 		t.Fatalf("expected exact path docs/a.txt, got %#v", got.ExactPaths)
 	}
-	if len(got.Prefixes) != 1 || got.Prefixes[0] != "docs/" {
-		t.Fatalf("expected exactly one prefix docs/, got %#v", got.Prefixes)
+	if len(got.Prefixes) != 2 || got.Prefixes[0] != "docs/" || got.Prefixes[1] != "images/" {
+		t.Fatalf("expected repeated prefixes, got %#v", got.Prefixes)
 	}
 }
 
@@ -86,9 +86,12 @@ func TestBuildSnapshotDiffResultDetailedModeKeepsMatchedAndTotalDistinct(t *test
 	}
 }
 
-func TestVerifyResultRemainsIntentionalPlaceholder(t *testing.T) {
-	var result VerifyResult
-	if result != (VerifyResult{}) {
-		t.Fatalf("expected empty VerifyResult placeholder, got %#v", result)
+func TestVerifyResultRepresentsCompleteCLISummary(t *testing.T) {
+	result := VerifyResult{
+		BlocksChecked: 5, PhysicalHashChecked: 4, CompressedHashChecked: 3,
+		LogicalHashChecked: 2, CompressedBlocksChecked: 1,
+	}
+	if result.BlocksChecked != 5 || result.CompressedBlocksChecked != 1 {
+		t.Fatalf("verify summary not representable: %#v", result)
 	}
 }

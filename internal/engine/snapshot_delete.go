@@ -13,7 +13,8 @@ type preparedSnapshotDeleteRequest struct {
 	mode       SnapshotDeleteMode
 }
 
-func (e *DefaultEngine) SnapshotDelete(ctx context.Context, req SnapshotDeleteRequest) (SnapshotDeleteResult, error) {
+func (e *DefaultEngine) SnapshotDelete(ctx context.Context, req SnapshotDeleteRequest) (_ SnapshotDeleteResult, outErr error) {
+	defer func() { outErr = TranslateError("snapshot_delete", outErr) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -23,7 +24,7 @@ func (e *DefaultEngine) SnapshotDelete(ctx context.Context, req SnapshotDeleteRe
 
 	prepared, err := prepareSnapshotDeleteRequest(req)
 	if err != nil {
-		return SnapshotDeleteResult{}, err
+		return SnapshotDeleteResult{}, TranslateErrorAs("snapshot_delete", ErrorInvalidArgument, err)
 	}
 
 	switch prepared.mode {

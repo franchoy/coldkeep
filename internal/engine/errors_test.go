@@ -6,27 +6,15 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/internal/invariants"
 )
 
-func TestErrNotImplementedRemainsUnsupportedSentinel(t *testing.T) {
-	if !errors.Is(engine.ErrNotImplemented, engine.ErrNotImplemented) {
-		t.Fatal("expected ErrNotImplemented to remain errors.Is compatible with itself")
-	}
-	if !engine.IsUnsupported(engine.ErrNotImplemented) {
-		t.Fatal("expected ErrNotImplemented to classify as unsupported")
-	}
-}
-
-func TestIsUnsupportedRecognizesWrappedErrNotImplemented(t *testing.T) {
-	err := fmt.Errorf("wrapped unsupported mode: %w", engine.ErrNotImplemented)
-	if !errors.Is(err, engine.ErrNotImplemented) {
-		t.Fatalf("expected wrapped error to remain ErrNotImplemented-compatible, got %v", err)
-	}
+func TestIsUnsupportedRecognizesTypedError(t *testing.T) {
+	err := engine.NewError(engine.ErrorUnsupported, "operation", "unsupported mode", "", nil)
 	if !engine.IsUnsupported(err) {
-		t.Fatalf("expected wrapped ErrNotImplemented to classify as unsupported, got %v", err)
+		t.Fatalf("expected typed error to classify as unsupported, got %v", err)
 	}
 }
 
@@ -43,26 +31,103 @@ func TestIsUnsupportedRejectsUnrelatedErrors(t *testing.T) {
 	}
 }
 
-func TestUnsupportedEngineModesRemainRecognizedByIsUnsupported(t *testing.T) {
-	t.Run("recursive store", func(t *testing.T) {
-		db := openSnapshotTestDB(t)
-		sgctx := storage.StorageContext{
-			DB:           db,
-			Writer:       container.NewSimulatedWriter(1024 * 1024),
-			ContainerDir: t.TempDir(),
+func TestEngineErrorCodesAreStable(t *testing.T) {
+	want := map[engine.ErrorCode]string{
+		engine.ErrorInvalidArgument:    "invalid_argument",
+		engine.ErrorNotFound:           "not_found",
+		engine.ErrorUnsupported:        "unsupported",
+		engine.ErrorInvariantViolation: "invariant_violation",
+		engine.ErrorVerificationFailed: "verification_failed",
+		engine.ErrorRecoveryFailed:     "recovery_failed",
+		engine.ErrorConflict:           "conflict",
+		engine.ErrorCancelled:          "cancelled",
+		engine.ErrorOperationFailed:    "operation_failed",
+	}
+	for code, text := range want {
+		if string(code) != text {
+			t.Errorf("error code changed: got=%q want=%q", code, text)
 		}
-		eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: &sgctx})
-		if err != nil {
-			t.Fatalf("engine.New: %v", err)
-		}
-		_, err = eng.Store(context.Background(), engine.StoreRequest{
-			SourcePath: t.TempDir(),
-			Recursive:  true,
-			Workers:    2,
-			Codec:      "plain",
+	}
+}
+
+func TestNewErrorPreservesMessageFieldsAndCause(t *testing.T) {
+	cause := errors.New("storage unavailable")
+	err := engine.NewError(engine.ErrorConflict, "store", "repository busy", "LOCK_BUSY", cause)
+	if err.Error() != "repository busy" {
+		t.Fatalf("message changed: %q", err.Error())
+	}
+	if err.Code != engine.ErrorConflict || err.Operation != "store" || err.InvariantCode != "LOCK_BUSY" {
+		t.Fatalf("unexpected typed fields: %+v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("typed error must preserve errors.Is cause chain")
+	}
+	if !engine.IsCode(err, engine.ErrorConflict) || engine.CodeOf(err) != engine.ErrorConflict {
+		t.Fatalf("typed classification failed: %v", err)
+	}
+}
+
+func TestNewErrorRejectsUnknownCodeFailClosed(t *testing.T) {
+	err := engine.NewError(engine.ErrorCode("invented"), "inspect", "boom", "", nil)
+	if err.Code != engine.ErrorOperationFailed {
+		t.Fatalf("unknown code should fail closed: %+v", err)
+	}
+}
+
+func TestTranslateErrorClassifiesUniversalFailures(t *testing.T) {
+	invariant := invariants.New(invariants.CodeGCRefusedIntegrity, "GC refused", nil)
+	tests := []struct {
+		name          string
+		err           error
+		want          engine.ErrorCode
+		invariantCode string
+	}{
+		{name: "cancelled", err: context.Canceled, want: engine.ErrorCancelled},
+		{name: "deadline", err: context.DeadlineExceeded, want: engine.ErrorCancelled},
+		{name: "unsupported", err: catalog.NewError(catalog.ErrorUnsupported, "operation", "", "unsupported mode", nil), want: engine.ErrorUnsupported},
+		{name: "invariant", err: invariant, want: engine.ErrorInvariantViolation, invariantCode: invariants.CodeGCRefusedIntegrity},
+		{name: "ordinary", err: errors.New("disk unavailable"), want: engine.ErrorOperationFailed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			translated := engine.TranslateError("operation", tc.err)
+			if !engine.IsCode(translated, tc.want) {
+				t.Fatalf("code mismatch: got=%q want=%q err=%v", engine.CodeOf(translated), tc.want, translated)
+			}
+			if translated.Error() != tc.err.Error() || !errors.Is(translated, tc.err) {
+				t.Fatalf("translation changed message or chain: translated=%v original=%v", translated, tc.err)
+			}
+			var typed *engine.Error
+			if !errors.As(translated, &typed) || typed.InvariantCode != tc.invariantCode {
+				t.Fatalf("typed detail mismatch: %+v", typed)
+			}
 		})
-		if !engine.IsUnsupported(err) {
-			t.Fatalf("expected recursive store error to classify as unsupported, got %v", err)
-		}
-	})
+	}
+}
+
+func TestTranslateErrorAsPreservesUniversalAndExplicitClassifications(t *testing.T) {
+	notFound := errors.New("file not found")
+	translated := engine.TranslateErrorAs("restore", engine.ErrorNotFound, notFound)
+	if !engine.IsCode(translated, engine.ErrorNotFound) || translated.Error() != notFound.Error() {
+		t.Fatalf("explicit classification failed: %v", translated)
+	}
+
+	cancelled := engine.TranslateErrorAs("restore", engine.ErrorNotFound, context.Canceled)
+	if !engine.IsCode(cancelled, engine.ErrorCancelled) {
+		t.Fatalf("cancellation must retain universal classification: %v", cancelled)
+	}
+
+	existing := engine.NewError(engine.ErrorConflict, "gc", "busy", "", nil)
+	if got := engine.TranslateErrorAs("restore", engine.ErrorNotFound, existing); got != existing {
+		t.Fatal("existing typed error must not be reclassified")
+	}
+}
+
+func TestTranslateErrorNilIsNil(t *testing.T) {
+	if got := engine.TranslateError("store", nil); got != nil {
+		t.Fatalf("nil translation = %v", got)
+	}
+	if got := engine.TranslateErrorAs("store", engine.ErrorInvalidArgument, nil); got != nil {
+		t.Fatalf("nil explicit translation = %v", got)
+	}
 }

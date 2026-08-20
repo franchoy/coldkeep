@@ -145,14 +145,15 @@ func storageRestoreTrustedRoot(req RestoreStoredPathRequest) string {
 	return ""
 }
 
-func (e *DefaultEngine) RestoreStoredPath(ctx context.Context, req RestoreStoredPathRequest) (RestoreStoredPathResult, error) {
+func (e *DefaultEngine) RestoreStoredPath(ctx context.Context, req RestoreStoredPathRequest) (_ RestoreStoredPathResult, outErr error) {
+	defer func() { outErr = TranslateError("restore_stored_path", outErr) }()
 	if err := ctx.Err(); err != nil {
 		return RestoreStoredPathResult{}, err
 	}
 
 	normalized, err := normalizeRestoreStoredPathRequest(req)
 	if err != nil {
-		return RestoreStoredPathResult{}, err
+		return RestoreStoredPathResult{}, TranslateErrorAs("restore_stored_path", ErrorInvalidArgument, err)
 	}
 	if err := e.validateRestoreStoredPathDependencies(); err != nil {
 		return RestoreStoredPathResult{}, err

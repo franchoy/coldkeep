@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/gc"
-	"github.com/franchoy/coldkeep/internal/graph"
 )
 
 const SimulationKindGC = "gc"
@@ -38,10 +38,8 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 	rootMetadata := map[string]any{
 		"excluded_snapshots": len(opts.AssumeDeletedSnapshots),
 	}
-	if s.graph != nil {
-		if roots, rootsErr := s.graph.GCRoots(ctx, graph.GCRootOptions{ExcludeSnapshots: opts.AssumeDeletedSnapshots}); rootsErr == nil {
-			rootMetadata["root_count"] = len(roots)
-		}
+	if roots, rootsErr := catalog.NewServiceFromSQL(s.db).LoadGCPlanMetadata(ctx, catalog.GCPlanInput{ExcludeSnapshotIDs: opts.AssumeDeletedSnapshots}); rootsErr == nil {
+		rootMetadata["root_count"] = len(roots.Roots)
 	}
 	emitTrace(opts.Trace, TraceEvent{
 		Step:     "simulate.gc.roots.load",

@@ -20,8 +20,23 @@ type stubCommandEngine struct {
 	snapshotCreateFunc    func(context.Context, engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error)
 	snapshotDeleteFunc    func(context.Context, engine.SnapshotDeleteRequest) (engine.SnapshotDeleteResult, error)
 	snapshotRestoreFunc   func(context.Context, engine.SnapshotRestoreRequest) (engine.SnapshotRestoreResult, error)
+	snapshotListFunc      func(context.Context, engine.SnapshotListRequest) (engine.SnapshotListResult, error)
+	snapshotShowFunc      func(context.Context, engine.SnapshotShowRequest) (engine.SnapshotShowResult, error)
+	snapshotStatsFunc     func(context.Context, engine.SnapshotStatsRequest) (engine.SnapshotStatsResult, error)
+	snapshotDiffFunc      func(context.Context, engine.SnapshotDiffRequest) (engine.SnapshotDiffResult, error)
 	restoreStoredPathFunc func(context.Context, engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error)
 	removeStoredPathsFunc func(context.Context, engine.RemoveStoredPathsRequest) (engine.RemoveStoredPathsResult, error)
+	storeFolderFunc       func(context.Context, engine.StoreFolderRequest) (engine.StoreFolderResult, error)
+	listFilesFunc         func(context.Context, engine.ListFilesRequest) (engine.ListFilesResult, error)
+	searchFilesFunc       func(context.Context, engine.SearchFilesRequest) (engine.SearchFilesResult, error)
+	getConfigurationFunc  func(context.Context, engine.GetConfigurationRequest) (engine.GetConfigurationResult, error)
+	setConfigurationFunc  func(context.Context, engine.SetConfigurationRequest) (engine.SetConfigurationResult, error)
+	statsFunc             func(context.Context, engine.StatsRequest) (engine.StatsResult, error)
+	inspectFunc           func(context.Context, engine.InspectRequest) (engine.InspectResult, error)
+	verifyFunc            func(context.Context, engine.VerifyRequest) (engine.VerifyResult, error)
+	repairFunc            func(context.Context, engine.RepairRequest) (engine.RepairResult, error)
+	recoverFunc           func(context.Context, engine.RecoverRequest) (engine.RecoverResult, error)
+	doctorFunc            func(context.Context, engine.DoctorRequest) (engine.DoctorResult, error)
 }
 
 func (s stubCommandEngine) SnapshotCreate(ctx context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
@@ -45,6 +60,34 @@ func (s stubCommandEngine) SnapshotRestore(ctx context.Context, req engine.Snaps
 	return engine.SnapshotRestoreResult{}, errors.New("unexpected SnapshotRestore call")
 }
 
+func (s stubCommandEngine) SnapshotList(ctx context.Context, req engine.SnapshotListRequest) (engine.SnapshotListResult, error) {
+	if s.snapshotListFunc != nil {
+		return s.snapshotListFunc(ctx, req)
+	}
+	return engine.SnapshotListResult{}, errors.New("unexpected SnapshotList call")
+}
+
+func (s stubCommandEngine) SnapshotShow(ctx context.Context, req engine.SnapshotShowRequest) (engine.SnapshotShowResult, error) {
+	if s.snapshotShowFunc != nil {
+		return s.snapshotShowFunc(ctx, req)
+	}
+	return engine.SnapshotShowResult{}, errors.New("unexpected SnapshotShow call")
+}
+
+func (s stubCommandEngine) SnapshotStats(ctx context.Context, req engine.SnapshotStatsRequest) (engine.SnapshotStatsResult, error) {
+	if s.snapshotStatsFunc != nil {
+		return s.snapshotStatsFunc(ctx, req)
+	}
+	return engine.SnapshotStatsResult{}, errors.New("unexpected SnapshotStats call")
+}
+
+func (s stubCommandEngine) SnapshotDiff(ctx context.Context, req engine.SnapshotDiffRequest) (engine.SnapshotDiffResult, error) {
+	if s.snapshotDiffFunc != nil {
+		return s.snapshotDiffFunc(ctx, req)
+	}
+	return engine.SnapshotDiffResult{}, errors.New("unexpected SnapshotDiff call")
+}
+
 func (s stubCommandEngine) RestoreStoredPath(ctx context.Context, req engine.RestoreStoredPathRequest) (engine.RestoreStoredPathResult, error) {
 	if s.restoreStoredPathFunc != nil {
 		return s.restoreStoredPathFunc(ctx, req)
@@ -57,6 +100,155 @@ func (s stubCommandEngine) RemoveStoredPaths(ctx context.Context, req engine.Rem
 		return s.removeStoredPathsFunc(ctx, req)
 	}
 	return engine.RemoveStoredPathsResult{}, errors.New("unexpected RemoveStoredPaths call")
+}
+
+func (s stubCommandEngine) StoreFolder(ctx context.Context, req engine.StoreFolderRequest) (engine.StoreFolderResult, error) {
+	if s.storeFolderFunc != nil {
+		return s.storeFolderFunc(ctx, req)
+	}
+	return engine.StoreFolderResult{}, errors.New("unexpected StoreFolder call")
+}
+
+func (s stubCommandEngine) ListFiles(ctx context.Context, req engine.ListFilesRequest) (engine.ListFilesResult, error) {
+	if s.listFilesFunc != nil {
+		return s.listFilesFunc(ctx, req)
+	}
+	return engine.ListFilesResult{}, errors.New("unexpected ListFiles call")
+}
+
+func (s stubCommandEngine) SearchFiles(ctx context.Context, req engine.SearchFilesRequest) (engine.SearchFilesResult, error) {
+	if s.searchFilesFunc != nil {
+		return s.searchFilesFunc(ctx, req)
+	}
+	return engine.SearchFilesResult{}, errors.New("unexpected SearchFiles call")
+}
+
+func (s stubCommandEngine) GetConfiguration(ctx context.Context, req engine.GetConfigurationRequest) (engine.GetConfigurationResult, error) {
+	if s.getConfigurationFunc != nil {
+		return s.getConfigurationFunc(ctx, req)
+	}
+	return engine.GetConfigurationResult{}, errors.New("unexpected GetConfiguration call")
+}
+
+func (s stubCommandEngine) SetConfiguration(ctx context.Context, req engine.SetConfigurationRequest) (engine.SetConfigurationResult, error) {
+	if s.setConfigurationFunc != nil {
+		return s.setConfigurationFunc(ctx, req)
+	}
+	return engine.SetConfigurationResult{}, errors.New("unexpected SetConfiguration call")
+}
+
+func (s stubCommandEngine) Stats(ctx context.Context, req engine.StatsRequest) (engine.StatsResult, error) {
+	if s.statsFunc != nil {
+		return s.statsFunc(ctx, req)
+	}
+	return engine.StatsResult{}, errors.New("unexpected Stats call")
+}
+
+func (s stubCommandEngine) Inspect(ctx context.Context, req engine.InspectRequest) (engine.InspectResult, error) {
+	if s.inspectFunc != nil {
+		return s.inspectFunc(ctx, req)
+	}
+	return engine.InspectResult{}, errors.New("unexpected Inspect call")
+}
+
+func (s stubCommandEngine) Verify(ctx context.Context, req engine.VerifyRequest) (engine.VerifyResult, error) {
+	if s.verifyFunc != nil {
+		return s.verifyFunc(ctx, req)
+	}
+	return engine.VerifyResult{}, errors.New("unexpected Verify call")
+}
+
+func (s stubCommandEngine) Repair(ctx context.Context, req engine.RepairRequest) (engine.RepairResult, error) {
+	if s.repairFunc != nil {
+		return s.repairFunc(ctx, req)
+	}
+	return engine.RepairResult{}, errors.New("unexpected Repair call")
+}
+
+func (s stubCommandEngine) Recover(ctx context.Context, req engine.RecoverRequest) (engine.RecoverResult, error) {
+	if s.recoverFunc != nil {
+		return s.recoverFunc(ctx, req)
+	}
+	return engine.RecoverResult{}, errors.New("unexpected Recover call")
+}
+
+func (s stubCommandEngine) Doctor(ctx context.Context, req engine.DoctorRequest) (engine.DoctorResult, error) {
+	if s.doctorFunc != nil {
+		return s.doctorFunc(ctx, req)
+	}
+	return engine.DoctorResult{}, errors.New("unexpected Doctor call")
+}
+
+func TestRunStoreFolderCommandUsesEngineJSONParity(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	installStoreFolderCommandStubs(t, dbconn, stubCommandEngine{
+		storeFolderFunc: func(_ context.Context, req engine.StoreFolderRequest) (engine.StoreFolderResult, error) {
+			if req.SourcePath != "/input" || req.Codec != "aes-gcm" || req.Workers != 3 {
+				t.Fatalf("unexpected StoreFolder request: %+v", req)
+			}
+			return engine.StoreFolderResult{SourcePath: req.SourcePath, FilesStored: 2, BytesLogical: 11, WorkersUsed: 3}, nil
+		},
+	})
+
+	output := captureStdout(t, func() {
+		err := runStoreFolderCommand(parsedCommandLine{
+			method:      "store-folder",
+			positionals: []string{"/input"},
+			flags: map[string][]string{
+				"codec":   {"aes-gcm"},
+				"workers": {"3"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runStoreFolderCommand: %v", err)
+		}
+	})
+	if strings.TrimSpace(output) != `{"command":"store-folder","status":"ok","target":"/input"}` {
+		t.Fatalf("unexpected JSON output: %s", output)
+	}
+}
+
+func TestRunStoreFolderCommandUsesEngineTextParity(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	installStoreFolderCommandStubs(t, dbconn, stubCommandEngine{
+		storeFolderFunc: func(_ context.Context, req engine.StoreFolderRequest) (engine.StoreFolderResult, error) {
+			return engine.StoreFolderResult{SourcePath: req.SourcePath, FilesStored: 1}, nil
+		},
+	})
+
+	output := captureStdout(t, func() {
+		err := runStoreFolderCommand(parsedCommandLine{
+			method:      "store-folder",
+			positionals: []string{"/input"},
+			flags:       map[string][]string{"codec": {"aes-gcm"}},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runStoreFolderCommand: %v", err)
+		}
+	})
+	for _, want := range []string{"Folder stored successfully: /input", "Hint: " + doctorOperationalHint} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunStoreFolderCommandPropagatesEngineErrors(t *testing.T) {
+	dbconn := openSnapshotRoutingDB(t)
+	installStoreFolderCommandStubs(t, dbconn, stubCommandEngine{
+		storeFolderFunc: func(context.Context, engine.StoreFolderRequest) (engine.StoreFolderResult, error) {
+			return engine.StoreFolderResult{}, errors.New("folder store failed")
+		},
+	})
+
+	err := runStoreFolderCommand(parsedCommandLine{
+		method:      "store-folder",
+		positionals: []string{"/input"},
+		flags:       map[string][]string{"codec": {"aes-gcm"}},
+	}, outputModeText)
+	if err == nil || err.Error() != "folder store failed" {
+		t.Fatalf("expected engine error to propagate unchanged, got %v", err)
+	}
 }
 
 func TestRunRestoreCommandStoredPathUsesEngineJSONParity(t *testing.T) {
@@ -583,5 +775,23 @@ func installStoredPathCommandStubs(
 			*removeByIDCalled = true
 			return batch.ItemResult{}
 		}
+	}
+}
+
+func installStoreFolderCommandStubs(t *testing.T, dbconn *sql.DB, stub stubCommandEngine) {
+	t.Helper()
+
+	originalLoad := loadDefaultStorageContextPhase
+	originalNewEngine := newStoreFolderCommandEngine
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		newStoreFolderCommandEngine = originalNewEngine
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+	newStoreFolderCommandEngine = func(storage.StorageContext) (engine.Engine, error) {
+		return stub, nil
 	}
 }
