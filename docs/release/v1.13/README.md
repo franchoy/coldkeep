@@ -151,11 +151,15 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
   `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
   `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.
-- `v1.13.12 — Engine and Catalog Completion` is active from exact baseline
-  `507859daccf25594142c61e5ab8209a751fb579a`. It must complete the deferred
-  catalog planning APIs, production engine ownership, neutral contracts, and
-  enforceable thin-CLI boundary without changing storage semantics. Phases
-  0–20 are complete; Phase 21 exact-head candidate validation is next.
+- `v1.13.12 — Engine and Catalog Completion` is ready for release. Final
+  candidate `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58` completed the catalog
+  planning APIs, production engine ownership, neutral contracts, and
+  enforceable thin-CLI boundary without changing storage semantics. Phase 21
+  is complete with local Profile A `PASS` and hosted exact-head validation
+  `PASS`; PR #107 merged the candidate to `main` as
+  `7505d7000faef452caeb4c01784f0510960e7240`. Tagging and publication have not
+  occurred yet. Earlier candidate evidence is historical only, v1.13.13
+  remains mandatory, and v1.x remains open.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan;
   final v1.x completion remains gated by v1.13.12 and v1.13.13. v1.13.13 is an
   audit-only final handoff gate, and v2.x implementation is not authorized.
