@@ -36,6 +36,19 @@ project, do not start here; start with [README.md](README.md).
   SQLite backend and PostgreSQL compatibility requirements through v1.
 - Froze local same-host coordination as the v1 boundary, local daemon/product
   work as v2, and network/NAS/distributed expansion as v3.
+- Audited all 25 active Engine operations and all 13 methods across ten Catalog
+  responsibility interfaces, separating ten production-adopted methods from
+  three library-only facade methods without using hosted PostgreSQL execution
+  as a substitute for source/routing evidence.
+- Froze the complete 36-row CLI lower-layer exception inventory: every entry
+  is bounded parsing, composition, projection, compatibility, benchmark, or
+  simulation support, with zero architectural bypasses.
+- Recorded complete Engine and thin-CLI architecture, narrow application
+  composition, zero promised production stubs, and zero Phase 2 architecture
+  blockers. Catalog planning adoption is complete, while aggregate Catalog
+  architecture is partial because five methods lack its stable typed-error
+  boundary (`P2-ARCH-001`). Correctness, backend, coordination, restore, and
+  v1 closure decisions remain later-phase work.
 
 ------------------------------------------------------------------------
 

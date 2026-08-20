@@ -161,7 +161,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 1 is Complete. Phase 2 is Next. Its authoritative
+  `release/v1.13.13`. Phase 2 is Complete. Phase 3 is Next. Its authoritative
   mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
   entering the train. v1.x remains open, SQLite-default productization remains
   v2.x scope, PostgreSQL compatibility remains required, and v2.x
@@ -173,6 +173,16 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [authoritative roadmap and supersession audit](v1.13.13-phase1-authoritative-roadmap-and-supersession-audit.md),
   [roadmap authority matrix](v1.13.13-roadmap-authority-matrix.md), and
   [v1.x normative requirement matrix](v1.13.13-v1x-normative-requirements.md).
+- Phase 2 independently records complete Engine and Catalog planning
+  ownership, a complete thin-CLI boundary, narrow application composition,
+  zero promised production stubs, and zero architecture blockers in the
+  [Engine/Catalog ownership audit](v1.13.13-phase2-engine-catalog-ownership-audit.md),
+  [Engine operation matrix](v1.13.13-engine-operation-ownership-matrix.md),
+  [Catalog adoption matrix](v1.13.13-catalog-contract-adoption-matrix.md), and
+  [CLI boundary exception matrix](v1.13.13-cli-boundary-exception-matrix.md).
+  Catalog architecture remains `PARTIAL` under `P2-ARCH-001` because five
+  aggregate methods lack the stable typed-error boundary.
+  `RESTORE_INSTALL_CONTRACT` remains unresolved for Phase 3.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
