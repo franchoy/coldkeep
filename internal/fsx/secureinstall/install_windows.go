@@ -225,7 +225,7 @@ func windowsOpenParent(request Request) (windows.Handle, string, string, error) 
 	}
 	oa := &windows.OBJECT_ATTRIBUTES{
 		ObjectName: rootName,
-		Attributes: windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
+		Attributes: windows.OBJ_CASE_INSENSITIVE,
 	}
 	oa.Length = uint32(unsafe.Sizeof(*oa))
 	var iosb windows.IO_STATUS_BLOCK
@@ -233,7 +233,7 @@ func windowsOpenParent(request Request) (windows.Handle, string, string, error) 
 	var parent windows.Handle
 	if err := windows.NtCreateFile(
 		&parent,
-		windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+		windows.FILE_LIST_DIRECTORY|windows.FILE_TRAVERSE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
 		oa,
 		&iosb,
 		&allocation,
@@ -259,7 +259,7 @@ func windowsOpenParent(request Request) (windows.Handle, string, string, error) 
 		next, openErr := windowsCreateRelative(
 			parent,
 			part,
-			windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+			windows.FILE_LIST_DIRECTORY|windows.FILE_TRAVERSE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
 			windows.FILE_OPEN,
 			windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
 			windows.FILE_ATTRIBUTE_DIRECTORY,
@@ -268,7 +268,7 @@ func windowsOpenParent(request Request) (windows.Handle, string, string, error) 
 			next, openErr = windowsCreateRelative(
 				parent,
 				part,
-				windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+				windows.FILE_LIST_DIRECTORY|windows.FILE_TRAVERSE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
 				windows.FILE_CREATE,
 				windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
 				windows.FILE_ATTRIBUTE_DIRECTORY,
