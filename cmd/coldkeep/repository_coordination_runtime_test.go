@@ -102,7 +102,7 @@ func TestRunCLIRepositoryCoordinationBypassesNonRepositoryPaths(t *testing.T) {
 		{name: "help", args: []string{"help"}, wantCode: exitSuccess, want: []string{"dispatch", "render success"}},
 		{name: "version", args: []string{"version"}, wantCode: exitSuccess, want: []string{"dispatch", "render success"}},
 		{name: "init", args: []string{"init"}, wantCode: exitSuccess, want: []string{"dispatch", "render success"}},
-		{name: "simulate", args: []string{"simulate", "gc"}, wantCode: exitSuccess, want: []string{"dispatch", "render success"}},
+		{name: "isolated simulate", args: []string{"simulate", "store", "input.bin"}, wantCode: exitSuccess, want: []string{"dispatch", "render success"}},
 		{name: "benchmark", args: []string{"benchmark", "run"}, wantCode: exitSuccess, want: []string{"dispatch", "render success"}},
 		{name: "unknown command", args: []string{"unknown"}, wantCode: exitUsage, want: []string{"dispatch"}},
 		{name: "command help", args: []string{"store", "--help"}, wantCode: exitSuccess, want: []string{"dispatch", "render success"}},

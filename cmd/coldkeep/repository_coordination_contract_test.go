@@ -19,6 +19,7 @@ func TestRepositoryCoordinationPolicyRequiresExclusiveRepositoryOperations(t *te
 		{name: "remove", method: "remove", operation: coordination.OperationRemove},
 		{name: "repair", method: "repair", operation: coordination.OperationRepair},
 		{name: "gc", method: "gc", operation: coordination.OperationGarbageCollect},
+		{name: "simulate gc", method: "simulate", positionals: []string{"gc"}, operation: coordination.OperationSimulateGC},
 		{name: "stats", method: "stats", operation: coordination.OperationStats},
 		{name: "inspect", method: "inspect", operation: coordination.OperationInspect},
 		{name: "list", method: "list", operation: coordination.OperationList},
@@ -69,6 +70,7 @@ func TestRepositoryCoordinationPolicyKeepsRestoreVerifyAndBothGCModesExclusive(t
 		{name: "verify deep", parsed: parsedCommandLine{method: "verify", flags: map[string][]string{"deep": {""}}}, operation: coordination.OperationVerify},
 		{name: "gc dry run", parsed: parsedCommandLine{method: "gc", flags: map[string][]string{"dry-run": {""}}}, operation: coordination.OperationGarbageCollect},
 		{name: "gc live", parsed: parsedCommandLine{method: "gc"}, operation: coordination.OperationGarbageCollect},
+		{name: "simulate gc", parsed: parsedCommandLine{method: "simulate", positionals: []string{"gc"}}, operation: coordination.OperationSimulateGC},
 	}
 
 	for _, test := range tests {
@@ -88,6 +90,10 @@ func TestRepositoryCoordinationPolicyBypassesNonRepositoryCommands(t *testing.T)
 	tests := []parsedCommandLine{
 		{method: "init"},
 		{method: "simulate", positionals: []string{"store"}},
+		{method: "simulate", positionals: []string{"store-folder"}},
+		{method: "simulate", positionals: []string{"gc", "extra"}},
+		{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"unknown": {""}}},
+		{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"help": {""}}},
 		{method: "benchmark", positionals: []string{"run"}},
 		{method: "version"},
 		{method: "help"},
@@ -104,7 +110,9 @@ func TestRepositoryCoordinationPolicyBypassesNonRepositoryCommands(t *testing.T)
 	}
 
 	for _, parsed := range tests {
-		parsed.flags = map[string][]string{}
+		if parsed.flags == nil {
+			parsed.flags = map[string][]string{}
+		}
 		policy := repositoryCoordinationPolicyFor(parsed)
 		if policy.Required || policy.Operation != "" || policy.Mode != "" {
 			t.Fatalf("method=%q positionals=%v unexpectedly coordinated: %+v", parsed.method, parsed.positionals, policy)

@@ -21,6 +21,7 @@ func TestRunCLIRestoreVerifyAndGCRuntimeWithinLease(t *testing.T) {
 		{name: "verify", args: []string{"verify", "system"}, operation: coordination.OperationVerify, event: "verify runtime"},
 		{name: "gc dry run", args: []string{"gc", "--dry-run"}, operation: coordination.OperationGarbageCollect, event: "gc dry-run runtime"},
 		{name: "gc live", args: []string{"gc"}, operation: coordination.OperationGarbageCollect, event: "gc live runtime"},
+		{name: "simulate gc", args: []string{"simulate", "gc"}, operation: coordination.OperationSimulateGC, event: "simulate gc runtime"},
 	}
 
 	for _, test := range tests {
@@ -75,6 +76,7 @@ func TestRunCLIRestoreVerifyAndGCFailuresCleanUpBeforeLeaseRelease(t *testing.T)
 		{name: "verify", args: []string{"verify", "system"}, event: "verify runtime"},
 		{name: "gc dry run", args: []string{"gc", "--dry-run"}, event: "gc dry-run runtime"},
 		{name: "gc live", args: []string{"gc"}, event: "gc live runtime"},
+		{name: "simulate gc", args: []string{"simulate", "gc"}, event: "simulate gc runtime"},
 	}
 
 	for _, test := range tests {
