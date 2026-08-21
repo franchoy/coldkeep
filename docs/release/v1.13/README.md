@@ -161,8 +161,8 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phases 0–10 are Complete. Phase 11 is Next: Independent
-  Full Local Release Gate. Its authoritative mode is
+  `release/v1.13.13`. Phases 0–11 are Complete. Phase 12 is Next: Hosted
+  Exact-Head Security and Quality Gate. Its authoritative mode is
   `AUDIT_PLUS_REMEDIATION`. All six frozen blocker roots are `CLOSED` by Phase
   9 proof, and `P2-DOC-001` is closed by Phase 10 reconciliation. v1.x remains
   formally open pending later closure gates,
@@ -266,7 +266,13 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [Phase 10 reconciliation](v1.13.13-phase10-documentation-and-current-state-reconciliation.md),
   [current-state truth matrix](v1.13.13-current-state-truth-matrix.md), and
   [stale-claim disposition matrix](v1.13.13-stale-claim-disposition-matrix.md).
-  This does not declare final v1.x closure; Phase 11 is next.
+  Phase 11 then passed the complete frozen-candidate local gate with all 44
+  mandatory local rows executed, local PostgreSQL proof, both codecs, G1–G17,
+  remediation rechecks, cross-builds, smoke, long-run, and four-profile hard
+  benchmark integrity. Evidence is the
+  [independent full local release gate](v1.13.13-phase11-independent-full-local-release-gate.md)
+  and [local execution matrix](v1.13.13-phase11-local-gate-execution-matrix.md).
+  This does not declare final v1.x closure; Phase 12 is next.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.

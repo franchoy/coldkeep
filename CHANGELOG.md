@@ -143,6 +143,18 @@ project, do not start here; start with [README.md](README.md).
 - Advanced Phase 11 — Independent Full Local Release Gate — to Next without
   changing production code, tests, schemas, migrations, dependencies, CI,
   validator implementation, or version.
+- Completed Phase 11 on immutable starting candidate
+  `ab6aa49f54b34ed8a4610058a16b63ce4eab7d29`: all 44 mandatory local rows
+  passed with zero failures and zero unexpected skips, including full/race,
+  both codecs, local PostgreSQL, G1–G17, restore/verify/Catalog/coordination
+  rechecks, smoke, legacy/snapshot, long-run/refcount, cross-build, and all four
+  hard benchmark-integrity profiles.
+- Recorded the Phase 11 independent local-gate evidence and execution matrix,
+  removed all gate-generated repository artifacts, preserved all seven closed
+  findings and zero known open v1 blockers, and advanced Phase 12 — Hosted
+  Exact-Head Security and Quality Gate — to Next. Formal v1.x closure remains
+  pending a later phase; no production, test, schema, migration, dependency,
+  CI implementation, validator, or version change is included.
 
 ------------------------------------------------------------------------
 
