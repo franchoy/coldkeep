@@ -106,6 +106,17 @@ project, do not start here; start with [README.md](README.md).
 - Froze the seven-commit Phase 8 order, source/test allowlist, Build-mode stop
   conditions, and Phase 9 closure matrix. All six blocker roots remain
   `OPEN_FROZEN`; Phase 8 is next and no remediation has begun.
+- Implemented the seven frozen Phase 8 boundaries across Catalog typed errors,
+  backend-neutral snapshot-label matching, authoritative packed file-deep
+  verification, `simulate gc` repository coordination, and restore routing,
+  native atomic publication, and retained-object metadata.
+- Added fail-closed Linux/Darwin/Windows restore installation without a new
+  dependency, preserving exact destinations, atomic no-overwrite, intentional
+  overwrite, confined cleanup, and post-publication strict-metadata behavior.
+- Passed the complete local Phase 8 package, race, G5/G7 adversarial, vet,
+  lint, and cross-platform compile validation with zero allowlist violations.
+  All six blockers are `IMPLEMENTED_PENDING_PROOF`; none is `CLOSED`, and
+  Phase 9 remains responsible for complete platform/backend closure proof.
 
 ------------------------------------------------------------------------
 

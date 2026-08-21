@@ -161,11 +161,11 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 7 is Complete. Phase 8 is Next. Its authoritative
-  mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
-  entering the train. v1.x remains open, SQLite-default productization remains
-  v2.x scope, PostgreSQL compatibility remains required, and v2.x
-  implementation is not authorized.
+  `release/v1.13.13`. Phase 8 is Complete. Phase 9 is Next. Its authoritative
+  mode is `AUDIT_PLUS_REMEDIATION`. All six frozen blockers are now
+  `IMPLEMENTED_PENDING_PROOF`; none is `CLOSED`. v1.x remains open,
+  SQLite-default productization remains v2.x scope, PostgreSQL compatibility
+  remains required, and v2.x implementation is not authorized.
 - Its active trackers are [scope](v1.13.13-scope.md),
   [phase list](v1.13.13-phase-list.md), and
   [validation checklist](v1.13.13-validation-checklist.md).
@@ -247,7 +247,11 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [implementation design matrix](v1.13.13-remediation-implementation-design-matrix.md),
   [regression contract matrix](v1.13.13-remediation-regression-contract-matrix.md),
   and [Phase 8 source/test allowlist](v1.13.13-phase8-source-test-allowlist.md).
-  All six blockers remain `OPEN_FROZEN`; Phase 8 has not begun.
+  Phase 8 implemented all seven frozen boundaries with zero allowlist
+  violations. Evidence is the
+  [Phase 8 remediation report](v1.13.13-phase8-minimum-v1x-blocker-remediation.md)
+  and [blocker implementation status](v1.13.13-phase8-blocker-implementation-status.md).
+  All six roots are `IMPLEMENTED_PENDING_PROOF`; Phase 9 alone may close them.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
