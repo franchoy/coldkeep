@@ -147,8 +147,8 @@ Integrity checkpoints:
 - deterministic, byte-identical restore
 - no exposure of partially written or inconsistent data
 - GC is reference-safe: no reachable chunk is ever deleted
-- Exact, atomic restore publication (within same-host local-filesystem semantics)
-- Cooperative same-process and same-host repository coordination
+- Atomic restore replacement (within single-node local filesystem semantics)
+- Safe in-process concurrent storage operations
 
 ### Core invariants
 
