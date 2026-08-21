@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1688,8 +1689,15 @@ func TestRestoreSnapshotCompatibleWithVersionedLogicalMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat restored snapshot file: %v", err)
 	}
-	if restoredInfo.Mode().Perm() != wantMode || !restoredInfo.ModTime().UTC().Equal(wantMtime) {
-		t.Fatalf("restored metadata mode=%o mtime=%v, want mode=%o mtime=%v", restoredInfo.Mode().Perm(), restoredInfo.ModTime(), wantMode, wantMtime)
+	if !restoredInfo.ModTime().UTC().Equal(wantMtime) {
+		t.Fatalf("restored mtime=%v, want %v", restoredInfo.ModTime(), wantMtime)
+	}
+	if runtime.GOOS == "windows" {
+		if restoredInfo.Mode().Perm()&0o222 == 0 {
+			t.Fatalf("restored Windows mode=%o, want writable projection of %o", restoredInfo.Mode().Perm(), wantMode)
+		}
+	} else if restoredInfo.Mode().Perm() != wantMode {
+		t.Fatalf("restored mode=%o, want %o", restoredInfo.Mode().Perm(), wantMode)
 	}
 }
 
