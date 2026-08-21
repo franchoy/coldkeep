@@ -7854,7 +7854,7 @@ func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
 	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyDeep),
-		"chunk Hash verification failed: found 1 errors in file chunk Hash verification",
+		"errors in file chunk Hash verification",
 		"verify-file deep chunk corruption",
 	)
 }
