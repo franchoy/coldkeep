@@ -1473,6 +1473,10 @@ func TestRestoreFileByStoredPathWarnsOnIncompleteMetadata(t *testing.T) {
 	if string(restored) != string(payload) {
 		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
 	}
+	if result.MetadataWarnings == nil || len(result.MetadataWarnings.Items) != 1 ||
+		result.MetadataWarnings.Items[0].Operation != "incomplete_metadata" {
+		t.Fatalf("expected structured incomplete-metadata warning, got %+v", result.MetadataWarnings)
+	}
 
 	if !strings.Contains(logBuffer.String(), "event=restore_metadata_warning") || !strings.Contains(logBuffer.String(), "incomplete_metadata") {
 		t.Fatalf("expected metadata warning log, got: %q", logBuffer.String())
@@ -2273,8 +2277,8 @@ func TestRestoreFailsWhenOutputParentPathIsFile(t *testing.T) {
 
 	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	err = RestoreFileWithStorageContext(sgctx, fileID, outputTarget)
-	if err == nil || !strings.Contains(err.Error(), "create parent directories for") {
-		t.Fatalf("expected create-parent-directories error contract, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "secure install open parent component") {
+		t.Fatalf("expected retained-parent traversal error contract, got: %v", err)
 	}
 }
 
@@ -2352,8 +2356,8 @@ func TestRestoreFailsOnCreateTempFilePermissionDenied(t *testing.T) {
 		t.Fatalf("insert file_chunk: %v", err)
 	}
 
-	// Create the output parent directory, then revoke write permission so os.CreateTemp
-	// fails while os.MkdirAll (on a pre-existing dir) still succeeds.
+	// Create the output parent directory, then revoke access so retained-parent
+	// opening or handle-relative temporary creation fails closed.
 	outputBase := t.TempDir()
 	outputParentDir := filepath.Join(outputBase, "restricted")
 	if err := os.MkdirAll(outputParentDir, 0o755); err != nil {
@@ -2368,8 +2372,8 @@ func TestRestoreFailsOnCreateTempFilePermissionDenied(t *testing.T) {
 	outputTarget := filepath.Join(outputParentDir, "restored.bin")
 	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	err = RestoreFileWithStorageContext(sgctx, fileID, outputTarget)
-	if err == nil || !strings.Contains(err.Error(), "create temporary output file for") {
-		t.Fatalf("expected create-temp-file error contract, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "prepare secure restore destination") {
+		t.Fatalf("expected secure-installer access error contract, got: %v", err)
 	}
 }
 
@@ -2585,56 +2589,6 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 	// (Deliberately do not check destination file content here)
 }
 
-func TestShouldCleanupRestoreTempPath(t *testing.T) {
-	tests := []struct {
-		name           string
-		tempOutputPath string
-		outputPath     string
-		want           bool
-	}{
-		{
-			name:           "same directory with restore temp prefix",
-			tempOutputPath: filepath.Join("/tmp", "restore", ".coldkeep-restore-abc"),
-			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
-			want:           true,
-		},
-		{
-			name:           "different directory",
-			tempOutputPath: filepath.Join("/tmp", "other", ".coldkeep-restore-abc"),
-			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
-			want:           false,
-		},
-		{
-			name:           "wrong filename prefix",
-			tempOutputPath: filepath.Join("/tmp", "restore", "not-owned.tmp"),
-			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
-			want:           false,
-		},
-		{
-			name:           "empty temp path",
-			tempOutputPath: "",
-			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
-			want:           false,
-		},
-		{
-			name:           "empty output path",
-			tempOutputPath: filepath.Join("/tmp", "restore", ".coldkeep-restore-abc"),
-			outputPath:     "",
-			want:           false,
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			got := shouldCleanupRestoreTempPath(tc.tempOutputPath, tc.outputPath)
-			if got != tc.want {
-				t.Fatalf("shouldCleanupRestoreTempPath(%q, %q)=%t, want %t", tc.tempOutputPath, tc.outputPath, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
 	_, sgctx, fileID, _, _ := setupRestorePinningFixture(t, [][]byte{[]byte("phase6-restore-temp")})
 	fixture := setupPreRenameFailureFixture(t)
@@ -2654,8 +2608,7 @@ type preRenameFailureFixture struct {
 }
 
 type preRenameHookState struct {
-	hookCalled   bool
-	seenTempPath string
+	hookCalled bool
 }
 
 func setupPreRenameFailureFixture(t *testing.T) preRenameFailureFixture {
@@ -2690,12 +2643,8 @@ func installPreRenameFailureHook(t *testing.T, destPath string) *preRenameHookSt
 	state := &preRenameHookState{}
 	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
 		state.hookCalled = true
-		state.seenTempPath = tempOutputPath
-		if filepath.Dir(tempOutputPath) != filepath.Dir(destPath) {
-			t.Fatalf("temp output dir mismatch: got %q want %q", filepath.Dir(tempOutputPath), filepath.Dir(destPath))
-		}
-		if !strings.HasPrefix(filepath.Base(tempOutputPath), ".coldkeep-restore-") {
-			t.Fatalf("temp output file has unexpected prefix: %q", filepath.Base(tempOutputPath))
+		if tempOutputPath != "" {
+			t.Fatalf("secure installer must not expose temporary pathname, got %q", tempOutputPath)
 		}
 		if outputPath != destPath {
 			t.Fatalf("hook output path mismatch: got %q want %q", outputPath, destPath)
@@ -2729,9 +2678,6 @@ func assertPreRenameHookObserved(t *testing.T, hookState *preRenameHookState) {
 
 	if !hookState.hookCalled {
 		t.Fatalf("expected pre-rename hook to be called")
-	}
-	if hookState.seenTempPath == "" {
-		t.Fatalf("expected hook to observe restore temp path")
 	}
 }
 

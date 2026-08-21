@@ -16,11 +16,20 @@ import (
 var linuxOps = struct {
 	renameNoReplace func(int, string, int, string, uint) error
 	link            func(int, string, int, string, int) error
+	syncParent      func(int) error
+	chmod           func(int, uint32) error
+	times           func(int, []unix.Timeval) error
+	chown           func(int, int, int) error
 	beforeCreate    func() error
 	beforePublish   func() error
+	beforeMetadata  func() error
 }{
 	renameNoReplace: unix.Renameat2,
 	link:            unix.Linkat,
+	syncParent:      unix.Fsync,
+	chmod:           unix.Fchmod,
+	times:           unix.Futimes,
+	chown:           unix.Fchown,
 }
 
 type linuxPending struct {
@@ -135,8 +144,13 @@ func (p *linuxPending) publish(overwrite bool) error {
 			return fmt.Errorf("secure install no-replace publication: %w", err)
 		}
 	}
-	if err := unix.Fsync(p.parentFD); err != nil {
+	if err := linuxOps.syncParent(p.parentFD); err != nil {
 		return fmt.Errorf("secure install sync retained parent: %w", err)
+	}
+	if linuxOps.beforeMetadata != nil {
+		if err := linuxOps.beforeMetadata(); err != nil {
+			return fmt.Errorf("secure install before-metadata hook: %w", err)
+		}
 	}
 	return nil
 }
@@ -144,18 +158,18 @@ func (p *linuxPending) publish(overwrite bool) error {
 func (p *linuxPending) applyMetadata(metadata Metadata) []metadataFailure {
 	failures := make([]metadataFailure, 0, 3)
 	if metadata.Mode != nil {
-		if err := unix.Fchmod(p.objectFD, uint32(metadata.Mode.Perm())); err != nil {
+		if err := linuxOps.chmod(p.objectFD, uint32(metadata.Mode.Perm())); err != nil {
 			failures = append(failures, metadataFailure{"chmod", err})
 		}
 	}
 	if metadata.ModifiedAt != nil {
 		tv := unix.NsecToTimeval(metadata.ModifiedAt.UnixNano())
-		if err := unix.Futimes(p.objectFD, []unix.Timeval{tv, tv}); err != nil {
+		if err := linuxOps.times(p.objectFD, []unix.Timeval{tv, tv}); err != nil {
 			failures = append(failures, metadataFailure{"chtimes", err})
 		}
 	}
 	if metadata.UID != nil && metadata.GID != nil {
-		if err := unix.Fchown(p.objectFD, *metadata.UID, *metadata.GID); err != nil {
+		if err := linuxOps.chown(p.objectFD, *metadata.UID, *metadata.GID); err != nil {
 			failures = append(failures, metadataFailure{"chown", err})
 		}
 	}
@@ -193,18 +207,22 @@ func (p *linuxPending) abort() error {
 }
 
 func linuxOpenParent(request Request) (int, string, string, error) {
-	rel, err := filepath.Rel(request.TrustedRoot, request.Destination)
+	anchor, err := nearestExistingDirectory(request.TrustedRoot)
+	if err != nil {
+		return -1, "", "", err
+	}
+	rel, err := filepath.Rel(anchor, request.Destination)
 	if err != nil {
 		return -1, "", "", err
 	}
 	parts := strings.Split(rel, string(os.PathSeparator))
 	finalName := parts[len(parts)-1]
 	parentParts := parts[:len(parts)-1]
-	fd, err := unix.Open(request.TrustedRoot, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open(anchor, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return -1, "", "", fmt.Errorf("secure install open trusted root: %w", err)
 	}
-	parentPath := request.TrustedRoot
+	parentPath := anchor
 	for _, part := range parentParts {
 		next, openErr := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if errors.Is(openErr, unix.ENOENT) {

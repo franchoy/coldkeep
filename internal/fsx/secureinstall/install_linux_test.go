@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -97,12 +98,151 @@ func TestLinuxOverwriteIntentionallyReplacesDestination(t *testing.T) {
 	requireLinuxFileBytes(t, destination, []byte("new"))
 }
 
+func TestLinuxParentSyncFailureIsTruthfulAfterPublication(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "restored.bin")
+	syncErr := errors.New("parent sync failure")
+	original := linuxOps
+	linuxOps.syncParent = func(int) error { return syncErr }
+	t.Cleanup(func() { linuxOps = original })
+	_, err := installLinuxTestContent(destination, root, false, []byte("published"))
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("install error=%v, want parent sync failure", err)
+	}
+	requireLinuxFileBytes(t, destination, []byte("published"))
+}
+
+func TestLinuxStrictMetadataFailureLeavesPublishedBytesVisible(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "restored.bin")
+	metadataErr := errors.New("metadata failure")
+	original := linuxOps
+	linuxOps.chmod = func(int, uint32) error { return metadataErr }
+	t.Cleanup(func() { linuxOps = original })
+	mode := os.FileMode(0o600)
+	pending, err := Begin(Request{
+		Destination: destination,
+		TrustedRoot: root,
+		Metadata:    Metadata{Mode: &mode, Strict: true},
+	})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	defer pending.Abort()
+	if err := writeAll(pending, []byte("published")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.SyncAndCloseWriter(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = pending.Publish()
+	if !errors.Is(err, metadataErr) {
+		t.Fatalf("Publish error=%v, want metadata failure", err)
+	}
+	requireLinuxFileBytes(t, destination, []byte("published"))
+}
+
+func TestLinuxBestEffortMetadataFailureReturnsWarning(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "restored.bin")
+	metadataErr := errors.New("metadata failure")
+	original := linuxOps
+	linuxOps.chmod = func(int, uint32) error { return metadataErr }
+	t.Cleanup(func() { linuxOps = original })
+	mode := os.FileMode(0o600)
+	pending, err := Begin(Request{
+		Destination: destination,
+		TrustedRoot: root,
+		Metadata:    Metadata{Mode: &mode},
+	})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	defer pending.Abort()
+	if err := writeAll(pending, []byte("published")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.SyncAndCloseWriter(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := pending.Publish()
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Operation != "chmod" || result.Warnings[0].Detail != metadataErr.Error() {
+		t.Fatalf("metadata warnings=%+v", result.Warnings)
+	}
+}
+
+func TestLinuxMetadataTargetsRetainedPublishedObject(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "restored.bin")
+	moved := filepath.Join(root, "retained-object.bin")
+	original := linuxOps
+	linuxOps.beforeMetadata = func() error {
+		if err := os.Rename(destination, moved); err != nil {
+			return err
+		}
+		return os.WriteFile(destination, []byte("path replacement"), 0o666)
+	}
+	t.Cleanup(func() { linuxOps = original })
+	mode := os.FileMode(0o600)
+	mtime := time.Date(2020, 6, 15, 10, 30, 0, 0, time.UTC)
+	pending, err := Begin(Request{
+		Destination: destination,
+		TrustedRoot: root,
+		Metadata:    Metadata{Mode: &mode, ModifiedAt: &mtime, Strict: true},
+	})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	defer pending.Abort()
+	if err := writeAll(pending, []byte("retained")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.SyncAndCloseWriter(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pending.Publish(); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	movedInfo, err := os.Stat(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if movedInfo.Mode().Perm() != mode || !movedInfo.ModTime().UTC().Equal(mtime) {
+		t.Fatalf("retained object metadata mode=%o mtime=%v", movedInfo.Mode().Perm(), movedInfo.ModTime())
+	}
+	replacementInfo, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementInfo.Mode().Perm() == mode {
+		t.Fatalf("pathname replacement unexpectedly received retained-object mode %o", mode)
+	}
+}
+
 func TestLinuxParentReplacementBeforeCreateFailsClosed(t *testing.T) {
 	testLinuxParentReplacement(t, true)
 }
 
 func TestLinuxParentReplacementBeforePublishFailsClosed(t *testing.T) {
 	testLinuxParentReplacement(t, false)
+}
+
+func TestLinuxTrustedRootSymlinkFailsClosed(t *testing.T) {
+	realRoot := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "trusted-root-link")
+	if err := os.Symlink(realRoot, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	_, err := installLinuxTestContent(filepath.Join(alias, "restored.bin"), alias, false, []byte("must-not-write"))
+	if err == nil {
+		t.Fatal("secure installer unexpectedly accepted a symlink trusted root")
+	}
+	if _, statErr := os.Stat(filepath.Join(realRoot, "restored.bin")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("symlink target stat error=%v, want not exists", statErr)
+	}
 }
 
 func testLinuxParentReplacement(t *testing.T, beforeCreate bool) {
@@ -135,6 +275,7 @@ func testLinuxParentReplacement(t *testing.T, beforeCreate bool) {
 	if _, statErr := os.Stat(filepath.Join(relocated, "restored.bin")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("retained destination stat error=%v, want not exists", statErr)
 	}
+	requireNoLinuxTemporaryNames(t, relocated)
 }
 
 func installLinuxTestContent(destination, root string, overwrite bool, content []byte) (Result, error) {

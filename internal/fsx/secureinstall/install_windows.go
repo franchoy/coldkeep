@@ -210,16 +210,23 @@ func (p *windowsPending) abort() error {
 }
 
 func windowsOpenParent(request Request) (windows.Handle, string, string, error) {
-	rel, err := filepath.Rel(request.TrustedRoot, request.Destination)
+	anchor, err := nearestExistingDirectory(request.TrustedRoot)
+	if err != nil {
+		return 0, "", "", err
+	}
+	rel, err := filepath.Rel(anchor, request.Destination)
 	if err != nil {
 		return 0, "", "", err
 	}
 	parts := strings.Split(rel, string(os.PathSeparator))
-	rootName, err := windows.NewNTUnicodeString(windowsNTPath(request.TrustedRoot))
+	rootName, err := windows.NewNTUnicodeString(windowsNTPath(anchor))
 	if err != nil {
 		return 0, "", "", err
 	}
-	oa := &windows.OBJECT_ATTRIBUTES{ObjectName: rootName, Attributes: windows.OBJ_CASE_INSENSITIVE}
+	oa := &windows.OBJECT_ATTRIBUTES{
+		ObjectName: rootName,
+		Attributes: windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
+	}
 	oa.Length = uint32(unsafe.Sizeof(*oa))
 	var iosb windows.IO_STATUS_BLOCK
 	var allocation int64
@@ -233,13 +240,21 @@ func windowsOpenParent(request Request) (windows.Handle, string, string, error) 
 		0,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		windows.FILE_OPEN,
-		windows.FILE_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT,
+		windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
 		0,
 		0,
 	); err != nil {
 		return 0, "", "", fmt.Errorf("secure install open trusted root: %w", err)
 	}
-	parentPath := request.TrustedRoot
+	var rootInfo windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(parent, &rootInfo); err != nil || rootInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		_ = windows.CloseHandle(parent)
+		if err != nil {
+			return 0, "", "", fmt.Errorf("secure install inspect trusted root: %w", err)
+		}
+		return 0, "", "", fmt.Errorf("secure install trusted root is a reparse point")
+	}
+	parentPath := anchor
 	for _, part := range parts[:len(parts)-1] {
 		next, openErr := windowsCreateRelative(
 			parent,
@@ -249,7 +264,7 @@ func windowsOpenParent(request Request) (windows.Handle, string, string, error) 
 			windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
 			windows.FILE_ATTRIBUTE_DIRECTORY,
 		)
-		if openErr != nil {
+		if errors.Is(openErr, windows.STATUS_OBJECT_NAME_NOT_FOUND) || errors.Is(openErr, windows.STATUS_OBJECT_PATH_NOT_FOUND) {
 			next, openErr = windowsCreateRelative(
 				parent,
 				part,

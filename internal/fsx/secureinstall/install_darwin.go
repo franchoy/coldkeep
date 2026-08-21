@@ -174,16 +174,20 @@ func (p *darwinPending) abort() error {
 }
 
 func darwinOpenParent(request Request) (int, string, string, error) {
-	rel, err := filepath.Rel(request.TrustedRoot, request.Destination)
+	anchor, err := nearestExistingDirectory(request.TrustedRoot)
+	if err != nil {
+		return -1, "", "", err
+	}
+	rel, err := filepath.Rel(anchor, request.Destination)
 	if err != nil {
 		return -1, "", "", err
 	}
 	parts := strings.Split(rel, string(os.PathSeparator))
-	fd, err := unix.Open(request.TrustedRoot, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open(anchor, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return -1, "", "", err
 	}
-	parentPath := request.TrustedRoot
+	parentPath := anchor
 	for _, part := range parts[:len(parts)-1] {
 		next, openErr := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if errors.Is(openErr, unix.ENOENT) {

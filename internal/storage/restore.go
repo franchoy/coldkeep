@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -21,17 +22,44 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/fsx"
+	"github.com/franchoy/coldkeep/internal/fsx/secureinstall"
 	"github.com/franchoy/coldkeep/internal/pathsafe"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 // RestoreFileResult contains structured metadata about a restore operation.
 type RestoreFileResult struct {
-	FileID       int64  `json:"file_id"`
-	OriginalName string `json:"original_name"`
-	OutputPath   string `json:"output_path"`
-	RestoredHash string `json:"restored_hash"`
+	FileID           int64                    `json:"file_id"`
+	OriginalName     string                   `json:"original_name"`
+	OutputPath       string                   `json:"output_path"`
+	RestoredHash     string                   `json:"restored_hash"`
+	MetadataWarnings *RestoreMetadataWarnings `json:"-"`
 }
+
+type RestoreMetadataWarnings struct {
+	Items []RestoreMetadataWarning
+}
+
+type RestoreMetadataWarning struct {
+	Operation string
+	Detail    string
+}
+
+type RestoreMetadata struct {
+	Mode  sql.NullInt64
+	MTime sql.NullTime
+	UID   sql.NullInt64
+	GID   sql.NullInt64
+}
+
+type restoreInstallation interface {
+	Writer() io.Writer
+	SyncAndCloseWriter() error
+	Publish() (secureinstall.Result, error)
+	Abort() error
+}
+
+type restoreInstallFactory func(secureinstall.Request) (restoreInstallation, error)
 
 // RestoreOptions controls restore-file behavior.
 type RestoreOptions struct {
@@ -41,7 +69,9 @@ type RestoreOptions struct {
 	TrustedRoot     string
 	StrictMetadata  bool
 	NoMetadata      bool
+	Metadata        *RestoreMetadata
 	fs              fsx.FS
+	installFactory  restoreInstallFactory
 }
 
 type RestoreDestinationMode string
@@ -977,19 +1007,29 @@ func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, 
 	}
 
 	opts.TrustedRoot = resolvedTrustedRoot
+	opts.Metadata = &RestoreMetadata{
+		Mode: descriptor.Mode, MTime: descriptor.MTime, UID: descriptor.UID, GID: descriptor.GID,
+	}
 	result, err := restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
-
-	// ================================================================
-	// STAGE 8: Apply physical metadata (optional)
-	// ================================================================
-	// - Set file mode, mtime, uid, gid if present and not skipped
-	// - May fail but does not invalidate restored content
-	//
-	if err := applyPhysicalMetadata(result.OutputPath, descriptor, opts); err != nil {
-		return RestoreFileResult{}, err
+	if !opts.NoMetadata && !descriptor.IsMetadataComplete {
+		msg := fmt.Sprintf("restore metadata incomplete for %q (mode=%t mtime=%t uid=%t gid=%t)",
+			descriptor.Path,
+			descriptor.Mode.Valid,
+			descriptor.MTime.Valid,
+			descriptor.UID.Valid,
+			descriptor.GID.Valid,
+		)
+		if result.MetadataWarnings == nil {
+			result.MetadataWarnings = &RestoreMetadataWarnings{}
+		}
+		result.MetadataWarnings.Items = append(result.MetadataWarnings.Items, RestoreMetadataWarning{
+			Operation: "incomplete_metadata",
+			Detail:    msg,
+		})
+		log.Printf("event=restore_metadata_warning path=%q reason=incomplete_metadata details=%q", result.OutputPath, msg)
 	}
 
 	return result, nil
@@ -1026,24 +1066,6 @@ func validateRestoreWritePath(path string, trustedRoot string) error {
 		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
 	}
 	return nil
-}
-
-// syncRestoredFileDir fsyncs the output directory to make the preceding rename
-// durable on filesystems that require it. On Windows, directory sync is not
-// supported and the call is skipped without error.
-func syncRestoredFileDir(fsys fsx.FS, outputPath string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	dir, err := fsys.Open(filepath.Dir(outputPath))
-	if err != nil {
-		return fmt.Errorf("open output directory for fsync: %w", err)
-	}
-	if err := dir.Sync(); err != nil {
-		_ = dir.Close()
-		return fmt.Errorf("fsync output directory: %w", err)
-	}
-	return dir.Close()
 }
 
 func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, string, error) {
@@ -1179,6 +1201,12 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	if err := validateRestoreWritePath(outputPath, opts.TrustedRoot); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("validate output path %s: %w", outputPath, err)
 	}
+	if strings.TrimSpace(opts.TrustedRoot) == "" {
+		opts.TrustedRoot, err = pathsafe.NearestExistingAncestorDir(outputPath)
+		if err != nil {
+			return RestoreFileResult{}, fmt.Errorf("derive secure restore trusted root: %w", err)
+		}
+	}
 	result.OutputPath = outputPath
 	if !opts.Overwrite {
 		if _, statErr := fsys.Stat(outputPath); statErr == nil {
@@ -1188,34 +1216,37 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 	}
 
-	// Create parent directories if they don't exist
-	if err := fsys.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
-		return RestoreFileResult{}, fmt.Errorf("create parent directories for %s: %w", outputPath, err)
-	}
-
-	outFile, err := os.CreateTemp(filepath.Dir(outputPath), ".coldkeep-restore-*")
-	if err != nil {
-		return RestoreFileResult{}, fmt.Errorf("create temporary output file for %s: %w", outputPath, err)
-	}
-	tempOutputPath := outFile.Name()
-	cleanupTemp := true
-	defer func() {
-		if outFile != nil {
-			_ = outFile.Close()
+	installFactory := opts.installFactory
+	if installFactory == nil {
+		installFactory = func(request secureinstall.Request) (restoreInstallation, error) {
+			return secureinstall.Begin(request)
 		}
-		if cleanupTemp {
-			if shouldCleanupRestoreTempPath(tempOutputPath, outputPath) {
-				_ = fsys.Remove(tempOutputPath)
-			} else {
-				log.Printf("event=restore_temp_cleanup_skip action=path_not_owned file_id=%d temp_path=%q output_path=%q", fileID, tempOutputPath, outputPath)
-			}
+	}
+	installation, err := installFactory(secureinstall.Request{
+		Destination: outputPath,
+		TrustedRoot: opts.TrustedRoot,
+		Overwrite:   opts.Overwrite,
+		Metadata:    secureRestoreMetadata(opts),
+	})
+	if err != nil {
+		return RestoreFileResult{}, fmt.Errorf("prepare secure restore destination %s: %w", outputPath, err)
+	}
+	defer func() {
+		if abortErr := installation.Abort(); abortErr != nil {
+			log.Printf("event=restore_temp_cleanup action=abort_failed file_id=%d output_path=%q error=%v", fileID, outputPath, abortErr)
+			err = errors.Join(err, abortErr)
+			result = RestoreFileResult{}
 		}
 	}()
 
 	// Phase 6 Step 7: Buffered output writer (1MB buffer)
 	// Reduces syscall overhead for small chunk writes
 	// Flush() is called before Sync() to preserve durability
-	bufw := bufio.NewWriterSize(outFile, 1<<20)
+	writer := installation.Writer()
+	if writer == nil {
+		return RestoreFileResult{}, fmt.Errorf("prepare secure restore destination %s: installer returned nil writer", outputPath)
+	}
+	bufw := bufio.NewWriterSize(writer, 1<<20)
 	defer func() {
 		if bufw != nil {
 			if flushErr := bufw.Flush(); flushErr != nil {
@@ -1546,44 +1577,56 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 	bufw = nil // prevent deferred flush from writing to already-closed outFile
 
-	// Fsync ensures data is written to disk before returning
-	if err := outFile.Sync(); err != nil {
-		return RestoreFileResult{}, fmt.Errorf("fsync output file: %w", err)
+	if err := installation.SyncAndCloseWriter(); err != nil {
+		return RestoreFileResult{}, err
 	}
-
-	// Close temp file before rename
-	if err := outFile.Close(); err != nil {
-		return RestoreFileResult{}, fmt.Errorf("close temporary output file: %w", err)
-	}
-	outFile = nil
 
 	// TEST HOOK: simulate failure after temp file is written but before rename
 	if TestRestoreFailBeforeRenameHook != nil {
-		if hookErr := TestRestoreFailBeforeRenameHook(tempOutputPath, outputPath); hookErr != nil {
+		if hookErr := TestRestoreFailBeforeRenameHook("", outputPath); hookErr != nil {
 			return RestoreFileResult{}, fmt.Errorf("test hook restore failure: %w", hookErr)
 		}
 	}
-	if !opts.Overwrite {
-		if _, statErr := fsys.Stat(outputPath); statErr == nil {
-			return RestoreFileResult{}, fmt.Errorf("output file already exists: %s (use --overwrite)", outputPath)
-		} else if !os.IsNotExist(statErr) {
-			return RestoreFileResult{}, fmt.Errorf("check output path %s before rename: %w", outputPath, statErr)
+	installResult, err := installation.Publish()
+	if err != nil {
+		return RestoreFileResult{}, fmt.Errorf("publish secure restore destination %s: %w", outputPath, err)
+	}
+	for _, warning := range installResult.Warnings {
+		if result.MetadataWarnings == nil {
+			result.MetadataWarnings = &RestoreMetadataWarnings{}
 		}
+		result.MetadataWarnings.Items = append(result.MetadataWarnings.Items, RestoreMetadataWarning{
+			Operation: warning.Operation,
+			Detail:    warning.Detail,
+		})
+		log.Printf("event=restore_metadata_warning path=%q operation=%q error=%q", outputPath, warning.Operation, warning.Detail)
 	}
-
-	if err := fsys.Rename(tempOutputPath, outputPath); err != nil {
-		return RestoreFileResult{}, fmt.Errorf("atomically replace output file %s: %w", outputPath, err)
-	}
-	// Flush directory metadata so the rename is durable across crashes on stricter filesystems.
-	// Skipped on Windows where directory sync is not supported.
-	if err := syncRestoredFileDir(fsys, outputPath); err != nil {
-		return RestoreFileResult{}, err
-	}
-	cleanupTemp = false
 
 	// Set result hash
 	result.RestoredHash = restoredHash
 	return result, nil
+}
+
+func secureRestoreMetadata(opts RestoreOptions) secureinstall.Metadata {
+	metadata := secureinstall.Metadata{Strict: opts.StrictMetadata}
+	if opts.NoMetadata || opts.Metadata == nil {
+		return metadata
+	}
+	if opts.Metadata.Mode.Valid {
+		mode := os.FileMode(opts.Metadata.Mode.Int64)
+		metadata.Mode = &mode
+	}
+	if opts.Metadata.MTime.Valid {
+		mtime := opts.Metadata.MTime.Time
+		metadata.ModifiedAt = &mtime
+	}
+	if opts.Metadata.UID.Valid && opts.Metadata.GID.Valid {
+		uid := int(opts.Metadata.UID.Int64)
+		gid := int(opts.Metadata.GID.Int64)
+		metadata.UID = &uid
+		metadata.GID = &gid
+	}
+	return metadata
 }
 
 func validateExactRestoreDestination(fsys fsx.FS, outputPath string) error {
@@ -1604,70 +1647,6 @@ func validateExactRestoreDestination(fsys fsx.FS, outputPath string) error {
 		// directory is rejected here as an inexact target.
 		return nil
 	}
-}
-
-func shouldCleanupRestoreTempPath(tempOutputPath, outputPath string) bool {
-	if tempOutputPath == "" || outputPath == "" {
-		return false
-	}
-	tempDir := filepath.Clean(filepath.Dir(tempOutputPath))
-	outputDir := filepath.Clean(filepath.Dir(outputPath))
-	if tempDir != outputDir {
-		return false
-	}
-	return strings.HasPrefix(filepath.Base(tempOutputPath), ".coldkeep-restore-")
-}
-
-func applyPhysicalMetadata(outputPath string, descriptor RestoreDescriptor, opts RestoreOptions) error {
-	if opts.NoMetadata {
-		return nil
-	}
-
-	metadataErrs := make([]string, 0)
-
-	if !descriptor.IsMetadataComplete {
-		msg := fmt.Sprintf("restore metadata incomplete for %q (mode=%t mtime=%t uid=%t gid=%t)",
-			descriptor.Path,
-			descriptor.Mode.Valid,
-			descriptor.MTime.Valid,
-			descriptor.UID.Valid,
-			descriptor.GID.Valid,
-		)
-		if opts.StrictMetadata {
-			return errors.New(msg)
-		}
-		log.Printf("event=restore_metadata_warning path=%q reason=incomplete_metadata details=%q", outputPath, msg)
-	}
-
-	if descriptor.Mode.Valid {
-		if err := os.Chmod(outputPath, os.FileMode(descriptor.Mode.Int64)); err != nil {
-			metadataErrs = append(metadataErrs, fmt.Sprintf("chmod: %v", err))
-		}
-	}
-
-	if descriptor.MTime.Valid {
-		mtime := descriptor.MTime.Time
-		if err := os.Chtimes(outputPath, mtime, mtime); err != nil {
-			metadataErrs = append(metadataErrs, fmt.Sprintf("chtimes: %v", err))
-		}
-	}
-
-	if descriptor.UID.Valid && descriptor.GID.Valid {
-		if err := os.Chown(outputPath, int(descriptor.UID.Int64), int(descriptor.GID.Int64)); err != nil {
-			metadataErrs = append(metadataErrs, fmt.Sprintf("chown: %v", err))
-		}
-	}
-
-	if len(metadataErrs) == 0 {
-		return nil
-	}
-
-	metadataErr := fmt.Errorf("apply restored metadata for %q: %s", outputPath, strings.Join(metadataErrs, "; "))
-	if opts.StrictMetadata {
-		return metadataErr
-	}
-	log.Printf("event=restore_metadata_warning path=%q reason=apply_failed error=%q", outputPath, metadataErr.Error())
-	return nil
 }
 
 // testRestoreFailBeforeRenameHook is a test-only hook for simulating restore failures after temp file is written but before rename.

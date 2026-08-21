@@ -174,10 +174,31 @@ func temporaryName() (string, error) {
 	return ".coldkeep-restore-" + hex.EncodeToString(entropy[:]), nil
 }
 
-func metadataFailuresError(destination string, failures []metadataFailure) error {
-	parts := make([]string, 0, len(failures))
-	for _, failure := range failures {
-		parts = append(parts, fmt.Sprintf("%s: %v", failure.operation, failure.err))
+func nearestExistingDirectory(path string) (string, error) {
+	candidate := filepath.Clean(path)
+	for {
+		info, err := os.Stat(candidate)
+		if err == nil {
+			if !info.IsDir() {
+				return "", fmt.Errorf("secure install retained root ancestor is not a directory: %s", candidate)
+			}
+			return candidate, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("secure install inspect retained root ancestor %s: %w", candidate, err)
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return "", fmt.Errorf("secure install found no existing directory ancestor for %s", path)
+		}
+		candidate = parent
 	}
-	return fmt.Errorf("secure install metadata for %q: %s", destination, strings.Join(parts, "; "))
+}
+
+func metadataFailuresError(destination string, failures []metadataFailure) error {
+	errs := make([]error, 0, len(failures))
+	for _, failure := range failures {
+		errs = append(errs, fmt.Errorf("%s: %w", failure.operation, failure.err))
+	}
+	return fmt.Errorf("secure install metadata for %q: %w", destination, errors.Join(errs...))
 }

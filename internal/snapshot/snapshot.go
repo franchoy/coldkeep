@@ -1528,47 +1528,12 @@ func resolveSnapshotRestoreOverrideOutput(destination string) (string, string, e
 	return outputPath, trustedRoot, nil
 }
 
-func applySnapshotMetadata(outputPath string, mode sql.NullInt64, mtime sql.NullTime, opts RestoreSnapshotOptions) ([]RestoreSnapshotWarning, error) {
-	if opts.NoMetadata {
-		return nil, nil
-	}
-
-	warnings := make([]RestoreSnapshotWarning, 0, 2)
-	metadataErrs := make([]string, 0)
-
-	if mode.Valid {
-		if err := os.Chmod(outputPath, os.FileMode(mode.Int64)); err != nil {
-			metadataErrs = append(metadataErrs, fmt.Sprintf("chmod: %v", err))
-			warnings = append(warnings, restoreSnapshotMetadataWarning(outputPath, "chmod", err))
-		}
-	}
-
-	if mtime.Valid {
-		mt := mtime.Time
-		if err := os.Chtimes(outputPath, mt, mt); err != nil {
-			metadataErrs = append(metadataErrs, fmt.Sprintf("chtimes: %v", err))
-			warnings = append(warnings, restoreSnapshotMetadataWarning(outputPath, "chtimes", err))
-		}
-	}
-
-	if len(metadataErrs) == 0 {
-		return nil, nil
-	}
-
-	metadataErr := fmt.Errorf("apply snapshot metadata for %q: %s", outputPath, strings.Join(metadataErrs, "; "))
-	if opts.StrictMetadata {
-		return nil, metadataErr
-	}
-	log.Printf("snapshot: restore metadata warning path=%q error=%q", outputPath, metadataErr.Error())
-	return warnings, nil
-}
-
-func restoreSnapshotMetadataWarning(outputPath, operation string, err error) RestoreSnapshotWarning {
+func restoreSnapshotMetadataWarning(outputPath string, warning storage.RestoreMetadataWarning) RestoreSnapshotWarning {
 	return RestoreSnapshotWarning{
 		Code:      RestoreSnapshotWarningMetadata,
 		Path:      outputPath,
-		Operation: operation,
-		Detail:    err.Error(),
+		Operation: warning.Operation,
+		Detail:    warning.Detail,
 	}
 }
 
@@ -1583,19 +1548,6 @@ func executeSnapshotRestorePlan(ctx context.Context, plans []snapshotRestorePlan
 		Warnings:      make([]RestoreSnapshotWarning, 0),
 	}
 
-	validatedDirs := make(map[string]struct{})
-	for _, plan := range plans {
-		dir := filepath.Dir(plan.OutputPath)
-		if _, seen := validatedDirs[dir]; seen {
-			continue
-		}
-		validatedDirs[dir] = struct{}{}
-
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("create destination directory %s: %w", dir, err)
-		}
-	}
-
 	for _, plan := range plans {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1606,23 +1558,27 @@ func executeSnapshotRestorePlan(ctx context.Context, plans []snapshotRestorePlan
 			plan.LogicalFileID,
 			plan.OutputPath,
 			storage.RestoreOptions{
-				Overwrite:   opts.Overwrite,
-				TrustedRoot: plan.TrustedRoot,
-				NoMetadata:  true,
+				Overwrite:      opts.Overwrite,
+				TrustedRoot:    plan.TrustedRoot,
+				StrictMetadata: opts.StrictMetadata,
+				NoMetadata:     opts.NoMetadata,
+				Metadata: &storage.RestoreMetadata{
+					Mode: plan.Mode, MTime: plan.MTime,
+				},
 			},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("restore snapshot path %q logical_file_id=%d: %w", plan.Path, plan.LogicalFileID, err)
 		}
 
-		warnings, err := applySnapshotMetadata(restoreResult.OutputPath, plan.Mode, plan.MTime, opts)
-		if err != nil {
-			return nil, err
+		if restoreResult.MetadataWarnings != nil {
+			for _, warning := range restoreResult.MetadataWarnings.Items {
+				result.Warnings = append(result.Warnings, restoreSnapshotMetadataWarning(restoreResult.OutputPath, warning))
+			}
 		}
 
 		result.RestoredFiles++
 		result.OutputPaths = append(result.OutputPaths, restoreResult.OutputPath)
-		result.Warnings = append(result.Warnings, warnings...)
 	}
 
 	return result, nil
