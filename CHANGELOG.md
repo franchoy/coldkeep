@@ -59,6 +59,16 @@ project, do not start here; start with [README.md](README.md).
   fidelity, SQL mutation cardinality, and scoped concurrent GC planning as
   proven within explicit backend/platform/coordination bounds. Backend
   equivalence remains Phase 4 and coordination ownership remains Phase 5.
+- Completed the source-first Phase 4 SQLite/PostgreSQL audit and mechanically
+  derived current schema version 16 from migration and fresh-schema sources.
+- Preserved SQLite and PostgreSQL as supported v1 backends within explicit
+  bounds, kept SQLite-default productization in v2 and centralized PostgreSQL
+  product mode in v3, and classified SQLite live GC as an authority-backed
+  explicit v2 productization bound rather than inferring it from daemon scope.
+- Recorded `DUAL_BACKEND_CONTRACT: BLOCKED` under one new root,
+  `P4-BE-001`: production snapshot-label filtering uses backend-native `LIKE`,
+  producing different case matching on SQLite and PostgreSQL. No finding was
+  remediated, and all inherited Phase 2/3 findings remain unchanged.
 
 ------------------------------------------------------------------------
 

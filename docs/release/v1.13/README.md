@@ -161,7 +161,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 3 is Complete. Phase 4 is Next. Its authoritative
+  `release/v1.13.13`. Phase 4 is Complete. Phase 5 is Next. Its authoritative
   mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
   entering the train. v1.x remains open, SQLite-default productization remains
   v2.x scope, PostgreSQL compatibility remains required, and v2.x
@@ -194,6 +194,19 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [safety subsystem matrix](v1.13.13-safety-subsystem-audit-matrix.md).
   Phase 3 makes no remediation, backend-equivalence, coordination, or v1
   closure claim.
+- Phase 4 independently records SQLite and PostgreSQL support within explicit
+  bounds, derives current schema version 16, keeps SQLite-default
+  productization in v2 and centralized PostgreSQL product mode in v3, and
+  classifies SQLite live GC as `EXPLICIT_V2_PRODUCTIZATION_BOUND`. Its result
+  is `DUAL_BACKEND_CONTRACT: BLOCKED` under one new root, `P4-BE-001`, because
+  production snapshot-label filtering has backend-dependent case semantics.
+  Its exhaustive evidence is the
+  [SQLite/PostgreSQL backend audit](v1.13.13-phase4-sqlite-postgresql-backend-audit.md),
+  [backend capability matrix](v1.13.13-backend-capability-matrix.md),
+  [backend contract evidence matrix](v1.13.13-backend-contract-evidence-matrix.md),
+  and [schema/migration parity matrix](v1.13.13-schema-migration-parity-matrix.md).
+  All Phase 2/3 findings remain unchanged; Phase 4 makes no coordination,
+  remediation, correctness-closure, or v1 closure claim.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
