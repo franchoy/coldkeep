@@ -94,6 +94,18 @@ project, do not start here; start with [README.md](README.md).
 - Generalized Phases 7–9 to remediation design/test-contract freeze, minimum
   v1.x blocker remediation, and complete cross-platform/backend regression
   proof. v1.x remains blocked pending closure of all six roots.
+- Completed the documentation-only Phase 7 design freeze for all five
+  remediation workstreams and all six independent blocker proof contracts.
+- Froze Catalog error translation at the five Service boundaries, one shared
+  SQLite/PostgreSQL snapshot-label predicate, Catalog-authoritative packed
+  file-deep verification, and outer-lease ownership for valid `simulate gc`.
+- Froze exact-only restore routing and retained parent/object installation,
+  including atomic fail-closed Linux/Darwin/Windows publication and preserved
+  post-publication strict-metadata behavior. Verified the required native
+  bindings in pinned `golang.org/x/sys v0.38.0`; no dependency was added.
+- Froze the seven-commit Phase 8 order, source/test allowlist, Build-mode stop
+  conditions, and Phase 9 closure matrix. All six blocker roots remain
+  `OPEN_FROZEN`; Phase 8 is next and no remediation has begun.
 
 ------------------------------------------------------------------------
 

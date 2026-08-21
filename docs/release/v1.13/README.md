@@ -161,7 +161,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 6 is Complete. Phase 7 is Next. Its authoritative
+  `release/v1.13.13`. Phase 7 is Complete. Phase 8 is Next. Its authoritative
   mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
   entering the train. v1.x remains open, SQLite-default productization remains
   v2.x scope, PostgreSQL compatibility remains required, and v2.x
@@ -233,6 +233,21 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   and [deferred-item matrix](v1.13.13-deferred-item-classification-matrix.md).
   Phases 7–9 are generalized for design, minimum remediation, and complete
   cross-platform/backend proof; v1.x remains blocked.
+- Phase 7 freezes one implementation-ready design for every workstream, one
+  deterministic proof contract for every blocker, a seven-commit Phase 8
+  order, and an exact source/test allowlist. Catalog errors translate once at
+  five Service boundaries; label matching uses one backend-neutral predicate;
+  file-deep verify consumes authoritative Catalog placements; and valid
+  `simulate gc` joins the existing outer lease lifecycle. Restore becomes
+  exact-only at the storage boundary and uses retained parent/object identity
+  plus fail-closed native atomic publication while preserving post-publication
+  metadata semantics. Pinned `x/sys v0.38.0` supplies the required Linux,
+  Darwin, and Windows surfaces without a new dependency. Evidence is the
+  [Phase 7 design freeze](v1.13.13-phase7-remediation-design-and-test-contract-freeze.md),
+  [implementation design matrix](v1.13.13-remediation-implementation-design-matrix.md),
+  [regression contract matrix](v1.13.13-remediation-regression-contract-matrix.md),
+  and [Phase 8 source/test allowlist](v1.13.13-phase8-source-test-allowlist.md).
+  All six blockers remain `OPEN_FROZEN`; Phase 8 has not begun.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
