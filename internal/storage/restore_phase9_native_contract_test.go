@@ -60,7 +60,24 @@ func TestRestoreWithTrustedRootAllowsOuterAliasForExactOutputPathPhase9NativePro
 		destination := filepath.Join(root, "restored.bin")
 		pending := beginPhase9NativeInstall(t, destination, root, false, []byte("confined"), secureinstall.Metadata{})
 		if err := os.Rename(root, relocated); err != nil {
-			t.Fatalf("relocate retained parent: %v", err)
+			if runtime.GOOS != "windows" || !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("relocate retained parent: %v", err)
+			}
+			// Windows may deny directory relocation while the production
+			// installer retains its parent handle. That is a fail-closed native
+			// outcome for the same frozen replacement threat, not a reason to
+			// weaken the proof or require a pathname reopen.
+			if _, publishErr := pending.Publish(); publishErr != nil {
+				t.Fatalf("publish after denied parent relocation: %v", publishErr)
+			}
+			if got, readErr := os.ReadFile(destination); readErr != nil || string(got) != "confined" {
+				t.Fatalf("retained destination bytes=%q err=%v", got, readErr)
+			}
+			if _, statErr := os.Stat(filepath.Join(outside, "restored.bin")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("outside destination stat=%v, want not exists", statErr)
+			}
+			requirePhase9NoRestoreTemps(t, root)
+			return
 		}
 		if err := os.Symlink(outside, root); err != nil {
 			t.Fatalf("install replacement symlink/reparse point: %v", err)

@@ -186,5 +186,25 @@ func TestPhase9SimulateGCPostgresCoordinationIntegration(t *testing.T) {
 	}
 	released = true
 	uncontended := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "simulate", "gc", "--output", "json")
-	testutils.AssertCLIJSONOK(t, uncontended, "uncontended simulate gc")
+	if uncontended.ExitCode != 0 {
+		t.Fatalf("uncontended simulate gc exit=%d stdout=%q stderr=%q", uncontended.ExitCode, uncontended.Stdout, uncontended.Stderr)
+	}
+	payload, ok := testutils.TryParseLastJSONLine(uncontended.Stdout)
+	if !ok {
+		t.Fatalf("uncontended simulate gc produced no JSON result: stdout=%q stderr=%q", uncontended.Stdout, uncontended.Stderr)
+	}
+	if got, _ := payload["type"].(string); got != "simulation" {
+		t.Fatalf("uncontended simulate gc type=%q, want simulation: payload=%v", got, payload)
+	}
+	data := testutils.JSONMap(t, payload, "data")
+	gcNode := testutils.JSONMap(t, data, "gc")
+	if got, _ := gcNode["kind"].(string); got != "gc" {
+		t.Fatalf("uncontended simulate gc kind=%q, want gc: payload=%v", got, payload)
+	}
+	if exact, _ := gcNode["exact"].(bool); !exact {
+		t.Fatalf("uncontended simulate gc exact=%v, want true: payload=%v", gcNode["exact"], payload)
+	}
+	if mutated, _ := gcNode["mutated"].(bool); mutated {
+		t.Fatalf("uncontended simulate gc mutated=%v, want false: payload=%v", gcNode["mutated"], payload)
+	}
 }
