@@ -117,6 +117,18 @@ project, do not start here; start with [README.md](README.md).
   lint, and cross-platform compile validation with zero allowlist violations.
   All six blockers are `IMPLEMENTED_PENDING_PROOF`; none is `CLOSED`, and
   Phase 9 remains responsible for complete platform/backend closure proof.
+- Completed Phase 9 by reconciling all 34 frozen regression IDs and closing
+  all six blocker roots independently through source, negative, local,
+  SQLite/PostgreSQL, Linux/macOS/Windows, race, fault, adversarial, and
+  exact-head hosted evidence.
+- Added test-only proof for complete Catalog cancellation/deadline identity,
+  exhaustive dual-backend packed placement failure, independent-process
+  `simulate gc` ownership, native retained-parent/publication behavior, and
+  PostgreSQL integration routes; production Go behavior is unchanged.
+- Recorded the Phase 9 evidence, blocker-closure matrix, and proof-execution
+  matrix. Phase 10 documentation/current-state reconciliation is next; final
+  v1.x closure, merge, tag, publication, and v2 implementation remain
+  unauthorized.
 
 ------------------------------------------------------------------------
 

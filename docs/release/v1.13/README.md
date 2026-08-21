@@ -161,9 +161,9 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 8 is Complete. Phase 9 is Next. Its authoritative
-  mode is `AUDIT_PLUS_REMEDIATION`. All six frozen blockers are now
-  `IMPLEMENTED_PENDING_PROOF`; none is `CLOSED`. v1.x remains open,
+  `release/v1.13.13`. Phase 9 is Complete. Phase 10 is Next. Its authoritative
+  mode is `AUDIT_PLUS_REMEDIATION`. All six frozen blocker roots are `CLOSED`
+  by Phase 9 proof. v1.x remains open pending later closure gates,
   SQLite-default productization remains v2.x scope, PostgreSQL compatibility
   remains required, and v2.x implementation is not authorized.
 - Its active trackers are [scope](v1.13.13-scope.md),
@@ -251,7 +251,14 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   violations. Evidence is the
   [Phase 8 remediation report](v1.13.13-phase8-minimum-v1x-blocker-remediation.md)
   and [blocker implementation status](v1.13.13-phase8-blocker-implementation-status.md).
-  All six roots are `IMPLEMENTED_PENDING_PROOF`; Phase 9 alone may close them.
+  Phase 9 independently closes all six roots after complete source, negative,
+  SQLite/PostgreSQL, Linux/macOS/Windows, race, fault, adversarial, and
+  exact-head hosted proof. Evidence is the
+  [Phase 9 remediation proof](v1.13.13-phase9-remediation-regression-and-cross-platform-backend-proof.md),
+  [blocker closure matrix](v1.13.13-phase9-blocker-closure-matrix.md), and
+  [proof execution matrix](v1.13.13-phase9-proof-execution-matrix.md).
+  This does not declare final v1.x closure; Phase 10 documentation and
+  current-state reconciliation is next.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
