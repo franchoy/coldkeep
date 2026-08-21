@@ -155,6 +155,18 @@ project, do not start here; start with [README.md](README.md).
   Exact-Head Security and Quality Gate — to Next. Formal v1.x closure remains
   pending a later phase; no production, test, schema, migration, dependency,
   CI implementation, validator, or version change is included.
+- Completed Phase 12 on exact candidate
+  `123976440053264362c2b93041ade43aed3788cf`: all 29 GitHub checks, CI Required
+  Gate, PostgreSQL/backend proof, both codecs, native Linux/macOS/Windows,
+  stress, long-run, adversarial, hard benchmark integrity, smoke, legacy,
+  coverage reporting, all CodeQL analyses, and CodeQL Aggregate passed.
+- Reconciled Codacy exact-head quality with `analyzed=true`, up-to-standards,
+  and zero added regular or potential issues; verified zero open release-branch
+  CodeQL alerts and effective required-check/branch rules with no bypass.
+- Added the hosted gate report, complete check inventory, and security-quality
+  matrix, and advanced Phase 13 — Formal v1.x Closure Decision — to Next in
+  `PLAN` mode. Formal closure, merge, tag, publication, and v2 implementation
+  remain unauthorized.
 
 ------------------------------------------------------------------------
 
