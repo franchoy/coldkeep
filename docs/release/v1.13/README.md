@@ -161,7 +161,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 4 is Complete. Phase 5 is Next. Its authoritative
+  `release/v1.13.13`. Phase 5 is Complete. Phase 6 is Next. Its authoritative
   mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
   entering the train. v1.x remains open, SQLite-default productization remains
   v2.x scope, PostgreSQL compatibility remains required, and v2.x
@@ -207,6 +207,19 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   and [schema/migration parity matrix](v1.13.13-schema-migration-parity-matrix.md).
   All Phase 2/3 findings remain unchanged; Phase 4 makes no coordination,
   remediation, correctness-closure, or v1 closure claim.
+- Phase 5 independently records `REPOSITORY_COORDINATION: BLOCKED` under one
+  new root, `P5-COORD-001`: the live-repository `simulate gc` route bypasses
+  the outer repository lease and can reach schema work plus GC planning
+  outside exclusive ownership. The same-process registry, native Unix/Windows
+  lifecycle, bounded process-death evidence, owner diagnostics, ordinary
+  operation coverage, live-GC exclusion, and PostgreSQL dedicated advisory
+  session remain proven within explicit bounds. Evidence is the
+  [repository coordination audit](v1.13.13-phase5-repository-coordination-audit.md),
+  [coordination contract matrix](v1.13.13-repository-coordination-contract-matrix.md),
+  [operation coverage matrix](v1.13.13-coordination-operation-coverage-matrix.md),
+  and [platform evidence matrix](v1.13.13-coordination-platform-evidence-matrix.md).
+  Network/NAS/distributed coordination remains post-v1; all Phase 2–4
+  findings remain unchanged and no remediation is authorized.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.

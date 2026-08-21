@@ -69,6 +69,18 @@ project, do not start here; start with [README.md](README.md).
   `P4-BE-001`: production snapshot-label filtering uses backend-native `LIKE`,
   producing different case matching on SQLite and PostgreSQL. No finding was
   remediated, and all inherited Phase 2/3 findings remain unchanged.
+- Completed the source-first Phase 5 repository coordination audit across
+  identity, control namespace, process reservation, native Unix/Windows locks,
+  owner diagnostics, operation coverage, process death, live GC, and the
+  PostgreSQL dedicated advisory session.
+- Preserved same-host/local-filesystem coordination as the v1 boundary and
+  network/NFS/SMB/NAS/cloud/distributed coordination as post-v1 scope, without
+  interpreting PostgreSQL advisory ownership as a cross-host repository lock.
+- Recorded `REPOSITORY_COORDINATION: BLOCKED` under one new root,
+  `P5-COORD-001`: the live-repository `simulate gc` route bypasses the outer
+  lease and can reach schema work plus GC planning outside exclusive
+  ownership. No finding was remediated, and all Phase 2–4 findings remain
+  unchanged for Phase 6 disposition.
 
 ------------------------------------------------------------------------
 
