@@ -175,6 +175,13 @@ project, do not start here; start with [README.md](README.md).
   49-row closure matrix, and evidence index. v1.13.13 remains an unreleased
   release candidate; Phase 14 handoff, Phase 15 merge, Phase 16 tag/publication,
   and all v2 implementation remain pending.
+- Completed Phase 14 by freezing the final v1.x closure record, authoritative
+  local-first v2 handoff scope, inherited v1 guarantees, explicit v3 boundary,
+  optional maintenance, and zero inherited v1 blockers.
+- Added the Phase 14 handoff record, v2 scope matrix, and compact Phase 15/16
+  closure reference. Advanced Phase 15 — Merge and Post-Merge Reconciliation —
+  to Next without implementation, test, configuration, v2 branch, merge, tag,
+  publication, GitHub-governance, or Codacy-configuration changes.
 
 ------------------------------------------------------------------------
 
