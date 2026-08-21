@@ -513,20 +513,20 @@ func assertCancelledCatalogErrors(t *testing.T, svc catalog.Catalog, dbconn *sql
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	before := catalogStateCounts(t, dbconn)
-	if ref, err := svc.FindLogicalFile(ctx, 1); err == nil || ref != nil {
-		t.Errorf("cancelled FindLogicalFile: got (%+v, %v), want (nil, error)", ref, err)
+	if ref, err := svc.FindLogicalFile(ctx, 1); ref != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled FindLogicalFile: got (%+v, %v), want typed cancellation preserving context.Canceled", ref, err)
 	}
-	if refs, err := svc.FindPhysicalFilesForLogicalFile(ctx, 1); err == nil || refs != nil {
-		t.Errorf("cancelled FindPhysicalFilesForLogicalFile: got (%+v, %v), want (nil, error)", refs, err)
+	if refs, err := svc.FindPhysicalFilesForLogicalFile(ctx, 1); refs != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled FindPhysicalFilesForLogicalFile: got (%+v, %v), want typed cancellation preserving context.Canceled", refs, err)
 	}
-	if ref, err := svc.FindSnapshot(ctx, "snap-full"); err == nil || ref != nil {
-		t.Errorf("cancelled FindSnapshot: got (%+v, %v), want (nil, error)", ref, err)
+	if ref, err := svc.FindSnapshot(ctx, "snap-full"); ref != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled FindSnapshot: got (%+v, %v), want typed cancellation preserving context.Canceled", ref, err)
 	}
-	if refs, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{}); err == nil || refs != nil {
-		t.Errorf("cancelled ListSnapshots: got (%+v, %v), want (nil, error)", refs, err)
+	if refs, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{}); refs != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled ListSnapshots: got (%+v, %v), want typed cancellation preserving context.Canceled", refs, err)
 	}
-	if roots, err := svc.LoadReachabilityRoots(ctx); err == nil || roots != nil {
-		t.Errorf("cancelled LoadReachabilityRoots: got (%+v, %v), want (nil, error)", roots, err)
+	if roots, err := svc.LoadReachabilityRoots(ctx); roots != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled LoadReachabilityRoots: got (%+v, %v), want typed cancellation preserving context.Canceled", roots, err)
 	}
 	if after := catalogStateCounts(t, dbconn); after != before {
 		t.Errorf("cancelled catalog reads mutated catalog state: before=%+v after=%+v", before, after)

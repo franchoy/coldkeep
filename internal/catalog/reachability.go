@@ -10,7 +10,11 @@ import (
 // and snapshot_file (snapshot-protected set) — and returns both sets of logical
 // file IDs. These two SELECT DISTINCT queries work identically on SQLite and
 // PostgreSQL; no packed/legacy distinction exists at the logical-file level.
-func (s *Service) LoadReachabilityRoots(ctx context.Context) (*ReachabilityRoots, error) {
+func (s *Service) LoadReachabilityRoots(ctx context.Context) (roots *ReachabilityRoots, err error) {
+	defer func() {
+		err = translateServiceError("load reachability roots", "reachability root load failed", err)
+	}()
+
 	current, err := s.loadCurrentRoots(ctx)
 	if err != nil {
 		return nil, err
