@@ -45,11 +45,11 @@ operationally closed. PR #107 merged final candidate
 #108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
 
 v1.13.13 Final v1.x and v2 Handoff Gate is active on
-`release/v1.13.13`. Phases 0–10 are Complete and Phase 11 — Independent Full
-Local Release Gate — is Next. Phase 9 technically closed all six frozen blocker
-roots, and Phase 10 reconciled current documentation. Formal v1.x closure is
-not yet declared; v1.13.13 is not yet released, v2.x implementation is not
-authorized, SQLite-default productization remains v2 scope, and PostgreSQL
+`release/v1.13.13`. Phases 0–13 are Complete and Phase 14 — v1.x Closure and
+v2 Handoff Record — is Next. Phase 13 reconciled all 49 frozen requirements
+and approved formal v1.x normative completion. v1.13.13 is still an unreleased
+release candidate; merge, tag, publication, and v2.x implementation have not
+occurred. SQLite-default productization remains v2 scope, and PostgreSQL
 compatibility remains required.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
@@ -928,7 +928,8 @@ Current v1 status:
 - Catalog planning/adoption and typed-error contracts are complete for v1.
 - The CLI is thin for v1, and all six frozen v1.13.13 blocker roots are
   technically closed.
-- Formal v1.x closure and the v1.13.13 release remain pending later gates.
+- Formal v1.x normative closure is approved; the v1.13.13 release remains
+  pending the Phase 14–16 handoff, merge, tag, and publication gates.
 - V2 owns SQLite-default local productization and daemon-backed local product
   workflows; V3 owns network/NAS/distributed product expansion.
 

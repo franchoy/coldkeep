@@ -201,8 +201,8 @@ roots, NFS/SMB semantics, centralized PostgreSQL product mode, multi-user/auth,
 cloud/object storage, replication/sync, and distributed coordination.
 
 All currently identified and frozen v1.13.13 blocker roots are technically
-closed. Formal v1.x closure, merge, tag, and release are separate later-phase
-decisions.
+closed, and Phase 13 approved formal v1.x normative completion. Merge, tag,
+publication, and v2 implementation remain separate later-phase decisions.
 
 ## Required invariants
 

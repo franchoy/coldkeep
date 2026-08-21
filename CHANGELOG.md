@@ -167,6 +167,14 @@ project, do not start here; start with [README.md](README.md).
   matrix, and advanced Phase 13 — Formal v1.x Closure Decision — to Next in
   `PLAN` mode. Formal closure, merge, tag, publication, and v2 implementation
   remain unauthorized.
+- Completed Phase 13 by reconciling all 49 frozen Phase 1 rows: all 45
+  mandatory v1 obligations are satisfied, the four explicit non-v1 boundary
+  rows remain truthful, all six blocker roots and `P2-DOC-001` remain closed,
+  and no late blocker or current contradiction remains.
+- Approved formal v1.x normative completion and added the Phase 13 decision,
+  49-row closure matrix, and evidence index. v1.13.13 remains an unreleased
+  release candidate; Phase 14 handoff, Phase 15 merge, Phase 16 tag/publication,
+  and all v2 implementation remain pending.
 
 ------------------------------------------------------------------------
 

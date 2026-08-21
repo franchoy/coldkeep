@@ -10,8 +10,8 @@ for safer diagnostics.
 The current v1 architecture includes a reusable headless Engine, a neutral
 Catalog boundary, a thin CLI, supported SQLite and PostgreSQL backends within
 documented bounds, and cooperative same-host/local-filesystem repository
-coordination. Formal v1.x closure and the v1.13.13 release remain pending their
-later release gates.
+coordination. Formal v1.x normative closure is approved; the v1.13.13 release
+remains pending its handoff, merge, tag, and publication gates.
 
 It is suitable for controlled production environments where:
 

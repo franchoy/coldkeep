@@ -161,11 +161,13 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phases 0–12 are Complete. Phase 13 is Next: Formal v1.x
-  Closure Decision in `PLAN` mode. Its authoritative mode is
+  `release/v1.13.13`. Phases 0–13 are Complete. Phase 14 is Next: v1.x Closure
+  and v2 Handoff Record in `BUILD` mode. Its authoritative mode is
   `AUDIT_PLUS_REMEDIATION`. All six frozen blocker roots are `CLOSED` by Phase
-  9 proof, and `P2-DOC-001` is closed by Phase 10 reconciliation. v1.x remains
-  formally open pending later closure gates,
+  9 proof, and `P2-DOC-001` is closed by Phase 10 reconciliation. Phase 13
+  reconciled all 49 frozen requirements and approved formal v1.x normative
+  closure. v1.13.13 remains an unreleased release candidate pending the Phase
+  14–16 handoff, merge, tag, and publication chain;
   SQLite-default productization remains v2.x scope, PostgreSQL compatibility
   remains required, and v2.x implementation is not authorized.
 - Its active trackers are [scope](v1.13.13-scope.md),
@@ -278,7 +280,13 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [hosted gate](v1.13.13-phase12-hosted-exact-head-security-and-quality-gate.md),
   [hosted inventory](v1.13.13-phase12-hosted-check-inventory.md), and
   [security-quality matrix](v1.13.13-phase12-security-quality-evidence-matrix.md).
-  This does not declare final v1.x closure; Phase 13 is next.
+  Phase 13 then approved formal v1.x normative closure after reconciling all
+  49 requirements, the six closed blockers, safe deferrals, residual bounds,
+  and current governance. Evidence is the
+  [formal closure decision](v1.13.13-phase13-formal-v1x-closure-decision.md),
+  [normative closure matrix](v1.13.13-v1x-normative-closure-matrix.md), and
+  [closure evidence index](v1.13.13-v1x-closure-evidence-index.md). Phase 14 is
+  next; merge, tag, publication, and v2 implementation have not occurred.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
