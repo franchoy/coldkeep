@@ -1173,14 +1173,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// ================================================================
 	// STAGE 5a: Prepare output file and harness
 	// ================================================================
-	if st, err := fsys.Stat(outputPath); err == nil && st.IsDir() {
-		outputPath = filepath.Join(outputPath, originalName)
-	} else if strings.HasSuffix(outputPath, string(os.PathSeparator)) {
-		// if user passed a non-existing dir with trailing slash
-		if err := fsys.MkdirAll(outputPath, 0755); err != nil {
-			return RestoreFileResult{}, fmt.Errorf("create output directory: %w", err)
-		}
-		outputPath = filepath.Join(outputPath, originalName)
+	if err := validateExactRestoreDestination(fsys, outputPath); err != nil {
+		return RestoreFileResult{}, err
 	}
 	if err := validateRestoreWritePath(outputPath, opts.TrustedRoot); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("validate output path %s: %w", outputPath, err)
@@ -1590,6 +1584,26 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// Set result hash
 	result.RestoredHash = restoredHash
 	return result, nil
+}
+
+func validateExactRestoreDestination(fsys fsx.FS, outputPath string) error {
+	if strings.HasSuffix(outputPath, "/") || strings.HasSuffix(outputPath, string(os.PathSeparator)) {
+		return fmt.Errorf("restore exact destination must name a file: %s", outputPath)
+	}
+	st, err := fsys.Stat(outputPath)
+	switch {
+	case err == nil && st.IsDir():
+		return fmt.Errorf("restore exact destination is a directory: %s", outputPath)
+	case err == nil:
+		return nil
+	case os.IsNotExist(err):
+		return nil
+	default:
+		// Parent-component and permission errors retain the established mkdir or
+		// temporary-file failure classification below. Only a positively observed
+		// directory is rejected here as an inexact target.
+		return nil
+	}
 }
 
 func shouldCleanupRestoreTempPath(tempOutputPath, outputPath string) bool {

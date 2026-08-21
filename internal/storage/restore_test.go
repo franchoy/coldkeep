@@ -2849,7 +2849,7 @@ func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
 	res, err := RestoreFileWithStorageContextResultOptions(
 		StorageContext{DB: dbconn, ContainerDir: containersDir},
 		fileID,
-		outputDir,
+		destPath,
 		RestoreOptions{Overwrite: false},
 	)
 	if err == nil || !strings.Contains(err.Error(), "output file already exists") {
@@ -2950,7 +2950,7 @@ func TestRestoreOptionsOverwriteTrueReplacesExistingDestination(t *testing.T) {
 	result, err := RestoreFileWithStorageContextResultOptions(
 		StorageContext{DB: dbconn, ContainerDir: containersDir},
 		fileID,
-		outputDir,
+		destPath,
 		RestoreOptions{Overwrite: true},
 	)
 	if err != nil {
