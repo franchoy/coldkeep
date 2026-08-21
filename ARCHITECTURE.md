@@ -23,11 +23,27 @@ coldkeep is a correctness-first, local-first, content-addressed storage engine.
 
 The architecture composes:
 
+- a reusable headless Engine with neutral requests, results, and typed errors
+- a backend-neutral Catalog for logical metadata and planning authority
+- a thin local CLI for parsing, composition, coordination, and projection
 - a logical file model
 - content-addressed chunk identity
 - physical block placement metadata
 - append-only container files on disk
 - lifecycle-aware recovery and verification paths
+
+The v1 responsibility split is:
+
+```text
+CLI -> application composition -> Engine -> Catalog/domain/storage
+```
+
+Engine owns operation validation and orchestration. Catalog owns logical
+identity, mapping, snapshot graph, reachability, authoritative placement,
+restore-plan metadata, and GC-plan metadata. Storage owns payload bytes and
+block/container representation. The 25-operation Engine, the frozen thirteen-
+method Catalog contract (including stable typed errors), and the thin CLI are
+complete for v1. Application composition remains intentionally narrow.
 
 Correctness has ten explicit layers:
 
@@ -239,7 +255,8 @@ High-level flow:
 3. Resolve ordered `file_chunk -> chunk -> blocks` graph.
 4. Stream/decode referenced block bytes into a temporary output.
 5. Verify reconstructed content hash against stored logical-file hash.
-6. Atomically publish destination file.
+6. Publish the exact destination atomically through retained parent/object
+   identity, using non-replacing or intentional-overwrite semantics.
 
 Restore flow diagram:
 
@@ -259,7 +276,7 @@ reconstruct temp file
 final hash verification
     |
     v
-atomic rename to destination
+secure atomic publication to exact destination
 ```
 
 ## Container and Append Model
@@ -464,15 +481,27 @@ Restore path behavior:
 
 - reconstruct into a temporary file
 - fsync + close temporary file
-- atomically rename into destination
+- retain the trusted parent and temporary-object identity
+- publish `overwrite=false` atomically without replacing a final-window entrant
+- publish `overwrite=true` as an intentional atomic replacement
+- reject lower-layer reinterpretation of an exact file destination as a directory
+- apply metadata after publication through the retained published object
 - fsync parent directory for durability
 - validate final reconstructed file hash against stored file hash
 
 Consequences:
 
-- destination replacement is atomic at the visible path boundary
+- exact destination publication is atomic at the visible path boundary
+- replacement of a checked parent path by a symlink/reparse point cannot
+  redirect creation, publication, metadata, or cleanup within the frozen bound
 - incomplete or hash-mismatched reconstruction fails explicitly
 - partial/corrupt output is not accepted as success
+- strict metadata failure can return an error after correct bytes are visible;
+  metadata failure does not roll back published content
+
+The native contract is proven on Linux, macOS, and Windows for cooperative
+same-host/local-filesystem use. It does not claim protection against arbitrary
+hostile same-user relocation of an already-open Unix directory object.
 
 ## GC Model (Reference Safe)
 
@@ -498,6 +527,12 @@ Deep verification explicitly detects:
 - trailing unaccounted bytes after last valid block
 - codec/authentication mismatches (for encrypted codec flows)
 
+File-deep verification obtains the ordered authoritative placement union from
+Catalog and checks every legacy-only, packed-only, and mixed recipe entry.
+Missing, incomplete, conflicting, malformed, or corrupt placement fails closed;
+packed chunks are not omitted. This guarantee remains bounded to the existing
+repository storage and codec contract.
+
 Operational note:
 
 - verification phase is read-only
@@ -513,6 +548,26 @@ Mutation semantics by command family:
 - startup recovery: corrective metadata mutation
 - doctor: corrective (runs recovery before verify)
 - verify: observational phase assumes recovered state
+
+## Backend and Repository Coordination Model
+
+SQLite and PostgreSQL are supported v1 backends within explicitly documented
+capability bounds. Shared snapshot-label filtering uses narrow ASCII case-
+insensitive substring semantics on both. PostgreSQL compatibility remains part
+of v1 and is retained through v2. Making SQLite the default repository-local
+product experience is v2 productization; centralized PostgreSQL server product
+mode is v3.
+
+The production Coordinator provides cooperative same-process/same-host/local-
+filesystem ownership for participating operations on Linux, macOS, and
+Windows. Valid `simulate gc` participates because it opens the shared
+application and plans against the live repository. Isolated `simulate store`
+and `simulate store-folder`, benchmarks, init, help, version, and invalid
+commands remain bounded bypasses. PostgreSQL advisory-session ownership is an
+additional backend barrier where applicable.
+
+No NFS, SMB, NAS, cross-machine, or distributed-locking guarantee is made.
+Those product and coordination semantics remain v3 scope.
 
 ## Trust Boundary and Assumptions
 

@@ -161,9 +161,11 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 9 is Complete. Phase 10 is Next. Its authoritative
-  mode is `AUDIT_PLUS_REMEDIATION`. All six frozen blocker roots are `CLOSED`
-  by Phase 9 proof. v1.x remains open pending later closure gates,
+  `release/v1.13.13`. Phases 0–10 are Complete. Phase 11 is Next: Independent
+  Full Local Release Gate. Its authoritative mode is
+  `AUDIT_PLUS_REMEDIATION`. All six frozen blocker roots are `CLOSED` by Phase
+  9 proof, and `P2-DOC-001` is closed by Phase 10 reconciliation. v1.x remains
+  formally open pending later closure gates,
   SQLite-default productization remains v2.x scope, PostgreSQL compatibility
   remains required, and v2.x implementation is not authorized.
 - Its active trackers are [scope](v1.13.13-scope.md),
@@ -180,8 +182,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [Engine operation matrix](v1.13.13-engine-operation-ownership-matrix.md),
   [Catalog adoption matrix](v1.13.13-catalog-contract-adoption-matrix.md), and
   [CLI boundary exception matrix](v1.13.13-cli-boundary-exception-matrix.md).
-  Catalog architecture remains `PARTIAL` under `P2-ARCH-001` because five
-  aggregate methods lack the stable typed-error boundary.
+  At that Phase 2 snapshot, Catalog architecture was `PARTIAL` under
+  `P2-ARCH-001` because five aggregate methods lacked the stable typed-error
+  boundary. Phase 9 later proved that root `CLOSED`; current Catalog
+  architecture is complete for the frozen v1 contract.
   Phase 3 independently confirms `RESTORE_INSTALL_CONTRACT` as a blocker for
   Phase 6 disposition and later design/remediation.
 - Phase 3 independently records `V1_CORRECTNESS: BLOCKED` with three distinct
@@ -257,8 +261,12 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [Phase 9 remediation proof](v1.13.13-phase9-remediation-regression-and-cross-platform-backend-proof.md),
   [blocker closure matrix](v1.13.13-phase9-blocker-closure-matrix.md), and
   [proof execution matrix](v1.13.13-phase9-proof-execution-matrix.md).
-  This does not declare final v1.x closure; Phase 10 documentation and
-  current-state reconciliation is next.
+  Phase 10 then reconciled current architecture and release prose, closed
+  `P2-DOC-001`, and recorded the current truth in the
+  [Phase 10 reconciliation](v1.13.13-phase10-documentation-and-current-state-reconciliation.md),
+  [current-state truth matrix](v1.13.13-current-state-truth-matrix.md), and
+  [stale-claim disposition matrix](v1.13.13-stale-claim-disposition-matrix.md).
+  This does not declare final v1.x closure; Phase 11 is next.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.

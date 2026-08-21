@@ -45,12 +45,20 @@ operationally closed. PR #107 merged final candidate
 #108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
 
 v1.13.13 Final v1.x and v2 Handoff Gate is active on
-`release/v1.13.13`. Phase 0 is Complete and Phase 1 is Next. v1.x remains
-open, v2.x implementation is not authorized, SQLite-default productization
-remains v2.x scope, and PostgreSQL compatibility remains required.
+`release/v1.13.13`. Phases 0–10 are Complete and Phase 11 — Independent Full
+Local Release Gate — is Next. Phase 9 technically closed all six frozen blocker
+roots, and Phase 10 reconciled current documentation. Formal v1.x closure is
+not yet declared; v1.13.13 is not yet released, v2.x implementation is not
+authorized, SQLite-default productization remains v2 scope, and PostgreSQL
+compatibility remains required.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
+
+The v1 architecture exposes a reusable headless Engine over a neutral Catalog
+boundary, with the CLI retained as a thin local wrapper. SQLite and PostgreSQL
+are supported backends within documented bounds; the default repository-local
+SQLite product experience remains v2 work.
 
 Now with snapshot lineage, diff summaries, and safe deletion insights.
 
@@ -139,8 +147,8 @@ Integrity checkpoints:
 - deterministic, byte-identical restore
 - no exposure of partially written or inconsistent data
 - GC is reference-safe: no reachable chunk is ever deleted
-- Atomic restore replacement (within single-node local filesystem semantics)
-- Safe in-process concurrent storage operations
+- Exact, atomic restore publication (within same-host local-filesystem semantics)
+- Cooperative same-process and same-host repository coordination
 
 ### Core invariants
 
@@ -150,9 +158,9 @@ Guarantee IDs are stable and tracked in [VALIDATION_MATRIX.md](VALIDATION_MATRIX
 - G2: repeat store does not drift chunk graph
 - G3: no exposure of partially written or inconsistent data
 - G4: GC is reference-safe (no reachable chunk is deleted)
-- G5: atomic restore replacement (single-node local filesystem semantics)
-- G6: safe in-process concurrent storage operations
-- G7: deep corruption detection (payload/offset/tail)
+- G5: exact, atomic restore publication (same-host local-filesystem semantics)
+- G6: cooperative same-process/same-host repository coordination on supported native platforms
+- G7: deep corruption detection across authoritative legacy, packed, and mixed placement
 - G8: corrective health gate contract stability
 - G9: deterministic batch CLI orchestration and automation-safe contract behavior
 - G10: current-state physical mapping graph coherence is audited in standard verify
@@ -882,9 +890,13 @@ Verification levels:
 coldkeep verify system --standard
 coldkeep verify system --full
 coldkeep verify system --deep
+coldkeep verify file <fileID> --deep
 ```
 
 Verification checks are observational. In CLI flows, startup recovery may run before verification.
+File-deep verification follows Catalog placement authority and covers
+legacy-only, packed-only, and mixed recipes; missing, conflicting, incomplete,
+or corrupt authoritative placement fails closed.
 
 ## Documentation Map
 
@@ -910,7 +922,15 @@ Current status:
 - v1.8 packed block abstraction, AES-GCM packed-block integration, and release hardening are complete.
 - v1.9 transform-based storage semantics, block-level compression, and staged verification are complete.
 
-Next focus is v1.10: architecture extraction on top of frozen v1.9 storage semantics.
+Current v1 status:
+
+- Engine architecture is complete for the frozen v1 contract.
+- Catalog planning/adoption and typed-error contracts are complete for v1.
+- The CLI is thin for v1, and all six frozen v1.13.13 blocker roots are
+  technically closed.
+- Formal v1.x closure and the v1.13.13 release remain pending later gates.
+- V2 owns SQLite-default local productization and daemon-backed local product
+  workflows; V3 owns network/NAS/distributed product expansion.
 
 ## Contributing
 

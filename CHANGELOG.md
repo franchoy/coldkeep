@@ -129,6 +129,20 @@ project, do not start here; start with [README.md](README.md).
   matrix. Phase 10 documentation/current-state reconciliation is next; final
   v1.x closure, merge, tag, publication, and v2 implementation remain
   unauthorized.
+- Completed the documentation-only Phase 10 current-state reconciliation.
+  Engine is complete for v1, Catalog is complete for the frozen v1 contract,
+  the CLI is thin for v1, and `P2-DOC-001` is closed.
+- Reconciled exact restore publication and confinement, complete authoritative
+  legacy/packed/mixed file-deep verification, backend-neutral snapshot-label
+  behavior, and coordinated live `simulate gc` within the proven platform and
+  threat bounds.
+- Preserved SQLite-default local productization in v2, network/NAS/distributed
+  product scope in v3, and all Phase 0–9 historical evidence. All currently
+  identified frozen blocker roots are technically closed, but formal v1.x
+  closure and the v1.13.13 release remain pending later phases.
+- Advanced Phase 11 — Independent Full Local Release Gate — to Next without
+  changing production code, tests, schemas, migrations, dependencies, CI,
+  validator implementation, or version.
 
 ------------------------------------------------------------------------
 
