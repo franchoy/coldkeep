@@ -65,6 +65,54 @@ func TestAggregateServiceIterationFailuresAreTypedAndPreserveCause(t *testing.T)
 	}(), true)
 }
 
+func TestAggregateServiceCancellationAndDeadlineFailuresPreserveIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+		ctx   func() context.Context
+	}{
+		{
+			name:  "cancelled",
+			cause: context.Canceled,
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+		},
+		{
+			name:  "deadline",
+			cause: context.DeadlineExceeded,
+			ctx: func() context.Context {
+				ctx, cancel := context.WithDeadline(context.Background(), time.Unix(1, 0))
+				cancel()
+				return ctx
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc, closeDB := newAggregateFaultService(t, "context")
+			defer closeDB()
+			ctx := test.ctx()
+			checks := []func() error{
+				func() error { _, err := svc.FindLogicalFile(ctx, 1); return err },
+				func() error { _, err := svc.FindPhysicalFilesForLogicalFile(ctx, 1); return err },
+				func() error { _, err := svc.FindSnapshot(ctx, "snap"); return err },
+				func() error { _, err := svc.ListSnapshots(ctx, SnapshotFilter{}); return err },
+				func() error { _, err := svc.LoadReachabilityRoots(ctx); return err },
+			}
+			for i, check := range checks {
+				t.Run(fmt.Sprintf("method-%d", i+1), func(t *testing.T) {
+					err := check()
+					if !IsCode(err, ErrorCancelled) || !errors.Is(err, test.cause) {
+						t.Fatalf("got %v, want typed cancellation preserving %v", err, test.cause)
+					}
+				})
+			}
+		})
+	}
+}
+
 func assertAggregateFailures(t *testing.T, svc *Service, requireSentinel bool) {
 	t.Helper()
 	ctx := context.Background()
