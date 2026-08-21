@@ -161,7 +161,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phase 5 is Complete. Phase 6 is Next. Its authoritative
+  `release/v1.13.13`. Phase 6 is Complete. Phase 7 is Next. Its authoritative
   mode is `AUDIT_PLUS_REMEDIATION`, with `RESTORE_INSTALL_CONTRACT` unresolved
   entering the train. v1.x remains open, SQLite-default productization remains
   v2.x scope, PostgreSQL compatibility remains required, and v2.x
@@ -220,6 +220,19 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   and [platform evidence matrix](v1.13.13-coordination-platform-evidence-matrix.md).
   Network/NAS/distributed coordination remains post-v1; all Phase 2–4
   findings remain unchanged and no remediation is authorized.
+- Phase 6 independently freezes six final v1.x blocker roots in five
+  remediation workstreams. It promotes the partial Catalog typed-error gap to
+  a closure blocker under mandatory `V1R-CAT-003`, keeps the two restore
+  invariants distinct, freezes Coldkeep's prior narrow ASCII case-insensitive
+  snapshot-label substring behavior across SQLite/PostgreSQL, and preserves
+  all other Phase 2–5 roots. V2/v3 deferrals and non-blocking debt are frozen;
+  no remediation is implemented. Evidence is the
+  [deferred-item and blocker freeze](v1.13.13-phase6-deferred-item-and-blocker-freeze.md),
+  [final blocker matrix](v1.13.13-final-blocker-classification-matrix.md),
+  [remediation workstream freeze](v1.13.13-remediation-workstream-freeze.md),
+  and [deferred-item matrix](v1.13.13-deferred-item-classification-matrix.md).
+  Phases 7–9 are generalized for design, minimum remediation, and complete
+  cross-platform/backend proof; v1.x remains blocked.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.

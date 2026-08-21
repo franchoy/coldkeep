@@ -81,6 +81,19 @@ project, do not start here; start with [README.md](README.md).
   lease and can reach schema work plus GC planning outside exclusive
   ownership. No finding was remediated, and all Phase 2–4 findings remain
   unchanged for Phase 6 disposition.
+- Completed Phase 6 by independently classifying six final v1.x blocker roots
+  and freezing five remediation workstreams. The previously partial Catalog
+  typed-error gap is a closure blocker under mandatory `V1R-CAT-003`; the two
+  restore safety roots remain distinct within one destination workstream.
+- Froze narrow ASCII case-insensitive snapshot-label substring matching as the
+  shared SQLite/PostgreSQL contract from Coldkeep's pre-Catalog query behavior,
+  rather than from an accidental SQLite default.
+- Froze v2 local-daemon/SQLite productization, v3 network/distributed
+  expansion, documentation debt, optional maintenance, and historical
+  supersession without implementing remediation or authorizing v2 work.
+- Generalized Phases 7–9 to remediation design/test-contract freeze, minimum
+  v1.x blocker remediation, and complete cross-platform/backend regression
+  proof. v1.x remains blocked pending closure of all six roots.
 
 ------------------------------------------------------------------------
 
