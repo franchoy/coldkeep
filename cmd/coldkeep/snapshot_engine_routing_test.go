@@ -166,6 +166,51 @@ func TestSnapshotListEngineRoutingJSON(t *testing.T) {
 	}
 }
 
+func TestSnapshotListLabelCaseInsensitiveProjection(t *testing.T) {
+	for _, mode := range []struct {
+		name       string
+		outputMode cliOutputMode
+	}{
+		{"json", outputModeJSON},
+		{"text", outputModeText},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			dbconn := openSnapshotRoutingDB(t)
+			injectSnapshotRoutingDB(t, dbconn)
+			now := time.Now().UTC().Truncate(time.Second)
+			insertRoutingSnapshot(t, dbconn, "label-alpha", "full", "Alpha", now)
+			insertRoutingSnapshot(t, dbconn, "label-alpha-two", "full", "alpha-two", now.Add(time.Second))
+			insertRoutingSnapshot(t, dbconn, "label-beta", "full", "BETA", now.Add(2*time.Second))
+			insertRoutingSnapshot(t, dbconn, "label-unrelated", "full", "unrelated", now.Add(3*time.Second))
+
+			parsed := parsedCommandLine{
+				method:      "snapshot",
+				positionals: []string{"list"},
+				flags:       map[string][]string{"label": {"ALPHA"}, "output": {mode.name}},
+			}
+			output := captureStdout(t, func() {
+				if err := runSnapshotCommand(parsed, mode.outputMode); err != nil {
+					t.Fatalf("snapshot list %s: %v", mode.name, err)
+				}
+			})
+			if mode.outputMode == outputModeJSON {
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+					t.Fatalf("parse JSON: %v output=%q", err, output)
+				}
+				snapshots := payload["data"].(map[string]any)["snapshots"].([]any)
+				if len(snapshots) != 2 || snapshots[0].(map[string]any)["id"] != "label-alpha-two" || snapshots[1].(map[string]any)["id"] != "label-alpha" {
+					t.Fatalf("case-insensitive JSON projection: %v", snapshots)
+				}
+				return
+			}
+			if !strings.Contains(output, "label-alpha-two") || !strings.Contains(output, "label-alpha") || strings.Contains(output, "label-beta") {
+				t.Fatalf("case-insensitive text projection: %q", output)
+			}
+		})
+	}
+}
+
 // TestSnapshotShowEngineRoutingJSON verifies that snapshot show uses the
 // engine-backed phase var to return snapshot metadata and files from a real DB.
 func TestSnapshotShowEngineRoutingJSON(t *testing.T) {

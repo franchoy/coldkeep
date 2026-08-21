@@ -85,7 +85,7 @@ func (s *Service) listSnapshotsWithoutLimit(ctx context.Context, args snapshotLi
 SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
 FROM snapshot
 WHERE ($1 = '' OR type = $1)
-  AND ($2 = '' OR label LIKE $2)
+  AND ($2 = '' OR LOWER(label) LIKE LOWER($2))
   AND ($3 = 0 OR created_at >= $4)
   AND ($5 = 0 OR created_at <= $6)
 ORDER BY created_at DESC, id DESC`, values...)
@@ -102,7 +102,7 @@ func (s *Service) listSnapshotsWithLimit(ctx context.Context, args snapshotListQ
 SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
 FROM snapshot
 WHERE ($1 = '' OR type = $1)
-  AND ($2 = '' OR label LIKE $2)
+  AND ($2 = '' OR LOWER(label) LIKE LOWER($2))
   AND ($3 = 0 OR created_at >= $4)
   AND ($5 = 0 OR created_at <= $6)
 ORDER BY created_at DESC, id DESC

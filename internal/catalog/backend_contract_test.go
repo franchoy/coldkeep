@@ -328,6 +328,32 @@ func TestCatalogContractListSnapshotsAcrossBackends(t *testing.T) {
 	})
 }
 
+func TestCatalogContractSnapshotLabelCaseAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		for index, row := range []struct {
+			id    string
+			label string
+		}{
+			{"label-alpha", "Alpha"},
+			{"label-alpha-two", "alpha-two"},
+			{"label-beta", "BETA"},
+			{"label-unrelated", "unrelated"},
+		} {
+			if _, err := backend.DB.ExecContext(context.Background(),
+				`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
+				row.id, catalogFixtureBase.Add(time.Duration(index+3)*time.Hour), "full", row.label); err != nil {
+				t.Fatalf("insert label fixture %q: %v", row.id, err)
+			}
+		}
+
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{LabelSubstring: "ALPHA"}, "label-alpha-two", "label-alpha", "snap-full")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{LabelSubstring: "alpha", Limit: 1}, "label-alpha-two")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{LabelSubstring: "beta"}, "label-beta", "snap-child")
+	})
+}
+
 func timePointer(value time.Time) *time.Time { return &value }
 
 func assertSnapshotIDs(t *testing.T, svc interface {
