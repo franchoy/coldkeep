@@ -123,9 +123,9 @@ the shared application and plans against the live repository. Isolated
 Native lifecycle behavior is proven on Linux, macOS, and Windows within this
 cooperative same-host bound.
 
-These guarantees do not provide Network File System (NFS)/SMB safety, NAS or
-cross-machine coordination, or distributed locking. Those remain post-v1
-product scope.
+These guarantees do not provide Network File System (NFS)/Server Message Block (SMB) safety,
+NAS or cross-machine coordination, or distributed locking. Those remain
+post-v1 product scope.
 
 ### 4. Restore Publication Confinement
 
