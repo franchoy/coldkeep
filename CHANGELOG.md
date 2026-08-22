@@ -182,6 +182,23 @@ project, do not start here; start with [README.md](README.md).
   closure reference. Advanced Phase 15 — Merge and Post-Merge Reconciliation —
   to Next without implementation, test, configuration, v2 branch, merge, tag,
   publication, GitHub-governance, or Codacy-configuration changes.
+- Completed the Phase 15 pre-merge quality remediation at
+  `02647536ac618f8f2df8297863d05357fe15eb54`, preserving all six technical
+  blocker closures while reducing candidate-added regular and potential
+  Codacy findings to zero.
+- Re-ratified the 49/49 formal v1.x closure against that remediation head and
+  added the decision, normative matrix, and evidence index. Historical Phases
+  13 and 14 remain Complete; Phase 14 handoff re-freeze is now required before
+  Phase 15 may receive a replacement immutable candidate or merge.
+
+```text
+QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
+FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
+PHASE_14_REFREEZE: NEXT_REQUIRED_OPERATION
+PHASE_15_RELEASE_CANDIDATE: NOT_YET_REFROZEN
+PHASE_15_MERGE: BLOCKED_PENDING_REFREEZE
+MERGE_AUTHORIZED: NO
+```
 
 ------------------------------------------------------------------------
 

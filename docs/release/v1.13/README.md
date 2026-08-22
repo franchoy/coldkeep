@@ -161,16 +161,24 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
 - `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Phases 0–14 are Complete. Phase 15 is Next: Merge and
-  Post-Merge Reconciliation in `BUILD` mode. Its authoritative mode is
-  `AUDIT_PLUS_REMEDIATION`. All six frozen blocker roots are `CLOSED` by Phase
-  9 proof, and `P2-DOC-001` is closed by Phase 10 reconciliation. Phase 13
-  reconciled all 49 frozen requirements and approved formal v1.x normative
-  closure. Phase 14 froze the final v1.x state and local-first v2 handoff with
-  zero inherited v1 blockers. v1.13.13 remains an unreleased release candidate
-  pending the Phase 15–16 merge, tag, and publication chain;
+  `release/v1.13.13`. Historical Phases 0–14 are Complete. Phase 15 is Next
+  only as the structural topology pointer; quality remediation invalidated the old
+  candidate identity. The remediation head preserves all 49 requirements and
+  six closed blockers, and formal closure re-ratification is approved. Phase
+  14 handoff re-freeze is the next required operation; Phase 15 merge is
+  blocked until it freezes a replacement candidate. v1.13.13 remains an
+  unreleased release candidate pending re-freeze, merge, tag, and publication;
   SQLite-default productization remains v2.x scope, PostgreSQL compatibility
   remains required, and v2.x implementation is not authorized.
+
+  ```text
+  QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
+  FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
+  PHASE_14_REFREEZE: NEXT_REQUIRED_OPERATION
+  PHASE_15_RELEASE_CANDIDATE: NOT_YET_REFROZEN
+  PHASE_15_MERGE: BLOCKED_PENDING_REFREEZE
+  MERGE_AUTHORIZED: NO
+  ```
 - Its active trackers are [scope](v1.13.13-scope.md),
   [phase list](v1.13.13-phase-list.md), and
   [validation checklist](v1.13.13-validation-checklist.md).
@@ -290,8 +298,13 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   then froze the final v1.x record and v2/v3 ownership boundary in the
   [handoff record](v1.13.13-phase14-v1x-closure-and-v2-handoff-record.md),
   [v2 scope matrix](v1.13.13-v2-handoff-scope-matrix.md), and
-  [compact closure state](v1.13.13-v1x-final-closure-state.md). Phase 15 is
-  next; merge, tag, publication, and v2 implementation have not occurred.
+  [compact closure state](v1.13.13-v1x-final-closure-state.md). The later
+  [re-ratification decision](v1.13.13-phase13-formal-v1x-closure-reratification.md),
+  [49-row matrix](v1.13.13-v1x-normative-reratification-matrix.md), and
+  [evidence index](v1.13.13-v1x-closure-reratification-evidence-index.md)
+  prove the quality-remediation delta preserved closure. Phase 14 re-freeze
+  is required before Phase 15 merge; tag, publication, and v2 implementation
+  have not occurred.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.

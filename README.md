@@ -45,12 +45,22 @@ operationally closed. PR #107 merged final candidate
 #108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
 
 v1.13.13 Final v1.x and v2 Handoff Gate is active on
-`release/v1.13.13`. Phases 0–13 are Complete and Phase 14 — v1.x Closure and
-v2 Handoff Record — is Next. Phase 13 reconciled all 49 frozen requirements
-and approved formal v1.x normative completion. v1.13.13 is still an unreleased
-release candidate; merge, tag, publication, and v2.x implementation have not
-occurred. SQLite-default productization remains v2 scope, and PostgreSQL
-compatibility remains required.
+`release/v1.13.13`. Historical Phases 0–14 are Complete. Quality remediation
+at `02647536ac618f8f2df8297863d05357fe15eb54` preserved all 49 frozen
+requirements and six closed blockers, and formal v1.x closure re-ratification
+is approved. Phase 14 handoff re-freeze is the next required operation; Phase
+15 retains its structural `Next` pointer but has no re-frozen candidate and
+merge is not authorized. v1.13.13 remains unreleased; tag, publication, and
+v2.x implementation have not occurred.
+
+```text
+QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
+FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
+PHASE_14_REFREEZE: NEXT_REQUIRED_OPERATION
+PHASE_15_RELEASE_CANDIDATE: NOT_YET_REFROZEN
+PHASE_15_MERGE: BLOCKED_PENDING_REFREEZE
+MERGE_AUTHORIZED: NO
+```
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
@@ -928,8 +938,9 @@ Current v1 status:
 - Catalog planning/adoption and typed-error contracts are complete for v1.
 - The CLI is thin for v1, and all six frozen v1.13.13 blocker roots are
   technically closed.
-- Formal v1.x normative closure is approved; the v1.13.13 release remains
-  pending the Phase 14–16 handoff, merge, tag, and publication gates.
+- Formal v1.x normative closure and its post-remediation re-ratification are
+  approved; Phase 14 re-freeze is required before Phase 15 merge, and tag and
+  publication remain later gates.
 - V2 owns SQLite-default local productization and daemon-backed local product
   workflows; V3 owns network/NAS/distributed product expansion.
 
