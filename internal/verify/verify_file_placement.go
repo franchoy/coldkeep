@@ -75,6 +75,25 @@ func (s *filePlacementVerifyState) verifyPacked(ctx context.Context, placement c
 	if packed == nil {
 		return fmt.Errorf("packed placement metadata is missing")
 	}
+	verified, err := s.loadPackedBlock(ctx, packed)
+	if err != nil {
+		return err
+	}
+	match, err := findPackedChunkEntry(verified, packed.BlockID, placement.ChunkID)
+	if err != nil {
+		return err
+	}
+	if err := validatePackedChunkRange(*match, *packed, placement.ChunkID); err != nil {
+		return err
+	}
+	chunkBytes, err := blocks.SliceChunkFromPayload(verified.DecodedBlock.Payload, *match)
+	if err != nil {
+		return fmt.Errorf("slice packed block %d chunk %d: %w", packed.BlockID, placement.ChunkID, err)
+	}
+	return verifyPlacementChunkBytes(placement, chunkBytes)
+}
+
+func (s *filePlacementVerifyState) loadPackedBlock(ctx context.Context, packed *catalog.PackedChunkPlacement) (*VerifiedBlock, error) {
 	verified := s.packedBlocks[packed.BlockID]
 	if verified == nil {
 		var err error
@@ -89,36 +108,39 @@ func (s *filePlacementVerifyState) verifyPacked(ctx context.Context, placement c
 			PhysicalHash: packed.PhysicalHash,
 		}, FilesystemContainerReader{ContainersDir: s.containersDir})
 		if err != nil {
-			return fmt.Errorf("verify packed block %d: %w", packed.BlockID, err)
+			return nil, fmt.Errorf("verify packed block %d: %w", packed.BlockID, err)
 		}
 		s.packedBlocks[packed.BlockID] = verified
 	}
 	if verified.DecodedBlock == nil {
-		return fmt.Errorf("packed block %d decoded block is nil", packed.BlockID)
+		return nil, fmt.Errorf("packed block %d decoded block is nil", packed.BlockID)
 	}
+	return verified, nil
+}
 
+func findPackedChunkEntry(verified *VerifiedBlock, blockID, chunkID int64) (*blocks.ChunkEntry, error) {
 	var match *blocks.ChunkEntry
 	for i := range verified.DecodedBlock.Entries {
 		entry := &verified.DecodedBlock.Entries[i]
-		if entry.ChunkID != uint64(placement.ChunkID) {
+		if entry.ChunkID != uint64(chunkID) {
 			continue
 		}
 		if match != nil {
-			return fmt.Errorf("packed block %d contains duplicate table entries for chunk %d", packed.BlockID, placement.ChunkID)
+			return nil, fmt.Errorf("packed block %d contains duplicate table entries for chunk %d", blockID, chunkID)
 		}
 		match = entry
 	}
 	if match == nil {
-		return fmt.Errorf("packed block %d has no table entry for chunk %d", packed.BlockID, placement.ChunkID)
+		return nil, fmt.Errorf("packed block %d has no table entry for chunk %d", blockID, chunkID)
 	}
-	if match.Offset != uint64(packed.OffsetInBlock) || match.Size != uint64(packed.SizeInBlock) {
-		return fmt.Errorf("packed block %d chunk %d table/range mismatch table=(%d,%d) placement=(%d,%d)", packed.BlockID, placement.ChunkID, match.Offset, match.Size, packed.OffsetInBlock, packed.SizeInBlock)
+	return match, nil
+}
+
+func validatePackedChunkRange(entry blocks.ChunkEntry, packed catalog.PackedChunkPlacement, chunkID int64) error {
+	if entry.Offset != uint64(packed.OffsetInBlock) || entry.Size != uint64(packed.SizeInBlock) {
+		return fmt.Errorf("packed block %d chunk %d table/range mismatch table=(%d,%d) placement=(%d,%d)", packed.BlockID, chunkID, entry.Offset, entry.Size, packed.OffsetInBlock, packed.SizeInBlock)
 	}
-	chunkBytes, err := blocks.SliceChunkFromPayload(verified.DecodedBlock.Payload, *match)
-	if err != nil {
-		return fmt.Errorf("slice packed block %d chunk %d: %w", packed.BlockID, placement.ChunkID, err)
-	}
-	return verifyPlacementChunkBytes(placement, chunkBytes)
+	return nil
 }
 
 func verifyPlacementChunkBytes(placement catalog.ChunkPlacementRef, payload []byte) error {
