@@ -49,53 +49,7 @@ func TestRestoreWithTrustedRootAllowsOuterAliasForExactOutputPathPhase9NativePro
 		}
 	})
 
-	t.Run("retained-parent-rejects-path-replacement", func(t *testing.T) {
-		base := t.TempDir()
-		root := filepath.Join(base, "trusted")
-		if err := os.Mkdir(root, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		relocated := filepath.Join(base, "retained")
-		outside := t.TempDir()
-		destination := filepath.Join(root, "restored.bin")
-		pending := beginPhase9NativeInstall(t, destination, root, false, []byte("confined"), secureinstall.Metadata{})
-		if err := os.Rename(root, relocated); err != nil {
-			if runtime.GOOS != "windows" || !errors.Is(err, os.ErrPermission) {
-				t.Fatalf("relocate retained parent: %v", err)
-			}
-			// Windows may deny directory relocation while the production
-			// installer retains its parent handle. That is a fail-closed native
-			// outcome for the same frozen replacement threat, not a reason to
-			// weaken the proof or require a pathname reopen.
-			if _, publishErr := pending.Publish(); publishErr != nil {
-				t.Fatalf("publish after denied parent relocation: %v", publishErr)
-			}
-			if got, readErr := os.ReadFile(destination); readErr != nil || string(got) != "confined" {
-				t.Fatalf("retained destination bytes=%q err=%v", got, readErr)
-			}
-			if _, statErr := os.Stat(filepath.Join(outside, "restored.bin")); !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("outside destination stat=%v, want not exists", statErr)
-			}
-			requirePhase9NoRestoreTemps(t, root)
-			return
-		}
-		if err := os.Symlink(outside, root); err != nil {
-			t.Fatalf("install replacement symlink/reparse point: %v", err)
-		}
-		if _, err := pending.Publish(); !errors.Is(err, secureinstall.ErrParentChanged) {
-			t.Fatalf("Publish error=%v, want ErrParentChanged", err)
-		}
-		if err := pending.Abort(); err != nil {
-			t.Fatalf("Abort after parent replacement: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(outside, "restored.bin")); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("outside destination stat=%v, want not exists", err)
-		}
-		if _, err := os.Stat(filepath.Join(relocated, "restored.bin")); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("retained destination stat=%v, want not exists", err)
-		}
-		requirePhase9NoRestoreTemps(t, relocated)
-	})
+	t.Run("retained-parent-rejects-path-replacement", provePhase9RetainedParentReplacement)
 
 	t.Run("retained-object-metadata", func(t *testing.T) {
 		root := t.TempDir()
@@ -119,6 +73,63 @@ func TestRestoreWithTrustedRootAllowsOuterAliasForExactOutputPathPhase9NativePro
 			t.Fatalf("mtime=%v want=%v", info.ModTime().UTC(), mtime)
 		}
 	})
+}
+
+func provePhase9RetainedParentReplacement(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "trusted")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	relocated := filepath.Join(base, "retained")
+	outside := t.TempDir()
+	destination := filepath.Join(root, "restored.bin")
+	pending := beginPhase9NativeInstall(t, destination, root, false, []byte("confined"), secureinstall.Metadata{})
+	if err := os.Rename(root, relocated); err != nil {
+		proveDeniedPhase9ParentRelocation(t, pending, destination, root, outside, err)
+		return
+	}
+	proveReplacedPhase9ParentFailsClosed(t, pending, root, relocated, outside)
+}
+
+func proveDeniedPhase9ParentRelocation(t *testing.T, pending *secureinstall.Pending, destination, root, outside string, relocateErr error) {
+	t.Helper()
+	if runtime.GOOS != "windows" || !errors.Is(relocateErr, os.ErrPermission) {
+		t.Fatalf("relocate retained parent: %v", relocateErr)
+	}
+	// Windows may deny directory relocation while the production installer
+	// retains its parent handle. That is a fail-closed native outcome for the
+	// same frozen replacement threat, not a reason to weaken the proof.
+	if _, err := pending.Publish(); err != nil {
+		t.Fatalf("publish after denied parent relocation: %v", err)
+	}
+	if got, err := os.ReadFile(destination); err != nil || string(got) != "confined" {
+		t.Fatalf("retained destination bytes=%q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "restored.bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside destination stat=%v, want not exists", err)
+	}
+	requirePhase9NoRestoreTemps(t, root)
+}
+
+func proveReplacedPhase9ParentFailsClosed(t *testing.T, pending *secureinstall.Pending, root, relocated, outside string) {
+	t.Helper()
+	if err := os.Symlink(outside, root); err != nil {
+		t.Fatalf("install replacement symlink/reparse point: %v", err)
+	}
+	if _, err := pending.Publish(); !errors.Is(err, secureinstall.ErrParentChanged) {
+		t.Fatalf("Publish error=%v, want ErrParentChanged", err)
+	}
+	if err := pending.Abort(); err != nil {
+		t.Fatalf("Abort after parent replacement: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "restored.bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside destination stat=%v, want not exists", err)
+	}
+	if _, err := os.Stat(filepath.Join(relocated, "restored.bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retained destination stat=%v, want not exists", err)
+	}
+	requirePhase9NoRestoreTemps(t, relocated)
 }
 
 func beginPhase9NativeInstall(t *testing.T, destination, root string, overwrite bool, content []byte, metadata secureinstall.Metadata) *secureinstall.Pending {

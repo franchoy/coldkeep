@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -37,6 +38,25 @@ func TestPhase9SimulateGCIndependentHolderProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
 	}
+	holder := startPhase9HolderProcess(t, executable, repositoryPath)
+	holder.requireReady(t)
+	runtime, probe := newPhase9SimulateGCRuntime(t, identity)
+	requirePhase9ContendedRuntime(t, runtime, probe)
+	holder.release(t)
+	probe.reset()
+	requirePhase9UncontendedRuntime(t, runtime, probe)
+}
+
+type phase9HolderProcess struct {
+	command *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  *bufio.Reader
+	stderr  bytes.Buffer
+	waited  bool
+}
+
+func startPhase9HolderProcess(t *testing.T, executable, repositoryPath string) *phase9HolderProcess {
+	t.Helper()
 	command := exec.Command(executable, "-test.run=^TestPhase9SimulateGCIndependentHolderProcess$") // #nosec G204 -- executable is the current Go test binary.
 	command.Env = append(os.Environ(), phase9SimulateGCHolderEnv+"=1", phase9SimulateGCRepository+"="+repositoryPath)
 	stdin, err := command.StdinPipe()
@@ -47,60 +67,86 @@ func TestPhase9SimulateGCIndependentHolderProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
+	holder := &phase9HolderProcess{command: command, stdin: stdin, stdout: bufio.NewReader(stdout)}
+	command.Stderr = &holder.stderr
 	if err := command.Start(); err != nil {
 		t.Fatalf("start holder process: %v", err)
 	}
-	waited := false
 	t.Cleanup(func() {
-		if waited {
+		if holder.waited {
 			return
 		}
 		_ = command.Process.Kill()
 		_ = command.Wait()
 	})
-	ready, err := bufio.NewReader(stdout).ReadString('\n')
-	if err != nil || strings.TrimSpace(ready) != "ready" {
-		t.Fatalf("holder readiness=%q err=%v stderr=%q", ready, err, stderr.String())
-	}
+	return holder
+}
 
-	var recoveryCalled, dispatchCalled bool
+func (p *phase9HolderProcess) requireReady(t *testing.T) {
+	t.Helper()
+	ready, err := p.stdout.ReadString('\n')
+	if err != nil || strings.TrimSpace(ready) != "ready" {
+		t.Fatalf("holder readiness=%q err=%v stderr=%q", ready, err, p.stderr.String())
+	}
+}
+
+func (p *phase9HolderProcess) release(t *testing.T) {
+	t.Helper()
+	if _, err := fmt.Fprintln(p.stdin, "release"); err != nil {
+		t.Fatalf("signal holder release: %v", err)
+	}
+	if err := p.command.Wait(); err != nil {
+		t.Fatalf("holder process exit: %v stderr=%q", err, p.stderr.String())
+	}
+	p.waited = true
+}
+
+type phase9RuntimeProbe struct {
+	recoveryCalled bool
+	dispatchCalled bool
+}
+
+func (p *phase9RuntimeProbe) reset() {
+	p.recoveryCalled = false
+	p.dispatchCalled = false
+}
+
+func newPhase9SimulateGCRuntime(t *testing.T, identity coordination.Identity) (cliRuntime, *phase9RuntimeProbe) {
+	t.Helper()
+	probe := &phase9RuntimeProbe{}
 	runtime := newTestCLIRuntime(t, &cliLifecycleTrace{})
 	runtime.newCoordinator = coordination.NewCoordinator
 	runtime.resolveIdentity = func(string) (coordination.Identity, error) { return identity, nil }
 	runtime.recover = func(cliOutputMode) (recovery.Report, error) {
-		recoveryCalled = true
+		probe.recoveryCalled = true
 		return recovery.Report{}, nil
 	}
 	runtime.dispatch = func(parsedCommandLine, cliOutputMode) error {
-		dispatchCalled = true
+		probe.dispatchCalled = true
 		return nil
 	}
+	return runtime, probe
+}
 
+func requirePhase9ContendedRuntime(t *testing.T, runtime cliRuntime, probe *phase9RuntimeProbe) {
+	t.Helper()
 	_, busyStderr, code := captureRuntimeCLI(t, []string{"simulate", "gc"}, runtime)
 	if code == exitSuccess || !strings.Contains(strings.ToLower(busyStderr), "busy") {
 		t.Fatalf("contended simulate gc code=%d stderr=%q", code, busyStderr)
 	}
-	if recoveryCalled || dispatchCalled {
-		t.Fatalf("contended simulate gc reached recovery=%t dispatch=%t before ownership", recoveryCalled, dispatchCalled)
+	if probe.recoveryCalled || probe.dispatchCalled {
+		t.Fatalf("contended simulate gc reached recovery=%t dispatch=%t before ownership", probe.recoveryCalled, probe.dispatchCalled)
 	}
+}
 
-	if _, err := fmt.Fprintln(stdin, "release"); err != nil {
-		t.Fatalf("signal holder release: %v", err)
-	}
-	if err := command.Wait(); err != nil {
-		t.Fatalf("holder process exit: %v stderr=%q", err, stderr.String())
-	}
-	waited = true
-
-	recoveryCalled, dispatchCalled = false, false
+func requirePhase9UncontendedRuntime(t *testing.T, runtime cliRuntime, probe *phase9RuntimeProbe) {
+	t.Helper()
 	_, retryStderr, code := captureRuntimeCLI(t, []string{"simulate", "gc"}, runtime)
 	if code != exitSuccess {
 		t.Fatalf("simulate gc after holder release code=%d stderr=%q", code, retryStderr)
 	}
-	if !recoveryCalled || !dispatchCalled {
-		t.Fatalf("reacquired simulate gc recovery=%t dispatch=%t", recoveryCalled, dispatchCalled)
+	if !probe.recoveryCalled || !probe.dispatchCalled {
+		t.Fatalf("reacquired simulate gc recovery=%t dispatch=%t", probe.recoveryCalled, probe.dispatchCalled)
 	}
 }
 

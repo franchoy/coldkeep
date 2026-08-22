@@ -41,9 +41,9 @@ func TestLinuxNoReplacePreservesExistingDestination(t *testing.T) {
 func TestLinuxNoReplaceClosesFinalWindow(t *testing.T) {
 	root := t.TempDir()
 	destination := filepath.Join(root, "restored.bin")
-	withLinuxOps(t, nil, nil, nil, func() error {
+	withLinuxOps(t, linuxOpsOverride{beforePublish: func() error {
 		return os.WriteFile(destination, []byte("raced"), 0o600)
-	})
+	}})
 	_, err := installLinuxTestContent(destination, root, false, []byte("new-content"))
 	if !errors.Is(err, ErrDestinationExists) {
 		t.Fatalf("install error=%v, want ErrDestinationExists", err)
@@ -54,12 +54,9 @@ func TestLinuxNoReplaceClosesFinalWindow(t *testing.T) {
 func TestLinuxNoReplaceUsesAtomicLinkFallback(t *testing.T) {
 	root := t.TempDir()
 	destination := filepath.Join(root, "restored.bin")
-	withLinuxOps(t,
-		func(int, string, int, string, uint) error { return unix.ENOSYS },
-		nil,
-		nil,
-		nil,
-	)
+	withLinuxOps(t, linuxOpsOverride{
+		renameNoReplace: func(int, string, int, string, uint) error { return unix.ENOSYS },
+	})
 	if _, err := installLinuxTestContent(destination, root, false, []byte("fallback")); err != nil {
 		t.Fatalf("fallback install: %v", err)
 	}
@@ -70,12 +67,10 @@ func TestLinuxNoReplaceUsesAtomicLinkFallback(t *testing.T) {
 func TestLinuxNoReplaceFailsClosedWhenAtomicPrimitivesUnavailable(t *testing.T) {
 	root := t.TempDir()
 	destination := filepath.Join(root, "restored.bin")
-	withLinuxOps(t,
-		func(int, string, int, string, uint) error { return unix.ENOSYS },
-		func(int, string, int, string, int) error { return unix.EOPNOTSUPP },
-		nil,
-		nil,
-	)
+	withLinuxOps(t, linuxOpsOverride{
+		renameNoReplace: func(int, string, int, string, uint) error { return unix.ENOSYS },
+		link:            func(int, string, int, string, int) error { return unix.EOPNOTSUPP },
+	})
 	_, err := installLinuxTestContent(destination, root, false, []byte("must-not-publish"))
 	if !errors.Is(err, ErrAtomicNoReplaceUnsupported) {
 		t.Fatalf("install error=%v, want ErrAtomicNoReplaceUnsupported", err)
@@ -175,6 +170,22 @@ func TestLinuxBestEffortMetadataFailureReturnsWarning(t *testing.T) {
 }
 
 func TestLinuxMetadataTargetsRetainedPublishedObject(t *testing.T) {
+	fixture, pending := beginLinuxRetainedMetadataProof(t)
+	if _, err := pending.Publish(); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	requireLinuxRetainedMetadata(t, fixture)
+}
+
+type linuxRetainedMetadataFixture struct {
+	destination string
+	moved       string
+	mode        os.FileMode
+	mtime       time.Time
+}
+
+func beginLinuxRetainedMetadataProof(t *testing.T) (linuxRetainedMetadataFixture, *Pending) {
+	t.Helper()
 	root := t.TempDir()
 	destination := filepath.Join(root, "restored.bin")
 	moved := filepath.Join(root, "retained-object.bin")
@@ -196,29 +207,31 @@ func TestLinuxMetadataTargetsRetainedPublishedObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	defer pending.Abort()
+	t.Cleanup(func() { _ = pending.Abort() })
 	if err := writeAll(pending, []byte("retained")); err != nil {
 		t.Fatal(err)
 	}
 	if err := pending.SyncAndCloseWriter(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pending.Publish(); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-	movedInfo, err := os.Stat(moved)
+	return linuxRetainedMetadataFixture{destination: destination, moved: moved, mode: mode, mtime: mtime}, pending
+}
+
+func requireLinuxRetainedMetadata(t *testing.T, fixture linuxRetainedMetadataFixture) {
+	t.Helper()
+	movedInfo, err := os.Stat(fixture.moved)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if movedInfo.Mode().Perm() != mode || !movedInfo.ModTime().UTC().Equal(mtime) {
+	if movedInfo.Mode().Perm() != fixture.mode || !movedInfo.ModTime().UTC().Equal(fixture.mtime) {
 		t.Fatalf("retained object metadata mode=%o mtime=%v", movedInfo.Mode().Perm(), movedInfo.ModTime())
 	}
-	replacementInfo, err := os.Stat(destination)
+	replacementInfo, err := os.Stat(fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replacementInfo.Mode().Perm() == mode {
-		t.Fatalf("pathname replacement unexpectedly received retained-object mode %o", mode)
+	if replacementInfo.Mode().Perm() == fixture.mode {
+		t.Fatalf("pathname replacement unexpectedly received retained-object mode %o", fixture.mode)
 	}
 }
 
@@ -261,9 +274,9 @@ func testLinuxParentReplacement(t *testing.T, beforeCreate bool) {
 		return os.Symlink(outside, root)
 	}
 	if beforeCreate {
-		withLinuxOps(t, nil, nil, swap, nil)
+		withLinuxOps(t, linuxOpsOverride{beforeCreate: swap})
 	} else {
-		withLinuxOps(t, nil, nil, nil, swap)
+		withLinuxOps(t, linuxOpsOverride{beforePublish: swap})
 	}
 	_, err := installLinuxTestContent(destination, root, false, []byte("confined"))
 	if !errors.Is(err, ErrParentChanged) {
@@ -293,23 +306,24 @@ func installLinuxTestContent(destination, root string, overwrite bool, content [
 	return pending.Publish()
 }
 
-func withLinuxOps(
-	t *testing.T,
-	rename func(int, string, int, string, uint) error,
-	link func(int, string, int, string, int) error,
-	beforeCreate func() error,
-	beforePublish func() error,
-) {
+type linuxOpsOverride struct {
+	renameNoReplace func(int, string, int, string, uint) error
+	link            func(int, string, int, string, int) error
+	beforeCreate    func() error
+	beforePublish   func() error
+}
+
+func withLinuxOps(t *testing.T, override linuxOpsOverride) {
 	t.Helper()
 	original := linuxOps
-	if rename != nil {
-		linuxOps.renameNoReplace = rename
+	if override.renameNoReplace != nil {
+		linuxOps.renameNoReplace = override.renameNoReplace
 	}
-	if link != nil {
-		linuxOps.link = link
+	if override.link != nil {
+		linuxOps.link = override.link
 	}
-	linuxOps.beforeCreate = beforeCreate
-	linuxOps.beforePublish = beforePublish
+	linuxOps.beforeCreate = override.beforeCreate
+	linuxOps.beforePublish = override.beforePublish
 	t.Cleanup(func() { linuxOps = original })
 }
 

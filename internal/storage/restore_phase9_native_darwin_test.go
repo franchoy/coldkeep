@@ -20,7 +20,12 @@ func TestRestoreWithTrustedRootAllowsOuterAliasForExactOutputPathPhase9DarwinPri
 		t.Fatal(err)
 	}
 	defer unix.Close(parentFD)
+	proveDarwinExclusiveRename(t, root, parentFD)
+	proveDarwinAtomicLinkFallback(t, root, parentFD)
+}
 
+func proveDarwinExclusiveRename(t *testing.T, root string, parentFD int) {
+	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, "rename-source"), []byte("rename"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +35,10 @@ func TestRestoreWithTrustedRootAllowsOuterAliasForExactOutputPathPhase9DarwinPri
 	if got, err := os.ReadFile(filepath.Join(root, "rename-target")); err != nil || string(got) != "rename" {
 		t.Fatalf("exclusive rename bytes=%q err=%v", got, err)
 	}
+}
 
+func proveDarwinAtomicLinkFallback(t *testing.T, root string, parentFD int) {
+	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, "link-source"), []byte("link"), 0o600); err != nil {
 		t.Fatal(err)
 	}
