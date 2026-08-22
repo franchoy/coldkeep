@@ -50,20 +50,36 @@ func beginPlatform(request Request) (nativePending, error) {
 	if err != nil {
 		return nil, err
 	}
+	cleanupParent := true
+	defer func() {
+		if cleanupParent {
+			_ = windows.CloseHandle(parentHandle)
+		}
+	}()
 	tempName, err := temporaryName()
 	if err != nil {
-		_ = windows.CloseHandle(parentHandle)
 		return nil, err
 	}
+	objectHandle, writer, err := windowsCreateTemporary(parentHandle, parentPath, tempName)
+	if err != nil {
+		return nil, err
+	}
+	cleanupParent = false
+	return &windowsPending{
+		parentHandle: parentHandle, objectHandle: objectHandle, writerFile: writer,
+		parentPath: parentPath, tempName: tempName, finalName: finalName,
+		tempPresent: true,
+	}, nil
+}
+
+func windowsCreateTemporary(parentHandle windows.Handle, parentPath, tempName string) (windows.Handle, *os.File, error) {
 	if windowsOps.beforeCreate != nil {
 		if err := windowsOps.beforeCreate(); err != nil {
-			_ = windows.CloseHandle(parentHandle)
-			return nil, fmt.Errorf("secure install before-create hook: %w", err)
+			return 0, nil, fmt.Errorf("secure install before-create hook: %w", err)
 		}
 	}
 	if err := windowsValidateParentIdentity(parentHandle, parentPath); err != nil {
-		_ = windows.CloseHandle(parentHandle)
-		return nil, err
+		return 0, nil, err
 	}
 	objectHandle, err := windowsCreateRelative(
 		parentHandle,
@@ -74,36 +90,32 @@ func beginPlatform(request Request) (nativePending, error) {
 		0,
 	)
 	if err != nil {
-		_ = windows.CloseHandle(parentHandle)
-		return nil, fmt.Errorf("secure install create temporary object: %w", err)
+		return 0, nil, fmt.Errorf("secure install create temporary object: %w", err)
 	}
-	process, err := windows.GetCurrentProcess()
+	writer, err := windowsDuplicateWriter(objectHandle, tempName)
 	if err != nil {
 		_ = windowsDeleteObject(objectHandle)
 		_ = windows.CloseHandle(objectHandle)
-		_ = windows.CloseHandle(parentHandle)
+		return 0, nil, err
+	}
+	return objectHandle, writer, nil
+}
+
+func windowsDuplicateWriter(objectHandle windows.Handle, tempName string) (*os.File, error) {
+	process, err := windows.GetCurrentProcess()
+	if err != nil {
 		return nil, err
 	}
 	var writerHandle windows.Handle
 	if err := windows.DuplicateHandle(process, objectHandle, process, &writerHandle, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
-		_ = windowsDeleteObject(objectHandle)
-		_ = windows.CloseHandle(objectHandle)
-		_ = windows.CloseHandle(parentHandle)
 		return nil, fmt.Errorf("secure install duplicate temporary object: %w", err)
 	}
 	writer := os.NewFile(uintptr(writerHandle), tempName)
 	if writer == nil {
 		_ = windows.CloseHandle(writerHandle)
-		_ = windowsDeleteObject(objectHandle)
-		_ = windows.CloseHandle(objectHandle)
-		_ = windows.CloseHandle(parentHandle)
 		return nil, fmt.Errorf("secure install construct temporary writer")
 	}
-	return &windowsPending{
-		parentHandle: parentHandle, objectHandle: objectHandle, writerFile: writer,
-		parentPath: parentPath, tempName: tempName, finalName: finalName,
-		tempPresent: true,
-	}, nil
+	return writer, nil
 }
 
 func (p *windowsPending) writer() *os.File { return p.writerFile }
@@ -117,9 +129,22 @@ func (p *windowsPending) publish(overwrite bool) error {
 	if err := windowsValidateParentIdentity(p.parentHandle, p.parentPath); err != nil {
 		return err
 	}
-	name, err := windows.UTF16FromString(p.finalName)
+	buffer, err := windowsRenameBuffer(p.parentHandle, p.finalName, overwrite)
 	if err != nil {
-		return fmt.Errorf("secure install encode destination name: %w", err)
+		return err
+	}
+	if err := p.renameRetainedObject(buffer, overwrite); err != nil {
+		return err
+	}
+	p.published = true
+	p.tempPresent = false
+	return nil
+}
+
+func windowsRenameBuffer(parentHandle windows.Handle, finalName string, overwrite bool) ([]byte, error) {
+	name, err := windows.UTF16FromString(finalName)
+	if err != nil {
+		return nil, fmt.Errorf("secure install encode destination name: %w", err)
 	}
 	nameBytes := (len(name) - 1) * 2
 	var layout fileRenameInformation
@@ -129,46 +154,29 @@ func (p *windowsPending) publish(overwrite bool) error {
 	if overwrite {
 		rename.ReplaceIfExists = windows.FILE_RENAME_REPLACE_IF_EXISTS
 	}
-	rename.RootDirectory = p.parentHandle
+	rename.RootDirectory = parentHandle
 	rename.FileNameLength = uint32(nameBytes)
 	copy((*[windows.MAX_LONG_PATH]uint16)(unsafe.Pointer(&rename.FileName[0]))[:nameBytes/2:nameBytes/2], name[:len(name)-1])
+	return buffer, nil
+}
+
+func (p *windowsPending) renameRetainedObject(buffer []byte, overwrite bool) error {
 	var iosb windows.IO_STATUS_BLOCK
+	bufferSize := len(buffer)
 	if err := windows.NtSetInformationFile(p.objectHandle, &iosb, &buffer[0], uint32(bufferSize), windows.FileRenameInformation); err != nil {
 		if !overwrite && errors.Is(err, windows.STATUS_OBJECT_NAME_COLLISION) {
 			return fmt.Errorf("%w: %s", ErrDestinationExists, p.finalName)
 		}
 		return fmt.Errorf("secure install retained-object publication: %w", err)
 	}
-	p.published = true
-	p.tempPresent = false
 	return nil
 }
 
 func (p *windowsPending) applyMetadata(metadata Metadata) []metadataFailure {
 	failures := make([]metadataFailure, 0, 3)
 	if metadata.Mode != nil {
-		var basic fileBasicInformation
-		if err := windows.GetFileInformationByHandleEx(
-			p.objectHandle,
-			windows.FileBasicInfo,
-			(*byte)(unsafe.Pointer(&basic)),
-			uint32(unsafe.Sizeof(basic)),
-		); err != nil {
+		if err := p.applyMode(*metadata.Mode); err != nil {
 			failures = append(failures, metadataFailure{"chmod", err})
-		} else {
-			if metadata.Mode.Perm()&0o200 == 0 {
-				basic.FileAttributes |= windows.FILE_ATTRIBUTE_READONLY
-			} else {
-				basic.FileAttributes &^= windows.FILE_ATTRIBUTE_READONLY
-			}
-			if err := windows.SetFileInformationByHandle(
-				p.objectHandle,
-				windows.FileBasicInfo,
-				(*byte)(unsafe.Pointer(&basic)),
-				uint32(unsafe.Sizeof(basic)),
-			); err != nil {
-				failures = append(failures, metadataFailure{"chmod", err})
-			}
 		}
 	}
 	if metadata.ModifiedAt != nil {
@@ -183,30 +191,74 @@ func (p *windowsPending) applyMetadata(metadata Metadata) []metadataFailure {
 	return failures
 }
 
+func (p *windowsPending) applyMode(mode os.FileMode) error {
+	var basic fileBasicInformation
+	if err := windows.GetFileInformationByHandleEx(
+		p.objectHandle,
+		windows.FileBasicInfo,
+		(*byte)(unsafe.Pointer(&basic)),
+		uint32(unsafe.Sizeof(basic)),
+	); err != nil {
+		return err
+	}
+	if mode.Perm()&0o200 == 0 {
+		basic.FileAttributes |= windows.FILE_ATTRIBUTE_READONLY
+	} else {
+		basic.FileAttributes &^= windows.FILE_ATTRIBUTE_READONLY
+	}
+	return windows.SetFileInformationByHandle(
+		p.objectHandle,
+		windows.FileBasicInfo,
+		(*byte)(unsafe.Pointer(&basic)),
+		uint32(unsafe.Sizeof(basic)),
+	)
+}
+
 func (p *windowsPending) abort() error {
 	var errs []error
-	if p.writerFile != nil {
-		if err := p.writerFile.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
-			errs = append(errs, err)
-		}
-		p.writerFile = nil
-	}
-	if p.tempPresent && p.objectHandle != 0 {
-		if err := windowsDeleteObject(p.objectHandle); err != nil {
-			errs = append(errs, fmt.Errorf("secure install remove retained temporary object: %w", err))
-		} else {
-			p.tempPresent = false
-		}
-	}
-	if p.objectHandle != 0 {
-		errs = append(errs, windows.CloseHandle(p.objectHandle))
-		p.objectHandle = 0
-	}
-	if p.parentHandle != 0 {
-		errs = append(errs, windows.CloseHandle(p.parentHandle))
-		p.parentHandle = 0
-	}
+	errs = append(errs, p.closeWriter(), p.removeTemporary(), p.closeObject(), p.closeParent())
 	return errors.Join(errs...)
+}
+
+func (p *windowsPending) closeWriter() error {
+	if p.writerFile == nil {
+		return nil
+	}
+	err := p.writerFile.Close()
+	p.writerFile = nil
+	if errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+func (p *windowsPending) removeTemporary() error {
+	if !p.tempPresent || p.objectHandle == 0 {
+		return nil
+	}
+	if err := windowsDeleteObject(p.objectHandle); err != nil {
+		return fmt.Errorf("secure install remove retained temporary object: %w", err)
+	}
+	p.tempPresent = false
+	return nil
+}
+
+func (p *windowsPending) closeObject() error {
+	if p.objectHandle == 0 {
+		return nil
+	}
+	err := windows.CloseHandle(p.objectHandle)
+	p.objectHandle = 0
+	return err
+}
+
+func (p *windowsPending) closeParent() error {
+	if p.parentHandle == 0 {
+		return nil
+	}
+	err := windows.CloseHandle(p.parentHandle)
+	p.parentHandle = 0
+	return err
 }
 
 func windowsOpenParent(request Request) (windows.Handle, string, string, error) {
@@ -219,14 +271,30 @@ func windowsOpenParent(request Request) (windows.Handle, string, string, error) 
 		return 0, "", "", err
 	}
 	parts := strings.Split(rel, string(os.PathSeparator))
-	rootName, err := windows.NewNTUnicodeString(windowsNTPath(anchor))
+	parent, err := windowsOpenTrustedRoot(anchor)
 	if err != nil {
 		return 0, "", "", err
 	}
-	oa := &windows.OBJECT_ATTRIBUTES{
-		ObjectName: rootName,
-		Attributes: windows.OBJ_CASE_INSENSITIVE,
+	parentPath := anchor
+	for _, part := range parts[:len(parts)-1] {
+		next, openErr := windowsOpenParentComponent(parent, part)
+		if openErr != nil {
+			_ = windows.CloseHandle(parent)
+			return 0, "", "", openErr
+		}
+		_ = windows.CloseHandle(parent)
+		parent = next
+		parentPath = filepath.Join(parentPath, part)
 	}
+	return parent, parentPath, parts[len(parts)-1], nil
+}
+
+func windowsOpenTrustedRoot(anchor string) (windows.Handle, error) {
+	rootName, err := windows.NewNTUnicodeString(windowsNTPath(anchor))
+	if err != nil {
+		return 0, err
+	}
+	oa := &windows.OBJECT_ATTRIBUTES{ObjectName: rootName, Attributes: windows.OBJ_CASE_INSENSITIVE}
 	oa.Length = uint32(unsafe.Sizeof(*oa))
 	var iosb windows.IO_STATUS_BLOCK
 	var allocation int64
@@ -244,54 +312,64 @@ func windowsOpenParent(request Request) (windows.Handle, string, string, error) 
 		0,
 		0,
 	); err != nil {
-		return 0, "", "", fmt.Errorf("secure install open trusted root: %w", err)
+		return 0, fmt.Errorf("secure install open trusted root: %w", err)
 	}
-	var rootInfo windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(parent, &rootInfo); err != nil || rootInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+	if err := windowsValidateOpenedRoot(parent); err != nil {
 		_ = windows.CloseHandle(parent)
-		if err != nil {
-			return 0, "", "", fmt.Errorf("secure install inspect trusted root: %w", err)
-		}
-		return 0, "", "", fmt.Errorf("secure install trusted root is a reparse point")
+		return 0, err
 	}
-	parentPath := anchor
-	for _, part := range parts[:len(parts)-1] {
-		next, openErr := windowsCreateRelative(
+	return parent, nil
+}
+
+func windowsValidateOpenedRoot(parent windows.Handle) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(parent, &info); err != nil {
+		return fmt.Errorf("secure install inspect trusted root: %w", err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("secure install trusted root is a reparse point")
+	}
+	return nil
+}
+
+func windowsOpenParentComponent(parent windows.Handle, part string) (windows.Handle, error) {
+	next, err := windowsCreateRelative(
+		parent,
+		part,
+		windows.FILE_LIST_DIRECTORY|windows.FILE_TRAVERSE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+		windows.FILE_OPEN,
+		windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
+		windows.FILE_ATTRIBUTE_DIRECTORY,
+	)
+	if errors.Is(err, windows.STATUS_OBJECT_NAME_NOT_FOUND) || errors.Is(err, windows.STATUS_OBJECT_PATH_NOT_FOUND) {
+		next, err = windowsCreateRelative(
 			parent,
 			part,
 			windows.FILE_LIST_DIRECTORY|windows.FILE_TRAVERSE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
-			windows.FILE_OPEN,
+			windows.FILE_CREATE,
 			windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
 			windows.FILE_ATTRIBUTE_DIRECTORY,
 		)
-		if errors.Is(openErr, windows.STATUS_OBJECT_NAME_NOT_FOUND) || errors.Is(openErr, windows.STATUS_OBJECT_PATH_NOT_FOUND) {
-			next, openErr = windowsCreateRelative(
-				parent,
-				part,
-				windows.FILE_LIST_DIRECTORY|windows.FILE_TRAVERSE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
-				windows.FILE_CREATE,
-				windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
-				windows.FILE_ATTRIBUTE_DIRECTORY,
-			)
-		}
-		if openErr != nil {
-			_ = windows.CloseHandle(parent)
-			return 0, "", "", fmt.Errorf("secure install open or create parent component %q: %w", part, openErr)
-		}
-		var info windows.ByHandleFileInformation
-		if err := windows.GetFileInformationByHandle(next, &info); err != nil || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-			_ = windows.CloseHandle(next)
-			_ = windows.CloseHandle(parent)
-			if err != nil {
-				return 0, "", "", err
-			}
-			return 0, "", "", fmt.Errorf("secure install parent component %q is a reparse point", part)
-		}
-		_ = windows.CloseHandle(parent)
-		parent = next
-		parentPath = filepath.Join(parentPath, part)
 	}
-	return parent, parentPath, parts[len(parts)-1], nil
+	if err != nil {
+		return 0, fmt.Errorf("secure install open or create parent component %q: %w", part, err)
+	}
+	if err := windowsValidateParentComponent(next, part); err != nil {
+		_ = windows.CloseHandle(next)
+		return 0, err
+	}
+	return next, nil
+}
+
+func windowsValidateParentComponent(handle windows.Handle, part string) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return err
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("secure install parent component %q is a reparse point", part)
+	}
+	return nil
 }
 
 func windowsCreateRelative(root windows.Handle, name string, access, disposition, options, attributes uint32) (windows.Handle, error) {

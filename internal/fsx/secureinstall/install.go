@@ -113,15 +113,24 @@ func (p *Pending) Publish() (Result, error) {
 	p.published = true
 
 	failures := p.native.applyMetadata(p.request.Metadata)
-	result := Result{Destination: p.request.Destination}
+	result := metadataResult(p.request.Destination, failures)
+	closeErr := p.native.abort()
+	p.finished = true
+	return p.finishPublish(result, failures, closeErr)
+}
+
+func metadataResult(destination string, failures []metadataFailure) Result {
+	result := Result{Destination: destination}
 	for _, failure := range failures {
 		result.Warnings = append(result.Warnings, Warning{
 			Operation: failure.operation,
 			Detail:    failure.err.Error(),
 		})
 	}
-	closeErr := p.native.abort()
-	p.finished = true
+	return result
+}
+
+func (p *Pending) finishPublish(result Result, failures []metadataFailure, closeErr error) (Result, error) {
 	if len(failures) > 0 && p.request.Metadata.Strict {
 		return result, errors.Join(metadataFailuresError(p.request.Destination, failures), closeErr)
 	}
@@ -143,27 +152,49 @@ func (p *Pending) Abort() error {
 func normalizeRequest(request Request) (Request, error) {
 	destination := strings.TrimSpace(request.Destination)
 	trustedRoot := strings.TrimSpace(request.TrustedRoot)
-	if destination == "" || trustedRoot == "" {
-		return Request{}, fmt.Errorf("secure install destination and trusted root are required")
+	if err := validateRequestPaths(destination, trustedRoot); err != nil {
+		return Request{}, err
 	}
-	if strings.HasSuffix(destination, "/") || strings.HasSuffix(destination, string(os.PathSeparator)) {
-		return Request{}, fmt.Errorf("secure install destination must name an exact file")
-	}
-	absDestination, err := filepath.Abs(destination)
+	absDestination, err := absoluteInstallPath(destination, "destination")
 	if err != nil {
-		return Request{}, fmt.Errorf("secure install resolve destination: %w", err)
+		return Request{}, err
 	}
-	absRoot, err := filepath.Abs(trustedRoot)
+	absRoot, err := absoluteInstallPath(trustedRoot, "trusted root")
 	if err != nil {
-		return Request{}, fmt.Errorf("secure install resolve trusted root: %w", err)
+		return Request{}, err
 	}
-	rel, err := filepath.Rel(absRoot, absDestination)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
-		return Request{}, fmt.Errorf("secure install destination escapes trusted root")
+	if err := validateDestinationContainment(absRoot, absDestination); err != nil {
+		return Request{}, err
 	}
 	request.Destination = filepath.Clean(absDestination)
 	request.TrustedRoot = filepath.Clean(absRoot)
 	return request, nil
+}
+
+func validateRequestPaths(destination, trustedRoot string) error {
+	if destination == "" || trustedRoot == "" {
+		return fmt.Errorf("secure install destination and trusted root are required")
+	}
+	if strings.HasSuffix(destination, "/") || strings.HasSuffix(destination, string(os.PathSeparator)) {
+		return fmt.Errorf("secure install destination must name an exact file")
+	}
+	return nil
+}
+
+func absoluteInstallPath(path, label string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("secure install resolve %s: %w", label, err)
+	}
+	return absPath, nil
+}
+
+func validateDestinationContainment(absRoot, absDestination string) error {
+	rel, err := filepath.Rel(absRoot, absDestination)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("secure install destination escapes trusted root")
+	}
+	return nil
 }
 
 func temporaryName() (string, error) {

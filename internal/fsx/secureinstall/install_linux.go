@@ -55,29 +55,46 @@ func beginPlatform(request Request) (nativePending, error) {
 		}
 	}()
 
+	objectFD, writer, tempName, err := linuxCreateTemporary(parentFD, parentPath)
+	if err != nil {
+		return nil, err
+	}
+
+	cleanupParent = false
+	return &linuxPending{
+		parentFD: parentFD, objectFD: objectFD, writerFile: writer,
+		parentPath: parentPath, tempName: tempName, finalName: finalName,
+		tempPresent: true,
+	}, nil
+}
+
+func linuxCreateTemporary(parentFD int, parentPath string) (int, *os.File, string, error) {
 	if linuxOps.beforeCreate != nil {
 		if err := linuxOps.beforeCreate(); err != nil {
-			return nil, fmt.Errorf("secure install before-create hook: %w", err)
+			return -1, nil, "", fmt.Errorf("secure install before-create hook: %w", err)
 		}
 	}
 	if err := linuxValidateParentIdentity(parentFD, parentPath); err != nil {
-		return nil, err
+		return -1, nil, "", err
 	}
 	tempName, err := temporaryName()
 	if err != nil {
-		return nil, err
+		return -1, nil, "", err
 	}
 	objectFD, err := unix.Openat(parentFD, tempName, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("secure install create temporary object: %w", err)
+		return -1, nil, "", fmt.Errorf("secure install create temporary object: %w", err)
 	}
-	cleanupObject := true
-	defer func() {
-		if cleanupObject {
-			_ = unix.Unlinkat(parentFD, tempName, 0)
-			_ = unix.Close(objectFD)
-		}
-	}()
+	writer, err := linuxDuplicateWriter(objectFD, tempName)
+	if err != nil {
+		_ = unix.Unlinkat(parentFD, tempName, 0)
+		_ = unix.Close(objectFD)
+		return -1, nil, "", err
+	}
+	return objectFD, writer, tempName, nil
+}
+
+func linuxDuplicateWriter(objectFD int, tempName string) (*os.File, error) {
 	writerFD, err := unix.Dup(objectFD)
 	if err != nil {
 		return nil, fmt.Errorf("secure install duplicate temporary object: %w", err)
@@ -87,19 +104,26 @@ func beginPlatform(request Request) (nativePending, error) {
 		_ = unix.Close(writerFD)
 		return nil, fmt.Errorf("secure install construct temporary writer")
 	}
-
-	cleanupParent = false
-	cleanupObject = false
-	return &linuxPending{
-		parentFD: parentFD, objectFD: objectFD, writerFile: writer,
-		parentPath: parentPath, tempName: tempName, finalName: finalName,
-		tempPresent: true,
-	}, nil
+	return writer, nil
 }
 
 func (p *linuxPending) writer() *os.File { return p.writerFile }
 
 func (p *linuxPending) publish(overwrite bool) error {
+	if err := p.preparePublish(); err != nil {
+		return err
+	}
+	if overwrite {
+		if err := p.publishOverwrite(); err != nil {
+			return err
+		}
+	} else if err := p.publishNoReplace(); err != nil {
+		return err
+	}
+	return p.finishPublish()
+}
+
+func (p *linuxPending) preparePublish() error {
 	if linuxOps.beforePublish != nil {
 		if err := linuxOps.beforePublish(); err != nil {
 			return fmt.Errorf("secure install before-publish hook: %w", err)
@@ -111,39 +135,53 @@ func (p *linuxPending) publish(overwrite bool) error {
 	if err := linuxValidateTemporaryIdentity(p.parentFD, p.tempName, p.objectFD); err != nil {
 		return err
 	}
-	if overwrite {
-		if err := unix.Renameat(p.parentFD, p.tempName, p.parentFD, p.finalName); err != nil {
-			return fmt.Errorf("secure install publish overwrite: %w", err)
-		}
+	return nil
+}
+
+func (p *linuxPending) publishOverwrite() error {
+	if err := unix.Renameat(p.parentFD, p.tempName, p.parentFD, p.finalName); err != nil {
+		return fmt.Errorf("secure install publish overwrite: %w", err)
+	}
+	p.published = true
+	p.tempPresent = false
+	return nil
+}
+
+func (p *linuxPending) publishNoReplace() error {
+	err := linuxOps.renameNoReplace(p.parentFD, p.tempName, p.parentFD, p.finalName, unix.RENAME_NOREPLACE)
+	switch {
+	case err == nil:
 		p.published = true
 		p.tempPresent = false
-	} else {
-		err := linuxOps.renameNoReplace(p.parentFD, p.tempName, p.parentFD, p.finalName, unix.RENAME_NOREPLACE)
-		switch {
-		case err == nil:
-			p.published = true
-			p.tempPresent = false
-		case errors.Is(err, unix.EEXIST):
-			return fmt.Errorf("%w: %s", ErrDestinationExists, p.finalName)
-		case linuxRenameNoReplaceUnsupported(err):
-			if linkErr := linuxOps.link(p.parentFD, p.tempName, p.parentFD, p.finalName, 0); linkErr != nil {
-				if errors.Is(linkErr, unix.EEXIST) {
-					return fmt.Errorf("%w: %s", ErrDestinationExists, p.finalName)
-				}
-				if linuxLinkUnsupported(linkErr) {
-					return fmt.Errorf("%w: rename=%v link=%v", ErrAtomicNoReplaceUnsupported, err, linkErr)
-				}
-				return fmt.Errorf("secure install atomic link publication: %w", linkErr)
-			}
-			p.published = true
-			if unlinkErr := unix.Unlinkat(p.parentFD, p.tempName, 0); unlinkErr != nil {
-				return fmt.Errorf("secure install remove linked temporary name: %w", unlinkErr)
-			}
-			p.tempPresent = false
-		default:
-			return fmt.Errorf("secure install no-replace publication: %w", err)
-		}
+		return nil
+	case errors.Is(err, unix.EEXIST):
+		return fmt.Errorf("%w: %s", ErrDestinationExists, p.finalName)
+	case linuxRenameNoReplaceUnsupported(err):
+		return p.publishByLink(err)
+	default:
+		return fmt.Errorf("secure install no-replace publication: %w", err)
 	}
+}
+
+func (p *linuxPending) publishByLink(renameErr error) error {
+	if linkErr := linuxOps.link(p.parentFD, p.tempName, p.parentFD, p.finalName, 0); linkErr != nil {
+		if errors.Is(linkErr, unix.EEXIST) {
+			return fmt.Errorf("%w: %s", ErrDestinationExists, p.finalName)
+		}
+		if linuxLinkUnsupported(linkErr) {
+			return fmt.Errorf("%w: rename=%v link=%v", ErrAtomicNoReplaceUnsupported, renameErr, linkErr)
+		}
+		return fmt.Errorf("secure install atomic link publication: %w", linkErr)
+	}
+	p.published = true
+	if unlinkErr := unix.Unlinkat(p.parentFD, p.tempName, 0); unlinkErr != nil {
+		return fmt.Errorf("secure install remove linked temporary name: %w", unlinkErr)
+	}
+	p.tempPresent = false
+	return nil
+}
+
+func (p *linuxPending) finishPublish() error {
 	if err := linuxOps.syncParent(p.parentFD); err != nil {
 		return fmt.Errorf("secure install sync retained parent: %w", err)
 	}
@@ -178,32 +216,50 @@ func (p *linuxPending) applyMetadata(metadata Metadata) []metadataFailure {
 
 func (p *linuxPending) abort() error {
 	var errs []error
-	if p.writerFile != nil {
-		if err := p.writerFile.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
-			errs = append(errs, err)
-		}
-		p.writerFile = nil
-	}
-	if p.tempPresent && p.parentFD >= 0 && p.tempName != "" {
-		if err := unix.Unlinkat(p.parentFD, p.tempName, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-			errs = append(errs, fmt.Errorf("secure install remove retained temporary object: %w", err))
-		} else {
-			p.tempPresent = false
-		}
-	}
-	if p.objectFD >= 0 {
-		if err := unix.Close(p.objectFD); err != nil {
-			errs = append(errs, err)
-		}
-		p.objectFD = -1
-	}
-	if p.parentFD >= 0 {
-		if err := unix.Close(p.parentFD); err != nil {
-			errs = append(errs, err)
-		}
-		p.parentFD = -1
-	}
+	errs = append(errs, p.closeWriter(), p.removeTemporary(), p.closeObject(), p.closeParent())
 	return errors.Join(errs...)
+}
+
+func (p *linuxPending) closeWriter() error {
+	if p.writerFile == nil {
+		return nil
+	}
+	err := p.writerFile.Close()
+	p.writerFile = nil
+	if errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+func (p *linuxPending) removeTemporary() error {
+	if !p.tempPresent || p.parentFD < 0 || p.tempName == "" {
+		return nil
+	}
+	err := unix.Unlinkat(p.parentFD, p.tempName, 0)
+	if err != nil && !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("secure install remove retained temporary object: %w", err)
+	}
+	p.tempPresent = false
+	return nil
+}
+
+func (p *linuxPending) closeObject() error {
+	if p.objectFD < 0 {
+		return nil
+	}
+	err := unix.Close(p.objectFD)
+	p.objectFD = -1
+	return err
+}
+
+func (p *linuxPending) closeParent() error {
+	if p.parentFD < 0 {
+		return nil
+	}
+	err := unix.Close(p.parentFD)
+	p.parentFD = -1
+	return err
 }
 
 func linuxOpenParent(request Request) (int, string, string, error) {
@@ -224,23 +280,34 @@ func linuxOpenParent(request Request) (int, string, string, error) {
 	}
 	parentPath := anchor
 	for _, part := range parentParts {
-		next, openErr := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-		if errors.Is(openErr, unix.ENOENT) {
-			if mkdirErr := unix.Mkdirat(fd, part, 0o755); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
-				_ = unix.Close(fd)
-				return -1, "", "", fmt.Errorf("secure install create parent component %q: %w", part, mkdirErr)
-			}
-			next, openErr = unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-		}
+		next, openErr := linuxOpenParentComponent(fd, part)
 		if openErr != nil {
 			_ = unix.Close(fd)
-			return -1, "", "", fmt.Errorf("secure install open parent component %q: %w", part, openErr)
+			return -1, "", "", openErr
 		}
 		_ = unix.Close(fd)
 		fd = next
 		parentPath = filepath.Join(parentPath, part)
 	}
 	return fd, parentPath, finalName, nil
+}
+
+func linuxOpenParentComponent(parentFD int, part string) (int, error) {
+	next, err := unix.Openat(parentFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if !errors.Is(err, unix.ENOENT) {
+		if err != nil {
+			return -1, fmt.Errorf("secure install open parent component %q: %w", part, err)
+		}
+		return next, nil
+	}
+	if mkdirErr := unix.Mkdirat(parentFD, part, 0o755); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
+		return -1, fmt.Errorf("secure install create parent component %q: %w", part, mkdirErr)
+	}
+	next, err = unix.Openat(parentFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, fmt.Errorf("secure install open parent component %q: %w", part, err)
+	}
+	return next, nil
 }
 
 func linuxValidateParentIdentity(fd int, parentPath string) error {
