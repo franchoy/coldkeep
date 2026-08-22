@@ -108,8 +108,8 @@ coldkeep uses:
 - backend-specific container selection and locking semantics
 - an exclusive, fail-fast repository Lease for participating cooperative
   same-process/same-host/local-filesystem operations
-- a dedicated PostgreSQL advisory session as an additional GC barrier where
-  applicable
+- a dedicated PostgreSQL advisory session as an additional garbage collection
+  (GC) barrier where applicable
 
 This ensures:
 
@@ -123,8 +123,9 @@ the shared application and plans against the live repository. Isolated
 Native lifecycle behavior is proven on Linux, macOS, and Windows within this
 cooperative same-host bound.
 
-These guarantees do not provide NFS/SMB safety, NAS or cross-machine
-coordination, or distributed locking. Those remain post-v1 product scope.
+These guarantees do not provide Network File System (NFS)/SMB safety, NAS or
+cross-machine coordination, or distributed locking. Those remain post-v1
+product scope.
 
 ### 4. Restore Publication Confinement
 
