@@ -20,7 +20,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.13 - Unreleased — Final v1.x and v2 Handoff Gate
+## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
 - Reconciled canonical v1.13.12 lifecycle truth after its final-main merge,
   annotated tag, tag validation, stable publication, and temporary-branch

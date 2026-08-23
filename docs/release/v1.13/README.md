@@ -160,37 +160,31 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   `fd396cd0c8cf43662881211b8e6b2877eb9a8010`. Annotated tag `v1.13.12`, tag
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
-- `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
-  `release/v1.13.13`. Historical Phases 0–14 are Complete. Phase 15 is Next
-  only as the structural topology pointer; quality remediation invalidated the old
-  candidate identity. The remediation head preserves all 49 requirements and
-  six closed blockers, and formal closure re-ratification is approved. Phase
-  14 attempt `1668a7490048144f4dea0fd795f4779b5e7108b5` was blocked by test-harness
-  nondeterminism. Corrective test commit
-  `bd84206a1de5fc5568e83abcfae1e382f44c2ba1` changes no product behavior; the
-  commit containing the dedicated replacement re-freeze record now defines
-  the candidate. Its freeze becomes effective only after exact-head hosted
-  proof; Phase 15 is the next operation after effective freeze, but Phase 14
-  does not authorize merge. v1.13.13 remains unreleased pending exact-head
-  proof, merge, tag, and publication;
-  SQLite-default productization remains v2.x scope, PostgreSQL compatibility
-  remains required, and v2.x implementation is not authorized.
+- `v1.13.13 — Final v1.x and v2 Handoff Gate` is ready for release in the
+  merged-not-tagged state. Candidate
+  `8b48418241458facd1291ddb615518fa0a775bfb` passed exact-head proof and PR
+  #109 merged it normally as `ac395e0bb1725c9c5ca57d56136b255e5cb55921`,
+  with prior `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`
+  as parent 1 and the candidate as parent 2. Formal v1.x normative completion
+  and the v2 handoff remain proven. The documentation-only
+  [Phase 15 reconciliation](v1.13.13-phase15-post-merge-reconciliation.md)
+  becomes authoritative after its protected normal merge and exact final-main
+  proof. The v1.13.13 tag and stable publication are absent; Phase 16 and v2.x
+  implementation are not authorized.
 
   ```text
-  QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
-  FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
-  PRIOR_PHASE_14_REFREEZE_ATTEMPT: 1668a7490048144f4dea0fd795f4779b5e7108b5
-  PRIOR_ATTEMPT_RESULT: BLOCKED_TEST_HARNESS_NONDETERMINISM
-  CORRECTIVE_TEST_COMMIT: bd84206a1de5fc5568e83abcfae1e382f44c2ba1
-  PRODUCT_BEHAVIOR_CHANGED: NO
-  PHASE_14_REFREEZE: REPLACEMENT_CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
-  PHASE_15_RELEASE_CANDIDATE: REPLACEMENT_PHASE_14_REFREEZE_COMMIT
-  CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
-  PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
-  PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
-  MERGE_AUTHORIZED: NO
+  V1_X_NORMATIVE_COMPLETION: PROVEN
+  V1_13_13_CANDIDATE: 8b48418241458facd1291ddb615518fa0a775bfb
+  PHASE_15_PROTECTED_MERGE: COMPLETE
+  ORIGINAL_MERGE_SHA: ac395e0bb1725c9c5ca57d56136b255e5cb55921
+  V1_13_13_STATE: MERGED_NOT_TAGGED
+  TAG: ABSENT
+  GITHUB_RELEASE: ABSENT
+  PHASE_15_POST_MERGE_RECONCILIATION: CONDITIONALLY_COMPLETE_PENDING_FINAL_MAIN_PROOF
+  PHASE_16: NOT_STARTED
+  PHASE_16_EXECUTION_AUTHORIZED: NO
   ```
-- Its active trackers are [scope](v1.13.13-scope.md),
+- Its current trackers are [scope](v1.13.13-scope.md),
   [phase list](v1.13.13-phase-list.md), and
   [validation checklist](v1.13.13-validation-checklist.md).
 - Phase 1 freezes current authority and requirements in the
