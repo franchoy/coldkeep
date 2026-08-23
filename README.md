@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.13%20active-blue)
+![Status](https://img.shields.io/badge/status-v1.13.13%20ready-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -44,33 +44,29 @@ operationally closed. PR #107 merged final candidate
 `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`; post-merge reconciliation PR
 #108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
 
-v1.13.13 Final v1.x and v2 Handoff Gate is active on
-`release/v1.13.13`. Historical Phases 0–14 are Complete. Quality remediation
-at `02647536ac618f8f2df8297863d05357fe15eb54` preserved all 49 frozen
-requirements and six closed blockers, and formal v1.x closure re-ratification
-is approved. The first Phase 14 re-freeze attempt at `1668a7490048144f4dea0fd795f4779b5e7108b5`
-was blocked by test-harness nondeterminism without reopening a product blocker.
-The deterministic test correction is `bd84206a1de5fc5568e83abcfae1e382f44c2ba1`;
-the commit containing the [replacement Phase 14 record](docs/release/v1.13/v1.13.13-phase14-test-harness-correction-and-replacement-refreeze.md)
-now defines the replacement Phase 15 candidate. Its freeze is effective only
-after exact-head hosted proof. Phase 15 retains its structural `Next` pointer
-and becomes the next operation after effective freeze, but merge is not
-authorized by Phase 14. v1.13.13 remains unreleased; tag, publication, and
-v2.x implementation have not occurred.
+v1.13.13 Final v1.x and v2 Handoff Gate is ready for release in the
+merged-not-tagged state. Immutable candidate
+`8b48418241458facd1291ddb615518fa0a775bfb` passed its exact-head gates and
+PR #109 merged it normally as `ac395e0bb1725c9c5ca57d56136b255e5cb55921`,
+with prior `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010` as
+parent 1 and the candidate as parent 2. Formal v1.x normative completion and
+the v2 handoff are proven. The documentation-only
+[Phase 15 post-merge reconciliation](docs/release/v1.13/v1.13.13-phase15-post-merge-reconciliation.md)
+becomes authoritative after its protected normal merge and exact final-main
+hosted proof. v1.13.13 is not yet tagged or published; Phase 16 remains a
+separately authorized operation and v2.x implementation has not started.
 
 ```text
-QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
-FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
-PRIOR_PHASE_14_REFREEZE_ATTEMPT: 1668a7490048144f4dea0fd795f4779b5e7108b5
-PRIOR_ATTEMPT_RESULT: BLOCKED_TEST_HARNESS_NONDETERMINISM
-CORRECTIVE_TEST_COMMIT: bd84206a1de5fc5568e83abcfae1e382f44c2ba1
-PRODUCT_BEHAVIOR_CHANGED: NO
-PHASE_14_REFREEZE: REPLACEMENT_CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
-PHASE_15_RELEASE_CANDIDATE: REPLACEMENT_PHASE_14_REFREEZE_COMMIT
-CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
-PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
-PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
-MERGE_AUTHORIZED: NO
+V1_X_NORMATIVE_COMPLETION: PROVEN
+V1_13_13_CANDIDATE: 8b48418241458facd1291ddb615518fa0a775bfb
+PHASE_15_PROTECTED_MERGE: COMPLETE
+ORIGINAL_MERGE_SHA: ac395e0bb1725c9c5ca57d56136b255e5cb55921
+V1_13_13_STATE: MERGED_NOT_TAGGED
+TAG: ABSENT
+GITHUB_RELEASE: ABSENT
+PHASE_15_POST_MERGE_RECONCILIATION: CONDITIONALLY_COMPLETE_PENDING_FINAL_MAIN_PROOF
+PHASE_16: NOT_STARTED
+PHASE_16_EXECUTION_AUTHORIZED: NO
 ```
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
