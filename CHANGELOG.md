@@ -192,14 +192,26 @@ project, do not start here; start with [README.md](README.md).
   re-freeze before Phase 15 could receive a replacement immutable candidate.
 - Added the dedicated Phase 14 recovery-path re-freeze record without changing
   the historical Phase 14 evidence or any v2/v3 ownership. The commit
-  containing that record defines the replacement Phase 15 candidate, whose
-  freeze becomes effective only after exact-head hosted proof.
+  containing that record defined candidate attempt
+  `1668a7490048144f4dea0fd795f4779b5e7108b5`, whose push gate passed but PR
+  gate failed closed on nondeterministic fixed-byte AES-GCM test corruption.
+- Corrected only that test mechanism in
+  `bd84206a1de5fc5568e83abcfae1e382f44c2ba1`: the test now targets the first
+  ciphertext byte and XORs it with `0x01`, guaranteeing corruption without
+  changing product behavior, test intent, or assertions.
+- Added the replacement Phase 14 re-freeze record. The commit containing that
+  record defines the new Phase 15 candidate, whose freeze becomes effective
+  only after full exact-head hosted proof.
 
 ```text
 QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
 FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
-PHASE_14_REFREEZE: CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
-PHASE_15_RELEASE_CANDIDATE: PHASE_14_REFREEZE_COMMIT
+PRIOR_PHASE_14_REFREEZE_ATTEMPT: 1668a7490048144f4dea0fd795f4779b5e7108b5
+PRIOR_ATTEMPT_RESULT: BLOCKED_TEST_HARNESS_NONDETERMINISM
+CORRECTIVE_TEST_COMMIT: bd84206a1de5fc5568e83abcfae1e382f44c2ba1
+PRODUCT_BEHAVIOR_CHANGED: NO
+PHASE_14_REFREEZE: REPLACEMENT_CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
+PHASE_15_RELEASE_CANDIDATE: REPLACEMENT_PHASE_14_REFREEZE_COMMIT
 CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
 PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
 PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE

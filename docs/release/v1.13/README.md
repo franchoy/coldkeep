@@ -165,19 +165,26 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   only as the structural topology pointer; quality remediation invalidated the old
   candidate identity. The remediation head preserves all 49 requirements and
   six closed blockers, and formal closure re-ratification is approved. Phase
-  14 now defines the replacement candidate in the commit containing the
-  dedicated re-freeze record. Its freeze becomes effective only after exact-
-  head hosted proof; Phase 15 is the next operation after effective freeze,
-  but Phase 14 does not authorize merge. v1.13.13 remains unreleased pending
-  exact-head proof, merge, tag, and publication;
+  14 attempt `1668a7490048144f4dea0fd795f4779b5e7108b5` was blocked by test-harness
+  nondeterminism. Corrective test commit
+  `bd84206a1de5fc5568e83abcfae1e382f44c2ba1` changes no product behavior; the
+  commit containing the dedicated replacement re-freeze record now defines
+  the candidate. Its freeze becomes effective only after exact-head hosted
+  proof; Phase 15 is the next operation after effective freeze, but Phase 14
+  does not authorize merge. v1.13.13 remains unreleased pending exact-head
+  proof, merge, tag, and publication;
   SQLite-default productization remains v2.x scope, PostgreSQL compatibility
   remains required, and v2.x implementation is not authorized.
 
   ```text
   QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
   FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
-  PHASE_14_REFREEZE: CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
-  PHASE_15_RELEASE_CANDIDATE: PHASE_14_REFREEZE_COMMIT
+  PRIOR_PHASE_14_REFREEZE_ATTEMPT: 1668a7490048144f4dea0fd795f4779b5e7108b5
+  PRIOR_ATTEMPT_RESULT: BLOCKED_TEST_HARNESS_NONDETERMINISM
+  CORRECTIVE_TEST_COMMIT: bd84206a1de5fc5568e83abcfae1e382f44c2ba1
+  PRODUCT_BEHAVIOR_CHANGED: NO
+  PHASE_14_REFREEZE: REPLACEMENT_CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
+  PHASE_15_RELEASE_CANDIDATE: REPLACEMENT_PHASE_14_REFREEZE_COMMIT
   CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
   PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
   PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
@@ -307,8 +314,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [49-row matrix](v1.13.13-v1x-normative-reratification-matrix.md), and
   [evidence index](v1.13.13-v1x-closure-reratification-evidence-index.md)
   prove the quality-remediation delta preserved closure. The dedicated
-  [Phase 14 re-freeze record](v1.13.13-phase14-v1x-closure-v2-handoff-refreeze.md)
-  defines the replacement Phase 15 candidate and its exact-head effectiveness
+  [first Phase 14 re-freeze record](v1.13.13-phase14-v1x-closure-v2-handoff-refreeze.md)
+  remains the blocked-attempt authority. The
+  [test-harness correction and replacement re-freeze](v1.13.13-phase14-test-harness-correction-and-replacement-refreeze.md)
+  defines the new Phase 15 candidate and its exact-head effectiveness
   condition; tag, publication, and v2 implementation have not occurred.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current

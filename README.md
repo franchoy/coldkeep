@@ -48,18 +48,25 @@ v1.13.13 Final v1.x and v2 Handoff Gate is active on
 `release/v1.13.13`. Historical Phases 0–14 are Complete. Quality remediation
 at `02647536ac618f8f2df8297863d05357fe15eb54` preserved all 49 frozen
 requirements and six closed blockers, and formal v1.x closure re-ratification
-is approved. The Phase 14 re-freeze commit now defines the replacement Phase
-15 candidate; its freeze is effective only after that exact commit passes the
-hosted proof. Phase 15 retains its structural `Next` pointer and becomes the
-next operation after effective freeze, but merge is not authorized by Phase
-14. v1.13.13 remains unreleased; tag, publication, and v2.x implementation
-have not occurred.
+is approved. The first Phase 14 re-freeze attempt at `1668a7490048144f4dea0fd795f4779b5e7108b5`
+was blocked by test-harness nondeterminism without reopening a product blocker.
+The deterministic test correction is `bd84206a1de5fc5568e83abcfae1e382f44c2ba1`;
+the commit containing the [replacement Phase 14 record](docs/release/v1.13/v1.13.13-phase14-test-harness-correction-and-replacement-refreeze.md)
+now defines the replacement Phase 15 candidate. Its freeze is effective only
+after exact-head hosted proof. Phase 15 retains its structural `Next` pointer
+and becomes the next operation after effective freeze, but merge is not
+authorized by Phase 14. v1.13.13 remains unreleased; tag, publication, and
+v2.x implementation have not occurred.
 
 ```text
 QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
 FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
-PHASE_14_REFREEZE: CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
-PHASE_15_RELEASE_CANDIDATE: PHASE_14_REFREEZE_COMMIT
+PRIOR_PHASE_14_REFREEZE_ATTEMPT: 1668a7490048144f4dea0fd795f4779b5e7108b5
+PRIOR_ATTEMPT_RESULT: BLOCKED_TEST_HARNESS_NONDETERMINISM
+CORRECTIVE_TEST_COMMIT: bd84206a1de5fc5568e83abcfae1e382f44c2ba1
+PRODUCT_BEHAVIOR_CHANGED: NO
+PHASE_14_REFREEZE: REPLACEMENT_CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
+PHASE_15_RELEASE_CANDIDATE: REPLACEMENT_PHASE_14_REFREEZE_COMMIT
 CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
 PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
 PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
@@ -943,9 +950,10 @@ Current v1 status:
 - The CLI is thin for v1, and all six frozen v1.13.13 blocker roots are
   technically closed.
 - Formal v1.x normative closure and its post-remediation re-ratification are
-  approved; the Phase 14 re-freeze commit defines the replacement candidate,
-  with effectiveness conditional on exact-head proof before resumed Phase 15.
-  Tag and publication remain later gates.
+  approved. The first Phase 14 re-freeze attempt was blocked by a corrected
+  test-harness defect; the replacement record defines a new candidate with
+  effectiveness conditional on exact-head proof before resumed Phase 15. Tag
+  and publication remain later gates.
 - V2 owns SQLite-default local productization and daemon-backed local product
   workflows; V3 owns network/NAS/distributed product expansion.
 
