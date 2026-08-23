@@ -188,15 +188,21 @@ project, do not start here; start with [README.md](README.md).
   Codacy findings to zero.
 - Re-ratified the 49/49 formal v1.x closure against that remediation head and
   added the decision, normative matrix, and evidence index. Historical Phases
-  13 and 14 remain Complete; Phase 14 handoff re-freeze is now required before
-  Phase 15 may receive a replacement immutable candidate or merge.
+  13 and 14 remain Complete; that decision required a Phase 14 handoff
+  re-freeze before Phase 15 could receive a replacement immutable candidate.
+- Added the dedicated Phase 14 recovery-path re-freeze record without changing
+  the historical Phase 14 evidence or any v2/v3 ownership. The commit
+  containing that record defines the replacement Phase 15 candidate, whose
+  freeze becomes effective only after exact-head hosted proof.
 
 ```text
 QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
 FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
-PHASE_14_REFREEZE: NEXT_REQUIRED_OPERATION
-PHASE_15_RELEASE_CANDIDATE: NOT_YET_REFROZEN
-PHASE_15_MERGE: BLOCKED_PENDING_REFREEZE
+PHASE_14_REFREEZE: CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
+PHASE_15_RELEASE_CANDIDATE: PHASE_14_REFREEZE_COMMIT
+CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
+PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
+PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
 MERGE_AUTHORIZED: NO
 ```
 

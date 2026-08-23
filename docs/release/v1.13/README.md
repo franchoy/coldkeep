@@ -165,18 +165,22 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   only as the structural topology pointer; quality remediation invalidated the old
   candidate identity. The remediation head preserves all 49 requirements and
   six closed blockers, and formal closure re-ratification is approved. Phase
-  14 handoff re-freeze is the next required operation; Phase 15 merge is
-  blocked until it freezes a replacement candidate. v1.13.13 remains an
-  unreleased release candidate pending re-freeze, merge, tag, and publication;
+  14 now defines the replacement candidate in the commit containing the
+  dedicated re-freeze record. Its freeze becomes effective only after exact-
+  head hosted proof; Phase 15 is the next operation after effective freeze,
+  but Phase 14 does not authorize merge. v1.13.13 remains unreleased pending
+  exact-head proof, merge, tag, and publication;
   SQLite-default productization remains v2.x scope, PostgreSQL compatibility
   remains required, and v2.x implementation is not authorized.
 
   ```text
   QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
   FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
-  PHASE_14_REFREEZE: NEXT_REQUIRED_OPERATION
-  PHASE_15_RELEASE_CANDIDATE: NOT_YET_REFROZEN
-  PHASE_15_MERGE: BLOCKED_PENDING_REFREEZE
+  PHASE_14_REFREEZE: CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
+  PHASE_15_RELEASE_CANDIDATE: PHASE_14_REFREEZE_COMMIT
+  CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
+  PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
+  PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
   MERGE_AUTHORIZED: NO
   ```
 - Its active trackers are [scope](v1.13.13-scope.md),
@@ -302,9 +306,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   [re-ratification decision](v1.13.13-phase13-formal-v1x-closure-reratification.md),
   [49-row matrix](v1.13.13-v1x-normative-reratification-matrix.md), and
   [evidence index](v1.13.13-v1x-closure-reratification-evidence-index.md)
-  prove the quality-remediation delta preserved closure. Phase 14 re-freeze
-  is required before Phase 15 merge; tag, publication, and v2 implementation
-  have not occurred.
+  prove the quality-remediation delta preserved closure. The dedicated
+  [Phase 14 re-freeze record](v1.13.13-phase14-v1x-closure-v2-handoff-refreeze.md)
+  defines the replacement Phase 15 candidate and its exact-head effectiveness
+  condition; tag, publication, and v2 implementation have not occurred.
 - The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.

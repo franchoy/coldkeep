@@ -48,17 +48,21 @@ v1.13.13 Final v1.x and v2 Handoff Gate is active on
 `release/v1.13.13`. Historical Phases 0–14 are Complete. Quality remediation
 at `02647536ac618f8f2df8297863d05357fe15eb54` preserved all 49 frozen
 requirements and six closed blockers, and formal v1.x closure re-ratification
-is approved. Phase 14 handoff re-freeze is the next required operation; Phase
-15 retains its structural `Next` pointer but has no re-frozen candidate and
-merge is not authorized. v1.13.13 remains unreleased; tag, publication, and
-v2.x implementation have not occurred.
+is approved. The Phase 14 re-freeze commit now defines the replacement Phase
+15 candidate; its freeze is effective only after that exact commit passes the
+hosted proof. Phase 15 retains its structural `Next` pointer and becomes the
+next operation after effective freeze, but merge is not authorized by Phase
+14. v1.13.13 remains unreleased; tag, publication, and v2.x implementation
+have not occurred.
 
 ```text
 QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
 FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
-PHASE_14_REFREEZE: NEXT_REQUIRED_OPERATION
-PHASE_15_RELEASE_CANDIDATE: NOT_YET_REFROZEN
-PHASE_15_MERGE: BLOCKED_PENDING_REFREEZE
+PHASE_14_REFREEZE: CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
+PHASE_15_RELEASE_CANDIDATE: PHASE_14_REFREEZE_COMMIT
+CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
+PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
+PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
 MERGE_AUTHORIZED: NO
 ```
 
@@ -939,8 +943,9 @@ Current v1 status:
 - The CLI is thin for v1, and all six frozen v1.13.13 blocker roots are
   technically closed.
 - Formal v1.x normative closure and its post-remediation re-ratification are
-  approved; Phase 14 re-freeze is required before Phase 15 merge, and tag and
-  publication remain later gates.
+  approved; the Phase 14 re-freeze commit defines the replacement candidate,
+  with effectiveness conditional on exact-head proof before resumed Phase 15.
+  Tag and publication remain later gates.
 - V2 owns SQLite-default local productization and daemon-backed local product
   workflows; V3 owns network/NAS/distributed product expansion.
 
