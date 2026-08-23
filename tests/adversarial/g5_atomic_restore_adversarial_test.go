@@ -121,23 +121,19 @@ func TestAdversarialG5RestoreFailureToExistingDirectoryLeavesNoMutatedOutput(t *
 			}
 
 			err := storage.RestoreFileWithDB(dbconn, fileID, targetPath)
-			if err != nil {
-				t.Fatalf("restore failed unexpectedly for directory target: %v", err)
-			}
+			testutils.AssertErrorContains(
+				t,
+				err,
+				"restore exact destination is a directory",
+				"restore to existing directory",
+			)
 
-			// Expect file inside directory
 			files, readErr := os.ReadDir(targetPath)
 			if readErr != nil {
-				t.Fatalf("readdir target directory after restore: %v", readErr)
+				t.Fatalf("readdir preserved target directory after failed restore: %v", readErr)
 			}
-			if len(files) != 1 {
-				t.Fatalf("expected exactly one file inside directory, got %d", len(files))
-			}
-
-			restoredPath := filepath.Join(targetPath, files[0].Name())
-			wantHash := testutils.SHA256File(t, inPath)
-			if gotHash := testutils.SHA256File(t, restoredPath); gotHash != wantHash {
-				t.Fatalf("restored file hash mismatch: want %s got %s", wantHash, gotHash)
+			if len(files) != 0 {
+				t.Fatalf("failed restore mutated existing directory: found %d entries", len(files))
 			}
 		})
 	}
@@ -253,44 +249,34 @@ func TestAdversarialG5RestoreAfterFailedAttemptToSamePathConvergesCleanly(t *tes
 				t.Fatalf("seed target path as directory: %v", err)
 			}
 
-			// First restore: should succeed and write inside directory
+			// The exact destination is obstructed by a directory, so the first
+			// attempt must fail without changing that directory.
 			err := storage.RestoreFileWithDB(dbconn, fileID, targetPath)
-			if err != nil {
-				t.Fatalf("restore failed unexpectedly for directory target: %v", err)
-			}
+			testutils.AssertErrorContains(
+				t,
+				err,
+				"restore exact destination is a directory",
+				"initial restore to existing directory",
+			)
 
-			// Validate correct output inside directory, no partial files
 			files, readErr := os.ReadDir(targetPath)
 			if readErr != nil {
-				t.Fatalf("readdir target directory after restore: %v", readErr)
+				t.Fatalf("readdir preserved target directory after failed restore: %v", readErr)
 			}
-			if len(files) != 1 {
-				t.Fatalf("expected exactly one file inside directory after restore, got %d", len(files))
-			}
-			restoredPath := filepath.Join(targetPath, files[0].Name())
-			if gotHash := testutils.SHA256File(t, restoredPath); gotHash != wantHash {
-				t.Fatalf("restored file hash mismatch after first restore: want %s got %s", wantHash, gotHash)
+			if len(files) != 0 {
+				t.Fatalf("failed restore mutated existing directory: found %d entries", len(files))
 			}
 
-			// Remove the restored file and retry restore to same directory
-			if err := os.Remove(restoredPath); err != nil {
-				t.Fatalf("remove restored file before retry: %v", err)
+			if err := os.Remove(targetPath); err != nil {
+				t.Fatalf("remove obstructing directory before retry: %v", err)
 			}
 
-			// Retry restore: should again succeed and converge
+			// Retry at the same exact destination after removing the obstruction.
 			err = storage.RestoreFileWithDB(dbconn, fileID, targetPath)
 			if err != nil {
 				t.Fatalf("restore failed unexpectedly on retry: %v", err)
 			}
-			files, readErr = os.ReadDir(targetPath)
-			if readErr != nil {
-				t.Fatalf("readdir target directory after retry: %v", readErr)
-			}
-			if len(files) != 1 {
-				t.Fatalf("expected exactly one file inside directory after retry, got %d", len(files))
-			}
-			restoredPath = filepath.Join(targetPath, files[0].Name())
-			if gotHash := testutils.SHA256File(t, restoredPath); gotHash != wantHash {
+			if gotHash := testutils.SHA256File(t, targetPath); gotHash != wantHash {
 				t.Fatalf("restored file hash mismatch after retry: want %s got %s", wantHash, gotHash)
 			}
 		})

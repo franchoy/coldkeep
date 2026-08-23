@@ -2,15 +2,13 @@ package verify
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/catalog"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -377,146 +375,29 @@ func verifyFileChunkHashes(dbconn *sql.DB, fileID int, containersDir string) err
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	rows, err := dbconn.QueryContext(ctx, `
-			SELECT
-			c.id,
-			b.block_offset,
-			b.stored_size,
-			b.plaintext_size,
-			c.chunk_hash,
-			b.codec,
-			b.format_version,
-			b.nonce,
-			b.container_id,
-			ctr.filename,
-			ctr.max_size
-		FROM file_chunk fc
-		JOIN chunk c ON c.id = fc.chunk_id
-		JOIN blocks b ON b.chunk_id = c.id
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE fc.logical_file_id = $1
-		ORDER BY fc.chunk_order
-	`, fileID)
+	placements, err := catalog.NewServiceFromSQL(dbconn).LoadChunkPlacements(ctx, int64(fileID))
 	if err != nil {
-		return fmt.Errorf("query file chunk hashes: %w", err)
+		return fmt.Errorf("load authoritative file chunk placements: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	var currentContainer *container.FileContainer
-	var currentFilename string
 	var errorList []error
 	var errorCount int
+	var attempted int
 	appendHashError := func(err error) {
 		errorCount++
 		errorList = utils_print.AppendToErrorList(errorList, err)
 	}
-	transformerCache := make(map[blocks.Codec]blocks.Transformer)
-
-	for rows.Next() {
-		var chunkID int
-		var blockOffset int64
-		var storedSize int64
-		var plaintextSize int64
-		var expectedChunkHash string
-		var codec string
-		var formatVersion int
-		var nonce []byte
-		var containerID int64
-		var filename string
-		var maxSize int64
-
-		if err := rows.Scan(
-			&chunkID,
-			&blockOffset,
-			&storedSize,
-			&plaintextSize,
-			&expectedChunkHash,
-			&codec,
-			&formatVersion,
-			&nonce,
-			&containerID,
-			&filename,
-			&maxSize,
-		); err != nil {
-			appendHashError(fmt.Errorf("scan file chunk hashes row: %w", err))
-			continue
-		}
-
-		if currentFilename != filename {
-			if currentContainer != nil {
-				if err := currentContainer.Close(); err != nil {
-					appendHashError(fmt.Errorf("close container %q: %w", currentFilename, err))
-				}
-				currentContainer = nil
-			}
-
-			fullPath, err := container.SafeContainerPath(containersDir, filename)
-			if err != nil {
-				appendHashError(fmt.Errorf("invalid container filename %q: %w", filename, err))
-				continue
-			}
-			// Open in read-only mode for verification safety.
-			currentContainer, err = container.OpenReadOnlyContainer(fullPath, maxSize)
-			if err != nil {
-				appendHashError(fmt.Errorf("open container %q: %w", fullPath, err))
-				currentFilename = ""
-				continue
-			}
-			currentFilename = filename
-		}
-
-		payload, err := container.ReadPayloadAt(currentContainer, blockOffset, storedSize)
-		if err != nil {
-			appendHashError(fmt.Errorf("read block payload for chunk %d: %w", chunkID, err))
-			continue
-		}
-
-		codecType := blocks.Codec(codec)
-		transformer, ok := transformerCache[codecType]
-		if !ok {
-			transformer, err = blocks.GetBlockTransformer(codecType)
-			if err != nil {
-				appendHashError(fmt.Errorf("get transformer for codec %q: %w", codec, err))
-				continue
-			}
-			transformerCache[codecType] = transformer
-		}
-
-		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-			ChunkHash: expectedChunkHash,
-			Descriptor: blocks.Descriptor{
-				ChunkID:       int64(chunkID),
-				Codec:         codecType,
-				FormatVersion: formatVersion,
-				PlaintextSize: plaintextSize,
-				StoredSize:    storedSize,
-				Nonce:         nonce,
-				ContainerID:   containerID,
-				BlockOffset:   blockOffset,
-			},
-			Payload: payload,
-		})
-		if err != nil {
-			appendHashError(fmt.Errorf("decode chunk %d data: %w", chunkID, err))
-			continue
-		}
-
-		sum := sha256.Sum256(plaintext)
-		computedHash := hex.EncodeToString(sum[:])
-		if computedHash != expectedChunkHash {
-			appendHashError(fmt.Errorf("chunk %d corrupted: expected %s got %s", chunkID, expectedChunkHash, computedHash))
+	state := filePlacementVerifyState{
+		containersDir: containersDir,
+		packedBlocks:  make(map[int64]*VerifiedBlock),
+	}
+	for _, placement := range placements {
+		attempted++
+		if err := state.verify(ctx, placement); err != nil {
+			appendHashError(fmt.Errorf("verify chunk %d placement kind=%s: %w", placement.ChunkID, placement.Kind, err))
 		}
 	}
-
-	if err := rows.Err(); err != nil {
-		appendHashError(fmt.Errorf("iterate file chunk hashes: %w", err))
-	}
-
-	if currentContainer != nil {
-		if err := currentContainer.Close(); err != nil {
-			appendHashError(fmt.Errorf("close container %q: %w", currentFilename, err))
-		}
-	}
+	log.Printf("file chunk hash verification for file ID %d attempted placements=%d failed=%d", fileID, attempted, errorCount)
 
 	if len(errorList) > 0 {
 		log.Println(" ERROR ")

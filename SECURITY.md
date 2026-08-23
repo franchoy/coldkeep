@@ -2,20 +2,21 @@
 
 ## Status
 
-coldkeep v1.9 is a correctness-first storage engine focused on
+coldkeep v1 is a correctness-first storage engine focused on
 data integrity, deterministic restore, explicit operator-visible
 failure handling, and read-only observability/simulation tooling
 for safer diagnostics.
 
-v1.9 formalizes transform-based storage semantics over packed storage blocks,
-including block-level compression and AES-GCM encrypted packed-block
-integration, while preserving
-restore determinism, GC safety, and snapshot semantics.
+The current v1 architecture includes a reusable headless Engine, a neutral
+Catalog boundary, a thin CLI, supported SQLite and PostgreSQL backends within
+documented bounds, and cooperative same-host/local-filesystem repository
+coordination. Formal v1.x normative closure is approved; the v1.13.13 release
+remains pending its handoff, merge, tag, and publication gates.
 
 It is suitable for controlled production environments where:
 
-- operational assumptions are respected (PostgreSQL correctness,
-    filesystem durability)
+- operational assumptions are respected (supported database-backend
+    correctness, filesystem durability)
 - storage and database are not externally modified
 - operators follow recovery and verification practices
 
@@ -82,7 +83,8 @@ This protects against:
 
 ### 2. Transactional Metadata Consistency
 
-Each file store operation runs inside a PostgreSQL transaction.
+Each file store operation runs inside a transaction on its configured supported
+database backend.
 
 This ensures:
 
@@ -102,9 +104,12 @@ This may leave orphan container files on disk.
 
 coldkeep uses:
 
-- PostgreSQL transactions per stored file
-- `SELECT ... FOR UPDATE SKIP LOCKED` for container selection
-- Row-level locking for container size updates
+- backend transactions per stored file
+- backend-specific container selection and locking semantics
+- an exclusive, fail-fast repository Lease for participating cooperative
+  same-process/same-host/local-filesystem operations
+- a dedicated PostgreSQL advisory session as an additional garbage collection
+  (GC) barrier where applicable
 
 This ensures:
 
@@ -112,12 +117,34 @@ This ensures:
 - Container size tracking remains consistent
 - Container layout is not interleaved
 
-These guarantees apply to the documented single-node, in-process model.
-They are not a distributed locking or multi-writer coordination system.
+Valid `simulate gc` participates in the outer repository Lease because it opens
+the shared application and plans against the live repository. Isolated
+`simulate store` and `simulate store-folder` remain repository-free bypasses.
+Native lifecycle behavior is proven on Linux, macOS, and Windows within this
+cooperative same-host bound.
+
+These guarantees do not provide Network File System (NFS)/Server Message Block (SMB) safety,
+Network Attached Storage (NAS) or cross-machine coordination, or distributed
+locking. Those remain post-v1 product scope.
+
+### 4. Restore Publication Confinement
+
+Restore plans an exact destination, reconstructs into a temporary object under
+a retained trusted parent, and publishes through native atomic primitives.
+No-overwrite is non-replacing even if another actor occupies the destination
+in the final window; overwrite remains an explicit replacing mode. Creation,
+publication, post-publication metadata, and cleanup use retained parent/object
+identity so a symlink or reparse replacement cannot redirect mutation within
+the documented bound.
+
+This is a correctness and confinement property, not a general hostile-host
+security guarantee. Arbitrary malicious same-user relocation of an already-
+open Unix directory object remains outside the frozen guarantee, and strict
+metadata failure may be reported after correct bytes are visible.
 
 ------------------------------------------------------------------------
 
-### 4. Optional Encryption At Rest
+### 5. Optional Encryption At Rest
 
 coldkeep supports an `aes-gcm` codec for block payload encryption.
 

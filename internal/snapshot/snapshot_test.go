@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1631,6 +1632,11 @@ func TestRestoreSnapshotCompatibleWithVersionedLogicalMetadata(t *testing.T) {
 	sourceDir := t.TempDir()
 	content := []byte("snapshot restore compatibility across versioned metadata")
 	storeResult := storeSnapshotFixtureFile(t, db, sgctx, sourceDir, "docs/snapshot-version-compat.txt", content)
+	wantMode := os.FileMode(0o640)
+	wantMtime := time.Date(2021, 7, 8, 9, 10, 11, 0, time.UTC)
+	if _, err := db.Exec(`UPDATE physical_file SET mode = ?, mtime = ? WHERE logical_file_id = ?`, int64(wantMode), wantMtime, storeResult.FileID); err != nil {
+		t.Fatalf("set snapshot fixture metadata: %v", err)
+	}
 
 	snapshotID := "snap-restore-version-compat"
 	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
@@ -1678,6 +1684,20 @@ func TestRestoreSnapshotCompatibleWithVersionedLogicalMetadata(t *testing.T) {
 	}
 	if string(restored) != string(content) {
 		t.Fatalf("unexpected restored snapshot payload: got=%q want=%q", string(restored), string(content))
+	}
+	restoredInfo, err := os.Stat(restoreDest)
+	if err != nil {
+		t.Fatalf("stat restored snapshot file: %v", err)
+	}
+	if !restoredInfo.ModTime().UTC().Equal(wantMtime) {
+		t.Fatalf("restored mtime=%v, want %v", restoredInfo.ModTime(), wantMtime)
+	}
+	if runtime.GOOS == "windows" {
+		if restoredInfo.Mode().Perm()&0o222 == 0 {
+			t.Fatalf("restored Windows mode=%o, want writable projection of %o", restoredInfo.Mode().Perm(), wantMode)
+		}
+	} else if restoredInfo.Mode().Perm() != wantMode {
+		t.Fatalf("restored mode=%o, want %o", restoredInfo.Mode().Perm(), wantMode)
 	}
 }
 
@@ -2028,150 +2048,14 @@ func TestPlanSnapshotRestoreOutputsRejectsUnsafeStoredPaths(t *testing.T) {
 	}
 }
 
-// ---- applySnapshotMetadata unit tests ----
-
-// TestApplySnapshotMetadataAppliesChmodAndChtimes verifies that when both mode and mtime are
-// valid, applySnapshotMetadata writes them to the target file.
-func TestApplySnapshotMetadataAppliesChmodAndChtimes(t *testing.T) {
-	tmp := t.TempDir()
-	target := filepath.Join(tmp, "target.txt")
-	if err := os.WriteFile(target, []byte("content"), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-
-	wantMode := os.FileMode(0o600)
-	wantMtime := time.Date(2020, 6, 15, 10, 30, 0, 0, time.UTC)
-
-	opts := RestoreSnapshotOptions{StrictMetadata: false, NoMetadata: false}
-	warnings, err := applySnapshotMetadata(
-		target,
-		sql.NullInt64{Int64: int64(wantMode), Valid: true},
-		sql.NullTime{Time: wantMtime, Valid: true},
-		opts,
-	)
-	if err != nil {
-		t.Fatalf("applySnapshotMetadata: %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("expected no metadata warnings, got %+v", warnings)
-	}
-
-	info, err := os.Stat(target)
-	if err != nil {
-		t.Fatalf("stat target after metadata: %v", err)
-	}
-	if got := info.Mode().Perm(); got != wantMode {
-		t.Fatalf("mode: want %04o got %04o", wantMode, got)
-	}
-	if got := info.ModTime().UTC(); !got.Equal(wantMtime) {
-		t.Fatalf("mtime: want %v got %v", wantMtime, got)
-	}
-}
-
-// TestApplySnapshotMetadataNoMetadataSkipsChmodAndChtimes verifies that --no-metadata leaves
-// the file's existing mode and mtime untouched.
-func TestApplySnapshotMetadataNoMetadataSkipsChmodAndChtimes(t *testing.T) {
-	tmp := t.TempDir()
-	target := filepath.Join(tmp, "target.txt")
-	if err := os.WriteFile(target, []byte("content"), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-
-	before, err := os.Stat(target)
-	if err != nil {
-		t.Fatalf("stat before: %v", err)
-	}
-
-	// Pass mode 0o600 and an old mtime; both should be ignored.
-	opts := RestoreSnapshotOptions{NoMetadata: true}
-	warnings, err := applySnapshotMetadata(
-		target,
-		sql.NullInt64{Int64: int64(0o600), Valid: true},
-		sql.NullTime{Time: time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
-		opts,
-	)
-	if err != nil {
-		t.Fatalf("applySnapshotMetadata with NoMetadata should not error: %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("expected no metadata warnings, got %+v", warnings)
-	}
-
-	after, err := os.Stat(target)
-	if err != nil {
-		t.Fatalf("stat after: %v", err)
-	}
-	if after.Mode() != before.Mode() {
-		t.Fatalf("--no-metadata must not change mode: before=%v after=%v", before.Mode(), after.Mode())
-	}
-	if !after.ModTime().Equal(before.ModTime()) {
-		t.Fatalf("--no-metadata must not change mtime: before=%v after=%v", before.ModTime(), after.ModTime())
-	}
-}
-
-// TestApplySnapshotMetadataStrictPropagatesChmodError verifies that --strict causes
-// applySnapshotMetadata to return an error when chmod fails (e.g., path does not exist).
-func TestApplySnapshotMetadataStrictPropagatesChmodError(t *testing.T) {
-	nonExistent := filepath.Join(t.TempDir(), "does-not-exist.txt")
-
-	opts := RestoreSnapshotOptions{StrictMetadata: true}
-	warnings, err := applySnapshotMetadata(
-		nonExistent,
-		sql.NullInt64{Int64: int64(0o600), Valid: true},
-		sql.NullTime{},
-		opts,
-	)
-	if len(warnings) != 0 {
-		t.Fatalf("strict metadata failure should not return warnings, got %+v", warnings)
-	}
-	if err == nil {
-		t.Fatalf("expected --strict to propagate chmod error, got nil")
-	}
-	if !strings.Contains(err.Error(), "apply snapshot metadata") {
-		t.Fatalf("expected 'apply snapshot metadata' in error message, got: %v", err)
-	}
-}
-
-// TestApplySnapshotMetadataStrictNotSetLogsAndContinues verifies that without --strict,
-// a chmod failure is logged but does not cause applySnapshotMetadata to return an error.
-func TestApplySnapshotMetadataStrictNotSetLogsAndContinues(t *testing.T) {
-	nonExistent := filepath.Join(t.TempDir(), "does-not-exist.txt")
-
-	opts := RestoreSnapshotOptions{StrictMetadata: false}
-	warnings, err := applySnapshotMetadata(
-		nonExistent,
-		sql.NullInt64{Int64: int64(0o600), Valid: true},
-		sql.NullTime{},
-		opts,
-	)
-	if err != nil {
-		t.Fatalf("without --strict, chmod error should be logged not returned; got: %v", err)
-	}
-	if len(warnings) != 1 {
-		t.Fatalf("expected one best-effort metadata warning, got %+v", warnings)
-	}
-	if warnings[0].Code != RestoreSnapshotWarningMetadata || warnings[0].Operation != "chmod" {
-		t.Fatalf("unexpected metadata warning: %+v", warnings[0])
-	}
-}
-
-func TestApplySnapshotMetadataBestEffortReturnsDeterministicWarnings(t *testing.T) {
-	nonExistent := filepath.Join(t.TempDir(), "does-not-exist.txt")
-
-	warnings, err := applySnapshotMetadata(
-		nonExistent,
-		sql.NullInt64{Int64: int64(0o600), Valid: true},
-		sql.NullTime{Time: time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
-		RestoreSnapshotOptions{},
-	)
-	if err != nil {
-		t.Fatalf("best-effort metadata should not fail restore, got %v", err)
-	}
-	if len(warnings) != 2 {
-		t.Fatalf("expected two warnings, got %+v", warnings)
-	}
-	if warnings[0].Operation != "chmod" || warnings[1].Operation != "chtimes" {
-		t.Fatalf("unexpected warning order: %+v", warnings)
+func TestRestoreSnapshotMetadataWarningMapsRetainedObjectWarning(t *testing.T) {
+	warning := restoreSnapshotMetadataWarning("restored.txt", storage.RestoreMetadataWarning{
+		Operation: "chmod",
+		Detail:    "permission denied",
+	})
+	if warning.Code != RestoreSnapshotWarningMetadata || warning.Path != "restored.txt" ||
+		warning.Operation != "chmod" || warning.Detail != "permission denied" {
+		t.Fatalf("unexpected mapped metadata warning: %+v", warning)
 	}
 }
 

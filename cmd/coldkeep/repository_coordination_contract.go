@@ -52,10 +52,21 @@ func repositoryCoordinationPolicyFor(parsed parsedCommandLine) repositoryCoordin
 		return configRepositoryPolicy(parsed.positionals)
 	case "snapshot":
 		return snapshotRepositoryPolicy(parsed.positionals)
+	case "simulate":
+		if validateSimulateGCRequest(parsed) == nil {
+			return exclusiveRepositoryPolicy(coordination.OperationSimulateGC)
+		}
 	}
-	// init, simulate, benchmark, version, help, and invalid commands do not
-	// access the shared repository through this policy.
+	// init, isolated simulations, benchmark, version, help, and invalid commands
+	// do not access the shared repository through this policy.
 	return repositoryCoordinationPolicy{}
+}
+
+func validateSimulateGCRequest(parsed parsedCommandLine) error {
+	if parsed.method != "simulate" || len(parsed.positionals) != 1 || parsed.positionals[0] != "gc" {
+		return usageErrorf("Usage: coldkeep simulate gc [--delete-snapshot <id>] [--containers] [--output <text|json>]")
+	}
+	return ensureAllowedFlags(parsed, "output", "json", "delete-snapshot", "containers", "trace", "trace-json")
 }
 
 func exclusiveRepositoryPolicy(operation coordination.Operation) repositoryCoordinationPolicy {

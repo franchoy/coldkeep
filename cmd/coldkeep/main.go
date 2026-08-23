@@ -492,7 +492,7 @@ func executeCLICommand(
 		request,
 		func() error {
 			outputDestination, operationErr = outputSpool.capture(func() error {
-				if shouldRunStartupRecovery(args) {
+				if policy.Operation == coordination.OperationSimulateGC || shouldRunStartupRecovery(args) {
 					recoveryReport, recoveryErr := runtime.recover(outputMode)
 					if recoveryErr != nil {
 						log.Printf("System recovery failed: %v\n", recoveryErr)
@@ -4614,9 +4614,6 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 	subcommand := parsed.positionals[0]
 
 	if subcommand == "gc" {
-		if len(parsed.positionals) > 1 {
-			return usageErrorf("Usage: coldkeep simulate gc [--delete-snapshot <id>] [--containers] [--output <text|json>]")
-		}
 		return runSimulateGCCommand(parsed, outputMode)
 	}
 
@@ -4686,7 +4683,7 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 // It is a pure read-only operation: it calls BuildPlan and reports what would
 // be reclaimable, without deleting anything.
 func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "json", "delete-snapshot", "containers", "trace", "trace-json"); err != nil {
+	if err := validateSimulateGCRequest(parsed); err != nil {
 		return err
 	}
 	traceOptions, err := resolveTraceOptions(parsed)

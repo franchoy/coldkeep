@@ -9,16 +9,20 @@ import (
 
 // FindSnapshot implements SnapshotCatalog.
 // Returns (nil, nil) when no row exists with the given ID.
-func (s *Service) FindSnapshot(ctx context.Context, id string) (*SnapshotRef, error) {
+func (s *Service) FindSnapshot(ctx context.Context, id string) (ref *SnapshotRef, err error) {
+	defer func() {
+		err = translateServiceError("find snapshot", "snapshot lookup failed", err)
+	}()
+
 	const q = `
 SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
 FROM snapshot
 WHERE id = $1`
 
 	row := s.db.QueryRowContext(ctx, q, id)
-	ref := &SnapshotRef{}
+	ref = &SnapshotRef{}
 	var createdAt string
-	err := row.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt)
+	err = row.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -31,7 +35,11 @@ WHERE id = $1`
 
 // ListSnapshots implements SnapshotCatalog.
 // Returns snapshots matching the filter, ordered newest first.
-func (s *Service) ListSnapshots(ctx context.Context, filter SnapshotFilter) ([]SnapshotRef, error) {
+func (s *Service) ListSnapshots(ctx context.Context, filter SnapshotFilter) (refs []SnapshotRef, err error) {
+	defer func() {
+		err = translateServiceError("list snapshots", "snapshot list failed", err)
+	}()
+
 	args := snapshotListArgs(filter)
 	if filter.Limit > 0 {
 		return s.listSnapshotsWithLimit(ctx, args, filter.Limit)
@@ -77,7 +85,7 @@ func (s *Service) listSnapshotsWithoutLimit(ctx context.Context, args snapshotLi
 SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
 FROM snapshot
 WHERE ($1 = '' OR type = $1)
-  AND ($2 = '' OR label LIKE $2)
+  AND ($2 = '' OR LOWER(label) LIKE LOWER($2))
   AND ($3 = 0 OR created_at >= $4)
   AND ($5 = 0 OR created_at <= $6)
 ORDER BY created_at DESC, id DESC`, values...)
@@ -94,7 +102,7 @@ func (s *Service) listSnapshotsWithLimit(ctx context.Context, args snapshotListQ
 SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
 FROM snapshot
 WHERE ($1 = '' OR type = $1)
-  AND ($2 = '' OR label LIKE $2)
+  AND ($2 = '' OR LOWER(label) LIKE LOWER($2))
   AND ($3 = 0 OR created_at >= $4)
   AND ($5 = 0 OR created_at <= $6)
 ORDER BY created_at DESC, id DESC

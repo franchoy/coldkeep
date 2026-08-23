@@ -9,7 +9,11 @@ import (
 // FindPhysicalFilesForLogicalFile implements PhysicalFileCatalog.
 // Returns the physical files mapping to the given logical file ID, ordered by
 // path. Returns an empty slice (not nil error) when none exist.
-func (s *Service) FindPhysicalFilesForLogicalFile(ctx context.Context, logicalFileID int64) ([]PhysicalFileRef, error) {
+func (s *Service) FindPhysicalFilesForLogicalFile(ctx context.Context, logicalFileID int64) (refs []PhysicalFileRef, err error) {
+	defer func() {
+		err = translateServiceError("find physical files", "physical file lookup failed", err)
+	}()
+
 	const q = `
 SELECT path, logical_file_id, mode, mtime, is_metadata_complete
 FROM physical_file
@@ -22,7 +26,6 @@ ORDER BY path`
 	}
 	defer func() { _ = rows.Close() }()
 
-	var refs []PhysicalFileRef
 	for rows.Next() {
 		var (
 			ref                PhysicalFileRef

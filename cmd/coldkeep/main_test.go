@@ -10114,7 +10114,7 @@ func TestRunSimulateGCCommandTextOutputIncludesWarnings(t *testing.T) {
 	}
 }
 
-func TestRunCLISimulateSkipsStartupRecovery(t *testing.T) {
+func TestRunCLISimulateGCRunsStartupRecoveryWithinCoordination(t *testing.T) {
 	originalStartupRecovery := startupRecoveryPhase
 	originalSimulate := runObservabilitySimulateGCPhase
 	t.Cleanup(func() {
@@ -10152,11 +10152,11 @@ func TestRunCLISimulateSkipsStartupRecovery(t *testing.T) {
 			t.Fatalf("expected simulate output, got %q", stdoutOutput)
 		}
 	})
-	if stderrOutput != "" {
-		t.Fatalf("expected no stderr output, got %q", stderrOutput)
+	if !strings.Contains(stderrOutput, "RECOVERY status=ok") {
+		t.Fatalf("expected startup recovery output, got %q", stderrOutput)
 	}
-	if startupCalls != 0 {
-		t.Fatalf("expected startup recovery to be skipped for simulate, got %d calls", startupCalls)
+	if startupCalls != 1 {
+		t.Fatalf("expected one startup recovery call for simulate gc, got %d", startupCalls)
 	}
 }
 
@@ -10331,8 +10331,9 @@ func TestSimulateCLIJSON(t *testing.T) {
 	if code != exitSuccess {
 		t.Fatalf("expected exitSuccess, got %d", code)
 	}
-	if strings.TrimSpace(stderr) != "" {
-		t.Fatalf("expected no stderr output for simulate command, got %q", stderr)
+	stderrPayloads := assertEveryLineIsJSONObject(t, stderr)
+	if len(stderrPayloads) == 0 || stderrPayloads[0]["event"] != "startup_recovery" {
+		t.Fatalf("expected startup recovery JSON event for simulate gc, got %v", stderrPayloads)
 	}
 
 	var payload map[string]any
@@ -10367,13 +10368,6 @@ func TestJSONModeStdoutIsSingleObjectForStatsInspectSimulate(t *testing.T) {
 			payload := assertSingleJSONObjectLine(t, stdout)
 			if got, _ := payload["type"].(string); got != tc.want {
 				t.Fatalf("expected type=%s, got %v payload=%v", tc.want, payload["type"], payload)
-			}
-
-			if tc.name == "simulate" {
-				if strings.TrimSpace(stderr) != "" {
-					t.Fatalf("expected no stderr output for simulate JSON command, got %q", stderr)
-				}
-				return
 			}
 
 			stderrPayloads := assertEveryLineIsJSONObject(t, stderr)

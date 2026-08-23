@@ -328,6 +328,32 @@ func TestCatalogContractListSnapshotsAcrossBackends(t *testing.T) {
 	})
 }
 
+func TestCatalogContractSnapshotLabelCaseAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		for index, row := range []struct {
+			id    string
+			label string
+		}{
+			{"label-alpha", "Alpha"},
+			{"label-alpha-two", "alpha-two"},
+			{"label-beta", "BETA"},
+			{"label-unrelated", "unrelated"},
+		} {
+			if _, err := backend.DB.ExecContext(context.Background(),
+				`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
+				row.id, catalogFixtureBase.Add(time.Duration(index+3)*time.Hour), "full", row.label); err != nil {
+				t.Fatalf("insert label fixture %q: %v", row.id, err)
+			}
+		}
+
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{LabelSubstring: "ALPHA"}, "label-alpha-two", "label-alpha", "snap-full")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{LabelSubstring: "alpha", Limit: 1}, "label-alpha-two")
+		assertSnapshotIDs(t, svc, catalog.SnapshotFilter{LabelSubstring: "beta"}, "label-beta", "snap-child")
+	})
+}
+
 func timePointer(value time.Time) *time.Time { return &value }
 
 func assertSnapshotIDs(t *testing.T, svc interface {
@@ -506,30 +532,80 @@ func containsSnapshot(snapshots []catalog.SnapshotRef, id string) bool {
 	return false
 }
 
-// CAT-007 adds bounded portable cancelled-context assertions. Errors must not
-// be converted to not-found results, and cancelled reads must not mutate state.
+// CAT-007 adds bounded portable cancellation/deadline assertions. Errors must
+// not be converted to not-found results, and failed reads must not mutate state.
 func assertCancelledCatalogErrors(t *testing.T, svc catalog.Catalog, dbconn *sql.DB) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	for _, test := range []catalogCancellationCase{
+		{"cancelled", context.Canceled, func() context.Context {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx
+		}},
+		{"deadline", context.DeadlineExceeded, func() context.Context {
+			ctx, cancel := context.WithDeadline(context.Background(), time.Unix(1, 0))
+			cancel()
+			return ctx
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertCancelledCatalogCase(t, svc, dbconn, test)
+		})
+	}
+}
+
+type catalogCancellationCase struct {
+	name  string
+	cause error
+	ctx   func() context.Context
+}
+
+func assertCancelledCatalogCase(t *testing.T, svc catalog.Catalog, dbconn *sql.DB, test catalogCancellationCase) {
+	t.Helper()
+	ctx := test.ctx()
 	before := catalogStateCounts(t, dbconn)
-	if ref, err := svc.FindLogicalFile(ctx, 1); err == nil || ref != nil {
-		t.Errorf("cancelled FindLogicalFile: got (%+v, %v), want (nil, error)", ref, err)
-	}
-	if refs, err := svc.FindPhysicalFilesForLogicalFile(ctx, 1); err == nil || refs != nil {
-		t.Errorf("cancelled FindPhysicalFilesForLogicalFile: got (%+v, %v), want (nil, error)", refs, err)
-	}
-	if ref, err := svc.FindSnapshot(ctx, "snap-full"); err == nil || ref != nil {
-		t.Errorf("cancelled FindSnapshot: got (%+v, %v), want (nil, error)", ref, err)
-	}
-	if refs, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{}); err == nil || refs != nil {
-		t.Errorf("cancelled ListSnapshots: got (%+v, %v), want (nil, error)", refs, err)
-	}
-	if roots, err := svc.LoadReachabilityRoots(ctx); err == nil || roots != nil {
-		t.Errorf("cancelled LoadReachabilityRoots: got (%+v, %v), want (nil, error)", roots, err)
-	}
+	assertCancelledLogicalFile(t, svc, ctx, test)
+	assertCancelledPhysicalFiles(t, svc, ctx, test)
+	assertCancelledSnapshot(t, svc, ctx, test)
+	assertCancelledSnapshotList(t, svc, ctx, test)
+	assertCancelledReachabilityRoots(t, svc, ctx, test)
 	if after := catalogStateCounts(t, dbconn); after != before {
-		t.Errorf("cancelled catalog reads mutated catalog state: before=%+v after=%+v", before, after)
+		t.Errorf("%s catalog reads mutated catalog state: before=%+v after=%+v", test.name, before, after)
+	}
+}
+
+func assertCancelledLogicalFile(t *testing.T, svc catalog.Catalog, ctx context.Context, test catalogCancellationCase) {
+	t.Helper()
+	if ref, err := svc.FindLogicalFile(ctx, 1); ref != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, test.cause) {
+		t.Errorf("%s FindLogicalFile: got (%+v, %v), want typed cancellation preserving %v", test.name, ref, err, test.cause)
+	}
+}
+
+func assertCancelledPhysicalFiles(t *testing.T, svc catalog.Catalog, ctx context.Context, test catalogCancellationCase) {
+	t.Helper()
+	if refs, err := svc.FindPhysicalFilesForLogicalFile(ctx, 1); refs != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, test.cause) {
+		t.Errorf("%s FindPhysicalFilesForLogicalFile: got (%+v, %v), want typed cancellation preserving %v", test.name, refs, err, test.cause)
+	}
+}
+
+func assertCancelledSnapshot(t *testing.T, svc catalog.Catalog, ctx context.Context, test catalogCancellationCase) {
+	t.Helper()
+	if ref, err := svc.FindSnapshot(ctx, "snap-full"); ref != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, test.cause) {
+		t.Errorf("%s FindSnapshot: got (%+v, %v), want typed cancellation preserving %v", test.name, ref, err, test.cause)
+	}
+}
+
+func assertCancelledSnapshotList(t *testing.T, svc catalog.Catalog, ctx context.Context, test catalogCancellationCase) {
+	t.Helper()
+	if refs, err := svc.ListSnapshots(ctx, catalog.SnapshotFilter{}); refs != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, test.cause) {
+		t.Errorf("%s ListSnapshots: got (%+v, %v), want typed cancellation preserving %v", test.name, refs, err, test.cause)
+	}
+}
+
+func assertCancelledReachabilityRoots(t *testing.T, svc catalog.Catalog, ctx context.Context, test catalogCancellationCase) {
+	t.Helper()
+	if roots, err := svc.LoadReachabilityRoots(ctx); roots != nil || !catalog.IsCode(err, catalog.ErrorCancelled) || !errors.Is(err, test.cause) {
+		t.Errorf("%s LoadReachabilityRoots: got (%+v, %v), want typed cancellation preserving %v", test.name, roots, err, test.cause)
 	}
 }
 

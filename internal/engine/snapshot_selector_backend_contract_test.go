@@ -15,6 +15,9 @@ import (
 func TestEngineSnapshotSelectorsAcrossBackends(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
 		fixture := newEngineReadFixture(t, backend)
+		if _, err := backend.DB.ExecContext(context.Background(), `UPDATE snapshot SET label = $1 WHERE id = $2`, "Target", "snap-target"); err != nil {
+			t.Fatalf("update mixed-case snapshot label: %v", err)
+		}
 		before := captureEngineReadState(t, backend.DB, fixture.containerDir)
 
 		atTie := engineReadFixtureTime.Add(time.Minute)

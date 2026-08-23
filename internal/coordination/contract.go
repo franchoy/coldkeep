@@ -45,6 +45,7 @@ const (
 	OperationRemove          Operation = "remove"
 	OperationRepair          Operation = "repair"
 	OperationGarbageCollect  Operation = "gc"
+	OperationSimulateGC      Operation = "simulate-gc"
 	OperationStats           Operation = "stats"
 	OperationInspect         Operation = "inspect"
 	OperationList            Operation = "list"
@@ -170,6 +171,7 @@ func isCanonicalOperation(operation Operation) bool {
 		OperationRemove,
 		OperationRepair,
 		OperationGarbageCollect,
+		OperationSimulateGC,
 		OperationStats,
 		OperationInspect,
 		OperationList,

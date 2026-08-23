@@ -151,18 +151,175 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   `v1.13.11-phase0-post-release-closure-correction-and-baseline.md`,
   `v1.13.11-scope.md`, `v1.13.11-phase-list.md`,
   `v1.13.11-validation-checklist.md`, and `v1.13.11-release-gate.md`.
-- `v1.13.12 — Engine and Catalog Completion` is ready for release. Final
-  candidate `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58` completed the catalog
-  planning APIs, production engine ownership, neutral contracts, and
-  enforceable thin-CLI boundary without changing storage semantics. Phase 21
-  is complete with local Profile A `PASS` and hosted exact-head validation
-  `PASS`; PR #107 merged the candidate to `main` as
-  `7505d7000faef452caeb4c01784f0510960e7240`. Tagging and publication have not
-  occurred yet. Earlier candidate evidence is historical only, v1.13.13
-  remains mandatory, and v1.x remains open.
-- The updated `v1.13.x-release-train.md` is the authoritative current plan;
-  final v1.x completion remains gated by v1.13.12 and v1.13.13. v1.13.13 is an
-  audit-only final handoff gate, and v2.x implementation is not authorized.
+- `v1.13.12 — Engine and Catalog Completion` is released and operationally
+  closed. Final candidate `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`
+  completed the catalog planning APIs, production engine ownership, neutral
+  contracts, and enforceable thin-CLI boundary without changing storage
+  semantics. PR #107 merged it as
+  `7505d7000faef452caeb4c01784f0510960e7240`; PR #108 produced final `main`
+  `fd396cd0c8cf43662881211b8e6b2877eb9a8010`. Annotated tag `v1.13.12`, tag
+  validation, stable publication, and both temporary-branch deletions are
+  complete. Historical Phase 0–21 evidence remains frozen.
+- `v1.13.13 — Final v1.x and v2 Handoff Gate` is active on
+  `release/v1.13.13`. Historical Phases 0–14 are Complete. Phase 15 is Next
+  only as the structural topology pointer; quality remediation invalidated the old
+  candidate identity. The remediation head preserves all 49 requirements and
+  six closed blockers, and formal closure re-ratification is approved. Phase
+  14 attempt `1668a7490048144f4dea0fd795f4779b5e7108b5` was blocked by test-harness
+  nondeterminism. Corrective test commit
+  `bd84206a1de5fc5568e83abcfae1e382f44c2ba1` changes no product behavior; the
+  commit containing the dedicated replacement re-freeze record now defines
+  the candidate. Its freeze becomes effective only after exact-head hosted
+  proof; Phase 15 is the next operation after effective freeze, but Phase 14
+  does not authorize merge. v1.13.13 remains unreleased pending exact-head
+  proof, merge, tag, and publication;
+  SQLite-default productization remains v2.x scope, PostgreSQL compatibility
+  remains required, and v2.x implementation is not authorized.
+
+  ```text
+  QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
+  FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
+  PRIOR_PHASE_14_REFREEZE_ATTEMPT: 1668a7490048144f4dea0fd795f4779b5e7108b5
+  PRIOR_ATTEMPT_RESULT: BLOCKED_TEST_HARNESS_NONDETERMINISM
+  CORRECTIVE_TEST_COMMIT: bd84206a1de5fc5568e83abcfae1e382f44c2ba1
+  PRODUCT_BEHAVIOR_CHANGED: NO
+  PHASE_14_REFREEZE: REPLACEMENT_CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
+  PHASE_15_RELEASE_CANDIDATE: REPLACEMENT_PHASE_14_REFREEZE_COMMIT
+  CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
+  PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
+  PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
+  MERGE_AUTHORIZED: NO
+  ```
+- Its active trackers are [scope](v1.13.13-scope.md),
+  [phase list](v1.13.13-phase-list.md), and
+  [validation checklist](v1.13.13-validation-checklist.md).
+- Phase 1 freezes current authority and requirements in the
+  [authoritative roadmap and supersession audit](v1.13.13-phase1-authoritative-roadmap-and-supersession-audit.md),
+  [roadmap authority matrix](v1.13.13-roadmap-authority-matrix.md), and
+  [v1.x normative requirement matrix](v1.13.13-v1x-normative-requirements.md).
+- Phase 2 independently records complete Engine and Catalog planning
+  ownership, a complete thin-CLI boundary, narrow application composition,
+  zero promised production stubs, and zero architecture blockers in the
+  [Engine/Catalog ownership audit](v1.13.13-phase2-engine-catalog-ownership-audit.md),
+  [Engine operation matrix](v1.13.13-engine-operation-ownership-matrix.md),
+  [Catalog adoption matrix](v1.13.13-catalog-contract-adoption-matrix.md), and
+  [CLI boundary exception matrix](v1.13.13-cli-boundary-exception-matrix.md).
+  At that Phase 2 snapshot, Catalog architecture was `PARTIAL` under
+  `P2-ARCH-001` because five aggregate methods lacked the stable typed-error
+  boundary. Phase 9 later proved that root `CLOSED`; current Catalog
+  architecture is complete for the frozen v1 contract.
+  Phase 3 independently confirms `RESTORE_INSTALL_CONTRACT` as a blocker for
+  Phase 6 disposition and later design/remediation.
+- Phase 3 independently records `V1_CORRECTNESS: BLOCKED` with three distinct
+  root findings: the confirmed restore installation contract, a concurrent
+  destination-parent symlink replacement confinement gap, and packed/mixed
+  file-deep verification omission. Its exhaustive evidence is the
+  [correctness and invariant audit](v1.13.13-phase3-correctness-and-invariant-audit.md),
+  [correctness invariant matrix](v1.13.13-correctness-invariant-matrix.md),
+  [restore correctness matrix](v1.13.13-restore-correctness-matrix.md), and
+  [safety subsystem matrix](v1.13.13-safety-subsystem-audit-matrix.md).
+  Phase 3 makes no remediation, backend-equivalence, coordination, or v1
+  closure claim.
+- Phase 4 independently records SQLite and PostgreSQL support within explicit
+  bounds, derives current schema version 16, keeps SQLite-default
+  productization in v2 and centralized PostgreSQL product mode in v3, and
+  classifies SQLite live GC as `EXPLICIT_V2_PRODUCTIZATION_BOUND`. Its result
+  is `DUAL_BACKEND_CONTRACT: BLOCKED` under one new root, `P4-BE-001`, because
+  production snapshot-label filtering has backend-dependent case semantics.
+  Its exhaustive evidence is the
+  [SQLite/PostgreSQL backend audit](v1.13.13-phase4-sqlite-postgresql-backend-audit.md),
+  [backend capability matrix](v1.13.13-backend-capability-matrix.md),
+  [backend contract evidence matrix](v1.13.13-backend-contract-evidence-matrix.md),
+  and [schema/migration parity matrix](v1.13.13-schema-migration-parity-matrix.md).
+  All Phase 2/3 findings remain unchanged; Phase 4 makes no coordination,
+  remediation, correctness-closure, or v1 closure claim.
+- Phase 5 independently records `REPOSITORY_COORDINATION: BLOCKED` under one
+  new root, `P5-COORD-001`: the live-repository `simulate gc` route bypasses
+  the outer repository lease and can reach schema work plus GC planning
+  outside exclusive ownership. The same-process registry, native Unix/Windows
+  lifecycle, bounded process-death evidence, owner diagnostics, ordinary
+  operation coverage, live-GC exclusion, and PostgreSQL dedicated advisory
+  session remain proven within explicit bounds. Evidence is the
+  [repository coordination audit](v1.13.13-phase5-repository-coordination-audit.md),
+  [coordination contract matrix](v1.13.13-repository-coordination-contract-matrix.md),
+  [operation coverage matrix](v1.13.13-coordination-operation-coverage-matrix.md),
+  and [platform evidence matrix](v1.13.13-coordination-platform-evidence-matrix.md).
+  Network/NAS/distributed coordination remains post-v1; all Phase 2–4
+  findings remain unchanged and no remediation is authorized.
+- Phase 6 independently freezes six final v1.x blocker roots in five
+  remediation workstreams. It promotes the partial Catalog typed-error gap to
+  a closure blocker under mandatory `V1R-CAT-003`, keeps the two restore
+  invariants distinct, freezes Coldkeep's prior narrow ASCII case-insensitive
+  snapshot-label substring behavior across SQLite/PostgreSQL, and preserves
+  all other Phase 2–5 roots. V2/v3 deferrals and non-blocking debt are frozen;
+  no remediation is implemented. Evidence is the
+  [deferred-item and blocker freeze](v1.13.13-phase6-deferred-item-and-blocker-freeze.md),
+  [final blocker matrix](v1.13.13-final-blocker-classification-matrix.md),
+  [remediation workstream freeze](v1.13.13-remediation-workstream-freeze.md),
+  and [deferred-item matrix](v1.13.13-deferred-item-classification-matrix.md).
+  Phases 7–9 are generalized for design, minimum remediation, and complete
+  cross-platform/backend proof; v1.x remains blocked.
+- Phase 7 freezes one implementation-ready design for every workstream, one
+  deterministic proof contract for every blocker, a seven-commit Phase 8
+  order, and an exact source/test allowlist. Catalog errors translate once at
+  five Service boundaries; label matching uses one backend-neutral predicate;
+  file-deep verify consumes authoritative Catalog placements; and valid
+  `simulate gc` joins the existing outer lease lifecycle. Restore becomes
+  exact-only at the storage boundary and uses retained parent/object identity
+  plus fail-closed native atomic publication while preserving post-publication
+  metadata semantics. Pinned `x/sys v0.38.0` supplies the required Linux,
+  Darwin, and Windows surfaces without a new dependency. Evidence is the
+  [Phase 7 design freeze](v1.13.13-phase7-remediation-design-and-test-contract-freeze.md),
+  [implementation design matrix](v1.13.13-remediation-implementation-design-matrix.md),
+  [regression contract matrix](v1.13.13-remediation-regression-contract-matrix.md),
+  and [Phase 8 source/test allowlist](v1.13.13-phase8-source-test-allowlist.md).
+  Phase 8 implemented all seven frozen boundaries with zero allowlist
+  violations. Evidence is the
+  [Phase 8 remediation report](v1.13.13-phase8-minimum-v1x-blocker-remediation.md)
+  and [blocker implementation status](v1.13.13-phase8-blocker-implementation-status.md).
+  Phase 9 independently closes all six roots after complete source, negative,
+  SQLite/PostgreSQL, Linux/macOS/Windows, race, fault, adversarial, and
+  exact-head hosted proof. Evidence is the
+  [Phase 9 remediation proof](v1.13.13-phase9-remediation-regression-and-cross-platform-backend-proof.md),
+  [blocker closure matrix](v1.13.13-phase9-blocker-closure-matrix.md), and
+  [proof execution matrix](v1.13.13-phase9-proof-execution-matrix.md).
+  Phase 10 then reconciled current architecture and release prose, closed
+  `P2-DOC-001`, and recorded the current truth in the
+  [Phase 10 reconciliation](v1.13.13-phase10-documentation-and-current-state-reconciliation.md),
+  [current-state truth matrix](v1.13.13-current-state-truth-matrix.md), and
+  [stale-claim disposition matrix](v1.13.13-stale-claim-disposition-matrix.md).
+  Phase 11 then passed the complete frozen-candidate local gate with all 44
+  mandatory local rows executed, local PostgreSQL proof, both codecs, G1–G17,
+  remediation rechecks, cross-builds, smoke, long-run, and four-profile hard
+  benchmark integrity. Evidence is the
+  [independent full local release gate](v1.13.13-phase11-independent-full-local-release-gate.md)
+  and [local execution matrix](v1.13.13-phase11-local-gate-execution-matrix.md).
+  Phase 12 then passed exact-candidate CI, Required Gate, PostgreSQL, both
+  codecs, native Linux/macOS/Windows, stress, long-run, adversarial, benchmark
+  integrity, CodeQL, Codacy, and effective protection policy. Evidence is the
+  [hosted gate](v1.13.13-phase12-hosted-exact-head-security-and-quality-gate.md),
+  [hosted inventory](v1.13.13-phase12-hosted-check-inventory.md), and
+  [security-quality matrix](v1.13.13-phase12-security-quality-evidence-matrix.md).
+  Phase 13 then approved formal v1.x normative closure after reconciling all
+  49 requirements, the six closed blockers, safe deferrals, residual bounds,
+  and current governance. Evidence is the
+  [formal closure decision](v1.13.13-phase13-formal-v1x-closure-decision.md),
+  [normative closure matrix](v1.13.13-v1x-normative-closure-matrix.md), and
+  [closure evidence index](v1.13.13-v1x-closure-evidence-index.md). Phase 14
+  then froze the final v1.x record and v2/v3 ownership boundary in the
+  [handoff record](v1.13.13-phase14-v1x-closure-and-v2-handoff-record.md),
+  [v2 scope matrix](v1.13.13-v2-handoff-scope-matrix.md), and
+  [compact closure state](v1.13.13-v1x-final-closure-state.md). The later
+  [re-ratification decision](v1.13.13-phase13-formal-v1x-closure-reratification.md),
+  [49-row matrix](v1.13.13-v1x-normative-reratification-matrix.md), and
+  [evidence index](v1.13.13-v1x-closure-reratification-evidence-index.md)
+  prove the quality-remediation delta preserved closure. The dedicated
+  [first Phase 14 re-freeze record](v1.13.13-phase14-v1x-closure-v2-handoff-refreeze.md)
+  remains the blocked-attempt authority. The
+  [test-harness correction and replacement re-freeze](v1.13.13-phase14-test-harness-correction-and-replacement-refreeze.md)
+  defines the new Phase 15 candidate and its exact-head effectiveness
+  condition; tag, publication, and v2 implementation have not occurred.
+- The updated `v1.13.x-release-train.md` is the authoritative current plan.
 - `v1.13.10-engine-contract-documentation-truthfulness.md` records the current
   Engine contract boundary and its intentional limitations.
 - `v1.13.10-release-state-validator-contract.md` freezes the lifecycle,

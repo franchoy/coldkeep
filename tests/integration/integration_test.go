@@ -7854,7 +7854,7 @@ func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
 	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyDeep),
-		"chunk Hash verification failed: found 1 errors in file chunk Hash verification",
+		"errors in file chunk Hash verification",
 		"verify-file deep chunk corruption",
 	)
 }
@@ -11352,11 +11352,22 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open container for corruption: %v", err)
 			}
-			corruptionOffset := record.BlockOffset
-			if record.StoredSize > 1 {
-				corruptionOffset++
+			// Packed AES-GCM payloads are nonce (12 bytes) || ciphertext. Mutate
+			// the first ciphertext byte; the same offset is an in-bounds payload
+			// byte for the plain codec used by the companion test configuration.
+			const aesGCMNonceSize = int64(12)
+			if record.StoredSize <= aesGCMNonceSize {
+				_ = f.Close()
+				t.Fatalf("expected stored block larger than AES-GCM nonce, got %d", record.StoredSize)
 			}
-			if _, err := f.WriteAt([]byte{0xEE}, corruptionOffset); err != nil {
+			corruptionOffset := record.BlockOffset + aesGCMNonceSize
+			original := make([]byte, 1)
+			if _, err := f.ReadAt(original, corruptionOffset); err != nil {
+				_ = f.Close()
+				t.Fatalf("read chunk payload byte for corruption: %v", err)
+			}
+			corrupted := []byte{original[0] ^ 0x01}
+			if _, err := f.WriteAt(corrupted, corruptionOffset); err != nil {
 				_ = f.Close()
 				t.Fatalf("corrupt chunk payload byte: %v", err)
 			}

@@ -142,6 +142,13 @@ func TestWithLeaseReturnsReleaseErrorAfterOperationSuccess(t *testing.T) {
 	}
 }
 
+func TestValidateRequestAcceptsSimulateGCOperation(t *testing.T) {
+	identity := mustIdentity(t, t.TempDir())
+	if err := ValidateRequest(identity, mustRequest(t, identity, OperationSimulateGC)); err != nil {
+		t.Fatalf("ValidateRequest simulate gc: %v", err)
+	}
+}
+
 func TestLeaseContractReleaseIsIdempotentAfterSuccess(t *testing.T) {
 	cleanupCalls := 0
 	lease := &fakeLease{onRelease: func() {

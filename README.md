@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.12%20ready-blue)
+![Status](https://img.shields.io/badge/status-v1.13.13%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -39,17 +39,47 @@ v1.13.11 is complete, merged, tagged, and published. It closed the safety and
 backend-compatibility gate at merge commit
 `507859daccf25594142c61e5ab8209a751fb579a` without closing v1.x as a whole.
 
-v1.13.12 Engine and Catalog Completion is complete. Phase 21 passed for final
-candidate `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`, and PR #107 merged it to
-`main` as `7505d7000faef452caeb4c01784f0510960e7240`. v1.13.12 is ready for
-release and tagging after post-merge validation; it is not yet tagged or
-published. v1.x is not closed, and v1.13.13 remains the mandatory independent
-final audit and v2 handoff gate. SQLite-default portable-repository
-productization remains a future v2.x objective, PostgreSQL compatibility
-remains required, and v2.x implementation is not authorized.
+v1.13.12 Engine and Catalog Completion is released, tagged, published, and
+operationally closed. PR #107 merged final candidate
+`33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`; post-merge reconciliation PR
+#108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
+
+v1.13.13 Final v1.x and v2 Handoff Gate is active on
+`release/v1.13.13`. Historical Phases 0–14 are Complete. Quality remediation
+at `02647536ac618f8f2df8297863d05357fe15eb54` preserved all 49 frozen
+requirements and six closed blockers, and formal v1.x closure re-ratification
+is approved. The first Phase 14 re-freeze attempt at `1668a7490048144f4dea0fd795f4779b5e7108b5`
+was blocked by test-harness nondeterminism without reopening a product blocker.
+The deterministic test correction is `bd84206a1de5fc5568e83abcfae1e382f44c2ba1`;
+the commit containing the [replacement Phase 14 record](docs/release/v1.13/v1.13.13-phase14-test-harness-correction-and-replacement-refreeze.md)
+now defines the replacement Phase 15 candidate. Its freeze is effective only
+after exact-head hosted proof. Phase 15 retains its structural `Next` pointer
+and becomes the next operation after effective freeze, but merge is not
+authorized by Phase 14. v1.13.13 remains unreleased; tag, publication, and
+v2.x implementation have not occurred.
+
+```text
+QUALITY_REMEDIATION_HEAD: 02647536ac618f8f2df8297863d05357fe15eb54
+FORMAL_V1_X_CLOSURE_RERATIFICATION: APPROVED
+PRIOR_PHASE_14_REFREEZE_ATTEMPT: 1668a7490048144f4dea0fd795f4779b5e7108b5
+PRIOR_ATTEMPT_RESULT: BLOCKED_TEST_HARNESS_NONDETERMINISM
+CORRECTIVE_TEST_COMMIT: bd84206a1de5fc5568e83abcfae1e382f44c2ba1
+PRODUCT_BEHAVIOR_CHANGED: NO
+PHASE_14_REFREEZE: REPLACEMENT_CANDIDATE_IDENTITY_DEFINED_BY_THIS_COMMIT
+PHASE_15_RELEASE_CANDIDATE: REPLACEMENT_PHASE_14_REFREEZE_COMMIT
+CANDIDATE_FREEZE_EFFECTIVE: CONDITIONAL_ON_EXACT_HEAD_PROOF
+PHASE_15_MERGE: NOT_AUTHORIZED_BY_PHASE_14
+PHASE_15: NEXT_OPERATION_AFTER_EFFECTIVE_FREEZE
+MERGE_AUTHORIZED: NO
+```
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
+
+The v1 architecture exposes a reusable headless Engine over a neutral Catalog
+boundary, with the CLI retained as a thin local wrapper. SQLite and PostgreSQL
+are supported backends within documented bounds; the default repository-local
+SQLite product experience remains v2 work.
 
 Now with snapshot lineage, diff summaries, and safe deletion insights.
 
@@ -149,9 +179,9 @@ Guarantee IDs are stable and tracked in [VALIDATION_MATRIX.md](VALIDATION_MATRIX
 - G2: repeat store does not drift chunk graph
 - G3: no exposure of partially written or inconsistent data
 - G4: GC is reference-safe (no reachable chunk is deleted)
-- G5: atomic restore replacement (single-node local filesystem semantics)
-- G6: safe in-process concurrent storage operations
-- G7: deep corruption detection (payload/offset/tail)
+- G5: exact, atomic restore publication (same-host local-filesystem semantics)
+- G6: cooperative same-process/same-host repository coordination on supported native platforms
+- G7: deep corruption detection across authoritative legacy, packed, and mixed placement
 - G8: corrective health gate contract stability
 - G9: deterministic batch CLI orchestration and automation-safe contract behavior
 - G10: current-state physical mapping graph coherence is audited in standard verify
@@ -881,9 +911,13 @@ Verification levels:
 coldkeep verify system --standard
 coldkeep verify system --full
 coldkeep verify system --deep
+coldkeep verify file <fileID> --deep
 ```
 
 Verification checks are observational. In CLI flows, startup recovery may run before verification.
+File-deep verification follows Catalog placement authority and covers
+legacy-only, packed-only, and mixed recipes; missing, conflicting, incomplete,
+or corrupt authoritative placement fails closed.
 
 ## Documentation Map
 
@@ -909,7 +943,19 @@ Current status:
 - v1.8 packed block abstraction, AES-GCM packed-block integration, and release hardening are complete.
 - v1.9 transform-based storage semantics, block-level compression, and staged verification are complete.
 
-Next focus is v1.10: architecture extraction on top of frozen v1.9 storage semantics.
+Current v1 status:
+
+- Engine architecture is complete for the frozen v1 contract.
+- Catalog planning/adoption and typed-error contracts are complete for v1.
+- The CLI is thin for v1, and all six frozen v1.13.13 blocker roots are
+  technically closed.
+- Formal v1.x normative closure and its post-remediation re-ratification are
+  approved. The first Phase 14 re-freeze attempt was blocked by a corrected
+  test-harness defect; the replacement record defines a new candidate with
+  effectiveness conditional on exact-head proof before resumed Phase 15. Tag
+  and publication remain later gates.
+- V2 owns SQLite-default local productization and daemon-backed local product
+  workflows; V3 owns network/NAS/distributed product expansion.
 
 ## Contributing
 

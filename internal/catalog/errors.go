@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -68,6 +69,24 @@ func CodeOf(err error) (ErrorCode, bool) {
 func IsCode(err error, code ErrorCode) bool {
 	actual, ok := CodeOf(err)
 	return ok && actual == code
+}
+
+// translateServiceError completes the backend-neutral error boundary for
+// aggregate Service methods whose private query helpers intentionally retain
+// contextual database errors. It must be called exactly once at the public
+// method boundary.
+func translateServiceError(operation, message string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var catalogErr *Error
+	if errors.As(err, &catalogErr) && catalogErr != nil {
+		return catalogErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return NewError(ErrorCancelled, operation, "", message, err)
+	}
+	return NewError(ErrorOperationFailed, operation, "", message, err)
 }
 
 func validErrorCode(code ErrorCode) bool {
