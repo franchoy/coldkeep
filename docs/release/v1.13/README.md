@@ -68,10 +68,12 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active on `release/v1.13.14`; its Phase 1 is next. v1.x
-normative scope remains complete, but correctness certification is under
-corrective revalidation after 17 confirmed findings and 4 process gates. v2
-implementation has not started. The v1.13.13 publication authority is the
+Certification` is active on `release/v1.13.14`; Phases 0 and 1 are complete
+and Phase 2 is next. v1.x normative scope remains complete, but correctness
+certification is under corrective revalidation after 17 confirmed findings and
+4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
+is the current classification authority. v2 implementation has not started.
+The v1.13.13 publication authority is the
 [Phase 16 record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).
 
 

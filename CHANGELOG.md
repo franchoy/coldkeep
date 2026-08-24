@@ -32,6 +32,10 @@ project, do not start here; start with [README.md](README.md).
   authoritative-main merge history: retained non-fast-forward protection,
   removed only the incompatible whole-history linearity rule, and assigned a
   branch-relative merge-history validator to Phase 14.
+- Completed the Phase 1 source audit and froze all 17 findings and 4 process
+  gates with zero rows closed, together with definitive rejection,
+  root-cause-deduplication, compatibility, closure-proof, and owner-phase
+  registers. Phase 2 remediation design is now Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
