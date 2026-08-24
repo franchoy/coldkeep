@@ -66,6 +66,15 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
+`v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
+closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
+Certification` is active on `release/v1.13.14`; its Phase 1 is next. v1.x
+normative scope remains complete, but correctness certification is under
+corrective revalidation after 17 confirmed findings and 4 process gates. v2
+implementation has not started. The v1.13.13 publication authority is the
+[Phase 16 record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).
+
+
 - `v1.13.9` is complete, merged, tagged, published, and operationally closed.
 - Phase 24 is complete; PR #104 merged, `v1.13.9` was tagged and released,
   and release/tag CI passed.
@@ -160,29 +169,17 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   `fd396cd0c8cf43662881211b8e6b2877eb9a8010`. Annotated tag `v1.13.12`, tag
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
-- `v1.13.13 — Final v1.x and v2 Handoff Gate` is ready for release in the
-  merged-not-tagged state. Candidate
-  `8b48418241458facd1291ddb615518fa0a775bfb` passed exact-head proof and
-  PR #109 merged it normally as `ac395e0bb1725c9c5ca57d56136b255e5cb55921`,
-  with prior `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`
-  as parent 1 and the candidate as parent 2. Formal v1.x normative completion
-  and the v2 handoff remain proven. The documentation-only
-  [Phase 15 reconciliation](v1.13.13-phase15-post-merge-reconciliation.md)
-  becomes authoritative after its protected normal merge and exact final-main
-  proof. The v1.13.13 tag and stable publication are absent; Phase 16 and v2.x
-  implementation are not authorized.
+- `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
+  closed. Its annotated tag object
+  `5d534a6b4a9d44ab7303d9b76575338e20eee36d` peels to final main
+  `f3b75dc0fbee44e4fe91eb2df1df724f9426640e`; tag-triggered CI and stable
+  publication passed. See the [Phase 16 publication record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).
 
   ```text
-  V1_X_NORMATIVE_COMPLETION: PROVEN
-  V1_13_13_CANDIDATE: 8b48418241458facd1291ddb615518fa0a775bfb
-  PHASE_15_PROTECTED_MERGE: COMPLETE
-  ORIGINAL_MERGE_SHA: ac395e0bb1725c9c5ca57d56136b255e5cb55921
-  V1_13_13_STATE: MERGED_NOT_TAGGED
-  TAG: ABSENT
-  GITHUB_RELEASE: ABSENT
-  PHASE_15_POST_MERGE_RECONCILIATION: CONDITIONALLY_COMPLETE_PENDING_FINAL_MAIN_PROOF
-  PHASE_16: NOT_STARTED
-  PHASE_16_EXECUTION_AUTHORIZED: NO
+  V1_13_13_STATE: RELEASED_AND_OPERATIONALLY_CLOSED
+  PHASE_16: COMPLETE
+  TAG: CREATED_AND_VALIDATED
+  GITHUB_RELEASE: PUBLISHED_STABLE
   ```
 - Its current trackers are [scope](v1.13.13-scope.md),
   [phase list](v1.13.13-phase-list.md), and

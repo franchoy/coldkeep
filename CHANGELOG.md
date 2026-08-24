@@ -20,11 +20,28 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.14 — Unreleased
+
+- Reconciled the authoritative v1.13.13 publication identity: annotated tag,
+  tag-triggered CI, stable GitHub release, and actual temporary-branch state.
+- Activated source identity `1.13.14` and `release/v1.13.14` as the active
+  corrective-revalidation release.
+- Froze the 17 confirmed findings and 4 release-process gates without changing
+  runtime behavior, schema, storage, dependencies, workflows, or v2 scope.
+- Corrected release-branch governance after GitHub rejected inherited
+  authoritative-main merge history: retained non-fast-forward protection,
+  removed only the incompatible whole-history linearity rule, and assigned a
+  branch-relative merge-history validator to Phase 14.
+
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
 - Reconciled canonical v1.13.12 lifecycle truth after its final-main merge,
   annotated tag, tag validation, stable publication, and temporary-branch
   cleanup, while preserving the historical Phase 0–21 evidence as frozen.
+- Completed Phase 16 publication: annotated tag object
+  `5d534a6b4a9d44ab7303d9b76575338e20eee36d` peels to
+  `f3b75dc0fbee44e4fe91eb2df1df724f9426640e`; tag CI run `32657349955` and
+  its Required Gate passed, and the stable GitHub release was published.
 - Activated release identity 1.13.13 on `release/v1.13.13` and froze the
   Phase 0–16 train in `AUDIT_PLUS_REMEDIATION` mode. Phase 0 is complete and
   Phase 1 is next.

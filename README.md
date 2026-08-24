@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.13%20ready-blue)
+![Status](https://img.shields.io/badge/status-v1.13.14%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -44,29 +44,28 @@ operationally closed. PR #107 merged final candidate
 `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`; post-merge reconciliation PR
 #108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
 
-v1.13.13 Final v1.x and v2 Handoff Gate is ready for release in the
-merged-not-tagged state. Immutable candidate
-`8b48418241458facd1291ddb615518fa0a775bfb` passed its exact-head gates and
-PR #109 merged it normally as `ac395e0bb1725c9c5ca57d56136b255e5cb55921`,
-with prior `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010` as
-parent 1 and the candidate as parent 2. Formal v1.x normative completion and
-the v2 handoff are proven. The documentation-only
-[Phase 15 post-merge reconciliation](docs/release/v1.13/v1.13.13-phase15-post-merge-reconciliation.md)
-becomes authoritative after its protected normal merge and exact final-main
-hosted proof. v1.13.13 is not yet tagged or published; Phase 16 remains a
-separately authorized operation and v2.x implementation has not started.
+v1.13.13 Final v1.x and v2 Handoff Gate is published and operationally
+closed. Its annotated tag `v1.13.13` has object
+`5d534a6b4a9d44ab7303d9b76575338e20eee36d` and peels to
+`f3b75dc0fbee44e4fe91eb2df1df724f9426640e`; tag-triggered CI and the stable
+GitHub release passed. Its pre-publication Phase 15 evidence remains historical;
+the [Phase 16 publication record](docs/release/v1.13/v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md)
+is the current publication authority.
+
+A post-release audit identified 17 confirmed findings and 4 release-process
+gates. `v1.13.14 — Final v1.x Correctness Remediation and Closure
+Certification` is active on `release/v1.13.14`. v1.x normative scope remains
+complete, but its correctness certification is under corrective revalidation;
+no finding is closed. v2 implementation has not started. Phase 1 is next.
 
 ```text
-V1_X_NORMATIVE_COMPLETION: PROVEN
-V1_13_13_CANDIDATE: 8b48418241458facd1291ddb615518fa0a775bfb
-PHASE_15_PROTECTED_MERGE: COMPLETE
-ORIGINAL_MERGE_SHA: ac395e0bb1725c9c5ca57d56136b255e5cb55921
-V1_13_13_STATE: MERGED_NOT_TAGGED
-TAG: ABSENT
-GITHUB_RELEASE: ABSENT
-PHASE_15_POST_MERGE_RECONCILIATION: CONDITIONALLY_COMPLETE_PENDING_FINAL_MAIN_PROOF
-PHASE_16: NOT_STARTED
-PHASE_16_EXECUTION_AUTHORIZED: NO
+V1_13_13_STATE: RELEASED_AND_OPERATIONALLY_CLOSED
+V1_13_14_STATE: ACTIVE_DEVELOPMENT
+V1_X_NORMATIVE_SCOPE: COMPLETE
+V1_X_CORRECTIVE_REVALIDATION: IN_PROGRESS
+V1_X_CONFIRMED_POST_RELEASE_FINDINGS: 17
+V1_X_RELEASE_PROCESS_GATES: 4
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
