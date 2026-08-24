@@ -44,6 +44,10 @@ func physicalGraphInvariantCode(summary PhysicalFileIntegritySummary) string {
 func CheckPhysicalFileGraphIntegrity(dbconn *sql.DB) (PhysicalFileIntegritySummary, error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return CheckPhysicalFileGraphIntegrityContext(ctx, dbconn)
+}
+
+func CheckPhysicalFileGraphIntegrityContext(ctx context.Context, dbconn *sql.DB) (PhysicalFileIntegritySummary, error) {
 
 	log.Printf("Checking v1.2 physical_file graph integrity...")
 

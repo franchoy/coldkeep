@@ -165,7 +165,8 @@ func (e *DefaultEngine) RestoreStoredPath(ctx context.Context, req RestoreStored
 		return RestoreStoredPathResult{}, err
 	}
 
-	storageResult, err := storage.RestoreFileByStoredPathWithStorageContextResultOptions(
+	storageResult, err := storage.RestoreFileByStoredPathWithStorageContextResultOptionsContext(
+		ctx,
 		e.restoreStorageContext(),
 		normalized.StoredPath,
 		storage.RestoreOptions{

@@ -32,6 +32,12 @@ type LogicalFileInspectInfo struct {
 func GetLogicalFileInfoWithDB(dbconn *sql.DB, fileID int64) (LogicalFileInfo, error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return GetLogicalFileInfoWithDBContext(ctx, dbconn, fileID)
+}
+
+// GetLogicalFileInfoWithDBContext returns logical file metadata using the
+// caller-owned operation context.
+func GetLogicalFileInfoWithDBContext(ctx context.Context, dbconn *sql.DB, fileID int64) (LogicalFileInfo, error) {
 
 	var info LogicalFileInfo
 	if err := dbconn.QueryRowContext(

@@ -676,8 +676,14 @@ func RestoreFileWithStorageContextResult(sgctx StorageContext, fileID int64, out
 }
 
 func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
+	return RestoreFileWithStorageContextResultOptionsContext(context.Background(), sgctx, fileID, outputPath, opts)
+}
+
+// RestoreFileWithStorageContextResultOptionsContext preserves caller
+// cancellation through restore planning, reads, decoding, and publication.
+func RestoreFileWithStorageContextResultOptionsContext(ctx context.Context, sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
 	opts.restoreHooks = sgctx.restoreHooks
-	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
+	return restoreFileWithDBAndDirContext(ctx, sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
 }
 
 func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPaths []string, notFoundPath string) (RestoreDescriptor, error) {
@@ -968,6 +974,12 @@ func validateRestorePrefixRelativePath(relativePath string) error {
 // current-state physical_file path as identity (v1.2 model).
 // This is original destination mode: output path is the stored physical path.
 func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext, storedPath string, opts RestoreOptions) (RestoreFileResult, error) {
+	return RestoreFileByStoredPathWithStorageContextResultOptionsContext(context.Background(), sgctx, storedPath, opts)
+}
+
+// RestoreFileByStoredPathWithStorageContextResultOptionsContext preserves
+// caller cancellation through stored-path resolution and restore execution.
+func RestoreFileByStoredPathWithStorageContextResultOptionsContext(ctx context.Context, sgctx StorageContext, storedPath string, opts RestoreOptions) (RestoreFileResult, error) {
 	if sgctx.DB == nil {
 		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
 	}
@@ -977,18 +989,18 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 		return RestoreFileResult{}, err
 	}
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	opctx, cancel := db.NewOperationContext(ctx)
 	defer cancel()
 
-	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, lookupPaths, notFoundPath)
+	descriptor, err := buildRestoreDescriptorFromPhysicalPath(opctx, sgctx.DB, lookupPaths, notFoundPath)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
 
-	return restoreFromDescriptorWithStorageContextResultOptions(sgctx, descriptor, opts)
+	return restoreFromDescriptorWithStorageContextResultOptionsContext(opctx, sgctx, descriptor, opts)
 }
 
-func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, descriptor RestoreDescriptor, opts RestoreOptions) (RestoreFileResult, error) {
+func restoreFromDescriptorWithStorageContextResultOptionsContext(ctx context.Context, sgctx StorageContext, descriptor RestoreDescriptor, opts RestoreOptions) (RestoreFileResult, error) {
 	if sgctx.DB == nil {
 		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
 	}
@@ -1013,7 +1025,7 @@ func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, 
 		Mode: descriptor.Mode, MTime: descriptor.MTime, UID: descriptor.UID, GID: descriptor.GID,
 	}
 	opts.restoreHooks = sgctx.restoreHooks
-	result, err := restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
+	result, err := restoreFileWithDBAndDirContext(ctx, sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
@@ -1150,13 +1162,17 @@ func resolveOverrideRestoreOutputPath(opts RestoreOptions) (string, string, erro
 	return filepath.Clean(absOverridePath), trustedRoot, nil
 }
 
-func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
+func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (RestoreFileResult, error) {
+	return restoreFileWithDBAndDirContext(context.Background(), dbconn, fileID, outputPath, containersDir, opts)
+}
+
+func restoreFileWithDBAndDirContext(parent context.Context, dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
 	result.FileID = fileID
 	fsys := opts.fs
 	if fsys == nil {
 		fsys = fsx.Default()
 	}
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := db.NewOperationContext(parent)
 	defer cancel()
 
 	// ================================================================
@@ -1179,9 +1195,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		defer cleanupCancel()
 		if unpinErr := unpinRestoreChunksWithContext(cleanupCtx, dbconn, pinnedChunkIDs); unpinErr != nil {
 			log.Printf("event=restore_cleanup action=unpin_chunks file_id=%d error=%v", fileID, unpinErr)
-			if err == nil {
-				err = unpinErr
-			}
+			err = errors.Join(err, unpinErr)
+			result = RestoreFileResult{}
 		}
 	}()
 

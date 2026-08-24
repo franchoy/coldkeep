@@ -50,8 +50,16 @@ project, do not start here; start with [README.md](README.md).
   recounts with a race-safe, invocation-local ledger of successful legacy and
   packed verification stages. Preserved the public `VerifyResult`, level,
   target, error, schema, storage, JSON, and CLI contracts; verification failure
-  still returns a zero result. One of 17 findings is now closed, all 4 process
-  gates remain open, and Phase 5 caller-context ownership is Next.
+  still returns a zero result. This Phase 4 milestone closed the first of 17
+  findings while all 4 process gates remained open.
+- Closed `CK-V1-AUD-002` in Phase 5 by preserving caller cancellation and
+  deadlines through single-file Store, both Remove identities, both Restore
+  identities, Verify, and Doctor Recovery/Schema/Verify/Audit. Sequential
+  batches now stop before new dispatch and return truthful partial results;
+  bounded safety cleanup remains independent and cleanup failures are joined.
+  Phase 4 verification accounting and the still-open Phase 6 finalization-error
+  contract are unchanged. Two of 17 findings are closed, all 4 process gates
+  remain open, and Phase 6 is Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

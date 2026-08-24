@@ -32,6 +32,10 @@ func (s ChunkerVersionMetadataSummary) totalIssues() int64 {
 func CheckChunkerVersionMetadataIntegrity(dbconn *sql.DB) (ChunkerVersionMetadataSummary, error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return CheckChunkerVersionMetadataIntegrityContext(ctx, dbconn)
+}
+
+func CheckChunkerVersionMetadataIntegrityContext(ctx context.Context, dbconn *sql.DB) (ChunkerVersionMetadataSummary, error) {
 
 	log.Printf("Checking chunker-version metadata integrity...")
 

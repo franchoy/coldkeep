@@ -15,9 +15,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
-func checkFileChunkOrdering(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkFileChunkOrderingContext(ctx context.Context, dbconn *sql.DB) error {
 
 	// Check that all non-empty files have chunk rows and that chunk_order is contiguous from 0 with no duplicates.
 	log.Printf("Checking file chunk ordering continuity and gaps...")
@@ -119,6 +117,10 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 func verifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersDir string, _ *verificationExecutionLedger) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return verifyFileStandardWithContainersDirContext(ctx, dbconn, fileId, containersDir, nil)
+}
+
+func verifyFileStandardWithContainersDirContext(ctx context.Context, dbconn *sql.DB, fileId int, containersDir string, _ *verificationExecutionLedger) error {
 
 	log.Printf("starting standard file verification for logical file with ID %d...", fileId)
 	if fileId <= 0 {
@@ -244,9 +246,7 @@ func verifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	return nil
 }
 
-func verifyFileContainersAndOffsets(dbconn *sql.DB, fileID int, containersDir string) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func verifyFileContainersAndOffsetsContext(ctx context.Context, dbconn *sql.DB, fileID int, containersDir string) error {
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT
@@ -366,12 +366,18 @@ func VerifyFileFullWithContainersDir(dbconn *sql.DB, fileId int, containersDir s
 }
 
 func verifyFileFullWithContainersDir(dbconn *sql.DB, fileId int, containersDir string, ledger *verificationExecutionLedger) error {
-	if err := verifyFileStandardWithContainersDir(dbconn, fileId, containersDir, ledger); err != nil {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return verifyFileFullWithContainersDirContext(ctx, dbconn, fileId, containersDir, ledger)
+}
+
+func verifyFileFullWithContainersDirContext(ctx context.Context, dbconn *sql.DB, fileId int, containersDir string, ledger *verificationExecutionLedger) error {
+	if err := verifyFileStandardWithContainersDirContext(ctx, dbconn, fileId, containersDir, ledger); err != nil {
 		return fmt.Errorf("standard verification failed: %w", err)
 	}
 
 	log.Printf("starting Full file verification for logical file with ID %d...", fileId)
-	if err := verifyFileContainersAndOffsets(dbconn, fileId, containersDir); err != nil {
+	if err := verifyFileContainersAndOffsetsContext(ctx, dbconn, fileId, containersDir); err != nil {
 		return fmt.Errorf("container and offset verification failed: %w", err)
 	}
 	log.Printf("Full file verification for logical file with ID %d completed successfully", fileId)
@@ -379,9 +385,7 @@ func verifyFileFullWithContainersDir(dbconn *sql.DB, fileId int, containersDir s
 	return nil
 }
 
-func verifyFileChunkHashesWithLedger(dbconn *sql.DB, fileID int, containersDir string, ledger *verificationExecutionLedger) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func verifyFileChunkHashesWithLedgerContext(ctx context.Context, dbconn *sql.DB, fileID int, containersDir string, ledger *verificationExecutionLedger) error {
 	ctx = withVerificationExecutionLedger(ctx, ledger)
 
 	placements, err := catalog.NewServiceFromSQL(dbconn).LoadChunkPlacements(ctx, int64(fileID))
@@ -428,12 +432,18 @@ func VerifyFileDeepWithContainersDir(dbconn *sql.DB, fileId int, containersDir s
 }
 
 func verifyFileDeepWithContainersDir(dbconn *sql.DB, fileId int, containersDir string, ledger *verificationExecutionLedger) error {
-	if err := verifyFileFullWithContainersDir(dbconn, fileId, containersDir, ledger); err != nil {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return verifyFileDeepWithContainersDirContext(ctx, dbconn, fileId, containersDir, ledger)
+}
+
+func verifyFileDeepWithContainersDirContext(ctx context.Context, dbconn *sql.DB, fileId int, containersDir string, ledger *verificationExecutionLedger) error {
+	if err := verifyFileFullWithContainersDirContext(ctx, dbconn, fileId, containersDir, ledger); err != nil {
 		return fmt.Errorf("full verification failed: %w", err)
 	}
 
 	log.Printf("starting deep file verification for logical file with ID %d...", fileId)
-	if err := verifyFileChunkHashesWithLedger(dbconn, fileId, containersDir, ledger); err != nil {
+	if err := verifyFileChunkHashesWithLedgerContext(ctx, dbconn, fileId, containersDir, ledger); err != nil {
 		return fmt.Errorf("chunk hash verification failed: %w", err)
 	}
 	log.Printf("Deep file verification for logical file with ID %d completed successfully", fileId)

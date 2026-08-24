@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -38,15 +39,25 @@ func (e *DefaultEngine) Doctor(ctx context.Context, req DoctorRequest) (_ Doctor
 		return result, doctorStageError(code, fmt.Sprintf("doctor recovery phase failed: %v", err), err)
 	}
 	result.RecoveryStatus = "ok"
+	if err := ctx.Err(); err != nil {
+		return result, doctorStageError(ErrorCancelled, fmt.Sprintf("doctor cancelled after recovery: %v", err), err)
+	}
 
 	schemaVersion, err := e.runDoctorSchema(ctx)
 	if err != nil {
 		result.SchemaStatus = "error"
 		result.FailedStage = DoctorStageSchema
-		return result, doctorStageError(ErrorOperationFailed, fmt.Sprintf("doctor schema/version check failed: %v", err), err)
+		code := ErrorOperationFailed
+		if CodeOf(err) == ErrorCancelled || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			code = ErrorCancelled
+		}
+		return result, doctorStageError(code, fmt.Sprintf("doctor schema/version check failed: %v", err), err)
 	}
 	result.SchemaVersion = schemaVersion
 	result.SchemaStatus = "ok"
+	if err := ctx.Err(); err != nil {
+		return result, doctorStageError(ErrorCancelled, fmt.Sprintf("doctor cancelled after schema check: %v", err), err)
+	}
 
 	if err := e.runDoctorVerification(ctx, level); err != nil {
 		result.VerifyStatus = "error"
@@ -58,11 +69,18 @@ func (e *DefaultEngine) Doctor(ctx context.Context, req DoctorRequest) (_ Doctor
 		return result, doctorStageError(code, fmt.Sprintf("doctor verify phase failed: %v", err), err)
 	}
 	result.VerifyStatus = "ok"
+	if err := ctx.Err(); err != nil {
+		return result, doctorStageError(ErrorCancelled, fmt.Sprintf("doctor cancelled after verification: %v", err), err)
+	}
 
 	physicalAudit, snapshotAudit, err := e.runDoctorAudit(ctx)
 	if err != nil {
 		result.FailedStage = DoctorStageAudit
-		return result, doctorStageError(ErrorVerificationFailed, fmt.Sprintf("doctor audit summary phase failed: %v", err), err)
+		code := ErrorVerificationFailed
+		if CodeOf(err) == ErrorCancelled || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			code = ErrorCancelled
+		}
+		return result, doctorStageError(code, fmt.Sprintf("doctor audit summary phase failed: %v", err), err)
 	}
 	result.PhysicalAudit = physicalAudit
 	result.SnapshotAudit = snapshotAudit
@@ -80,7 +98,7 @@ func (e *DefaultEngine) runDoctorSchema(ctx context.Context) (int64, error) {
 	if e.doctorSchema != nil {
 		return e.doctorSchema(ctx, e.config.DB)
 	}
-	return db.CurrentSchemaVersion(e.config.DB)
+	return db.CurrentSchemaVersionContext(ctx, e.config.DB)
 }
 
 func (e *DefaultEngine) runDoctorVerification(ctx context.Context, level string) error {
@@ -95,7 +113,7 @@ func (e *DefaultEngine) runDoctorAudit(ctx context.Context) (DoctorPhysicalAudit
 	if e.doctorAudit != nil {
 		return e.doctorAudit(ctx, e.config.DB)
 	}
-	audit, err := maintenance.CollectSystemAuditSummaryWithDB(e.config.DB)
+	audit, err := maintenance.CollectSystemAuditSummaryWithDBContext(ctx, e.config.DB)
 	if err != nil {
 		return DoctorPhysicalAudit{}, DoctorSnapshotAudit{}, err
 	}

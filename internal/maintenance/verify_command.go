@@ -27,12 +27,18 @@ func CollectSystemAuditSummary() (SystemAuditSummary, error) {
 // CollectSystemAuditSummaryWithDB collects the Doctor audit summaries through
 // a caller-owned database connection.
 func CollectSystemAuditSummaryWithDB(dbconn *sql.DB) (SystemAuditSummary, error) {
-	physical, err := verify.CheckPhysicalFileGraphIntegrity(dbconn)
+	return CollectSystemAuditSummaryWithDBContext(context.Background(), dbconn)
+}
+
+// CollectSystemAuditSummaryWithDBContext collects Doctor audit summaries with
+// caller-owned cancellation.
+func CollectSystemAuditSummaryWithDBContext(ctx context.Context, dbconn *sql.DB) (SystemAuditSummary, error) {
+	physical, err := verify.CheckPhysicalFileGraphIntegrityContext(ctx, dbconn)
 	if err != nil {
 		return SystemAuditSummary{}, err
 	}
 
-	snapshot, err := verify.CheckSnapshotReachabilityIntegrity(dbconn)
+	snapshot, err := verify.CheckSnapshotReachabilityIntegrityContext(ctx, dbconn)
 	if err != nil {
 		return SystemAuditSummary{}, err
 	}
@@ -69,11 +75,17 @@ func VerifyCommandWithDBAndContainersDir(dbconn *sql.DB, containersDir string, t
 // VerifyCommandWithDBAndContainersDirResult preserves the error-only command
 // API while providing invocation-local verification evidence to Engine.
 func VerifyCommandWithDBAndContainersDirResult(dbconn *sql.DB, containersDir string, target string, fileID int, verifyLevel verify.VerifyLevel) (verify.ExecutionResult, error) {
+	return VerifyCommandWithDBAndContainersDirResultContext(context.Background(), dbconn, containersDir, target, fileID, verifyLevel)
+}
+
+// VerifyCommandWithDBAndContainersDirResultContext preserves caller
+// cancellation through verification orchestration.
+func VerifyCommandWithDBAndContainersDirResultContext(ctx context.Context, dbconn *sql.DB, containersDir string, target string, fileID int, verifyLevel verify.VerifyLevel) (verify.ExecutionResult, error) {
 	switch target {
 	case "system":
-		return verifySystemResult(dbconn, containersDir, verifyLevel)
+		return verifySystemResultContext(ctx, dbconn, containersDir, verifyLevel)
 	case "file":
-		return verifyFileResult(dbconn, containersDir, fileID, verifyLevel)
+		return verifyFileResultContext(ctx, dbconn, containersDir, fileID, verifyLevel)
 	default:
 		return verify.ExecutionResult{}, fmt.Errorf("invalid target for verify command: %s", target)
 	}
@@ -85,11 +97,15 @@ func verifySystem(dbconn *sql.DB, containersDir string, verifyLevel verify.Verif
 }
 
 func verifySystemResult(dbconn *sql.DB, containersDir string, verifyLevel verify.VerifyLevel) (verify.ExecutionResult, error) {
+	return verifySystemResultContext(context.Background(), dbconn, containersDir, verifyLevel)
+}
+
+func verifySystemResultContext(ctx context.Context, dbconn *sql.DB, containersDir string, verifyLevel verify.VerifyLevel) (verify.ExecutionResult, error) {
 	if verifyLevel < verify.VerifyFast || verifyLevel > verify.VerifyDeep {
 		return verify.ExecutionResult{}, fmt.Errorf("invalid system verify level: %d", verifyLevel)
 	}
 
-	result, err := verify.VerifySystemWithExecutionResult(dbconn, containersDir, verifyLevel)
+	result, err := verify.VerifySystemWithExecutionResultContext(ctx, dbconn, containersDir, verifyLevel)
 	if err != nil {
 		return verify.ExecutionResult{}, fmt.Errorf("system %s verification failed: %w", verifyLevelLabel(verifyLevel), err)
 	}
@@ -102,7 +118,11 @@ func verifyFile(dbconn *sql.DB, containersDir string, fileID int, verifyLevel ve
 }
 
 func verifyFileResult(dbconn *sql.DB, containersDir string, fileID int, verifyLevel verify.VerifyLevel) (verify.ExecutionResult, error) {
-	ctx, cancel := db.NewOperationContext(context.Background())
+	return verifyFileResultContext(context.Background(), dbconn, containersDir, fileID, verifyLevel)
+}
+
+func verifyFileResultContext(parent context.Context, dbconn *sql.DB, containersDir string, fileID int, verifyLevel verify.VerifyLevel) (verify.ExecutionResult, error) {
+	ctx, cancel := db.NewOperationContext(parent)
 	defer cancel()
 
 	// Verify that the file ID exists before dispatching to deeper validation.
@@ -118,7 +138,7 @@ func verifyFileResult(dbconn *sql.DB, containersDir string, fileID int, verifyLe
 	if verifyLevel < verify.VerifyFast || verifyLevel > verify.VerifyDeep {
 		return verify.ExecutionResult{}, fmt.Errorf("invalid file verify level: %d", verifyLevel)
 	}
-	result, err := verify.VerifyFileWithExecutionResult(dbconn, fileID, containersDir, verifyLevel)
+	result, err := verify.VerifyFileWithExecutionResultContext(ctx, dbconn, fileID, containersDir, verifyLevel)
 	if err != nil {
 		return verify.ExecutionResult{}, fmt.Errorf("file %s verification failed: %w", verifyLevelLabel(verifyLevel), err)
 	}

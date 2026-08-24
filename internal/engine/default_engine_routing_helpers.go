@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -239,7 +240,7 @@ func (e *DefaultEngine) Store(ctx context.Context, req StoreRequest) (_ StoreRes
 		}
 	}
 
-	stored, err := storeWithOptionalCodec(*e.config.StoreContext, req)
+	stored, err := storeWithOptionalCodec(ctx, *e.config.StoreContext, req)
 	if err != nil {
 		return StoreResult{}, err
 	}
@@ -286,15 +287,22 @@ func (e *DefaultEngine) StoreFolder(ctx context.Context, req StoreFolderRequest)
 	return result, err
 }
 
-func storeWithOptionalCodec(ctx storage.StorageContext, req StoreRequest) (storage.StoreFileResult, error) {
+func storeWithOptionalCodec(ctx context.Context, sgctx storage.StorageContext, req StoreRequest) (storage.StoreFileResult, error) {
 	if strings.TrimSpace(req.Codec) == "" {
-		return storage.StoreFileWithStorageContextResult(ctx, req.SourcePath)
+		return storage.StoreFileWithStorageContextResultContext(ctx, sgctx, req.SourcePath)
 	}
 	codec, err := blocks.ParseCodec(req.Codec)
 	if err != nil {
 		return storage.StoreFileResult{}, err
 	}
-	return storage.StoreFileWithStorageContextAndCodecResult(ctx, req.SourcePath, codec)
+	result, err := storage.StoreFileWithStorageContextAndCodecResultContext(ctx, sgctx, req.SourcePath, codec)
+	if sgctx.Writer != nil {
+		finalizeErr := sgctx.Writer.FinalizeContainer()
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			err = errors.Join(err, finalizeErr)
+		}
+	}
+	return result, err
 }
 
 func validateRemoveRequest(req RemoveRequest) error {
@@ -304,42 +312,50 @@ func validateRemoveRequest(req RemoveRequest) error {
 	return nil
 }
 
-func (e *DefaultEngine) removeFileIDs(req RemoveRequest) RemoveResult {
+func (e *DefaultEngine) removeFileIDs(ctx context.Context, req RemoveRequest) (RemoveResult, error) {
 	result := RemoveResult{
 		DryRun:        req.DryRun,
 		ExecutionMode: ExecutionModeSequential,
 		Items:         make([]RemoveItemResult, 0, len(req.FileIDs)),
 	}
 	for _, fileID := range req.FileIDs {
-		item := e.removeFileID(req, fileID)
+		if err := ctx.Err(); err != nil {
+			finalizeBatchSummary(&result.Summary, len(req.FileIDs))
+			return result, err
+		}
+		item := e.removeFileID(ctx, req, fileID)
 		appendRemoveItem(&result, item)
+		if err := ctx.Err(); err != nil {
+			finalizeBatchSummary(&result.Summary, len(req.FileIDs))
+			return result, err
+		}
 		if req.FailFast && item.Status == BatchItemFailed {
 			break
 		}
 	}
 	finalizeBatchSummary(&result.Summary, len(req.FileIDs))
-	return result
+	return result, nil
 }
 
-func (e *DefaultEngine) removeFileID(req RemoveRequest, fileID int64) RemoveItemResult {
+func (e *DefaultEngine) removeFileID(ctx context.Context, req RemoveRequest, fileID int64) RemoveItemResult {
 	if fileID <= 0 {
 		return failedRemoveItem(fileID, fmt.Sprintf("invalid file ID %d", fileID))
 	}
 	if req.DryRun {
-		return e.dryRunRemoveFileID(fileID)
+		return e.dryRunRemoveFileID(ctx, fileID)
 	}
-	return e.liveRemoveFileID(fileID)
+	return e.liveRemoveFileID(ctx, fileID)
 }
 
-func (e *DefaultEngine) dryRunRemoveFileID(fileID int64) RemoveItemResult {
-	if err := dryRunRemoveByID(e.config.DB, fileID); err != nil {
+func (e *DefaultEngine) dryRunRemoveFileID(ctx context.Context, fileID int64) RemoveItemResult {
+	if err := dryRunRemoveByID(ctx, e.config.DB, fileID); err != nil {
 		return failedRemoveItem(fileID, err.Error())
 	}
 	return RemoveItemResult{FileID: fileID, Status: BatchItemOK}
 }
 
-func (e *DefaultEngine) liveRemoveFileID(fileID int64) RemoveItemResult {
-	removed, err := storage.RemoveFileWithDBResult(e.config.DB, fileID)
+func (e *DefaultEngine) liveRemoveFileID(ctx context.Context, fileID int64) RemoveItemResult {
+	removed, err := storage.RemoveFileWithDBResultContext(ctx, e.config.DB, fileID)
 	if err != nil {
 		return failedRemoveItemWithInvariant(fileID, err)
 	}
@@ -383,35 +399,43 @@ func validateRestoreRequest(req RestoreRequest) error {
 	return nil
 }
 
-func (e *DefaultEngine) restoreFileIDs(req RestoreRequest) RestoreResult {
+func (e *DefaultEngine) restoreFileIDs(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
 	result := RestoreResult{
 		DryRun:        req.DryRun,
 		ExecutionMode: ExecutionModeSequential,
 		Items:         make([]RestoreItemResult, 0, len(req.FileIDs)),
 	}
 	for _, fileID := range req.FileIDs {
-		item := e.restoreFileID(req, fileID)
+		if err := ctx.Err(); err != nil {
+			finalizeBatchSummary(&result.Summary, len(req.FileIDs))
+			return result, err
+		}
+		item := e.restoreFileID(ctx, req, fileID)
 		appendRestoreItem(&result, item)
+		if err := ctx.Err(); err != nil {
+			finalizeBatchSummary(&result.Summary, len(req.FileIDs))
+			return result, err
+		}
 		if req.FailFast && item.Status == BatchItemFailed {
 			break
 		}
 	}
 	finalizeBatchSummary(&result.Summary, len(req.FileIDs))
-	return result
+	return result, nil
 }
 
-func (e *DefaultEngine) restoreFileID(req RestoreRequest, fileID int64) RestoreItemResult {
+func (e *DefaultEngine) restoreFileID(ctx context.Context, req RestoreRequest, fileID int64) RestoreItemResult {
 	if fileID <= 0 {
 		return failedRestoreItem(fileID, fmt.Sprintf("invalid file ID %d", fileID))
 	}
 	if req.DryRun {
-		return e.dryRunRestoreFileID(req, fileID)
+		return e.dryRunRestoreFileID(ctx, req, fileID)
 	}
-	return e.liveRestoreFileID(req, fileID)
+	return e.liveRestoreFileID(ctx, req, fileID)
 }
 
-func (e *DefaultEngine) dryRunRestoreFileID(req RestoreRequest, fileID int64) RestoreItemResult {
-	item, err := dryRunRestoreByID(e.config.DB, fileID, req.DestinationRoot, req.Overwrite)
+func (e *DefaultEngine) dryRunRestoreFileID(ctx context.Context, req RestoreRequest, fileID int64) RestoreItemResult {
+	item, err := dryRunRestoreByID(ctx, e.config.DB, fileID, req.DestinationRoot, req.Overwrite)
 	if err != nil {
 		item.Status = BatchItemFailed
 		item.Error = err.Error()
@@ -419,13 +443,13 @@ func (e *DefaultEngine) dryRunRestoreFileID(req RestoreRequest, fileID int64) Re
 	return item
 }
 
-func (e *DefaultEngine) liveRestoreFileID(req RestoreRequest, fileID int64) RestoreItemResult {
+func (e *DefaultEngine) liveRestoreFileID(ctx context.Context, req RestoreRequest, fileID int64) RestoreItemResult {
 	sgctx := storage.StorageContext{DB: e.config.DB, ContainerDir: e.config.ContainerDir}
-	out, originalName, err := restoreByIDOutputPath(e.config.DB, fileID, req.DestinationRoot)
+	out, originalName, err := restoreByIDOutputPath(ctx, e.config.DB, fileID, req.DestinationRoot)
 	if err != nil {
 		return failedRestoreItem(fileID, err.Error())
 	}
-	r, err := storage.RestoreFileWithStorageContextResultOptions(sgctx, fileID, out, storage.RestoreOptions{
+	r, err := storage.RestoreFileWithStorageContextResultOptionsContext(ctx, sgctx, fileID, out, storage.RestoreOptions{
 		Overwrite:   req.Overwrite,
 		TrustedRoot: req.DestinationRoot,
 	})
@@ -461,9 +485,9 @@ func finalizeBatchSummary(summary *BatchSummary, requested int) {
 	}
 }
 
-func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) (RestoreItemResult, error) {
+func dryRunRestoreByID(ctx context.Context, dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) (RestoreItemResult, error) {
 	item := RestoreItemResult{FileID: fileID, Status: BatchItemOK}
-	out, originalName, err := restoreByIDOutputPath(dbconn, fileID, outputDir)
+	out, originalName, err := restoreByIDOutputPath(ctx, dbconn, fileID, outputDir)
 	if err != nil {
 		return item, err
 	}
@@ -479,8 +503,8 @@ func dryRunRestoreByID(dbconn *sql.DB, fileID int64, outputDir string, overwrite
 	return item, nil
 }
 
-func restoreByIDOutputPath(dbconn *sql.DB, fileID int64, outputDir string) (string, string, error) {
-	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+func restoreByIDOutputPath(ctx context.Context, dbconn *sql.DB, fileID int64, outputDir string) (string, string, error) {
+	info, err := storage.GetLogicalFileInfoWithDBContext(ctx, dbconn, fileID)
 	if err != nil {
 		return "", "", err
 	}
@@ -490,8 +514,8 @@ func restoreByIDOutputPath(dbconn *sql.DB, fileID int64, outputDir string) (stri
 	return filepath.Join(outputDir, info.OriginalName), info.OriginalName, nil
 }
 
-func dryRunRemoveByID(dbconn *sql.DB, fileID int64) error {
-	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+func dryRunRemoveByID(ctx context.Context, dbconn *sql.DB, fileID int64) error {
+	info, err := storage.GetLogicalFileInfoWithDBContext(ctx, dbconn, fileID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("file ID %d not found", fileID)

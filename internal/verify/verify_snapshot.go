@@ -50,6 +50,10 @@ func snapshotGraphInvariantCode(summary SnapshotReachabilityIntegritySummary) st
 func CheckSnapshotReachabilityIntegrity(dbconn *sql.DB) (SnapshotReachabilityIntegritySummary, error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return CheckSnapshotReachabilityIntegrityContext(ctx, dbconn)
+}
+
+func CheckSnapshotReachabilityIntegrityContext(ctx context.Context, dbconn *sql.DB) (SnapshotReachabilityIntegritySummary, error) {
 
 	log.Printf("Checking snapshot reachability integrity...")
 

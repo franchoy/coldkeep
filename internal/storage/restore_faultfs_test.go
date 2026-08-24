@@ -2,6 +2,8 @@ package storage
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"os"
@@ -88,6 +90,40 @@ func TestRestoreSecureInstallerAbortFailureIsReturned(t *testing.T) {
 	_, err := restoreWithFakeInstallation(repo, stored.FileID, destination, fake)
 	if !errors.Is(err, publishErr) || !errors.Is(err, abortErr) {
 		t.Fatalf("restore error=%v, want publication and abort failures", err)
+	}
+}
+
+func TestRestoreCancellationUsesBoundedCleanupAndJoinsAbortFailure(t *testing.T) {
+	dbconn, sgctx, fileID, chunkIDs, _ := setupRestorePinningFixture(t, [][]byte{[]byte("cancel-cleanup")})
+	defer func() { _ = dbconn.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	abortErr := errors.New("forced cancellation abort failure")
+	fake := &fakeRestoreInstallation{abortErr: abortErr}
+	ConfigureRestoreTestHooksForTesting(&sgctx, func(_ *sql.DB, _ int64) error {
+		cancel()
+		return ctx.Err()
+	}, nil)
+
+	result, err := RestoreFileWithStorageContextResultOptionsContext(ctx, sgctx, fileID, filepath.Join(t.TempDir(), "cancelled.bin"), RestoreOptions{
+		Overwrite: true,
+		installFactory: func(secureinstall.Request) (restoreInstallation, error) {
+			return fake, nil
+		},
+	})
+	if result != (RestoreFileResult{}) {
+		t.Fatalf("restore result=%+v, want zero", result)
+	}
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, abortErr) {
+		t.Fatalf("restore error=%v, want joined cancellation and abort failure", err)
+	}
+	if fake.abortCalls != 1 {
+		t.Fatalf("Abort calls=%d, want 1", fake.abortCalls)
+	}
+	for _, chunkID := range chunkIDs {
+		if got := readChunkPinCountForRestoreTest(t, dbconn, chunkID); got != 0 {
+			t.Fatalf("chunk %d pin_count=%d after cancellation cleanup", chunkID, got)
+		}
 	}
 }
 

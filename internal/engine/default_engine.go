@@ -149,8 +149,11 @@ func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (_ Verify
 	if containerDir == "" {
 		containerDir = container.ContainersDir
 	}
-	execution, err := maintenance.VerifyCommandWithDBAndContainersDirResult(e.config.DB, containerDir, target, req.FileID, level)
+	execution, err := maintenance.VerifyCommandWithDBAndContainersDirResultContext(ctx, e.config.DB, containerDir, target, req.FileID, level)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return VerifyResult{}, err
+		}
 		return VerifyResult{}, TranslateErrorAs("verify", ErrorVerificationFailed, err)
 	}
 	return VerifyResult{
@@ -430,7 +433,7 @@ func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (_ Remove
 	if err := validateRemoveRequest(req); err != nil {
 		return RemoveResult{}, TranslateErrorAs("remove", ErrorInvalidArgument, err)
 	}
-	return e.removeFileIDs(req), nil
+	return e.removeFileIDs(ctx, req)
 }
 
 func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredPathsRequest) (_ RemoveStoredPathsResult, outErr error) {
@@ -448,7 +451,7 @@ func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredP
 	if err := e.validateRemoveStoredPathsDependencies(); err != nil {
 		return RemoveStoredPathsResult{}, err
 	}
-	return e.removeStoredPaths(req, preflight.prepared), nil
+	return e.removeStoredPaths(ctx, req, preflight.prepared)
 }
 
 func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (_ RestoreResult, outErr error) {
@@ -459,7 +462,7 @@ func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (_ Rest
 	if err := validateRestoreRequest(req); err != nil {
 		return RestoreResult{}, TranslateErrorAs("restore", ErrorInvalidArgument, err)
 	}
-	return e.restoreFileIDs(req), nil
+	return e.restoreFileIDs(ctx, req)
 }
 
 // engineQueryToSnapshotQuery maps an engine-level SnapshotQuery to the
