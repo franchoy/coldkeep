@@ -214,3 +214,68 @@ func TestVerificationStageObserverReportsSuccessfulLegacyStages(t *testing.T) {
 		t.Fatalf("legacy observations = %+v, want %+v", got, want)
 	}
 }
+
+func TestVerificationExecutionLedgerDeduplicatesByLayoutBlockAndStage(t *testing.T) {
+	t.Parallel()
+	ledger := newVerificationExecutionLedger()
+	observations := []verificationStageObservation{
+		{Layout: verificationLayoutPacked, BlockID: 41, Stage: verificationObservedPhysicalHash},
+		{Layout: verificationLayoutPacked, BlockID: 41, Stage: verificationObservedLogicalHash},
+		{Layout: verificationLayoutPacked, BlockID: 41, Stage: verificationObservedBlockComplete},
+		{Layout: verificationLayoutLegacy, BlockID: 41, Stage: verificationObservedLogicalHash},
+		{Layout: verificationLayoutLegacy, BlockID: 41, Stage: verificationObservedBlockComplete},
+	}
+	for _, observation := range observations {
+		ledger.observe(observation)
+		ledger.observe(observation)
+	}
+
+	got := ledger.result()
+	want := ExecutionResult{
+		BlocksChecked:       2,
+		PhysicalHashChecked: 1,
+		LogicalHashChecked:  2,
+	}
+	if got != want {
+		t.Fatalf("execution result = %+v, want %+v", got, want)
+	}
+}
+
+func TestVerificationExecutionLedgerIsRaceSafe(t *testing.T) {
+	t.Parallel()
+	ledger := newVerificationExecutionLedger()
+	const blockCount = 32
+	var wg sync.WaitGroup
+	for blockID := int64(1); blockID <= blockCount; blockID++ {
+		for duplicate := 0; duplicate < 4; duplicate++ {
+			wg.Add(1)
+			go func(blockID int64) {
+				defer wg.Done()
+				for _, stage := range []verificationObservedStage{
+					verificationObservedPhysicalHash,
+					verificationObservedCompressedHash,
+					verificationObservedDecompression,
+					verificationObservedLogicalHash,
+					verificationObservedBlockComplete,
+				} {
+					ledger.observe(verificationStageObservation{
+						Layout: verificationLayoutPacked, BlockID: blockID, Stage: stage,
+					})
+				}
+			}(blockID)
+		}
+	}
+	wg.Wait()
+
+	got := ledger.result()
+	want := ExecutionResult{
+		BlocksChecked:           blockCount,
+		PhysicalHashChecked:     blockCount,
+		CompressedHashChecked:   blockCount,
+		LogicalHashChecked:      blockCount,
+		CompressedBlocksChecked: blockCount,
+	}
+	if got != want {
+		t.Fatalf("execution result = %+v, want %+v", got, want)
+	}
+}

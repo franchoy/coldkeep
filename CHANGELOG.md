@@ -45,7 +45,13 @@ project, do not start here; start with [README.md](README.md).
   dispatch options, per-`StorageContext` restore hooks, context-aware private
   Doctor callbacks, and deterministic `faultfs` truncate injection. The seams
   are nil by default, race-safe, and behavior-preserving; no finding or process
-  gate is closed. Phase 4 execution-derived verification results is now Next.
+  gate was closed.
+- Closed `CK-V1-AUD-001` in Phase 4 by replacing post-verification catalog
+  recounts with a race-safe, invocation-local ledger of successful legacy and
+  packed verification stages. Preserved the public `VerifyResult`, level,
+  target, error, schema, storage, JSON, and CLI contracts; verification failure
+  still returns a zero result. One of 17 findings is now closed, all 4 process
+  gates remain open, and Phase 5 caller-context ownership is Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

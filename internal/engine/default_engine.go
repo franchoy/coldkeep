@@ -149,14 +149,17 @@ func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (_ Verify
 	if containerDir == "" {
 		containerDir = container.ContainersDir
 	}
-	if err := maintenance.VerifyCommandWithDBAndContainersDir(e.config.DB, containerDir, target, req.FileID, level); err != nil {
+	execution, err := maintenance.VerifyCommandWithDBAndContainersDirResult(e.config.DB, containerDir, target, req.FileID, level)
+	if err != nil {
 		return VerifyResult{}, TranslateErrorAs("verify", ErrorVerificationFailed, err)
 	}
-	result, err := collectVerifyResult(ctx, e.config.DB, target, int64(req.FileID))
-	if err != nil {
-		return VerifyResult{}, TranslateError("verify", fmt.Errorf("collect verify summary: %w", err))
-	}
-	return result, nil
+	return VerifyResult{
+		BlocksChecked:           execution.BlocksChecked,
+		PhysicalHashChecked:     execution.PhysicalHashChecked,
+		CompressedHashChecked:   execution.CompressedHashChecked,
+		LogicalHashChecked:      execution.LogicalHashChecked,
+		CompressedBlocksChecked: execution.CompressedBlocksChecked,
+	}, nil
 }
 
 // validateInspectRequest returns an error if req contains an unrecognized entity

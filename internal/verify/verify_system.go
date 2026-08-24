@@ -156,6 +156,10 @@ func runLogicalReconstructionChecks(dbconn *sql.DB) error {
 }
 
 func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	return verifySystemStandardWithContainersDir(dbconn, containersDir, nil)
+}
+
+func verifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	// standard
 	//   Physical integrity:  chunk rows exist, location metadata valid,
 	//                        reference counts coherent, version metadata present.
@@ -170,7 +174,7 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 	}
 
 	// Phase 5 layered verification entrypoint.
-	if err := VerifyRepository(dbconn, containersDir); err != nil {
+	if err := verifyRepository(dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 
@@ -180,13 +184,17 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 }
 
 func VerifySystemFastWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	return verifySystemFastWithContainersDir(dbconn, containersDir, nil)
+}
+
+func verifySystemFastWithContainersDir(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	log.Printf("Starting fast system verification...")
 
 	if err := printCounters(dbconn); err != nil {
 		return err
 	}
 
-	if err := VerifyRepositoryFast(dbconn, containersDir); err != nil {
+	if err := verifyRepositoryFast(dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 
@@ -196,6 +204,10 @@ func VerifySystemFastWithContainersDir(dbconn *sql.DB, containersDir string) err
 }
 
 func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	return verifySystemFullWithContainersDir(dbconn, containersDir, nil)
+}
+
+func verifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	// full = standard checks + extended physical storage checks.
 	//
 	// Extended physical integrity (no chunker algorithm involved):
@@ -210,7 +222,7 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 	var err error
 
 	// Standard checks first (physical + logical reconstruction).
-	if err = VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
+	if err = verifySystemStandardWithContainersDir(dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 
@@ -258,6 +270,10 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 }
 
 func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	return verifySystemDeepWithContainersDir(dbconn, containersDir, nil)
+}
+
+func verifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	// deep = full checks + byte-level physical integrity.
 	//
 	// For every container with packed block data: open the file and verify each
@@ -269,7 +285,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 	var err error
 
 	//first verify full checks
-	if err = VerifySystemFullWithContainersDir(dbconn, containersDir); err != nil {
+	if err = verifySystemFullWithContainersDir(dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 
@@ -290,6 +306,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	ctx = withVerificationExecutionLedger(ctx, ledger)
 
 	containers, err := loadDeepVerifyContainers(ctx, dbconn)
 	if err != nil {

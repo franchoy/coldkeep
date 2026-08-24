@@ -28,6 +28,73 @@ type verificationStageObservation struct {
 	Stage   verificationObservedStage
 }
 
+// ExecutionResult is the invocation-local evidence produced by successful
+// verification stages. It is transported internally to the Engine facade and
+// deliberately does not expose verification metadata as execution credit.
+type ExecutionResult struct {
+	BlocksChecked           int64
+	PhysicalHashChecked     int64
+	CompressedHashChecked   int64
+	LogicalHashChecked      int64
+	CompressedBlocksChecked int64
+}
+
+type verificationExecutionKey struct {
+	Layout  verificationLayout
+	BlockID int64
+	Stage   verificationObservedStage
+}
+
+type verificationExecutionLedger struct {
+	mu     sync.Mutex
+	stages map[verificationExecutionKey]struct{}
+}
+
+func newVerificationExecutionLedger() *verificationExecutionLedger {
+	return &verificationExecutionLedger{stages: make(map[verificationExecutionKey]struct{})}
+}
+
+func (l *verificationExecutionLedger) observe(observation verificationStageObservation) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.stages[verificationExecutionKey(observation)] = struct{}{}
+}
+
+func (l *verificationExecutionLedger) result() ExecutionResult {
+	if l == nil {
+		return ExecutionResult{}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var result ExecutionResult
+	for key := range l.stages {
+		switch key.Stage {
+		case verificationObservedPhysicalHash:
+			result.PhysicalHashChecked++
+		case verificationObservedCompressedHash:
+			result.CompressedHashChecked++
+		case verificationObservedDecompression:
+			result.CompressedBlocksChecked++
+		case verificationObservedLogicalHash:
+			result.LogicalHashChecked++
+		case verificationObservedBlockComplete:
+			result.BlocksChecked++
+		}
+	}
+	return result
+}
+
+func withVerificationExecutionLedger(ctx context.Context, ledger *verificationExecutionLedger) context.Context {
+	if ledger == nil {
+		return ctx
+	}
+	return withVerificationStageObserver(ctx, ledger.observe)
+}
+
 type verificationStageObserver struct {
 	mu      sync.Mutex
 	observe func(verificationStageObservation)
