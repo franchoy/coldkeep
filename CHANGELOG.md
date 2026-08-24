@@ -35,7 +35,12 @@ project, do not start here; start with [README.md](README.md).
 - Completed the Phase 1 source audit and froze all 17 findings and 4 process
   gates with zero rows closed, together with definitive rejection,
   root-cause-deduplication, compatibility, closure-proof, and owner-phase
-  registers. Phase 2 remediation design is now Next.
+  registers.
+- Completed the documentation-only Phase 2 remediation-design and regression-
+  contract freeze for all 21 rows. The implementation, regression,
+  compatibility, and source/test matrices contain no unresolved decisions;
+  zero findings and zero process gates are closed. Phase 3 deterministic test
+  seams is now Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
