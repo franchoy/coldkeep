@@ -372,14 +372,21 @@ func TestStep8RestoreRepeatedBlockUsageUsesCache(t *testing.T) {
 
 	hookCalls := 0
 	hookChunkIDs := make([]int64, 0, 4)
-	TestRestoreBeforeChunkReadHook = func(_ *sql.DB, chunkID int64) error {
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	ConfigureRestoreTestHooksForTesting(&sgctx, func(_ *sql.DB, chunkID int64) error {
 		hookCalls++
 		hookChunkIDs = append(hookChunkIDs, chunkID)
 		return nil
-	}
-	defer func() { TestRestoreBeforeChunkReadHook = nil }()
+	}, nil)
 
-	got := restoreAndReadBytes(t, dbconn, fileID, containersDir)
+	outPath := filepath.Join(t.TempDir(), "repeat-cache.bin")
+	if _, err := RestoreFileWithStorageContextResultOptions(sgctx, fileID, outPath, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore repeated block fixture: %v", err)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read repeated block restore: %v", err)
+	}
 	want := []byte("repeat-Arepeat-Brepeat-C")
 	if !bytes.Equal(got, want) {
 		t.Fatalf("repeated-block restore mismatch: got=%q want=%q", string(got), string(want))

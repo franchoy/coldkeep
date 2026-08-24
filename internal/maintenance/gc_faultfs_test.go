@@ -88,6 +88,7 @@ func TestGCDeleteFaultFSRemoveFailureIsLoggedAndRecovered(t *testing.T) {
 		map[int64]struct{}{},
 		livePhysicalUnits{LegacyLiveContainerIDs: map[int64]struct{}{}, PackedLiveBlockIDs: map[int64]struct{}{}},
 		faultfs.New(fsx.Default(), script),
+		gcExecutionOptions{},
 	)
 	if err != nil {
 		t.Fatalf("cleanup fully dead active containers: %v", err)

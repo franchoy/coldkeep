@@ -19,7 +19,7 @@ import (
 
 type storedPathRestoreFixture struct {
 	db      *sql.DB
-	sgctx   storage.StorageContext
+	sgctx   *storage.StorageContext
 	engine  *engine.DefaultEngine
 	stored  storage.StoreFileResult
 	payload []byte
@@ -452,11 +452,10 @@ func TestRestoreStoredPathReleasesPinsAfterFailure(t *testing.T) {
 	chunkIDs := logicalFileChunkIDs(t, fixture.db, fixture.stored.FileID)
 
 	hookCalled := false
-	storage.TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+	storage.ConfigureRestoreTestHooksForTesting(fixture.sgctx, nil, func(tempOutputPath, outputPath string) error {
 		hookCalled = true
 		return fmt.Errorf("forced failure before rename")
-	}
-	defer func() { storage.TestRestoreFailBeforeRenameHook = nil }()
+	})
 
 	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
 		StoredPath:      fixture.stored.Path,
@@ -589,10 +588,14 @@ func newStoredPathRestoreFixtureFromDB(t *testing.T, db *sql.DB, payload []byte,
 func newStoredPathRestoreFixtureFromExistingStore(t *testing.T, db *sql.DB, sgctx storage.StorageContext, stored storage.StoreFileResult, payload []byte) storedPathRestoreFixture {
 	t.Helper()
 
-	eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
+	fixtureContext := &sgctx
+	eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: fixtureContext})
+	if err != nil {
+		t.Fatalf("new restore stored-path engine: %v", err)
+	}
 	return storedPathRestoreFixture{
 		db:      db,
-		sgctx:   sgctx,
+		sgctx:   fixtureContext,
 		engine:  eng,
 		stored:  stored,
 		payload: payload,

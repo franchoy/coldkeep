@@ -194,6 +194,9 @@ func VerifyStoredBlock(ctx context.Context, meta BlockStorageMetadata, reader Co
 		metaErr := verifyBlockFailureMeta(VerifyStageDecompress, meta.BlockID, meta.ContainerID, meta.ContainerOffset)
 		return nil, verifyStageError(verifyErrMetadataInvalid, metaErr, fmt.Sprintf("verifyBlockPayloads: plaintext size mismatch metadata=%d decoded=%d", meta.PlaintextSize, len(logicalPayload)), nil)
 	}
+	if compressionCodec != storagecompression.CompressionNone {
+		observePackedVerificationStage(ctx, meta.BlockID, verificationObservedDecompression)
+	}
 
 	// 6) Verify logical block hash.
 	payloads.plaintextEncoded = logicalPayload
@@ -213,6 +216,7 @@ func VerifyStoredBlock(ctx context.Context, meta BlockStorageMetadata, reader Co
 		metaErr := verifyBlockFailureMeta(VerifyStageChunkRefs, meta.BlockID, meta.ContainerID, meta.ContainerOffset)
 		return nil, verifyStageError(verifyErrUnsupportedBlock, metaErr, "verifyBlockPayloads: decoded chunk layout invalid", err)
 	}
+	observePackedVerificationStage(ctx, meta.BlockID, verificationObservedBlockComplete)
 
 	return &VerifiedBlock{LogicalPayload: logicalPayload, DecodedBlock: decoded, Metadata: meta}, nil
 }

@@ -39,8 +39,13 @@ project, do not start here; start with [README.md](README.md).
 - Completed the documentation-only Phase 2 remediation-design and regression-
   contract freeze for all 21 rows. The implementation, regression,
   compatibility, and source/test matrices contain no unresolved decisions;
-  zero findings and zero process gates are closed. Phase 3 deterministic test
-  seams is now Next.
+  zero findings and zero process gates are closed.
+- Completed Phase 3 deterministic remediation test infrastructure: added an
+  invocation-scoped verification-stage observer, private GC filesystem and
+  dispatch options, per-`StorageContext` restore hooks, context-aware private
+  Doctor callbacks, and deterministic `faultfs` truncate injection. The seams
+  are nil by default, race-safe, and behavior-preserving; no finding or process
+  gate is closed. Phase 4 execution-derived verification results is now Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

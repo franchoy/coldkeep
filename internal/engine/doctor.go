@@ -39,7 +39,7 @@ func (e *DefaultEngine) Doctor(ctx context.Context, req DoctorRequest) (_ Doctor
 	}
 	result.RecoveryStatus = "ok"
 
-	schemaVersion, err := e.runDoctorSchema()
+	schemaVersion, err := e.runDoctorSchema(ctx)
 	if err != nil {
 		result.SchemaStatus = "error"
 		result.FailedStage = DoctorStageSchema
@@ -59,7 +59,7 @@ func (e *DefaultEngine) Doctor(ctx context.Context, req DoctorRequest) (_ Doctor
 	}
 	result.VerifyStatus = "ok"
 
-	physicalAudit, snapshotAudit, err := e.runDoctorAudit()
+	physicalAudit, snapshotAudit, err := e.runDoctorAudit(ctx)
 	if err != nil {
 		result.FailedStage = DoctorStageAudit
 		return result, doctorStageError(ErrorVerificationFailed, fmt.Sprintf("doctor audit summary phase failed: %v", err), err)
@@ -76,9 +76,9 @@ func (e *DefaultEngine) runDoctorRecovery(ctx context.Context) (RecoverResult, e
 	return e.Recover(ctx, RecoverRequest{})
 }
 
-func (e *DefaultEngine) runDoctorSchema() (int64, error) {
+func (e *DefaultEngine) runDoctorSchema(ctx context.Context) (int64, error) {
 	if e.doctorSchema != nil {
-		return e.doctorSchema(e.config.DB)
+		return e.doctorSchema(ctx, e.config.DB)
 	}
 	return db.CurrentSchemaVersion(e.config.DB)
 }
@@ -91,9 +91,9 @@ func (e *DefaultEngine) runDoctorVerification(ctx context.Context, level string)
 	return err
 }
 
-func (e *DefaultEngine) runDoctorAudit() (DoctorPhysicalAudit, DoctorSnapshotAudit, error) {
+func (e *DefaultEngine) runDoctorAudit(ctx context.Context) (DoctorPhysicalAudit, DoctorSnapshotAudit, error) {
 	if e.doctorAudit != nil {
-		return e.doctorAudit(e.config.DB)
+		return e.doctorAudit(ctx, e.config.DB)
 	}
 	audit, err := maintenance.CollectSystemAuditSummaryWithDB(e.config.DB)
 	if err != nil {

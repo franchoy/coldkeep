@@ -69,14 +69,18 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
 Certification` is active on `release/v1.13.14`; Phases 0 and 1 are complete
-and Phase 2 is also complete. Phase 3 deterministic test seams is next. v1.x
+and Phases 2 and 3 are also complete. Phase 4 is next: execution-derived
+verification results. Phase 3 added only deterministic, nil-by-default test
+seams and closed no finding or gate. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
 is the current classification authority, and the
 [Phase 2 design freeze](v1.13.14-phase2-remediation-design-and-regression-contract-freeze.md)
-is the remediation and regression-contract authority. v2 implementation has
-not started.
+is the remediation and regression-contract authority, and the
+[Phase 3 seam record](v1.13.14-phase3-deterministic-remediation-test-seams.md)
+is the test-infrastructure readiness authority. v2 implementation has not
+started.
 The v1.13.13 publication authority is the
 [Phase 16 record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).
 

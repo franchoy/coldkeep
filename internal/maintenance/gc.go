@@ -78,6 +78,37 @@ type GCResult struct {
 	RetainedSharedLogical        int      `json:"retained_shared_logical_files"`
 }
 
+type gcDispatchUnitKind string
+
+const (
+	gcDispatchSealedContainer gcDispatchUnitKind = "sealed_container"
+	gcDispatchActiveContainer gcDispatchUnitKind = "active_container"
+)
+
+type gcDispatchUnit struct {
+	Kind        gcDispatchUnitKind
+	ContainerID int64
+	Filename    string
+}
+
+type gcExecutionOptions struct {
+	fs               fsx.FS
+	dispatchObserver func(gcDispatchUnit)
+}
+
+func (opts gcExecutionOptions) effectiveFS() fsx.FS {
+	if opts.fs != nil {
+		return opts.fs
+	}
+	return fsx.Default()
+}
+
+func (opts gcExecutionOptions) observeDispatch(unit gcDispatchUnit) {
+	if opts.dispatchObserver != nil {
+		opts.dispatchObserver(unit)
+	}
+}
+
 func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 	_, err := RunGCWithContainersDirResult(dryRun, containersDir)
 	return err
@@ -122,9 +153,13 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (GCResult, 
 // to run 'repair ref-counts' before retrying GC.
 // Both real and dry-run GC are subject to the same pre-flight gate.
 func RunGCWithDB(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir string) (result GCResult, err error) {
+	return runGCWithDBOptions(ctx, dbconn, dryRun, containersDir, gcExecutionOptions{})
+}
+
+func runGCWithDBOptions(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir string, opts gcExecutionOptions) (result GCResult, err error) {
 	result.DryRun = dryRun
 
-	fsys := fsx.Default()
+	fsys := opts.effectiveFS()
 
 	advisoryLock, err := acquireGCAdvisoryLock(ctx, dbconn, dryRun)
 	if err != nil {
@@ -144,12 +179,12 @@ func RunGCWithDB(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir
 	}
 	applyRetentionCountsToResult(state.reachability, &result)
 
-	if err := sweepGCSealedContainers(ctx, dbconn, dryRun, state, containersDir, fsys, &result); err != nil {
+	if err := sweepGCSealedContainers(ctx, dbconn, dryRun, state, containersDir, fsys, opts, &result); err != nil {
 		return GCResult{}, err
 	}
 
 	if !dryRun {
-		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, state.reachableChunks, state.liveUnits, fsys); err != nil {
+		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, state.reachableChunks, state.liveUnits, fsys, opts); err != nil {
 			return GCResult{}, fmt.Errorf("cleanup fully dead active containers: %w", err)
 		}
 	}
@@ -334,7 +369,7 @@ func applyRetentionCountsToResult(reachability *retention.ReachabilitySummary, r
 
 // sweepGCSealedContainers iterates over all sealed, non-quarantined containers
 // and evaluates each for deletion. It updates result in place.
-func sweepGCSealedContainers(ctx context.Context, dbconn *sql.DB, dryRun bool, state gcPreFlightState, containersDir string, fsys fsx.FS, result *GCResult) error {
+func sweepGCSealedContainers(ctx context.Context, dbconn *sql.DB, dryRun bool, state gcPreFlightState, containersDir string, fsys fsx.FS, opts gcExecutionOptions, result *GCResult) error {
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE AND sealing = FALSE
@@ -354,6 +389,7 @@ func sweepGCSealedContainers(ctx context.Context, dbconn *sql.DB, dryRun bool, s
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		opts.observeDispatch(gcDispatchUnit{Kind: gcDispatchSealedContainer, ContainerID: containerID, Filename: filename})
 		outcome, err := processSealedContainerForGC(ctx, dbconn, containerID, filename, dryRun, state, containersDir, fsys)
 		if err != nil {
 			return err
@@ -923,12 +959,13 @@ type activeContainer struct {
 // offset invariant is preserved by removing the container entirely — no offsets shift.
 // Partially-dead containers (mixed live and dead chunks) are left intact;
 // they will be handled by the regular sealed-container GC path once sealed.
-func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS) error {
+func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS, opts gcExecutionOptions) error {
 	candidates, err := queryFullyDeadActiveContainers(ctx, dbconn)
 	if err != nil {
 		return err
 	}
 	for _, ac := range candidates {
+		opts.observeDispatch(gcDispatchUnit{Kind: gcDispatchActiveContainer, ContainerID: ac.id, Filename: ac.filename})
 		// Snapshot-retention safety net: skip containers whose chunks are retained.
 		hasRetained, err := containerHasReachableChunks(ctx, dbconn, ac.id, reachableChunkIDs)
 		if err != nil {

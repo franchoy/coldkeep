@@ -198,6 +198,68 @@ func TestFaultFSSyncFaultIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestFaultFSTruncateFaultIsDeterministic(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "payload.txt")
+	script := NewScript(Fault{Op: OpTruncate, After: 1, Err: ErrFaultTruncate})
+	fsys := New(fsx.Default(), script)
+
+	f, err := fsys.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte("payload")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := f.Truncate(3); !errors.Is(err, ErrFaultTruncate) {
+		t.Fatalf("Truncate error = %v, want ErrFaultTruncate", err)
+	}
+	if got := script.CallCount(OpTruncate); got != 1 {
+		t.Fatalf("truncate call count = %d, want 1", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Size(); got != int64(len("payload")) {
+		t.Fatalf("size after injected truncate = %d, want %d", got, len("payload"))
+	}
+}
+
+func TestFaultFSTruncateWithoutFaultDelegates(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "payload.txt")
+	script := NewScript()
+	fsys := New(fsx.Default(), script)
+
+	f, err := fsys.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte("payload")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := f.Truncate(3); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	if got := script.CallCount(OpTruncate); got != 1 {
+		t.Fatalf("truncate call count = %d, want 1", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Size(); got != 3 {
+		t.Fatalf("size after delegated truncate = %d, want 3", got)
+	}
+}
+
 func TestFaultFSPathOperationFaultsAreDeterministic(t *testing.T) {
 	t.Parallel()
 

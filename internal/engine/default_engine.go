@@ -53,9 +53,9 @@ type DefaultEngine struct {
 	obs                 *observability.Service
 	snapshotIDGenerator snapshotIDGenerator
 	doctorRecover       func(context.Context) (RecoverResult, error)
-	doctorSchema        func(*sql.DB) (int64, error)
+	doctorSchema        func(context.Context, *sql.DB) (int64, error)
 	doctorVerify        func(context.Context, string) error
-	doctorAudit         func(*sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error)
+	doctorAudit         func(context.Context, *sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error)
 }
 
 // New returns a new DefaultEngine with the given configuration.

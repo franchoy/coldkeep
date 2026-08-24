@@ -72,6 +72,7 @@ type RestoreOptions struct {
 	Metadata        *RestoreMetadata
 	fs              fsx.FS
 	installFactory  restoreInstallFactory
+	restoreHooks    *restoreTestHooks
 }
 
 type RestoreDestinationMode string
@@ -675,6 +676,7 @@ func RestoreFileWithStorageContextResult(sgctx StorageContext, fileID int64, out
 }
 
 func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
+	opts.restoreHooks = sgctx.restoreHooks
 	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
 }
 
@@ -1010,6 +1012,7 @@ func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, 
 	opts.Metadata = &RestoreMetadata{
 		Mode: descriptor.Mode, MTime: descriptor.MTime, UID: descriptor.UID, GID: descriptor.GID,
 	}
+	opts.restoreHooks = sgctx.restoreHooks
 	result, err := restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
 	if err != nil {
 		return RestoreFileResult{}, err
@@ -1378,8 +1381,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 				cachedBlock = block
 
 				// TEST HOOK: assert state just before first block read.
-				if TestRestoreBeforeChunkReadHook != nil {
-					if hookErr := TestRestoreBeforeChunkReadHook(dbconn, chunk.ID); hookErr != nil {
+				if opts.restoreHooks != nil && opts.restoreHooks.beforeChunkRead != nil {
+					if hookErr := opts.restoreHooks.beforeChunkRead(dbconn, chunk.ID); hookErr != nil {
 						return RestoreFileResult{}, fmt.Errorf("test hook before chunk read: %w", hookErr)
 					}
 				}
@@ -1454,8 +1457,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			}
 
 			// TEST HOOK: assert state just before first payload read.
-			if TestRestoreBeforeChunkReadHook != nil {
-				if hookErr := TestRestoreBeforeChunkReadHook(dbconn, chunk.ID); hookErr != nil {
+			if opts.restoreHooks != nil && opts.restoreHooks.beforeChunkRead != nil {
+				if hookErr := opts.restoreHooks.beforeChunkRead(dbconn, chunk.ID); hookErr != nil {
 					return RestoreFileResult{}, fmt.Errorf("test hook before chunk read: %w", hookErr)
 				}
 			}
@@ -1582,8 +1585,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 
 	// TEST HOOK: simulate failure after temp file is written but before rename
-	if TestRestoreFailBeforeRenameHook != nil {
-		if hookErr := TestRestoreFailBeforeRenameHook("", outputPath); hookErr != nil {
+	if opts.restoreHooks != nil && opts.restoreHooks.failBeforeRename != nil {
+		if hookErr := opts.restoreHooks.failBeforeRename("", outputPath); hookErr != nil {
 			return RestoreFileResult{}, fmt.Errorf("test hook restore failure: %w", hookErr)
 		}
 	}
@@ -1648,11 +1651,3 @@ func validateExactRestoreDestination(fsys fsx.FS, outputPath string) error {
 		return nil
 	}
 }
-
-// testRestoreFailBeforeRenameHook is a test-only hook for simulating restore failures after temp file is written but before rename.
-// It should only be set in tests.
-var TestRestoreFailBeforeRenameHook func(tempOutputPath, outputPath string) error
-
-// TestRestoreBeforeChunkReadHook is a test-only hook invoked immediately before
-// reading chunk payload bytes from a container. It should only be set in tests.
-var TestRestoreBeforeChunkReadHook func(dbconn *sql.DB, chunkID int64) error

@@ -10,14 +10,15 @@ import (
 )
 
 var (
-	ErrFaultWrite  = errors.New("faultfs: write fault")
-	ErrFaultSync   = errors.New("faultfs: sync fault")
-	ErrFaultClose  = errors.New("faultfs: close fault")
-	ErrFaultRename = errors.New("faultfs: rename fault")
-	ErrFaultMkdir  = errors.New("faultfs: mkdir fault")
-	ErrFaultStat   = errors.New("faultfs: stat fault")
-	ErrFaultRemove = errors.New("faultfs: remove fault")
-	ErrFaultENOSPC = errors.New("faultfs: no space left on device")
+	ErrFaultWrite    = errors.New("faultfs: write fault")
+	ErrFaultSync     = errors.New("faultfs: sync fault")
+	ErrFaultClose    = errors.New("faultfs: close fault")
+	ErrFaultTruncate = errors.New("faultfs: truncate fault")
+	ErrFaultRename   = errors.New("faultfs: rename fault")
+	ErrFaultMkdir    = errors.New("faultfs: mkdir fault")
+	ErrFaultStat     = errors.New("faultfs: stat fault")
+	ErrFaultRemove   = errors.New("faultfs: remove fault")
+	ErrFaultENOSPC   = errors.New("faultfs: no space left on device")
 )
 
 type Operation string
@@ -34,6 +35,7 @@ const (
 	OpWrite    Operation = "write"
 	OpSync     Operation = "sync"
 	OpClose    Operation = "close"
+	OpTruncate Operation = "truncate"
 )
 
 type Fault struct {
@@ -281,6 +283,9 @@ func (f File) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (f File) Truncate(size int64) error {
+	if fault, ok := f.Script.record(OpTruncate); ok {
+		return fault.errOrDefault(ErrFaultTruncate)
+	}
 	return f.File.Truncate(size)
 }
 

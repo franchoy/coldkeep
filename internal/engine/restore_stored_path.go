@@ -108,10 +108,16 @@ func (e *DefaultEngine) validateRestoreStoredPathDependencies() error {
 }
 
 func (e *DefaultEngine) restoreStorageContext() storage.StorageContext {
-	return storage.StorageContext{
+	ctx := storage.StorageContext{
 		DB:           e.config.DB,
 		ContainerDir: e.config.ContainerDir,
 	}
+	if e.config.StoreContext != nil {
+		ctx = *e.config.StoreContext
+		ctx.DB = e.config.DB
+		ctx.ContainerDir = e.config.ContainerDir
+	}
+	return ctx
 }
 
 func toStorageRestoreDestinationMode(mode RestoreDestinationMode) storage.RestoreDestinationMode {
