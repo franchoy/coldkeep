@@ -38,16 +38,29 @@ func newGCExecutionOptionsTestDB(t *testing.T, filenames ...string) *sql.DB {
 	return dbconn
 }
 
+func writeGCExecutionOptionFiles(t *testing.T, dir string, filenames ...string) {
+	t.Helper()
+	for _, filename := range filenames {
+		if err := os.WriteFile(filepath.Join(dir, filename), []byte(filename), 0o600); err != nil {
+			t.Fatalf("write container %q: %v", filename, err)
+		}
+	}
+}
+
 func TestGCDefaultExecutionOptionsPreserveExistingBehavior(t *testing.T) {
 	t.Parallel()
 
 	defaultDB := newGCExecutionOptionsTestDB(t, "default.bin")
 	optionsDB := newGCExecutionOptionsTestDB(t, "default.bin")
-	defaultResult, err := RunGCWithDB(context.Background(), defaultDB, true, t.TempDir())
+	defaultDir := t.TempDir()
+	optionsDir := t.TempDir()
+	writeGCExecutionOptionFiles(t, defaultDir, "default.bin")
+	writeGCExecutionOptionFiles(t, optionsDir, "default.bin")
+	defaultResult, err := RunGCWithDB(context.Background(), defaultDB, true, defaultDir)
 	if err != nil {
 		t.Fatalf("RunGCWithDB: %v", err)
 	}
-	optionsResult, err := runGCWithDBOptions(context.Background(), optionsDB, true, t.TempDir(), gcExecutionOptions{})
+	optionsResult, err := runGCWithDBOptions(context.Background(), optionsDB, true, optionsDir, gcExecutionOptions{})
 	if err != nil {
 		t.Fatalf("runGCWithDBOptions: %v", err)
 	}
@@ -90,8 +103,10 @@ func TestGCDispatchObserverSeesCurrentSerialUnits(t *testing.T) {
 	t.Parallel()
 
 	dbconn := newGCExecutionOptionsTestDB(t, "a.bin", "b.bin")
+	dir := t.TempDir()
+	writeGCExecutionOptionFiles(t, dir, "a.bin", "b.bin")
 	var observed []gcDispatchUnit
-	result, err := runGCWithDBOptions(context.Background(), dbconn, true, t.TempDir(), gcExecutionOptions{
+	result, err := runGCWithDBOptions(context.Background(), dbconn, true, dir, gcExecutionOptions{
 		dispatchObserver: func(unit gcDispatchUnit) { observed = append(observed, unit) },
 	})
 	if err != nil {
@@ -123,6 +138,8 @@ func TestGCOptionsDoNotLeakAcrossConcurrentInvocations(t *testing.T) {
 	errB := make(chan error, 1)
 	dirA := t.TempDir()
 	dirB := t.TempDir()
+	writeGCExecutionOptionFiles(t, dirA, "a.bin")
+	writeGCExecutionOptionFiles(t, dirB, "b.bin")
 
 	go func() {
 		_, err := runGCWithDBOptions(context.Background(), dbA, true, dirA, gcExecutionOptions{

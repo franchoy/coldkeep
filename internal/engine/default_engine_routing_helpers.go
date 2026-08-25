@@ -131,15 +131,19 @@ func buildSnapshotDiffResult(req SnapshotDiffRequest, entries []SnapshotDiffEntr
 
 func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRequest) (_ GarbageCollectResult, outErr error) {
 	defer func() { outErr = TranslateError("garbage_collect", outErr) }()
+	if req.Workers < 0 {
+		return GarbageCollectResult{}, TranslateErrorAs("garbage_collect", ErrorInvalidArgument, fmt.Errorf("garbage collect workers must be zero or greater"))
+	}
+	effectiveWorkers := req.Workers
+	if effectiveWorkers < 2 {
+		effectiveWorkers = 1
+	}
 	containerDir := e.config.ContainerDir
 	if containerDir == "" {
 		containerDir = container.ContainersDir
 	}
-	gcRes, err := maintenance.RunGCWithDB(ctx, e.config.DB, req.DryRun, containerDir)
-	if err != nil {
-		return GarbageCollectResult{}, err
-	}
-	return GarbageCollectResult{
+	gcRes, err := maintenance.RunGCWithDBWorkers(ctx, e.config.DB, req.DryRun, containerDir, effectiveWorkers)
+	result := GarbageCollectResult{
 		DryRun:                           gcRes.DryRun,
 		AffectedContainers:               gcRes.AffectedContainers,
 		ContainerFilenames:               gcRes.ContainerFilenames,
@@ -148,8 +152,9 @@ func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRe
 		CurrentOnlyRetainedLogicalFiles:  gcRes.RetainedCurrentOnlyLogical,
 		SnapshotOnlyRetainedLogicalFiles: gcRes.RetainedSnapshotOnlyLogical,
 		SharedRetainedLogicalFiles:       gcRes.RetainedSharedLogical,
-		BytesReclaimed:                   0, // not computed by current maintenance layer
-	}, nil
+		BytesReclaimed:                   gcRes.BytesReclaimed,
+	}
+	return result, err
 }
 
 func (e *DefaultEngine) PlanGarbageCollection(ctx context.Context, req GarbageCollectionPlanRequest) (_ GarbageCollectionPlanResult, outErr error) {

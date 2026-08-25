@@ -2,12 +2,18 @@ package engine_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/franchoy/coldkeep/internal/container"
+	internaldb "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
 )
 
@@ -33,6 +39,9 @@ func TestGCDryRunThroughEngineEmptyDB(t *testing.T) {
 	}
 	if len(result.ContainerFilenames) != 0 {
 		t.Errorf("expected empty ContainerFilenames, got %v", result.ContainerFilenames)
+	}
+	if result.BytesReclaimed != 0 {
+		t.Errorf("expected 0 reclaimed bytes on empty DB, got %d", result.BytesReclaimed)
 	}
 }
 
@@ -75,6 +84,105 @@ func TestGCDryRunEchoesFields(t *testing.T) {
 		t.Fatalf("GarbageCollect: %v", err)
 	}
 	assertGCNonNegativeFields(t, result)
+}
+
+func TestGarbageCollectRejectsNegativeWorkersBeforeMaintenance(t *testing.T) {
+	db := openSnapshotTestDB(t)
+	eng, err := engine.New(engine.Config{DB: db, ContainerDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	result, err := eng.GarbageCollect(context.Background(), engine.GarbageCollectRequest{
+		DryRun:  true,
+		Workers: -1,
+	})
+	if !engine.IsCode(err, engine.ErrorInvalidArgument) {
+		t.Fatalf("GarbageCollect error = %v, want %s", err, engine.ErrorInvalidArgument)
+	}
+	if !reflect.DeepEqual(result, engine.GarbageCollectResult{}) {
+		t.Fatalf("negative-workers result = %+v, want zero", result)
+	}
+}
+
+func TestGarbageCollectBytesReclaimedCreditsSuccessfulPhysicalRemovalOnly(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "gc-bytes.db"))
+	if err != nil {
+		t.Fatalf("open SQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+	if err := internaldb.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	containersDir := t.TempDir()
+	payload := []byte("phase11-physical-byte-baseline")
+	filename := "phase11-byte-baseline.bin"
+	if err := os.WriteFile(filepath.Join(containersDir, filename), payload, 0o600); err != nil {
+		t.Fatalf("write container fixture: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)`,
+		filename,
+		int64(len(payload)),
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container fixture: %v", err)
+	}
+	eng, err := engine.New(engine.Config{DB: dbconn, ContainerDir: containersDir})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	result, err := eng.GarbageCollect(context.Background(), engine.GarbageCollectRequest{DryRun: true})
+	if err != nil {
+		t.Fatalf("GarbageCollect: %v", err)
+	}
+	if result.AffectedContainers != 1 || len(result.ContainerFilenames) != 1 || result.ContainerFilenames[0] != filename {
+		t.Fatalf("affected population = %+v, want one %q", result, filename)
+	}
+	if result.BytesReclaimed != int64(len(payload)) {
+		t.Fatalf("BytesReclaimed = %d, want independently observed physical size %d", result.BytesReclaimed, len(payload))
+	}
+}
+
+func TestGarbageCollectPreservesMaintenancePartialResultWhenReturningError(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "gc-partial.db"))
+	if err != nil {
+		t.Fatalf("open SQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+	if err := internaldb.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	containersDir := t.TempDir()
+	payload := []byte("phase11-partial-success")
+	if err := os.WriteFile(filepath.Join(containersDir, "a-success.bin"), payload, 0o600); err != nil {
+		t.Fatalf("write successful container: %v", err)
+	}
+	for _, filename := range []string{"a-success.bin", "b-missing.bin"} {
+		if _, err := dbconn.Exec(
+			`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+			 VALUES ($1, $2, $3, TRUE, FALSE)`,
+			filename,
+			int64(len(payload)),
+			container.GetContainerMaxSize(),
+		); err != nil {
+			t.Fatalf("insert %s: %v", filename, err)
+		}
+	}
+	eng, err := engine.New(engine.Config{DB: dbconn, ContainerDir: containersDir})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	result, err := eng.GarbageCollect(context.Background(), engine.GarbageCollectRequest{DryRun: true, Workers: 1})
+	if err == nil {
+		t.Fatal("expected missing-file GC error")
+	}
+	if result.AffectedContainers != 1 || !reflect.DeepEqual(result.ContainerFilenames, []string{"a-success.bin"}) || result.BytesReclaimed != int64(len(payload)) {
+		t.Fatalf("partial Engine result = %+v", result)
+	}
 }
 
 func assertGCNonNegativeFields(t *testing.T, result engine.GarbageCollectResult) {

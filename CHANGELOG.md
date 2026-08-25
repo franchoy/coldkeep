@@ -96,6 +96,15 @@ project, do not start here; start with [README.md](README.md).
   deterministic scheduling, physical-byte, filesystem-failure, and overflow
   contracts. Eight of 17 findings remain closed, all 4 process gates remain
   open, and Phase 11 is the sole Next phase; implementation has not started.
+- Closed `CK-V1-AUD-003` and `CK-V1-AUD-004` in Phase 11. Engine now validates
+  and forwards GC Workers; maintenance executes materialized sealed and active
+  plans through a bounded no-backlog coordinator with plan-ordered results,
+  stop-new-dispatch semantics, and truthful partial results. Reclaimed bytes
+  come from one safe-path physical `Stat` per affected unit; active live
+  removals are counted, filesystem failures are surfaced, failed Remove earns
+  zero credit, and checked overflow preserves the exact prefix plus all
+  successful count/filename evidence. Ten of 17 findings are closed, all 4
+  process gates remain open, and Phase 12 is the sole Next phase.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

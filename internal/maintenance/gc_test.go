@@ -10,6 +10,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -322,6 +323,18 @@ func TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession(t *testing.T)
 			defer dbconn.Close()
 			applySchema(t, dbconn)
 			resetDB(t, dbconn)
+			containersDir := t.TempDir()
+			payload := []byte("phase11 unlock partial result")
+			filename := "phase11-unlock-success.bin"
+			if err := os.WriteFile(filepath.Join(containersDir, filename), payload, 0o600); err != nil {
+				t.Fatalf("write successful GC fixture: %v", err)
+			}
+			if _, err := dbconn.Exec(`
+				INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+				VALUES ($1, $2, $3, TRUE, FALSE)
+			`, filename, int64(len(payload)), container.GetContainerMaxSize()); err != nil {
+				t.Fatalf("insert successful GC fixture: %v", err)
+			}
 
 			observerDB, err := db.ConnectDB()
 			if err != nil {
@@ -344,7 +357,7 @@ func TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession(t *testing.T)
 			}
 			t.Cleanup(func() { gcAdvisoryUnlock = originalUnlock })
 
-			result, runErr := RunGCWithDB(context.Background(), dbconn, false, t.TempDir())
+			result, runErr := RunGCWithDB(context.Background(), dbconn, false, containersDir)
 			if runErr == nil {
 				t.Fatal("expected advisory cleanup failure")
 			}
@@ -354,8 +367,10 @@ func TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession(t *testing.T)
 			if test.wantText != "" && !strings.Contains(runErr.Error(), test.wantText) {
 				t.Fatalf("cleanup error=%v want text %q", runErr, test.wantText)
 			}
-			if result.DryRun {
-				t.Fatalf("expected completed live GC result, got %+v", result)
+			if result.DryRun || result.AffectedContainers != 1 ||
+				!reflect.DeepEqual(result.ContainerFilenames, []string{filename}) ||
+				result.BytesReclaimed != int64(len(payload)) {
+				t.Fatalf("expected completed live GC result to survive unlock failure, got %+v", result)
 			}
 			if discardedPID == 0 {
 				t.Fatal("unlock failure did not observe the owning backend PID")
@@ -1394,15 +1409,20 @@ func TestRunGCMixedCompressionAgnosticPackedReachabilityAndRestoreStep311(t *tes
 	`, hex.EncodeToString(orphanHash[:]), int64(len(orphanPayload))).Scan(&orphanChunkID); err != nil {
 		t.Fatalf("insert compressed orphan chunk: %v", err)
 	}
+	const orphanFilename = "step311-compressed-orphan.bin"
 	orphanContainerID, orphanBlockID := insertPackedStorageBlockFixtureWithCompression(
 		t,
 		dbconn,
 		containersDir,
-		"step311-compressed-orphan.bin",
+		orphanFilename,
 		[]int64{orphanChunkID},
 		[][]byte{orphanPayload},
 		storagecompression.CompressionZstd,
 	)
+	orphanPhysicalInfo, err := os.Stat(filepath.Join(containersDir, orphanFilename))
+	if err != nil {
+		t.Fatalf("Stat compressed orphan before GC: %v", err)
+	}
 
 	gcResult, gcErr := RunGCWithContainersDirResult(false, containersDir)
 	if gcErr != nil {
@@ -1410,6 +1430,9 @@ func TestRunGCMixedCompressionAgnosticPackedReachabilityAndRestoreStep311(t *tes
 	}
 	if gcResult.AffectedContainers < 1 {
 		t.Fatalf("expected at least one affected container (compressed orphan), got %d", gcResult.AffectedContainers)
+	}
+	if gcResult.BytesReclaimed != orphanPhysicalInfo.Size() {
+		t.Fatalf("compressed orphan reclaimed bytes=%d, want independently observed %d", gcResult.BytesReclaimed, orphanPhysicalInfo.Size())
 	}
 	if gcResult.SnapshotRetainedContainers < 2 {
 		t.Fatalf("expected at least two snapshot-retained containers (compressed + uncompressed), got %d", gcResult.SnapshotRetainedContainers)

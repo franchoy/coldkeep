@@ -3,6 +3,7 @@ package maintenance
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,23 +76,27 @@ func setupGCDeleteFaultFixture(t *testing.T) (*sql.DB, string, int64, string) {
 	return dbconn, containersDir, containerID, containerPath
 }
 
-func TestGCDeleteFaultFSRemoveFailureIsLoggedAndRecovered(t *testing.T) {
+func TestGCDeleteFaultFSRemoveFailureIsReturned(t *testing.T) {
 	t.Parallel()
 
 	dbconn, containersDir, containerID, containerPath := setupGCDeleteFaultFixture(t)
 
 	script := faultfs.NewScript(faultfs.Fault{Op: faultfs.OpRemove, Err: faultfs.ErrFaultRemove})
-	err := cleanupFullyDeadActiveContainers(
+	outcome, physicalBytes, err := sweepDeadActiveContainerResult(
 		context.Background(),
 		dbconn,
 		containersDir,
 		map[int64]struct{}{},
 		livePhysicalUnits{LegacyLiveContainerIDs: map[int64]struct{}{}, PackedLiveBlockIDs: map[int64]struct{}{}},
 		faultfs.New(fsx.Default(), script),
-		gcExecutionOptions{},
+		containerID,
+		filepath.Base(containerPath),
 	)
-	if err != nil {
-		t.Fatalf("cleanup fully dead active containers: %v", err)
+	if !errors.Is(err, faultfs.ErrFaultRemove) {
+		t.Fatalf("cleanup error = %v, want errors.Is(ErrFaultRemove)", err)
+	}
+	if outcome != sealedContainerSkipped || physicalBytes != 0 {
+		t.Fatalf("remove-failed unit outcome=%v bytes=%d, want skipped/0", outcome, physicalBytes)
 	}
 	if got := script.CallCount(faultfs.OpRemove); got != 1 {
 		t.Fatalf("remove call count = %d, want 1", got)
