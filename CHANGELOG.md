@@ -76,6 +76,13 @@ project, do not start here; start with [README.md](README.md).
   rollback retains the pending container ID, normal rollback remains
   quarantine-free, and Phase 5/6 contracts remain unchanged. Four of 17
   findings are closed, all 4 process gates remain open, and Phase 8 is Next.
+- Closed `CK-V1-AUD-006` and `CK-V1-AUD-009` in Phase 8 by preserving
+  `SnapshotRestoreRequest.Overwrite` through the Engine adapter and routing
+  SnapshotShow, SnapshotDiff, and SnapshotRestore through one private selector
+  normalizer. Existing lower atomic overwrite ownership, explicit restore-path
+  accounting, public shapes, CLI/JSON contracts, schema, and storage formats
+  remain unchanged. Six of 17 findings are closed, all 4 process gates remain
+  open, and Phase 9 is Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

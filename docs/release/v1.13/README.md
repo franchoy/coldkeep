@@ -68,16 +68,18 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active on `release/v1.13.14`; Phases 0–7 are complete.
+Certification` is active on `release/v1.13.14`; Phases 0–8 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
 ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
 Store finalization failures without changing writer-owned quarantine.
 Phase 7 closed `CK-V1-AUD-008` with joined rollback cleanup failures, retained
 poisoned container identity, durable quarantine ordering, and fail-closed
-append refusal. `4/17` findings are closed and all 4 process gates remain
-open. Phase 8 is next for snapshot restore overwrite and the shared selector
-contract. v1.x
+append refusal. Phase 8 closed `CK-V1-AUD-006` and `CK-V1-AUD-009` by
+preserving snapshot restore overwrite and giving Show, Diff, and Restore one
+private Engine selector normalizer. `6/17` findings are closed and all 4
+process gates remain open. Phase 9 is next for SnapshotDiff limit and
+SnapshotMeta file-count truth. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -93,7 +95,10 @@ is the `CK-V1-AUD-002` implementation and closure authority, and the
 [Phase 6 closure record](v1.13.14-phase6-single-file-store-finalization-error-propagation.md)
 is the `CK-V1-AUD-007` implementation and closure authority, and the
 [Phase 7 closure record](v1.13.14-phase7-rollback-close-failure-and-quarantine-safety.md)
-is the `CK-V1-AUD-008` implementation and closure authority. v2 implementation
+is the `CK-V1-AUD-008` implementation and closure authority, and the
+[Phase 8 closure record](v1.13.14-phase8-snapshot-restore-overwrite-and-shared-selector-contract.md)
+is the `CK-V1-AUD-006` and `CK-V1-AUD-009` implementation and closure
+authority. v2 implementation
 has not started.
 The v1.13.13 publication authority is the
 [Phase 16 record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).

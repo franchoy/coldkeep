@@ -44,11 +44,11 @@ func (e *DefaultEngine) snapshotDiffSummaryFastPath(ctx context.Context, req Sna
 	}, nil
 }
 
-func (e *DefaultEngine) snapshotDiffDetailed(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error) {
-	query, err := snapshotQueryOrNil(req.Query)
-	if err != nil {
-		return SnapshotDiffResult{}, err
-	}
+func (e *DefaultEngine) snapshotDiffDetailed(
+	ctx context.Context,
+	req SnapshotDiffRequest,
+	query *snapshot.SnapshotQuery,
+) (SnapshotDiffResult, error) {
 	raw, err := snapshot.DiffSnapshots(ctx, e.config.DB, req.BaseID, req.TargetID, query)
 	if err != nil {
 		return SnapshotDiffResult{}, err

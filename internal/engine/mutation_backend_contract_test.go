@@ -654,7 +654,7 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 					})
 					return err
 				},
-				want: "invalid snapshot restore regex",
+				want: "invalid snapshot query regex",
 			},
 		} {
 			t.Run(operation.name, func(t *testing.T) {

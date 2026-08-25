@@ -85,6 +85,27 @@ func TestEngineSnapshotSelectorsAcrossBackends(t *testing.T) {
 			}
 		}
 		assertEngineReadStateUnchanged(t, before, captureEngineReadState(t, backend.DB, fixture.containerDir))
+
+		restored, err := fixture.engine.SnapshotRestore(context.Background(), engine.SnapshotRestoreRequest{
+			SnapshotID: "snap-target",
+			Selection: engine.SnapshotRestoreSelection{
+				ExactPaths:     []string{"docs/added.txt"},
+				Prefixes:       []string{"docs/"},
+				Pattern:        "docs/*.txt",
+				Regex:          "added\\.txt$",
+				MinSize:        int64Pointer(10),
+				MaxSize:        int64Pointer(10),
+				ModifiedAfter:  timePointer(engineReadFixtureTime),
+				ModifiedBefore: timePointer(engineReadFixtureTime),
+			},
+			Destination: engine.SnapshotRestoreDestination{
+				Mode: engine.SnapshotRestoreDestinationOriginal,
+				Path: t.TempDir(),
+			},
+		})
+		if err != nil || restored.RestoredFiles != 1 || len(restored.OutputPaths) != 1 {
+			t.Fatalf("filtered SnapshotRestore: got (%+v, %v)", restored, err)
+		}
 	})
 }
 
@@ -99,11 +120,25 @@ func TestEngineSnapshotSelectorErrorsAcrossBackends(t *testing.T) {
 		if _, err := fixture.engine.SnapshotDiff(context.Background(), engine.SnapshotDiffRequest{BaseID: "snap-base", TargetID: "snap-target", Query: invalid}); err == nil || !strings.Contains(err.Error(), "invalid snapshot query regex") {
 			t.Fatalf("invalid SnapshotDiff regex: %v", err)
 		}
+		if _, err := fixture.engine.SnapshotRestore(context.Background(), engine.SnapshotRestoreRequest{
+			SnapshotID:  "snap-target",
+			Selection:   engine.SnapshotRestoreSelection{Regex: "("},
+			Destination: engine.SnapshotRestoreDestination{Mode: engine.SnapshotRestoreDestinationOriginal, Path: t.TempDir()},
+		}); !engine.IsCode(err, engine.ErrorInvalidArgument) || !strings.Contains(err.Error(), "invalid snapshot query regex") {
+			t.Fatalf("invalid SnapshotRestore regex: %v", err)
+		}
 		if _, err := fixture.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: "snap-target", Query: engine.SnapshotQuery{Paths: []string{" docs/common.txt"}}}); err == nil || !strings.Contains(err.Error(), "leading or trailing whitespace") {
 			t.Fatalf("invalid SnapshotShow path: %v", err)
 		}
 		if _, err := fixture.engine.SnapshotDiff(context.Background(), engine.SnapshotDiffRequest{BaseID: "snap-base", TargetID: "snap-target", Query: engine.SnapshotQuery{Prefixes: []string{"docs"}}}); err == nil || !strings.Contains(err.Error(), "must end with '/'") {
 			t.Fatalf("invalid SnapshotDiff prefix: %v", err)
+		}
+		if _, err := fixture.engine.SnapshotRestore(context.Background(), engine.SnapshotRestoreRequest{
+			SnapshotID:  "snap-target",
+			Selection:   engine.SnapshotRestoreSelection{Prefixes: []string{"docs"}},
+			Destination: engine.SnapshotRestoreDestination{Mode: engine.SnapshotRestoreDestinationOriginal, Path: t.TempDir()},
+		}); !engine.IsCode(err, engine.ErrorInvalidArgument) || !strings.Contains(err.Error(), "must end with '/'") {
+			t.Fatalf("invalid SnapshotRestore prefix: %v", err)
 		}
 		cancelled, cancel := context.WithCancel(context.Background())
 		cancel()
