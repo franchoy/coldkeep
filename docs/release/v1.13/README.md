@@ -68,7 +68,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active on `release/v1.13.14`; Phases 0–9 are complete.
+Certification` is active on `release/v1.13.14`; Phases 0–10 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
 ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
@@ -81,8 +81,11 @@ private Engine selector normalizer. Phase 9 closed `CK-V1-AUD-010` and
 `CK-V1-AUD-012` by applying SnapshotDiff Limit after query/change filtering
 with truthful raw/matched/summary counts and carrying persisted membership
 through Catalog snapshot projections into `SnapshotMeta.FileCount`. `8/17`
-findings are closed and all 4 process gates remain open. Phase 10 is next for
-the GC execution and byte-accounting design freeze. v1.x
+findings are closed and all 4 process gates remain open. Phase 10 froze the
+GC execution scheduler, active-container accounting, physical-byte,
+partial-result, filesystem-failure, and overflow contracts without
+implementing or closing `CK-V1-AUD-003` or `CK-V1-AUD-004`. Phase 11 is next,
+is the sole next phase, and remains ready for separate authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -104,7 +107,10 @@ is the `CK-V1-AUD-006` and `CK-V1-AUD-009` implementation and closure
 authority, and the
 [Phase 9 closure record](v1.13.14-phase9-snapshot-diff-limit-and-snapshot-metadata-file-counts.md)
 is the `CK-V1-AUD-010` and `CK-V1-AUD-012` implementation and closure
-authority. v2 implementation
+authority, and the
+[Phase 10 design-freeze record](v1.13.14-phase10-gc-execution-and-byte-accounting-design-freeze.md)
+is the binding `CK-V1-AUD-003` and `CK-V1-AUD-004` execution-design authority.
+v2 implementation
 has not started.
 The v1.13.13 publication authority is the
 [Phase 16 record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).

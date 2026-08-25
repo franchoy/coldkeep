@@ -90,6 +90,12 @@ project, do not start here; start with [README.md](README.md).
   list/show/graph/tree `SnapshotMeta.FileCount` without N+1 queries, schema,
   public-shape, JSON, or CLI changes. Eight of 17 findings are closed, all 4
   process gates remain open, and Phase 10 is Next.
+- Completed the documentation-only Phase 10 GC execution and byte-accounting
+  design freeze. `CK-V1-AUD-003` and `CK-V1-AUD-004` remain open with verified
+  active-container accounting, transaction-concurrency, partial-result,
+  deterministic scheduling, physical-byte, filesystem-failure, and overflow
+  contracts. Eight of 17 findings remain closed, all 4 process gates remain
+  open, and Phase 11 is the sole Next phase; implementation has not started.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
