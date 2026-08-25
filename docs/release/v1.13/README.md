@@ -68,7 +68,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active on `release/v1.13.14`; Phases 0–15 are complete.
+Certification` is active on `release/v1.13.14`; Phases 0–16 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
 ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
@@ -104,8 +104,11 @@ lifecycle, and branch-relative release linearity while preserving the Phase 0
 non-fast-forward ruleset. `CK-V1-AUD-005` remains partial. Phase 15 then reconciled
 all 21 frozen rows: 16 closed findings retain integrated regression PASS, all
 four process gates retain integrated PASS, and AUD-005 remains lifecycle-
-deferred to Phases 18/26 rather than falsely closed. Phase 16 is the sole Next
-phase and remains ready for separate authorization. v1.x
+deferred to Phases 18/26 rather than falsely closed. Phase 16 then proved all
+10 assigned rows across the exact applicable SQLite/PostgreSQL, plain/AES-GCM,
+none/zstd, and legacy/packed/mixed matrix: 20/20 backend, 16/16 codec, 16/16
+compression, and 21/21 layout cells passed without product or test changes.
+Phase 17 is the sole Next phase and remains ready for separate authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -143,7 +146,10 @@ and closure authority, and the
 is the `CK-V1-GATE-001` through `CK-V1-GATE-004` closure authority, and the
 [Phase 15 integrated closure record](v1.13.14-phase15-finding-by-finding-integrated-regression-closure.md)
 and [21-row matrix](v1.13.14-integrated-regression-closure-matrix.md) are the
-current finding-by-finding integration authority.
+current finding-by-finding integration authority, and the
+[Phase 16 compatibility proof](v1.13.14-phase16-backend-codec-compression-storage-layout-proof.md)
+and [compatibility matrix](v1.13.14-compatibility-proof-matrix.md) are the
+backend, codec, compression, and storage-layout authority.
 v2 implementation
 has not started.
 The v1.13.13 publication authority is the

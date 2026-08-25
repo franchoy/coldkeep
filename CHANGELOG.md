@@ -140,6 +140,13 @@ project, do not start here; start with [README.md](README.md).
   Phases 18/26, and all 21 numbered rows reconcile without production or test
   code changes. Findings remain `16/17`, process gates remain `4/4`,
   `CK-V1-AUD-005` remains partial, and Phase 16 is the sole Next phase.
+- Completed Phase 16 backend, codec, compression, and storage-layout proof.
+  All 10 owner rows and all 73 derived non-Cartesian compatibility cells pass:
+  20/20 backend, 16/16 codec, 16/16 compression, and 21/21 layout. SQLite,
+  PostgreSQL, plain, AES-GCM, none, zstd, legacy, packed, and mixed evidence is
+  direct and complete; no product or test code changed. Findings remain
+  `16/17`, process gates remain `4/4`, `CK-V1-AUD-005` remains partial, and
+  Phase 17 is the sole Next phase.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
