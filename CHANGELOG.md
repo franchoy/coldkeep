@@ -134,6 +134,12 @@ project, do not start here; start with [README.md](README.md).
   benchmark thresholds, schema, storage formats, and dependencies are
   unchanged. Findings remain `16/17`, `CK-V1-AUD-005` remains partial, process
   gates are `4/4`, and Phase 15 is the sole Next phase.
+- Completed Phase 15 finding-by-finding integrated regression closure. All 20
+  currently executable frozen primary regressions pass independently, the
+  AUD-005 lifecycle audit remains consistent and deliberately deferred to
+  Phases 18/26, and all 21 numbered rows reconcile without production or test
+  code changes. Findings remain `16/17`, process gates remain `4/4`,
+  `CK-V1-AUD-005` remains partial, and Phase 16 is the sole Next phase.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

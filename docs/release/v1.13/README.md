@@ -68,7 +68,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active on `release/v1.13.14`; Phases 0–14 are complete.
+Certification` is active on `release/v1.13.14`; Phases 0–15 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
 ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
@@ -101,7 +101,10 @@ JSON automation contract, and init compression behavior. `16/17` findings are
 closed. Phase 14 completed all four process gates with isolated CLI test
 storage, tracked-source evidence validation, an exact-SHA benchmark-evidence
 lifecycle, and branch-relative release linearity while preserving the Phase 0
-non-fast-forward ruleset. `CK-V1-AUD-005` remains partial. Phase 15 is the sole Next
+non-fast-forward ruleset. `CK-V1-AUD-005` remains partial. Phase 15 then reconciled
+all 21 frozen rows: 16 closed findings retain integrated regression PASS, all
+four process gates retain integrated PASS, and AUD-005 remains lifecycle-
+deferred to Phases 18/26 rather than falsely closed. Phase 16 is the sole Next
 phase and remains ready for separate authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
@@ -137,7 +140,10 @@ and closure authority, and the
 is the `CK-V1-AUD-015`, `CK-V1-AUD-016`, and `CK-V1-AUD-017` implementation
 and closure authority, and the
 [Phase 14 release-gate hardening record](v1.13.14-phase14-release-gate-reproducibility-hardening.md)
-is the `CK-V1-GATE-001` through `CK-V1-GATE-004` closure authority.
+is the `CK-V1-GATE-001` through `CK-V1-GATE-004` closure authority, and the
+[Phase 15 integrated closure record](v1.13.14-phase15-finding-by-finding-integrated-regression-closure.md)
+and [21-row matrix](v1.13.14-integrated-regression-closure-matrix.md) are the
+current finding-by-finding integration authority.
 v2 implementation
 has not started.
 The v1.13.13 publication authority is the
