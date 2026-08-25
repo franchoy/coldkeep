@@ -68,6 +68,14 @@ project, do not start here; start with [README.md](README.md).
   ownership of physical quarantine, StoreFolder and rollback behavior are
   unchanged, three of 17 findings are closed, all 4 process gates remain open,
   and Phase 7 is Next.
+- Closed `CK-V1-AUD-008` in Phase 7 by making rollback truncate and close
+  failures jointly visible and retaining the exact affected container identity
+  in a private poisoned writer state until durable quarantine succeeds.
+  Unresolved quarantine now blocks further appends; successful quarantine
+  clears poison only after the DB row is non-selectable. Full-container path
+  rollback retains the pending container ID, normal rollback remains
+  quarantine-free, and Phase 5/6 contracts remain unchanged. Four of 17
+  findings are closed, all 4 process gates remain open, and Phase 8 is Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

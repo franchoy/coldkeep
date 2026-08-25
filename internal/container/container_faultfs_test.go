@@ -131,8 +131,11 @@ func TestContainerFaultFSPayloadWriteFailureFailsClosed(t *testing.T) {
 	if !errors.Is(err, faultfs.ErrFaultWrite) {
 		t.Fatalf("append error = %v, want ErrFaultWrite", err)
 	}
-	if w.hasActive || w.activeHandle != nil || w.pendingAppend {
-		t.Fatalf("expected writer state cleared after payload failure, got hasActive=%v activeHandle=%v pendingAppend=%v", w.hasActive, w.activeHandle, w.pendingAppend)
+	if !w.hasActive || w.activeID <= 0 || w.activeHandle != nil || w.pendingAppend || !w.rollbackPoisoned {
+		t.Fatalf("expected unresolved quarantine to retain poisoned identity after payload failure, got hasActive=%v activeID=%d activeHandle=%v pendingAppend=%v poisoned=%v", w.hasActive, w.activeID, w.activeHandle, w.pendingAppend, w.rollbackPoisoned)
+	}
+	if _, poisonErr := w.AppendPayload(nil, []byte("must be refused")); !errors.Is(poisonErr, errUnresolvedRollback) {
+		t.Fatalf("append after unresolved payload-failure quarantine = %v, want poisoned-writer refusal", poisonErr)
 	}
 	path, got := readSingleContainerFile(t, dir)
 	if len(got) != ContainerHdrLen {
@@ -156,8 +159,11 @@ func TestContainerFaultFSPartialPayloadWriteFailsClosed(t *testing.T) {
 	if !errors.Is(err, faultfs.ErrFaultWrite) {
 		t.Fatalf("append error = %v, want ErrFaultWrite", err)
 	}
-	if w.hasActive || w.activeHandle != nil || w.pendingAppend {
-		t.Fatalf("expected writer state cleared after partial payload failure, got hasActive=%v activeHandle=%v pendingAppend=%v", w.hasActive, w.activeHandle, w.pendingAppend)
+	if !w.hasActive || w.activeID <= 0 || w.activeHandle != nil || w.pendingAppend || !w.rollbackPoisoned {
+		t.Fatalf("expected unresolved quarantine to retain poisoned identity after partial payload failure, got hasActive=%v activeID=%d activeHandle=%v pendingAppend=%v poisoned=%v", w.hasActive, w.activeID, w.activeHandle, w.pendingAppend, w.rollbackPoisoned)
+	}
+	if _, poisonErr := w.AppendPayload(nil, []byte("must be refused")); !errors.Is(poisonErr, errUnresolvedRollback) {
+		t.Fatalf("append after unresolved partial-write quarantine = %v, want poisoned-writer refusal", poisonErr)
 	}
 	path, got := readSingleContainerFile(t, dir)
 	if len(got) != ContainerHdrLen+3 {
@@ -241,6 +247,297 @@ func TestLocalWriterFinalizeFailureQuarantinesAndPreventsReuse(t *testing.T) {
 	}
 	if second.ContainerID == first.ContainerID {
 		t.Fatalf("unsafe quarantined container %d was reused", first.ContainerID)
+	}
+}
+
+func prepareCommittedContainerWithPendingRollback(t *testing.T, maxSize int64, script *faultfs.Script, pendingPayload []byte) (*sql.DB, *LocalWriter, int64) {
+	t.Helper()
+
+	dbconn, firstTx, w, _ := newFaultedContainerWriter(t, maxSize, script)
+	first, err := w.AppendPayload(firstTx, []byte("committed payload"))
+	if err != nil {
+		t.Fatalf("append committed payload: %v", err)
+	}
+	if err := UpdateContainerSize(firstTx, first.ContainerID, first.NewContainerSize); err != nil {
+		t.Fatalf("update committed container size: %v", err)
+	}
+	if err := firstTx.Commit(); err != nil {
+		t.Fatalf("commit initial payload: %v", err)
+	}
+	w.AcknowledgeAppendCommitted()
+
+	rollbackTx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin rollback transaction: %v", err)
+	}
+	if _, err := w.AppendPayload(rollbackTx, pendingPayload); err != nil {
+		_ = rollbackTx.Rollback()
+		t.Fatalf("append rollback payload: %v", err)
+	}
+	if err := rollbackTx.Rollback(); err != nil {
+		t.Fatalf("roll back metadata transaction: %v", err)
+	}
+
+	return dbconn, w, first.ContainerID
+}
+
+func queryContainerQuarantine(t *testing.T, dbconn *sql.DB, containerID int64) bool {
+	t.Helper()
+
+	var quarantined bool
+	if err := dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = ?`, containerID).Scan(&quarantined); err != nil {
+		t.Fatalf("query container %d quarantine: %v", containerID, err)
+	}
+	return quarantined
+}
+
+func appendAfterRollbackSafetyBoundary(t *testing.T, dbconn *sql.DB, w *LocalWriter, payload []byte) (LocalPlacement, error) {
+	t.Helper()
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin append-after-rollback transaction: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	return w.AppendPayload(tx, payload)
+}
+
+func TestRollbackCloseFailureQuarantinesBeforeClearingActiveIdentity(t *testing.T) {
+	t.Parallel()
+
+	script := faultfs.NewScript(faultfs.Fault{Op: faultfs.OpClose, After: 2, Err: faultfs.ErrFaultClose})
+	dbconn, w, affectedID := prepareCommittedContainerWithPendingRollback(
+		t,
+		ContainerHdrLen+1024,
+		script,
+		[]byte("rollback payload"),
+	)
+
+	rollbackErr := w.RollbackLastAppend()
+	if !errors.Is(rollbackErr, faultfs.ErrFaultClose) {
+		t.Fatalf("RollbackLastAppend error = %v, want close failure", rollbackErr)
+	}
+	if got := script.CallCount(faultfs.OpTruncate); got != 1 {
+		t.Fatalf("truncate calls = %d, want 1", got)
+	}
+	if got := script.CallCount(faultfs.OpClose); got != 2 {
+		t.Fatalf("close calls before quarantine = %d, want 2", got)
+	}
+
+	if err := w.QuarantineActiveContainer(); err != nil {
+		t.Fatalf("quarantine affected container: %v", err)
+	}
+	if !queryContainerQuarantine(t, dbconn, affectedID) {
+		t.Fatalf("container %d was not durably quarantined", affectedID)
+	}
+
+	next, err := appendAfterRollbackSafetyBoundary(t, dbconn, w, []byte("safe payload"))
+	if err != nil {
+		t.Fatalf("append after successful quarantine: %v", err)
+	}
+	if next.ContainerID == affectedID {
+		t.Fatalf("quarantined container %d was reused", affectedID)
+	}
+}
+
+func TestRollbackLastAppendJoinsTruncateAndCloseFailures(t *testing.T) {
+	t.Parallel()
+
+	script := faultfs.NewScript(
+		faultfs.Fault{Op: faultfs.OpTruncate, Err: faultfs.ErrFaultTruncate},
+		faultfs.Fault{Op: faultfs.OpClose, After: 2, Err: faultfs.ErrFaultClose},
+	)
+	dbconn, w, affectedID := prepareCommittedContainerWithPendingRollback(
+		t,
+		ContainerHdrLen+1024,
+		script,
+		[]byte("rollback payload"),
+	)
+
+	rollbackErr := w.RollbackLastAppend()
+	if !errors.Is(rollbackErr, faultfs.ErrFaultTruncate) {
+		t.Fatalf("RollbackLastAppend error = %v, want truncate failure", rollbackErr)
+	}
+	if !errors.Is(rollbackErr, faultfs.ErrFaultClose) {
+		t.Fatalf("RollbackLastAppend error = %v, want close failure", rollbackErr)
+	}
+	if got := script.CallCount(faultfs.OpClose); got != 2 {
+		t.Fatalf("close calls before quarantine = %d, want 2", got)
+	}
+	if err := w.QuarantineActiveContainer(); err != nil {
+		t.Fatalf("quarantine affected container: %v", err)
+	}
+	if !queryContainerQuarantine(t, dbconn, affectedID) {
+		t.Fatalf("container %d was not durably quarantined", affectedID)
+	}
+}
+
+func TestRollbackTruncateFailureStillClosesAndQuarantines(t *testing.T) {
+	t.Parallel()
+
+	script := faultfs.NewScript(faultfs.Fault{Op: faultfs.OpTruncate, Err: faultfs.ErrFaultTruncate})
+	dbconn, w, affectedID := prepareCommittedContainerWithPendingRollback(
+		t,
+		ContainerHdrLen+1024,
+		script,
+		[]byte("rollback payload"),
+	)
+
+	rollbackErr := w.RollbackLastAppend()
+	if !errors.Is(rollbackErr, faultfs.ErrFaultTruncate) {
+		t.Fatalf("RollbackLastAppend error = %v, want truncate failure", rollbackErr)
+	}
+	if got := script.CallCount(faultfs.OpClose); got != 2 {
+		t.Fatalf("close calls before quarantine = %d, want 2", got)
+	}
+	if err := w.QuarantineActiveContainer(); err != nil {
+		t.Fatalf("quarantine affected container: %v", err)
+	}
+	if !queryContainerQuarantine(t, dbconn, affectedID) {
+		t.Fatalf("container %d was not durably quarantined", affectedID)
+	}
+}
+
+func TestRollbackPostTruncateVerificationFailureQuarantines(t *testing.T) {
+	t.Parallel()
+
+	// The first Stat opens the existing container. The second is rollback's
+	// post-truncate verification.
+	script := faultfs.NewScript(faultfs.Fault{Op: faultfs.OpStat, After: 2, Err: faultfs.ErrFaultStat})
+	dbconn, w, affectedID := prepareCommittedContainerWithPendingRollback(
+		t,
+		ContainerHdrLen+1024,
+		script,
+		[]byte("rollback payload"),
+	)
+
+	rollbackErr := w.RollbackLastAppend()
+	if !errors.Is(rollbackErr, faultfs.ErrFaultStat) {
+		t.Fatalf("RollbackLastAppend error = %v, want stat failure", rollbackErr)
+	}
+	if err := w.QuarantineActiveContainer(); err != nil {
+		t.Fatalf("quarantine affected container: %v", err)
+	}
+	if !queryContainerQuarantine(t, dbconn, affectedID) {
+		t.Fatalf("container %d was not durably quarantined", affectedID)
+	}
+}
+
+func TestRollbackQuarantineFailureRetainsPoisonedIdentity(t *testing.T) {
+	t.Parallel()
+
+	// Stat calls: open existing container, rollback verification, quarantine.
+	script := faultfs.NewScript(
+		faultfs.Fault{Op: faultfs.OpClose, After: 2, Err: faultfs.ErrFaultClose},
+		faultfs.Fault{Op: faultfs.OpStat, After: 3, Err: faultfs.ErrFaultStat},
+	)
+	dbconn, w, affectedID := prepareCommittedContainerWithPendingRollback(
+		t,
+		ContainerHdrLen+1024,
+		script,
+		[]byte("rollback payload"),
+	)
+
+	rollbackErr := w.RollbackLastAppend()
+	if !errors.Is(rollbackErr, faultfs.ErrFaultClose) {
+		t.Fatalf("RollbackLastAppend error = %v, want close failure", rollbackErr)
+	}
+	quarantineErr := w.QuarantineActiveContainer()
+	if !errors.Is(quarantineErr, faultfs.ErrFaultStat) {
+		t.Fatalf("QuarantineActiveContainer error = %v, want quarantine stat failure", quarantineErr)
+	}
+	if queryContainerQuarantine(t, dbconn, affectedID) {
+		t.Fatalf("container %d was marked quarantined despite durable quarantine failure", affectedID)
+	}
+
+	w.AcknowledgeAppendCommitted()
+	if _, err := appendAfterRollbackSafetyBoundary(t, dbconn, w, []byte("must be refused")); err == nil {
+		t.Fatalf("poisoned writer accepted append after failed quarantine")
+	}
+
+	// The fault is one-shot. Retrying the existing quarantine API must operate on
+	// the retained identity and recover once durable exclusion succeeds.
+	if err := w.QuarantineActiveContainer(); err != nil {
+		t.Fatalf("retry quarantine affected container: %v", err)
+	}
+	if !queryContainerQuarantine(t, dbconn, affectedID) {
+		t.Fatalf("container %d was not quarantined on retry", affectedID)
+	}
+}
+
+func TestSuccessfulRollbackClearsActiveState(t *testing.T) {
+	t.Parallel()
+
+	dbconn, w, affectedID := prepareCommittedContainerWithPendingRollback(
+		t,
+		ContainerHdrLen+1024,
+		faultfs.NewScript(),
+		[]byte("rollback payload"),
+	)
+
+	if err := w.RollbackLastAppend(); err != nil {
+		t.Fatalf("RollbackLastAppend: %v", err)
+	}
+	if queryContainerQuarantine(t, dbconn, affectedID) {
+		t.Fatalf("successful rollback unexpectedly quarantined container %d", affectedID)
+	}
+	if w.hasActive || w.activeHandle != nil || w.pendingAppend {
+		t.Fatalf("successful rollback retained active/pending state")
+	}
+	if _, err := appendAfterRollbackSafetyBoundary(t, dbconn, w, []byte("normal append")); err != nil {
+		t.Fatalf("append after successful rollback: %v", err)
+	}
+}
+
+func TestClosedContainerRollbackFailureCanStillQuarantineAffectedContainer(t *testing.T) {
+	t.Parallel()
+
+	const maxSize = ContainerHdrLen + 64
+	script := faultfs.NewScript(faultfs.Fault{Op: faultfs.OpTruncate, Err: faultfs.ErrFaultTruncate})
+	dbconn, firstTx, w, _ := newFaultedContainerWriter(t, maxSize, script)
+	first, err := w.AppendPayload(firstTx, []byte("base"))
+	if err != nil {
+		t.Fatalf("append committed base: %v", err)
+	}
+	if err := UpdateContainerSize(firstTx, first.ContainerID, first.NewContainerSize); err != nil {
+		t.Fatalf("update committed base size: %v", err)
+	}
+	if err := firstTx.Commit(); err != nil {
+		t.Fatalf("commit base: %v", err)
+	}
+	w.AcknowledgeAppendCommitted()
+
+	rollbackTx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin full-container rollback transaction: %v", err)
+	}
+	remaining := maxSize - first.NewContainerSize
+	placement, err := w.AppendPayload(rollbackTx, bytes.Repeat([]byte("x"), int(remaining)))
+	if err != nil {
+		_ = rollbackTx.Rollback()
+		t.Fatalf("append full-container rollback payload: %v", err)
+	}
+	if !placement.Full {
+		_ = rollbackTx.Rollback()
+		t.Fatalf("expected full placement")
+	}
+	if err := w.FinalizeContainer(); err != nil {
+		_ = rollbackTx.Rollback()
+		t.Fatalf("finalize full container: %v", err)
+	}
+	if err := rollbackTx.Rollback(); err != nil {
+		t.Fatalf("roll back full-container metadata: %v", err)
+	}
+
+	rollbackErr := w.RollbackLastAppend()
+	if !errors.Is(rollbackErr, faultfs.ErrFaultTruncate) {
+		t.Fatalf("RollbackLastAppend error = %v, want path truncate failure", rollbackErr)
+	}
+	if err := w.QuarantineActiveContainer(); err != nil {
+		t.Fatalf("quarantine closed affected container: %v", err)
+	}
+	if !queryContainerQuarantine(t, dbconn, first.ContainerID) {
+		t.Fatalf("closed container %d was not durably quarantined", first.ContainerID)
 	}
 }
 

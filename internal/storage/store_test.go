@@ -2987,6 +2987,46 @@ func TestStoreFileEscalatesRollbackCleanupFailureAndQuarantinesContainer(t *test
 	}
 }
 
+func TestRollbackFailureTriggersQuarantine(t *testing.T) {
+	t.Parallel()
+
+	rollbackCause := errors.New("rollback failure")
+	writer := &rollbackCleanupFailureWriter{rollbackErr: rollbackCause}
+
+	err := rollbackWriterLastAppendWithQuarantine(writer)
+	if !errors.Is(err, rollbackCause) {
+		t.Fatalf("rollback wrapper error = %v, want rollback cause", err)
+	}
+	if writer.rollbackCalls != 1 {
+		t.Fatalf("rollback calls = %d, want 1", writer.rollbackCalls)
+	}
+	if writer.quarantineCalls != 1 {
+		t.Fatalf("quarantine calls = %d, want 1", writer.quarantineCalls)
+	}
+}
+
+func TestRollbackAndQuarantineFailuresRemainJoined(t *testing.T) {
+	t.Parallel()
+
+	rollbackCause := errors.New("rollback failure")
+	quarantineCause := errors.New("quarantine failure")
+	writer := &rollbackCleanupFailureWriter{
+		rollbackErr:   rollbackCause,
+		quarantineErr: quarantineCause,
+	}
+
+	err := rollbackWriterLastAppendWithQuarantine(writer)
+	if !errors.Is(err, rollbackCause) {
+		t.Fatalf("rollback wrapper error = %v, want rollback cause", err)
+	}
+	if !errors.Is(err, quarantineCause) {
+		t.Fatalf("rollback wrapper error = %v, want quarantine cause", err)
+	}
+	if writer.rollbackCalls != 1 || writer.quarantineCalls != 1 {
+		t.Fatalf("rollback/quarantine calls = %d/%d, want 1/1", writer.rollbackCalls, writer.quarantineCalls)
+	}
+}
+
 func TestStoreFileRetainsCommittedChunksWhenFinalCompletionUpdateFails(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
