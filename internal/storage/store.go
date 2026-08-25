@@ -2825,21 +2825,11 @@ func StoreFileWithStorageContextResultContext(ctx context.Context, sgctx Storage
 		return StoreFileResult{}, err
 	}
 
-	result, err := StoreFileWithStorageContextAndCodecResultContext(ctx, sgctx, path, codec)
-	if sgctx.Writer != nil {
-		finalizeErr := sgctx.Writer.FinalizeContainer()
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			err = errors.Join(err, finalizeErr)
-		}
-	}
-	return result, err
+	return StoreFileWithStorageContextAndCodecResultContext(ctx, sgctx, path, codec)
 }
 
 func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, codec blocks.Codec) (err error) {
 	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
-	if sgctx.Writer != nil {
-		_ = sgctx.Writer.FinalizeContainer()
-	}
 	return err
 }
 
@@ -2866,11 +2856,29 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 // StoreFileWithStorageContextAndCodecResultWithPolicyContext is the
 // caller-context-aware form of StoreFileWithStorageContextAndCodecResultWithPolicy.
 func StoreFileWithStorageContextAndCodecResultWithPolicyContext(ctx context.Context, sgctx StorageContext, path string, codec blocks.Codec, replace bool) (result StoreFileResult, err error) {
+	defer func() {
+		result, err = finalizeSingleFileStore(result, err, sgctx.Writer)
+	}()
+
 	runtime, err := buildStoreFileRuntime(sgctx, codec)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
 	return storeFileWithStorageContextAndRuntimeResultWithPolicy(ctx, sgctx, path, replace, nil, runtime)
+}
+
+func finalizeSingleFileStore(result StoreFileResult, storeErr error, writer container.ContainerWriter) (StoreFileResult, error) {
+	if writer == nil {
+		return result, storeErr
+	}
+	finalizeErr := writer.FinalizeContainer()
+	if finalizeErr == nil {
+		return result, storeErr
+	}
+	if storeErr == nil {
+		return result, finalizeErr
+	}
+	return result, errors.Join(storeErr, finalizeErr)
 }
 
 func storeFileWithStorageContextAndRuntimeResultWithPolicy(

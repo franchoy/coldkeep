@@ -196,6 +196,54 @@ func TestContainerFaultFSSyncFailureFailsClosed(t *testing.T) {
 	}
 }
 
+func TestLocalWriterFinalizeFailureQuarantinesAndPreventsReuse(t *testing.T) {
+	t.Parallel()
+
+	const maxSize = ContainerHdrLen + 1024
+	script := faultfs.NewScript(faultfs.Fault{
+		Op:    faultfs.OpClose,
+		After: 2,
+		Err:   faultfs.ErrFaultClose,
+	})
+	dbconn, tx, w, _ := newFaultedContainerWriter(t, maxSize, script)
+
+	first, err := w.AppendPayload(tx, []byte("first payload"))
+	if err != nil {
+		t.Fatalf("append first payload: %v", err)
+	}
+	w.AcknowledgeAppendCommitted()
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit first payload: %v", err)
+	}
+
+	if err := w.FinalizeContainer(); !errors.Is(err, faultfs.ErrFaultClose) {
+		t.Fatalf("FinalizeContainer error = %v, want close failure", err)
+	}
+	var quarantined bool
+	if err := dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = ?`, first.ContainerID).Scan(&quarantined); err != nil {
+		t.Fatalf("query first container quarantine: %v", err)
+	}
+	if !quarantined {
+		t.Fatalf("container %d quarantine = false, want true", first.ContainerID)
+	}
+	if w.hasActive || w.activeHandle != nil {
+		t.Fatalf("writer retained unsafe active container %d", first.ContainerID)
+	}
+
+	secondTx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin second transaction: %v", err)
+	}
+	t.Cleanup(func() { _ = secondTx.Rollback() })
+	second, err := w.AppendPayload(secondTx, []byte("second payload"))
+	if err != nil {
+		t.Fatalf("append second payload: %v", err)
+	}
+	if second.ContainerID == first.ContainerID {
+		t.Fatalf("unsafe quarantined container %d was reused", first.ContainerID)
+	}
+}
+
 func TestContainerFaultFSRemoveFailurePreservesRetireFailure(t *testing.T) {
 	t.Parallel()
 

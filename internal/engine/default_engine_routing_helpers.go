@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -295,14 +294,7 @@ func storeWithOptionalCodec(ctx context.Context, sgctx storage.StorageContext, r
 	if err != nil {
 		return storage.StoreFileResult{}, err
 	}
-	result, err := storage.StoreFileWithStorageContextAndCodecResultContext(ctx, sgctx, req.SourcePath, codec)
-	if sgctx.Writer != nil {
-		finalizeErr := sgctx.Writer.FinalizeContainer()
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			err = errors.Join(err, finalizeErr)
-		}
-	}
-	return result, err
+	return storage.StoreFileWithStorageContextAndCodecResultContext(ctx, sgctx, req.SourcePath, codec)
 }
 
 func validateRemoveRequest(req RemoveRequest) error {

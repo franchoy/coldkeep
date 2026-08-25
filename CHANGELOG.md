@@ -60,6 +60,14 @@ project, do not start here; start with [README.md](README.md).
   Phase 4 verification accounting and the still-open Phase 6 finalization-error
   contract are unchanged. Two of 17 findings are closed, all 4 process gates
   remain open, and Phase 6 is Next.
+- Closed `CK-V1-AUD-007` and its historical root-equivalent `CK-110-1728` in
+  Phase 6 by moving all single-file Store wrappers to one exactly-once
+  finalization boundary. Finalization failures now propagate, preceding Store
+  failures are joined, Engine returns no success result, and Phase 5
+  cancellation/deadline chains remain discoverable. LocalWriter retains sole
+  ownership of physical quarantine, StoreFolder and rollback behavior are
+  unchanged, three of 17 findings are closed, all 4 process gates remain open,
+  and Phase 7 is Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
