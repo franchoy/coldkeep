@@ -155,6 +155,17 @@ project, do not start here; start with [README.md](README.md).
   changes, and repository-local runtime storage remained absent. Findings
   remain `16/17`, process gates remain `4/4`, `CK-V1-AUD-005` remains partial,
   and Phase 18 is the sole Next phase.
+- Completed the documentation-only Phase 18 current-candidate reconciliation.
+  Root README, the v1.13 index, the active changelog entry, and current
+  v1.13.14 release controls now agree that Phases 0–18 are complete, Phase 19
+  is next, findings remain `16/17`, process gates remain `4/4`, and all 21
+  integrated rows plus the compatibility and runtime-stress matrices are
+  complete. `CK-V1-AUD-005` remains lifecycle-partial: candidate truth is
+  reconciled and final publication truth remains pending Phase 26.
+  `v1.13.14` remains active and unreleased with no tag or stable GitHub
+  release; corrective revalidation remains in progress and no product, test,
+  script, workflow, schema, storage, dependency, governance, or benchmark
+  threshold changed.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

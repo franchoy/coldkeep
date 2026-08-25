@@ -68,7 +68,8 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active on `release/v1.13.14`; Phases 0–16 are complete.
+Certification` is active and unreleased on `release/v1.13.14`; Phases 0–18
+are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
 ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
@@ -111,8 +112,14 @@ compression, and 21/21 layout cells passed without product or test changes.
 Phase 17 then proved 17/17 deep rows across cancellation/deadline, race,
 deterministic fault, adversarial, and exact-head native execution: 10/10
 cancellation, 17/17 race, 12/12 fault, 17/17 adversarial, and 15/15 native
-cells passed without product or test changes. Phase 18 is the sole Next phase
-and remains ready for separate authorization. v1.x
+cells passed without product or test changes. Phase 18 then reconciled every
+current candidate-truth surface without changing product, test, script, or
+workflow code. Sixteen of 17 findings remain closed, all 4 process gates and
+all 21 integrated rows remain complete, and the compatibility and runtime-
+stress matrices remain complete. `CK-V1-AUD-005` remains lifecycle-partial:
+its Phase 18 candidate-truth leg is complete and its final publication-truth
+leg remains pending Phase 26. No v1.13.14 tag or stable GitHub release exists.
+Phase 19 is the sole Next phase. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -156,7 +163,10 @@ and [compatibility matrix](v1.13.14-compatibility-proof-matrix.md) are the
 backend, codec, compression, and storage-layout authority, and the
 [Phase 17 runtime-stress proof](v1.13.14-phase17-cancellation-race-fault-adversarial-cross-platform-proof.md)
 and [adversarial runtime matrix](v1.13.14-adversarial-runtime-proof-matrix.md)
-are the cancellation, race, fault, adversarial, and native-platform authority.
+are the cancellation, race, fault, adversarial, and native-platform authority,
+and the
+[Phase 18 current-candidate reconciliation](v1.13.14-phase18-current-documentation-and-release-state-reconciliation.md)
+is the current candidate-truth authority.
 v2 implementation
 has not started.
 The v1.13.13 publication authority is the
