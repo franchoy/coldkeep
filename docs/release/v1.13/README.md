@@ -68,7 +68,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active and unreleased on `release/v1.13.14`; Phases 0–18
+Certification` is active and unreleased on `release/v1.13.14`; Phases 0–19
 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
@@ -118,8 +118,11 @@ workflow code. Sixteen of 17 findings remain closed, all 4 process gates and
 all 21 integrated rows remain complete, and the compatibility and runtime-
 stress matrices remain complete. `CK-V1-AUD-005` remains lifecycle-partial:
 its Phase 18 candidate-truth leg is complete and its final publication-truth
-leg remains pending Phase 26. No v1.13.14 tag or stable GitHub release exists.
-Phase 19 is the sole Next phase. v1.x
+leg remains pending Phase 26. Phase 19 approved candidate-side technical
+corrective completion for entry into the final release lifecycle without
+certifying release readiness, publication, or final closure. No v1.13.14 tag
+or stable GitHub release exists. Phase 20 is the sole Next phase under separate
+authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -166,7 +169,9 @@ and [adversarial runtime matrix](v1.13.14-adversarial-runtime-proof-matrix.md)
 are the cancellation, race, fault, adversarial, and native-platform authority,
 and the
 [Phase 18 current-candidate reconciliation](v1.13.14-phase18-current-documentation-and-release-state-reconciliation.md)
-is the current candidate-truth authority.
+is the current candidate-truth authority, and the
+[Phase 19 formal corrective closure decision](v1.13.14-phase19-formal-final-v1x-corrective-closure-decision.md)
+is the authority for entry into the final release lifecycle.
 v2 implementation
 has not started.
 The v1.13.13 publication authority is the

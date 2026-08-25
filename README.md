@@ -55,10 +55,12 @@ is the current publication authority.
 A post-release audit identified 17 confirmed findings and 4 release-process
 gates. `v1.13.14 — Final v1.x Correctness Remediation and Closure
 Certification` is the active unreleased corrective candidate on
-`release/v1.13.14`. Phases 0–18 are complete and Phase 19 is next. Sixteen of
+`release/v1.13.14`. Phases 0–19 are complete and Phase 20 is next. Sixteen of
 17 findings are closed; `CK-V1-AUD-005` remains lifecycle-partial, with its
 current-candidate truth reconciled in Phase 18 and final publication truth
-pending Phase 26. All 4 release-process gates are complete, all 21 integrated
+pending Phase 26. Phase 19 approved entry into the final release lifecycle;
+it did not certify release readiness or publication. All 4 release-process
+gates are complete, all 21 integrated
 regression rows are reconciled, and the compatibility and runtime-stress
 matrices are complete. No `v1.13.14` tag or stable GitHub release exists.
 v1.x normative scope remains complete, but corrective revalidation remains in
@@ -79,8 +81,8 @@ V1_X_RELEASE_PROCESS_GATES_COMPLETE: 4/4
 V1_X_INTEGRATED_REGRESSION_ROWS: 21/21
 V1_X_COMPATIBILITY_MATRIX: COMPLETE
 V1_X_RUNTIME_STRESS_MATRIX: COMPLETE
-PHASES_0_18: COMPLETE
-PHASE_19: NEXT
+PHASES_0_19: COMPLETE
+PHASE_20: NEXT
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 
