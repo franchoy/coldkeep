@@ -108,7 +108,11 @@ deferred to Phases 18/26 rather than falsely closed. Phase 16 then proved all
 10 assigned rows across the exact applicable SQLite/PostgreSQL, plain/AES-GCM,
 none/zstd, and legacy/packed/mixed matrix: 20/20 backend, 16/16 codec, 16/16
 compression, and 21/21 layout cells passed without product or test changes.
-Phase 17 is the sole Next phase and remains ready for separate authorization. v1.x
+Phase 17 then proved 17/17 deep rows across cancellation/deadline, race,
+deterministic fault, adversarial, and exact-head native execution: 10/10
+cancellation, 17/17 race, 12/12 fault, 17/17 adversarial, and 15/15 native
+cells passed without product or test changes. Phase 18 is the sole Next phase
+and remains ready for separate authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -149,7 +153,10 @@ and [21-row matrix](v1.13.14-integrated-regression-closure-matrix.md) are the
 current finding-by-finding integration authority, and the
 [Phase 16 compatibility proof](v1.13.14-phase16-backend-codec-compression-storage-layout-proof.md)
 and [compatibility matrix](v1.13.14-compatibility-proof-matrix.md) are the
-backend, codec, compression, and storage-layout authority.
+backend, codec, compression, and storage-layout authority, and the
+[Phase 17 runtime-stress proof](v1.13.14-phase17-cancellation-race-fault-adversarial-cross-platform-proof.md)
+and [adversarial runtime matrix](v1.13.14-adversarial-runtime-proof-matrix.md)
+are the cancellation, race, fault, adversarial, and native-platform authority.
 v2 implementation
 has not started.
 The v1.13.13 publication authority is the

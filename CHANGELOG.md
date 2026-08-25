@@ -147,6 +147,14 @@ project, do not start here; start with [README.md](README.md).
   direct and complete; no product or test code changed. Findings remain
   `16/17`, process gates remain `4/4`, `CK-V1-AUD-005` remains partial, and
   Phase 17 is the sole Next phase.
+- Completed Phase 17 cancellation, deadline, race, deterministic-fault,
+  adversarial, and native cross-platform proof. All 17 deep rows and every
+  derived runtime cell pass: 10/10 cancellation, 17/17 race, 12/12 fault,
+  17/17 adversarial, and 15/15 native. The complete owner/process/PostgreSQL
+  race matrix and both G1–G17 codec profiles passed without production or test
+  changes, and repository-local runtime storage remained absent. Findings
+  remain `16/17`, process gates remain `4/4`, `CK-V1-AUD-005` remains partial,
+  and Phase 18 is the sole Next phase.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
