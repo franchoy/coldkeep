@@ -5,14 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/retention"
 	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
 const unknownChunkerBucket = "unknown"
@@ -371,30 +370,6 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	return r, nil
 }
 
-func blockTargetSizeBytesForStats() int64 {
-	const defaultTargetBytes int64 = 1 << 20
-	const defaultTargetMB int64 = 1
-
-	targetMB := int64(0)
-	if _, ok := lookupEnv("COLDKEEP_BLOCK_TARGET_SIZE_MB"); ok {
-		targetMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_BLOCK_TARGET_SIZE_MB", defaultTargetMB)
-	} else {
-		targetMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_PACKED_BLOCK_SIZE_MIB", defaultTargetMB)
-	}
-
-	if targetMB <= 0 {
-		return defaultTargetBytes
-	}
-	if targetMB > (1<<63-1)/(1<<20) {
-		return defaultTargetBytes
-	}
-	return targetMB << 20
-}
-
-var lookupEnv = func(key string) (string, bool) {
-	return os.LookupEnv(key)
-}
-
 // CollectBlockStats gathers packed/legacy block metrics used in stats and
 // benchmarking analysis.
 func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) {
@@ -473,7 +448,7 @@ func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) 
 	// Operators should note any block-size overrides when interpreting this metric.
 	// For decision-grade analysis, prefer reviewing individual block sizes from
 	// the storage_blocks table (plaintext_size, stored_size) directly.
-	targetBlockSizeBytes := blockTargetSizeBytesForStats()
+	targetBlockSizeBytes := blocks.ResolvePackedBlockTarget().Bytes
 	if targetBlockSizeBytes > 0 {
 		out.FillRatio = out.AvgPlaintextSize / float64(targetBlockSizeBytes)
 	}

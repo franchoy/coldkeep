@@ -74,6 +74,15 @@ func New(cfg Config) (*DefaultEngine, error) {
 	}, nil
 }
 
+// effectiveContainerDir resolves Config.ContainerDir's documented default at
+// the point of use without mutating the caller-supplied configuration.
+func (e *DefaultEngine) effectiveContainerDir() string {
+	if e == nil || strings.TrimSpace(e.config.ContainerDir) == "" {
+		return container.ContainersDir
+	}
+	return e.config.ContainerDir
+}
+
 type snapshotIDGenerator func() (string, error)
 
 func secureSnapshotIDGenerator() (string, error) {
@@ -143,11 +152,7 @@ func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (_ Verify
 	if err := validateVerifyRequest(target, req.FileID); err != nil {
 		return VerifyResult{}, TranslateErrorAs("verify", ErrorInvalidArgument, err)
 	}
-	containerDir := e.config.ContainerDir
-	if containerDir == "" {
-		containerDir = container.ContainersDir
-	}
-	execution, err := maintenance.VerifyCommandWithDBAndContainersDirResultContext(ctx, e.config.DB, containerDir, target, req.FileID, level)
+	execution, err := maintenance.VerifyCommandWithDBAndContainersDirResultContext(ctx, e.config.DB, e.effectiveContainerDir(), target, req.FileID, level)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return VerifyResult{}, err

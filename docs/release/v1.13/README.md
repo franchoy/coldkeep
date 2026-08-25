@@ -68,7 +68,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active on `release/v1.13.14`; Phases 0–11 are complete.
+Certification` is active on `release/v1.13.14`; Phases 0–12 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
 ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
@@ -89,7 +89,12 @@ implementing or closing `CK-V1-AUD-003` or `CK-V1-AUD-004`. Phase 11 then
 implemented the frozen bounded scheduler and accurate physical-byte contract,
 including active accounting, surfaced filesystem/overflow errors, and truthful
 partial results, and closed those two findings. `10/17` findings are closed and
-all 4 process gates remain open. Phase 12 is next, is the sole next phase, and
+all 4 process gates remain open at the Phase 11 boundary. Phase 12 then closed
+`CK-V1-AUD-011`, `CK-V1-AUD-013`, and `CK-V1-AUD-014` by applying one private
+Engine ContainerDir default resolver, correcting the Store codec contract text
+to the unchanged runtime precedence, and sharing Store's exact packed-block
+target resolver with silent Stats consumption. `13/17` findings are closed and
+all 4 process gates remain open. Phase 13 is next, is the sole next phase, and
 remains ready for separate authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
@@ -117,7 +122,10 @@ authority, and the
 is the binding `CK-V1-AUD-003` and `CK-V1-AUD-004` execution-design authority,
 and the
 [Phase 11 closure record](v1.13.14-phase11-gc-workers-and-accurate-reclaimed-bytes.md)
-is their implementation and closure authority.
+is their implementation and closure authority, and the
+[Phase 12 closure record](v1.13.14-phase12-configuration-defaults-and-observability-parity.md)
+is the `CK-V1-AUD-011`, `CK-V1-AUD-013`, and `CK-V1-AUD-014` implementation
+and closure authority.
 v2 implementation
 has not started.
 The v1.13.13 publication authority is the

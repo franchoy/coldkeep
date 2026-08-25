@@ -105,6 +105,15 @@ project, do not start here; start with [README.md](README.md).
   zero credit, and checked overflow preserves the exact prefix plus all
   successful count/filename evidence. Ten of 17 findings are closed, all 4
   process gates remain open, and Phase 12 is the sole Next phase.
+- Closed `CK-V1-AUD-011`, `CK-V1-AUD-013`, and `CK-V1-AUD-014` in Phase 12.
+  One private Engine resolver now applies the documented ContainerDir default
+  consistently to Verify, GC, Recover, ordinary Restore, and RestoreStoredPath
+  while preserving explicit values exactly. `StoreRequest.Codec` now documents
+  the unchanged explicit request, `COLDKEEP_CODEC`, then `aes-gcm` precedence.
+  Store and Stats now share one Store-compatible packed-block target resolver;
+  Store warning behavior is unchanged and Stats remains silent. Thirteen of 17
+  findings are closed, all 4 process gates remain open, and Phase 13 is the
+  sole Next phase.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

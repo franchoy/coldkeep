@@ -101,21 +101,18 @@ func (e *DefaultEngine) validateRestoreStoredPathDependencies() error {
 	if e.config.DB == nil {
 		return fmt.Errorf("engine: restore stored path database is required")
 	}
-	if strings.TrimSpace(e.config.ContainerDir) == "" {
-		return fmt.Errorf("engine: restore stored path container directory is required")
-	}
 	return nil
 }
 
 func (e *DefaultEngine) restoreStorageContext() storage.StorageContext {
 	ctx := storage.StorageContext{
 		DB:           e.config.DB,
-		ContainerDir: e.config.ContainerDir,
+		ContainerDir: e.effectiveContainerDir(),
 	}
 	if e.config.StoreContext != nil {
 		ctx = *e.config.StoreContext
 		ctx.DB = e.config.DB
-		ctx.ContainerDir = e.config.ContainerDir
+		ctx.ContainerDir = e.effectiveContainerDir()
 	}
 	return ctx
 }

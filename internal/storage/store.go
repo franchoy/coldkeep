@@ -26,7 +26,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/execution"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
-	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
 type payloadStatefulWriter interface {
@@ -133,37 +132,19 @@ func InstallTestStoreInterleavingHooks(
 	}
 }
 
-const defaultPackedBlockTargetSizeBytes int64 = 1 << 20
-const defaultPackedBlockTargetSizeMB int64 = 1
+const defaultPackedBlockTargetSizeBytes = blocks.DefaultPackedBlockTargetSizeBytes
 
 func packedBlockTargetSizeBytesFromEnv() int64 {
-	blockSizeMB := int64(0)
-	if _, ok := os.LookupEnv("COLDKEEP_BLOCK_TARGET_SIZE_MB"); ok {
-		blockSizeMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_BLOCK_TARGET_SIZE_MB", defaultPackedBlockTargetSizeMB)
-	} else {
-		blockSizeMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_PACKED_BLOCK_SIZE_MIB", defaultPackedBlockTargetSizeMB)
+	resolution := blocks.ResolvePackedBlockTarget()
+	switch resolution.Warning {
+	case blocks.PackedBlockTargetWarningInvalid:
+		log.Printf("invalid packed block target size mb=%d; using default %d bytes", resolution.Megabytes, defaultPackedBlockTargetSizeBytes)
+	case blocks.PackedBlockTargetWarningUnsupported:
+		log.Printf("unsupported packed block target size mb=%d; v1.8 supports override values 1,2,3; using locked default %d bytes", resolution.Megabytes, defaultPackedBlockTargetSizeBytes)
+	case blocks.PackedBlockTargetWarningOverflow:
+		log.Printf("packed block target size mb=%d overflows int64 bytes; using default %d bytes", resolution.Megabytes, defaultPackedBlockTargetSizeBytes)
 	}
-
-	if blockSizeMB <= 0 {
-		log.Printf("invalid packed block target size mb=%d; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
-		return defaultPackedBlockTargetSizeBytes
-	}
-
-	// v1.8 final default is locked to 1 MiB (1 << 20 bytes).
-	// The COLDKEEP_BLOCK_TARGET_SIZE_MB override is retained for operator tuning and testing.
-	// Only validated sizes (1, 2, 3 MiB from Phase 8 benchmarking) are accepted for override.
-	// Production deployments should use the default; override is for evaluating alternative sizes on specific workloads.
-	if blockSizeMB != 1 && blockSizeMB != 2 && blockSizeMB != 3 {
-		log.Printf("unsupported packed block target size mb=%d; v1.8 supports override values 1,2,3; using locked default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
-		return defaultPackedBlockTargetSizeBytes
-	}
-
-	if blockSizeMB > (1<<63-1)/(1<<20) {
-		log.Printf("packed block target size mb=%d overflows int64 bytes; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
-		return defaultPackedBlockTargetSizeBytes
-	}
-
-	return blockSizeMB << 20
+	return resolution.Bytes
 }
 
 // preparedFile is the internal output of the CPU-side preparation phase.

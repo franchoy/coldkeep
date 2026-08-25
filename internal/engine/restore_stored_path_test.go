@@ -219,7 +219,7 @@ func TestRestoreStoredPathRequiresDatabaseDependency(t *testing.T) {
 	assertRestoreStoredPathValidationError(t, result, err, "engine: restore stored path database is required")
 }
 
-func TestRestoreStoredPathRequiresContainerDirectoryDependency(t *testing.T) {
+func TestRestoreStoredPathUsesDefaultContainerDirectoryDependency(t *testing.T) {
 	db := openSnapshotTestDB(t)
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
@@ -229,7 +229,15 @@ func TestRestoreStoredPathRequiresContainerDirectoryDependency(t *testing.T) {
 	result, restoreErr := eng.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
 		StoredPath: "/tmp/file.txt",
 	})
-	assertRestoreStoredPathValidationError(t, result, restoreErr, "engine: restore stored path container directory is required")
+	if restoreErr == nil {
+		t.Fatal("expected missing stored path error")
+	}
+	if strings.Contains(restoreErr.Error(), "container directory is required") {
+		t.Fatalf("RestoreStoredPath retained contradictory explicit-directory dependency: %v", restoreErr)
+	}
+	if result != (engine.RestoreStoredPathResult{}) {
+		t.Fatalf("expected zero result for missing stored path, got %+v", result)
+	}
 }
 
 func TestRestoreStoredPathOriginalMode(t *testing.T) {
@@ -553,6 +561,41 @@ func TestRestoreStoredPathPostgres(t *testing.T) {
 
 	after := snapshotRestoreCatalogState(t, fixture.db, fixture.stored.FileID)
 	assertRestoreCatalogStateEqual(t, before, after)
+}
+
+func TestRestoreStoredPathDefaultContainerDirPostgres(t *testing.T) {
+	testgate.RequireDB(t)
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+
+	db := openTempPostgresEngineDatabase(t, "coldkeep_phase12_restore_default")
+	if err := dbpkg.EnsurePostgresSchema(db); err != nil {
+		t.Fatalf("EnsurePostgresSchema: %v", err)
+	}
+
+	originalDefault := container.ContainersDir
+	defaultRoot := t.TempDir()
+	container.ContainersDir = defaultRoot
+	t.Cleanup(func() { container.ContainersDir = originalDefault })
+
+	payload := []byte("restore-stored-path-postgres-default")
+	fixture := newStoredPathRestoreFixtureFromDB(t, db, payload, defaultRoot)
+	eng, err := engine.New(engine.Config{DB: db, StoreContext: fixture.sgctx})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	destination := filepath.Join(t.TempDir(), "postgres-default.txt")
+	result, err := eng.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+		StoredPath:      fixture.stored.Path,
+		DestinationMode: engine.RestoreDestinationOverride,
+		DestinationPath: destination,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("RestoreStoredPath postgres default: %v", err)
+	}
+	assertRestoreStoredPathResult(t, result, fixture.stored.Path, fixture.stored.FileID, engine.RestoreDestinationOverride, destination, fixture.stored.FileHash)
+	assertRestoredBytes(t, destination, payload)
 }
 
 func newStoredPathRestoreFixture(t *testing.T, content string) storedPathRestoreFixture {

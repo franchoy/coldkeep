@@ -11,7 +11,6 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/execution"
 	internalgc "github.com/franchoy/coldkeep/internal/gc"
 	"github.com/franchoy/coldkeep/internal/invariants"
@@ -138,11 +137,7 @@ func (e *DefaultEngine) GarbageCollect(ctx context.Context, req GarbageCollectRe
 	if effectiveWorkers < 2 {
 		effectiveWorkers = 1
 	}
-	containerDir := e.config.ContainerDir
-	if containerDir == "" {
-		containerDir = container.ContainersDir
-	}
-	gcRes, err := maintenance.RunGCWithDBWorkers(ctx, e.config.DB, req.DryRun, containerDir, effectiveWorkers)
+	gcRes, err := maintenance.RunGCWithDBWorkers(ctx, e.config.DB, req.DryRun, e.effectiveContainerDir(), effectiveWorkers)
 	result := GarbageCollectResult{
 		DryRun:                           gcRes.DryRun,
 		AffectedContainers:               gcRes.AffectedContainers,
@@ -459,7 +454,7 @@ func (e *DefaultEngine) dryRunRestoreFileID(ctx context.Context, req RestoreRequ
 }
 
 func (e *DefaultEngine) liveRestoreFileID(ctx context.Context, req RestoreRequest, fileID int64) RestoreItemResult {
-	sgctx := storage.StorageContext{DB: e.config.DB, ContainerDir: e.config.ContainerDir}
+	sgctx := storage.StorageContext{DB: e.config.DB, ContainerDir: e.effectiveContainerDir()}
 	out, originalName, err := restoreByIDOutputPath(ctx, e.config.DB, fileID, req.DestinationRoot)
 	if err != nil {
 		return failedRestoreItem(fileID, err.Error())
