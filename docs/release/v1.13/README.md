@@ -68,7 +68,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active on `release/v1.13.14`; Phases 0–12 are complete.
+Certification` is active on `release/v1.13.14`; Phases 0–13 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
 ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
@@ -94,8 +94,13 @@ all 4 process gates remain open at the Phase 11 boundary. Phase 12 then closed
 Engine ContainerDir default resolver, correcting the Store codec contract text
 to the unchanged runtime precedence, and sharing Store's exact packed-block
 target resolver with silent Stats consumption. `13/17` findings are closed and
-all 4 process gates remain open. Phase 13 is next, is the sole next phase, and
-remains ready for separate authorization. v1.x
+all 4 process gates remain open at the Phase 12 boundary. Phase 13 then closed
+`CK-V1-AUD-015`, `CK-V1-AUD-016`, and `CK-V1-AUD-017` by aligning the root
+README and top-level help with the existing search syntax, five-code exit and
+JSON automation contract, and init compression behavior. `16/17` findings are
+closed and all 4 process gates remain open. `CK-V1-AUD-005` remains partial.
+Phase 14 is next, is the sole next phase, and remains ready for separate
+authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -125,6 +130,9 @@ and the
 is their implementation and closure authority, and the
 [Phase 12 closure record](v1.13.14-phase12-configuration-defaults-and-observability-parity.md)
 is the `CK-V1-AUD-011`, `CK-V1-AUD-013`, and `CK-V1-AUD-014` implementation
+and closure authority, and the
+[Phase 13 closure record](v1.13.14-phase13-cli-help-and-automation-contracts.md)
+is the `CK-V1-AUD-015`, `CK-V1-AUD-016`, and `CK-V1-AUD-017` implementation
 and closure authority.
 v2 implementation
 has not started.

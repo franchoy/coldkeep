@@ -6457,7 +6457,7 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
-		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
+		{"  init [--compression <none|zstd>] [--compression-level <1-9>]", "Initialize Coldkeep with a new aes-gcm encryption key and optional compression for new writes"},
 		{"  config get default-chunker [--output <text|json>]", "Get repository default chunker for new writes"},
 		{"  config set default-chunker <value> [--output <text|json>]", "Set repository default chunker for new writes. Affects only new stored data. Existing data is not modified."},
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
@@ -6518,6 +6518,13 @@ func printHelp() {
 	fmt.Println("    Store codecs:")
 	fmt.Println("      plain")
 	fmt.Println("      aes-gcm")
+	fmt.Println("    Init compression:")
+	fmt.Println("      coldkeep init --compression none")
+	fmt.Println("      coldkeep init --compression zstd --compression-level 1")
+	fmt.Println("      Compression is block-level and happens before encryption.")
+	fmt.Println("      none stores new blocks without compression; zstd uses configured compression for new blocks.")
+	fmt.Println("      Compression settings affect new writes only; existing blocks are not modified.")
+	fmt.Println("      --compression-level is valid only with zstd and must be in the range 1-9.")
 	fmt.Println()
 	fmt.Println("Environment Variables:")
 	fmt.Println("  DB_HOST")
@@ -6561,10 +6568,19 @@ func printHelp() {
 	fmt.Println("    ok: no item failed")
 	fmt.Println("    partial_failure: at least one item failed and at least one item succeeded or was planned")
 	fmt.Println("    error: all executable items failed")
-	fmt.Println("  Batch process exit contract (restore/remove):")
-	fmt.Println("    exit 0: no item failed")
-	fmt.Println("    exit 1: any item failed (partial_failure or error)")
-	fmt.Println("    exit 2: usage/validation error before execution")
+	fmt.Println("  Process exit contract:")
+	fmt.Println("    exit 0: success")
+	fmt.Println("    exit 1: general/execution error")
+	fmt.Println("    exit 2: usage/pre-execution validation error")
+	fmt.Println("    exit 3: verification/invariant-integrity error")
+	fmt.Println("    exit 4: recovery error")
+	fmt.Println("    Batch failure precedence: invariant > execution > validation")
+	fmt.Println("  JSON error field roles:")
+	fmt.Println("    exit_code: numeric process exit status")
+	fmt.Println("    error_class: process-level label")
+	fmt.Println("    error.code: coarse error family")
+	fmt.Println("    invariant_code: stable invariant identifier")
+	fmt.Println("    recommended_action: operator remediation guidance")
 	fmt.Println("  Simulated mode is not proof of physical durability")
 	fmt.Println()
 	fmt.Println("Operator quick check:")

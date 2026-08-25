@@ -411,10 +411,19 @@ coldkeep remove 12
 coldkeep gc
 coldkeep stats
 coldkeep list
-coldkeep search report
+coldkeep search --name report
 coldkeep verify system --standard
 coldkeep doctor
 ```
+
+Initialize with explicit compression settings when needed:
+
+```bash
+coldkeep init --compression none
+coldkeep init --compression zstd --compression-level 1
+```
+
+Compression is block-level and happens before encryption. `none` stores new blocks without compression; `zstd` uses configured compression behavior for new blocks. Compression settings affect new writes only; existing blocks are not modified. `--compression-level` is valid only with `zstd` and must be in the range 1-9.
 
 Simulation (no physical writes):
 
@@ -527,10 +536,21 @@ Semantics (summary):
   - overall payload status: ok, partial_failure, error
   - per-item result status: success, failed, skipped, planned
 - JSON execution mode is explicit: `continue_on_error` (default) or `fail_fast`
-- process exit is automation-friendly:
-  - 0 when no item fails
-  - 1 when one or more items fail
-  - 2 for pre-execution validation/usage failures (including empty effective target sets after parsing input)
+- process exit is automation-friendly and follows the public process exit contract:
+  - exit 0: success
+  - exit 1: general/execution error
+  - exit 2: usage/pre-execution validation error
+  - exit 3: verification/invariant-integrity error
+  - exit 4: recovery error
+- Batch failure precedence: invariant > execution > validation.
+
+JSON error fields serve distinct automation roles:
+
+- `exit_code`: numeric process exit status
+- `error_class`: process-level label
+- `error.code`: coarse error family
+- `invariant_code`: stable invariant identifier
+- `recommended_action`: operator remediation guidance
 
 Example JSON payload:
 

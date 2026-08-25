@@ -114,6 +114,15 @@ project, do not start here; start with [README.md](README.md).
   Store warning behavior is unchanged and Stats remains silent. Thirteen of 17
   findings are closed, all 4 process gates remain open, and Phase 13 is the
   sole Next phase.
+- Closed `CK-V1-AUD-015`, `CK-V1-AUD-016`, and `CK-V1-AUD-017` in Phase 13.
+  The root README now uses the accepted `search --name` form; README and top
+  help expose the existing five-code exit contract, invariant-over-execution-
+  over-validation batch precedence, and distinct JSON error-field roles; and
+  init help documents the existing none/zstd compression forms, block-level
+  pre-encryption ordering, new-writes-only scope, and zstd level range. Runtime
+  parsing, classification, JSON, search, init, and compression behavior are
+  unchanged. Sixteen of 17 findings are closed, all 4 process gates remain
+  open, `CK-V1-AUD-005` remains partial, and Phase 14 is the sole Next phase.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
