@@ -468,6 +468,51 @@ func TestCatalogContractSnapshotGraphAcrossBackends(t *testing.T) {
 	})
 }
 
+func TestCatalogSnapshotFileCountAcrossBackends(t *testing.T) {
+	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {
+		seedCatalogFixture(t, backend.DB)
+		svc := catalog.NewServiceFromSQL(backend.DB)
+		want := map[string]int{
+			"snap-full": 1, "snap-tie-a": 1, "snap-tie-b": 0,
+			"snap-child": 1, "snap-null-label": 0,
+		}
+
+		for id, wantCount := range want {
+			ref, err := svc.FindSnapshot(context.Background(), id)
+			if err != nil || ref == nil || ref.FileCount != wantCount {
+				t.Errorf("FindSnapshot(%q) FileCount: got (%+v, %v), want %d", id, ref, err, wantCount)
+			}
+		}
+		refs, err := svc.ListSnapshots(context.Background(), catalog.SnapshotFilter{})
+		if err != nil {
+			t.Fatalf("ListSnapshots: %v", err)
+		}
+		for _, ref := range refs {
+			if ref.FileCount != want[ref.ID] {
+				t.Errorf("ListSnapshots %q FileCount = %d, want %d", ref.ID, ref.FileCount, want[ref.ID])
+			}
+		}
+		limited, err := svc.ListSnapshots(context.Background(), catalog.SnapshotFilter{Limit: 2})
+		if err != nil || len(limited) != 2 {
+			t.Fatalf("ListSnapshots limited: got (%+v, %v)", limited, err)
+		}
+		for _, ref := range limited {
+			if ref.FileCount != want[ref.ID] {
+				t.Errorf("limited ListSnapshots %q FileCount = %d, want %d", ref.ID, ref.FileCount, want[ref.ID])
+			}
+		}
+		graph, err := svc.LoadSnapshotGraph(context.Background())
+		if err != nil {
+			t.Fatalf("LoadSnapshotGraph: %v", err)
+		}
+		for _, node := range graph.Nodes {
+			if node.Snapshot.FileCount != want[node.Snapshot.ID] {
+				t.Errorf("graph %q FileCount = %d, want %d", node.Snapshot.ID, node.Snapshot.FileCount, want[node.Snapshot.ID])
+			}
+		}
+	})
+}
+
 // CAT-007 proves deterministic current/snapshot GC roots on both backends.
 func TestCatalogContractGCPlansAcrossBackends(t *testing.T) {
 	forEachCatalogBackend(t, func(t *testing.T, backend backendtest.Backend) {

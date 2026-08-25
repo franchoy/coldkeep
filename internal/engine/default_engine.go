@@ -257,6 +257,7 @@ func (e *DefaultEngine) SnapshotList(ctx context.Context, req SnapshotListReques
 			Label:     ref.Label,
 			ParentID:  ref.ParentID,
 			CreatedAt: ref.CreatedAt,
+			FileCount: ref.FileCount,
 		}
 	}
 	var resultGraph *SnapshotGraph
@@ -301,6 +302,7 @@ func projectSelectedSnapshotGraph(graph *catalog.SnapshotGraph, selected []catal
 				Label:     node.Snapshot.Label,
 				ParentID:  node.Snapshot.ParentID,
 				CreatedAt: node.Snapshot.CreatedAt,
+				FileCount: node.Snapshot.FileCount,
 			},
 			ParentState: SnapshotParentState(node.ParentState),
 			ChildIDs:    children,
@@ -345,6 +347,7 @@ func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowReques
 		Label:     ref.Label,
 		ParentID:  ref.ParentID,
 		CreatedAt: ref.CreatedAt,
+		FileCount: ref.FileCount,
 	}
 	snapshotQ, err := snapshotQueryOrNil(req.Query)
 	if err != nil {
@@ -409,6 +412,9 @@ func (e *DefaultEngine) SnapshotDiff(ctx context.Context, req SnapshotDiffReques
 	}
 	if req.Filter != SnapshotDiffAll && req.Filter != SnapshotDiffAdded && req.Filter != SnapshotDiffRemoved && req.Filter != SnapshotDiffModified {
 		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, fmt.Errorf("unknown snapshot diff filter %q", req.Filter))
+	}
+	if req.Query.Limit < 0 {
+		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, fmt.Errorf("snapshot diff limit cannot be negative"))
 	}
 	query, err := snapshotQueryOrNil(req.Query)
 	if err != nil {

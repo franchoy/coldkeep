@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -21,7 +22,9 @@ import (
 )
 
 func isSnapshotDiffSummaryFastPath(req SnapshotDiffRequest) bool {
-	return req.Summary && req.Filter == "" && isEmptySnapshotQuery(req.Query)
+	query := req.Query
+	query.Limit = 0
+	return req.Summary && req.Filter == "" && isEmptySnapshotQuery(query)
 }
 
 func (e *DefaultEngine) snapshotDiffSummaryFastPath(ctx context.Context, req SnapshotDiffRequest) (SnapshotDiffResult, error) {
@@ -53,6 +56,14 @@ func (e *DefaultEngine) snapshotDiffDetailed(
 	if err != nil {
 		return SnapshotDiffResult{}, err
 	}
+	total := len(raw.Entries)
+	if query != nil {
+		rawSummary, err := snapshot.DiffSnapshotsSummarySQL(ctx, e.config.DB, req.BaseID, req.TargetID)
+		if err != nil {
+			return SnapshotDiffResult{}, err
+		}
+		total = int(rawSummary.Added + rawSummary.Removed + rawSummary.Modified)
+	}
 	entries := make([]SnapshotDiffEntry, 0, len(raw.Entries))
 	summary := SnapshotDiffSummary{}
 	for _, entry := range raw.Entries {
@@ -66,7 +77,7 @@ func (e *DefaultEngine) snapshotDiffDetailed(
 		})
 		addSnapshotDiffSummaryEntry(&summary, diffType)
 	}
-	return buildSnapshotDiffResult(req, entries, summary, len(raw.Entries)), nil
+	return buildSnapshotDiffResult(req, entries, summary, total), nil
 }
 
 func snapshotQueryOrNil(q SnapshotQuery) (*snapshot.SnapshotQuery, error) {
@@ -97,16 +108,23 @@ func addSnapshotDiffSummaryEntry(summary *SnapshotDiffSummary, diffType string) 
 }
 
 func buildSnapshotDiffResult(req SnapshotDiffRequest, entries []SnapshotDiffEntry, summary SnapshotDiffSummary, total int) SnapshotDiffResult {
+	matched := append([]SnapshotDiffEntry(nil), entries...)
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].StoredPath < matched[j].StoredPath
+	})
 	res := SnapshotDiffResult{
 		BaseID:            req.BaseID,
 		TargetID:          req.TargetID,
 		SummaryMode:       req.Summary,
 		Summary:           summary,
-		MatchedEntryCount: len(entries),
+		MatchedEntryCount: len(matched),
 		TotalEntryCount:   total,
 	}
 	if !req.Summary {
-		res.Entries = entries
+		if req.Query.Limit > 0 && req.Query.Limit < len(matched) {
+			matched = matched[:req.Query.Limit]
+		}
+		res.Entries = matched
 	}
 	return res
 }

@@ -15,14 +15,15 @@ func (s *Service) FindSnapshot(ctx context.Context, id string) (ref *SnapshotRef
 	}()
 
 	const q = `
-SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
-FROM snapshot
-WHERE id = $1`
+SELECT s.id, s.type, COALESCE(s.label, ''), COALESCE(s.parent_id, ''), s.created_at,
+       (SELECT COUNT(*) FROM snapshot_file sf WHERE sf.snapshot_id = s.id) AS file_count
+FROM snapshot s
+WHERE s.id = $1`
 
 	row := s.db.QueryRowContext(ctx, q, id)
 	ref = &SnapshotRef{}
 	var createdAt string
-	err = row.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt)
+	err = row.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt, &ref.FileCount)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -82,13 +83,14 @@ func labelPattern(labelSubstring string) string {
 func (s *Service) listSnapshotsWithoutLimit(ctx context.Context, args snapshotListQueryArgs) ([]SnapshotRef, error) {
 	values := snapshotListQueryValues(args)
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
-FROM snapshot
-WHERE ($1 = '' OR type = $1)
-  AND ($2 = '' OR LOWER(label) LIKE LOWER($2))
-  AND ($3 = 0 OR created_at >= $4)
-  AND ($5 = 0 OR created_at <= $6)
-ORDER BY created_at DESC, id DESC`, values...)
+SELECT s.id, s.type, COALESCE(s.label, ''), COALESCE(s.parent_id, ''), s.created_at,
+       (SELECT COUNT(*) FROM snapshot_file sf WHERE sf.snapshot_id = s.id) AS file_count
+FROM snapshot s
+WHERE ($1 = '' OR s.type = $1)
+  AND ($2 = '' OR LOWER(s.label) LIKE LOWER($2))
+  AND ($3 = 0 OR s.created_at >= $4)
+  AND ($5 = 0 OR s.created_at <= $6)
+ORDER BY s.created_at DESC, s.id DESC`, values...)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list snapshots: %w", err)
 	}
@@ -99,13 +101,14 @@ ORDER BY created_at DESC, id DESC`, values...)
 func (s *Service) listSnapshotsWithLimit(ctx context.Context, args snapshotListQueryArgs, limit int) ([]SnapshotRef, error) {
 	values := append(snapshotListQueryValues(args), limit)
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
-FROM snapshot
-WHERE ($1 = '' OR type = $1)
-  AND ($2 = '' OR LOWER(label) LIKE LOWER($2))
-  AND ($3 = 0 OR created_at >= $4)
-  AND ($5 = 0 OR created_at <= $6)
-ORDER BY created_at DESC, id DESC
+SELECT s.id, s.type, COALESCE(s.label, ''), COALESCE(s.parent_id, ''), s.created_at,
+       (SELECT COUNT(*) FROM snapshot_file sf WHERE sf.snapshot_id = s.id) AS file_count
+FROM snapshot s
+WHERE ($1 = '' OR s.type = $1)
+  AND ($2 = '' OR LOWER(s.label) LIKE LOWER($2))
+  AND ($3 = 0 OR s.created_at >= $4)
+  AND ($5 = 0 OR s.created_at <= $6)
+ORDER BY s.created_at DESC, s.id DESC
 LIMIT $7`, values...)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list snapshots: %w", err)
@@ -143,7 +146,7 @@ func scanSnapshotRows(rows *sql.Rows) ([]SnapshotRef, error) {
 func scanSnapshotRow(rows *sql.Rows) (SnapshotRef, error) {
 	var ref SnapshotRef
 	var createdAt string
-	if err := rows.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt); err != nil {
+	if err := rows.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt, &ref.FileCount); err != nil {
 		return SnapshotRef{}, fmt.Errorf("catalog: scan snapshot row: %w", err)
 	}
 	ref.CreatedAt = parseTimestamp(createdAt)

@@ -208,10 +208,10 @@ func aggregateFaultRow(query string) ([]string, []driver.Value) {
 		return []string{"path", "logical_file_id", "mode", "mtime", "is_metadata_complete"}, []driver.Value{"path", int64(1), int64(0), time.Now().UTC(), true}
 	case strings.Contains(query, "FROM logical_file"):
 		return []string{"id", "original_name", "total_size", "file_hash", "ref_count", "status"}, []driver.Value{int64(1), "file", int64(1), "hash", int64(1), "complete"}
+	case strings.Contains(query, "FROM snapshot s"):
+		return []string{"id", "type", "label", "parent_id", "created_at", "file_count"}, []driver.Value{"snap", "full", "label", "", time.Now().UTC().Format(time.RFC3339Nano), int64(1)}
 	case strings.Contains(query, "FROM snapshot_file"):
 		return []string{"logical_file_id"}, []driver.Value{int64(1)}
-	case strings.Contains(query, "FROM snapshot"):
-		return []string{"id", "type", "label", "parent_id", "created_at"}, []driver.Value{"snap", "full", "label", "", time.Now().UTC().Format(time.RFC3339Nano)}
 	default:
 		return []string{"unknown"}, []driver.Value{int64(1)}
 	}

@@ -83,6 +83,13 @@ project, do not start here; start with [README.md](README.md).
   accounting, public shapes, CLI/JSON contracts, schema, and storage formats
   remain unchanged. Six of 17 findings are closed, all 4 process gates remain
   open, and Phase 9 is Next.
+- Closed `CK-V1-AUD-010` and `CK-V1-AUD-012` in Phase 9. SnapshotDiff now
+  rejects negative Limit, preserves raw Total and pre-limit Matched/Summary
+  populations, sorts by stored path, and caps only detailed Entries. Existing
+  Catalog find/list/graph queries now carry persisted snapshot membership into
+  list/show/graph/tree `SnapshotMeta.FileCount` without N+1 queries, schema,
+  public-shape, JSON, or CLI changes. Eight of 17 findings are closed, all 4
+  process gates remain open, and Phase 10 is Next.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 
