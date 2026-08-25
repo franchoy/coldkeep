@@ -277,6 +277,10 @@ go test -race -count=1 ./internal/chunk/benchmark -run 'TestFastCDCBetterThanV1_
 
 go build ./...
 scripts/audit_ci_enforcement.sh --local-only
+go test -count=1 ./scripts -run '^(TestSnapshotEvidenceNameValidatorUsesTrackedSourceOnly|TestBenchmarkEvidenceLifecycleLeavesCleanWorktree|TestReleaseLinearityValidatorAllowsInheritedAndRejectsLocalMerges)$'
+scripts/validate_snapshot_evidence_names.sh
+scripts/release_benchmark_evidence.sh inventory --repo-root "$PWD"
+scripts/validate_release_linearity.sh --repo-root "$PWD"
 
 # The fixture suite is valid from any branch. The real repository check is
 # release-lifecycle aware: run it from the active release branch, a main
@@ -399,79 +403,32 @@ export COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15
 export COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900
 
 candidate_sha=$(git rev-parse HEAD)
-go_version=$(go version)
-postgres_version=$(psql --version)
-postgres_digest=sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+scripts/run_release_benchmark_evidence.sh \
+  --repo-root "$PWD" \
+  --candidate-sha "$candidate_sha" \
+  --binary "$PWD/coldkeep"
 
-while read -r profile compression workers dataset; do
-  output_dir="benchmark-integrity-evidence/${profile}/integrity"
-  test ! -e "$output_dir"
-  COLDKEEP_COMPRESSION="$compression" \
-    python3 scripts/benchmark_gate.py integrity \
-      --binary ./coldkeep \
-      --output-dir "$output_dir" \
-      --compression "$compression" \
-      --workers "$workers" \
-      --dataset "$dataset" \
-      --command-timeout-seconds 600 \
-      --source-commit "$candidate_sha" \
-      --go-version "$go_version" \
-      --postgres-version "$postgres_version" \
-      --database-image-digest "$postgres_digest"
-  (cd "$output_dir" && sha256sum --check checksums.sha256)
-done <<'EOF'
-none-w1 none 1 ci-paired-w1-v2
-none-w4 none 4 ci-paired-w4-v2
-zstd-w1 zstd 1 ci-paired-w1-v2
-zstd-w4 zstd 4 ci-paired-w4-v2
-EOF
-
-while read -r profile compression workers mode baseline; do
-  evidence_dir="benchmark-timing-evidence/${profile}"
-  mkdir -p "$evidence_dir"
-  COLDKEEP_COMPRESSION="$compression" \
-    ./coldkeep benchmark run \
-      --dataset small \
-      --workers "$workers" \
-      --repeat 1 \
-      --output json \
-      | tee "${evidence_dir}/benchmark.json"
-
-  set +e
-  python3 scripts/validate_regression_thresholds.py check \
-    "${evidence_dir}/benchmark.json" \
-    --baseline "benchmarks/v1.9/baselines/${baseline}" \
-    --mode "$mode" \
-    --policy hosted-advisory \
-    --json-report "${evidence_dir}/timing-advisory.json"
-  comparator_exit=$?
-  set -e
-
-  test -s "${evidence_dir}/timing-advisory.json"
-  python3 scripts/validate_regression_thresholds.py verify-advisory-exit \
-    --report "${evidence_dir}/timing-advisory.json" \
-    --observed-exit-code "$comparator_exit"
-  case "$comparator_exit" in
-    0|10|11|12) ;;
-    *) echo "invalid timing-advisory exit: $comparator_exit" >&2; exit 2 ;;
-  esac
-  (
-    cd "$evidence_dir"
-    actual_inventory=$(find . -maxdepth 1 -type f ! -name checksums.sha256 -printf '%f\n' | sort)
-    test "$actual_inventory" = $'benchmark.json\ntiming-advisory.json'
-    sha256sum benchmark.json timing-advisory.json > checksums.sha256
-    sha256sum --check checksums.sha256
-  )
-done <<'EOF'
-none-w1 none 1 uncompressed benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json
-none-w4 none 4 uncompressed benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json
-zstd-w1 zstd 1 compressed benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json
-zstd-w4 zstd 4 compressed benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json
-EOF
+scripts/release_benchmark_evidence.sh validate \
+  --bundle-root "$PWD/.release-evidence/v1.13.14/$candidate_sha" \
+  --candidate-sha "$candidate_sha"
+scripts/release_benchmark_evidence.sh inventory --repo-root "$PWD"
+git status --ignored --short
+git check-ignore -v .release-evidence
+find .release-evidence/v1.13.14 -maxdepth 2 -printf '%P\n' | sort
 
 unset COLDKEEP_CODEC COLDKEEP_COMPRESSION COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS \
       COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS
 ```
+
+The runner creates all expensive profile output below one external `mktemp -d`
+root, installs cleanup traps for success, failure, and signals, validates the
+four per-profile checksum sets and deterministic top manifest, copies the
+complete bundle into a unique same-filesystem staging directory, revalidates
+it, and atomically renames it to
+`.release-evidence/v1.13.14/<candidate-SHA>/`. A valid existing exact-SHA
+bundle is reused; an incomplete or corrupt one is a hard failure and is never
+overwritten. The explicit ignored inventory above is mandatory because
+ordinary `git status` does not expose retained evidence.
 
 Run the current `legacy-compatibility` job locally. This mirrors the CI job's
 plain-codec PostgreSQL assumptions:
@@ -1182,36 +1139,10 @@ VALIDATION_MATRIX:
 - [ ] Evidence names match actual tests
 - [ ] No stale "covered" claims remain
 
-Quick evidence-name consistency check (G14-G17):
+Quick tracked-source evidence-name consistency check (G14-G17):
 
 ```bash
-for t in \
-  TestListRetainedLogicalFileIDs \
-  TestIsLogicalFileReferencedBySnapshot \
-  TestComputeReachabilitySummary \
-  TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot \
-  TestRunGCDoesNotDeleteSnapshotRetainedContainer \
-  TestRunGCDryRunDoesNotCountSnapshotRetainedContainerAsReclaimable \
-  TestAdversarialG14SnapshotRetainedGCGuardUnderChurn \
-  TestDeleteSnapshotRemovesSnapshotRowsOnly \
-  TestAdversarialG17RetentionRootTransitionChurn \
-  TestRunStatsResultIncludesSnapshotRetentionVisibility \
-  TestRunStatsCommandJSONIncludesSnapshotRetention \
-  TestAdversarialG16SnapshotQueryContractChaos \
-  TestVerifySystemStandardPassesWithConsistentSnapshotReachability \
-  TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference \
-  TestVerifySystemStandardDetectsSnapshotInvalidLifecycleState \
-  TestVerifySystemStandardDetectsSnapshotRetainedMissingChunkGraph \
-  TestFormatDoctorTextReportGoldenHealthy \
-  TestFormatDoctorTextReportGoldenDegraded \
-  TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC
-do
-  grep -R --line-number --include='*.go' "func ${t}(" . >/dev/null || {
-    echo "missing evidence: ${t}";
-    exit 1;
-  }
-done
-echo "G14-G17 evidence names: OK"
+scripts/validate_snapshot_evidence_names.sh --repo-root "$PWD"
 ```
 
 ## 16) Snapshot CLI/contract checklist
@@ -1292,6 +1223,9 @@ Confirm:
 
 ## 18) Final global sign-off
 
+- [ ] Tracked snapshot evidence-name validator passed without filesystem-recursive scanning
+- [ ] Benchmark evidence manifest/checksum, atomic-promotion, signal-cleanup, and ignored-inventory gates passed
+- [ ] Branch-relative release-linearity validator passed with no release-local merges
 - [ ] Doctor checks passed
 - [ ] Validation matrix audit passed
 - [ ] Bootstrap on/off behavior verified

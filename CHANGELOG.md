@@ -123,6 +123,17 @@ project, do not start here; start with [README.md](README.md).
   parsing, classification, JSON, search, init, and compression behavior are
   unchanged. Sixteen of 17 findings are closed, all 4 process gates remain
   open, `CK-V1-AUD-005` remains partial, and Phase 14 is the sole Next phase.
+- Completed all four release-process gates in Phase 14. CLI schema-gate
+  subprocesses now receive unique absolute TempDir storage roots; snapshot
+  evidence names are validated only through tracked Git Go source; benchmark
+  evidence uses external transient generation, exhaustive checksummed
+  manifests, same-filesystem atomic exact-SHA promotion, signal cleanup, and
+  explicit ignored inventory; and release branches now have a repository-side
+  merge-base-relative linearity validator alongside the unchanged Phase 0
+  non-fast-forward ruleset. Product runtime, workflow topology, governance,
+  benchmark thresholds, schema, storage formats, and dependencies are
+  unchanged. Findings remain `16/17`, `CK-V1-AUD-005` remains partial, process
+  gates are `4/4`, and Phase 15 is the sole Next phase.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

@@ -15,6 +15,7 @@ Remote audit prerequisites:
 
 Expected GitHub-side policy names:
   - Protect mainline branches
+  - Protect release branches
   - Protect release tags
 EOF
 }
@@ -81,6 +82,10 @@ PAIRED_THRESHOLD_POLICY_FILE="${COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE:-$REPO_ROO
 NATIVE_UNIX_TEST_FILE="${COLDKEEP_NATIVE_UNIX_TEST_FILE:-$REPO_ROOT/internal/coordination/native_lock_unix_test.go}"
 NATIVE_WINDOWS_TEST_FILE="${COLDKEEP_NATIVE_WINDOWS_TEST_FILE:-$REPO_ROOT/internal/coordination/native_lock_windows_test.go}"
 COORDINATOR_NATIVE_TEST_FILE="${COLDKEEP_COORDINATOR_NATIVE_TEST_FILE:-$REPO_ROOT/internal/coordination/coordinator_native_test.go}"
+SNAPSHOT_EVIDENCE_VALIDATOR_FILE="${COLDKEEP_SNAPSHOT_EVIDENCE_VALIDATOR_FILE:-$REPO_ROOT/scripts/validate_snapshot_evidence_names.sh}"
+RELEASE_LINEARITY_VALIDATOR_FILE="${COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE:-$REPO_ROOT/scripts/validate_release_linearity.sh}"
+RELEASE_BENCHMARK_EVIDENCE_FILE="${COLDKEEP_RELEASE_BENCHMARK_EVIDENCE_FILE:-$REPO_ROOT/scripts/release_benchmark_evidence.sh}"
+RELEASE_BENCHMARK_RUNNER_FILE="${COLDKEEP_RELEASE_BENCHMARK_RUNNER_FILE:-$REPO_ROOT/scripts/run_release_benchmark_evidence.sh}"
 
 require_pattern() {
   local file="$1"
@@ -104,6 +109,18 @@ require_content_pattern() {
     echo "[audit] ok: $description"
   else
     echo "[audit] ERROR: missing $description" >&2
+    return 1
+  fi
+}
+
+require_executable_file() {
+  local file="$1"
+  local description="$2"
+
+  if [[ -f "$file" && ! -L "$file" && -x "$file" ]]; then
+    echo "[audit] ok: $description"
+  else
+    echo "[audit] ERROR: $description must be an executable regular non-symlink file" >&2
     return 1
   fi
 }
@@ -449,6 +466,34 @@ check_local_workflow() {
   local upload_v7_count=0
 
   echo "[audit] checking local workflow invariants"
+  require_executable_file "$SNAPSHOT_EVIDENCE_VALIDATOR_FILE" 'tracked-source snapshot evidence validator' || check_status=1
+  require_executable_file "$RELEASE_LINEARITY_VALIDATOR_FILE" 'branch-relative release-linearity validator' || check_status=1
+  require_executable_file "$RELEASE_BENCHMARK_EVIDENCE_FILE" 'release benchmark evidence lifecycle validator' || check_status=1
+  require_executable_file "$RELEASE_BENCHMARK_RUNNER_FILE" 'external-transient release benchmark evidence runner' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables and pathspec.
+  require_pattern "$SNAPSHOT_EVIDENCE_VALIDATOR_FILE" 'git -C "\$repo_root" grep -F -- "func \$\{name\}\(" -- '\''\*\.go'\''' 'snapshot evidence validator enumerates tracked Go source only' || check_status=1
+  require_pattern "$RELEASE_LINEARITY_VALIDATOR_FILE" 'merge-base HEAD refs/remotes/origin/main' 'release-linearity validator computes the branch-relative merge base' || check_status=1
+  require_pattern "$RELEASE_LINEARITY_VALIDATOR_FILE" 'rev-list --merges "\$\{base\}\.\.HEAD"' 'release-linearity validator rejects only post-base merges' || check_status=1
+  require_pattern "$RELEASE_BENCHMARK_RUNNER_FILE" 'mktemp -d' 'release benchmark runner uses an external transient root' || check_status=1
+  require_pattern "$RELEASE_BENCHMARK_EVIDENCE_FILE" '\.release-evidence/v1\.13\.14' 'release benchmark lifecycle uses the canonical repository evidence root' || check_status=1
+  if ! "$SNAPSHOT_EVIDENCE_VALIDATOR_FILE" --repo-root "$REPO_ROOT"; then
+    echo "[audit] ERROR: tracked-source snapshot evidence validation failed" >&2
+    check_status=1
+  fi
+  if ! "$RELEASE_BENCHMARK_EVIDENCE_FILE" inventory --repo-root "$REPO_ROOT"; then
+    echo "[audit] ERROR: release benchmark evidence inventory failed" >&2
+    check_status=1
+  fi
+  current_branch=$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  validation_ref="${GITHUB_HEAD_REF:-$current_branch}"
+  if [[ "$validation_ref" == release/* || "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" == v* ]]; then
+    if ! "$RELEASE_LINEARITY_VALIDATOR_FILE" --repo-root "$REPO_ROOT"; then
+      echo "[audit] ERROR: current release candidate contains a release-local merge" >&2
+      check_status=1
+    fi
+  else
+    echo "[audit] ok: real release-linearity check not required for context ${validation_ref:-detached}"
+  fi
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'uses:\s*golangci/golangci-lint-action@v9' 'hosted quality uses golangci-lint action v9' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'version:\s*v2\.6\.2' 'hosted quality pins golangci-lint v2.6.2' || check_status=1
@@ -1104,6 +1149,38 @@ check_remote_policy() {
   else
     echo "[audit] ok: mainline ruleset has no always-bypass actors"
   fi
+
+  # --- Ruleset: Protect release branches ---
+  local release_id
+  release_id=$(echo "$rulesets_json" | jq -r '.[] | select(.name == "Protect release branches") | .id')
+  if [[ -z "$release_id" ]]; then
+    echo "[audit] ERROR: missing ruleset 'Protect release branches'" >&2
+    return 1
+  fi
+  echo "[audit] ok: ruleset 'Protect release branches' exists (id=${release_id})"
+
+  local release_detail
+  release_detail=$(gh_api "repos/$REPO/rulesets/${release_id}") || return 1
+  if [[ "$(echo "$release_detail" | jq -r '.enforcement // "disabled"')" != "active" ]]; then
+    echo "[audit] ERROR: ruleset 'Protect release branches' is not active" >&2
+    return 1
+  fi
+  if [[ "$(echo "$release_detail" | jq -c '.conditions.ref_name.include // []')" != '["refs/heads/release/**/*"]' ]]; then
+    echo "[audit] ERROR: release ruleset target is not exactly refs/heads/release/**/*" >&2
+    return 1
+  fi
+  if [[ "$(echo "$release_detail" | jq '[.bypass_actors // [] | .[]] | length')" -ne 0 ]]; then
+    echo "[audit] ERROR: release ruleset has bypass actors" >&2
+    return 1
+  fi
+  local release_rules
+  release_rules=$(echo "$release_detail" | jq -c '[.rules[].type] | sort')
+  if [[ "$release_rules" != '["non_fast_forward"]' ]]; then
+    echo "[audit] ERROR: release ruleset must contain only non_fast_forward; found ${release_rules}" >&2
+    return 1
+  fi
+  echo "[audit] ok: release ruleset is active for refs/heads/release/**/* with zero bypass actors"
+  echo "[audit] ok: release ruleset preserves non_fast_forward and omits required_linear_history"
 
   # --- Ruleset: Protect release tags ---
   local tags_id

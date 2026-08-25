@@ -885,6 +885,30 @@ func TestAuditCIEnforcementLocalWorkflowPassesCurrentConfiguration(t *testing.T)
 	}
 }
 
+func TestAuditCIEnforcementRequiresPhase14ReleaseGateTooling(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	for _, test := range []struct {
+		name        string
+		environment string
+		message     string
+	}{
+		{name: "tracked source validator", environment: "COLDKEEP_SNAPSHOT_EVIDENCE_VALIDATOR_FILE", message: "tracked-source snapshot evidence validator must be an executable"},
+		{name: "release linearity validator", environment: "COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE", message: "branch-relative release-linearity validator must be an executable"},
+		{name: "benchmark lifecycle", environment: "COLDKEEP_RELEASE_BENCHMARK_EVIDENCE_FILE", message: "release benchmark evidence lifecycle validator must be an executable"},
+		{name: "benchmark runner", environment: "COLDKEEP_RELEASE_BENCHMARK_RUNNER_FILE", message: "external-transient release benchmark evidence runner must be an executable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(test.environment, filepath.Join(t.TempDir(), "missing"))
+			output := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+			if !strings.Contains(output, test.message) {
+				t.Fatalf("expected %q, got:\n%s", test.message, output)
+			}
+		})
+	}
+}
+
 func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))

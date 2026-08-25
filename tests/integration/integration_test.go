@@ -5920,7 +5920,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
 		})
 
-		env := testutils.DefaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(filepath.Join(t.TempDir(), "containers"))
 		env["DB_NAME"] = dbName
 		env["COLDKEEP_DB_AUTO_BOOTSTRAP"] = "false"
 
@@ -5970,7 +5970,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 			t.Fatalf("downgrade schema_version in temp DB: %v", err)
 		}
 
-		env := testutils.DefaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(filepath.Join(t.TempDir(), "containers"))
 		env["DB_NAME"] = dbName
 
 		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats")
@@ -6000,7 +6000,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
 		})
 
-		env := testutils.DefaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(filepath.Join(t.TempDir(), "containers"))
 		env["DB_NAME"] = dbName
 		env["COLDKEEP_DB_AUTO_BOOTSTRAP"] = "true"
 

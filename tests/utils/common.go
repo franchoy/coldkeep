@@ -245,11 +245,19 @@ func FindCLIErrorPayload(output string) (map[string]any, bool) {
 }
 
 func DefaultCLIEnv(storageDir string) map[string]string {
+	if strings.TrimSpace(storageDir) == "" {
+		panic("test storage directory is required")
+	}
+	storageRoot, err := filepath.Abs(filepath.Clean(storageDir))
+	if err != nil {
+		panic(fmt.Sprintf("resolve absolute test storage directory: %v", err))
+	}
+
 	codec := GetenvOrDefault("COLDKEEP_CODEC", "plain")
 	env := map[string]string{
 		"COLDKEEP_TEST_DB":     "1",
 		"COLDKEEP_CODEC":       codec,
-		"COLDKEEP_STORAGE_DIR": storageDir,
+		"COLDKEEP_STORAGE_DIR": storageRoot,
 		"DB_HOST":              GetenvOrDefault("DB_HOST", "127.0.0.1"),
 		"DB_PORT":              GetenvOrDefault("DB_PORT", "5432"),
 		"DB_USER":              GetenvOrDefault("DB_USER", "coldkeep"),

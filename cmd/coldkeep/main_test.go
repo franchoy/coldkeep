@@ -10117,10 +10117,17 @@ func TestRunSimulateGCCommandTextOutputIncludesWarnings(t *testing.T) {
 func TestRunCLISimulateGCRunsStartupRecoveryWithinCoordination(t *testing.T) {
 	originalStartupRecovery := startupRecoveryPhase
 	originalSimulate := runObservabilitySimulateGCPhase
+	originalContainersDir := container.ContainersDir
 	t.Cleanup(func() {
 		startupRecoveryPhase = originalStartupRecovery
 		runObservabilitySimulateGCPhase = originalSimulate
+		container.ContainersDir = originalContainersDir
 	})
+	testContainersDir, err := filepath.Abs(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve test container directory: %v", err)
+	}
+	container.ContainersDir = testContainersDir
 
 	startupCalls := 0
 	startupRecoveryPhase = func(string) (recovery.Report, error) {
