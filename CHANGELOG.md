@@ -177,6 +177,18 @@ project, do not start here; start with [README.md](README.md).
   authorization. No merge, tag, release, publication, final closure, product,
   test, script, workflow, schema, storage, dependency, governance, or benchmark
   threshold change occurred.
+- Completed the documentation-only Phase 20 final corrective handoff and
+  immutable candidate-core freeze. The canonical 1,397-entry candidate-core
+  manifest has SHA-256
+  `984221fc5dc0e9d2d76d97cfb2c334bd7a52733682d818cb839d7c5caacac4da`;
+  only the explicitly lifecycle-mutable release documentation is excluded.
+  Phases 0–20 are complete and Phase 21 is the sole Next phase under separate
+  authorization, pending exact-head Phase 20 hosted acceptance. Findings remain
+  `16/17`, `CK-V1-AUD-005` remains open partial with Phase 26 publication truth
+  pending, release-readiness certification remains pending Phases 21/22, and
+  no product, test, script, workflow, schema, storage, dependency, governance,
+  benchmark threshold, merge, tag, release, publication, or final closure
+  changed.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

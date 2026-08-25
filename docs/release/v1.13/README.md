@@ -68,7 +68,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active and unreleased on `release/v1.13.14`; Phases 0–19
+Certification` is active and unreleased on `release/v1.13.14`; Phases 0–20
 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
@@ -120,9 +120,11 @@ stress matrices remain complete. `CK-V1-AUD-005` remains lifecycle-partial:
 its Phase 18 candidate-truth leg is complete and its final publication-truth
 leg remains pending Phase 26. Phase 19 approved candidate-side technical
 corrective completion for entry into the final release lifecycle without
-certifying release readiness, publication, or final closure. No v1.13.14 tag
-or stable GitHub release exists. Phase 20 is the sole Next phase under separate
-authorization. v1.x
+certifying release readiness, publication, or final closure. Phase 20 then
+recorded the final corrective handoff and froze the 1,397-entry candidate core
+without changing it; exact-head hosted acceptance is still required for
+terminal activation. No v1.13.14 tag or stable GitHub release exists.
+Phase 21 is the sole Next phase under separate authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -172,6 +174,9 @@ and the
 is the current candidate-truth authority, and the
 [Phase 19 formal corrective closure decision](v1.13.14-phase19-formal-final-v1x-corrective-closure-decision.md)
 is the authority for entry into the final release lifecycle.
+The [Phase 20 handoff record](v1.13.14-phase20-final-closure-handoff-and-immutable-candidate-freeze.md)
+and [candidate-core manifest](v1.13.14-immutable-candidate-core-manifest.txt)
+are the final corrective handoff and immutable candidate-core authorities.
 v2 implementation
 has not started.
 The v1.13.13 publication authority is the
