@@ -26,7 +26,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/execution"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
-	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
 type payloadStatefulWriter interface {
@@ -133,37 +132,19 @@ func InstallTestStoreInterleavingHooks(
 	}
 }
 
-const defaultPackedBlockTargetSizeBytes int64 = 1 << 20
-const defaultPackedBlockTargetSizeMB int64 = 1
+const defaultPackedBlockTargetSizeBytes = blocks.DefaultPackedBlockTargetSizeBytes
 
 func packedBlockTargetSizeBytesFromEnv() int64 {
-	blockSizeMB := int64(0)
-	if _, ok := os.LookupEnv("COLDKEEP_BLOCK_TARGET_SIZE_MB"); ok {
-		blockSizeMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_BLOCK_TARGET_SIZE_MB", defaultPackedBlockTargetSizeMB)
-	} else {
-		blockSizeMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_PACKED_BLOCK_SIZE_MIB", defaultPackedBlockTargetSizeMB)
+	resolution := blocks.ResolvePackedBlockTarget()
+	switch resolution.Warning {
+	case blocks.PackedBlockTargetWarningInvalid:
+		log.Printf("invalid packed block target size mb=%d; using default %d bytes", resolution.Megabytes, defaultPackedBlockTargetSizeBytes)
+	case blocks.PackedBlockTargetWarningUnsupported:
+		log.Printf("unsupported packed block target size mb=%d; v1.8 supports override values 1,2,3; using locked default %d bytes", resolution.Megabytes, defaultPackedBlockTargetSizeBytes)
+	case blocks.PackedBlockTargetWarningOverflow:
+		log.Printf("packed block target size mb=%d overflows int64 bytes; using default %d bytes", resolution.Megabytes, defaultPackedBlockTargetSizeBytes)
 	}
-
-	if blockSizeMB <= 0 {
-		log.Printf("invalid packed block target size mb=%d; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
-		return defaultPackedBlockTargetSizeBytes
-	}
-
-	// v1.8 final default is locked to 1 MiB (1 << 20 bytes).
-	// The COLDKEEP_BLOCK_TARGET_SIZE_MB override is retained for operator tuning and testing.
-	// Only validated sizes (1, 2, 3 MiB from Phase 8 benchmarking) are accepted for override.
-	// Production deployments should use the default; override is for evaluating alternative sizes on specific workloads.
-	if blockSizeMB != 1 && blockSizeMB != 2 && blockSizeMB != 3 {
-		log.Printf("unsupported packed block target size mb=%d; v1.8 supports override values 1,2,3; using locked default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
-		return defaultPackedBlockTargetSizeBytes
-	}
-
-	if blockSizeMB > (1<<63-1)/(1<<20) {
-		log.Printf("packed block target size mb=%d overflows int64 bytes; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
-		return defaultPackedBlockTargetSizeBytes
-	}
-
-	return blockSizeMB << 20
+	return resolution.Bytes
 }
 
 // preparedFile is the internal output of the CPU-side preparation phase.
@@ -2814,30 +2795,35 @@ func StoreFileWithStorageContext(sgctx StorageContext, path string) (err error) 
 
 // StoreFileWithStorageContextResult stores one file and returns structured result metadata.
 func StoreFileWithStorageContextResult(sgctx StorageContext, path string) (StoreFileResult, error) {
+	return StoreFileWithStorageContextResultContext(context.Background(), sgctx, path)
+}
+
+// StoreFileWithStorageContextResultContext is the caller-context-aware form of
+// StoreFileWithStorageContextResult. Ordinary store work is owned by ctx.
+func StoreFileWithStorageContextResultContext(ctx context.Context, sgctx StorageContext, path string) (StoreFileResult, error) {
 	codec, err := blocks.LoadDefaultCodec()
 	if err != nil {
 		return StoreFileResult{}, err
 	}
 
-	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
-	if sgctx.Writer != nil {
-		_ = sgctx.Writer.FinalizeContainer()
-	}
-	return result, err
+	return StoreFileWithStorageContextAndCodecResultContext(ctx, sgctx, path, codec)
 }
 
 func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, codec blocks.Codec) (err error) {
 	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
-	if sgctx.Writer != nil {
-		_ = sgctx.Writer.FinalizeContainer()
-	}
 	return err
 }
 
 // StoreFileWithStorageContextAndCodecResult stores one file and returns
 // metadata suitable for CLI text and JSON output.
 func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string, codec blocks.Codec) (result StoreFileResult, err error) {
-	return StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, path, codec, true)
+	return StoreFileWithStorageContextAndCodecResultContext(context.Background(), sgctx, path, codec)
+}
+
+// StoreFileWithStorageContextAndCodecResultContext stores one file while
+// preserving caller cancellation through all ordinary work.
+func StoreFileWithStorageContextAndCodecResultContext(ctx context.Context, sgctx StorageContext, path string, codec blocks.Codec) (result StoreFileResult, err error) {
+	return StoreFileWithStorageContextAndCodecResultWithPolicyContext(ctx, sgctx, path, codec, true)
 }
 
 // StoreFileWithStorageContextAndCodecResultWithPolicy stores one file and returns
@@ -2845,14 +2831,39 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 // When replace is false, existing path mapped to different logical content fails.
 // When replace is true, existing path mapping is atomically retargeted.
 func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, path string, codec blocks.Codec, replace bool) (result StoreFileResult, err error) {
+	return StoreFileWithStorageContextAndCodecResultWithPolicyContext(context.Background(), sgctx, path, codec, replace)
+}
+
+// StoreFileWithStorageContextAndCodecResultWithPolicyContext is the
+// caller-context-aware form of StoreFileWithStorageContextAndCodecResultWithPolicy.
+func StoreFileWithStorageContextAndCodecResultWithPolicyContext(ctx context.Context, sgctx StorageContext, path string, codec blocks.Codec, replace bool) (result StoreFileResult, err error) {
+	defer func() {
+		result, err = finalizeSingleFileStore(result, err, sgctx.Writer)
+	}()
+
 	runtime, err := buildStoreFileRuntime(sgctx, codec)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
-	return storeFileWithStorageContextAndRuntimeResultWithPolicy(sgctx, path, replace, nil, runtime)
+	return storeFileWithStorageContextAndRuntimeResultWithPolicy(ctx, sgctx, path, replace, nil, runtime)
+}
+
+func finalizeSingleFileStore(result StoreFileResult, storeErr error, writer container.ContainerWriter) (StoreFileResult, error) {
+	if writer == nil {
+		return result, storeErr
+	}
+	finalizeErr := writer.FinalizeContainer()
+	if finalizeErr == nil {
+		return result, storeErr
+	}
+	if storeErr == nil {
+		return result, finalizeErr
+	}
+	return result, errors.Join(storeErr, finalizeErr)
 }
 
 func storeFileWithStorageContextAndRuntimeResultWithPolicy(
+	ctx context.Context,
 	sgctx StorageContext,
 	path string,
 	replace bool,
@@ -2864,7 +2875,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		return StoreFileResult{}, err
 	}
 	result.Path = normalizedPath
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := db.NewOperationContext(ctx)
 	defer cancel()
 
 	if runtime == nil {
@@ -2959,6 +2970,8 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 				fileID,
 			); execErr != nil {
 				log.Printf("event=store_cleanup action=mark_aborted file_id=%d error=%v", fileID, execErr)
+				err = errors.Join(err, fmt.Errorf("mark logical file %d aborted: %w", fileID, execErr))
+				result = StoreFileResult{}
 			}
 		}
 	}()
@@ -3171,7 +3184,7 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStatsContext(ctx context
 				workerCtx.Writer = workerWriter
 			}
 
-			_, err := storeFileWithStorageContextAndRuntimeResultWithPolicy(*workerCtx, job.Path, true, info, runtime)
+			_, err := storeFileWithStorageContextAndRuntimeResultWithPolicy(ctx, *workerCtx, job.Path, true, info, runtime)
 			return err
 		})
 		if err != nil {

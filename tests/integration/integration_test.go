@@ -2451,9 +2451,9 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 	}
 }
 
-// TestSnapshotDiffFilteredJSONContractMatchesSummary ensures that
-// snapshot diff with --filter/--regex produces JSON where the
-// summary matches the returned entries.
+// TestSnapshotDiffFilteredJSONContractMatchesSummary ensures that a filtered,
+// unlimited snapshot diff preserves the raw total while its matched count and
+// summary describe the complete filtered entries.
 func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	testgate.RequireDB(t)
 
@@ -2501,8 +2501,11 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(storeDir2, "docs"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(storeDir2, "misc"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 	testutils.CreateTempFile(t, filepath.Join(storeDir2, "docs"), "readme.txt", 250)  // modified size
-	testutils.CreateTempFile(t, filepath.Join(storeDir2, "docs"), "newfile.txt", 100) // added
+	testutils.CreateTempFile(t, filepath.Join(storeDir2, "misc"), "newfile.txt", 100) // added
 
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store-folder", storeDir2, "--output", "json"), "store-folder")
@@ -2510,10 +2513,19 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "create", "--id", "snap-diff-v2", "--output", "json"), "snapshot")
 
-	// Test: snapshot diff with --prefix filter
+	// Snapshot paths are normalized slash paths rooted at stored physical paths.
+	// Derive a prefix that intentionally excludes the v1 and v2/misc paths while
+	// matching the newly stored v2/docs path.
+	normalizedStoreDir2 := strings.TrimPrefix(filepath.ToSlash(storeDir2), "/")
+	docsPrefix := normalizedStoreDir2 + "/docs/"
+
+	// Test: snapshot diff with --prefix filter.
 	diffResult := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "diff", "snap-diff-v1", "snap-diff-v2", "--prefix", "docs/", "--output", "json"), "snapshot diff")
+		"snapshot", "diff", "snap-diff-v1", "snap-diff-v2", "--prefix", docsPrefix, "--output", "json"), "snapshot diff")
 	diffData := testutils.JSONMap(t, diffResult, "data")
+	unfilteredResult := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "snap-diff-v1", "snap-diff-v2", "--output", "json"), "snapshot diff")
+	unfilteredData := testutils.JSONMap(t, unfilteredResult, "data")
 
 	// Extract summary
 	summary, ok := diffData["summary"].(map[string]any)
@@ -2528,11 +2540,14 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	}
 
 	addedCount := int64(0)
+	removedCount := int64(0)
 	modifiedCount := int64(0)
 	for _, entry := range entriesArray {
 		entryMap, _ := entry.(map[string]any)
 		if change, _ := entryMap["change"].(string); change == "added" {
 			addedCount++
+		} else if change == "removed" {
+			removedCount++
 		} else if change == "modified" {
 			modifiedCount++
 		}
@@ -2542,14 +2557,34 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	if got, _ := summary["added_count"].(float64); int64(got) != addedCount {
 		t.Fatalf("snapshot diff: summary.added_count=%d does not match counted added entries=%d", int64(got), addedCount)
 	}
+	if got, _ := summary["removed_count"].(float64); int64(got) != removedCount {
+		t.Fatalf("snapshot diff: summary.removed_count=%d does not match counted removed entries=%d", int64(got), removedCount)
+	}
 	if got, _ := summary["modified_count"].(float64); int64(got) != modifiedCount {
 		t.Fatalf("snapshot diff: summary.modified_count=%d does not match counted modified entries=%d", int64(got), modifiedCount)
 	}
 
-	// Verify total_diff_entry_count matches
-	totalEntryCount := testutils.JSONInt64(t, diffData, "total_diff_entry_count")
-	if totalEntryCount != int64(len(entriesArray)) {
-		t.Fatalf("snapshot diff: total_diff_entry_count=%d does not match len(entries)=%d", totalEntryCount, int64(len(entriesArray)))
+	// The unfiltered, unlimited detailed response independently witnesses the raw
+	// population. Filtering must not rewrite that raw total.
+	unfilteredEntries, ok := unfilteredData["entries"].([]any)
+	if !ok {
+		t.Fatalf("unfiltered snapshot diff: entries is not an array in JSON: %v", unfilteredData)
+	}
+	unfilteredTotal := testutils.JSONInt64(t, unfilteredData, "total_diff_entry_count")
+	if unfilteredTotal != int64(len(unfilteredEntries)) {
+		t.Fatalf("unfiltered snapshot diff: total_diff_entry_count=%d does not match len(entries)=%d", unfilteredTotal, len(unfilteredEntries))
+	}
+
+	filteredTotal := testutils.JSONInt64(t, diffData, "total_diff_entry_count")
+	if filteredTotal != unfilteredTotal {
+		t.Fatalf("filtered snapshot diff: raw total=%d does not match unfiltered raw total=%d", filteredTotal, unfilteredTotal)
+	}
+	matchedEntryCount := testutils.JSONInt64(t, diffData, "matched_entry_count")
+	if matchedEntryCount != int64(len(entriesArray)) {
+		t.Fatalf("filtered snapshot diff: matched_entry_count=%d does not match len(entries)=%d", matchedEntryCount, len(entriesArray))
+	}
+	if filteredTotal <= matchedEntryCount {
+		t.Fatalf("filtered snapshot diff fixture did not distinguish raw and matched populations: raw=%d matched=%d prefix=%q", filteredTotal, matchedEntryCount, docsPrefix)
 	}
 }
 
@@ -5885,7 +5920,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
 		})
 
-		env := testutils.DefaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(filepath.Join(t.TempDir(), "containers"))
 		env["DB_NAME"] = dbName
 		env["COLDKEEP_DB_AUTO_BOOTSTRAP"] = "false"
 
@@ -5935,7 +5970,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 			t.Fatalf("downgrade schema_version in temp DB: %v", err)
 		}
 
-		env := testutils.DefaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(filepath.Join(t.TempDir(), "containers"))
 		env["DB_NAME"] = dbName
 
 		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats")
@@ -5965,7 +6000,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
 		})
 
-		env := testutils.DefaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(filepath.Join(t.TempDir(), "containers"))
 		env["DB_NAME"] = dbName
 		env["COLDKEEP_DB_AUTO_BOOTSTRAP"] = "true"
 

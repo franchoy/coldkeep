@@ -33,6 +33,12 @@ func TestFaultFSReleaseFaultClassesAreScriptable(t *testing.T) {
 			want:  ErrFaultClose,
 		},
 		{
+			name:  "truncate",
+			fault: Fault{Op: OpTruncate, Err: ErrFaultTruncate},
+			op:    OpTruncate,
+			want:  ErrFaultTruncate,
+		},
+		{
 			name:  "rename",
 			fault: Fault{Op: OpRename, Err: ErrFaultRename},
 			op:    OpRename,

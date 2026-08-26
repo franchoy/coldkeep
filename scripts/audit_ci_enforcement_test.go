@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -882,6 +883,223 @@ func TestAuditCIEnforcementLocalWorkflowPassesCurrentConfiguration(t *testing.T)
 	output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false)
 	if !strings.Contains(output, "[audit] PASSED") {
 		t.Fatalf("expected audit pass output, got:\n%s", output)
+	}
+}
+
+func TestAuditCIEnforcementSelectsAuthoritativeReleasePRHead(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	releaseSHA := strings.TrimSpace(runAuditTestCommand(t, "git", "rev-parse", "HEAD"))
+
+	t.Run("same repository main pull request passes exact head", func(t *testing.T) {
+		probe, logPath := writeReleaseLinearityProbe(t)
+		eventPath := writeReleasePullRequestEvent(t, "main", "release/v1.13.14", "franchoy/coldkeep", releaseSHA)
+		setReleasePullRequestAuditEnvironment(t, probe, logPath, eventPath, "release/v1.13.14", "franchoy/coldkeep")
+
+		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false)
+		if !strings.Contains(output, "authoritative same-repository head "+releaseSHA) {
+			t.Fatalf("authoritative PR identity proof omitted:\n%s", output)
+		}
+		calls, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("read release-linearity probe log: %v", err)
+		}
+		if !strings.Contains(string(calls), "--candidate-ref "+releaseSHA) {
+			t.Fatalf("audit did not pass authoritative PR SHA to validator:\n%s", calls)
+		}
+	})
+
+	tests := []struct {
+		name       string
+		baseRef    string
+		headRef    string
+		headRepo   string
+		headSHA    string
+		eventBody  string
+		wantPhrase string
+	}{
+		{name: "wrong base", baseRef: "develop", headRef: "release/v1.13.14", headRepo: "franchoy/coldkeep", headSHA: releaseSHA, wantPhrase: "event identity is malformed"},
+		{name: "wrong repository", baseRef: "main", headRef: "release/v1.13.14", headRepo: "fork/coldkeep", headSHA: releaseSHA, wantPhrase: "event identity is malformed"},
+		{name: "mismatched head ref", baseRef: "main", headRef: "release/other", headRepo: "franchoy/coldkeep", headSHA: releaseSHA, wantPhrase: "event identity is malformed"},
+		{name: "invalid SHA", baseRef: "main", headRef: "release/v1.13.14", headRepo: "franchoy/coldkeep", headSHA: "not-a-sha", wantPhrase: "event identity is malformed"},
+		{name: "uppercase SHA", baseRef: "main", headRef: "release/v1.13.14", headRepo: "franchoy/coldkeep", headSHA: strings.ToUpper(releaseSHA), wantPhrase: "event identity is malformed"},
+		{name: "missing SHA", eventBody: `{"pull_request":{"base":{"ref":"main"},"head":{"ref":"release/v1.13.14","repo":{"full_name":"franchoy/coldkeep"}}}}`, wantPhrase: "event identity is malformed"},
+		{name: "non-string SHA", eventBody: `{"pull_request":{"base":{"ref":"main"},"head":{"ref":"release/v1.13.14","repo":{"full_name":"franchoy/coldkeep"},"sha":23}}}`, wantPhrase: "event identity is malformed"},
+		{name: "unresolvable SHA", baseRef: "main", headRef: "release/v1.13.14", headRepo: "franchoy/coldkeep", headSHA: strings.Repeat("0", 40), wantPhrase: "does not resolve to a local commit"},
+		{name: "malformed JSON", eventBody: "{", wantPhrase: "event identity is malformed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			probe, logPath := writeReleaseLinearityProbe(t)
+			eventPath := filepath.Join(t.TempDir(), "event.json")
+			body := test.eventBody
+			if body == "" {
+				body = releasePullRequestEvent(test.baseRef, test.headRef, test.headRepo, test.headSHA)
+			}
+			if err := os.WriteFile(eventPath, []byte(body), 0o600); err != nil {
+				t.Fatalf("write PR event fixture: %v", err)
+			}
+			setReleasePullRequestAuditEnvironment(t, probe, logPath, eventPath, "release/v1.13.14", "franchoy/coldkeep")
+			output := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+			if !strings.Contains(output, test.wantPhrase) {
+				t.Fatalf("expected %q, got:\n%s", test.wantPhrase, output)
+			}
+			if calls, err := os.ReadFile(logPath); err == nil && strings.TrimSpace(string(calls)) != "" {
+				t.Fatalf("validator ran after invalid PR identity:\n%s", calls)
+			}
+		})
+	}
+
+	t.Run("missing event path fails closed", func(t *testing.T) {
+		probe, logPath := writeReleaseLinearityProbe(t)
+		setReleasePullRequestAuditEnvironment(t, probe, logPath, filepath.Join(t.TempDir(), "missing.json"), "release/v1.13.14", "franchoy/coldkeep")
+		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+		if !strings.Contains(output, "requires a readable GITHUB_EVENT_PATH") {
+			t.Fatalf("missing-event diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("missing repository fails closed", func(t *testing.T) {
+		probe, logPath := writeReleaseLinearityProbe(t)
+		eventPath := writeReleasePullRequestEvent(t, "main", "release/v1.13.14", "franchoy/coldkeep", releaseSHA)
+		setReleasePullRequestAuditEnvironment(t, probe, logPath, eventPath, "release/v1.13.14", "")
+		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+		if !strings.Contains(output, "requires GITHUB_REPOSITORY") {
+			t.Fatalf("missing-repository diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("wrong event name fails closed", func(t *testing.T) {
+		probe, logPath := writeReleaseLinearityProbe(t)
+		eventPath := writeReleasePullRequestEvent(t, "main", "release/v1.13.14", "franchoy/coldkeep", releaseSHA)
+		setReleasePullRequestAuditEnvironment(t, probe, logPath, eventPath, "release/v1.13.14", "franchoy/coldkeep")
+		t.Setenv("GITHUB_EVENT_NAME", "push")
+		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+		if !strings.Contains(output, "requires GITHUB_EVENT_NAME=pull_request") {
+			t.Fatalf("wrong-event diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("ordinary release push uses HEAD", func(t *testing.T) {
+		probe, logPath := writeReleaseLinearityProbe(t)
+		t.Setenv("COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE", probe)
+		t.Setenv("PHASE23R_LINEAGE_PROBE_LOG", logPath)
+		t.Setenv("GITHUB_EVENT_NAME", "push")
+		t.Setenv("GITHUB_HEAD_REF", "")
+		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false)
+		if !strings.Contains(output, "[audit] PASSED") {
+			t.Fatalf("ordinary release push audit failed:\n%s", output)
+		}
+		calls, err := os.ReadFile(logPath)
+		if err != nil || !strings.Contains(string(calls), "--candidate-ref HEAD") {
+			t.Fatalf("ordinary release push did not validate HEAD: err=%v calls=%q", err, calls)
+		}
+	})
+
+	t.Run("release tag uses HEAD", func(t *testing.T) {
+		probe, logPath := writeReleaseLinearityProbe(t)
+		t.Setenv("COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE", probe)
+		t.Setenv("PHASE23R_LINEAGE_PROBE_LOG", logPath)
+		t.Setenv("GITHUB_EVENT_NAME", "push")
+		t.Setenv("GITHUB_HEAD_REF", "")
+		t.Setenv("GITHUB_REF_TYPE", "tag")
+		t.Setenv("GITHUB_REF_NAME", "v1.13.14")
+		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false)
+		if !strings.Contains(output, "[audit] PASSED") {
+			t.Fatalf("release tag audit failed:\n%s", output)
+		}
+		calls, err := os.ReadFile(logPath)
+		if err != nil || !strings.Contains(string(calls), "--candidate-ref HEAD") {
+			t.Fatalf("release tag did not validate HEAD: err=%v calls=%q", err, calls)
+		}
+	})
+
+	t.Run("non release pull request skips lineage", func(t *testing.T) {
+		probe, logPath := writeReleaseLinearityProbe(t)
+		eventPath := writeReleasePullRequestEvent(t, "main", "topic", "franchoy/coldkeep", releaseSHA)
+		setReleasePullRequestAuditEnvironment(t, probe, logPath, eventPath, "topic", "franchoy/coldkeep")
+		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false)
+		if !strings.Contains(output, "real release-linearity check not required for context topic") {
+			t.Fatalf("non-release PR skip proof omitted:\n%s", output)
+		}
+		if calls, err := os.ReadFile(logPath); err == nil && strings.TrimSpace(string(calls)) != "" {
+			t.Fatalf("validator ran for non-release PR:\n%s", calls)
+		}
+	})
+}
+
+func writeReleaseLinearityProbe(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	probe := filepath.Join(root, "validate_release_linearity.sh")
+	logPath := filepath.Join(root, "calls.log")
+	source := `#!/usr/bin/env bash
+set -euo pipefail
+# merge-base "$candidate_commit" refs/remotes/origin/main
+# rev-list --merges "${base}..${candidate_commit}"
+printf '%s\n' "$*" >> "$PHASE23R_LINEAGE_PROBE_LOG"
+`
+	if err := os.WriteFile(probe, []byte(source), 0o700); err != nil {
+		t.Fatalf("write release-linearity probe: %v", err)
+	}
+	return probe, logPath
+}
+
+func releasePullRequestEvent(baseRef, headRef, headRepo, headSHA string) string {
+	return fmt.Sprintf(`{"pull_request":{"base":{"ref":%q},"head":{"ref":%q,"repo":{"full_name":%q},"sha":%q}}}`+"\n", baseRef, headRef, headRepo, headSHA)
+}
+
+func writeReleasePullRequestEvent(t *testing.T, baseRef, headRef, headRepo, headSHA string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "event.json")
+	if err := os.WriteFile(path, []byte(releasePullRequestEvent(baseRef, headRef, headRepo, headSHA)), 0o600); err != nil {
+		t.Fatalf("write release PR event fixture: %v", err)
+	}
+	return path
+}
+
+func setReleasePullRequestAuditEnvironment(t *testing.T, probe, logPath, eventPath, headRef, repository string) {
+	t.Helper()
+	t.Setenv("COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE", probe)
+	t.Setenv("PHASE23R_LINEAGE_PROBE_LOG", logPath)
+	t.Setenv("GITHUB_EVENT_NAME", "pull_request")
+	t.Setenv("GITHUB_EVENT_PATH", eventPath)
+	t.Setenv("GITHUB_HEAD_REF", headRef)
+	t.Setenv("GITHUB_REPOSITORY", repository)
+}
+
+func runAuditTestCommand(t *testing.T, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = repoRoot(t)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run %s %v: %v\n%s", name, args, err, output)
+	}
+	return string(output)
+}
+
+func TestAuditCIEnforcementRequiresPhase14ReleaseGateTooling(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	for _, test := range []struct {
+		name        string
+		environment string
+		message     string
+	}{
+		{name: "tracked source validator", environment: "COLDKEEP_SNAPSHOT_EVIDENCE_VALIDATOR_FILE", message: "tracked-source snapshot evidence validator must be an executable"},
+		{name: "release linearity validator", environment: "COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE", message: "branch-relative release-linearity validator must be an executable"},
+		{name: "benchmark lifecycle", environment: "COLDKEEP_RELEASE_BENCHMARK_EVIDENCE_FILE", message: "release benchmark evidence lifecycle validator must be an executable"},
+		{name: "benchmark runner", environment: "COLDKEEP_RELEASE_BENCHMARK_RUNNER_FILE", message: "external-transient release benchmark evidence runner must be an executable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(test.environment, filepath.Join(t.TempDir(), "missing"))
+			output := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+			if !strings.Contains(output, test.message) {
+				t.Fatalf("expected %q, got:\n%s", test.message, output)
+			}
+		})
 	}
 }
 

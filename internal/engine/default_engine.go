@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -53,9 +51,9 @@ type DefaultEngine struct {
 	obs                 *observability.Service
 	snapshotIDGenerator snapshotIDGenerator
 	doctorRecover       func(context.Context) (RecoverResult, error)
-	doctorSchema        func(*sql.DB) (int64, error)
+	doctorSchema        func(context.Context, *sql.DB) (int64, error)
 	doctorVerify        func(context.Context, string) error
-	doctorAudit         func(*sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error)
+	doctorAudit         func(context.Context, *sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error)
 }
 
 // New returns a new DefaultEngine with the given configuration.
@@ -74,6 +72,15 @@ func New(cfg Config) (*DefaultEngine, error) {
 		obs:                 obs,
 		snapshotIDGenerator: secureSnapshotIDGenerator,
 	}, nil
+}
+
+// effectiveContainerDir resolves Config.ContainerDir's documented default at
+// the point of use without mutating the caller-supplied configuration.
+func (e *DefaultEngine) effectiveContainerDir() string {
+	if e == nil || strings.TrimSpace(e.config.ContainerDir) == "" {
+		return container.ContainersDir
+	}
+	return e.config.ContainerDir
 }
 
 type snapshotIDGenerator func() (string, error)
@@ -145,18 +152,20 @@ func (e *DefaultEngine) Verify(ctx context.Context, req VerifyRequest) (_ Verify
 	if err := validateVerifyRequest(target, req.FileID); err != nil {
 		return VerifyResult{}, TranslateErrorAs("verify", ErrorInvalidArgument, err)
 	}
-	containerDir := e.config.ContainerDir
-	if containerDir == "" {
-		containerDir = container.ContainersDir
-	}
-	if err := maintenance.VerifyCommandWithDBAndContainersDir(e.config.DB, containerDir, target, req.FileID, level); err != nil {
+	execution, err := maintenance.VerifyCommandWithDBAndContainersDirResultContext(ctx, e.config.DB, e.effectiveContainerDir(), target, req.FileID, level)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return VerifyResult{}, err
+		}
 		return VerifyResult{}, TranslateErrorAs("verify", ErrorVerificationFailed, err)
 	}
-	result, err := collectVerifyResult(ctx, e.config.DB, target, int64(req.FileID))
-	if err != nil {
-		return VerifyResult{}, TranslateError("verify", fmt.Errorf("collect verify summary: %w", err))
-	}
-	return result, nil
+	return VerifyResult{
+		BlocksChecked:           execution.BlocksChecked,
+		PhysicalHashChecked:     execution.PhysicalHashChecked,
+		CompressedHashChecked:   execution.CompressedHashChecked,
+		LogicalHashChecked:      execution.LogicalHashChecked,
+		CompressedBlocksChecked: execution.CompressedBlocksChecked,
+	}, nil
 }
 
 // validateInspectRequest returns an error if req contains an unrecognized entity
@@ -253,6 +262,7 @@ func (e *DefaultEngine) SnapshotList(ctx context.Context, req SnapshotListReques
 			Label:     ref.Label,
 			ParentID:  ref.ParentID,
 			CreatedAt: ref.CreatedAt,
+			FileCount: ref.FileCount,
 		}
 	}
 	var resultGraph *SnapshotGraph
@@ -297,6 +307,7 @@ func projectSelectedSnapshotGraph(graph *catalog.SnapshotGraph, selected []catal
 				Label:     node.Snapshot.Label,
 				ParentID:  node.Snapshot.ParentID,
 				CreatedAt: node.Snapshot.CreatedAt,
+				FileCount: node.Snapshot.FileCount,
 			},
 			ParentState: SnapshotParentState(node.ParentState),
 			ChildIDs:    children,
@@ -341,14 +352,11 @@ func (e *DefaultEngine) SnapshotShow(ctx context.Context, req SnapshotShowReques
 		Label:     ref.Label,
 		ParentID:  ref.ParentID,
 		CreatedAt: ref.CreatedAt,
+		FileCount: ref.FileCount,
 	}
-	var snapshotQ *snapshot.SnapshotQuery
-	if !isEmptySnapshotQuery(req.Query) {
-		var err error
-		snapshotQ, err = engineQueryToSnapshotQuery(req.Query)
-		if err != nil {
-			return SnapshotShowResult{}, TranslateErrorAs("snapshot_show", ErrorInvalidArgument, err)
-		}
+	snapshotQ, err := snapshotQueryOrNil(req.Query)
+	if err != nil {
+		return SnapshotShowResult{}, TranslateErrorAs("snapshot_show", ErrorInvalidArgument, err)
 	}
 	entries, err := snapshot.ListSnapshotFiles(ctx, e.config.DB, req.SnapshotID, req.Query.Limit, snapshotQ)
 	if err != nil {
@@ -410,13 +418,17 @@ func (e *DefaultEngine) SnapshotDiff(ctx context.Context, req SnapshotDiffReques
 	if req.Filter != SnapshotDiffAll && req.Filter != SnapshotDiffAdded && req.Filter != SnapshotDiffRemoved && req.Filter != SnapshotDiffModified {
 		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, fmt.Errorf("unknown snapshot diff filter %q", req.Filter))
 	}
-	if _, err := snapshotQueryOrNil(req.Query); err != nil {
+	if req.Query.Limit < 0 {
+		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, fmt.Errorf("snapshot diff limit cannot be negative"))
+	}
+	query, err := snapshotQueryOrNil(req.Query)
+	if err != nil {
 		return SnapshotDiffResult{}, TranslateErrorAs("snapshot_diff", ErrorInvalidArgument, err)
 	}
 	if isSnapshotDiffSummaryFastPath(req) {
 		return e.snapshotDiffSummaryFastPath(ctx, req)
 	}
-	return e.snapshotDiffDetailed(ctx, req)
+	return e.snapshotDiffDetailed(ctx, req, query)
 }
 
 func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (_ RemoveResult, outErr error) {
@@ -427,7 +439,7 @@ func (e *DefaultEngine) Remove(ctx context.Context, req RemoveRequest) (_ Remove
 	if err := validateRemoveRequest(req); err != nil {
 		return RemoveResult{}, TranslateErrorAs("remove", ErrorInvalidArgument, err)
 	}
-	return e.removeFileIDs(req), nil
+	return e.removeFileIDs(ctx, req)
 }
 
 func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredPathsRequest) (_ RemoveStoredPathsResult, outErr error) {
@@ -445,7 +457,7 @@ func (e *DefaultEngine) RemoveStoredPaths(ctx context.Context, req RemoveStoredP
 	if err := e.validateRemoveStoredPathsDependencies(); err != nil {
 		return RemoveStoredPathsResult{}, err
 	}
-	return e.removeStoredPaths(req, preflight.prepared), nil
+	return e.removeStoredPaths(ctx, req, preflight.prepared)
 }
 
 func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (_ RestoreResult, outErr error) {
@@ -456,64 +468,7 @@ func (e *DefaultEngine) Restore(ctx context.Context, req RestoreRequest) (_ Rest
 	if err := validateRestoreRequest(req); err != nil {
 		return RestoreResult{}, TranslateErrorAs("restore", ErrorInvalidArgument, err)
 	}
-	return e.restoreFileIDs(req), nil
-}
-
-// engineQueryToSnapshotQuery maps an engine-level SnapshotQuery to the
-// snapshot package's equivalent type.
-func engineQueryToSnapshotQuery(q SnapshotQuery) (*snapshot.SnapshotQuery, error) {
-	sq := &snapshot.SnapshotQuery{
-		Pattern:        q.Pattern,
-		MinSize:        q.MinSize,
-		MaxSize:        q.MaxSize,
-		ModifiedAfter:  q.ModifiedAfter,
-		ModifiedBefore: q.ModifiedBefore,
-	}
-	if len(q.Paths) > 0 {
-		sq.ExactPaths = make(map[string]struct{}, len(q.Paths))
-		for _, rawPath := range q.Paths {
-			normalized, err := snapshot.NormalizeSnapshotPath(rawPath)
-			if err != nil {
-				return nil, fmt.Errorf("invalid snapshot query path %q: %w", rawPath, err)
-			}
-			sq.ExactPaths[normalized] = struct{}{}
-		}
-	}
-	if len(q.Prefixes) > 0 {
-		sq.Prefixes = make([]string, 0, len(q.Prefixes))
-		for _, rawPrefix := range q.Prefixes {
-			normalized, err := snapshot.NormalizeSnapshotPath(rawPrefix)
-			if err != nil {
-				return nil, fmt.Errorf("invalid snapshot query prefix %q: %w", rawPrefix, err)
-			}
-			if !strings.HasSuffix(normalized, "/") {
-				return nil, fmt.Errorf("invalid snapshot query prefix %q: must end with '/'", rawPrefix)
-			}
-			sq.Prefixes = append(sq.Prefixes, normalized)
-		}
-	}
-	if q.Pattern != "" {
-		if _, err := path.Match(q.Pattern, ""); err != nil {
-			return nil, fmt.Errorf("invalid snapshot query pattern %q: %w", q.Pattern, err)
-		}
-	}
-	if q.Regex != "" {
-		compiled, err := regexp.Compile(q.Regex)
-		if err != nil {
-			return nil, fmt.Errorf("invalid snapshot query regex %q: %w", q.Regex, err)
-		}
-		sq.Regex = compiled
-	}
-	if (q.MinSize != nil && *q.MinSize < 0) || (q.MaxSize != nil && *q.MaxSize < 0) {
-		return nil, fmt.Errorf("invalid snapshot query size range")
-	}
-	if q.MinSize != nil && q.MaxSize != nil && *q.MinSize > *q.MaxSize {
-		return nil, fmt.Errorf("invalid snapshot query size range: minimum exceeds maximum")
-	}
-	if q.ModifiedAfter != nil && q.ModifiedBefore != nil && q.ModifiedAfter.After(*q.ModifiedBefore) {
-		return nil, fmt.Errorf("invalid snapshot query time range: after exceeds before")
-	}
-	return sq, nil
+	return e.restoreFileIDs(ctx, req)
 }
 
 func nullableInt64(value sql.NullInt64) *int64 {

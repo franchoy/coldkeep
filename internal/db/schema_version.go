@@ -15,6 +15,15 @@ func CurrentSchemaVersion(dbconn *sql.DB) (int64, error) {
 
 	ctx, cancel := NewOperationContext(context.Background())
 	defer cancel()
+	return CurrentSchemaVersionContext(ctx, dbconn)
+}
+
+// CurrentSchemaVersionContext returns the highest applied schema version using
+// the caller-owned context.
+func CurrentSchemaVersionContext(ctx context.Context, dbconn *sql.DB) (int64, error) {
+	if dbconn == nil {
+		return 0, errors.New("nil DB connection")
+	}
 
 	var version sql.NullInt64
 	if err := dbconn.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {

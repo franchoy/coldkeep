@@ -72,6 +72,7 @@ type RestoreOptions struct {
 	Metadata        *RestoreMetadata
 	fs              fsx.FS
 	installFactory  restoreInstallFactory
+	restoreHooks    *restoreTestHooks
 }
 
 type RestoreDestinationMode string
@@ -675,7 +676,14 @@ func RestoreFileWithStorageContextResult(sgctx StorageContext, fileID int64, out
 }
 
 func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
-	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
+	return RestoreFileWithStorageContextResultOptionsContext(context.Background(), sgctx, fileID, outputPath, opts)
+}
+
+// RestoreFileWithStorageContextResultOptionsContext preserves caller
+// cancellation through restore planning, reads, decoding, and publication.
+func RestoreFileWithStorageContextResultOptionsContext(ctx context.Context, sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
+	opts.restoreHooks = sgctx.restoreHooks
+	return restoreFileWithDBAndDirContext(ctx, sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
 }
 
 func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPaths []string, notFoundPath string) (RestoreDescriptor, error) {
@@ -966,6 +974,12 @@ func validateRestorePrefixRelativePath(relativePath string) error {
 // current-state physical_file path as identity (v1.2 model).
 // This is original destination mode: output path is the stored physical path.
 func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext, storedPath string, opts RestoreOptions) (RestoreFileResult, error) {
+	return RestoreFileByStoredPathWithStorageContextResultOptionsContext(context.Background(), sgctx, storedPath, opts)
+}
+
+// RestoreFileByStoredPathWithStorageContextResultOptionsContext preserves
+// caller cancellation through stored-path resolution and restore execution.
+func RestoreFileByStoredPathWithStorageContextResultOptionsContext(ctx context.Context, sgctx StorageContext, storedPath string, opts RestoreOptions) (RestoreFileResult, error) {
 	if sgctx.DB == nil {
 		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
 	}
@@ -975,18 +989,18 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 		return RestoreFileResult{}, err
 	}
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	opctx, cancel := db.NewOperationContext(ctx)
 	defer cancel()
 
-	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, lookupPaths, notFoundPath)
+	descriptor, err := buildRestoreDescriptorFromPhysicalPath(opctx, sgctx.DB, lookupPaths, notFoundPath)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
 
-	return restoreFromDescriptorWithStorageContextResultOptions(sgctx, descriptor, opts)
+	return restoreFromDescriptorWithStorageContextResultOptionsContext(opctx, sgctx, descriptor, opts)
 }
 
-func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, descriptor RestoreDescriptor, opts RestoreOptions) (RestoreFileResult, error) {
+func restoreFromDescriptorWithStorageContextResultOptionsContext(ctx context.Context, sgctx StorageContext, descriptor RestoreDescriptor, opts RestoreOptions) (RestoreFileResult, error) {
 	if sgctx.DB == nil {
 		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
 	}
@@ -1010,7 +1024,8 @@ func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, 
 	opts.Metadata = &RestoreMetadata{
 		Mode: descriptor.Mode, MTime: descriptor.MTime, UID: descriptor.UID, GID: descriptor.GID,
 	}
-	result, err := restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
+	opts.restoreHooks = sgctx.restoreHooks
+	result, err := restoreFileWithDBAndDirContext(ctx, sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
@@ -1147,13 +1162,17 @@ func resolveOverrideRestoreOutputPath(opts RestoreOptions) (string, string, erro
 	return filepath.Clean(absOverridePath), trustedRoot, nil
 }
 
-func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
+func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (RestoreFileResult, error) {
+	return restoreFileWithDBAndDirContext(context.Background(), dbconn, fileID, outputPath, containersDir, opts)
+}
+
+func restoreFileWithDBAndDirContext(parent context.Context, dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
 	result.FileID = fileID
 	fsys := opts.fs
 	if fsys == nil {
 		fsys = fsx.Default()
 	}
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := db.NewOperationContext(parent)
 	defer cancel()
 
 	// ================================================================
@@ -1176,9 +1195,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		defer cleanupCancel()
 		if unpinErr := unpinRestoreChunksWithContext(cleanupCtx, dbconn, pinnedChunkIDs); unpinErr != nil {
 			log.Printf("event=restore_cleanup action=unpin_chunks file_id=%d error=%v", fileID, unpinErr)
-			if err == nil {
-				err = unpinErr
-			}
+			err = errors.Join(err, unpinErr)
+			result = RestoreFileResult{}
 		}
 	}()
 
@@ -1378,8 +1396,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 				cachedBlock = block
 
 				// TEST HOOK: assert state just before first block read.
-				if TestRestoreBeforeChunkReadHook != nil {
-					if hookErr := TestRestoreBeforeChunkReadHook(dbconn, chunk.ID); hookErr != nil {
+				if opts.restoreHooks != nil && opts.restoreHooks.beforeChunkRead != nil {
+					if hookErr := opts.restoreHooks.beforeChunkRead(dbconn, chunk.ID); hookErr != nil {
 						return RestoreFileResult{}, fmt.Errorf("test hook before chunk read: %w", hookErr)
 					}
 				}
@@ -1454,8 +1472,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			}
 
 			// TEST HOOK: assert state just before first payload read.
-			if TestRestoreBeforeChunkReadHook != nil {
-				if hookErr := TestRestoreBeforeChunkReadHook(dbconn, chunk.ID); hookErr != nil {
+			if opts.restoreHooks != nil && opts.restoreHooks.beforeChunkRead != nil {
+				if hookErr := opts.restoreHooks.beforeChunkRead(dbconn, chunk.ID); hookErr != nil {
 					return RestoreFileResult{}, fmt.Errorf("test hook before chunk read: %w", hookErr)
 				}
 			}
@@ -1582,8 +1600,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 
 	// TEST HOOK: simulate failure after temp file is written but before rename
-	if TestRestoreFailBeforeRenameHook != nil {
-		if hookErr := TestRestoreFailBeforeRenameHook("", outputPath); hookErr != nil {
+	if opts.restoreHooks != nil && opts.restoreHooks.failBeforeRename != nil {
+		if hookErr := opts.restoreHooks.failBeforeRename("", outputPath); hookErr != nil {
 			return RestoreFileResult{}, fmt.Errorf("test hook restore failure: %w", hookErr)
 		}
 	}
@@ -1648,11 +1666,3 @@ func validateExactRestoreDestination(fsys fsx.FS, outputPath string) error {
 		return nil
 	}
 }
-
-// testRestoreFailBeforeRenameHook is a test-only hook for simulating restore failures after temp file is written but before rename.
-// It should only be set in tests.
-var TestRestoreFailBeforeRenameHook func(tempOutputPath, outputPath string) error
-
-// TestRestoreBeforeChunkReadHook is a test-only hook invoked immediately before
-// reading chunk payload bytes from a container. It should only be set in tests.
-var TestRestoreBeforeChunkReadHook func(dbconn *sql.DB, chunkID int64) error

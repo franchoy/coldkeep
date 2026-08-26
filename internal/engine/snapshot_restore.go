@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
@@ -71,12 +69,12 @@ func prepareSnapshotRestoreRequest(
 		return preparedSnapshotRestoreRequest{}, err
 	}
 
-	restoreQuery, err := buildSnapshotRestoreQuery(req.Selection)
+	restoreQuery, err := snapshotRestoreSelectionToSnapshotQuery(req.Selection)
 	if err != nil {
 		return preparedSnapshotRestoreRequest{}, err
 	}
 
-	restoreOpts, err := buildSnapshotRestoreOptions(destinationMode, outputTarget, req.Metadata, restoreQuery, storeCtx)
+	restoreOpts, err := buildSnapshotRestoreOptions(destinationMode, outputTarget, req.Metadata, req.Overwrite, restoreQuery, storeCtx)
 	if err != nil {
 		return preparedSnapshotRestoreRequest{}, err
 	}
@@ -127,69 +125,11 @@ func snapshotRestoreDestinationPathRequiredError(mode SnapshotRestoreDestination
 	}
 }
 
-func buildSnapshotRestoreQuery(selection SnapshotRestoreSelection) (*snapshot.SnapshotQuery, error) {
-	minSize, maxSize, err := snapshotRestoreSizeRange(selection)
-	if err != nil {
-		return nil, err
-	}
-	modifiedAfter, modifiedBefore, err := snapshotRestoreModifiedRange(selection)
-	if err != nil {
-		return nil, err
-	}
-	compiledRegex, err := compileSnapshotRestoreRegex(selection.Regex)
-	if err != nil {
-		return nil, err
-	}
-
-	query := &snapshot.SnapshotQuery{
-		ExactPaths:     copyStringSet(selection.ExactPaths),
-		Prefixes:       copyStrings(selection.Prefixes),
-		Pattern:        selection.Pattern,
-		Regex:          compiledRegex,
-		MinSize:        minSize,
-		MaxSize:        maxSize,
-		ModifiedAfter:  modifiedAfter,
-		ModifiedBefore: modifiedBefore,
-	}
-	if isEmptySnapshotRestoreQuery(query) {
-		return nil, nil
-	}
-	return query, nil
-}
-
-func snapshotRestoreSizeRange(selection SnapshotRestoreSelection) (*int64, *int64, error) {
-	minSize := cloneInt64(selection.MinSize)
-	maxSize := cloneInt64(selection.MaxSize)
-	if minSize != nil && maxSize != nil && *minSize > *maxSize {
-		return nil, nil, fmt.Errorf("engine: snapshot restore min size cannot exceed max size")
-	}
-	return minSize, maxSize, nil
-}
-
-func snapshotRestoreModifiedRange(selection SnapshotRestoreSelection) (*time.Time, *time.Time, error) {
-	modifiedAfter := cloneTime(selection.ModifiedAfter)
-	modifiedBefore := cloneTime(selection.ModifiedBefore)
-	if modifiedAfter != nil && modifiedBefore != nil && modifiedAfter.After(*modifiedBefore) {
-		return nil, nil, fmt.Errorf("engine: snapshot restore modified-after cannot be after modified-before")
-	}
-	return modifiedAfter, modifiedBefore, nil
-}
-
-func compileSnapshotRestoreRegex(pattern string) (*regexp.Regexp, error) {
-	if pattern == "" {
-		return nil, nil
-	}
-	compiled, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, fmt.Errorf("engine: invalid snapshot restore regex %q: %w", pattern, err)
-	}
-	return compiled, nil
-}
-
 func buildSnapshotRestoreOptions(
 	mode SnapshotRestoreDestinationMode,
 	outputTarget string,
 	metadataMode SnapshotRestoreMetadataMode,
+	overwrite bool,
 	restoreQuery *snapshot.SnapshotQuery,
 	storeCtx *storage.StorageContext,
 ) (snapshot.RestoreSnapshotOptions, error) {
@@ -197,6 +137,7 @@ func buildSnapshotRestoreOptions(
 		DestinationMode: storage.RestoreDestinationMode(mode),
 		StorageContext:  storeCtx,
 		Query:           restoreQuery,
+		Overwrite:       overwrite,
 	}
 
 	switch mode {
@@ -220,53 +161,11 @@ func buildSnapshotRestoreOptions(
 	}
 }
 
-func isEmptySnapshotRestoreQuery(q *snapshot.SnapshotQuery) bool {
-	if q == nil {
-		return true
-	}
-	return !hasSnapshotRestorePathSelector(q) && !hasSnapshotRestoreRangeSelector(q)
-}
-
-func hasSnapshotRestorePathSelector(q *snapshot.SnapshotQuery) bool {
-	return len(q.ExactPaths) > 0 || len(q.Prefixes) > 0 || q.Pattern != "" || q.Regex != nil
-}
-
-func hasSnapshotRestoreRangeSelector(q *snapshot.SnapshotQuery) bool {
-	return q.MinSize != nil || q.MaxSize != nil || q.ModifiedAfter != nil || q.ModifiedBefore != nil
-}
-
-func copyStringSet(values []string) map[string]struct{} {
-	if len(values) == 0 {
-		return nil
-	}
-	result := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		result[value] = struct{}{}
-	}
-	return result
-}
-
 func copyStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
 	}
 	return append([]string(nil), values...)
-}
-
-func cloneInt64(v *int64) *int64 {
-	if v == nil {
-		return nil
-	}
-	out := *v
-	return &out
-}
-
-func cloneTime(v *time.Time) *time.Time {
-	if v == nil {
-		return nil
-	}
-	out := *v
-	return &out
 }
 
 func hasTrailingPathSeparator(path string) bool {

@@ -67,7 +67,12 @@ func (s *filePlacementVerifyState) verifyLegacy(ctx context.Context, placement c
 	if err != nil {
 		return fmt.Errorf("decode legacy block %d: %w", legacy.BlockID, err)
 	}
-	return verifyPlacementChunkBytes(placement, plaintext)
+	if err := verifyPlacementChunkBytes(placement, plaintext); err != nil {
+		return err
+	}
+	observeLegacyVerificationStage(ctx, legacy.BlockID, verificationObservedLogicalHash)
+	observeLegacyVerificationStage(ctx, legacy.BlockID, verificationObservedBlockComplete)
+	return nil
 }
 
 func (s *filePlacementVerifyState) verifyPacked(ctx context.Context, placement catalog.ChunkPlacementRef) error {

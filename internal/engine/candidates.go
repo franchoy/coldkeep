@@ -110,8 +110,9 @@ type SnapshotQuery struct {
 type StoreRequest struct {
 	// SourcePath is the file to store.
 	SourcePath string
-	// Codec selects the storage codec (e.g. "plain", "aes-gcm"). Empty means
-	// the repository default.
+	// Codec selects the storage codec (e.g. "plain", "aes-gcm"). When
+	// non-empty, the explicit request value is used. When empty, COLDKEEP_CODEC
+	// is consulted; if it is unset, the implementation default is aes-gcm.
 	Codec string
 }
 

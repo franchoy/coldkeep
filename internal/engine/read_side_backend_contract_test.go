@@ -90,6 +90,77 @@ func TestEngineReadSnapshotViewsAcrossBackends(t *testing.T) {
 	})
 }
 
+func TestSnapshotDiffLimitAndMetadataFileCountAcrossBackends(t *testing.T) {
+	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
+		fixture := newEngineReadFixture(t, backend)
+		if _, err := backend.DB.ExecContext(context.Background(), `INSERT INTO snapshot_path (path) VALUES ($1)`, "docs/extra-added.txt"); err != nil {
+			t.Fatalf("seed second added diff path: %v", err)
+		}
+		addedPathID := requireEngineReadInt64(t, backend.DB, `SELECT id FROM snapshot_path WHERE path = $1`, "docs/extra-added.txt")
+		if _, err := backend.DB.ExecContext(context.Background(), `
+INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
+VALUES ($1, $2, $3, $4, $5, $6)`, "snap-target", addedPathID, fixture.logicalB, 10, 0o644, engineReadFixtureTime); err != nil {
+			t.Fatalf("seed second added diff membership: %v", err)
+		}
+		before := captureEngineReadState(t, backend.DB, fixture.containerDir)
+
+		limited, err := fixture.engine.SnapshotDiff(context.Background(), engine.SnapshotDiffRequest{
+			BaseID: "snap-base", TargetID: "snap-target", Filter: engine.SnapshotDiffAdded,
+			Query: engine.SnapshotQuery{Prefixes: []string{"docs/"}, Limit: 1},
+		})
+		if err != nil {
+			t.Fatalf("SnapshotDiff limited: %v", err)
+		}
+		if limited.TotalEntryCount != 3 || limited.MatchedEntryCount != 2 ||
+			limited.Summary != (engine.SnapshotDiffSummary{Added: 2}) ||
+			!reflect.DeepEqual(diffPaths(limited), []string{"docs/added.txt"}) {
+			t.Fatalf("SnapshotDiff limited projection: %+v", limited)
+		}
+
+		summary, err := fixture.engine.SnapshotDiff(context.Background(), engine.SnapshotDiffRequest{
+			BaseID: "snap-base", TargetID: "snap-target", Summary: true, Filter: engine.SnapshotDiffAdded,
+			Query: engine.SnapshotQuery{Prefixes: []string{"docs/"}, Limit: 1},
+		})
+		if err != nil || !summary.SummaryMode || summary.Entries != nil || summary.TotalEntryCount != 3 ||
+			summary.MatchedEntryCount != 2 || summary.Summary != (engine.SnapshotDiffSummary{Added: 2}) {
+			t.Fatalf("SnapshotDiff summary with Limit: got (%+v, %v)", summary, err)
+		}
+		if result, err := fixture.engine.SnapshotDiff(context.Background(), engine.SnapshotDiffRequest{
+			BaseID: "snap-base", TargetID: "snap-target", Query: engine.SnapshotQuery{Limit: -1},
+		}); !engine.IsCode(err, engine.ErrorInvalidArgument) || !reflect.DeepEqual(result, engine.SnapshotDiffResult{}) {
+			t.Fatalf("SnapshotDiff negative Limit: got (%+v, %v)", result, err)
+		}
+
+		list, err := fixture.engine.SnapshotList(context.Background(), engine.SnapshotListRequest{Limit: 2})
+		if err != nil || len(list.Snapshots) != 2 || list.Snapshots[0].FileCount != 3 || list.Snapshots[1].FileCount != 2 {
+			t.Fatalf("SnapshotList FileCount: got (%+v, %v)", list, err)
+		}
+		show, err := fixture.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{
+			SnapshotID: "snap-target", Query: engine.SnapshotQuery{Prefixes: []string{"docs/"}, Limit: 1},
+		})
+		if err != nil || show.Snapshot.FileCount != 3 || show.TotalFileCount != 3 || len(show.Files) != 1 {
+			t.Fatalf("SnapshotShow FileCount independence: got (%+v, %v)", show, err)
+		}
+		tree, err := fixture.engine.SnapshotList(context.Background(), engine.SnapshotListRequest{Tree: true})
+		if err != nil || tree.Graph == nil {
+			t.Fatalf("SnapshotList tree: got (%+v, %v)", tree, err)
+		}
+		wantCounts := map[string]int{"snap-root": 0, "snap-base": 2, "snap-target": 3}
+		for _, meta := range tree.Snapshots {
+			if meta.FileCount != wantCounts[meta.ID] {
+				t.Errorf("tree list snapshot %q FileCount = %d, want %d", meta.ID, meta.FileCount, wantCounts[meta.ID])
+			}
+		}
+		for _, node := range tree.Graph.Nodes {
+			if node.Snapshot.FileCount != wantCounts[node.Snapshot.ID] {
+				t.Errorf("graph snapshot %q FileCount = %d, want %d", node.Snapshot.ID, node.Snapshot.FileCount, wantCounts[node.Snapshot.ID])
+			}
+		}
+
+		assertEngineReadStateUnchanged(t, before, captureEngineReadState(t, backend.DB, fixture.containerDir))
+	})
+}
+
 func TestEngineReadVerifyAcrossBackends(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
 		fixture := newEngineReadFixture(t, backend)

@@ -2,6 +2,8 @@ package storage
 
 import (
 	"bytes"
+	"database/sql"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +12,54 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/fsx"
 )
+
+func TestRestoreHooksAreScopedToStorageContext(t *testing.T) {
+	t.Parallel()
+
+	repoA := NewTestRepository(t)
+	repoB := NewTestRepository(t)
+	storeFixture := func(repo *TestRepository, name, content string) StoreFileResult {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name)
+		mustNoErr(t, os.WriteFile(path, []byte(content), 0o600), "write restore hook fixture")
+		result, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, path, blocks.CodecPlain)
+		mustNoErr(t, err, "store restore hook fixture")
+		return result
+	}
+	storedA := storeFixture(repoA, "a.txt", "context-a")
+	storedB := storeFixture(repoB, "b.txt", "context-b")
+
+	hookErr := errors.New("context A restore hook")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	ConfigureRestoreTestHooksForTesting(&repoA.Storage, func(_ *sql.DB, _ int64) error {
+		close(entered)
+		<-release
+		return hookErr
+	}, nil)
+
+	errA := make(chan error, 1)
+	outA := filepath.Join(t.TempDir(), "a.out")
+	go func() {
+		errA <- RestoreFileWithStorageContext(repoA.Storage, storedA.FileID, outA)
+	}()
+	<-entered
+
+	outB := filepath.Join(t.TempDir(), "b.out")
+	if err := RestoreFileWithStorageContext(repoB.Storage, storedB.FileID, outB); err != nil {
+		close(release)
+		t.Fatalf("context B restore was affected by context A hook: %v", err)
+	}
+	close(release)
+	if err := <-errA; !errors.Is(err, hookErr) {
+		t.Fatalf("context A restore error = %v, want hook error", err)
+	}
+	got, err := os.ReadFile(outB)
+	mustNoErr(t, err, "read context B restore")
+	if string(got) != "context-b" {
+		t.Fatalf("context B restore payload = %q, want context-b", got)
+	}
+}
 
 // TestRestoreSeamDefaultFSPreservesRestoredBytes verifies that using the
 // default OS-backed filesystem seam (opts.fs == nil → fsx.Default()) produces

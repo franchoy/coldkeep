@@ -2458,13 +2458,12 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 
 	// Set test hook to simulate failure after temp file is written but before rename
 	hookCalled := false
-	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	ConfigureRestoreTestHooksForTesting(&sgctx, nil, func(tempOutputPath, outputPath string) error {
 		hookCalled = true
 		return fmt.Errorf("simulated failure before rename")
-	}
-	defer func() { TestRestoreFailBeforeRenameHook = nil }()
+	})
 
-	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	err = RestoreFileWithStorageContext(sgctx, fileID, destPath)
 	// restore should fail
 	if err == nil || !hookCalled {
@@ -2563,13 +2562,12 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 
 	// Set test hook to simulate failure after temp file is written but before rename
 	hookCalled := false
-	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	ConfigureRestoreTestHooksForTesting(&sgctx, nil, func(tempOutputPath, outputPath string) error {
 		hookCalled = true
 		return fmt.Errorf("simulated failure before rename")
-	}
-	defer func() { TestRestoreFailBeforeRenameHook = nil }()
+	})
 
-	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	err = RestoreFileWithStorageContext(sgctx, fileID, destPath)
 	// restore should fail
 	if err == nil || !hookCalled {
@@ -2592,7 +2590,7 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
 	_, sgctx, fileID, _, _ := setupRestorePinningFixture(t, [][]byte{[]byte("phase6-restore-temp")})
 	fixture := setupPreRenameFailureFixture(t)
-	hookState := installPreRenameFailureHook(t, fixture.destPath)
+	hookState := installPreRenameFailureHook(t, &sgctx, fixture.destPath)
 
 	err := RestoreFileWithStorageContext(sgctx, fileID, fixture.destPath)
 	assertPreRenameFailureAndCleanup(t, err, fixture, hookState)
@@ -2637,11 +2635,11 @@ func setupPreRenameFailureFixture(t *testing.T) preRenameFailureFixture {
 	}
 }
 
-func installPreRenameFailureHook(t *testing.T, destPath string) *preRenameHookState {
+func installPreRenameFailureHook(t *testing.T, sgctx *StorageContext, destPath string) *preRenameHookState {
 	t.Helper()
 
 	state := &preRenameHookState{}
-	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+	ConfigureRestoreTestHooksForTesting(sgctx, nil, func(tempOutputPath, outputPath string) error {
 		state.hookCalled = true
 		if tempOutputPath != "" {
 			t.Fatalf("secure installer must not expose temporary pathname, got %q", tempOutputPath)
@@ -2650,8 +2648,7 @@ func installPreRenameFailureHook(t *testing.T, destPath string) *preRenameHookSt
 			t.Fatalf("hook output path mismatch: got %q want %q", outputPath, destPath)
 		}
 		return fmt.Errorf("forced failure before rename for phase6")
-	}
-	t.Cleanup(func() { TestRestoreFailBeforeRenameHook = nil })
+	})
 
 	return state
 }
@@ -3157,7 +3154,7 @@ func TestRestorePinsChunksBeforeRead(t *testing.T) {
 	defer func() { _ = dbconn.Close() }()
 
 	hookCalled := false
-	TestRestoreBeforeChunkReadHook = func(hookDB *sql.DB, chunkID int64) error {
+	ConfigureRestoreTestHooksForTesting(&sgctx, func(hookDB *sql.DB, chunkID int64) error {
 		hookCalled = true
 		var pinCount int64
 		if err := hookDB.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinCount); err != nil {
@@ -3167,8 +3164,7 @@ func TestRestorePinsChunksBeforeRead(t *testing.T) {
 			return fmt.Errorf("expected chunk %d pin_count=1 before read, got %d", chunkID, pinCount)
 		}
 		return fmt.Errorf("stop before read")
-	}
-	defer func() { TestRestoreBeforeChunkReadHook = nil }()
+	}, nil)
 
 	outPath := filepath.Join(t.TempDir(), "out.bin")
 	err := RestoreFileWithStorageContext(sgctx, fileID, outPath)
@@ -3214,11 +3210,10 @@ func TestRestoreUnpinsAfterFailure(t *testing.T) {
 	defer func() { _ = dbconn.Close() }()
 
 	hookCalled := false
-	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+	ConfigureRestoreTestHooksForTesting(&sgctx, nil, func(tempOutputPath, outputPath string) error {
 		hookCalled = true
 		return fmt.Errorf("forced failure before rename")
-	}
-	defer func() { TestRestoreFailBeforeRenameHook = nil }()
+	})
 
 	err := RestoreFileWithStorageContext(sgctx, fileID, filepath.Join(t.TempDir(), "out-failure.bin"))
 	if err == nil || !strings.Contains(err.Error(), "test hook restore failure") {
@@ -3241,7 +3236,7 @@ func TestRestoreFailureDoesNotLeaveStalePins(t *testing.T) {
 	defer func() { _ = dbconn.Close() }()
 
 	hookCalls := 0
-	TestRestoreBeforeChunkReadHook = func(hookDB *sql.DB, _ int64) error {
+	ConfigureRestoreTestHooksForTesting(&sgctx, func(hookDB *sql.DB, _ int64) error {
 		hookCalls++
 		for _, cid := range chunkIDs {
 			var pinCount int64
@@ -3253,8 +3248,7 @@ func TestRestoreFailureDoesNotLeaveStalePins(t *testing.T) {
 			}
 		}
 		return fmt.Errorf("forced pre-read failure")
-	}
-	defer func() { TestRestoreBeforeChunkReadHook = nil }()
+	}, nil)
 
 	err := RestoreFileWithStorageContext(sgctx, fileID, filepath.Join(t.TempDir(), "out-stale.bin"))
 	if err == nil || !strings.Contains(err.Error(), "test hook before chunk read") {

@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.13%20ready-blue)
+![Status](https://img.shields.io/badge/status-v1.13.14%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -44,29 +44,74 @@ operationally closed. PR #107 merged final candidate
 `33aa1a563b1e6f7b09a86326c6bbd06d7b106e58`; post-merge reconciliation PR
 #108 produced final `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`.
 
-v1.13.13 Final v1.x and v2 Handoff Gate is ready for release in the
-merged-not-tagged state. Immutable candidate
-`8b48418241458facd1291ddb615518fa0a775bfb` passed its exact-head gates and
-PR #109 merged it normally as `ac395e0bb1725c9c5ca57d56136b255e5cb55921`,
-with prior `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010` as
-parent 1 and the candidate as parent 2. Formal v1.x normative completion and
-the v2 handoff are proven. The documentation-only
-[Phase 15 post-merge reconciliation](docs/release/v1.13/v1.13.13-phase15-post-merge-reconciliation.md)
-becomes authoritative after its protected normal merge and exact final-main
-hosted proof. v1.13.13 is not yet tagged or published; Phase 16 remains a
-separately authorized operation and v2.x implementation has not started.
+v1.13.13 Final v1.x and v2 Handoff Gate is published and operationally
+closed. Its annotated tag `v1.13.13` has object
+`5d534a6b4a9d44ab7303d9b76575338e20eee36d` and peels to
+`f3b75dc0fbee44e4fe91eb2df1df724f9426640e`; tag-triggered CI and the stable
+GitHub release passed. Its pre-publication Phase 15 evidence remains historical;
+the [Phase 16 publication record](docs/release/v1.13/v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md)
+is the current publication authority.
+
+A post-release audit identified 17 confirmed findings and 4 release-process
+gates. `v1.13.14 — Final v1.x Correctness Remediation and Closure
+Certification` is the active unreleased corrective candidate on
+`release/v1.13.14`. Phases 0–22 remain historically complete and Phase 23
+remains the sole Next phase, but its execution is blocked by the authorized
+Phase 23R recovery ledger. Sixteen of
+17 findings are closed; `CK-V1-AUD-005` remains lifecycle-partial, with its
+current-candidate truth reconciled in Phase 18 and final publication truth
+pending Phase 26. Phase 19 approved entry into the final release lifecycle,
+Phase 20 recorded the original corrective handoff and candidate-core freeze,
+and Phases 21 and 22 certified that superseded candidate. PR #112 then exposed
+a GATE-004 execution-context defect: product validation correctly ran on the
+synthetic PR merge, but release-linearity validation inspected that synthetic
+merge instead of the authoritative same-repository PR head. Phase 23R repairs
+and refreezes the core at 1,397 entries with SHA-256
+`58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
+The repaired head passed real PR-context quality and Required Gate proof, the
+repeated Phase 21 local certification passed against the exact refrozen
+candidate, and Phase 22 hosted recertification passed on the resulting exact
+head. State D is effective after final-head hosted acceptance; Phase 23 is
+ready only for separate authorization, while merge, tag, publication, and
+final closure remain blocked. All 4 release-process gates are
+currently closed, all 21 historical integrated
+regression rows are reconciled, and the compatibility and runtime-stress
+matrices are complete. No `v1.13.14` tag or stable GitHub release exists.
+v1.x normative scope and Phase 23R corrective revalidation are complete. v2
+implementation has not started.
 
 ```text
-V1_X_NORMATIVE_COMPLETION: PROVEN
-V1_13_13_CANDIDATE: 8b48418241458facd1291ddb615518fa0a775bfb
-PHASE_15_PROTECTED_MERGE: COMPLETE
-ORIGINAL_MERGE_SHA: ac395e0bb1725c9c5ca57d56136b255e5cb55921
-V1_13_13_STATE: MERGED_NOT_TAGGED
-TAG: ABSENT
-GITHUB_RELEASE: ABSENT
-PHASE_15_POST_MERGE_RECONCILIATION: CONDITIONALLY_COMPLETE_PENDING_FINAL_MAIN_PROOF
-PHASE_16: NOT_STARTED
-PHASE_16_EXECUTION_AUTHORIZED: NO
+V1_13_13_STATE: RELEASED_AND_OPERATIONALLY_CLOSED
+V1_13_14_STATE: ACTIVE_UNRELEASED_CORRECTIVE_CANDIDATE
+V1_13_14_TAG: ABSENT
+V1_13_14_STABLE_GITHUB_RELEASE: ABSENT
+V1_X_NORMATIVE_SCOPE: COMPLETE
+V1_X_CORRECTIVE_REVALIDATION: COMPLETE_PHASE23R
+V1_X_CONFIRMED_POST_RELEASE_FINDINGS: 17
+V1_X_FINDINGS_CLOSED: 16/17
+CK_V1_AUD_005: STILL_OPEN_PARTIAL
+V1_X_RELEASE_PROCESS_GATES: 4
+V1_X_RELEASE_PROCESS_GATES_COMPLETE: 4/4
+V1_X_INTEGRATED_REGRESSION_ROWS: 21/21
+V1_X_COMPATIBILITY_MATRIX: COMPLETE
+V1_X_RUNTIME_STRESS_MATRIX: COMPLETE
+FINAL_CORRECTIVE_HANDOFF: COMPLETE
+ORIGINAL_PHASE20_FREEZE: HISTORICALLY_VALID_FOR_SUPERSEDED_CANDIDATE
+CURRENT_PHASE23R_CORE: REFROZEN_PHASE23R_RECERTIFIED
+CURRENT_IMMUTABLE_CANDIDATE_CORE_FREEZE: ACTIVE_PHASE23R
+PHASE23R_CORE_MANIFEST_ENTRIES: 1397
+PHASE23R_CORE_MANIFEST_SHA256: 58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023
+CK_V1_GATE_004: RECLOSED_PHASE23R
+ACTUAL_PR_CONTEXT_REVALIDATION: PASS
+LOCAL_RELEASE_READINESS_CERTIFICATION: PASS_PHASE23R_RECERTIFICATION
+HOSTED_RELEASE_READINESS_CERTIFICATION: PASS_PHASE23R_RECERTIFICATION
+RELEASE_READINESS_CERTIFICATION: CERTIFIED_PHASE23R_RECERTIFIED
+PHASE23R_RECOVERY: COMPLETE
+PHASES_0_22: COMPLETE
+PHASE_23: NEXT
+PHASE_23_EXECUTION: NOT_STARTED_READY_FOR_SEPARATE_AUTHORIZATION
+PHASES_24_26: NOT_STARTED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
@@ -412,10 +457,19 @@ coldkeep remove 12
 coldkeep gc
 coldkeep stats
 coldkeep list
-coldkeep search report
+coldkeep search --name report
 coldkeep verify system --standard
 coldkeep doctor
 ```
+
+Initialize with explicit compression settings when needed:
+
+```bash
+coldkeep init --compression none
+coldkeep init --compression zstd --compression-level 1
+```
+
+Compression is block-level and happens before encryption. `none` stores new blocks without compression; `zstd` uses configured compression behavior for new blocks. Compression settings affect new writes only; existing blocks are not modified. `--compression-level` is valid only with `zstd` and must be in the range 1-9.
 
 Simulation (no physical writes):
 
@@ -528,10 +582,21 @@ Semantics (summary):
   - overall payload status: ok, partial_failure, error
   - per-item result status: success, failed, skipped, planned
 - JSON execution mode is explicit: `continue_on_error` (default) or `fail_fast`
-- process exit is automation-friendly:
-  - 0 when no item fails
-  - 1 when one or more items fail
-  - 2 for pre-execution validation/usage failures (including empty effective target sets after parsing input)
+- process exit is automation-friendly and follows the public process exit contract:
+  - exit 0: success
+  - exit 1: general/execution error
+  - exit 2: usage/pre-execution validation error
+  - exit 3: verification/invariant-integrity error
+  - exit 4: recovery error
+- Batch failure precedence: invariant > execution > validation.
+
+JSON error fields serve distinct automation roles:
+
+- `exit_code`: numeric process exit status
+- `error_class`: process-level label
+- `error.code`: coarse error family
+- `invariant_code`: stable invariant identifier
+- `recommended_action`: operator remediation guidance
 
 Example JSON payload:
 

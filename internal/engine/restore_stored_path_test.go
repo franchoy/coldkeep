@@ -19,7 +19,7 @@ import (
 
 type storedPathRestoreFixture struct {
 	db      *sql.DB
-	sgctx   storage.StorageContext
+	sgctx   *storage.StorageContext
 	engine  *engine.DefaultEngine
 	stored  storage.StoreFileResult
 	payload []byte
@@ -219,7 +219,7 @@ func TestRestoreStoredPathRequiresDatabaseDependency(t *testing.T) {
 	assertRestoreStoredPathValidationError(t, result, err, "engine: restore stored path database is required")
 }
 
-func TestRestoreStoredPathRequiresContainerDirectoryDependency(t *testing.T) {
+func TestRestoreStoredPathUsesDefaultContainerDirectoryDependency(t *testing.T) {
 	db := openSnapshotTestDB(t)
 	eng, err := engine.New(engine.Config{DB: db})
 	if err != nil {
@@ -229,7 +229,15 @@ func TestRestoreStoredPathRequiresContainerDirectoryDependency(t *testing.T) {
 	result, restoreErr := eng.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
 		StoredPath: "/tmp/file.txt",
 	})
-	assertRestoreStoredPathValidationError(t, result, restoreErr, "engine: restore stored path container directory is required")
+	if restoreErr == nil {
+		t.Fatal("expected missing stored path error")
+	}
+	if strings.Contains(restoreErr.Error(), "container directory is required") {
+		t.Fatalf("RestoreStoredPath retained contradictory explicit-directory dependency: %v", restoreErr)
+	}
+	if result != (engine.RestoreStoredPathResult{}) {
+		t.Fatalf("expected zero result for missing stored path, got %+v", result)
+	}
 }
 
 func TestRestoreStoredPathOriginalMode(t *testing.T) {
@@ -452,11 +460,10 @@ func TestRestoreStoredPathReleasesPinsAfterFailure(t *testing.T) {
 	chunkIDs := logicalFileChunkIDs(t, fixture.db, fixture.stored.FileID)
 
 	hookCalled := false
-	storage.TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+	storage.ConfigureRestoreTestHooksForTesting(fixture.sgctx, nil, func(tempOutputPath, outputPath string) error {
 		hookCalled = true
 		return fmt.Errorf("forced failure before rename")
-	}
-	defer func() { storage.TestRestoreFailBeforeRenameHook = nil }()
+	})
 
 	result, err := fixture.engine.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
 		StoredPath:      fixture.stored.Path,
@@ -556,6 +563,41 @@ func TestRestoreStoredPathPostgres(t *testing.T) {
 	assertRestoreCatalogStateEqual(t, before, after)
 }
 
+func TestRestoreStoredPathDefaultContainerDirPostgres(t *testing.T) {
+	testgate.RequireDB(t)
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+
+	db := openTempPostgresEngineDatabase(t, "coldkeep_phase12_restore_default")
+	if err := dbpkg.EnsurePostgresSchema(db); err != nil {
+		t.Fatalf("EnsurePostgresSchema: %v", err)
+	}
+
+	originalDefault := container.ContainersDir
+	defaultRoot := t.TempDir()
+	container.ContainersDir = defaultRoot
+	t.Cleanup(func() { container.ContainersDir = originalDefault })
+
+	payload := []byte("restore-stored-path-postgres-default")
+	fixture := newStoredPathRestoreFixtureFromDB(t, db, payload, defaultRoot)
+	eng, err := engine.New(engine.Config{DB: db, StoreContext: fixture.sgctx})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+
+	destination := filepath.Join(t.TempDir(), "postgres-default.txt")
+	result, err := eng.RestoreStoredPath(context.Background(), engine.RestoreStoredPathRequest{
+		StoredPath:      fixture.stored.Path,
+		DestinationMode: engine.RestoreDestinationOverride,
+		DestinationPath: destination,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("RestoreStoredPath postgres default: %v", err)
+	}
+	assertRestoreStoredPathResult(t, result, fixture.stored.Path, fixture.stored.FileID, engine.RestoreDestinationOverride, destination, fixture.stored.FileHash)
+	assertRestoredBytes(t, destination, payload)
+}
+
 func newStoredPathRestoreFixture(t *testing.T, content string) storedPathRestoreFixture {
 	t.Helper()
 
@@ -589,10 +631,14 @@ func newStoredPathRestoreFixtureFromDB(t *testing.T, db *sql.DB, payload []byte,
 func newStoredPathRestoreFixtureFromExistingStore(t *testing.T, db *sql.DB, sgctx storage.StorageContext, stored storage.StoreFileResult, payload []byte) storedPathRestoreFixture {
 	t.Helper()
 
-	eng := newRemoveTestEngine(t, db, sgctx.ContainerDir)
+	fixtureContext := &sgctx
+	eng, err := engine.New(engine.Config{DB: db, ContainerDir: sgctx.ContainerDir, StoreContext: fixtureContext})
+	if err != nil {
+		t.Fatalf("new restore stored-path engine: %v", err)
+	}
 	return storedPathRestoreFixture{
 		db:      db,
-		sgctx:   sgctx,
+		sgctx:   fixtureContext,
 		engine:  eng,
 		stored:  stored,
 		payload: payload,

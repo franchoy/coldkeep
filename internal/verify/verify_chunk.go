@@ -7,14 +7,11 @@ import (
 	"log"
 
 	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
-func checkReferenceCounts(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkReferenceCountsContext(ctx context.Context, dbconn *sql.DB) error {
 
 	// Check that all chunks have correct reference counts (chunk.live_ref_count should match the actual number of file_chunk references)
 	log.Printf("Checking chunk reference counts consistency...")
@@ -74,9 +71,7 @@ func checkReferenceCounts(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkOrphanChunks(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkOrphanChunksContext(ctx context.Context, dbconn *sql.DB) error {
 
 	// Check that there are no orphan chunks (chunks with live_ref_count > 0 but no file_chunk references)
 	log.Printf("Checking for orphan chunks with live_ref_count > 0 but no file_chunk references...")
@@ -124,9 +119,7 @@ func checkOrphanChunks(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkPinnedChunkStatus(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkPinnedChunkStatusContext(ctx context.Context, dbconn *sql.DB) error {
 
 	// Restore pin_count should only exist on chunks that remain COMPLETED and
 	// still have valid location metadata.
@@ -220,9 +213,7 @@ func checkPinnedChunkStatus(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkCompletedChunkBlockCardinality(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkCompletedChunkBlockCardinalityContext(ctx context.Context, dbconn *sql.DB) error {
 
 	// Every COMPLETED chunk must have a valid physical mapping:
 	// blocks-only, packed-only, or migration companion (both).
@@ -283,9 +274,7 @@ func checkCompletedChunkBlockCardinality(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkChunkOffsets(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkChunkOffsetsContext(ctx context.Context, dbconn *sql.DB) error {
 
 	// Check that all chunks have physical location metadata consistent with their
 	// status across migration modes: legacy blocks, packed
@@ -406,9 +395,7 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 //     settle.
 //   - If a future format intentionally introduces padding/alignment gaps,
 //     this check must be updated to reflect the new on-disk contract.
-func checkChunkOffsetValidity(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkChunkOffsetValidityContext(ctx context.Context, dbconn *sql.DB) error {
 
 	// Check that all chunks with status = COMPLETED have valid blocks.container_id and blocks.block_offset values
 	// and that the block_offset + stored_size does not exceed the container's current_size

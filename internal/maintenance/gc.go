@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
+	"sort"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/catalog"
@@ -71,11 +73,51 @@ type GCResult struct {
 	DryRun                       bool     `json:"dry_run"`
 	AffectedContainers           int      `json:"affected_containers"`
 	ContainerFilenames           []string `json:"container_filenames"`
+	BytesReclaimed               int64    `json:"bytes_reclaimed"`
 	SnapshotRetainedContainers   int      `json:"snapshot_retained_containers"`
 	SnapshotRetainedLogicalFiles int      `json:"snapshot_retained_logical_files"`
 	RetainedCurrentOnlyLogical   int      `json:"retained_current_only_logical_files"`
 	RetainedSnapshotOnlyLogical  int      `json:"retained_snapshot_only_logical_files"`
 	RetainedSharedLogical        int      `json:"retained_shared_logical_files"`
+}
+
+type gcDispatchUnitKind string
+
+const (
+	gcDispatchSealedContainer gcDispatchUnitKind = "sealed_container"
+	gcDispatchActiveContainer gcDispatchUnitKind = "active_container"
+)
+
+type gcDispatchUnit struct {
+	Kind        gcDispatchUnitKind
+	ContainerID int64
+	Filename    string
+}
+
+type gcExecutionOptions struct {
+	fs               fsx.FS
+	dispatchObserver func(gcDispatchUnit)
+	workers          int
+}
+
+func (opts gcExecutionOptions) effectiveWorkers() int {
+	if opts.workers > 1 {
+		return opts.workers
+	}
+	return 1
+}
+
+func (opts gcExecutionOptions) effectiveFS() fsx.FS {
+	if opts.fs != nil {
+		return opts.fs
+	}
+	return fsx.Default()
+}
+
+func (opts gcExecutionOptions) observeDispatch(unit gcDispatchUnit) {
+	if opts.dispatchObserver != nil {
+		opts.dispatchObserver(unit)
+	}
 }
 
 func RunGCWithContainersDir(dryRun bool, containersDir string) error {
@@ -122,9 +164,20 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (GCResult, 
 // to run 'repair ref-counts' before retrying GC.
 // Both real and dry-run GC are subject to the same pre-flight gate.
 func RunGCWithDB(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir string) (result GCResult, err error) {
+	return RunGCWithDBWorkers(ctx, dbconn, dryRun, containersDir, 1)
+}
+
+// RunGCWithDBWorkers is the worker-aware Engine entry. Workers is an upper
+// bound on concurrently executing physical-container units; values below two
+// retain the serial compatibility behavior.
+func RunGCWithDBWorkers(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir string, workers int) (result GCResult, err error) {
+	return runGCWithDBOptions(ctx, dbconn, dryRun, containersDir, gcExecutionOptions{workers: workers})
+}
+
+func runGCWithDBOptions(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir string, opts gcExecutionOptions) (result GCResult, err error) {
 	result.DryRun = dryRun
 
-	fsys := fsx.Default()
+	fsys := opts.effectiveFS()
 
 	advisoryLock, err := acquireGCAdvisoryLock(ctx, dbconn, dryRun)
 	if err != nil {
@@ -144,13 +197,48 @@ func RunGCWithDB(ctx context.Context, dbconn *sql.DB, dryRun bool, containersDir
 	}
 	applyRetentionCountsToResult(state.reachability, &result)
 
-	if err := sweepGCSealedContainers(ctx, dbconn, dryRun, state, containersDir, fsys, &result); err != nil {
+	sealedPlan, err := materializeSealedGCPlan(ctx, dbconn)
+	if err != nil {
 		return GCResult{}, err
+	}
+	sealedResults := executeGCPlan(ctx, sealedPlan, opts, func(unit gcPlannedUnit) gcUnitResult {
+		outcome, physicalBytes, unitErr := processSealedContainerForGC(
+			ctx,
+			dbconn,
+			unit.dispatch.ContainerID,
+			unit.dispatch.Filename,
+			dryRun,
+			state,
+			containersDir,
+			fsys,
+		)
+		return gcUnitResult{plan: unit, outcome: outcome, physicalBytes: physicalBytes, err: unitErr}
+	})
+	if sealedErr := aggregateGCUnitResults(sealedResults, ctx.Err(), &result); sealedErr != nil {
+		return result, sealedErr
 	}
 
 	if !dryRun {
-		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, state.reachableChunks, state.liveUnits, fsys); err != nil {
-			return GCResult{}, fmt.Errorf("cleanup fully dead active containers: %w", err)
+		activeCandidates, activeErr := queryFullyDeadActiveContainers(ctx, dbconn)
+		if activeErr != nil {
+			return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
+		}
+		activePlan := planActiveGCUnits(activeCandidates, len(sealedPlan))
+		activeResults := executeGCPlan(ctx, activePlan, opts, func(unit gcPlannedUnit) gcUnitResult {
+			outcome, physicalBytes, unitErr := sweepDeadActiveContainerResult(
+				ctx,
+				dbconn,
+				containersDir,
+				state.reachableChunks,
+				state.liveUnits,
+				fsys,
+				unit.dispatch.ContainerID,
+				unit.dispatch.Filename,
+			)
+			return gcUnitResult{plan: unit, outcome: outcome, physicalBytes: physicalBytes, err: unitErr}
+		})
+		if activeErr := aggregateGCUnitResults(activeResults, ctx.Err(), &result); activeErr != nil {
+			return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
 		}
 	}
 
@@ -174,6 +262,111 @@ const (
 	sealedContainerRetained                                // retained by snapshot safety net
 	sealedContainerAffected                                // deleted (or dry-run counted)
 )
+
+type gcPlannedUnit struct {
+	index    int
+	dispatch gcDispatchUnit
+}
+
+type gcUnitResult struct {
+	plan          gcPlannedUnit
+	outcome       sealedContainerGCResult
+	physicalBytes int64
+	err           error
+}
+
+func executeGCPlan(ctx context.Context, plan []gcPlannedUnit, opts gcExecutionOptions, execute func(gcPlannedUnit) gcUnitResult) []gcUnitResult {
+	if len(plan) == 0 {
+		return nil
+	}
+	workers := opts.effectiveWorkers()
+	if workers > len(plan) {
+		workers = len(plan)
+	}
+
+	completed := make(chan gcUnitResult, workers)
+	results := make([]gcUnitResult, len(plan))
+	started := make([]bool, len(plan))
+	next := 0
+	inFlight := 0
+	stopped := false
+
+	dispatch := func(unit gcPlannedUnit) {
+		localIndex := next
+		started[localIndex] = true
+		next++
+		inFlight++
+		go func() {
+			opts.observeDispatch(unit.dispatch)
+			completed <- execute(unit)
+		}()
+	}
+
+	for inFlight < workers && next < len(plan) {
+		if ctx.Err() != nil {
+			stopped = true
+			break
+		}
+		dispatch(plan[next])
+	}
+
+	for inFlight > 0 {
+		unitResult := <-completed
+		inFlight--
+		localIndex := unitResult.plan.index - plan[0].index
+		results[localIndex] = unitResult
+		if unitResult.err != nil || ctx.Err() != nil {
+			stopped = true
+		}
+		if !stopped && next < len(plan) {
+			dispatch(plan[next])
+		}
+	}
+
+	ordered := make([]gcUnitResult, 0, len(plan))
+	for i := range results {
+		if started[i] {
+			ordered = append(ordered, results[i])
+		}
+	}
+	return ordered
+}
+
+func aggregateGCUnitResults(unitResults []gcUnitResult, callerErr error, result *GCResult) error {
+	var joined []error
+	overflowed := false
+	for _, unitResult := range unitResults {
+		if unitResult.outcome == sealedContainerRetained {
+			result.SnapshotRetainedContainers++
+		}
+		if unitResult.outcome == sealedContainerAffected {
+			result.AffectedContainers++
+			result.ContainerFilenames = append(result.ContainerFilenames, unitResult.plan.dispatch.Filename)
+			if !overflowed {
+				if result.BytesReclaimed > math.MaxInt64-unitResult.physicalBytes {
+					overflowed = true
+					joined = append(joined, fmt.Errorf(
+						"GC byte-accounting overflow at plan index %d kind=%s container_id=%d filename=%q",
+						unitResult.plan.index,
+						unitResult.plan.dispatch.Kind,
+						unitResult.plan.dispatch.ContainerID,
+						unitResult.plan.dispatch.Filename,
+					))
+				} else {
+					result.BytesReclaimed += unitResult.physicalBytes
+				}
+			}
+		}
+		if unitResult.err != nil {
+			joined = append(joined, unitResult.err)
+		}
+	}
+	combined := errors.Join(joined...)
+	if callerErr != nil && !errors.Is(combined, callerErr) {
+		combined = errors.Join(combined, callerErr)
+	}
+	return combined
+}
 
 // gcAdvisoryLock owns the dedicated PostgreSQL session carrying GC's
 // session-level advisory lock. The connection must not return to the pool until
@@ -332,59 +525,64 @@ func applyRetentionCountsToResult(reachability *retention.ReachabilitySummary, r
 	result.RetainedSharedLogical = len(classification.Shared)
 }
 
-// sweepGCSealedContainers iterates over all sealed, non-quarantined containers
-// and evaluates each for deletion. It updates result in place.
-func sweepGCSealedContainers(ctx context.Context, dbconn *sql.DB, dryRun bool, state gcPreFlightState, containersDir string, fsys fsx.FS, result *GCResult) error {
+// materializeSealedGCPlan scans and closes the candidate query before any unit
+// transaction begins. The returned slice is the authoritative execution order.
+func materializeSealedGCPlan(ctx context.Context, dbconn *sql.DB) ([]gcPlannedUnit, error) {
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE AND sealing = FALSE
-		ORDER BY id ASC
+		ORDER BY id ASC, filename ASC
 	`)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 
+	var units []gcDispatchUnit
 	for rows.Next() {
-		var containerID int64
-		var filename string
-		if err := rows.Scan(&containerID, &filename); err != nil {
-			return err
+		var unit gcDispatchUnit
+		unit.Kind = gcDispatchSealedContainer
+		if err := rows.Scan(&unit.ContainerID, &unit.Filename); err != nil {
+			_ = rows.Close()
+			return nil, err
 		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		outcome, err := processSealedContainerForGC(ctx, dbconn, containerID, filename, dryRun, state, containersDir, fsys)
-		if err != nil {
-			return err
-		}
-		switch outcome {
-		case sealedContainerRetained:
-			result.SnapshotRetainedContainers++
-		case sealedContainerAffected:
-			result.AffectedContainers++
-			result.ContainerFilenames = append(result.ContainerFilenames, filename)
-		}
+		units = append(units, unit)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	sort.Slice(units, func(i, j int) bool {
+		if units[i].ContainerID != units[j].ContainerID {
+			return units[i].ContainerID < units[j].ContainerID
+		}
+		return units[i].Filename < units[j].Filename
+	})
+	plan := make([]gcPlannedUnit, len(units))
+	for i := range units {
+		plan[i] = gcPlannedUnit{index: i, dispatch: units[i]}
+	}
+	return plan, nil
 }
 
 // processSealedContainerForGC evaluates and optionally deletes one sealed
 // container. It owns the transaction lifecycle for that container.
-func processSealedContainerForGC(ctx context.Context, dbconn *sql.DB, containerID int64, filename string, dryRun bool, state gcPreFlightState, containersDir string, fsys fsx.FS) (sealedContainerGCResult, error) {
+func processSealedContainerForGC(ctx context.Context, dbconn *sql.DB, containerID int64, filename string, dryRun bool, state gcPreFlightState, containersDir string, fsys fsx.FS) (sealedContainerGCResult, int64, error) {
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
-		return sealedContainerSkipped, err
+		return sealedContainerSkipped, 0, err
 	}
 
 	stillEmpty, skip, err := evaluateSealedContainerEmpty(ctx, tx, dbconn, containerID, dryRun, state.liveUnits)
 	if err != nil {
 		_ = tx.Rollback()
-		return sealedContainerSkipped, err
+		return sealedContainerSkipped, 0, err
 	}
 	if skip || !stillEmpty {
 		_ = tx.Rollback()
-		return sealedContainerSkipped, nil
+		return sealedContainerSkipped, 0, nil
 	}
 
 	return checkRetentionAndCommit(ctx, tx, containerID, filename, dryRun, state.reachableChunks, containersDir, fsys)
@@ -410,24 +608,29 @@ func evaluateSealedContainerEmpty(ctx context.Context, tx *sql.Tx, dbconn *sql.D
 // checkRetentionAndCommit runs the snapshot-retention safety check and, if
 // the container is not retained, either rolls back (dry-run) or commits the
 // deletion and removes the physical file.
-func checkRetentionAndCommit(ctx context.Context, tx *sql.Tx, containerID int64, filename string, dryRun bool, reachableChunks map[int64]struct{}, containersDir string, fsys fsx.FS) (sealedContainerGCResult, error) {
+func checkRetentionAndCommit(ctx context.Context, tx *sql.Tx, containerID int64, filename string, dryRun bool, reachableChunks map[int64]struct{}, containersDir string, fsys fsx.FS) (sealedContainerGCResult, int64, error) {
 	hasRetained, err := containerHasReachableChunks(ctx, tx, containerID, reachableChunks)
 	if err != nil {
 		_ = tx.Rollback()
-		return sealedContainerSkipped, fmt.Errorf("retention safety check for container %d: %w", containerID, err)
+		return sealedContainerSkipped, 0, fmt.Errorf("retention safety check for container %d: %w", containerID, err)
 	}
 	if hasRetained {
 		_ = tx.Rollback()
-		return sealedContainerRetained, nil
+		return sealedContainerRetained, 0, nil
+	}
+	containerPath, physicalBytes, err := inspectGCContainerFile(fsys, containersDir, filename)
+	if err != nil {
+		_ = tx.Rollback()
+		return sealedContainerSkipped, 0, err
 	}
 	if dryRun {
 		_ = tx.Rollback()
-		return sealedContainerAffected, nil
+		return sealedContainerAffected, physicalBytes, nil
 	}
-	if err := commitGCContainerDeletion(ctx, tx, containerID, containersDir, filename, fsys); err != nil {
-		return sealedContainerSkipped, err
+	if err := commitGCContainerDeletionWithPath(ctx, tx, containerID, containerPath, fsys); err != nil {
+		return sealedContainerSkipped, 0, err
 	}
-	return sealedContainerAffected, nil
+	return sealedContainerAffected, physicalBytes, nil
 }
 
 // evaluateContainerEmptyDryRun checks whether a container appears empty
@@ -529,10 +732,38 @@ func evaluateContainerEmptyLive(ctx context.Context, tx *sql.Tx, dbconn *sql.DB,
 	return stillEmpty, false, nil
 }
 
-// commitGCContainerDeletion sweeps chunk/block metadata, deletes the container
-// row, commits the transaction, then removes the physical file. The transaction
-// is rolled back on any error before commit.
+func inspectGCContainerFile(fsys fsx.FS, containersDir, filename string) (string, int64, error) {
+	containerPath, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
+	info, err := fsys.Stat(containerPath)
+	if err != nil {
+		return "", 0, fmt.Errorf("stat container file %q: %w", filename, err)
+	}
+	physicalBytes := info.Size()
+	if physicalBytes < 0 {
+		return "", 0, fmt.Errorf("stat container file %q returned negative size %d", filename, physicalBytes)
+	}
+	return containerPath, physicalBytes, nil
+}
+
+// commitGCContainerDeletion is retained for focused transaction-cardinality
+// contracts. Ordinary GC resolves and stats the path before calling the
+// path-aware helper so the physical observation occurs exactly once.
 func commitGCContainerDeletion(ctx context.Context, tx *sql.Tx, containerID int64, containersDir, filename string, fsys fsx.FS) error {
+	containerPath, _, err := inspectGCContainerFile(fsys, containersDir, filename)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return commitGCContainerDeletionWithPath(ctx, tx, containerID, containerPath, fsys)
+}
+
+// commitGCContainerDeletionWithPath sweeps chunk/block metadata, deletes the
+// container row, commits, then removes the already-inspected physical file.
+// The transaction is rolled back on every failure before commit.
+func commitGCContainerDeletionWithPath(ctx context.Context, tx *sql.Tx, containerID int64, containerPath string, fsys fsx.FS) error {
 	if err := SweepUnreachableChunks(ctx, tx, containerID); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -556,12 +787,7 @@ func commitGCContainerDeletion(ctx context.Context, tx *sql.Tx, containerID int6
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	containerPath, err := container.SafeContainerPath(containersDir, filename)
-	if err != nil {
-		return fmt.Errorf("invalid container filename %q: %w", filename, err)
-	}
-	removeContainerFileWithFS(fsys, containerPath)
-	return nil
+	return removeContainerFileWithFS(fsys, containerPath)
 }
 
 // gcChunkQuerier is a minimal interface satisfied by *sql.Tx and *sql.DB,
@@ -830,7 +1056,12 @@ func collectPackedChunkIDsToDelete(ctx context.Context, execer gcSweepExecer, de
 // live_ref_count and pin_count are both zero, preserving any chunk that gained
 // a new reference since the mark phase.
 func deleteUnreachableChunkRows(ctx context.Context, execer gcSweepExecer, chunkIDs map[int64]struct{}) error {
+	orderedChunkIDs := make([]int64, 0, len(chunkIDs))
 	for chunkID := range chunkIDs {
+		orderedChunkIDs = append(orderedChunkIDs, chunkID)
+	}
+	sort.Slice(orderedChunkIDs, func(i, j int) bool { return orderedChunkIDs[i] < orderedChunkIDs[j] })
+	for _, chunkID := range orderedChunkIDs {
 		if _, err := execer.ExecContext(ctx, `
 			DELETE FROM chunk
 			WHERE id = $1
@@ -902,12 +1133,13 @@ func deletePackedBlockMetadata(ctx context.Context, execer gcSweepExecer, blockI
 }
 
 // removeContainerFileWithFS deletes the physical container file through the
-// filesystem seam. Errors are logged only; container DB rows are already
-// committed as deleted at this point.
-func removeContainerFileWithFS(fsys fsx.FS, path string) {
+// filesystem seam. The metadata transaction is already committed, so failure
+// is returned without attempting a synthetic metadata restore.
+func removeContainerFileWithFS(fsys fsx.FS, path string) error {
 	if err := fsys.Remove(path); err != nil {
-		log.Println("warning: failed to delete container file:", err)
+		return fmt.Errorf("remove container file %q: %w", path, err)
 	}
+	return nil
 }
 
 // activeContainer is a minimal record used during the fully-dead active
@@ -917,38 +1149,25 @@ type activeContainer struct {
 	filename string
 }
 
-// cleanupFullyDeadActiveContainers deletes active (unsealed) containers in which
-// every chunk has live_ref_count = 0 and pin_count = 0. Deleting the whole container
-// (both the physical file and all metadata rows) is safe because the append-only
-// offset invariant is preserved by removing the container entirely — no offsets shift.
-// Partially-dead containers (mixed live and dead chunks) are left intact;
-// they will be handled by the regular sealed-container GC path once sealed.
-func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS) error {
-	candidates, err := queryFullyDeadActiveContainers(ctx, dbconn)
-	if err != nil {
-		return err
-	}
-	for _, ac := range candidates {
-		// Snapshot-retention safety net: skip containers whose chunks are retained.
-		hasRetained, err := containerHasReachableChunks(ctx, dbconn, ac.id, reachableChunkIDs)
-		if err != nil {
-			return fmt.Errorf("retention safety check for active container %d: %w", ac.id, err)
+func planActiveGCUnits(candidates []activeContainer, baseIndex int) []gcPlannedUnit {
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].id != candidates[j].id {
+			return candidates[i].id < candidates[j].id
 		}
-		if hasRetained {
-			continue
-		}
-		hasLiveUnits, err := containerHasLivePhysicalUnits(ctx, dbconn, ac.id, liveUnits)
-		if err != nil {
-			return fmt.Errorf("live physical unit check for active container %d: %w", ac.id, err)
-		}
-		if hasLiveUnits {
-			continue
-		}
-		if err := sweepDeadActiveContainer(ctx, dbconn, containersDir, liveUnits, fsys, ac.id, ac.filename); err != nil {
-			return err
+		return candidates[i].filename < candidates[j].filename
+	})
+	plan := make([]gcPlannedUnit, len(candidates))
+	for i, candidate := range candidates {
+		plan[i] = gcPlannedUnit{
+			index: baseIndex + i,
+			dispatch: gcDispatchUnit{
+				Kind:        gcDispatchActiveContainer,
+				ContainerID: candidate.id,
+				Filename:    candidate.filename,
+			},
 		}
 	}
-	return nil
+	return plan
 }
 
 // queryFullyDeadActiveContainers returns active, non-quarantined containers
@@ -978,7 +1197,7 @@ func queryFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB) ([]acti
 			UNION ALL
 			SELECT 1 FROM storage_blocks WHERE container_id = c.id
 		)
-		ORDER BY c.id ASC
+		ORDER BY c.id ASC, c.filename ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -1003,49 +1222,71 @@ func queryFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB) ([]acti
 // container is still fully dead under lock, sweeps its chunks and blocks,
 // commits, then removes the physical file.
 func sweepDeadActiveContainer(ctx context.Context, dbconn *sql.DB, containersDir string, liveUnits livePhysicalUnits, fsys fsx.FS, containerID int64, filename string) error {
+	_, _, err := sweepDeadActiveContainerResult(ctx, dbconn, containersDir, map[int64]struct{}{}, liveUnits, fsys, containerID, filename)
+	return err
+}
+
+func sweepDeadActiveContainerResult(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS, containerID int64, filename string) (sealedContainerGCResult, int64, error) {
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return sealedContainerSkipped, 0, err
+	}
+
+	eligible, err := verifyActiveContainerEligible(ctx, tx, dbconn, containerID)
+	if err != nil {
+		_ = tx.Rollback()
+		return sealedContainerSkipped, 0, err
+	}
+	if !eligible {
+		_ = tx.Rollback()
+		return sealedContainerSkipped, 0, nil
 	}
 
 	stillFullyDead, err := verifyActiveContainerFullyDead(ctx, tx, dbconn, containerID, liveUnits)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return sealedContainerSkipped, 0, err
 	}
 	if !stillFullyDead {
 		_ = tx.Rollback()
-		return nil
+		return sealedContainerSkipped, 0, nil
 	}
 
-	// Delete all blocks + chunk rows for this container.
-	if err := SweepUnreachableChunks(ctx, tx, containerID); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-
-	// Delete the container row.
-	result, err := tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, containerID)
+	hasRetained, err := containerHasReachableChunks(ctx, tx, containerID, reachableChunkIDs)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return sealedContainerSkipped, 0, fmt.Errorf("retention safety check for active container %d: %w", containerID, err)
 	}
-	if err := db.RequireExactlyOneRow(result, "delete fully dead active GC container"); err != nil {
+	if hasRetained {
 		_ = tx.Rollback()
-		return err
+		return sealedContainerSkipped, 0, nil
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	// Physical file deletion after commit.
-	containerPath, err := container.SafeContainerPath(containersDir, filename)
+	containerPath, physicalBytes, err := inspectGCContainerFile(fsys, containersDir, filename)
 	if err != nil {
-		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		_ = tx.Rollback()
+		return sealedContainerSkipped, 0, err
 	}
-	removeContainerFileWithFS(fsys, containerPath)
-	return nil
+	if err := commitGCContainerDeletionWithPath(ctx, tx, containerID, containerPath, fsys); err != nil {
+		return sealedContainerSkipped, 0, err
+	}
+	return sealedContainerAffected, physicalBytes, nil
+}
+
+func verifyActiveContainerEligible(ctx context.Context, tx *sql.Tx, dbconn *sql.DB, containerID int64) (bool, error) {
+	query := db.QueryWithOptionalForUpdate(dbconn, `
+		SELECT COALESCE(sealed, false), COALESCE(quarantine, false)
+		FROM container
+		WHERE id = $1
+	`)
+	var sealed, quarantined bool
+	if err := tx.QueryRowContext(ctx, query, containerID).Scan(&sealed, &quarantined); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return !sealed && !quarantined, nil
 }
 
 // verifyActiveContainerFullyDead acquires FOR UPDATE locks on the container's

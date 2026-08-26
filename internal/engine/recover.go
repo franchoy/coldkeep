@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/recovery"
 )
 
@@ -21,11 +20,7 @@ func (e *DefaultEngine) Recover(ctx context.Context, _ RecoverRequest) (_ Recove
 	if e == nil || e.config.DB == nil {
 		return RecoverResult{}, TranslateErrorAs("recover", ErrorRecoveryFailed, fmt.Errorf("recover requires injected database"))
 	}
-	containersDir := e.config.ContainerDir
-	if containersDir == "" {
-		containersDir = container.ContainersDir
-	}
-	report, err := recovery.SystemRecoveryReportWithDBContext(ctx, e.config.DB, containersDir)
+	report, err := recovery.SystemRecoveryReportWithDBContext(ctx, e.config.DB, e.effectiveContainerDir())
 	result := recoverResultFromReport(report)
 	if err != nil {
 		return result, TranslateErrorAs("recover", ErrorRecoveryFailed, err)

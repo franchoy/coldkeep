@@ -67,6 +67,7 @@ type SnapshotRef struct {
 	Label     string
 	ParentID  string
 	CreatedAt time.Time
+	FileCount int
 }
 
 type SnapshotFilter struct {

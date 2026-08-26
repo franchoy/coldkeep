@@ -66,6 +66,135 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
+`v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
+closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
+Certification` is active and unreleased on `release/v1.13.14`; Phases 0–20
+are complete.
+Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
+Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
+ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
+Store finalization failures without changing writer-owned quarantine.
+Phase 7 closed `CK-V1-AUD-008` with joined rollback cleanup failures, retained
+poisoned container identity, durable quarantine ordering, and fail-closed
+append refusal. Phase 8 closed `CK-V1-AUD-006` and `CK-V1-AUD-009` by
+preserving snapshot restore overwrite and giving Show, Diff, and Restore one
+private Engine selector normalizer. Phase 9 closed `CK-V1-AUD-010` and
+`CK-V1-AUD-012` by applying SnapshotDiff Limit after query/change filtering
+with truthful raw/matched/summary counts and carrying persisted membership
+through Catalog snapshot projections into `SnapshotMeta.FileCount`. At the
+Phase 9 boundary, `8/17` findings were closed and all 4 process gates remained
+open. Phase 10 froze the
+GC execution scheduler, active-container accounting, physical-byte,
+partial-result, filesystem-failure, and overflow contracts without
+implementing or closing `CK-V1-AUD-003` or `CK-V1-AUD-004`. Phase 11 then
+implemented the frozen bounded scheduler and accurate physical-byte contract,
+including active accounting, surfaced filesystem/overflow errors, and truthful
+partial results, and closed those two findings. `10/17` findings are closed and
+all 4 process gates remain open at the Phase 11 boundary. Phase 12 then closed
+`CK-V1-AUD-011`, `CK-V1-AUD-013`, and `CK-V1-AUD-014` by applying one private
+Engine ContainerDir default resolver, correcting the Store codec contract text
+to the unchanged runtime precedence, and sharing Store's exact packed-block
+target resolver with silent Stats consumption. `13/17` findings are closed and
+all 4 process gates remain open at the Phase 12 boundary. Phase 13 then closed
+`CK-V1-AUD-015`, `CK-V1-AUD-016`, and `CK-V1-AUD-017` by aligning the root
+README and top-level help with the existing search syntax, five-code exit and
+JSON automation contract, and init compression behavior. `16/17` findings are
+closed. Phase 14 completed all four process gates with isolated CLI test
+storage, tracked-source evidence validation, an exact-SHA benchmark-evidence
+lifecycle, and branch-relative release linearity while preserving the Phase 0
+non-fast-forward ruleset. `CK-V1-AUD-005` remains partial. Phase 15 then reconciled
+all 21 frozen rows: 16 closed findings retain integrated regression PASS, all
+four process gates retain integrated PASS, and AUD-005 remains lifecycle-
+deferred to Phases 18/26 rather than falsely closed. Phase 16 then proved all
+10 assigned rows across the exact applicable SQLite/PostgreSQL, plain/AES-GCM,
+none/zstd, and legacy/packed/mixed matrix: 20/20 backend, 16/16 codec, 16/16
+compression, and 21/21 layout cells passed without product or test changes.
+Phase 17 then proved 17/17 deep rows across cancellation/deadline, race,
+deterministic fault, adversarial, and exact-head native execution: 10/10
+cancellation, 17/17 race, 12/12 fault, 17/17 adversarial, and 15/15 native
+cells passed without product or test changes. Phase 18 then reconciled every
+current candidate-truth surface without changing product, test, script, or
+workflow code. Sixteen of 17 findings remain closed, all 4 process gates and
+all 21 integrated rows remain complete, and the compatibility and runtime-
+stress matrices remain complete. `CK-V1-AUD-005` remains lifecycle-partial:
+its Phase 18 candidate-truth leg is complete and its final publication-truth
+leg remains pending Phase 26. Phase 19 approved candidate-side technical
+corrective completion for entry into the final release lifecycle without
+certifying release readiness, publication, or final closure. Phase 20 then
+recorded the final corrective handoff and froze the 1,397-entry candidate core
+without changing it. Phase 21 independently passed the complete local exact-
+candidate gate, and Phase 22 passed the exact-head hosted CI, CodeQL, native-
+platform, benchmark, security, and live governance gates for that candidate.
+PR #112 subsequently exposed a GATE-004 PR execution-context defect. Phase 23R
+repairs the audit to validate release history against the authoritative
+same-repository PR head while leaving product validation on GitHub's synthetic
+merge, and refreezes the 1,397-entry core at SHA-256
+`58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
+The refreeze passed real PR-context acceptance, the repeated independent Phase
+21 local gate, and repeated Phase 22 hosted certification. GATE-004 is reclosed
+at `4/4`; State D is effective after final-head hosted acceptance. No v1.13.14
+tag or stable GitHub release exists. Phase 23 remains the sole Next phase and
+is ready only for separate authorization. v1.x normative scope and Phase 23R
+corrective recertification are complete after 17 confirmed findings and 4
+process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
+is the current classification authority, and the
+[Phase 2 design freeze](v1.13.14-phase2-remediation-design-and-regression-contract-freeze.md)
+is the remediation and regression-contract authority, and the
+[Phase 3 seam record](v1.13.14-phase3-deterministic-remediation-test-seams.md)
+is the test-infrastructure readiness authority, and the
+[Phase 4 closure record](v1.13.14-phase4-execution-derived-verification-results.md)
+is the `CK-V1-AUD-001` implementation and closure authority, and the
+[Phase 5 closure record](v1.13.14-phase5-complete-caller-context-and-cancellation-ownership.md)
+is the `CK-V1-AUD-002` implementation and closure authority, and the
+[Phase 6 closure record](v1.13.14-phase6-single-file-store-finalization-error-propagation.md)
+is the `CK-V1-AUD-007` implementation and closure authority, and the
+[Phase 7 closure record](v1.13.14-phase7-rollback-close-failure-and-quarantine-safety.md)
+is the `CK-V1-AUD-008` implementation and closure authority, and the
+[Phase 8 closure record](v1.13.14-phase8-snapshot-restore-overwrite-and-shared-selector-contract.md)
+is the `CK-V1-AUD-006` and `CK-V1-AUD-009` implementation and closure
+authority, and the
+[Phase 9 closure record](v1.13.14-phase9-snapshot-diff-limit-and-snapshot-metadata-file-counts.md)
+is the `CK-V1-AUD-010` and `CK-V1-AUD-012` implementation and closure
+authority, and the
+[Phase 10 design-freeze record](v1.13.14-phase10-gc-execution-and-byte-accounting-design-freeze.md)
+is the binding `CK-V1-AUD-003` and `CK-V1-AUD-004` execution-design authority,
+and the
+[Phase 11 closure record](v1.13.14-phase11-gc-workers-and-accurate-reclaimed-bytes.md)
+is their implementation and closure authority, and the
+[Phase 12 closure record](v1.13.14-phase12-configuration-defaults-and-observability-parity.md)
+is the `CK-V1-AUD-011`, `CK-V1-AUD-013`, and `CK-V1-AUD-014` implementation
+and closure authority, and the
+[Phase 13 closure record](v1.13.14-phase13-cli-help-and-automation-contracts.md)
+is the `CK-V1-AUD-015`, `CK-V1-AUD-016`, and `CK-V1-AUD-017` implementation
+and closure authority, and the
+[Phase 14 release-gate hardening record](v1.13.14-phase14-release-gate-reproducibility-hardening.md)
+is the `CK-V1-GATE-001` through `CK-V1-GATE-004` closure authority, and the
+[Phase 15 integrated closure record](v1.13.14-phase15-finding-by-finding-integrated-regression-closure.md)
+and [21-row matrix](v1.13.14-integrated-regression-closure-matrix.md) are the
+current finding-by-finding integration authority, and the
+[Phase 16 compatibility proof](v1.13.14-phase16-backend-codec-compression-storage-layout-proof.md)
+and [compatibility matrix](v1.13.14-compatibility-proof-matrix.md) are the
+backend, codec, compression, and storage-layout authority, and the
+[Phase 17 runtime-stress proof](v1.13.14-phase17-cancellation-race-fault-adversarial-cross-platform-proof.md)
+and [adversarial runtime matrix](v1.13.14-adversarial-runtime-proof-matrix.md)
+are the cancellation, race, fault, adversarial, and native-platform authority,
+and the
+[Phase 18 current-candidate reconciliation](v1.13.14-phase18-current-documentation-and-release-state-reconciliation.md)
+is the current candidate-truth authority, and the
+[Phase 19 formal corrective closure decision](v1.13.14-phase19-formal-final-v1x-corrective-closure-decision.md)
+is the authority for entry into the final release lifecycle.
+The [Phase 20 handoff record](v1.13.14-phase20-final-closure-handoff-and-immutable-candidate-freeze.md)
+and [candidate-core manifest](v1.13.14-immutable-candidate-core-manifest.txt)
+are the final corrective handoff and immutable candidate-core authorities.
+The [Phase 21 local gate](v1.13.14-phase21-independent-full-local-exact-candidate-release-gate.md)
+and [Phase 22 hosted gate](v1.13.14-phase22-hosted-exact-head-security-quality-and-governance-gate.md)
+are the combined local and hosted release-readiness authorities.
+v2 implementation
+has not started.
+The v1.13.13 publication authority is the
+[Phase 16 record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).
+
+
 - `v1.13.9` is complete, merged, tagged, published, and operationally closed.
 - Phase 24 is complete; PR #104 merged, `v1.13.9` was tagged and released,
   and release/tag CI passed.
@@ -160,29 +289,17 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
   `fd396cd0c8cf43662881211b8e6b2877eb9a8010`. Annotated tag `v1.13.12`, tag
   validation, stable publication, and both temporary-branch deletions are
   complete. Historical Phase 0–21 evidence remains frozen.
-- `v1.13.13 — Final v1.x and v2 Handoff Gate` is ready for release in the
-  merged-not-tagged state. Candidate
-  `8b48418241458facd1291ddb615518fa0a775bfb` passed exact-head proof and
-  PR #109 merged it normally as `ac395e0bb1725c9c5ca57d56136b255e5cb55921`,
-  with prior `main` `fd396cd0c8cf43662881211b8e6b2877eb9a8010`
-  as parent 1 and the candidate as parent 2. Formal v1.x normative completion
-  and the v2 handoff remain proven. The documentation-only
-  [Phase 15 reconciliation](v1.13.13-phase15-post-merge-reconciliation.md)
-  becomes authoritative after its protected normal merge and exact final-main
-  proof. The v1.13.13 tag and stable publication are absent; Phase 16 and v2.x
-  implementation are not authorized.
+- `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
+  closed. Its annotated tag object
+  `5d534a6b4a9d44ab7303d9b76575338e20eee36d` peels to final main
+  `f3b75dc0fbee44e4fe91eb2df1df724f9426640e`; tag-triggered CI and stable
+  publication passed. See the [Phase 16 publication record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).
 
   ```text
-  V1_X_NORMATIVE_COMPLETION: PROVEN
-  V1_13_13_CANDIDATE: 8b48418241458facd1291ddb615518fa0a775bfb
-  PHASE_15_PROTECTED_MERGE: COMPLETE
-  ORIGINAL_MERGE_SHA: ac395e0bb1725c9c5ca57d56136b255e5cb55921
-  V1_13_13_STATE: MERGED_NOT_TAGGED
-  TAG: ABSENT
-  GITHUB_RELEASE: ABSENT
-  PHASE_15_POST_MERGE_RECONCILIATION: CONDITIONALLY_COMPLETE_PENDING_FINAL_MAIN_PROOF
-  PHASE_16: NOT_STARTED
-  PHASE_16_EXECUTION_AUTHORIZED: NO
+  V1_13_13_STATE: RELEASED_AND_OPERATIONALLY_CLOSED
+  PHASE_16: COMPLETE
+  TAG: CREATED_AND_VALIDATED
+  GITHUB_RELEASE: PUBLISHED_STABLE
   ```
 - Its current trackers are [scope](v1.13.13-scope.md),
   [phase list](v1.13.13-phase-list.md), and

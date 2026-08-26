@@ -36,7 +36,7 @@ type blockStagePayloads struct {
 // Compatibility rule: NULL/empty physical_hash on a legacy (blocks table) row
 // skips this stage. Packed (storage_blocks) rows must always carry physical_hash;
 // a NULL value on a packed row is treated as a metadata integrity failure.
-func verifyPhysicalPayloadStage(_ context.Context, loc verifyBlockLocation, payloads blockStagePayloads) error {
+func verifyPhysicalPayloadStage(ctx context.Context, loc verifyBlockLocation, payloads blockStagePayloads) error {
 	if len(payloads.hashes.PhysicalHash) == 0 {
 		if payloads.isPackedBlock {
 			// Packed blocks must have physical_hash recorded at write time.
@@ -64,6 +64,7 @@ func verifyPhysicalPayloadStage(_ context.Context, loc verifyBlockLocation, payl
 			nil,
 		)
 	}
+	observePayloadVerificationStage(ctx, loc.blockID, payloads, verificationObservedPhysicalHash)
 	return nil
 }
 
@@ -73,7 +74,7 @@ func verifyPhysicalPayloadStage(_ context.Context, loc verifyBlockLocation, payl
 // or a packed row with no compression (codec=none) skips this stage. Packed rows
 // with a non-none compression codec must carry compressed_hash; a NULL value is
 // a metadata integrity failure.
-func verifyCompressedPayloadStage(_ context.Context, loc verifyBlockLocation, payloads blockStagePayloads) error {
+func verifyCompressedPayloadStage(ctx context.Context, loc verifyBlockLocation, payloads blockStagePayloads) error {
 	if len(payloads.hashes.CompressedHash) == 0 {
 		if payloads.isPackedBlock && payloads.compressionCodec != "" && payloads.compressionCodec != "none" {
 			// Packed compressed blocks must have compressed_hash recorded at write time.
@@ -101,12 +102,13 @@ func verifyCompressedPayloadStage(_ context.Context, loc verifyBlockLocation, pa
 			nil,
 		)
 	}
+	observePayloadVerificationStage(ctx, loc.blockID, payloads, verificationObservedCompressedHash)
 	return nil
 }
 
 // verifyLogicalPayloadStage is Stage 3 of the block verification pipeline.
 // It validates sha256(plaintextEncoded) == block_hash after decrypt/decompress.
-func verifyLogicalPayloadStage(_ context.Context, loc verifyBlockLocation, expectedHash []byte, payloads blockStagePayloads) error {
+func verifyLogicalPayloadStage(ctx context.Context, loc verifyBlockLocation, expectedHash []byte, payloads blockStagePayloads) error {
 	if err := blocks.VerifyBlockHash(payloads.plaintextEncoded, expectedHash); err != nil {
 		meta := verifyBlockFailureMeta(VerifyStageLogicalHash, loc.blockID, loc.containerID, loc.offset)
 		meta.expectedHash = hex.EncodeToString(expectedHash)
@@ -114,5 +116,6 @@ func verifyLogicalPayloadStage(_ context.Context, loc verifyBlockLocation, expec
 		return verifyStageError(verifyErrBlockHashMismatch, meta,
 			"verifyBlockPayloads: logical block hash mismatch", err)
 	}
+	observePayloadVerificationStage(ctx, loc.blockID, payloads, verificationObservedLogicalHash)
 	return nil
 }

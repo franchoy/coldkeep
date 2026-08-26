@@ -458,7 +458,7 @@ func TestIsLockNotAvailableFalseForOtherErrors(t *testing.T) {
 	}
 }
 
-func TestLocalWriterQuarantineContainerResetsStateAndReturnsDBError(t *testing.T) {
+func TestLocalWriterQuarantineContainerRetainsUnsafeStateOnDBError(t *testing.T) {
 	// Closed sqlite DB forces QuarantineContainer(db, id) to fail deterministically.
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -469,6 +469,10 @@ func TestLocalWriterQuarantineContainerResetsStateAndReturnsDBError(t *testing.T
 	}
 
 	w := NewLocalWriterWithDirAndDB(t.TempDir(), ContainerHdrLen+64, dbconn)
+	w.hasActive = true
+	w.activeID = 123
+	w.activeFile = "will-be-cleared.bin"
+	w.activeHandle = &fakeContainer{size: 99}
 	w.pendingAppend = true
 	w.prevAppendFile = "will-be-cleared.bin"
 	w.prevAppendSize = 99
@@ -477,11 +481,11 @@ func TestLocalWriterQuarantineContainerResetsStateAndReturnsDBError(t *testing.T
 	if err == nil {
 		t.Fatalf("expected db quarantine failure from closed sqlite db")
 	}
-	if w.pendingAppend || w.prevAppendFile != "" || w.prevAppendSize != 0 {
-		t.Fatalf("expected quarantine path to clear pending append bookkeeping, got pending=%v file=%q size=%d", w.pendingAppend, w.prevAppendFile, w.prevAppendSize)
+	if !w.pendingAppend || w.prevAppendFile != "will-be-cleared.bin" || w.prevAppendSize != 99 {
+		t.Fatalf("expected failed quarantine to retain pending append bookkeeping, got pending=%v file=%q size=%d", w.pendingAppend, w.prevAppendFile, w.prevAppendSize)
 	}
-	if w.hasActive || w.activeID != 0 || w.activeFile != "" || w.activeHandle != nil {
-		t.Fatalf("expected quarantine path to clear active state, got hasActive=%v id=%d file=%q handle=%v", w.hasActive, w.activeID, w.activeFile, w.activeHandle)
+	if !w.hasActive || w.activeID != 123 || w.activeFile != "will-be-cleared.bin" {
+		t.Fatalf("expected failed quarantine to retain affected identity, got hasActive=%v id=%d file=%q handle=%v", w.hasActive, w.activeID, w.activeFile, w.activeHandle)
 	}
 }
 
@@ -655,16 +659,20 @@ func TestLocalWriterAppendPayloadWriteErrorQuarantinesAndClearsHandle(t *testing
 		t.Fatalf("expected error to contain original cause, got: %v", err)
 	}
 
-	// Active state must be fully released — no handle leak.
-	if w.hasActive {
-		t.Fatalf("expected hasActive=false after quarantine, got true")
+	// The open metadata transaction prevents durable quarantine in this fixture.
+	// Exact identity and poison must remain so normal appends cannot resume.
+	if !w.hasActive || w.activeID != 1 || !w.rollbackPoisoned {
+		t.Fatalf("expected poisoned identity retained after quarantine failure, got hasActive=%v activeID=%d poisoned=%v", w.hasActive, w.activeID, w.rollbackPoisoned)
 	}
 	if w.activeHandle != nil {
-		t.Fatalf("expected activeHandle=nil after quarantine, got non-nil")
+		t.Fatalf("expected successfully closed activeHandle to be released, got non-nil")
 	}
 	// pendingAppend must be false: Sync was never reached so metadata was never published.
 	if w.pendingAppend {
 		t.Fatalf("expected pendingAppend=false (Sync never reached), got true")
+	}
+	if _, poisonErr := w.AppendPayload(nil, []byte("must be refused")); !errors.Is(poisonErr, errUnresolvedRollback) {
+		t.Fatalf("append after unresolved write-failure quarantine = %v, want poisoned-writer refusal", poisonErr)
 	}
 }
 
@@ -703,16 +711,20 @@ func TestLocalWriterAppendPayloadSyncErrorTruncatesAndQuarantinesContainer(t *te
 	if w.pendingAppend {
 		t.Fatalf("expected pendingAppend=false after sync error, got true")
 	}
-	// Active state cleared — quarantine fired after truncate succeeded.
-	if w.hasActive {
-		t.Fatalf("expected hasActive=false after quarantine on sync error, got true")
+	// The open metadata transaction prevents durable quarantine in this fixture,
+	// so identity remains poisoned even though the handle was closed.
+	if !w.hasActive || w.activeID != 2 || !w.rollbackPoisoned {
+		t.Fatalf("expected poisoned identity retained after sync quarantine failure, got hasActive=%v activeID=%d poisoned=%v", w.hasActive, w.activeID, w.rollbackPoisoned)
 	}
 	if w.activeHandle != nil {
-		t.Fatalf("expected activeHandle=nil after quarantine, got non-nil")
+		t.Fatalf("expected successfully closed activeHandle to be released, got non-nil")
 	}
 	// File size rolled back to pre-append value via Truncate.
 	if fc.size != ContainerHdrLen+10 {
 		t.Fatalf("expected file size rolled back to %d, got %d", ContainerHdrLen+10, fc.size)
+	}
+	if _, poisonErr := w.AppendPayload(nil, []byte("must be refused")); !errors.Is(poisonErr, errUnresolvedRollback) {
+		t.Fatalf("append after unresolved sync-failure quarantine = %v, want poisoned-writer refusal", poisonErr)
 	}
 }
 

@@ -51,7 +51,7 @@ func newEngineReadFixture(t *testing.T, backend backendtest.Backend) engineReadF
 		`SELECT container_id FROM blocks WHERE chunk_id = $1`, chunkA)
 
 	seedEngineReadSnapshots(t, backend.DB, storedA.FileID, storedB.FileID)
-	eng, err := engine.New(engine.Config{DB: backend.DB, ContainerDir: containerDir})
+	eng, err := engine.New(engine.Config{DB: backend.DB, ContainerDir: containerDir, StoreContext: &storageContext})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}

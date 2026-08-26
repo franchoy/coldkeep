@@ -44,6 +44,10 @@ import (
 func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return checkContainersFileExistenceContext(ctx, dbconn, containersDir)
+}
+
+func checkContainersFileExistenceContext(ctx context.Context, dbconn *sql.DB, containersDir string) error {
 
 	// Check that container files exist and sizes match DB metadata for containers
 	// that have at least one COMPLETED legacy chunk (blocks table) or at least one
@@ -147,9 +151,7 @@ func checkContainerFile(id int, filename string, currentSize int64, containersDi
 	return nil
 }
 
-func checkChunkContainerConsistency(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkChunkContainerConsistencyContext(ctx context.Context, dbconn *sql.DB) error {
 
 	// Legacy mapping consistency check: if blocks.container_id exists for a
 	// chunk, chunk.status must be COMPLETED. Packed mappings are validated via
@@ -200,9 +202,7 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkSealedContainersHashContext(ctx context.Context, dbconn *sql.DB, containersDir string) error {
 
 	// Check that all sealed containers have a valid hash that matches the file content.
 	// Verify contract assumption 3: for simulated (test) backends the hash stored at
@@ -270,9 +270,7 @@ func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
 	return nil
 }
 
-func checkContainerCompleteness(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func checkContainerCompletenessContext(ctx context.Context, dbconn *sql.DB) error {
 
 	//sealed containers should not accept new chunks
 	log.Println("Checking sealed containers for completeness (no new chunks should be added to sealed containers)...")

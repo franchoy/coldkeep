@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -46,12 +47,24 @@ func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 	return err
 }
 
+// RemoveFileWithDBContext is the caller-context-aware form of RemoveFileWithDB.
+func RemoveFileWithDBContext(ctx context.Context, dbconn *sql.DB, fileID int64) error {
+	_, err := RemoveFileWithDBResultContext(ctx, dbconn, fileID)
+	return err
+}
+
 func RemoveFileByStoredPathWithStorageContext(sgctx StorageContext, storedPath string) error {
 	_, err := RemoveFileByStoredPathWithStorageContextResult(sgctx, storedPath)
 	return err
 }
 
 func RemoveFileByStoredPathWithStorageContextResult(sgctx StorageContext, storedPath string) (RemovePhysicalFileResult, error) {
+	return RemoveFileByStoredPathWithStorageContextResultContext(context.Background(), sgctx, storedPath)
+}
+
+// RemoveFileByStoredPathWithStorageContextResultContext preserves caller
+// cancellation through the current-state unlink transaction.
+func RemoveFileByStoredPathWithStorageContextResultContext(ctx context.Context, sgctx StorageContext, storedPath string) (RemovePhysicalFileResult, error) {
 	if sgctx.DB == nil {
 		return RemovePhysicalFileResult{}, fmt.Errorf("db connection is nil")
 	}
@@ -61,13 +74,13 @@ func RemoveFileByStoredPathWithStorageContextResult(sgctx StorageContext, stored
 		return RemovePhysicalFileResult{}, err
 	}
 
-	return removePhysicalFileByPathWithDBResult(sgctx.DB, normalizedPath)
+	return removePhysicalFileByPathWithDBResultContext(ctx, sgctx.DB, normalizedPath)
 }
 
-func removePhysicalFileByPathWithDBResult(dbconn *sql.DB, storedPath string) (result RemovePhysicalFileResult, err error) {
+func removePhysicalFileByPathWithDBResultContext(parent context.Context, dbconn *sql.DB, storedPath string) (result RemovePhysicalFileResult, err error) {
 	result.StoredPath = storedPath
 
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := db.NewOperationContext(parent)
 	defer cancel()
 
 	tx, err := dbconn.BeginTx(ctx, nil)
@@ -76,7 +89,7 @@ func removePhysicalFileByPathWithDBResult(dbconn *sql.DB, storedPath string) (re
 	}
 	defer func() {
 		if err != nil {
-			_ = tx.Rollback()
+			err = errors.Join(err, tx.Rollback())
 		}
 	}()
 
@@ -236,8 +249,14 @@ func removeAllPhysicalMappingsForLogicalFileTx(ctx context.Context, tx *sql.Tx, 
 }
 
 func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResult, err error) {
+	return RemoveFileWithDBResultContext(context.Background(), dbconn, fileID)
+}
+
+// RemoveFileWithDBResultContext preserves caller cancellation through the
+// remove-by-ID transaction while retaining the contextless compatibility API.
+func RemoveFileWithDBResultContext(parent context.Context, dbconn *sql.DB, fileID int64) (result RemoveFileResult, err error) {
 	result.FileID = fileID
-	ctx, cancel := db.NewOperationContext(context.Background())
+	ctx, cancel := db.NewOperationContext(parent)
 	defer cancel()
 
 	tx, err := dbconn.BeginTx(ctx, nil)
@@ -246,7 +265,7 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	}
 	defer func() {
 		if err != nil {
-			_ = tx.Rollback()
+			err = errors.Join(err, tx.Rollback())
 		}
 	}()
 
@@ -300,7 +319,6 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 		WHERE logical_file_id = $1
 	`, fileID)
 	if err != nil {
-		_ = tx.Rollback()
 		return RemoveFileResult{}, err
 	}
 	defer func() { _ = rows.Close() }()
@@ -309,7 +327,6 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			_ = tx.Rollback()
 			return RemoveFileResult{}, err
 		}
 		chunkIDs = append(chunkIDs, id)
@@ -328,11 +345,9 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 		`, chunkID).Scan(&refCount)
 
 		if err == sql.ErrNoRows {
-			_ = tx.Rollback()
 			return RemoveFileResult{}, fmt.Errorf("invalid live_ref_count transition for chunk %d", chunkID)
 		}
 		if err != nil {
-			_ = tx.Rollback()
 			return RemoveFileResult{}, err
 		}
 	}
@@ -340,18 +355,15 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	// Remove mappings
 	_, err = tx.ExecContext(ctx, `DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID)
 	if err != nil {
-		_ = tx.Rollback()
 		return RemoveFileResult{}, err
 	}
 
 	// Remove logical file
 	deleteResult, err := tx.ExecContext(ctx, `DELETE FROM logical_file WHERE id = $1`, fileID)
 	if err != nil {
-		_ = tx.Rollback()
 		return RemoveFileResult{}, err
 	}
 	if err := db.RequireExactlyOneRow(deleteResult, "delete logical file"); err != nil {
-		_ = tx.Rollback()
 		return RemoveFileResult{}, err
 	}
 

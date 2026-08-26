@@ -31,6 +31,31 @@ type StorageContext struct {
 	// test-only deterministic interleaving seam; nil in normal operation.
 	interleavingHooks *storeInterleavingHooks
 	interleavingSeq   *atomic.Uint64
+	// test-only restore hooks are immutable after setup and scoped to this
+	// StorageContext instance; nil in normal operation.
+	restoreHooks *restoreTestHooks
+}
+
+type restoreTestHooks struct {
+	beforeChunkRead  func(*sql.DB, int64) error
+	failBeforeRename func(string, string) error
+}
+
+// ConfigureRestoreTestHooksForTesting installs deterministic restore hooks on
+// one StorageContext. It is internal test infrastructure, not an application
+// configuration surface. Configure the context before starting restore work.
+func ConfigureRestoreTestHooksForTesting(
+	s *StorageContext,
+	beforeChunkRead func(*sql.DB, int64) error,
+	failBeforeRename func(tempOutputPath, outputPath string) error,
+) {
+	if s == nil {
+		return
+	}
+	s.restoreHooks = &restoreTestHooks{
+		beforeChunkRead:  beforeChunkRead,
+		failBeforeRename: failBeforeRename,
+	}
 }
 
 // EffectiveChunker returns the configured Chunker or the default if none was set.

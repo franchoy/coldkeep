@@ -19,6 +19,8 @@ import (
 
 var ErrContainerLockContention = errors.New("container row lock contention")
 
+var errUnresolvedRollback = errors.New("local writer has an unresolved rollback failure")
+
 var defaultLockRetryAttempts = 10
 
 // defaultLockRetryBaseWait is the base duration for the first backoff interval.
@@ -72,9 +74,16 @@ type LocalWriter struct {
 	// (Append lifecycle state machine).
 	// RollbackLastAppend uses prevAppendSize/prevAppendFile to truncate the file
 	// back to its pre-write offset if the transaction is rolled back or fails to commit.
-	pendingAppend  bool
-	prevAppendSize int64
-	prevAppendFile string
+	pendingAppend            bool
+	pendingAppendContainerID int64
+	prevAppendSize           int64
+	prevAppendFile           string
+
+	// rollbackPoisoned prevents normal append work after rollback cleanup has
+	// failed. poisonedContainerID survives inactive/full-container rollback and
+	// failed durable quarantine so the exact unsafe row can be retried.
+	rollbackPoisoned    bool
+	poisonedContainerID int64
 
 	// fs is the filesystem abstraction used for directory and file operations.
 	// Defaults to fsx.Default() (OS-backed). Unexported for seam injection in tests.
@@ -118,6 +127,9 @@ func NewLocalWriterWithDirAndDB(dir string, maxSize int64, dbconn *sql.DB) *Loca
 // Canonical lifecycle contract: internal/storage/store.go
 // (Append lifecycle state machine).
 func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement, error) {
+	if w.rollbackPoisoned {
+		return LocalPlacement{}, fmt.Errorf("%w for container %d", errUnresolvedRollback, w.poisonedContainerID)
+	}
 	if len(payload) == 0 {
 		return LocalPlacement{}, fmt.Errorf("payload is empty")
 	}
@@ -172,6 +184,7 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 	// only after the physical write succeeds, so only real unresolved append outcomes
 	// are tracked and lock-contention retries cannot corrupt prior committed state.
 	w.pendingAppend = false
+	w.pendingAppendContainerID = 0
 	w.prevAppendSize = w.activeSize
 	w.prevAppendFile = w.activeFile
 
@@ -214,6 +227,7 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		return LocalPlacement{}, fmt.Errorf("sync payload in container %d: %w", containerID, err)
 	}
 
+	w.pendingAppendContainerID = w.activeID
 	w.pendingAppend = true
 
 	newSize := offset + int64(len(payload))
@@ -505,9 +519,29 @@ func (w *LocalWriter) FinalizeContainer() error {
 // Must be called exactly once after each successful commit that followed an
 // AppendPayload success. Safe to call when no append is pending (no-op).
 func (w *LocalWriter) AcknowledgeAppendCommitted() {
+	if w.rollbackPoisoned {
+		return
+	}
+	w.clearPendingAppend()
+}
+
+func (w *LocalWriter) clearPendingAppend() {
 	w.pendingAppend = false
+	w.pendingAppendContainerID = 0
 	w.prevAppendSize = 0
 	w.prevAppendFile = ""
+}
+
+func (w *LocalWriter) poisonRollback(containerID int64) {
+	w.rollbackPoisoned = true
+	if containerID > 0 {
+		w.poisonedContainerID = containerID
+	}
+}
+
+func (w *LocalWriter) clearRollbackPoison() {
+	w.rollbackPoisoned = false
+	w.poisonedContainerID = 0
 }
 
 // RollbackLastAppend truncates the active container file back to its pre-append
@@ -519,34 +553,42 @@ func (w *LocalWriter) AcknowledgeAppendCommitted() {
 // If rollback path cleanup itself fails, caller must trigger quarantine for the
 // active container before any further writes.
 func (w *LocalWriter) RollbackLastAppend() error {
+	if w.rollbackPoisoned {
+		return fmt.Errorf("%w for container %d", errUnresolvedRollback, w.poisonedContainerID)
+	}
 	if !w.pendingAppend {
 		return nil
 	}
-	w.pendingAppend = false
 
 	filename := w.prevAppendFile
 	target := w.prevAppendSize
+	containerID := w.pendingAppendContainerID
+	if containerID <= 0 {
+		containerID = w.activeID
+	}
+
+	var rollbackErrs []error
 
 	if w.hasActive && w.activeHandle != nil && w.activeFile == filename {
 		// File handle is still open. Truncate via the handle, then close and reset
 		// so the next write does a fresh DB lookup (the DB row may have been rolled back).
 		truncErr := w.activeHandle.Truncate(target)
-		_ = w.activeHandle.Close()
-		w.clearActive()
 		if truncErr != nil {
-			return fmt.Errorf("rollback append: truncate container %s to %d: %w", filename, target, truncErr)
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: truncate container %s to %d: %w", filename, target, truncErr))
 		}
-		if filename != "" {
+		if closeErr := w.activeHandle.Close(); closeErr != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: close container %s: %w", filename, closeErr))
+		}
+		if truncErr == nil && filename != "" {
 			fullPath, err := SafeContainerPath(w.dir, filename)
 			if err != nil {
-				return fmt.Errorf("rollback append: invalid container filename %q: %w", filename, err)
-			}
-			if info, statErr := w.fs.Stat(fullPath); statErr == nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: invalid container filename %q: %w", filename, err))
+			} else if info, statErr := w.fs.Stat(fullPath); statErr == nil {
 				if info.Size() != target {
-					return fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size())
+					rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size()))
 				}
 			} else if !os.IsNotExist(statErr) {
-				return fmt.Errorf("rollback append: stat container %s after truncate: %w", fullPath, statErr)
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: stat container %s after truncate: %w", fullPath, statErr))
 			}
 		}
 	} else if !w.hasActive && filename != "" {
@@ -554,21 +596,44 @@ func (w *LocalWriter) RollbackLastAppend() error {
 		// closed but the file exists on disk. Truncate by path.
 		fullPath, err := SafeContainerPath(w.dir, filename)
 		if err != nil {
-			return fmt.Errorf("rollback append: invalid container filename %q: %w", filename, err)
-		}
-		if err := os.Truncate(fullPath, target); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("rollback append: truncate closed container %s to %d: %w", fullPath, target, err)
-		}
-		if info, statErr := w.fs.Stat(fullPath); statErr == nil {
-			if info.Size() != target {
-				return fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size())
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: invalid container filename %q: %w", filename, err))
+		} else {
+			file, openErr := w.fs.OpenFile(fullPath, os.O_RDWR, 0)
+			if openErr != nil {
+				if !os.IsNotExist(openErr) {
+					rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: open closed container %s: %w", fullPath, openErr))
+				}
+			} else {
+				truncErr := file.Truncate(target)
+				if truncErr != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: truncate closed container %s to %d: %w", fullPath, target, truncErr))
+				}
+				if closeErr := file.Close(); closeErr != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: close closed container %s: %w", fullPath, closeErr))
+				}
+				if truncErr == nil {
+					if info, statErr := w.fs.Stat(fullPath); statErr == nil {
+						if info.Size() != target {
+							rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size()))
+						}
+					} else if !os.IsNotExist(statErr) {
+						rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: stat closed container %s after truncate: %w", fullPath, statErr))
+					}
+				}
 			}
-		} else if !os.IsNotExist(statErr) {
-			return fmt.Errorf("rollback append: stat closed container %s after truncate: %w", fullPath, statErr)
 		}
+	} else {
+		rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback append: affected container identity does not match active writer state"))
 	}
-	// If the active file was switched to a different name (shouldn't happen within
-	// one AppendPayload call), there is nothing reliable to truncate.
+
+	if rollbackErr := errors.Join(rollbackErrs...); rollbackErr != nil {
+		w.poisonRollback(containerID)
+		return rollbackErr
+	}
+
+	w.clearActive()
+	w.clearPendingAppend()
+	w.clearRollbackPoison()
 	return nil
 }
 func (w *LocalWriter) BindDB(dbconn *sql.DB) {
@@ -583,10 +648,17 @@ func (w *LocalWriter) BindDB(dbconn *sql.DB) {
 // It closes current handles, clears pending append state, and marks the DB row
 // as quarantined to prevent future reuse.
 func (w *LocalWriter) QuarantineActiveContainer() error {
-	if !w.hasActive {
+	containerID := w.activeID
+	if w.rollbackPoisoned && w.poisonedContainerID > 0 {
+		containerID = w.poisonedContainerID
+	}
+	if containerID <= 0 {
+		if w.rollbackPoisoned {
+			return fmt.Errorf("%w without a quarantineable container identity", errUnresolvedRollback)
+		}
 		return nil
 	}
-	return w.quarantineContainer(w.activeID)
+	return w.quarantineContainer(containerID)
 }
 
 func (w *LocalWriter) quarantineContainer(containerID int64) error {
@@ -594,18 +666,29 @@ func (w *LocalWriter) quarantineContainer(containerID int64) error {
 	if w.activeHandle != nil {
 		if err := w.activeHandle.Close(); err != nil {
 			closeErr = err
+		} else {
+			w.activeHandle = nil
+			w.active.Container = nil
 		}
 	}
-	w.pendingAppend = false
-	w.prevAppendFile = ""
-	w.prevAppendSize = 0
-	w.clearActive()
-	if err := quarantineContainerInDirWithFS(w.dbconn, containerID, w.dir, w.fs); err != nil {
+
+	var quarantineErr error
+	if w.rollbackPoisoned && !isQuarantineableContainer(w.dbconn, containerID) {
+		quarantineErr = fmt.Errorf("cannot durably quarantine poisoned container %d without a database binding", containerID)
+	} else {
+		quarantineErr = quarantineContainerInDirWithFS(w.dbconn, containerID, w.dir, w.fs)
+	}
+	if quarantineErr != nil {
+		w.poisonRollback(containerID)
 		if closeErr != nil {
-			return errors.Join(closeErr, err)
+			return errors.Join(closeErr, quarantineErr)
 		}
-		return err
+		return quarantineErr
 	}
+
+	w.clearActive()
+	w.clearPendingAppend()
+	w.clearRollbackPoison()
 	return closeErr
 }
 

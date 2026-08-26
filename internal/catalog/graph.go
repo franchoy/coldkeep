@@ -19,9 +19,10 @@ func (s *Service) LoadSnapshotGraph(ctx context.Context) (*SnapshotGraph, error)
 		return nil, graphCatalogError(err)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, type, COALESCE(label, ''), COALESCE(parent_id, ''), created_at
-FROM snapshot
-ORDER BY created_at ASC, id ASC`)
+SELECT s.id, s.type, COALESCE(s.label, ''), COALESCE(s.parent_id, ''), s.created_at,
+       (SELECT COUNT(*) FROM snapshot_file sf WHERE sf.snapshot_id = s.id) AS file_count
+FROM snapshot s
+ORDER BY s.created_at ASC, s.id ASC`)
 	if err != nil {
 		return nil, graphCatalogError(fmt.Errorf("query snapshot graph: %w", err))
 	}
@@ -31,7 +32,7 @@ ORDER BY created_at ASC, id ASC`)
 	for rows.Next() {
 		var ref SnapshotRef
 		var createdAt any
-		if err := rows.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt); err != nil {
+		if err := rows.Scan(&ref.ID, &ref.Type, &ref.Label, &ref.ParentID, &createdAt, &ref.FileCount); err != nil {
 			return nil, graphCatalogError(fmt.Errorf("scan snapshot graph row: %w", err))
 		}
 		parsed, err := catalogTimestamp(createdAt)

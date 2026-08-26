@@ -654,7 +654,7 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 					})
 					return err
 				},
-				want: "invalid snapshot restore regex",
+				want: "invalid snapshot query regex",
 			},
 		} {
 			t.Run(operation.name, func(t *testing.T) {
@@ -808,12 +808,13 @@ func TestEngineGCDryRunAcrossBackends(t *testing.T) {
 			t.Fatalf("create GC reachability snapshot: %v", err)
 		}
 		const deadFilename = "phase9-gc-dead.bin"
+		deadPayload := []byte("phase9 fixed dead GC payload")
 		seedMutationDeadContainer(
 			t,
 			backend.DB,
 			fixture.containerDir,
 			deadFilename,
-			[]byte("phase9 fixed dead GC payload"),
+			deadPayload,
 		)
 		backend.DB.SetMaxOpenConns(4)
 		before := captureMutationRepositoryFingerprint(t, backend.DB, fixture.containerDir)
@@ -831,7 +832,7 @@ func TestEngineGCDryRunAcrossBackends(t *testing.T) {
 			first.CurrentOnlyRetainedLogicalFiles != 0 ||
 			first.SnapshotOnlyRetainedLogicalFiles != 0 ||
 			first.SharedRetainedLogicalFiles != 1 ||
-			first.BytesReclaimed != 0 || first.Warnings != nil {
+			first.BytesReclaimed != int64(len(deadPayload)) || first.Warnings != nil {
 			t.Fatalf("unexpected GC dry-run result: %+v", first)
 		}
 		assertMutationFingerprintEqual(

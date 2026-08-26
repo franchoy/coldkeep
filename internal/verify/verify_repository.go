@@ -48,25 +48,35 @@ func verifyCategoryError(category, detail string, cause error) error {
 //  4. chunk slice integrity (chunk-to-block slice validation)
 //  5. legacy compatibility checks
 func VerifyRepository(dbconn *sql.DB, containersDir string) error {
-	if err := verifyChunkReachability(dbconn); err != nil {
+	return verifyRepository(dbconn, containersDir, nil)
+}
+
+func verifyRepository(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return verifyRepositoryContext(ctx, dbconn, containersDir, ledger)
+}
+
+func verifyRepositoryContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	if err := verifyChunkReachabilityContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyStorageBlocks(dbconn); err != nil {
+	if err := verifyStorageBlocksContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyChunkBlockRefs(dbconn); err != nil {
+	if err := verifyChunkBlockRefsContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyPackedManifestIndex(dbconn); err != nil {
+	if err := verifyPackedManifestIndexContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyPackedBounds(dbconn); err != nil {
+	if err := verifyPackedBoundsContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyBlockPayloads(dbconn, containersDir); err != nil {
+	if err := verifyBlockPayloadsModeContext(ctx, dbconn, containersDir, true, ledger); err != nil {
 		return err
 	}
-	if err := verifyLegacyCompatibility(dbconn, containersDir); err != nil {
+	if err := verifyLegacyCompatibilityContext(ctx, dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 	return nil
@@ -76,30 +86,38 @@ func VerifyRepository(dbconn *sql.DB, containersDir string) error {
 // Fast mode is intended for quick operational health checks:
 // metadata graph + packed block hash integrity.
 func VerifyRepositoryFast(dbconn *sql.DB, containersDir string) error {
-	if err := verifyChunkReachability(dbconn); err != nil {
+	return verifyRepositoryFast(dbconn, containersDir, nil)
+}
+
+func verifyRepositoryFast(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return verifyRepositoryFastContext(ctx, dbconn, containersDir, ledger)
+}
+
+func verifyRepositoryFastContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	if err := verifyChunkReachabilityContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyStorageBlocks(dbconn); err != nil {
+	if err := verifyStorageBlocksContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyChunkBlockRefs(dbconn); err != nil {
+	if err := verifyChunkBlockRefsContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyPackedManifestIndex(dbconn); err != nil {
+	if err := verifyPackedManifestIndexContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyPackedBounds(dbconn); err != nil {
+	if err := verifyPackedBoundsContext(ctx, dbconn); err != nil {
 		return err
 	}
-	if err := verifyBlockPayloadsFast(dbconn, containersDir); err != nil {
+	if err := verifyBlockPayloadsModeContext(ctx, dbconn, containersDir, false, ledger); err != nil {
 		return err
 	}
 	return nil
 }
 
-func verifyPackedManifestIndex(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func verifyPackedManifestIndexContext(ctx context.Context, dbconn *sql.DB) error {
 
 	log.Printf("Checking packed manifest/index metadata consistency...")
 	for _, check := range packedManifestIndexChecks() {
@@ -214,9 +232,7 @@ func validatePackedRange(label string, offset, length, size int64) error {
 // within the bounds of the parent storage_block's plaintext_size.
 // This runs after verifyPackedManifestIndex and before verifyBlockPayloads so
 // that unsafe ranges fail before any read, seek, or allocation depends on them.
-func verifyPackedBounds(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func verifyPackedBoundsContext(ctx context.Context, dbconn *sql.DB) error {
 
 	log.Printf("Checking packed offset/length/bounds metadata...")
 
@@ -237,19 +253,17 @@ func verifyPackedBounds(dbconn *sql.DB) error {
 	return nil
 }
 
-func verifyChunkReachability(dbconn *sql.DB) error {
-	if err := runPhysicalIntegrityChecks(dbconn); err != nil {
+func verifyChunkReachabilityContext(ctx context.Context, dbconn *sql.DB) error {
+	if err := runPhysicalIntegrityChecksContext(ctx, dbconn); err != nil {
 		return fmt.Errorf("verifyChunkReachability: %w", err)
 	}
-	if err := verifyFileChunkRelationships(dbconn); err != nil {
+	if err := verifyFileChunkRelationshipsContext(ctx, dbconn); err != nil {
 		return err
 	}
 	return nil
 }
 
-func verifyFileChunkRelationships(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func verifyFileChunkRelationshipsContext(ctx context.Context, dbconn *sql.DB) error {
 
 	log.Printf("Checking file_chunk -> chunk relationships...")
 
@@ -270,9 +284,7 @@ func verifyFileChunkRelationships(dbconn *sql.DB) error {
 	return nil
 }
 
-func verifyStorageBlocks(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func verifyStorageBlocksContext(ctx context.Context, dbconn *sql.DB) error {
 
 	log.Printf("Checking storage_blocks metadata integrity...")
 
@@ -388,6 +400,10 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 func verifyChunkBlockRefs(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return verifyChunkBlockRefsContext(ctx, dbconn)
+}
+
+func verifyChunkBlockRefsContext(ctx context.Context, dbconn *sql.DB) error {
 
 	log.Printf("Checking chunk_block_refs structural integrity...")
 
@@ -612,16 +628,17 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 }
 
 func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {
-	return verifyBlockPayloadsMode(dbconn, containersDir, true)
+	return verifyBlockPayloadsMode(dbconn, containersDir, true, nil)
 }
 
-func verifyBlockPayloadsFast(dbconn *sql.DB, containersDir string) error {
-	return verifyBlockPayloadsMode(dbconn, containersDir, false)
-}
-
-func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepContentChecks bool) error {
+func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepContentChecks bool, ledger *verificationExecutionLedger) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return verifyBlockPayloadsModeContext(ctx, dbconn, containersDir, includeDeepContentChecks, ledger)
+}
+
+func verifyBlockPayloadsModeContext(ctx context.Context, dbconn *sql.DB, containersDir string, includeDeepContentChecks bool, ledger *verificationExecutionLedger) error {
+	ctx = withVerificationExecutionLedger(ctx, ledger)
 
 	log.Printf("Checking packed block payload and segment integrity...")
 
@@ -1021,13 +1038,23 @@ func verifyStrictPackedSegmentsEnabled() bool {
 }
 
 func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
+	return verifyLegacyChunkHashesWithLedger(dbconn, containersDir, nil)
+}
+
+func verifyLegacyChunkHashesWithLedger(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return verifyLegacyChunkHashesWithLedgerContext(ctx, dbconn, containersDir, ledger)
+}
+
+func verifyLegacyChunkHashesWithLedgerContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	ctx = withVerificationExecutionLedger(ctx, ledger)
 
 	log.Printf("Checking legacy block payload hash integrity...")
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT
+			b.id,
 			b.chunk_id,
 			b.block_offset,
 			b.stored_size,
@@ -1063,6 +1090,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 	}()
 
 	for rows.Next() {
+		var blockID int64
 		var chunkID int64
 		var blockOffset int64
 		var storedSize int64
@@ -1074,7 +1102,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		var filename string
 		var maxSize int64
 
-		if err := rows.Scan(&chunkID, &blockOffset, &storedSize, &plaintextSize, &expectedChunkHash, &codecRaw, &formatVersion, &nonce, &filename, &maxSize); err != nil {
+		if err := rows.Scan(&blockID, &chunkID, &blockOffset, &storedSize, &plaintextSize, &expectedChunkHash, &codecRaw, &formatVersion, &nonce, &filename, &maxSize); err != nil {
 			return verifyCategoryError(verifyErrMetadataInvalid, "verifyLegacyChunkHashes: scan legacy block row", err)
 		}
 
@@ -1139,6 +1167,8 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		if !strings.EqualFold(strings.TrimSpace(expectedChunkHash), computed) {
 			return verifyCategoryError(verifyErrChunkHashMismatch, fmt.Sprintf("verifyLegacyChunkHashes: chunk %d hash mismatch computed=%s expected=%s", chunkID, computed, strings.TrimSpace(expectedChunkHash)), nil)
 		}
+		observeLegacyVerificationStage(ctx, blockID, verificationObservedLogicalHash)
+		observeLegacyVerificationStage(ctx, blockID, verificationObservedBlockComplete)
 	}
 	if err := rows.Err(); err != nil {
 		return verifyCategoryError(verifyErrMetadataInvalid, "verifyLegacyChunkHashes: iterate legacy block rows", err)
@@ -1148,11 +1178,11 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 	return nil
 }
 
-func verifyLegacyCompatibility(dbconn *sql.DB, containersDir string) error {
-	if err := verifyLegacyChunkHashes(dbconn, containersDir); err != nil {
+func verifyLegacyCompatibilityContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	if err := verifyLegacyChunkHashesWithLedgerContext(ctx, dbconn, containersDir, ledger); err != nil {
 		return fmt.Errorf("verifyLegacyCompatibility: %w", err)
 	}
-	if err := runLogicalReconstructionChecks(dbconn); err != nil {
+	if err := runLogicalReconstructionChecksContext(ctx, dbconn); err != nil {
 		return fmt.Errorf("verifyLegacyCompatibility: %w", err)
 	}
 	return nil

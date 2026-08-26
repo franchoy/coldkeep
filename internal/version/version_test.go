@@ -3,7 +3,7 @@ package version
 import "testing"
 
 func TestStringReturnsSemverFromConstants(t *testing.T) {
-	if got, want := String(), "1.13.13"; got != want {
+	if got, want := String(), "1.13.14"; got != want {
 		t.Fatalf("String() mismatch: got=%q want=%q", got, want)
 	}
 }

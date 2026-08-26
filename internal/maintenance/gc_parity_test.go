@@ -256,6 +256,9 @@ func TestSimulateGCMatchesActualGCDeletion(t *testing.T) {
 	if len(gcResult.ContainerFilenames) != 1 || gcResult.ContainerFilenames[0] != filename {
 		t.Fatalf("actual gc filenames = %v, want [%s]", gcResult.ContainerFilenames, filename)
 	}
+	if gcResult.BytesReclaimed != int64(len(payload)) {
+		t.Fatalf("actual gc bytes = %d, want independently observed physical size %d", gcResult.BytesReclaimed, len(payload))
+	}
 	if _, err := os.Stat(containerPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected container file to be removed, stat err=%v", err)
 	}
@@ -273,12 +276,13 @@ func TestRunGCDryRunIsNonMutating(t *testing.T) {
 	requireParityDB(t)
 
 	dbconn, containersDir := setupParityRunEnv(t)
+	payload := []byte("dry-run-non-mutation-payload")
 	containerID, _, containerPath := insertDeadContainerFixture(
 		t,
 		dbconn,
 		containersDir,
 		"dry-run-non-mutation.bin",
-		[]byte("dry-run-non-mutation-payload"),
+		payload,
 		"dry-run-non-mutation-chunk",
 	)
 
@@ -291,6 +295,9 @@ func TestRunGCDryRunIsNonMutating(t *testing.T) {
 	}
 	if dryResult.AffectedContainers != 1 {
 		t.Fatalf("dry-run AffectedContainers = %d, want 1", dryResult.AffectedContainers)
+	}
+	if dryResult.BytesReclaimed != int64(len(payload)) {
+		t.Fatalf("dry-run bytes = %d, want %d", dryResult.BytesReclaimed, len(payload))
 	}
 
 	assertFileExistsState(t, containerPath, true)
@@ -320,6 +327,10 @@ func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
 	if dryResult.AffectedContainers != 2 {
 		t.Fatalf("dry-run AffectedContainers = %d, want 2", dryResult.AffectedContainers)
 	}
+	wantBytes := int64(len(fixtures[0].payload) + len(fixtures[1].payload))
+	if dryResult.BytesReclaimed != wantBytes {
+		t.Fatalf("dry-run bytes = %d, want %d", dryResult.BytesReclaimed, wantBytes)
+	}
 	assertFilenameListEqual(t, dryResult.ContainerFilenames, []string{"parity-dead-a.bin", "parity-dead-b.bin"})
 
 	gcResult, err := maintenance.RunGCWithContainersDirResult(false, containersDir)
@@ -331,6 +342,9 @@ func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
 			dryResult.AffectedContainers, gcResult.AffectedContainers)
 	}
 	assertFilenameListEqual(t, gcResult.ContainerFilenames, dryResult.ContainerFilenames)
+	if gcResult.BytesReclaimed != dryResult.BytesReclaimed {
+		t.Fatalf("byte mismatch: dry-run=%d destructive=%d", dryResult.BytesReclaimed, gcResult.BytesReclaimed)
+	}
 	for _, fn := range gcResult.ContainerFilenames {
 		assertFileExistsState(t, filepath.Join(containersDir, fn), false)
 	}
@@ -373,7 +387,7 @@ func TestRunGCDryRunDoesNotAuthorizeLaterDeletionAfterMutation(t *testing.T) {
 	assertContainerRowCountByID(t, dbconn, containerID, 1)
 }
 
-func TestRunGCDeletesMetadataWhenContainerFileIsMissing(t *testing.T) {
+func TestRunGCMissingContainerFileFailsBeforeMetadataCommit(t *testing.T) {
 	requireParityDB(t)
 
 	dbconn, containersDir := setupParityRunEnv(t)
@@ -391,16 +405,15 @@ func TestRunGCDeletesMetadataWhenContainerFileIsMissing(t *testing.T) {
 	}
 
 	result, err := maintenance.RunGCWithContainersDirResult(false, containersDir)
-	if err != nil {
-		t.Fatalf("destructive gc with missing file: %v", err)
+	if err == nil {
+		t.Fatal("destructive GC with missing file succeeded")
 	}
 	if result.DryRun {
 		t.Fatal("expected DryRun=false")
 	}
-	if result.AffectedContainers != 1 {
-		t.Fatalf("affected containers = %d, want 1", result.AffectedContainers)
+	if result.AffectedContainers != 0 || result.BytesReclaimed != 0 || len(result.ContainerFilenames) != 0 {
+		t.Fatalf("missing-file result = %+v, want zero unit credit", result)
 	}
-	assertFilenameListEqual(t, result.ContainerFilenames, []string{"missing-file.bin"})
 	assertFileExistsState(t, containerPath, false)
-	assertContainerRowCountByID(t, dbconn, containerID, 0)
+	assertContainerRowCountByID(t, dbconn, containerID, 1)
 }

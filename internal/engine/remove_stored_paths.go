@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -118,7 +119,7 @@ func preflightRemoveStoredPaths(req RemoveStoredPathsRequest) (removeStoredPaths
 	}, nil
 }
 
-func (e *DefaultEngine) removeStoredPaths(req RemoveStoredPathsRequest, prepared []preparedRemoveStoredPathTarget) RemoveStoredPathsResult {
+func (e *DefaultEngine) removeStoredPaths(ctx context.Context, req RemoveStoredPathsRequest, prepared []preparedRemoveStoredPathTarget) (RemoveStoredPathsResult, error) {
 	result := RemoveStoredPathsResult{
 		DryRun:        req.DryRun,
 		ExecutionMode: ExecutionModeSequential,
@@ -126,6 +127,9 @@ func (e *DefaultEngine) removeStoredPaths(req RemoveStoredPathsRequest, prepared
 	}
 
 	for _, target := range prepared {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		if !target.executable {
 			appendRemoveStoredPathItem(&result, target.item)
 			continue
@@ -133,21 +137,24 @@ func (e *DefaultEngine) removeStoredPaths(req RemoveStoredPathsRequest, prepared
 
 		var item RemoveStoredPathItemResult
 		if req.DryRun {
-			item = e.dryRunRemoveStoredPath(target)
+			item = e.dryRunRemoveStoredPath(ctx, target)
 		} else {
-			item = e.removeStoredPath(target)
+			item = e.removeStoredPath(ctx, target)
 		}
 		appendRemoveStoredPathItem(&result, item)
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		if req.FailFast && item.Status == BatchItemFailed {
 			break
 		}
 	}
 
-	return result
+	return result, nil
 }
 
-func (e *DefaultEngine) dryRunRemoveStoredPath(target preparedRemoveStoredPathTarget) RemoveStoredPathItemResult {
-	logicalFileID, err := storage.LookupLogicalFileIDByStoredPath(e.config.DB, target.storedPath)
+func (e *DefaultEngine) dryRunRemoveStoredPath(ctx context.Context, target preparedRemoveStoredPathTarget) RemoveStoredPathItemResult {
+	logicalFileID, err := storage.LookupLogicalFileIDByStoredPathContext(ctx, e.config.DB, target.storedPath)
 	if err != nil {
 		item := failedRemoveStoredPathItem(target.rawTarget, target.storedPath, err.Error())
 		annotateRemoveStoredPathInvariant(&item, err)
@@ -167,8 +174,8 @@ func (e *DefaultEngine) dryRunRemoveStoredPath(target preparedRemoveStoredPathTa
 	}
 }
 
-func (e *DefaultEngine) removeStoredPath(target preparedRemoveStoredPathTarget) RemoveStoredPathItemResult {
-	result, err := storage.RemoveFileByStoredPathWithStorageContextResult(storage.StorageContext{DB: e.config.DB}, target.storedPath)
+func (e *DefaultEngine) removeStoredPath(ctx context.Context, target preparedRemoveStoredPathTarget) RemoveStoredPathItemResult {
+	result, err := storage.RemoveFileByStoredPathWithStorageContextResultContext(ctx, storage.StorageContext{DB: e.config.DB}, target.storedPath)
 	if err != nil {
 		item := failedRemoveStoredPathItem(target.rawTarget, target.storedPath, err.Error())
 		annotateRemoveStoredPathInvariant(&item, err)

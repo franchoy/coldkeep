@@ -16,7 +16,7 @@ func TestDoctorOwnsOrderedCompositeAndNeutralResult(t *testing.T) {
 		calls = append(calls, "recovery")
 		return RecoverResult{AbortedLogicalFiles: 2}, nil
 	}
-	eng.doctorSchema = func(*sql.DB) (int64, error) {
+	eng.doctorSchema = func(context.Context, *sql.DB) (int64, error) {
 		calls = append(calls, "schema")
 		return 8, nil
 	}
@@ -24,7 +24,7 @@ func TestDoctorOwnsOrderedCompositeAndNeutralResult(t *testing.T) {
 		calls = append(calls, "verify:"+level)
 		return nil
 	}
-	eng.doctorAudit = func(*sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error) {
+	eng.doctorAudit = func(context.Context, *sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error) {
 		calls = append(calls, "audit")
 		return DoctorPhysicalAudit{LogicalRefCountMismatches: 3}, DoctorSnapshotAudit{SnapshotFileRows: 4}, nil
 	}
@@ -67,7 +67,7 @@ func TestDoctorShortCircuitsAtFirstFailedStage(t *testing.T) {
 				}
 				return RecoverResult{}, nil
 			}
-			eng.doctorSchema = func(*sql.DB) (int64, error) {
+			eng.doctorSchema = func(context.Context, *sql.DB) (int64, error) {
 				calls = append(calls, "schema")
 				if tc.failStage == DoctorStageSchema {
 					return 0, errors.New("schema fault")
@@ -81,7 +81,7 @@ func TestDoctorShortCircuitsAtFirstFailedStage(t *testing.T) {
 				}
 				return nil
 			}
-			eng.doctorAudit = func(*sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error) {
+			eng.doctorAudit = func(context.Context, *sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error) {
 				calls = append(calls, "audit")
 				if tc.failStage == DoctorStageAudit {
 					return DoctorPhysicalAudit{}, DoctorSnapshotAudit{}, errors.New("audit fault")
@@ -110,6 +110,79 @@ func TestDoctorRejectsInvalidLevelBeforeCorrectiveRecovery(t *testing.T) {
 	_, err := eng.Doctor(context.Background(), DoctorRequest{VerifyLevel: "fast"})
 	if !IsCode(err, ErrorInvalidArgument) || called {
 		t.Fatalf("invalid level error=%v code=%q recovery_called=%v", err, CodeOf(err), called)
+	}
+}
+
+type doctorContextTestKey struct{}
+
+func TestDoctorCallbacksReceiveCallerContext(t *testing.T) {
+	eng := newDoctorHookEngine(t)
+	callerCtx := context.WithValue(context.Background(), doctorContextTestKey{}, "caller")
+	assertCallerContext := func(stage string, ctx context.Context) {
+		t.Helper()
+		if got := ctx.Value(doctorContextTestKey{}); got != "caller" {
+			t.Fatalf("%s callback context value = %v, want caller", stage, got)
+		}
+	}
+
+	eng.doctorRecover = func(ctx context.Context) (RecoverResult, error) {
+		assertCallerContext("recovery", ctx)
+		return RecoverResult{}, nil
+	}
+	eng.doctorSchema = func(ctx context.Context, _ *sql.DB) (int64, error) {
+		assertCallerContext("schema", ctx)
+		return 8, nil
+	}
+	eng.doctorVerify = func(ctx context.Context, _ string) error {
+		assertCallerContext("verify", ctx)
+		return nil
+	}
+	eng.doctorAudit = func(ctx context.Context, _ *sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error) {
+		assertCallerContext("audit", ctx)
+		return DoctorPhysicalAudit{}, DoctorSnapshotAudit{}, nil
+	}
+
+	if _, err := eng.Doctor(callerCtx, DoctorRequest{}); err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+}
+
+func TestDoctorCallbacksRemainPerEngineInstance(t *testing.T) {
+	newConfigured := func(label string, calls *[]string) *DefaultEngine {
+		eng := newDoctorHookEngine(t)
+		eng.doctorRecover = func(context.Context) (RecoverResult, error) {
+			*calls = append(*calls, label+":recovery")
+			return RecoverResult{}, nil
+		}
+		eng.doctorSchema = func(context.Context, *sql.DB) (int64, error) {
+			*calls = append(*calls, label+":schema")
+			return 8, nil
+		}
+		eng.doctorVerify = func(context.Context, string) error {
+			*calls = append(*calls, label+":verify")
+			return nil
+		}
+		eng.doctorAudit = func(context.Context, *sql.DB) (DoctorPhysicalAudit, DoctorSnapshotAudit, error) {
+			*calls = append(*calls, label+":audit")
+			return DoctorPhysicalAudit{}, DoctorSnapshotAudit{}, nil
+		}
+		return eng
+	}
+
+	var callsA, callsB []string
+	engA := newConfigured("A", &callsA)
+	engB := newConfigured("B", &callsB)
+	if _, err := engA.Doctor(context.Background(), DoctorRequest{}); err != nil {
+		t.Fatalf("Doctor A: %v", err)
+	}
+	if _, err := engB.Doctor(context.Background(), DoctorRequest{}); err != nil {
+		t.Fatalf("Doctor B: %v", err)
+	}
+	if want := []string{"A:recovery", "A:schema", "A:verify", "A:audit"}; !reflect.DeepEqual(callsA, want) {
+		t.Fatalf("engine A callbacks = %v, want %v", callsA, want)
+	}
+	if want := []string{"B:recovery", "B:schema", "B:verify", "B:audit"}; !reflect.DeepEqual(callsB, want) {
+		t.Fatalf("engine B callbacks = %v, want %v", callsB, want)
 	}
 }
 

@@ -63,9 +63,7 @@ func loadDeepVerifyContainers(ctx context.Context, dbconn *sql.DB) ([]deepVerify
 	return containers, nil
 }
 
-func printCounters(dbconn *sql.DB) error {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+func printCountersContext(ctx context.Context, dbconn *sql.DB) error {
 
 	var containerCount, chunkCount, fileCount int
 	//list container counter to be checked
@@ -96,31 +94,31 @@ func printCounters(dbconn *sql.DB) error {
 // These checks are entirely read-side: no chunker algorithm is invoked. The
 // chunker_version column is treated as an opaque label — only its presence is
 // verified, never its value compared against the current active chunker.
-func runPhysicalIntegrityChecks(dbconn *sql.DB) error {
+func runPhysicalIntegrityChecksContext(ctx context.Context, dbconn *sql.DB) error {
 	// Chunk rows exist and have valid location mappings.
-	if err := checkCompletedChunkBlockCardinality(dbconn); err != nil {
+	if err := checkCompletedChunkBlockCardinalityContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// Chunk reference counts match actual file_chunk rows.
-	if err := checkReferenceCounts(dbconn); err != nil {
+	if err := checkReferenceCountsContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// No orphan chunks (positive live_ref_count but zero file_chunk rows).
-	if err := checkOrphanChunks(dbconn); err != nil {
+	if err := checkOrphanChunksContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// Restore pins may only be placed on COMPLETED chunks.
-	if err := checkPinnedChunkStatus(dbconn); err != nil {
+	if err := checkPinnedChunkStatusContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// chunker_version is non-empty on every logical_file and chunk row.
 	// This confirms the metadata is present for read-side flows; it does NOT
 	// compare versions against the current active chunker.
-	if _, err := CheckChunkerVersionMetadataIntegrity(dbconn); err != nil {
+	if _, err := CheckChunkerVersionMetadataIntegrityContext(ctx, dbconn); err != nil {
 		return err
 	}
 
@@ -134,21 +132,21 @@ func runPhysicalIntegrityChecks(dbconn *sql.DB) error {
 // These checks operate entirely on persisted structure and never re-run the
 // chunker algorithm. A file stored under v1-simple-rolling and one stored under
 // a future v2 algorithm are treated identically — only the recipe is checked.
-func runLogicalReconstructionChecks(dbconn *sql.DB) error {
+func runLogicalReconstructionChecksContext(ctx context.Context, dbconn *sql.DB) error {
 	// Snapshots reference logical_file rows that exist and are reachable.
 	// Runs before fine-grained ordering so snapshot-graph errors surface first.
-	if _, err := CheckSnapshotReachabilityIntegrity(dbconn); err != nil {
+	if _, err := CheckSnapshotReachabilityIntegrityContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// physical_file rows point to existing logical_file rows; ref_count matches
 	// the actual number of physical_file mappings; no negative ref_counts.
-	if _, err := CheckPhysicalFileGraphIntegrity(dbconn); err != nil {
+	if _, err := CheckPhysicalFileGraphIntegrityContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// file_chunk.chunk_order is gapless and starts at 0 for every logical file.
-	if err := checkFileChunkOrdering(dbconn); err != nil {
+	if err := checkFileChunkOrderingContext(ctx, dbconn); err != nil {
 		return err
 	}
 
@@ -156,6 +154,16 @@ func runLogicalReconstructionChecks(dbconn *sql.DB) error {
 }
 
 func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	return verifySystemStandardWithContainersDir(dbconn, containersDir, nil)
+}
+
+func verifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return verifySystemStandardWithContainersDirContext(ctx, dbconn, containersDir, ledger)
+}
+
+func verifySystemStandardWithContainersDirContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	// standard
 	//   Physical integrity:  chunk rows exist, location metadata valid,
 	//                        reference counts coherent, version metadata present.
@@ -165,12 +173,12 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 	// Neither category re-runs the chunker algorithm.
 	log.Printf("Starting standard system verification...")
 
-	if err := printCounters(dbconn); err != nil {
+	if err := printCountersContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// Phase 5 layered verification entrypoint.
-	if err := VerifyRepository(dbconn, containersDir); err != nil {
+	if err := verifyRepositoryContext(ctx, dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 
@@ -180,13 +188,23 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 }
 
 func VerifySystemFastWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	return verifySystemFastWithContainersDir(dbconn, containersDir, nil)
+}
+
+func verifySystemFastWithContainersDir(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return verifySystemFastWithContainersDirContext(ctx, dbconn, containersDir, ledger)
+}
+
+func verifySystemFastWithContainersDirContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	log.Printf("Starting fast system verification...")
 
-	if err := printCounters(dbconn); err != nil {
+	if err := printCountersContext(ctx, dbconn); err != nil {
 		return err
 	}
 
-	if err := VerifyRepositoryFast(dbconn, containersDir); err != nil {
+	if err := verifyRepositoryFastContext(ctx, dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 
@@ -196,6 +214,16 @@ func VerifySystemFastWithContainersDir(dbconn *sql.DB, containersDir string) err
 }
 
 func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	return verifySystemFullWithContainersDir(dbconn, containersDir, nil)
+}
+
+func verifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return verifySystemFullWithContainersDirContext(ctx, dbconn, containersDir, ledger)
+}
+
+func verifySystemFullWithContainersDirContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	// full = standard checks + extended physical storage checks.
 	//
 	// Extended physical integrity (no chunker algorithm involved):
@@ -210,45 +238,45 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 	var err error
 
 	// Standard checks first (physical + logical reconstruction).
-	if err = VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
+	if err = verifySystemStandardWithContainersDirContext(ctx, dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 
 	// --- Extended physical integrity ---
 
 	// Container files exist on disk; filesystem sizes match DB current_size.
-	if err = checkContainersFileExistence(dbconn, containersDir); err != nil {
+	if err = checkContainersFileExistenceContext(ctx, dbconn, containersDir); err != nil {
 		return err
 	}
 
 	// Sealed containers: stored hash matches actual file content.
-	if err = checkSealedContainersHash(dbconn, containersDir); err != nil {
+	if err = checkSealedContainersHashContext(ctx, dbconn, containersDir); err != nil {
 		return err
 	}
 
 	// Legacy-path consistency check: blocks.container_id present ↔
 	// chunk.status = COMPLETED. Packed-path presence/structure is validated via
 	// chunk_block_refs/storage_blocks checks in repository verification.
-	if err = checkChunkContainerConsistency(dbconn); err != nil {
+	if err = checkChunkContainerConsistencyContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// Chunk location metadata consistency across migration states:
 	// legacy blocks row (container_id/block_offset), packed refs
 	// (chunk_block_refs->storage_blocks), or migration companion state (both).
-	if err = checkChunkOffsets(dbconn); err != nil {
+	if err = checkChunkOffsetsContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// Container-bound checks for persisted byte ranges. This applies to legacy
 	// blocks offsets and packed storage_blocks offsets through their respective
 	// verification paths.
-	if err = checkChunkOffsetValidity(dbconn); err != nil {
+	if err = checkChunkOffsetValidityContext(ctx, dbconn); err != nil {
 		return err
 	}
 
 	// Sealed containers must not accept new chunks.
-	if err = checkContainerCompleteness(dbconn); err != nil {
+	if err = checkContainerCompletenessContext(ctx, dbconn); err != nil {
 		return err
 	}
 
@@ -258,6 +286,16 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 }
 
 func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	return verifySystemDeepWithContainersDir(dbconn, containersDir, nil)
+}
+
+func verifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return verifySystemDeepWithContainersDirContext(ctx, dbconn, containersDir, ledger)
+}
+
+func verifySystemDeepWithContainersDirContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
 	// deep = full checks + byte-level physical integrity.
 	//
 	// For every container with packed block data: open the file and verify each
@@ -269,7 +307,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 	var err error
 
 	//first verify full checks
-	if err = VerifySystemFullWithContainersDir(dbconn, containersDir); err != nil {
+	if err = verifySystemFullWithContainersDirContext(ctx, dbconn, containersDir, ledger); err != nil {
 		return err
 	}
 
@@ -288,8 +326,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 	}
 	reader := FilesystemContainerReader{ContainersDir: containersDir}
 
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
+	ctx = withVerificationExecutionLedger(ctx, ledger)
 
 	containers, err := loadDeepVerifyContainers(ctx, dbconn)
 	if err != nil {
