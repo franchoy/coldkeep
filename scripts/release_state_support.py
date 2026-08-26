@@ -528,9 +528,13 @@ def _post_release_pr_identity(event_path: str) -> Optional[tuple[object, object,
     if not isinstance(pull_request, dict):
         return None
     base = pull_request.get("base")
+    if not isinstance(base, dict):
+        return None
     head = pull_request.get("head")
-    head_repository = head.get("repo") if isinstance(head, dict) else None
-    if not all(isinstance(value, dict) for value in (base, head, head_repository)):
+    if not isinstance(head, dict):
+        return None
+    head_repository = head.get("repo")
+    if not isinstance(head_repository, dict):
         return None
     return base.get("ref"), head.get("ref"), head_repository.get("full_name")
 
