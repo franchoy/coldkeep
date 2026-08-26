@@ -22,6 +22,16 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.14 — Unreleased
 
+- Began the owner-authorized Phase 23R recovery after PR #112 proved that the
+  release-linearity audit inspected GitHub's synthetic pull-request merge
+  instead of the authoritative same-repository release head. The validator now
+  accepts `--candidate-ref`, release PR identity fails closed, and deterministic
+  regressions preserve synthetic-merge product validation while selecting the
+  exact PR head for lineage. The repaired 1,397-entry core is refrozen at
+  SHA-256 `58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`
+  pending real PR-context acceptance and repeated Phase 21/22 certification.
+  Historical Phase 2/14/15/20–22 evidence is unchanged; Phase 23 remains Next
+  but blocked, and PR #112 remains open and unmerged.
 - Reconciled the authoritative v1.13.13 publication identity: annotated tag,
   tag-triggered CI, stable GitHub release, and actual temporary-branch state.
 - Activated source identity `1.13.14` and `release/v1.13.14` as the active

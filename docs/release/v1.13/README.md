@@ -124,10 +124,16 @@ certifying release readiness, publication, or final closure. Phase 20 then
 recorded the final corrective handoff and froze the 1,397-entry candidate core
 without changing it. Phase 21 independently passed the complete local exact-
 candidate gate, and Phase 22 passed the exact-head hosted CI, CodeQL, native-
-platform, benchmark, security, and live governance gates. The candidate-core
-freeze is active and release readiness is `CERTIFIED_PHASES_21_22`. No
-v1.13.14 tag or stable GitHub release exists. Phase 23 is the sole Next phase
-under separate owner authorization. v1.x
+platform, benchmark, security, and live governance gates for that candidate.
+PR #112 subsequently exposed a GATE-004 PR execution-context defect. Phase 23R
+repairs the audit to validate release history against the authoritative
+same-repository PR head while leaving product validation on GitHub's synthetic
+merge, and refreezes the 1,397-entry core at SHA-256
+`58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
+The refreeze is pending real PR-context acceptance, and local and hosted
+readiness require Phase 23R recertification. No v1.13.14 tag or stable GitHub
+release exists. Phase 23 remains the sole Next phase but is blocked pending
+recovery completion. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)

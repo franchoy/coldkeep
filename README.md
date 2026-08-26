@@ -55,17 +55,22 @@ is the current publication authority.
 A post-release audit identified 17 confirmed findings and 4 release-process
 gates. `v1.13.14 — Final v1.x Correctness Remediation and Closure
 Certification` is the active unreleased corrective candidate on
-`release/v1.13.14`. Phases 0–22 are complete and Phase 23 is next under
-separate owner authorization. Sixteen of
+`release/v1.13.14`. Phases 0–22 remain historically complete and Phase 23
+remains the sole Next phase, but its execution is blocked by the authorized
+Phase 23R recovery ledger. Sixteen of
 17 findings are closed; `CK-V1-AUD-005` remains lifecycle-partial, with its
 current-candidate truth reconciled in Phase 18 and final publication truth
 pending Phase 26. Phase 19 approved entry into the final release lifecycle,
-Phase 20 recorded the final corrective handoff and active candidate-core
-freeze, Phase 21 passed the independent full local exact-candidate gate, and
-Phase 22 passed exact-head hosted CI, CodeQL, native-platform, benchmark,
-security, and governance gates. Release readiness is certified by Phases 21
-and 22; merge, tag, publication, and final closure remain pending. All 4 release-process
-gates are complete, all 21 integrated
+Phase 20 recorded the original corrective handoff and candidate-core freeze,
+and Phases 21 and 22 certified that superseded candidate. PR #112 then exposed
+a GATE-004 execution-context defect: product validation correctly ran on the
+synthetic PR merge, but release-linearity validation inspected that synthetic
+merge instead of the authoritative same-repository PR head. Phase 23R repairs
+and refreezes the core at 1,397 entries with SHA-256
+`58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
+Real PR-context proof and repeated Phase 21/22 certification are pending;
+merge, tag, publication, and final closure remain blocked. Three of 4 release-process
+gates are currently closed, all 21 historical integrated
 regression rows are reconciled, and the compatibility and runtime-stress
 matrices are complete. No `v1.13.14` tag or stable GitHub release exists.
 v1.x normative scope remains complete, but corrective revalidation remains in
@@ -82,19 +87,24 @@ V1_X_CONFIRMED_POST_RELEASE_FINDINGS: 17
 V1_X_FINDINGS_CLOSED: 16/17
 CK_V1_AUD_005: STILL_OPEN_PARTIAL
 V1_X_RELEASE_PROCESS_GATES: 4
-V1_X_RELEASE_PROCESS_GATES_COMPLETE: 4/4
+V1_X_RELEASE_PROCESS_GATES_COMPLETE: 3/4
 V1_X_INTEGRATED_REGRESSION_ROWS: 21/21
 V1_X_COMPATIBILITY_MATRIX: COMPLETE
 V1_X_RUNTIME_STRESS_MATRIX: COMPLETE
 FINAL_CORRECTIVE_HANDOFF: COMPLETE
-IMMUTABLE_CANDIDATE_CORE_FREEZE: ACTIVE
-IMMUTABLE_CANDIDATE_CORE_MANIFEST_ENTRIES: 1397
-IMMUTABLE_CANDIDATE_CORE_MANIFEST_SHA256: 984221fc5dc0e9d2d76d97cfb2c334bd7a52733682d818cb839d7c5caacac4da
-LOCAL_RELEASE_READINESS_CERTIFICATION: PASS_PHASE_21
-HOSTED_RELEASE_READINESS_CERTIFICATION: PASS_PHASE_22
-RELEASE_READINESS_CERTIFICATION: CERTIFIED_PHASES_21_22
+ORIGINAL_PHASE20_FREEZE: HISTORICALLY_VALID_FOR_SUPERSEDED_CANDIDATE
+CURRENT_PHASE23R_CORE: REFROZEN_PENDING_PR_CONTEXT_ACCEPTANCE
+CURRENT_IMMUTABLE_CANDIDATE_CORE_FREEZE: PENDING_ACTIVATION
+PHASE23R_CORE_MANIFEST_ENTRIES: 1397
+PHASE23R_CORE_MANIFEST_SHA256: 58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023
+CK_V1_GATE_004: REOPENED_PROCESS_CONTEXT_DEFECT
+ACTUAL_PR_CONTEXT_REVALIDATION: PENDING
+LOCAL_RELEASE_READINESS_CERTIFICATION: REVALIDATION_REQUIRED_PHASE23R
+HOSTED_RELEASE_READINESS_CERTIFICATION: REVALIDATION_REQUIRED_PHASE23R
+RELEASE_READINESS_CERTIFICATION: SUSPENDED_PENDING_PHASE23R_RECERTIFICATION
 PHASES_0_22: COMPLETE
 PHASE_23: NEXT
+PHASE_23_EXECUTION: BLOCKED_PENDING_PHASE23R_RECERTIFICATION
 PHASES_24_26: NOT_STARTED
 V2_IMPLEMENTATION: NOT_STARTED
 ```

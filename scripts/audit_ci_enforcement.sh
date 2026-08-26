@@ -453,6 +453,11 @@ check_local_workflow() {
   local credential_disabled_count=0
   local quality_block=""
   local quality_checkout_block=""
+  local current_branch=""
+  local lineage_candidate_ref=""
+  local lineage_identity_valid=0
+  local pr_identity=""
+  local validation_ref=""
   local validator_test_block=""
   local validator_real_block=""
 	local benchmark_integrity_block=""
@@ -472,8 +477,10 @@ check_local_workflow() {
   require_executable_file "$RELEASE_BENCHMARK_RUNNER_FILE" 'external-transient release benchmark evidence runner' || check_status=1
   # shellcheck disable=SC2016 # Match literal validator variables and pathspec.
   require_pattern "$SNAPSHOT_EVIDENCE_VALIDATOR_FILE" 'git -C "\$repo_root" grep -F -- "func \$\{name\}\(" -- '\''\*\.go'\''' 'snapshot evidence validator enumerates tracked Go source only' || check_status=1
-  require_pattern "$RELEASE_LINEARITY_VALIDATOR_FILE" 'merge-base HEAD refs/remotes/origin/main' 'release-linearity validator computes the branch-relative merge base' || check_status=1
-  require_pattern "$RELEASE_LINEARITY_VALIDATOR_FILE" 'rev-list --merges "\$\{base\}\.\.HEAD"' 'release-linearity validator rejects only post-base merges' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_pattern "$RELEASE_LINEARITY_VALIDATOR_FILE" 'merge-base "\$candidate_commit" refs/remotes/origin/main' 'release-linearity validator computes the candidate-relative merge base' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_pattern "$RELEASE_LINEARITY_VALIDATOR_FILE" 'rev-list --merges "\$\{base\}\.\.\$\{candidate_commit\}"' 'release-linearity validator rejects only post-base candidate merges' || check_status=1
   require_pattern "$RELEASE_BENCHMARK_RUNNER_FILE" 'mktemp -d' 'release benchmark runner uses an external transient root' || check_status=1
   require_pattern "$RELEASE_BENCHMARK_EVIDENCE_FILE" '\.release-evidence/v1\.13\.14' 'release benchmark lifecycle uses the canonical repository evidence root' || check_status=1
   if ! "$SNAPSHOT_EVIDENCE_VALIDATOR_FILE" --repo-root "$REPO_ROOT"; then
@@ -487,7 +494,42 @@ check_local_workflow() {
   current_branch=$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
   validation_ref="${GITHUB_HEAD_REF:-$current_branch}"
   if [[ "$validation_ref" == release/* || "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" == v* ]]; then
-    if ! "$RELEASE_LINEARITY_VALIDATOR_FILE" --repo-root "$REPO_ROOT"; then
+    lineage_candidate_ref=HEAD
+    lineage_identity_valid=1
+    if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+      if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]]; then
+        echo "[audit] ERROR: release PR head identity requires GITHUB_EVENT_NAME=pull_request" >&2
+        lineage_identity_valid=0
+      elif [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
+        echo "[audit] ERROR: release PR head identity requires GITHUB_REPOSITORY" >&2
+        lineage_identity_valid=0
+      elif [[ -z "${GITHUB_EVENT_PATH:-}" || ! -r "${GITHUB_EVENT_PATH:-}" ]]; then
+        echo "[audit] ERROR: release PR head identity requires a readable GITHUB_EVENT_PATH" >&2
+        lineage_identity_valid=0
+      else
+        pr_identity=$(jq -cer '
+          .pull_request as $pr
+          | select($pr.base.ref == "main")
+          | select($pr.head.ref == env.GITHUB_HEAD_REF)
+          | select($pr.head.repo.full_name == env.GITHUB_REPOSITORY)
+          | $pr.head.sha
+          | select(type == "string" and test("^[0-9a-f]{40}$"))
+        ' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+        if [[ -z "$pr_identity" ]]; then
+          echo "[audit] ERROR: release PR event identity is malformed, non-main, or not from the authoritative repository" >&2
+          lineage_identity_valid=0
+        elif ! git -C "$REPO_ROOT" rev-parse --verify --quiet --end-of-options "${pr_identity}^{commit}" >/dev/null; then
+          echo "[audit] ERROR: release PR head SHA does not resolve to a local commit: $pr_identity" >&2
+          lineage_identity_valid=0
+        else
+          lineage_candidate_ref="$pr_identity"
+          echo "[audit] ok: release PR lineage candidate is authoritative same-repository head $lineage_candidate_ref"
+        fi
+      fi
+    fi
+    if [[ "$lineage_identity_valid" -ne 1 ]]; then
+      check_status=1
+    elif ! "$RELEASE_LINEARITY_VALIDATOR_FILE" --repo-root "$REPO_ROOT" --candidate-ref "$lineage_candidate_ref"; then
       echo "[audit] ERROR: current release candidate contains a release-local merge" >&2
       check_status=1
     fi

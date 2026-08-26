@@ -2,11 +2,12 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: scripts/validate_release_linearity.sh [--repo-root PATH]" >&2
+  echo "Usage: scripts/validate_release_linearity.sh [--repo-root PATH] [--candidate-ref COMMIT_OR_REF]" >&2
 }
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
+candidate_ref=HEAD
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -16,6 +17,14 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       repo_root="$2"
+      shift 2
+      ;;
+    --candidate-ref)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "release linearity validator: --candidate-ref requires a commit or ref" >&2
+        exit 2
+      fi
+      candidate_ref="$2"
       shift 2
       ;;
     -h|--help)
@@ -51,16 +60,20 @@ if ! git -C "$repo_root" show-ref --verify --quiet refs/remotes/origin/main; the
 fi
 
 origin_main=$(git -C "$repo_root" rev-parse refs/remotes/origin/main)
-if ! base=$(git -C "$repo_root" merge-base HEAD refs/remotes/origin/main); then
-  echo "release linearity validator: no merge base between HEAD and refs/remotes/origin/main" >&2
+if ! candidate_commit=$(git -C "$repo_root" rev-parse --verify --end-of-options "${candidate_ref}^{commit}" 2>/dev/null); then
+  echo "release linearity validator: candidate ref does not resolve to a commit: $candidate_ref" >&2
+  exit 1
+fi
+if ! base=$(git -C "$repo_root" merge-base "$candidate_commit" refs/remotes/origin/main); then
+  echo "release linearity validator: no merge base between $candidate_ref and refs/remotes/origin/main" >&2
   exit 1
 fi
 if [[ -z "$base" ]]; then
-  echo "release linearity validator: no merge base between HEAD and refs/remotes/origin/main" >&2
+  echo "release linearity validator: no merge base between $candidate_ref and refs/remotes/origin/main" >&2
   exit 1
 fi
 
-local_merges=$(git -C "$repo_root" rev-list --merges "${base}..HEAD")
+local_merges=$(git -C "$repo_root" rev-list --merges "${base}..${candidate_commit}")
 if [[ -n "$local_merges" ]]; then
   echo "release linearity validator: release-local merge commit(s) detected after merge base $base:" >&2
   printf '%s\n' "$local_merges" >&2
@@ -68,6 +81,8 @@ if [[ -n "$local_merges" ]]; then
 fi
 
 echo "RELEASE_LINEARITY_ORIGIN_MAIN: $origin_main"
+echo "RELEASE_LINEARITY_CANDIDATE_REF: $candidate_ref"
+echo "RELEASE_LINEARITY_CANDIDATE_SHA: $candidate_commit"
 echo "RELEASE_LINEARITY_MERGE_BASE: $base"
 echo "RELEASE_LINEARITY_LOCAL_MERGES: NONE"
 echo "RELEASE_LINEARITY: PASS"

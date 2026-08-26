@@ -298,6 +298,33 @@ func TestReleaseLinearityValidatorAllowsInheritedAndRejectsLocalMerges(t *testin
 		runPhase14Command(t, repo, true, "bash", script, "--repo-root", repo)
 	})
 
+	t.Run("synthetic pull request merge validates authoritative release head", func(t *testing.T) {
+		repo := newPhase14GraphRepo(t)
+		commitPhase14(t, repo, "A")
+		commitPhase14(t, repo, "B")
+		commitPhase14(t, repo, "C")
+		setPhase14OriginMain(t, repo)
+		runPhase14Command(t, repo, true, "git", "switch", "-c", "release/v1.13.14")
+		commitPhase14(t, repo, "R1")
+		releaseSHA := commitPhase14(t, repo, "R2")
+		runPhase14Command(t, repo, true, "git", "switch", "main")
+		runPhase14Command(t, repo, true, "git", "merge", "--no-ff", "release/v1.13.14", "-m", "synthetic pull request merge")
+		syntheticSHA := strings.TrimSpace(runPhase14Command(t, repo, true, "git", "rev-parse", "HEAD"))
+
+		output := runPhase14Command(t, repo, true, "bash", script, "--repo-root", repo, "--candidate-ref", releaseSHA)
+		if !strings.Contains(output, "RELEASE_LINEARITY_CANDIDATE_SHA: "+releaseSHA) {
+			t.Fatalf("authoritative release candidate identity omitted:\n%s", output)
+		}
+		if strings.Contains(output, syntheticSHA) {
+			t.Fatalf("synthetic merge SHA was treated as release lineage:\n%s", output)
+		}
+
+		defaultOutput := runPhase14Command(t, repo, false, "bash", script, "--repo-root", repo)
+		if !strings.Contains(defaultOutput, syntheticSHA) || !strings.Contains(defaultOutput, "release-local merge commit") {
+			t.Fatalf("default HEAD validation did not expose synthetic merge fixture %s:\n%s", syntheticSHA, defaultOutput)
+		}
+	})
+
 	t.Run("release local merge is rejected with SHA", func(t *testing.T) {
 		repo := newPhase14GraphRepo(t)
 		commitPhase14(t, repo, "A")
@@ -333,6 +360,36 @@ func TestReleaseLinearityValidatorAllowsInheritedAndRejectsLocalMerges(t *testin
 		output := runPhase14Command(t, repo, false, "bash", script, "--repo-root", repo)
 		if !strings.Contains(output, "no merge base") {
 			t.Fatalf("unrelated-history diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("invalid explicit candidate is rejected", func(t *testing.T) {
+		repo := newPhase14GraphRepo(t)
+		commitPhase14(t, repo, "A")
+		setPhase14OriginMain(t, repo)
+		output := runPhase14Command(t, repo, false, "bash", script, "--repo-root", repo, "--candidate-ref", "refs/heads/missing")
+		if !strings.Contains(output, "candidate ref does not resolve to a commit") {
+			t.Fatalf("invalid-candidate diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("missing explicit candidate argument is rejected", func(t *testing.T) {
+		output := runPhase14Command(t, repoRoot(t), false, "bash", script, "--candidate-ref")
+		if !strings.Contains(output, "--candidate-ref requires a commit or ref") {
+			t.Fatalf("missing-candidate diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("non commit candidate object is rejected", func(t *testing.T) {
+		repo := newPhase14GraphRepo(t)
+		commitPhase14(t, repo, "A")
+		setPhase14OriginMain(t, repo)
+		objectPath := filepath.Join(repo, "blob.txt")
+		writePhase14File(t, objectPath, "not a commit\n", 0o600)
+		blobSHA := strings.TrimSpace(runPhase14Command(t, repo, true, "git", "hash-object", "-w", objectPath))
+		output := runPhase14Command(t, repo, false, "bash", script, "--repo-root", repo, "--candidate-ref", blobSHA)
+		if !strings.Contains(output, "candidate ref does not resolve to a commit") {
+			t.Fatalf("non-commit diagnostic omitted:\n%s", output)
 		}
 	})
 }
