@@ -19,7 +19,14 @@ from release_state_support import ProcessResult, resolved_executable, run_proces
 
 
 SCRIPT = Path(__file__).with_name("validate_release_state.py").resolve()
-GITHUB_KEYS = ("GITHUB_EVENT_NAME", "GITHUB_REF", "GITHUB_REF_NAME", "GITHUB_HEAD_REF")
+GITHUB_KEYS = (
+    "GITHUB_EVENT_NAME",
+    "GITHUB_REF",
+    "GITHUB_REF_NAME",
+    "GITHUB_HEAD_REF",
+    "GITHUB_EVENT_PATH",
+    "GITHUB_REPOSITORY",
+)
 
 
 def write(root: Path, relative: str, content: str) -> None:
@@ -170,6 +177,83 @@ class Fixture:
                 "# Gate\n\n**Status:** Passed — awaiting publication\n\n"
                 "## Final verdict\n\nREADY\n",
             )
+
+    def close_post_release(self) -> None:
+        for relative in (
+            "docs/release/v1.13/v1.13.10-scope.md",
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+        ):
+            replace(
+                self.root,
+                relative,
+                "**Status:** Ready for release",
+                "**Status:** Released and operationally closed",
+            )
+        replace(
+            self.root,
+            "README.md",
+            "v1.13.10 is ready for release",
+            "v1.13.10 is published and operationally closed",
+        )
+        replace(
+            self.root,
+            "docs/release/v1.13/README.md",
+            "v1.13.10 is ready for release",
+            "v1.13.10 is published and operationally closed",
+        )
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "# Gate\n\n**Status:** Passed and released\n\n"
+            "## Final verdict\n\nPASS — PUBLISHED AND OPERATIONALLY CLOSED\n",
+        )
+
+    def publish_then_close(self) -> str:
+        self.complete_release()
+        self.commit()
+        published = run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        git(self.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        self.close_post_release()
+        self.commit()
+        return published
+
+    def write_pr_event(
+        self,
+        *,
+        base: str = "main",
+        head: str = "release/v1.13.10",
+        repository: str = "fixture/coldkeep",
+    ) -> Path:
+        path = self.root / "event.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "pull_request": {
+                        "base": {"ref": base},
+                        "head": {
+                            "ref": head,
+                            "repo": {"full_name": repository},
+                        },
+                    },
+                },
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def post_release_pr_env(self, event_path: Path) -> dict[str, str]:
+        return {
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/pull/7/merge",
+            "GITHUB_REF_NAME": "7/merge",
+            "GITHUB_HEAD_REF": "release/v1.13.10",
+            "GITHUB_EVENT_PATH": str(event_path),
+            "GITHUB_REPOSITORY": "fixture/coldkeep",
+        }
 
     def run(
         self,
@@ -483,6 +567,232 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         self.assertEqual(second_status, 2)
         self.assertEqual(first.getvalue(), second.getvalue())
         self.assertIn("[release-state] ERROR internal: fixture failure", first.getvalue())
+
+    def test_49_release_branch_post_release_closed(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        self.assert_ok(fixture.run("--state", "auto"))
+        self.assertIn("state=post-release-closed", fixture.run().stdout)
+
+    def test_50_main_post_release_closed(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_ok(fixture.run("--state", "auto"))
+
+    def test_51_same_repository_post_release_pr(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.write_pr_event()
+        git(fixture.root, "checkout", "--detach")
+        self.assert_ok(fixture.run(env=fixture.post_release_pr_env(event)))
+
+    def test_52_post_release_pr_fork_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.write_pr_event(repository="fork/coldkeep")
+        git(fixture.root, "checkout", "--detach")
+        self.assert_rules(
+            fixture.run(env=fixture.post_release_pr_env(event)),
+            ["CKRS005", "CKRS006", "CKRS007", "CKRS017"],
+        )
+
+    def test_53_post_release_pr_wrong_base_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.write_pr_event(base="develop")
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(
+            fixture.run(env=fixture.post_release_pr_env(event)).returncode,
+            0,
+        )
+
+    def test_54_post_release_pr_head_mismatch_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.write_pr_event(head="release/v1.13.9")
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(
+            fixture.run(env=fixture.post_release_pr_env(event)).returncode,
+            0,
+        )
+
+    def test_55_post_release_pr_malformed_event_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.root / "event.json"
+        event.write_text("{", encoding="utf-8")
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(
+            fixture.run(env=fixture.post_release_pr_env(event)).returncode,
+            0,
+        )
+
+    def test_56_post_release_pr_missing_event_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.root / "missing-event.json"
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(
+            fixture.run(env=fixture.post_release_pr_env(event)).returncode,
+            0,
+        )
+
+    def test_57_post_release_pr_missing_repository_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.write_pr_event()
+        env = fixture.post_release_pr_env(event)
+        env["GITHUB_REPOSITORY"] = ""
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(fixture.run(env=env).returncode, 0)
+
+    def test_58_post_release_lightweight_tag_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.complete_release()
+        fixture.commit()
+        git(fixture.root, "tag", "v1.13.10")
+        fixture.close_post_release()
+        fixture.commit()
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS017"],
+        )
+
+    def test_59_post_release_exact_target_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.complete_release()
+        fixture.close_post_release()
+        fixture.commit()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS017"],
+        )
+
+    def test_60_post_release_unrelated_tag_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.complete_release()
+        fixture.commit()
+        published = run_process(
+            [resolved_executable("git"), "-C", str(fixture.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        git(fixture.root, "checkout", "--orphan", "unrelated")
+        git(fixture.root, "rm", "-rf", ".")
+        write(fixture.root, "unrelated", "unrelated\n")
+        git(fixture.root, "add", ".")
+        git(fixture.root, "commit", "-m", "unrelated")
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        git(fixture.root, "checkout", "release/v1.13.10")
+        fixture.close_post_release()
+        fixture.commit()
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS017"],
+        )
+        self.assertTrue(published)
+
+    def test_61_post_release_gate_status_is_exact(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "Passed and released",
+            "Passed — awaiting publication",
+        )
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS018"],
+        )
+
+    def test_62_post_release_pending_verdict_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "PASS — PUBLISHED AND OPERATIONALLY CLOSED",
+            "PENDING",
+        )
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS018"],
+        )
+
+    def test_63_post_release_missing_tag_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.complete_release()
+        fixture.close_post_release()
+        fixture.commit()
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS017"],
+        )
+
+    def test_64_post_release_wrong_branch_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        git(fixture.root, "checkout", "-b", "wrong-branch")
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS016"],
+        )
+
+    def test_65_post_release_empty_verdict_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "PASS — PUBLISHED AND OPERATIONALLY CLOSED",
+            "",
+        )
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS018"],
+        )
+
+    def test_66_post_release_pr_unreadable_event_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(
+            fixture.run(env=fixture.post_release_pr_env(fixture.root)).returncode,
+            0,
+        )
+
+    def test_67_post_release_pr_environment_head_mismatch_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.write_pr_event()
+        env = fixture.post_release_pr_env(event)
+        env["GITHUB_HEAD_REF"] = "release/v1.13.9"
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(fixture.run(env=env).returncode, 0)
+
+    def test_68_git_ancestry_internal_error_fails_closed(self) -> None:
+        completed = ProcessResult(
+            ["git", "merge-base", "--is-ancestor"],
+            128,
+            "",
+            "fixture ancestry failure",
+        )
+        with mock.patch.object(
+            release_state_support,
+            "run_git",
+            return_value=completed,
+        ):
+            with self.assertRaisesRegex(
+                release_state_support.InternalError,
+                "fixture ancestry failure",
+            ):
+                release_state_support.strict_git_ancestor(
+                    Path("."),
+                    "ancestor",
+                    "descendant",
+                )
 
 
 if __name__ == "__main__":

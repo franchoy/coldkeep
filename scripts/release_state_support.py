@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -312,7 +313,12 @@ def changelog_entry_valid(
     state: Optional[str],
 ) -> bool:
     """Return whether the active changelog entry matches its lifecycle."""
-    expected_dated = state in ("pre-release", "merged-not-tagged", "released")
+    expected_dated = state in (
+        "pre-release",
+        "merged-not-tagged",
+        "released",
+        "post-release-closed",
+    )
     dated = bool(re.search(r"-\s+\d{4}-\d{2}-\d{2}\b", suffix))
     if found != version:
         return False
@@ -328,7 +334,13 @@ def readme_current_state_valid(
     content: str,
 ) -> bool:
     """Return whether README badge and current block agree on lifecycle."""
-    expected_word = "active" if state == "development" else "ready"
+    expected_word = (
+        "active"
+        if state == "development"
+        else "published"
+        if state == "post-release-closed"
+        else "ready"
+    )
     return (
         len(badge) == 1
         and f"v{version}" in badge[0]
@@ -366,7 +378,10 @@ def gate_verdict_missing(verdict: Optional[tuple[int, list[str]]]) -> bool:
     """Return whether a bounded verdict is empty or pending."""
     if verdict is None:
         return True
-    text = "\n".join(verdict[1])
+    lines = verdict[1]
+    if lines and lines[0] == "## Final verdict":
+        lines = lines[1:]
+    text = "\n".join(lines)
     return not text.strip() or re.search(r"\bpending\b", text, re.I) is not None
 
 
@@ -464,7 +479,14 @@ def development_progression_valid(ordered: list[str]) -> bool:
 
 def github_context() -> dict[str, str]:
     """Return only GitHub environment fields used by lifecycle inference."""
-    keys = ("GITHUB_EVENT_NAME", "GITHUB_REF", "GITHUB_REF_NAME", "GITHUB_HEAD_REF")
+    keys = (
+        "GITHUB_EVENT_NAME",
+        "GITHUB_REF",
+        "GITHUB_REF_NAME",
+        "GITHUB_HEAD_REF",
+        "GITHUB_EVENT_PATH",
+        "GITHUB_REPOSITORY",
+    )
     return {key: os.environ.get(key, "") for key in keys}
 
 
@@ -475,6 +497,56 @@ def accepted_release_pr(version: str, env: dict[str, str]) -> bool:
         and env["GITHUB_REF"].startswith("refs/pull/")
         and env["GITHUB_HEAD_REF"] == f"release/v{version}"
     )
+
+
+def _post_release_pr_environment(
+    version: str,
+    env: dict[str, str],
+) -> Optional[tuple[str, str, str]]:
+    """Return bounded post-release PR inputs after environment validation."""
+    release_branch = f"release/v{version}"
+    expected = ("pull_request", release_branch)
+    actual = (env["GITHUB_EVENT_NAME"], env["GITHUB_HEAD_REF"])
+    if actual != expected or not env["GITHUB_REF"].startswith("refs/pull/"):
+        return None
+    event_path = env["GITHUB_EVENT_PATH"]
+    repository = env["GITHUB_REPOSITORY"]
+    if not event_path or not repository:
+        return None
+    return event_path, repository, release_branch
+
+
+def _post_release_pr_identity(event_path: str) -> Optional[tuple[object, object, object]]:
+    """Load one bounded PR identity tuple, returning none on invalid input."""
+    try:
+        payload = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    pull_request = payload.get("pull_request")
+    if not isinstance(pull_request, dict):
+        return None
+    base = pull_request.get("base")
+    if not isinstance(base, dict):
+        return None
+    head = pull_request.get("head")
+    if not isinstance(head, dict):
+        return None
+    head_repository = head.get("repo")
+    if not isinstance(head_repository, dict):
+        return None
+    return base.get("ref"), head.get("ref"), head_repository.get("full_name")
+
+
+def accepted_post_release_pr(version: str, env: dict[str, str]) -> bool:
+    """Validate a same-repository release PR from its authoritative payload."""
+    bounded = _post_release_pr_environment(version, env)
+    if bounded is None:
+        return False
+    event_path, repository, release_branch = bounded
+    expected = ("main", release_branch, repository)
+    return _post_release_pr_identity(event_path) == expected
 
 
 def phases_complete(phase_doc: Optional[Document]) -> bool:
@@ -499,6 +571,12 @@ def git_context_matches(
         return branch == release_branch or accepted_release_pr(version, env)
     if state == "merged-not-tagged":
         return branch == "main" or env["GITHUB_REF"] == "refs/heads/main"
+    if state == "post-release-closed":
+        return (
+            branch in ("main", release_branch)
+            or env["GITHUB_REF"] == "refs/heads/main"
+            or accepted_post_release_pr(version, env)
+        )
     return state == "released"
 
 
@@ -563,6 +641,21 @@ def exact_tag_matches_head(
 ) -> bool:
     """Return whether the exact annotated tag peels to HEAD."""
     return exists and annotated and target == head
+
+
+def strict_git_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    """Return whether one commit is a strict Git ancestor of another."""
+    if ancestor == descendant:
+        return False
+    completed = run_git(
+        root,
+        ["merge-base", "--is-ancestor", ancestor, descendant],
+        allow_failure=True,
+    )
+    if completed.returncode in (0, 1):
+        return completed.returncode == 0
+    detail = completed.stderr.strip() or completed.stdout.strip() or "git merge-base failed"
+    raise InternalError("git", detail)
 
 
 def main_context(branch: str, env: dict[str, str]) -> bool:
