@@ -10,9 +10,11 @@ for safer diagnostics.
 The current v1 architecture includes a reusable headless Engine, a neutral
 Catalog boundary, a thin CLI, supported SQLite and PostgreSQL backends within
 documented bounds, and cooperative same-host/local-filesystem repository
-coordination. v1.13.13 is the published prior release. v1.13.14 is the active
-corrective branch: v1.x normative scope remains complete while correctness
-certification is under corrective revalidation. v2 implementation has not
+coordination. v1.13.14 is the published stable final v1.x corrective release.
+All 17 confirmed findings and all 4 release-process gates are closed, including
+post-publication lifecycle reconciliation in Phase 26. The operational
+repository is `post-release-closed`; the published tag remains immutable at
+`caac44d459609f89f2c971cb7b07a8678bd52d2c`. V2 implementation has not
 started.
 
 It is suitable for controlled production environments where:

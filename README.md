@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.14%20ready-blue)
+![Status](https://img.shields.io/badge/status-v1.13.14%20published-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -54,30 +54,30 @@ is the current publication authority.
 
 A post-release audit identified 17 confirmed findings and 4 release-process
 gates. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is ready for release in merged-not-tagged state. Immutable
-Phase23R candidate `eef722121aad571a6b2394bde67ea3f08ab768e4` passed local,
-hosted, and real PR-context recertification; PR #112 merged it normally as
-`7962275ffe24f9ca719d5ced543f71f89a1286f4`. Phase 24 conditionally completes
-the recognized Phase 0–24 topology by reconciling only current documentation
-and adding the canonical release gate. Its completion becomes authoritative
-only after the protected reconciliation merge and exact final-main hosted
-proof. The 1,397-entry Phase23R core remains frozen at SHA-256
+Certification` is published and operationally closed. Annotated tag
+`v1.13.14`, object `a996b25b562de69749f41c3af56626aeb5d44e33`, peels to
+certified final main `caac44d459609f89f2c971cb7b07a8678bd52d2c`. Tag CI run
+`33002555210` passed after the single authorized failed-job retry, and the
+stable release was published at `2026-08-26T19:39:02Z`. The published
+1,397-entry Phase23R core remains immutable at SHA-256
 `58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
-Sixteen of 17 findings are closed and all 4 process gates are complete;
-`CK-V1-AUD-005` remains lifecycle-partial. The `v1.13.14` tag and stable
-GitHub release are absent. Phase 25 publication and Phase 26 final truth remain
-separately authorized, unstarted operations. V2 implementation has not started.
+Phase 26 reconciles the post-publication repository as
+`post-release-closed`, closes `CK-V1-AUD-005`, and brings all 17 findings and
+all 4 process gates to closure. V2 implementation has not started.
 
 ```text
 V1_13_13_STATE: RELEASED_AND_OPERATIONALLY_CLOSED
-V1_13_14_STATE: MERGED_NOT_TAGGED_READY_FOR_RELEASE
-V1_13_14_TAG: ABSENT
-V1_13_14_STABLE_GITHUB_RELEASE: ABSENT
+V1_13_14_STATE: PUBLISHED_STABLE_POST_RELEASE_CLOSED
+V1_13_14_TAG: PRESENT_ANNOTATED
+V1_13_14_TAG_OBJECT: a996b25b562de69749f41c3af56626aeb5d44e33
+V1_13_14_TAG_TARGET: caac44d459609f89f2c971cb7b07a8678bd52d2c
+V1_13_14_STABLE_GITHUB_RELEASE: PUBLISHED
 V1_X_NORMATIVE_SCOPE: COMPLETE
 V1_X_CORRECTIVE_REVALIDATION: COMPLETE_PHASE23R
 V1_X_CONFIRMED_POST_RELEASE_FINDINGS: 17
-V1_X_FINDINGS_CLOSED: 16/17
-CK_V1_AUD_005: STILL_OPEN_PARTIAL
+V1_X_FINDINGS_CLOSED: 17/17
+CK_V1_AUD_005: CLOSED
+CK_V1_AUD_005_PHASE26_PUBLICATION_TRUTH: COMPLETE
 V1_X_RELEASE_PROCESS_GATES: 4
 V1_X_RELEASE_PROCESS_GATES_COMPLETE: 4/4
 V1_X_INTEGRATED_REGRESSION_ROWS: 21/21
@@ -97,12 +97,13 @@ LOCAL_RELEASE_READINESS_CERTIFICATION: PASS_PHASE23R_RECERTIFICATION
 HOSTED_RELEASE_READINESS_CERTIFICATION: PASS_PHASE23R_RECERTIFICATION
 RELEASE_READINESS_CERTIFICATION: CERTIFIED_PHASE23R_RECERTIFIED
 PHASE23R_RECOVERY: COMPLETE
-V1_13_14_PHASES_0_24: COMPLETE_CONDITIONAL_ON_FINAL_MAIN_PROOF
+V1_13_14_PHASES_0_26: COMPLETE_CONDITIONAL_ON_PHASE26_FINAL_MAIN_AND_CLEANUP_PROOF
 PHASE_23_PROTECTED_RELEASE_PR: MERGED
-PHASE_24_POST_MERGE_RECONCILIATION: CONDITIONAL_PASS
-PHASE_25: NOT_STARTED_SEPARATELY_AUTHORIZED
-PHASE_26: NOT_STARTED_SEPARATELY_AUTHORIZED
-FINAL_PUBLISHED_CLOSURE: NOT_ACHIEVED_PENDING_PHASE_26
+PHASE_24_POST_MERGE_RECONCILIATION: COMPLETE
+PHASE_25: COMPLETE
+PHASE_26: COMPLETE_CONDITIONAL_ON_FINAL_MAIN_AND_CLEANUP_PROOF
+FINAL_PUBLISHED_CLOSURE: COMPLETE_CONDITIONAL_ON_PHASE26_ACCEPTANCE
+V1_X: COMPLETE_CONDITIONAL_ON_PHASE26_ACCEPTANCE
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 

@@ -15,6 +15,7 @@ from release_state_support import (
     Document,
     InternalError,
     ValidationResult,
+    accepted_post_release_pr,
     accepted_release_pr,
     artifact_targets,
     candidate_gate_valid,
@@ -28,6 +29,7 @@ from release_state_support import (
     first_invalid_phase,
     git_context_matches,
     github_context,
+    gate_closure_detail,
     main_context,
     metadata_named,
     parse_phase_states,
@@ -39,6 +41,7 @@ from release_state_support import (
     prior_is_active,
     readme_current_state_valid,
     run_git,
+    strict_git_ancestor,
     topology_valid,
     train_definition_invalid,
     train_marker_index,
@@ -51,7 +54,13 @@ from release_state_support import (
 
 
 VALIDATOR = "coldkeep-release-state"
-STATES = ("development", "pre-release", "merged-not-tagged", "released")
+STATES = (
+    "development",
+    "pre-release",
+    "merged-not-tagged",
+    "released",
+    "post-release-closed",
+)
 
 
 def read_document(
@@ -176,7 +185,13 @@ def check_ckrs006(version: str, doc: Optional[Document], state: Optional[str], r
         return None
     start, lines = section
     text = "\n".join(lines)
-    expected_word = "active" if state == "development" else "ready"
+    expected_word = (
+        "active"
+        if state == "development"
+        else "published"
+        if state == "post-release-closed"
+        else "ready"
+    )
     if f"v{version}" not in text or expected_word not in text.lower():
         result.add("CKRS006", doc.path, start, f"release README current state conflicts with {version}")
     return section
@@ -211,7 +226,13 @@ def check_ckrs007(
     tracker_values = present_tracker_values(values)
     if tracker_values is None:
         return
-    expected_status = "Active" if state == "development" else "Ready for release"
+    expected_status = (
+        "Active"
+        if state == "development"
+        else "Released and operationally closed"
+        if state == "post-release-closed"
+        else "Ready for release"
+    )
     if tracker_values_disagree(tracker_values, version, expected_status):
         rendered = "; ".join(f"{key}={value}" for key, value in zip(("scope", "phase_list", "phase_checklist"), tracker_values))
         result.add("CKRS007", "docs/release/v1.13", 0, f"active tracker identity/title/status disagree: {rendered}")
@@ -314,7 +335,12 @@ def check_ckrs013(
         message = "invalid phase status progression at Phase 0: development requires Complete*, one Next, Not started*"
         result.add("CKRS013", phase_doc.path, 0, message)
         return
-    candidate_states = ("pre-release", "merged-not-tagged", "released")
+    candidate_states = (
+        "pre-release",
+        "merged-not-tagged",
+        "released",
+        "post-release-closed",
+    )
     if state in candidate_states and any(value != "Complete" for value in ordered):
         message = f"invalid phase status progression at Phase 0: {state} requires all phases Complete"
         result.add("CKRS013", phase_doc.path, 0, message)
@@ -425,9 +451,22 @@ def infer_state(
     env = github_context()
     if exact_tag_matches_head(head, exists, annotated, target):
         return "released", context
+    release_branch = f"release/v{version}"
+    post_release_context = (
+        main_context(branch, env)
+        or branch == release_branch
+        or accepted_post_release_pr(version, env)
+    )
+    if (
+        exists
+        and annotated
+        and target is not None
+        and strict_git_ancestor(root, target, head)
+        and post_release_context
+    ):
+        return "post-release-closed", context
     if main_context(branch, env):
         return "merged-not-tagged", context
-    release_branch = f"release/v{version}"
     if branch == release_branch or accepted_release_pr(version, env):
         state = "pre-release" if phases_complete(phase_doc) else "development"
         return state, context
@@ -445,12 +484,37 @@ def check_ckrs016(
         result.add("CKRS016", ".git", 0, f"Git context branch={branch or 'detached'} is incompatible with {state} for {version}")
 
 
-def check_ckrs017(version: str, state: str, context: tuple[str, str, bool, bool, Optional[str]], result: ValidationResult) -> None:
+def check_ckrs017(
+    root: Path,
+    version: str,
+    state: str,
+    context: tuple[str, str, bool, bool, Optional[str]],
+    result: ValidationResult,
+) -> None:
     head, _, exists, annotated, target = context
     if state == "released":
         if not exists or not annotated or target != head:
             detail = "missing annotated tag" if not exists else "tag is lightweight" if not annotated else "peeled target does not equal HEAD"
             result.add("CKRS017", ".git", 0, f"tag v{version} does not satisfy released: {detail}")
+    elif state == "post-release-closed":
+        detail = (
+            "missing annotated tag"
+            if not exists
+            else "tag is lightweight"
+            if not annotated
+            else "peeled target equals HEAD"
+            if target == head
+            else "peeled target is not a strict ancestor of HEAD"
+            if target is None or not strict_git_ancestor(root, target, head)
+            else None
+        )
+        if detail:
+            result.add(
+                "CKRS017",
+                ".git",
+                0,
+                f"tag v{version} does not satisfy post-release-closed: {detail}",
+            )
     elif exists:
         result.add("CKRS017", ".git", 0, f"tag v{version} does not satisfy {state}: exact tag already exists")
 
@@ -472,6 +536,18 @@ def check_ckrs018(
         return
     if gate is None:
         result.add("CKRS018", path, 0, f"current release gate is invalid for {state}: canonical gate is missing")
+        return
+    if state == "post-release-closed":
+        detail = gate_closure_detail(gate)
+        if not complete or detail:
+            suffix = detail or "recognized phases are incomplete"
+            result.add(
+                "CKRS018",
+                path,
+                0,
+                "current release gate is invalid for post-release-closed: "
+                f"{suffix}",
+            )
         return
     if not candidate_gate_valid(gate, complete):
         result.add("CKRS018", path, 0, f"current release gate is invalid for {state}: passed pre-tag gate and final verdict are required")
@@ -503,7 +579,7 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
     check_ckrs012_014(docs, state, result)
     check_ckrs015(root, docs["phase_list"], result)
     check_ckrs016(version, state, context, result)
-    check_ckrs017(version, state, context, result)
+    check_ckrs017(root, version, state, context, result)
     check_ckrs018(root, version, state, docs["phase_list"], result)
     return result
 

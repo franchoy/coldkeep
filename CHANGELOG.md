@@ -22,15 +22,22 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.14 - 2026-08-26 — Final v1.x Correctness Remediation and Closure Certification
 
+- Published the stable v1.13.14 release from annotated tag object
+  `a996b25b562de69749f41c3af56626aeb5d44e33`, peeling to certified final main
+  `caac44d459609f89f2c971cb7b07a8678bd52d2c`. Tag CI run `33002555210`
+  passed after its single authorized failed-job retry. Phase 26 adds generic
+  strict-descendant `post-release-closed` validation, reconciles current
+  publication truth, closes `CK-V1-AUD-005`, and completes all `17/17`
+  findings without changing the published artifact, source version, product,
+  workflow, governance, schema, format, dependency, or v2 implementation.
 - Merged immutable Phase23R candidate
   `eef722121aad571a6b2394bde67ea3f08ab768e4` through protected PR #112 as
   normal merge `7962275ffe24f9ca719d5ced543f71f89a1286f4`. Phase 24 reconciles
   merged-not-tagged lifecycle documentation and adds the conditional canonical
   release gate while preserving the 1,397-entry core and SHA-256
   `58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
-  Sixteen of 17 findings remain closed, `CK-V1-AUD-005` remains partial, and
-  the tag, GitHub release, Phase 25 publication, Phase 26 final reconciliation,
-  and V2 implementation remain absent or unstarted.
+  This pre-publication state remains historical authority for the release
+  candidate and is superseded for current lifecycle truth by Phases 25–26.
 - Began the owner-authorized Phase 23R recovery after PR #112 proved that the
   release-linearity audit inspected GitHub's synthetic pull-request merge
   instead of the authoritative same-repository release head. The validator now

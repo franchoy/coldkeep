@@ -68,8 +68,10 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is ready for release in merged-not-tagged state; Phases 0–20
-are complete.
+Certification` is published and operationally closed. Its annotated tag object
+`a996b25b562de69749f41c3af56626aeb5d44e33` peels to certified final main
+`caac44d459609f89f2c971cb7b07a8678bd52d2c`; all Phases 0–26 are complete
+subject to the Phase 26 self-effective final-main and cleanup proof.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
 ownership. Phase 6 closed `CK-V1-AUD-007` by propagating required single-file
@@ -193,9 +195,10 @@ and [candidate-core manifest](v1.13.14-immutable-candidate-core-manifest.txt)
 are the final corrective handoff and immutable candidate-core authorities.
 The [Phase 21 local gate](v1.13.14-phase21-independent-full-local-exact-candidate-release-gate.md)
 and [Phase 22 hosted gate](v1.13.14-phase22-hosted-exact-head-security-quality-and-governance-gate.md)
-are the combined local and hosted release-readiness authorities.
-v2 implementation
-has not started.
+are the combined local and hosted release-readiness authorities. The
+[Phase 26 final reconciliation](v1.13.14-phase26-post-publication-truth-reconciliation-and-final-cleanup.md)
+is the current publication, AUD-005 closure, `17/17` finding, and final v1.x
+operational-closure authority. V2 implementation has not started.
 The v1.13.13 publication authority is the
 [Phase 16 record](v1.13.13-phase16-tag-ci-stable-publication-and-cleanup.md).
 
