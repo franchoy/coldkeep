@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.14%20active-blue)
+![Status](https://img.shields.io/badge/status-v1.13.14%20ready-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -54,35 +54,23 @@ is the current publication authority.
 
 A post-release audit identified 17 confirmed findings and 4 release-process
 gates. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is the active unreleased corrective candidate on
-`release/v1.13.14`. Phases 0–22 remain historically complete and Phase 23
-remains the sole Next phase, but its execution is blocked by the authorized
-Phase 23R recovery ledger. Sixteen of
-17 findings are closed; `CK-V1-AUD-005` remains lifecycle-partial, with its
-current-candidate truth reconciled in Phase 18 and final publication truth
-pending Phase 26. Phase 19 approved entry into the final release lifecycle,
-Phase 20 recorded the original corrective handoff and candidate-core freeze,
-and Phases 21 and 22 certified that superseded candidate. PR #112 then exposed
-a GATE-004 execution-context defect: product validation correctly ran on the
-synthetic PR merge, but release-linearity validation inspected that synthetic
-merge instead of the authoritative same-repository PR head. Phase 23R repairs
-and refreezes the core at 1,397 entries with SHA-256
+Certification` is ready for release in merged-not-tagged state. Immutable
+Phase23R candidate `eef722121aad571a6b2394bde67ea3f08ab768e4` passed local,
+hosted, and real PR-context recertification; PR #112 merged it normally as
+`7962275ffe24f9ca719d5ced543f71f89a1286f4`. Phase 24 conditionally completes
+the recognized Phase 0–24 topology by reconciling only current documentation
+and adding the canonical release gate. Its completion becomes authoritative
+only after the protected reconciliation merge and exact final-main hosted
+proof. The 1,397-entry Phase23R core remains frozen at SHA-256
 `58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
-The repaired head passed real PR-context quality and Required Gate proof, the
-repeated Phase 21 local certification passed against the exact refrozen
-candidate, and Phase 22 hosted recertification passed on the resulting exact
-head. State D is effective after final-head hosted acceptance; Phase 23 is
-ready only for separate authorization, while merge, tag, publication, and
-final closure remain blocked. All 4 release-process gates are
-currently closed, all 21 historical integrated
-regression rows are reconciled, and the compatibility and runtime-stress
-matrices are complete. No `v1.13.14` tag or stable GitHub release exists.
-v1.x normative scope and Phase 23R corrective revalidation are complete. v2
-implementation has not started.
+Sixteen of 17 findings are closed and all 4 process gates are complete;
+`CK-V1-AUD-005` remains lifecycle-partial. The `v1.13.14` tag and stable
+GitHub release are absent. Phase 25 publication and Phase 26 final truth remain
+separately authorized, unstarted operations. V2 implementation has not started.
 
 ```text
 V1_13_13_STATE: RELEASED_AND_OPERATIONALLY_CLOSED
-V1_13_14_STATE: ACTIVE_UNRELEASED_CORRECTIVE_CANDIDATE
+V1_13_14_STATE: MERGED_NOT_TAGGED_READY_FOR_RELEASE
 V1_13_14_TAG: ABSENT
 V1_13_14_STABLE_GITHUB_RELEASE: ABSENT
 V1_X_NORMATIVE_SCOPE: COMPLETE
@@ -97,8 +85,10 @@ V1_X_COMPATIBILITY_MATRIX: COMPLETE
 V1_X_RUNTIME_STRESS_MATRIX: COMPLETE
 FINAL_CORRECTIVE_HANDOFF: COMPLETE
 ORIGINAL_PHASE20_FREEZE: HISTORICALLY_VALID_FOR_SUPERSEDED_CANDIDATE
+IMMUTABLE_PHASE23R_CANDIDATE: eef722121aad571a6b2394bde67ea3f08ab768e4
+ORIGINAL_PHASE23_MERGE_SHA: 7962275ffe24f9ca719d5ced543f71f89a1286f4
 CURRENT_PHASE23R_CORE: REFROZEN_PHASE23R_RECERTIFIED
-CURRENT_IMMUTABLE_CANDIDATE_CORE_FREEZE: ACTIVE_PHASE23R
+CURRENT_IMMUTABLE_CANDIDATE_CORE_FREEZE: PRESERVED_PHASE23R
 PHASE23R_CORE_MANIFEST_ENTRIES: 1397
 PHASE23R_CORE_MANIFEST_SHA256: 58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023
 CK_V1_GATE_004: RECLOSED_PHASE23R
@@ -107,10 +97,12 @@ LOCAL_RELEASE_READINESS_CERTIFICATION: PASS_PHASE23R_RECERTIFICATION
 HOSTED_RELEASE_READINESS_CERTIFICATION: PASS_PHASE23R_RECERTIFICATION
 RELEASE_READINESS_CERTIFICATION: CERTIFIED_PHASE23R_RECERTIFIED
 PHASE23R_RECOVERY: COMPLETE
-PHASES_0_22: COMPLETE
-PHASE_23: NEXT
-PHASE_23_EXECUTION: NOT_STARTED_READY_FOR_SEPARATE_AUTHORIZATION
-PHASES_24_26: NOT_STARTED
+V1_13_14_PHASES_0_24: COMPLETE_CONDITIONAL_ON_FINAL_MAIN_PROOF
+PHASE_23_PROTECTED_RELEASE_PR: MERGED
+PHASE_24_POST_MERGE_RECONCILIATION: CONDITIONAL_PASS
+PHASE_25: NOT_STARTED_SEPARATELY_AUTHORIZED
+PHASE_26: NOT_STARTED_SEPARATELY_AUTHORIZED
+FINAL_PUBLISHED_CLOSURE: NOT_ACHIEVED_PENDING_PHASE_26
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 
