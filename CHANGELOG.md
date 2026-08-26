@@ -20,8 +20,17 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.14 — Unreleased
+## v1.13.14 - 2026-08-26 — Final v1.x Correctness Remediation and Closure Certification
 
+- Merged immutable Phase23R candidate
+  `eef722121aad571a6b2394bde67ea3f08ab768e4` through protected PR #112 as
+  normal merge `7962275ffe24f9ca719d5ced543f71f89a1286f4`. Phase 24 reconciles
+  merged-not-tagged lifecycle documentation and adds the conditional canonical
+  release gate while preserving the 1,397-entry core and SHA-256
+  `58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
+  Sixteen of 17 findings remain closed, `CK-V1-AUD-005` remains partial, and
+  the tag, GitHub release, Phase 25 publication, Phase 26 final reconciliation,
+  and V2 implementation remain absent or unstarted.
 - Began the owner-authorized Phase 23R recovery after PR #112 proved that the
   release-linearity audit inspected GitHub's synthetic pull-request merge
   instead of the authoritative same-repository release head. The validator now
@@ -33,8 +42,8 @@ project, do not start here; start with [README.md](README.md).
   reclosed GATE-004, passed the repeated independent Phase 21 local gate, and
   passed repeated Phase 22 hosted certification. State D is effective after
   final-head hosted acceptance. Historical Phase 2/14/15/20–22 evidence is
-  unchanged; Phase 23 remains Next and requires separate authorization, and
-  PR #112 remains open and unmerged.
+  unchanged. This historical pre-merge state is superseded by the protected
+  Phase 23 merge and conditional Phase 24 reconciliation above.
 - Reconciled the authoritative v1.13.13 publication identity: annotated tag,
   tag-triggered CI, stable GitHub release, and actual temporary-branch state.
 - Activated source identity `1.13.14` and `release/v1.13.14` as the active

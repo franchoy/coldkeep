@@ -68,7 +68,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
-Certification` is active and unreleased on `release/v1.13.14`; Phases 0–20
+Certification` is ready for release in merged-not-tagged state; Phases 0–20
 are complete.
 Phase 4 closed `CK-V1-AUD-001` with execution-derived verification results and
 Phase 5 closed `CK-V1-AUD-002` with complete caller-context and cancellation
@@ -132,11 +132,16 @@ merge, and refreezes the 1,397-entry core at SHA-256
 `58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
 The refreeze passed real PR-context acceptance, the repeated independent Phase
 21 local gate, and repeated Phase 22 hosted certification. GATE-004 is reclosed
-at `4/4`; State D is effective after final-head hosted acceptance. No v1.13.14
-tag or stable GitHub release exists. Phase 23 remains the sole Next phase and
-is ready only for separate authorization. v1.x normative scope and Phase 23R
-corrective recertification are complete after 17 confirmed findings and 4
-process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
+at `4/4`. PR #112 merged immutable Phase23R candidate
+`eef722121aad571a6b2394bde67ea3f08ab768e4` normally as
+`7962275ffe24f9ca719d5ced543f71f89a1286f4`. Phase 24 conditionally completes
+the recognized Phase 0–24 topology through documentation-only reconciliation;
+its authority depends on the protected reconciliation merge and exact
+final-main proof. No v1.13.14 tag or stable GitHub release exists. Phase 25
+publication and Phase 26 final reconciliation remain separately authorized and
+unstarted. v1.x normative scope and Phase23R corrective recertification are
+complete after 17 confirmed findings and 4 process gates. The
+[Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
 is the current classification authority, and the
 [Phase 2 design freeze](v1.13.14-phase2-remediation-design-and-regression-contract-freeze.md)
 is the remediation and regression-contract authority, and the
