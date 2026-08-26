@@ -68,15 +68,17 @@ synthetic PR merge, but release-linearity validation inspected that synthetic
 merge instead of the authoritative same-repository PR head. Phase 23R repairs
 and refreezes the core at 1,397 entries with SHA-256
 `58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
-The repaired head passed real PR-context quality and Required Gate proof, and
-the repeated Phase 21 local certification passed against the exact refrozen
-candidate. Phase 22 hosted recertification remains pending; merge, tag,
-publication, and final closure remain blocked. All 4 release-process gates are
+The repaired head passed real PR-context quality and Required Gate proof, the
+repeated Phase 21 local certification passed against the exact refrozen
+candidate, and Phase 22 hosted recertification passed on the resulting exact
+head. State D is effective after final-head hosted acceptance; Phase 23 is
+ready only for separate authorization, while merge, tag, publication, and
+final closure remain blocked. All 4 release-process gates are
 currently closed, all 21 historical integrated
 regression rows are reconciled, and the compatibility and runtime-stress
 matrices are complete. No `v1.13.14` tag or stable GitHub release exists.
-v1.x normative scope remains complete, but corrective revalidation remains in
-progress. v2 implementation has not started.
+v1.x normative scope and Phase 23R corrective revalidation are complete. v2
+implementation has not started.
 
 ```text
 V1_13_13_STATE: RELEASED_AND_OPERATIONALLY_CLOSED
@@ -84,7 +86,7 @@ V1_13_14_STATE: ACTIVE_UNRELEASED_CORRECTIVE_CANDIDATE
 V1_13_14_TAG: ABSENT
 V1_13_14_STABLE_GITHUB_RELEASE: ABSENT
 V1_X_NORMATIVE_SCOPE: COMPLETE
-V1_X_CORRECTIVE_REVALIDATION: IN_PROGRESS
+V1_X_CORRECTIVE_REVALIDATION: COMPLETE_PHASE23R
 V1_X_CONFIRMED_POST_RELEASE_FINDINGS: 17
 V1_X_FINDINGS_CLOSED: 16/17
 CK_V1_AUD_005: STILL_OPEN_PARTIAL
@@ -95,18 +97,19 @@ V1_X_COMPATIBILITY_MATRIX: COMPLETE
 V1_X_RUNTIME_STRESS_MATRIX: COMPLETE
 FINAL_CORRECTIVE_HANDOFF: COMPLETE
 ORIGINAL_PHASE20_FREEZE: HISTORICALLY_VALID_FOR_SUPERSEDED_CANDIDATE
-CURRENT_PHASE23R_CORE: REFROZEN_PR_CONTEXT_ACCEPTED
+CURRENT_PHASE23R_CORE: REFROZEN_PHASE23R_RECERTIFIED
 CURRENT_IMMUTABLE_CANDIDATE_CORE_FREEZE: ACTIVE_PHASE23R
 PHASE23R_CORE_MANIFEST_ENTRIES: 1397
 PHASE23R_CORE_MANIFEST_SHA256: 58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023
 CK_V1_GATE_004: RECLOSED_PHASE23R
 ACTUAL_PR_CONTEXT_REVALIDATION: PASS
 LOCAL_RELEASE_READINESS_CERTIFICATION: PASS_PHASE23R_RECERTIFICATION
-HOSTED_RELEASE_READINESS_CERTIFICATION: PENDING_PHASE23R_HOSTED_RECERTIFICATION
-RELEASE_READINESS_CERTIFICATION: PENDING_PHASE23R_HOSTED_RECERTIFICATION
+HOSTED_RELEASE_READINESS_CERTIFICATION: PASS_PHASE23R_RECERTIFICATION
+RELEASE_READINESS_CERTIFICATION: CERTIFIED_PHASE23R_RECERTIFIED
+PHASE23R_RECOVERY: COMPLETE
 PHASES_0_22: COMPLETE
 PHASE_23: NEXT
-PHASE_23_EXECUTION: BLOCKED_PENDING_PHASE23R_RECERTIFICATION
+PHASE_23_EXECUTION: NOT_STARTED_READY_FOR_SEPARATE_AUTHORIZATION
 PHASES_24_26: NOT_STARTED
 V2_IMPLEMENTATION: NOT_STARTED
 ```
