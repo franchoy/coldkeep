@@ -122,9 +122,12 @@ leg remains pending Phase 26. Phase 19 approved candidate-side technical
 corrective completion for entry into the final release lifecycle without
 certifying release readiness, publication, or final closure. Phase 20 then
 recorded the final corrective handoff and froze the 1,397-entry candidate core
-without changing it; exact-head hosted acceptance is still required for
-terminal activation. No v1.13.14 tag or stable GitHub release exists.
-Phase 21 is the sole Next phase under separate authorization. v1.x
+without changing it. Phase 21 independently passed the complete local exact-
+candidate gate, and Phase 22 passed the exact-head hosted CI, CodeQL, native-
+platform, benchmark, security, and live governance gates. The candidate-core
+freeze is active and release readiness is `CERTIFIED_PHASES_21_22`. No
+v1.13.14 tag or stable GitHub release exists. Phase 23 is the sole Next phase
+under separate owner authorization. v1.x
 normative scope remains complete, but correctness
 certification is under corrective revalidation after 17 confirmed findings and
 4 process gates. The [Phase 1 scope freeze](v1.13.14-phase1-confirmed-finding-rejection-and-scope-freeze.md)
@@ -177,6 +180,9 @@ is the authority for entry into the final release lifecycle.
 The [Phase 20 handoff record](v1.13.14-phase20-final-closure-handoff-and-immutable-candidate-freeze.md)
 and [candidate-core manifest](v1.13.14-immutable-candidate-core-manifest.txt)
 are the final corrective handoff and immutable candidate-core authorities.
+The [Phase 21 local gate](v1.13.14-phase21-independent-full-local-exact-candidate-release-gate.md)
+and [Phase 22 hosted gate](v1.13.14-phase22-hosted-exact-head-security-quality-and-governance-gate.md)
+are the combined local and hosted release-readiness authorities.
 v2 implementation
 has not started.
 The v1.13.13 publication authority is the

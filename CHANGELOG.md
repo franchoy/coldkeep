@@ -189,6 +189,22 @@ project, do not start here; start with [README.md](README.md).
   no product, test, script, workflow, schema, storage, dependency, governance,
   benchmark threshold, merge, tag, release, publication, or final closure
   changed.
+- Completed Phase 21's independent full local exact-candidate release gate.
+  Exact Go 1.25.10 and golangci-lint 2.6.2, isolated PostgreSQL, both codec
+  matrices, full uncached and race sweeps, G1–G17, smoke, legacy, hard
+  benchmark integrity, operator, snapshot, and retention gates passed. The
+  1,397-entry candidate core remained byte-for-byte unchanged at SHA-256
+  `984221fc5dc0e9d2d76d97cfb2c334bd7a52733682d818cb839d7c5caacac4da`.
+- Completed Phase 22's hosted exact-head release gate against Phase 21 evidence
+  commit `1fe768a45eec1117d3c808581080e75545812617`. CI run `32949760025`, all 25
+  required jobs, Required Gate `98123359910`, native Linux/macOS/Windows,
+  CodeQL run `32949759949`, Aggregate `98118569421`, hosted benchmark
+  artifacts, release linearity, and live governance passed. Local and hosted
+  readiness are now `CERTIFIED_PHASES_21_22`; Phases 0–22 are complete and
+  Phase 23 is the sole Next phase under separate authorization. No merge, tag,
+  publication, final closure, AUD-005 closure, product, test, script, workflow,
+  schema, storage, dependency, benchmark-threshold, or governance change
+  occurred.
 
 ## v1.13.13 - 2026-08-23 — Final v1.x and v2 Handoff Gate
 

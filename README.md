@@ -55,12 +55,16 @@ is the current publication authority.
 A post-release audit identified 17 confirmed findings and 4 release-process
 gates. `v1.13.14 — Final v1.x Correctness Remediation and Closure
 Certification` is the active unreleased corrective candidate on
-`release/v1.13.14`. Phases 0–20 are complete and Phase 21 is next. Sixteen of
+`release/v1.13.14`. Phases 0–22 are complete and Phase 23 is next under
+separate owner authorization. Sixteen of
 17 findings are closed; `CK-V1-AUD-005` remains lifecycle-partial, with its
 current-candidate truth reconciled in Phase 18 and final publication truth
 pending Phase 26. Phase 19 approved entry into the final release lifecycle,
-and Phase 20 recorded the final corrective handoff and candidate-core freeze;
-neither certified release readiness or publication. All 4 release-process
+Phase 20 recorded the final corrective handoff and active candidate-core
+freeze, Phase 21 passed the independent full local exact-candidate gate, and
+Phase 22 passed exact-head hosted CI, CodeQL, native-platform, benchmark,
+security, and governance gates. Release readiness is certified by Phases 21
+and 22; merge, tag, publication, and final closure remain pending. All 4 release-process
 gates are complete, all 21 integrated
 regression rows are reconciled, and the compatibility and runtime-stress
 matrices are complete. No `v1.13.14` tag or stable GitHub release exists.
@@ -82,13 +86,16 @@ V1_X_RELEASE_PROCESS_GATES_COMPLETE: 4/4
 V1_X_INTEGRATED_REGRESSION_ROWS: 21/21
 V1_X_COMPATIBILITY_MATRIX: COMPLETE
 V1_X_RUNTIME_STRESS_MATRIX: COMPLETE
-FINAL_CORRECTIVE_HANDOFF: COMPLETE_PENDING_EXACT_HEAD_ACCEPTANCE
-IMMUTABLE_CANDIDATE_CORE_FREEZE: EFFECTIVE_ON_PHASE20_EXACT_HEAD_ACCEPTANCE
+FINAL_CORRECTIVE_HANDOFF: COMPLETE
+IMMUTABLE_CANDIDATE_CORE_FREEZE: ACTIVE
 IMMUTABLE_CANDIDATE_CORE_MANIFEST_ENTRIES: 1397
 IMMUTABLE_CANDIDATE_CORE_MANIFEST_SHA256: 984221fc5dc0e9d2d76d97cfb2c334bd7a52733682d818cb839d7c5caacac4da
-PHASES_0_20: COMPLETE
-PHASE_21: NEXT
-PHASES_22_26: NOT_STARTED
+LOCAL_RELEASE_READINESS_CERTIFICATION: PASS_PHASE_21
+HOSTED_RELEASE_READINESS_CERTIFICATION: PASS_PHASE_22
+RELEASE_READINESS_CERTIFICATION: CERTIFIED_PHASES_21_22
+PHASES_0_22: COMPLETE
+PHASE_23: NEXT
+PHASES_24_26: NOT_STARTED
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 
