@@ -130,8 +130,9 @@ repairs the audit to validate release history against the authoritative
 same-repository PR head while leaving product validation on GitHub's synthetic
 merge, and refreezes the 1,397-entry core at SHA-256
 `58d2909d1fe490e3ce246c48b42d02ff8ea256877fec05f1c8c2972f83248023`.
-The refreeze is pending real PR-context acceptance, and local and hosted
-readiness require Phase 23R recertification. No v1.13.14 tag or stable GitHub
+The refreeze passed real PR-context acceptance and the repeated independent
+Phase 21 local gate. GATE-004 is reclosed at `4/4`; Phase 22 hosted readiness
+still requires Phase 23R recertification. No v1.13.14 tag or stable GitHub
 release exists. Phase 23 remains the sole Next phase but is blocked pending
 recovery completion. v1.x
 normative scope remains complete, but correctness
