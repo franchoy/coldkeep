@@ -754,6 +754,46 @@ class ReleaseStateValidatorTests(unittest.TestCase):
             ["CKRS018"],
         )
 
+    def test_66_post_release_pr_unreadable_event_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(
+            fixture.run(env=fixture.post_release_pr_env(fixture.root)).returncode,
+            0,
+        )
+
+    def test_67_post_release_pr_environment_head_mismatch_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_then_close()
+        event = fixture.write_pr_event()
+        env = fixture.post_release_pr_env(event)
+        env["GITHUB_HEAD_REF"] = "release/v1.13.9"
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(fixture.run(env=env).returncode, 0)
+
+    def test_68_git_ancestry_internal_error_fails_closed(self) -> None:
+        completed = ProcessResult(
+            ["git", "merge-base", "--is-ancestor"],
+            128,
+            "",
+            "fixture ancestry failure",
+        )
+        with mock.patch.object(
+            release_state_support,
+            "run_git",
+            return_value=completed,
+        ):
+            with self.assertRaisesRegex(
+                release_state_support.InternalError,
+                "fixture ancestry failure",
+            ):
+                release_state_support.strict_git_ancestor(
+                    Path("."),
+                    "ancestor",
+                    "descendant",
+                )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

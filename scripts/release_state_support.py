@@ -499,35 +499,50 @@ def accepted_release_pr(version: str, env: dict[str, str]) -> bool:
     )
 
 
-def accepted_post_release_pr(version: str, env: dict[str, str]) -> bool:
-    """Validate a same-repository release PR from its authoritative payload."""
+def _post_release_pr_environment(
+    version: str,
+    env: dict[str, str],
+) -> Optional[tuple[str, str, str]]:
+    """Return bounded post-release PR inputs after environment validation."""
     release_branch = f"release/v{version}"
+    expected = ("pull_request", release_branch)
+    actual = (env["GITHUB_EVENT_NAME"], env["GITHUB_HEAD_REF"])
+    if actual != expected or not env["GITHUB_REF"].startswith("refs/pull/"):
+        return None
     event_path = env["GITHUB_EVENT_PATH"]
     repository = env["GITHUB_REPOSITORY"]
-    if (
-        env["GITHUB_EVENT_NAME"] != "pull_request"
-        or not env["GITHUB_REF"].startswith("refs/pull/")
-        or env["GITHUB_HEAD_REF"] != release_branch
-        or not event_path
-        or not repository
-    ):
-        return False
+    if not event_path or not repository:
+        return None
+    return event_path, repository, release_branch
+
+
+def _post_release_pr_identity(event_path: str) -> Optional[tuple[object, object, object]]:
+    """Load one bounded PR identity tuple, returning none on invalid input."""
     try:
         payload = json.loads(Path(event_path).read_text(encoding="utf-8"))
-        pull_request = payload["pull_request"]
-        base = pull_request["base"]
-        head = pull_request["head"]
-        head_repository = head["repo"]
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    pull_request = payload.get("pull_request")
+    if not isinstance(pull_request, dict):
+        return None
+    base = pull_request.get("base")
+    head = pull_request.get("head")
+    head_repository = head.get("repo") if isinstance(head, dict) else None
+    if not all(isinstance(value, dict) for value in (base, head, head_repository)):
+        return None
+    return base.get("ref"), head.get("ref"), head_repository.get("full_name")
+
+
+def accepted_post_release_pr(version: str, env: dict[str, str]) -> bool:
+    """Validate a same-repository release PR from its authoritative payload."""
+    bounded = _post_release_pr_environment(version, env)
+    if bounded is None:
         return False
-    return (
-        isinstance(base, dict)
-        and isinstance(head, dict)
-        and isinstance(head_repository, dict)
-        and base.get("ref") == "main"
-        and head.get("ref") == release_branch
-        and head_repository.get("full_name") == repository
-    )
+    event_path, repository, release_branch = bounded
+    expected = ("main", release_branch, repository)
+    return _post_release_pr_identity(event_path) == expected
 
 
 def phases_complete(phase_doc: Optional[Document]) -> bool:
@@ -633,7 +648,10 @@ def strict_git_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
         ["merge-base", "--is-ancestor", ancestor, descendant],
         allow_failure=True,
     )
-    return completed.returncode == 0
+    if completed.returncode in (0, 1):
+        return completed.returncode == 0
+    detail = completed.stderr.strip() or completed.stdout.strip() or "git merge-base failed"
+    raise InternalError("git", detail)
 
 
 def main_context(branch: str, env: dict[str, str]) -> bool:

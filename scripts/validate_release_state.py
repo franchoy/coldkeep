@@ -484,6 +484,41 @@ def check_ckrs016(
         result.add("CKRS016", ".git", 0, f"Git context branch={branch or 'detached'} is incompatible with {state} for {version}")
 
 
+def released_tag_detail(
+    head: str,
+    exists: bool,
+    annotated: bool,
+    target: Optional[str],
+) -> Optional[str]:
+    """Return a bounded released-tag violation detail."""
+    if not exists:
+        return "missing annotated tag"
+    if not annotated:
+        return "tag is lightweight"
+    if target != head:
+        return "peeled target does not equal HEAD"
+    return None
+
+
+def post_release_closed_tag_detail(
+    root: Path,
+    head: str,
+    exists: bool,
+    annotated: bool,
+    target: Optional[str],
+) -> Optional[str]:
+    """Return a bounded post-release tag violation detail."""
+    if not exists:
+        return "missing annotated tag"
+    if not annotated:
+        return "tag is lightweight"
+    if target == head:
+        return "peeled target equals HEAD"
+    if target is None or not strict_git_ancestor(root, target, head):
+        return "peeled target is not a strict ancestor of HEAD"
+    return None
+
+
 def check_ckrs017(
     root: Path,
     version: str,
@@ -493,30 +528,13 @@ def check_ckrs017(
 ) -> None:
     head, _, exists, annotated, target = context
     if state == "released":
-        if not exists or not annotated or target != head:
-            detail = "missing annotated tag" if not exists else "tag is lightweight" if not annotated else "peeled target does not equal HEAD"
-            result.add("CKRS017", ".git", 0, f"tag v{version} does not satisfy released: {detail}")
+        detail = released_tag_detail(head, exists, annotated, target)
     elif state == "post-release-closed":
-        detail = (
-            "missing annotated tag"
-            if not exists
-            else "tag is lightweight"
-            if not annotated
-            else "peeled target equals HEAD"
-            if target == head
-            else "peeled target is not a strict ancestor of HEAD"
-            if target is None or not strict_git_ancestor(root, target, head)
-            else None
-        )
-        if detail:
-            result.add(
-                "CKRS017",
-                ".git",
-                0,
-                f"tag v{version} does not satisfy post-release-closed: {detail}",
-            )
-    elif exists:
-        result.add("CKRS017", ".git", 0, f"tag v{version} does not satisfy {state}: exact tag already exists")
+        detail = post_release_closed_tag_detail(root, head, exists, annotated, target)
+    else:
+        detail = "exact tag already exists" if exists else None
+    if detail:
+        result.add("CKRS017", ".git", 0, f"tag v{version} does not satisfy {state}: {detail}")
 
 
 def check_ckrs018(
