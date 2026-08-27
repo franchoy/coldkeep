@@ -15,15 +15,18 @@ import (
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
-	workflow = strings.Replace(
+	mutated := strings.Replace(
 		workflow,
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability]",
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, vulnerability]",
+		", cross-platform, vulnerability, source-install",
+		", vulnerability, source-install",
 		1,
 	)
+	if mutated == workflow {
+		t.Fatal("required-gate cross-platform dependency fixture was not removed")
+	}
 
-	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
-	if !strings.Contains(stderr, "required gate depends separately on benchmark, cross-platform, and vulnerability evaluation") {
+	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "required gate depends on security and Phase 3 reproducibility jobs") {
 		t.Fatalf("expected missing cross-platform dependency error, got:\n%s", stderr)
 	}
 }
@@ -443,7 +446,7 @@ func TestAuditCIEnforcementRejectsBenchmarkGovernanceMutations(t *testing.T) {
 		},
 		{
 			name: "required dependency removed", old: "benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability",
-			replacement: "benchmark-timing-advisory, cross-platform, vulnerability", message: "depends separately on benchmark, cross-platform, and vulnerability evaluation",
+			replacement: "benchmark-timing-advisory, cross-platform, vulnerability", message: "required gate depends on security and Phase 3 reproducibility jobs",
 		},
 	}
 	for _, tt := range tests {
