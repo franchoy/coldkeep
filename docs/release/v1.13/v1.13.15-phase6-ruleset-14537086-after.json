@@ -1,0 +1,43 @@
+{
+  "_links": {
+    "html": {"href": "https://github.com/franchoy/coldkeep/rules/14537086"},
+    "self": {"href": "https://api.github.com/repos/franchoy/coldkeep/rulesets/14537086"}
+  },
+  "bypass_actors": [
+    {"actor_id": 7415595, "actor_type": "User", "bypass_mode": "always"}
+  ],
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/tags/v*"
+      ]
+    }
+  },
+  "created_at": "2026-03-31T08:33:35.419+02:00",
+  "current_user_can_bypass": "always",
+  "enforcement": "active",
+  "id": 14537086,
+  "name": "Protect release tags",
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5FEIoOzgDd0X4",
+  "rules": [
+    {"type": "deletion"},
+    {"type": "non_fast_forward"},
+    {"type": "creation"},
+    {"type": "update"},
+    {
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {"context": "CI Required Gate", "integration_id": 15368}
+        ],
+        "strict_required_status_checks_policy": true
+      },
+      "type": "required_status_checks"
+    }
+  ],
+  "source": "franchoy/coldkeep",
+  "source_type": "Repository",
+  "target": "tag",
+  "updated_at": "2026-08-27T21:01:56.544+02:00"
+}
