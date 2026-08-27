@@ -538,12 +538,12 @@ check_local_workflow() {
   fi
   require_pattern "$WORKFLOW_FILE" 'name: CI' 'CI workflow file' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'uses:\s*golangci/golangci-lint-action@v9' 'hosted quality uses golangci-lint action v9' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'version:\s*v2\.6\.2' 'hosted quality pins golangci-lint v2.6.2' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'version:\s*v2\.9\.0' 'hosted quality pins golangci-lint v2.9.0' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Test candidate lint gate contract' 'hosted quality tests the candidate lint gate contract' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -count=1 ./scripts -run '\^TestCandidateLintGate'" 'hosted quality runs candidate lint gate regression tests' || check_status=1
   require_pattern "$CANDIDATE_LINT_GATE_FILE" '^set -Eeuo pipefail$' 'candidate lint gate enables fail-closed shell semantics' || check_status=1
   require_pattern "$CANDIDATE_LINT_GATE_FILE" '^set -o pipefail$' 'candidate lint gate preserves pipeline failures' || check_status=1
-  require_pattern "$CANDIDATE_LINT_GATE_FILE" '^readonly EXPECTED_GOLANGCI_LINT_VERSION="2\.6\.2"$' 'candidate lint gate pins golangci-lint v2.6.2' || check_status=1
+  require_pattern "$CANDIDATE_LINT_GATE_FILE" '^readonly EXPECTED_GOLANGCI_LINT_VERSION="2\.9\.0"$' 'candidate lint gate pins golangci-lint v2.9.0' || check_status=1
   require_pattern "$CANDIDATE_LINT_GATE_FILE" 'config path' 'candidate lint gate resolves the effective repository config' || check_status=1
   require_pattern "$CANDIDATE_LINT_GATE_FILE" 'config verify' 'candidate lint gate verifies the effective repository config' || check_status=1
   require_pattern "$CANDIDATE_LINT_GATE_FILE" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 'candidate lint gate captures lint and tee pipeline statuses' || check_status=1

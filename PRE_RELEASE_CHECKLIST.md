@@ -85,7 +85,7 @@ Install these before claiming CI parity locally:
 - PostgreSQL client tools, including `psql`.
 - `jq`.
 - `shellcheck`.
-- `golangci-lint` v2.6.2 for exact CI parity. Newer local versions may report
+- `golangci-lint` v2.9.0 for exact CI parity. Newer local versions may report
   findings that GitHub CI does not yet enforce.
 - Python 3.
 - A bash-compatible shell.
@@ -264,11 +264,11 @@ else
 fi
 scripts/validate_validation_matrix.sh
 bash scripts/check_versioned_row_writers.sh
-# CI pins golangci-lint at v2.6.2 (golangci/golangci-lint-action@v9 version: v2.6.2).
+# CI pins golangci-lint at v2.9.0 (golangci/golangci-lint-action@v9 version: v2.9.0).
 # A newer local version may surface findings that CI would not flag, causing
 # false parity failures. For exact parity, install the pinned version:
 #   curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-#     | sh -s -- -b $(go env GOPATH)/bin v2.6.2
+#     | sh -s -- -b $(go env GOPATH)/bin v2.9.0
 golangci-lint run ./...
 go vet ./...
 

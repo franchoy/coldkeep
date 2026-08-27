@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 set -o pipefail
 
-readonly EXPECTED_GOLANGCI_LINT_VERSION="2.6.2"
+readonly EXPECTED_GOLANGCI_LINT_VERSION="2.9.0"
 
 usage() {
   cat <<'EOF'
@@ -75,7 +75,7 @@ version_output="$("$LINTER_BIN" version 2>&1)" || {
   echo "[candidate-lint] ERROR: cannot execute golangci-lint" >&2
   exit 1
 }
-if [[ ! "$version_output" =~ (^|[[:space:]])version[[:space:]]+2[.]6[.]2([[:space:]]|$) ]]; then
+if [[ ! "$version_output" =~ (^|[[:space:]])version[[:space:]]+2[.]9[.]0([[:space:]]|$) ]]; then
   printf '%s\n' "$version_output" >&2
   echo "[candidate-lint] ERROR: expected golangci-lint $EXPECTED_GOLANGCI_LINT_VERSION" >&2
   exit 1

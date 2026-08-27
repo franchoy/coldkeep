@@ -33,12 +33,12 @@ func TestAuditCIEnforcementRequiresCandidateLintParity(t *testing.T) {
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 
 	t.Run("hosted version pin", func(t *testing.T) {
-		mutated := strings.Replace(workflow, "version: v2.6.2", "version: v2.6.3", 1)
+		mutated := strings.Replace(workflow, "version: v2.9.0", "version: v2.9.1", 1)
 		if mutated == workflow {
 			t.Fatal("hosted linter version fixture not found")
 		}
 		stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
-		if !strings.Contains(stderr, "hosted quality pins golangci-lint v2.6.2") {
+		if !strings.Contains(stderr, "hosted quality pins golangci-lint v2.9.0") {
 			t.Fatalf("expected hosted linter pin failure, got:\n%s", stderr)
 		}
 	})
@@ -1734,7 +1734,7 @@ if [[ -n "${FAKE_LINT_CALL_LOG:-}" ]]; then
 fi
 case "${1:-}" in
   version)
-    echo "golangci-lint has version 2.6.2 built with test"
+    echo "golangci-lint has version 2.9.0 built with test"
     ;;
   config)
     case "${2:-}" in

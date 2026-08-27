@@ -34,7 +34,10 @@ var windowsOps = struct {
 	beforePublish func() error
 }{}
 
-const windowsRenameMaxCodeUnits = windows.MAX_LONG_PATH
+// MAX_LONG_PATH includes the terminating NUL. FILE_RENAME_INFORMATION carries
+// an explicit byte length and no terminator, so bound the encoded name itself
+// to the remaining UTF-16 units.
+const windowsRenameMaxCodeUnits = windows.MAX_LONG_PATH - 1
 
 var errWindowsRenameNameTooLong = errors.New("secure install destination name exceeds Windows rename limit")
 
