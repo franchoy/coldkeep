@@ -1006,6 +1006,7 @@ check_local_workflow() {
   require_content_pattern "$remote_candidate_install_block" 'moduleInfo\.Origin\.Hash' 'Windows remote candidate installation resolves origin identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'go install.*cmd/coldkeep@.*CANDIDATE_SHA' 'remote candidate installation installs the exact candidate revision' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.15" 'remote candidate installation proves binary identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "go1\\\.26\\\.7" 'remote candidate installation proves binary compiler identity' || check_status=1
   if grep -Eq 'actions/checkout|continue-on-error|\|\| true' <<<"$remote_candidate_install_block"; then
     echo "[audit] ERROR: remote candidate installation must run outside a checkout and remain blocking" >&2
     check_status=1

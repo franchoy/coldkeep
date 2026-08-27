@@ -1354,6 +1354,7 @@ jobs:
           go install "${module}/cmd/coldkeep@${CANDIDATE_SHA}"
           "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.15'
           go version -m "${GOBIN}/coldkeep" > binary-build-info.txt
+          head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'
           grep -F "$(printf 'mod\t%s\t%s' "${module}" "${resolved_version}")" binary-build-info.txt
 
           {
@@ -1400,6 +1401,7 @@ jobs:
           if ((& $binary version) -ne 'coldkeep version 1.13.15') { throw 'binary identity mismatch' }
           $buildInfo = go version -m $binary
           $buildInfo | Out-File -FilePath binary-build-info.txt -Encoding utf8
+          if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }
           if (($buildInfo -join "`n") -notmatch [regex]::Escape("mod`t$module`t$($moduleInfo.Version)")) {
             throw 'installed module build identity mismatch'
           }
