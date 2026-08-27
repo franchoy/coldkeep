@@ -3,12 +3,86 @@
 package secureinstall
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
+
+func TestWindowsRenameBufferUTF16Boundaries(t *testing.T) {
+	nonBMPBelow := strings.Repeat("😀", windowsRenameMaxCodeUnits/2)
+	nonBMPAt := nonBMPBelow + "a"
+	tests := []struct {
+		name      string
+		finalName string
+		wantUnits int
+		wantErr   bool
+	}{
+		{name: "ascii below", finalName: strings.Repeat("a", windowsRenameMaxCodeUnits-1), wantUnits: windowsRenameMaxCodeUnits - 1},
+		{name: "ascii at", finalName: strings.Repeat("a", windowsRenameMaxCodeUnits), wantUnits: windowsRenameMaxCodeUnits},
+		{name: "ascii above", finalName: strings.Repeat("a", windowsRenameMaxCodeUnits+1), wantErr: true},
+		{name: "non-BMP below", finalName: nonBMPBelow, wantUnits: windowsRenameMaxCodeUnits - 1},
+		{name: "non-BMP at", finalName: nonBMPAt, wantUnits: windowsRenameMaxCodeUnits},
+		{name: "non-BMP above", finalName: nonBMPAt + "a", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buffer, err := windowsRenameBuffer(windows.Handle(42), tt.finalName, true)
+			if tt.wantErr {
+				if !errors.Is(err, errWindowsRenameNameTooLong) {
+					t.Fatalf("boundary error=%v", err)
+				}
+				if buffer != nil {
+					t.Fatalf("boundary buffer length=%d, want nil", len(buffer))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("rename buffer: %v", err)
+			}
+			var layout fileRenameInformation
+			nameOffset := int(unsafe.Offsetof(layout.FileName))
+			if got, want := len(buffer), nameOffset+tt.wantUnits*2; got != want {
+				t.Fatalf("buffer length=%d want=%d", got, want)
+			}
+			rename := (*fileRenameInformation)(unsafe.Pointer(&buffer[0]))
+			if got, want := rename.FileNameLength, uint32(tt.wantUnits*2); got != want {
+				t.Fatalf("FileNameLength=%d want=%d", got, want)
+			}
+			if rename.RootDirectory != windows.Handle(42) {
+				t.Fatalf("RootDirectory=%v", rename.RootDirectory)
+			}
+			if rename.ReplaceIfExists != windows.FILE_RENAME_REPLACE_IF_EXISTS {
+				t.Fatalf("ReplaceIfExists=%d", rename.ReplaceIfExists)
+			}
+			encoded, encodeErr := windows.UTF16FromString(tt.finalName)
+			if encodeErr != nil {
+				t.Fatalf("encode expected name: %v", encodeErr)
+			}
+			for index, want := range encoded[:len(encoded)-1] {
+				got := binary.LittleEndian.Uint16(buffer[nameOffset+index*2:])
+				if got != want {
+					t.Fatalf("UTF-16 unit %d=%#x want=%#x", index, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestWindowsRenameBufferRejectsEmbeddedNUL(t *testing.T) {
+	buffer, err := windowsRenameBuffer(0, "invalid\x00name", false)
+	if err == nil || !strings.Contains(err.Error(), "encode destination name") {
+		t.Fatalf("embedded-NUL error=%v", err)
+	}
+	if buffer != nil {
+		t.Fatalf("embedded-NUL buffer length=%d, want nil", len(buffer))
+	}
+}
 
 func TestWindowsNoReplaceAndOverwrite(t *testing.T) {
 	root := t.TempDir()

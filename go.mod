@@ -1,6 +1,6 @@
 module github.com/franchoy/coldkeep
 
-go 1.25
+go 1.25.0
 
 toolchain go1.25.10
 
@@ -10,4 +10,4 @@ require github.com/mattn/go-sqlite3 v1.14.24
 
 require github.com/klauspost/compress v1.18.0
 
-require golang.org/x/sys v0.38.0
+require golang.org/x/sys v0.44.0
