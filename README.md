@@ -32,9 +32,11 @@ Coldkeep uses a visual identity based on an ice cube vault:
 `v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure` is
 the active unreleased release train on `release/v1.13.15`. Phase 0 is complete:
 Phase 0A persisted the frozen scope and v1.13.14 publication baseline, and
-Phase 0B activated version and repository-agent authority. Phase 1 — Windows
-Security and Rename Boundaries — is Next. All 15 findings remain open pending
-their owner phases. V2 implementation has not started.
+Phase 0B activated version and repository-agent authority. Phase 1 implemented
+the Windows security and rename-boundary remediation and passed its exact-head
+hosted candidate. Phase 2 — Certified Toolchain and Security Gates — is Next.
+The two Windows findings remain pending direct hosted execution of their new
+boundary tests in Phase 2. V2 implementation has not started.
 
 v1.13.14 remains published, operationally closed historical state. Its
 annotated tag object `a996b25b562de69749f41c3af56626aeb5d44e33` peels to
@@ -46,7 +48,8 @@ V1_13_15_STATE: ACTIVE_UNRELEASED
 V1_13_15_BRANCH: release/v1.13.15
 V1_13_15_FINDINGS_CLOSED: 0/15
 PHASE_0: COMPLETE
-PHASE_1: NEXT
+PHASE_1: COMPLETE
+PHASE_2: NEXT
 V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
 V1_X: CLOSURE_RELEASE_ACTIVE
 V2_IMPLEMENTATION: NOT_STARTED
