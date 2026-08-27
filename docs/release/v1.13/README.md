@@ -84,9 +84,10 @@ boundary proof through its exact-head hosted candidate. Phase 3 completed the
 safe development container, digest-pinned official product images, native
 Linux/macOS/Windows source-install proof, and multi-architecture product-image
 smokes. Phase 4 reconciled current agent/provider, lifecycle, historical-prompt,
-and roadmap authority with deterministic validation. Phase 5 is Next:
-Integrated Local Closure. Phases 6–10 are Not started. V2 implementation has
-not started.
+and roadmap authority with deterministic validation. Phase 5 completed the
+exact-candidate integrated local gate and v1.13.14 identity reconciliation.
+Phase 6 is Next: Hosted Candidate and Pre-Tag Governance Proof. Phases 7–10 are
+Not started. V2 implementation has not started.
 
 v1.13.14 remains published and operationally closed historical state. Its tag,
 release, and historical evidence must not be mutated.
