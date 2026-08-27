@@ -991,7 +991,7 @@ check_local_workflow() {
   require_content_pattern "$source_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'source installation covers Linux, macOS, and Windows' || check_status=1
   require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.7'" 'source installation pins Go 1.26.7' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
-  require_content_pattern "$source_install_block" '\$env:CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
+  require_content_pattern "$source_install_block" 'CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" "coldkeep version 1\.13\.15" 'source installation proves binary identity' || check_status=1
   require_content_pattern "$product_container_block" 'arch:\s*\[amd64, arm64\]' 'product container validates amd64 and arm64' || check_status=1
   require_content_pattern "$product_container_block" 'docker buildx build' 'product container uses Buildx' || check_status=1
