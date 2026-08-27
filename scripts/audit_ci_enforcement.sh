@@ -985,8 +985,24 @@ check_local_workflow() {
   else
     echo "[audit] ok: reachable-vulnerability scan is blocking and uses ordinary output semantics"
   fi
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability\]' 'required gate depends separately on benchmark, cross-platform, and vulnerability evaluation' || check_status=1
+  source_install_block="$(extract_job_block source-install)"
+  product_container_block="$(extract_job_block product-container)"
+  devcontainer_block="$(extract_job_block devcontainer)"
+  require_content_pattern "$source_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'source installation covers Linux, macOS, and Windows' || check_status=1
+  require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.7'" 'source installation pins Go 1.26.7' || check_status=1
+  require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
+  require_content_pattern "$source_install_block" '\$env:CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
+  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.15" 'source installation proves binary identity' || check_status=1
+  require_content_pattern "$product_container_block" 'arch:\s*\[amd64, arm64\]' 'product container validates amd64 and arm64' || check_status=1
+  require_content_pattern "$product_container_block" 'docker buildx build' 'product container uses Buildx' || check_status=1
+  require_content_pattern "$product_container_block" 'name:\s*Smoke product image' 'product container runs the version smoke' || check_status=1
+  require_content_pattern "$devcontainer_block" 'validate_phase3_contracts\.py' 'development container runs the static safety contract' || check_status=1
+  require_content_pattern "$devcontainer_block" 'post-create\.sh' 'development container runs its bootstrap' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, product-container, devcontainer\]' 'required gate depends on security and Phase 3 reproducibility jobs' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT:\s*\$\{\{ needs\.vulnerability\.result \}\}' 'required gate captures vulnerability result' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'SOURCE_INSTALL_RESULT:\s*\$\{\{ needs\['\''source-install'\''\]\.result \}\}' 'required gate captures source-install result' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'PRODUCT_CONTAINER_RESULT:\s*\$\{\{ needs\['\''product-container'\''\]\.result \}\}' 'required gate captures product-container result' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'DEVCONTAINER_RESULT:\s*\$\{\{ needs\.devcontainer\.result \}\}' 'required gate captures devcontainer result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_smart_quotes\.sh' 'smart-quote guard command' || check_status=1
@@ -1075,6 +1091,9 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'BENCHMARK_TIMING_ADVISORY_RESULT.*!= "success"' 'required gate rejects skipped benchmark timing advisory job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'CROSS_PLATFORM_RESULT.*!= "success"' 'required gate rejects skipped cross-platform job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT.*!= "success"' 'required gate rejects skipped vulnerability job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'SOURCE_INSTALL_RESULT.*!= "success"' 'required gate rejects skipped source-install job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'PRODUCT_CONTAINER_RESULT.*!= "success"' 'required gate rejects skipped product-container job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'DEVCONTAINER_RESULT.*!= "success"' 'required gate rejects skipped devcontainer job' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" 'name:\s*CodeQL' 'CodeQL workflow file' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" '^  push:$' 'CodeQL push trigger' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- main$' 'CodeQL push branch retains main' || check_status=1

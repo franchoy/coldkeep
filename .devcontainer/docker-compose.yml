@@ -1,0 +1,38 @@
+# Development-only services for VS Code Dev Containers.
+services:
+  workspace:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    command: sleep infinity
+    environment:
+      GOTOOLCHAIN: local
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: coldkeep
+      DB_PASSWORD: coldkeep-development-only
+      DB_NAME: coldkeep
+      DB_SSLMODE: disable
+      COLDKEEP_DB_AUTO_BOOTSTRAP: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ..:/workspaces/coldkeep:cached
+
+  postgres:
+    image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+    environment:
+      POSTGRES_USER: coldkeep
+      POSTGRES_PASSWORD: coldkeep-development-only
+      POSTGRES_DB: coldkeep
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coldkeep -d coldkeep"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - coldkeep-dev-postgres:/var/lib/postgresql/data
+
+volumes:
+  coldkeep-dev-postgres:

@@ -1,0 +1,12 @@
+{
+  "name": "Coldkeep v1.13.15",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "workspace",
+  "workspaceFolder": "/workspaces/coldkeep",
+  "remoteUser": "vscode",
+  "shutdownAction": "stopCompose",
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "containerEnv": {
+    "GOTOOLCHAIN": "local"
+  }
+}

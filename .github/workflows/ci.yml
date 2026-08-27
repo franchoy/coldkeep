@@ -134,7 +134,7 @@ jobs:
         codec: [plain, aes-gcm]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
         env:
           POSTGRES_USER: coldkeep
           POSTGRES_PASSWORD: coldkeep
@@ -457,7 +457,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
         env:
           POSTGRES_USER: coldkeep
           POSTGRES_PASSWORD: coldkeep
@@ -508,7 +508,7 @@ jobs:
         codec: [plain, aes-gcm]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
         env:
           POSTGRES_USER: coldkeep
           POSTGRES_PASSWORD: coldkeep
@@ -559,7 +559,7 @@ jobs:
         codec: [plain, aes-gcm]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
         env:
           POSTGRES_USER: coldkeep
           POSTGRES_PASSWORD: coldkeep
@@ -612,7 +612,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
         env:
           POSTGRES_USER: coldkeep
           POSTGRES_PASSWORD: coldkeep
@@ -865,7 +865,7 @@ jobs:
         codec: [plain, aes-gcm]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
         env:
           POSTGRES_USER: coldkeep
           POSTGRES_PASSWORD: coldkeep
@@ -1246,10 +1246,142 @@ jobs:
       - name: Run blocking reachable-vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
+  source-install:
+    name: Local source installation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout clean source
+        uses: actions/checkout@v6
+        with:
+          clean: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.7'
+          check-latest: false
+          cache: true
+
+      - name: Build and install from local source (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(go env GOVERSION)" = "go1.26.7"
+          test "$(go env GOTOOLCHAIN)" = "local"
+          cc --version
+          CGO_ENABLED=1 go build ./cmd/coldkeep
+          CGO_ENABLED=1 go install ./cmd/coldkeep
+          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 1.13.15'
+          {
+            echo "GO_VERSION=$(go version)"
+            echo "GOTOOLCHAIN=$(go env GOTOOLCHAIN)"
+            echo "GOOS=$(go env GOOS)"
+            echo "GOARCH=$(go env GOARCH)"
+            echo 'C_COMPILER<<EOF'
+            cc --version
+            echo 'EOF'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Build and install from local source (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ((go env GOVERSION) -ne 'go1.26.7') { throw 'Go version drift' }
+          if ((go env GOTOOLCHAIN) -ne 'local') { throw 'GOTOOLCHAIN drift' }
+          if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { throw 'native gcc is unavailable' }
+          gcc --version
+          $env:CGO_ENABLED = '1'
+          go build ./cmd/coldkeep
+          go install ./cmd/coldkeep
+          $binary = Join-Path (go env GOPATH) 'bin/coldkeep.exe'
+          if ((& $binary version) -ne 'coldkeep version 1.13.15') { throw 'binary identity mismatch' }
+          "GO_VERSION=$(go version)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "GOTOOLCHAIN=$(go env GOTOOLCHAIN)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "GOOS=$(go env GOOS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "GOARCH=$(go env GOARCH)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          'C_COMPILER=gcc' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+  product-container:
+    name: Product container (linux/${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4.2.0
+        with:
+          platforms: arm64
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Validate pinned container contracts
+        run: python3 scripts/validate_phase3_contracts.py
+
+      - name: Build product image
+        run: >-
+          docker buildx build
+          --platform linux/${{ matrix.arch }}
+          --load
+          --tag coldkeep:phase3-${{ matrix.arch }}
+          .
+
+      - name: Smoke product image
+        run: >-
+          docker run --rm
+          --platform linux/${{ matrix.arch }}
+          coldkeep:phase3-${{ matrix.arch }}
+          version
+
+  devcontainer:
+    name: Development container contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate static development-container contract
+        run: |
+          python3 scripts/validate_phase3_contracts.py
+          docker compose -f .devcontainer/docker-compose.yml config --quiet
+
+      - name: Build and prove idempotent bootstrap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          project='coldkeep-phase3'
+          cleanup() {
+            docker compose --project-name "$project" -f .devcontainer/docker-compose.yml down --volumes
+          }
+          trap cleanup EXIT
+          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml build workspace
+          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml up -d postgres workspace
+          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash .devcontainer/post-create.sh
+          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash .devcontainer/post-create.sh
+          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash -lc 'test "$(go env GOVERSION)" = go1.26.7 && test "$(go env GOTOOLCHAIN)" = local && gcc --version'
+
   ci-required:
     name: CI Required Gate
     runs-on: ubuntu-latest
-    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability]
+    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, product-container, devcontainer]
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
@@ -1266,6 +1398,9 @@ jobs:
           BENCHMARK_TIMING_ADVISORY_RESULT: ${{ needs['benchmark-timing-advisory'].result }}
           CROSS_PLATFORM_RESULT: ${{ needs['cross-platform'].result }}
           VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
+          SOURCE_INSTALL_RESULT: ${{ needs['source-install'].result }}
+          PRODUCT_CONTAINER_RESULT: ${{ needs['product-container'].result }}
+          DEVCONTAINER_RESULT: ${{ needs.devcontainer.result }}
         run: |
           echo "quality=${QUALITY_RESULT}"
           echo "correctness-matrix=${CORRECTNESS_MATRIX_RESULT}"
@@ -1278,6 +1413,9 @@ jobs:
           echo "benchmark-timing-advisory=${BENCHMARK_TIMING_ADVISORY_RESULT}"
           echo "cross-platform=${CROSS_PLATFORM_RESULT}"
           echo "vulnerability=${VULNERABILITY_RESULT}"
+          echo "source-install=${SOURCE_INSTALL_RESULT}"
+          echo "product-container=${PRODUCT_CONTAINER_RESULT}"
+          echo "devcontainer=${DEVCONTAINER_RESULT}"
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
              [ "${CORRECTNESS_MATRIX_RESULT}" != "success" ] || \
@@ -1289,7 +1427,10 @@ jobs:
              [ "${BENCHMARK_INTEGRITY_RESULT}" != "success" ] || \
              [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ] || \
              [ "${CROSS_PLATFORM_RESULT}" != "success" ] || \
-             [ "${VULNERABILITY_RESULT}" != "success" ]; then
+             [ "${VULNERABILITY_RESULT}" != "success" ] || \
+             [ "${SOURCE_INSTALL_RESULT}" != "success" ] || \
+             [ "${PRODUCT_CONTAINER_RESULT}" != "success" ] || \
+             [ "${DEVCONTAINER_RESULT}" != "success" ]; then
             echo "One or more required jobs failed or were skipped."
             exit 1
           fi

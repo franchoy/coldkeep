@@ -1,12 +1,13 @@
+# Local product smoke environment. All credentials below are development-only.
 services:
   coldkeep_postgres:
-    image: postgres:16
+    image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
     environment:
-      POSTGRES_USER: coldkeep
-      POSTGRES_PASSWORD: coldkeep
-      POSTGRES_DB: coldkeep
+      POSTGRES_USER: ${COLDKEEP_DEV_DB_USER:-coldkeep}
+      POSTGRES_PASSWORD: ${COLDKEEP_DEV_DB_PASSWORD:-coldkeep-development-only}
+      POSTGRES_DB: ${COLDKEEP_DEV_DB_NAME:-coldkeep}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U coldkeep -d coldkeep"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -15,7 +16,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/schema_postgres.sql:/docker-entrypoint-initdb.d/schema_postgres.sql
+      - ./db/schema_postgres.sql:/docker-entrypoint-initdb.d/schema_postgres.sql:ro
 
   coldkeep:
     build:
@@ -27,9 +28,9 @@ services:
     environment:
       DB_HOST: coldkeep_postgres
       DB_PORT: 5432
-      DB_USER: coldkeep
-      DB_PASSWORD: coldkeep
-      DB_NAME: coldkeep
+      DB_USER: ${COLDKEEP_DEV_DB_USER:-coldkeep}
+      DB_PASSWORD: ${COLDKEEP_DEV_DB_PASSWORD:-coldkeep-development-only}
+      DB_NAME: ${COLDKEEP_DEV_DB_NAME:-coldkeep}
       DB_SSLMODE: disable
       COLDKEEP_STORAGE_DIR: /storage/containers
       COLDKEEP_CONTAINER_MAX_SIZE_MB: 64
