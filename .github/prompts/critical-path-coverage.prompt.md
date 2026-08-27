@@ -89,14 +89,14 @@ When proposing coverage, provide:
 - whether it is release-blocking or advisory;
 - scope risks.
 
-## v1.10.x Boundaries
+## v1.13.15 Boundaries
 
-During v1.10.x:
+During the active v1.13.15 final v1.x closure train:
 
-- do not add engine extraction;
-- do not add catalog abstraction;
-- do not change default database behavior;
+- do not implement v2 or SQLite-first product-default behavior;
+- do not change public APIs, schemas, storage formats, or repository formats;
 - do not introduce product features;
 - do not perform broad refactors;
 - do not use coverage work to force style-only cleanup;
-- do not remove PostgreSQL compatibility.
+- do not remove PostgreSQL compatibility;
+- keep changes within the active phase allowlist.

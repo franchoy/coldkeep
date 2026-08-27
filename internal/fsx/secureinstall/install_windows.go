@@ -34,6 +34,13 @@ var windowsOps = struct {
 	beforePublish func() error
 }{}
 
+// MAX_LONG_PATH includes the terminating NUL. FILE_RENAME_INFORMATION carries
+// an explicit byte length and no terminator, so bound the encoded name itself
+// to the remaining UTF-16 units.
+const windowsRenameMaxCodeUnits = windows.MAX_LONG_PATH - 1
+
+var errWindowsRenameNameTooLong = errors.New("secure install destination name exceeds Windows rename limit")
+
 type windowsPending struct {
 	parentHandle windows.Handle
 	objectHandle windows.Handle
@@ -146,7 +153,16 @@ func windowsRenameBuffer(parentHandle windows.Handle, finalName string, overwrit
 	if err != nil {
 		return nil, fmt.Errorf("secure install encode destination name: %w", err)
 	}
-	nameBytes := (len(name) - 1) * 2
+	nameUnits := len(name) - 1
+	if nameUnits > windowsRenameMaxCodeUnits {
+		return nil, fmt.Errorf(
+			"%w: %d UTF-16 code units exceeds %d",
+			errWindowsRenameNameTooLong,
+			nameUnits,
+			windowsRenameMaxCodeUnits,
+		)
+	}
+	nameBytes := nameUnits * 2
 	var layout fileRenameInformation
 	bufferSize := int(unsafe.Offsetof(layout.FileName)) + nameBytes
 	buffer := make([]byte, bufferSize)
@@ -156,7 +172,10 @@ func windowsRenameBuffer(parentHandle windows.Handle, finalName string, overwrit
 	}
 	rename.RootDirectory = parentHandle
 	rename.FileNameLength = uint32(nameBytes)
-	copy((*[windows.MAX_LONG_PATH]uint16)(unsafe.Pointer(&rename.FileName[0]))[:nameBytes/2:nameBytes/2], name[:len(name)-1])
+	if nameUnits > 0 {
+		fileName := unsafe.Slice(&rename.FileName[0], nameUnits)
+		copy(fileName, name[:nameUnits])
+	}
 	return buffer, nil
 }
 

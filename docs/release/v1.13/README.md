@@ -7,6 +7,14 @@ stabilize the catalog contract surface, harden dependency direction, clarify eng
 correctness invariant ownership, prepare for SQLite-first local portability, and preserve
 PostgreSQL compatibility while the project moves toward future v2.x local-first productization.
 
+## Current roadmap authority
+
+v1.x completed the frozen Engine/Catalog correctness work and bounded
+SQLite/PostgreSQL backend compatibility. SQLite-first repository-local default
+product behavior belongs to v2.x. Older v1.x documents that implied the
+default-product switch must ship before v1 closure are historical and
+superseded on that timing point; their completed-release facts remain intact.
+
 v1.13.0 is the baseline release for that work. It is documentation and inventory only, and it
 must not change runtime behavior.
 
@@ -65,6 +73,26 @@ The v1.13.0 baseline is defined by:
 All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is green.
 
 ## Current Release State
+
+`v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure` is
+the active unreleased train on `release/v1.13.15`. Phase 0A persisted the
+release contract and canonical v1.13.14 identity baseline. Phase 0B activated
+source identity 1.13.15 and current repository-agent authority. Phase 1
+implemented the Windows remediation. Phase 2 certified Go 1.26.7, the blocking
+native vulnerability gate, the complete Python suite, and the direct Windows
+boundary proof through its exact-head hosted candidate. Phase 3 completed the
+safe development container, digest-pinned official product images, native
+Linux/macOS/Windows source-install proof, and multi-architecture product-image
+smokes. Phase 4 reconciled current agent/provider, lifecycle, historical-prompt,
+and roadmap authority with deterministic validation. Phase 5 completed the
+exact-candidate integrated local gate and v1.13.14 identity reconciliation.
+Phase 6 is Next: Hosted Candidate and Pre-Tag Governance Proof. Phases 7–10 are
+Not started. V2 implementation has not started.
+
+v1.13.14 remains published and operationally closed historical state. Its tag,
+release, and historical evidence must not be mutated.
+
+## Historical v1.13.14 current-state narrative
 
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure

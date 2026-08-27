@@ -21,13 +21,51 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.14%20published-blue)
+![Status](https://img.shields.io/badge/status-v1.13.15%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
 > Migration note (v1.9): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v16 schema at startup.
 
 ## Current release state
+
+`v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure` is
+the active unreleased release train on `release/v1.13.15`. Phase 0 is complete:
+Phase 0A persisted the frozen scope and v1.13.14 publication baseline, and
+Phase 0B activated version and repository-agent authority. Phase 1 implemented
+the Windows security and rename-boundary remediation. Phase 2 certified Go
+1.26.7, blocking native vulnerability gates, the complete Python suite, and
+the Windows boundary proof. Phase 3 completed safe development and product
+containers, registry-pinned official images, native Linux/macOS/Windows source
+installation, and Linux amd64/arm64 product-image smokes. Phase 4 — Governance
+and Authority Reconciliation — reconciled active provider instructions,
+historical prompts, lifecycle authority, and the v1/v2 roadmap. Phase 5
+completed the exact-candidate integrated local gate and historical-identity
+reconciliation. Phase 6 is Next: Hosted Candidate and Pre-Tag Governance
+Proof. V2 implementation has not started.
+
+v1.13.14 remains published, operationally closed historical state. Its
+annotated tag object `a996b25b562de69749f41c3af56626aeb5d44e33` peels to
+`caac44d459609f89f2c971cb7b07a8678bd52d2c`; its canonical identity is frozen
+by the v1.13.15 Phase 0A baseline and must not be mutated.
+
+```text
+V1_13_15_STATE: ACTIVE_UNRELEASED
+V1_13_15_BRANCH: release/v1.13.15
+V1_13_15_FINDINGS_CLOSED: 13/15
+PHASE_0: COMPLETE
+PHASE_1: COMPLETE
+PHASE_2: COMPLETE
+PHASE_3: COMPLETE
+PHASE_4: COMPLETE
+PHASE_5: COMPLETE
+PHASE_6: NEXT
+V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
+V1_X: CLOSURE_RELEASE_ACTIVE
+V2_IMPLEMENTATION: NOT_STARTED
+```
+
+## Historical release-state narrative through v1.13.14
 
 v1.13.10 is released: it completed closure-integrity, release-state validation,
 CI runtime hygiene, and truthful documentation of known limitations. It remains
@@ -318,35 +356,66 @@ Not a fit (v1.x scope):
 
 A small samples directory is included for local testing.
 
-If you only want the fastest successful first run, use the Local (no Docker)
-path below, then come back to the later sections as needed.
+### Source-only distribution contract
 
-### Local (no Docker)
+Coldkeep v1.13.15 is distributed as source only; the GitHub release does not
+provide prebuilt executables. The supported installation families are Linux,
+macOS, and Windows with:
+
+- Go 1.26.7 explicitly installed;
+- `GOTOOLCHAIN=local`; and
+- a native C compiler supported by that Go installation.
+
+The module language floor remains Go 1.25. The `toolchain go1.26.7` directive
+is useful when Coldkeep is the main module, but it is not relied upon to select
+Go 1.26.7 for a version-qualified command. After publication, the certified
+remote form is:
 
 ```bash
-# 1) Initialize key material (.env)
-coldkeep init
+GOTOOLCHAIN=local go install github.com/franchoy/coldkeep/cmd/coldkeep@v1.13.15
+```
 
-# 2) Load environment
-export $(cat .env | xargs)
+Run that command with Go 1.26.7; do not infer broader platform or architecture
+support from source availability.
 
-# 3) Configure local PostgreSQL connection (required for local mode)
+For a host build, install Go 1.26.7 and a native C compiler first. The `go 1.25`
+module directive is the language floor; Go 1.26.7 with `GOTOOLCHAIN=local` is
+the certified v1.13.15 build environment. Normal v1.x CLI operation remains
+PostgreSQL-backed; SQLite-first local productization belongs to v2.x.
+
+### Host binary with PostgreSQL
+
+```bash
+# 1) Verify the certified toolchain and build before invoking Coldkeep
+export GOTOOLCHAIN=local
+go version # must report go1.26.7
+go build -o coldkeep ./cmd/coldkeep
+
+# 2) Initialize fresh development key material (.env)
+./coldkeep init
+
+# 3) Load the generated environment without parsing it as command arguments
+set -a
+source .env
+set +a
+
+# 4) Configure the required PostgreSQL connection
 export DB_HOST=127.0.0.1
 export DB_PORT=5432
 export DB_USER=coldkeep
-export DB_PASSWORD=coldkeep
+export DB_PASSWORD=coldkeep-development-only
 export DB_NAME=coldkeep
 export DB_SSLMODE=disable
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 
-# 4) Store and inspect
-coldkeep store samples/hello.txt
-coldkeep stats
+# 5) Store and inspect
+./coldkeep store samples/hello.txt
+./coldkeep stats
 
-# 5) Restore + verify
+# 6) Restore + verify
 # restore expects file ID(s), not source filename
-coldkeep restore 1 ./restored
-coldkeep verify system --standard
+./coldkeep restore 1 ./restored
+./coldkeep verify system --standard
 ```
 
 Security note: if the encryption key is lost, encrypted data cannot be recovered.
@@ -359,10 +428,11 @@ Command form tips:
 ### Docker
 
 ```bash
-# 1) Start services
-docker compose up -d --build
+# 1) Build the digest-pinned product image and start development PostgreSQL
+docker compose build coldkeep
+docker compose up -d coldkeep_postgres
 
-# 2) Initialize key material on host-mounted workspace
+# 2) Generate fresh key material into the host-mounted workspace
 docker compose run --rm -v "$PWD:/app" coldkeep init
 
 # 3) Store a sample file
@@ -382,26 +452,23 @@ to summarize invariants and lifecycle-semantics impact for reviewers.
 For a contributor-oriented local CI path before that, see [CONTRIBUTING.md](CONTRIBUTING.md).
 If your change touches `coldkeep stats` or stats query shape, the same guide also includes a short stats benchmarking section with small/medium/large benchmark commands.
 
-### Approach A: Docker runner
+### Approach A: Development container
 
-Use the `coldkeep` service container to run the smoke script.
+Use the development workspace, not the minimal product image, to run
+contributor scripts.
 
 ```bash
-# 1) Ensure PostgreSQL service is up
-docker compose up -d coldkeep_postgres
+# 1) Start the development-only workspace and PostgreSQL service
+docker compose -f .devcontainer/docker-compose.yml up -d postgres workspace
 
-# 2) Load encryption env from .env generated by coldkeep init
-set -a
-source .env
-set +a
-
-# 3) Run smoke inside the coldkeep container
-docker compose run --rm \
-  -e COLDKEEP_KEY="$COLDKEEP_KEY" \
-  -e COLDKEEP_CODEC="$COLDKEEP_CODEC" \
-  -v "$PWD/samples:/samples:ro" \
-  --entrypoint sh coldkeep \
-  -lc 'apk add --no-cache jq >/dev/null && COLDKEEP_SAMPLES_DIR=/samples scripts/smoke.sh'
+# 2) Build and run smoke with the plain development codec
+docker compose -f .devcontainer/docker-compose.yml exec workspace bash -lc '
+  go build -o /tmp/coldkeep ./cmd/coldkeep
+  COLDKEEP_CODEC=plain \
+  COLDKEEP_SMOKE_RESET_DB=1 \
+  PATH="/tmp:$PATH" \
+  scripts/smoke.sh
+'
 ```
 
 ### Approach B: Host runner
@@ -435,7 +502,10 @@ rm -f coldkeep
 Notes:
 
 - `scripts/smoke.sh` requires `jq` and `coldkeep` on PATH in the execution environment.
-- Containerized simulate checks may print a non-fatal warning about sqlite/cgo stubs; smoke continues unless `COLDKEEP_SMOKE_STRICT_SIMULATE=1` is set.
+- The minimal product image intentionally contains only the statically linked
+  CLI. Run contributor scripts from the host or the development container.
+- Containerized simulate checks may print a non-fatal warning about sqlite/cgo
+  stubs; smoke continues unless `COLDKEEP_SMOKE_STRICT_SIMULATE=1` is set.
 
 ## CLI Basics
 

@@ -1,0 +1,9 @@
+.git
+.release-evidence
+.ci-storage
+.coldkeep
+.env
+storage
+coldkeep
+*.test
+*.out

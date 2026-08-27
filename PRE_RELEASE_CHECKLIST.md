@@ -79,12 +79,13 @@ promotes a section into the active gate for a special release.
 
 Install these before claiming CI parity locally:
 
-- Go 1.25.x, or the version required by `go.mod` / `toolchain`.
+- Go 1.26.7 exactly for v1.13.15 certification. The module language floor
+  remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
 - `docker compose`.
 - PostgreSQL client tools, including `psql`.
 - `jq`.
 - `shellcheck`.
-- `golangci-lint` v2.6.2 for exact CI parity. Newer local versions may report
+- `golangci-lint` v2.9.0 for exact CI parity. Newer local versions may report
   findings that GitHub CI does not yet enforce.
 - Python 3.
 - A bash-compatible shell.
@@ -115,9 +116,12 @@ Current release-gate sections:
 
 Historical v1.9 note:
 
-- Active v1.9 blockers are the current release-gate sections (1-11, 15-18).
+- For historical v1.9 sign-off, sections 1-11 and 15-18 were the active
+  blockers. They are not the current v1.13.15 lifecycle authority.
 - Historical template sections (12-14) are archived reference material only.
-- Unchecked boxes in sections 12-14 are intentional historical state and are not v1.9 blockers unless a release manager explicitly promotes one into the active v1.9 gate.
+- Unchecked boxes in sections 12-14 are intentional historical state and are
+  not current blockers unless a release manager explicitly promotes one into
+  a release-specific gate.
 
 ## Release freeze policy
 
@@ -263,11 +267,11 @@ else
 fi
 scripts/validate_validation_matrix.sh
 bash scripts/check_versioned_row_writers.sh
-# CI pins golangci-lint at v2.6.2 (golangci/golangci-lint-action@v9 version: v2.6.2).
+# CI pins golangci-lint at v2.9.0 (golangci/golangci-lint-action@v9 version: v2.9.0).
 # A newer local version may surface findings that CI would not flag, causing
 # false parity failures. For exact parity, install the pinned version:
 #   curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-#     | sh -s -- -b $(go env GOPATH)/bin v2.6.2
+#     | sh -s -- -b $(go env GOPATH)/bin v2.9.0
 golangci-lint run ./...
 go vet ./...
 
@@ -286,11 +290,12 @@ scripts/validate_release_linearity.sh --repo-root "$PWD"
 # release-lifecycle aware: run it from the active release branch, a main
 # candidate, or an annotated tag checkout. Neither command performs network calls.
 python3 scripts/test_validate_release_state.py
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
 python3 scripts/validate_release_state.py --state auto
 
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.14"
+expected_version="1.13.15"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -318,7 +323,7 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.14 in both human and JSON modes.
+Expected: the built CLI reports exactly 1.13.15 in both human and JSON modes.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
@@ -792,7 +797,7 @@ Confirm:
 
 Sections 12-14 are retained as historical release templates for prior release
 tracks (v1.5/v1.6). Unchecked boxes in these sections are intentional and do
-not represent unfinished blockers for the current v1.9 release.
+not represent unfinished blockers for the current release.
 
 Historical status marker:
 
@@ -800,8 +805,9 @@ Historical status marker:
 - They are explicitly non-gating for v1.9 final sign-off.
 - Keep checklist boxes unchanged in these sections to preserve historical parity.
 
-For v1.9 final tagging, use the active release-gate flow in earlier sections
-plus the snapshot sign-off sections that follow.
+For the historical v1.9 final-tag context, the active flow was the earlier
+sections plus the snapshot sign-off sections that follow. Current v1.13.15
+authority is its release-specific checklist and gate.
 
 ## 12) Historical Template (Archived, Non-gating) - v1.5 CDC / chunker-evolution contract
 

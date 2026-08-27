@@ -20,6 +20,25 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.15 - Unreleased — Final v1.x Security, Reproducibility, and Operational Closure
+
+- Persisted the final 15-finding/four-invariant closure contract and the
+  canonical v1.13.14 publication-identity baseline on a release branch created
+  from exact main `5337f955467e67e4cce9bcdae5904a4b2c6af670`.
+- Activated source identity `1.13.15`, current root agent authority, and the
+  bounded Phase 0–10 lifecycle. Phase 1 Windows security and rename-boundary
+  remediation is next.
+- Retained `go 1.25` as the language floor while freezing Go 1.26.7 as the
+  certified release toolchain; upgraded only `x/sys` to v0.44.0; added blocking
+  ordinary-output govulncheck v1.7.0 on Linux and Windows; and bounded native
+  Windows rename construction at the UTF-16 limit.
+- Added an unprivileged, socket-free development container with development-
+  only PostgreSQL; pinned registry-verified official builder, runtime, and
+  PostgreSQL image indexes; and passed source installation on Linux, macOS,
+  and Windows plus product-image smokes on Linux amd64 and arm64.
+- Distribution remains source-only. No schema, storage-format, public API, or
+  v2 product implementation change has landed through Phase 3.
+
 ## v1.13.14 - 2026-08-26 — Final v1.x Correctness Remediation and Closure Certification
 
 - Published the stable v1.13.14 release from annotated tag object

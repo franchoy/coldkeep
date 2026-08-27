@@ -66,7 +66,7 @@ Codacy must not be treated as:
 - architecture authority;
 - correctness authority;
 - invariant authority;
-- a reason for broad refactors during v1.10.x;
+- a reason for broad refactors during the active v1.13.15 closure train;
 - a blocker for style-only findings.
 
 ## Coverage Boundary
@@ -85,18 +85,20 @@ Critical-path coverage should focus on:
 
 Do not add global coverage gates unless explicitly approved.
 
-## v1.10.x Release Boundary
+## v1.13.15 Release Boundary
 
-During v1.10.x, do not use CI work to introduce:
+During the active v1.13.15 final v1.x closure train, do not use CI work to
+introduce:
 
-- engine extraction;
-- catalog abstraction;
-- default database backend changes;
+- v2 implementation or SQLite-first product-default behavior;
+- public API, schema, storage-format, or repository-format changes;
 - product features;
 - broad refactors;
-- CodeRabbit adoption;
-- mutation testing as a required per-PR gate;
-- filesystem fault-injection implementation unless explicitly assigned to a phase.
+- unassigned dependency or toolchain movement;
+- required gates outside the active phase allowlist.
+
+Treat v1.13.14 release evidence as immutable historical state. Stop on release
+identity drift or newly discovered private security impact.
 
 ## Required Review Questions
 

@@ -14,8 +14,13 @@ coordination. v1.13.14 is the published stable final v1.x corrective release.
 All 17 confirmed findings and all 4 release-process gates are closed, including
 post-publication lifecycle reconciliation in Phase 26. The operational
 repository is `post-release-closed`; the published tag remains immutable at
-`caac44d459609f89f2c971cb7b07a8678bd52d2c`. V2 implementation has not
-started.
+`caac44d459609f89f2c971cb7b07a8678bd52d2c`.
+
+v1.13.15 is the active final v1.x security, reproducibility, and operational-
+closure train. Its frozen work is limited to the accepted 15-finding contract,
+including Windows native-string safety, supported-toolchain/vulnerability
+gates, reproducible source builds, and release governance. v1.13.14 remains
+immutable historical release state. V2 implementation has not started.
 
 It is suitable for controlled production environments where:
 

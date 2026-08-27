@@ -1,38 +1,31 @@
-# ---------- Builder ----------
-FROM golang:1.25-alpine AS builder
+# syntax=docker/dockerfile:1
 
-WORKDIR /app
+# Product image only. Development tooling belongs in .devcontainer/.
+FROM --platform=$BUILDPLATFORM golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514 AS builder
 
-# Install git (required for some Go modules)
-RUN apk add --no-cache git
+ARG TARGETOS=linux
+ARG TARGETARCH
 
-# Copy module files first (better layer caching)
+ENV GOTOOLCHAIN=local
+
+WORKDIR /src
+
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY db/ ./db/
 
-# Build binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o coldkeep ./cmd/coldkeep
+RUN test "$(go env GOVERSION)" = "go1.26.7" && \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+    go build -trimpath -buildvcs=false -o /out/coldkeep ./cmd/coldkeep
 
-
-# ---------- Runtime ----------
-FROM alpine:3.19
-
-RUN apk add --no-cache \
-    ca-certificates \
-    bash
+FROM alpine:3.22.5@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 
 WORKDIR /app
 
-# Copy binary
-COPY --from=builder /app/coldkeep /usr/local/bin/coldkeep
-
-# Copy scripts
-COPY scripts/ ./scripts/
+COPY --from=builder /out/coldkeep /usr/local/bin/coldkeep
 
 ENTRYPOINT ["coldkeep"]
-CMD ["stats"]
+CMD ["version"]

@@ -34,9 +34,10 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
-- Do not implement engine extraction during v1.10.x.
-- Do not implement catalog abstraction during v1.10.x.
-- Do not change the default database backend during v1.10.x.
+- Do not implement v2 or SQLite-first product-default behavior during the
+  active v1.13.15 closure train.
+- Do not change public APIs, schemas, storage formats, or repository formats.
+- Keep changes within the active phase allowlist.
 - Do not remove PostgreSQL compatibility.
 - Do not introduce SQLite-only assumptions into engine or catalog contracts.
 - Do not close issue-tracker or remediation-matrix rows unless explicitly asked.

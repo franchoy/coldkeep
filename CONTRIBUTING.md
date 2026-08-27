@@ -78,8 +78,10 @@ This focus preserves system reliability as the primary delivery criterion.
 
 ## Development Requirements
 
-- Go 1.23+ (or the version specified in go.mod)
-- PostgreSQL 14+
+- Go 1.26.7 exactly with `GOTOOLCHAIN=local` for the certified v1.13.15 path
+  (`go 1.25` remains the module language floor)
+- A native C compiler supported by Go on Linux, macOS, or Windows
+- PostgreSQL 16
 - Docker (recommended for reproducibility)
 - `psql` if you plan to run `scripts/smoke.sh` from the host or follow the full pre-release checklist
 - `jq` if you plan to run the smoke gate on the host
@@ -93,10 +95,11 @@ If this is your first change, do not start with the full release checklist.
 Use this shorter loop first:
 
 1. Read `README.md`, then skim `ARCHITECTURE.md` for the invariants your change could affect.
-2. Start PostgreSQL with `docker compose up -d coldkeep_postgres`.
-3. Build the binary with `go build -o coldkeep ./cmd/coldkeep`.
-4. Run one health command such as `./coldkeep doctor`.
-5. Run the smallest relevant test slice for your change before expanding to broader suites.
+2. Verify `go version` reports Go 1.26.7 and set `GOTOOLCHAIN=local`.
+3. Start PostgreSQL with `docker compose up -d coldkeep_postgres`.
+4. Build the binary with `go build -o coldkeep ./cmd/coldkeep`.
+5. Run one health command such as `./coldkeep doctor`.
+6. Run the smallest relevant test slice for your change before expanding to broader suites.
 
 Use `PRE_RELEASE_CHECKLIST.md` when you are preparing a release, validating a broad correctness-sensitive change, or trying to mirror CI end-to-end.
 
@@ -405,13 +408,13 @@ go test ./... -count=1 -timeout 25m
 Optional focused run while working on doctor behavior:
 
 ``` bash
-go test ./tests -run 'TestDoctor(Command|JSONContractConsistency|FailureJSONContractAndStreams)$' -count=1 -v
+go test ./tests/integration -run 'TestDoctor(Command|JSONContractConsistency|FailureJSONContractAndStreams)$' -count=1 -v
 ```
 
 Recommended focused runs for lifecycle/reuse hardening changes:
 
 ``` bash
-go test ./tests -run 'TestReuseRefusesSemanticallyCorruptedCompletedFile|TestGCRestorePinRaceContainerNotDeleted|TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock|TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt' -count=1 -v
+go test ./tests/integration -run 'TestReuseRefusesSemanticallyCorruptedCompletedFile|TestGCRestorePinRaceContainerNotDeleted|TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock|TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt' -count=1 -v
 ```
 
 If you modify startup recovery, semantic reuse validation, verify semantics, restore
