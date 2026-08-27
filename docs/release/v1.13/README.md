@@ -70,10 +70,11 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 the active unreleased train on `release/v1.13.15`. Phase 0A persisted the
 release contract and canonical v1.13.14 identity baseline. Phase 0B activated
 source identity 1.13.15 and current repository-agent authority. Phase 1
-implemented the Windows remediation and passed its exact-head hosted
-candidate. Phase 2 is Next: Certified Toolchain and Security Gates. Phases
-3–10 are Not started. The two Windows findings remain pending direct hosted
-execution of their new boundary tests. V2 implementation has not started.
+implemented the Windows remediation. Phase 2 certified Go 1.26.7, the blocking
+native vulnerability gate, the complete Python suite, and the direct Windows
+boundary proof through its exact-head hosted candidate. Phase 3 is Next: Local
+Development, Containers, and Local Source Installation. Phases 4–10 are Not
+started. V2 implementation has not started.
 
 v1.13.14 remains published and operationally closed historical state. Its tag,
 release, and historical evidence must not be mutated.
