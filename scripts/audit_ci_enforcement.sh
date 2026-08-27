@@ -986,6 +986,7 @@ check_local_workflow() {
     echo "[audit] ok: reachable-vulnerability scan is blocking and uses ordinary output semantics"
   fi
   source_install_block="$(extract_job_block source-install)"
+  remote_candidate_install_block="$(extract_job_block remote-candidate-install)"
   product_container_block="$(extract_job_block product-container)"
   devcontainer_block="$(extract_job_block devcontainer)"
   require_content_pattern "$source_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'source installation covers Linux, macOS, and Windows' || check_status=1
@@ -993,14 +994,33 @@ check_local_workflow() {
   require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" "coldkeep version 1\.13\.15" 'source installation proves binary identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'remote candidate installation covers Linux, macOS, and Windows' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.7'" 'remote candidate installation pins Go 1.26.7' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" 'cache:\s*false' 'remote candidate installation does not require checkout-backed Go caching' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" 'CANDIDATE_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}' 'remote candidate installation binds the exact public candidate head' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" 'GOPROXY=direct' 'Unix remote candidate installation resolves directly from the public repository' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "GOPROXY = 'direct'" 'Windows remote candidate installation resolves directly from the public repository' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" 'GOWORK=off' 'Unix remote candidate installation runs outside a workspace' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "GOWORK = 'off'" 'Windows remote candidate installation runs outside a workspace' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" 'resolved_hash.*Origin.*Hash' 'Unix remote candidate installation resolves origin identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" 'moduleInfo\.Origin\.Hash' 'Windows remote candidate installation resolves origin identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" 'go install.*cmd/coldkeep@.*CANDIDATE_SHA' 'remote candidate installation installs the exact candidate revision' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.15" 'remote candidate installation proves binary identity' || check_status=1
+  if grep -Eq 'actions/checkout|continue-on-error|\|\| true' <<<"$remote_candidate_install_block"; then
+    echo "[audit] ERROR: remote candidate installation must run outside a checkout and remain blocking" >&2
+    check_status=1
+  else
+    echo "[audit] ok: remote candidate installation runs outside a checkout and remains blocking"
+  fi
   require_content_pattern "$product_container_block" 'arch:\s*\[amd64, arm64\]' 'product container validates amd64 and arm64' || check_status=1
   require_content_pattern "$product_container_block" 'docker buildx build' 'product container uses Buildx' || check_status=1
   require_content_pattern "$product_container_block" 'name:\s*Smoke product image' 'product container runs the version smoke' || check_status=1
   require_content_pattern "$devcontainer_block" 'validate_phase3_contracts\.py' 'development container runs the static safety contract' || check_status=1
   require_content_pattern "$devcontainer_block" 'post-create\.sh' 'development container runs its bootstrap' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, product-container, devcontainer\]' 'required gate depends on security and Phase 3 reproducibility jobs' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer\]' 'required gate depends on security and hosted reproducibility jobs' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT:\s*\$\{\{ needs\.vulnerability\.result \}\}' 'required gate captures vulnerability result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SOURCE_INSTALL_RESULT:\s*\$\{\{ needs\['\''source-install'\''\]\.result \}\}' 'required gate captures source-install result' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'REMOTE_CANDIDATE_INSTALL_RESULT:\s*\$\{\{ needs\['\''remote-candidate-install'\''\]\.result \}\}' 'required gate captures remote-candidate-install result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'PRODUCT_CONTAINER_RESULT:\s*\$\{\{ needs\['\''product-container'\''\]\.result \}\}' 'required gate captures product-container result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'DEVCONTAINER_RESULT:\s*\$\{\{ needs\.devcontainer\.result \}\}' 'required gate captures devcontainer result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
@@ -1092,6 +1112,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'CROSS_PLATFORM_RESULT.*!= "success"' 'required gate rejects skipped cross-platform job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT.*!= "success"' 'required gate rejects skipped vulnerability job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SOURCE_INSTALL_RESULT.*!= "success"' 'required gate rejects skipped source-install job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'REMOTE_CANDIDATE_INSTALL_RESULT.*!= "success"' 'required gate rejects skipped remote-candidate-install job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'PRODUCT_CONTAINER_RESULT.*!= "success"' 'required gate rejects skipped product-container job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'DEVCONTAINER_RESULT.*!= "success"' 'required gate rejects skipped devcontainer job' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" 'name:\s*CodeQL' 'CodeQL workflow file' || check_status=1

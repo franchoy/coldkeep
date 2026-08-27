@@ -26,8 +26,61 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 	}
 
 	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
-	if !strings.Contains(stderr, "required gate depends on security and Phase 3 reproducibility jobs") {
+	if !strings.Contains(stderr, "required gate depends on security and hosted reproducibility jobs") {
 		t.Fatalf("expected missing cross-platform dependency error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	tests := []struct {
+		name        string
+		mutate      func(string) string
+		wantMessage string
+	}{
+		{
+			name: "required-gate dependency",
+			mutate: func(value string) string {
+				return strings.Replace(value, "source-install, remote-candidate-install, product-container", "source-install, product-container", 1)
+			},
+			wantMessage: "required gate depends on security and hosted reproducibility jobs",
+		},
+		{
+			name: "exact candidate head",
+			mutate: func(value string) string {
+				return strings.ReplaceAll(value, "github.event.pull_request.head.sha || github.sha", "github.sha")
+			},
+			wantMessage: "remote candidate installation binds the exact public candidate head",
+		},
+		{
+			name: "origin identity",
+			mutate: func(value string) string {
+				return strings.ReplaceAll(value, "Origin.Hash", "Origin.Ref")
+			},
+			wantMessage: "remote candidate installation resolves origin identity",
+		},
+		{
+			name: "required-gate result",
+			mutate: func(value string) string {
+				return strings.Replace(value, "             [ \"${REMOTE_CANDIDATE_INSTALL_RESULT}\" != \"success\" ] || \\\n", "", 1)
+			},
+			wantMessage: "required gate rejects skipped remote-candidate-install job",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutated := tt.mutate(workflow)
+			if mutated == workflow {
+				t.Fatal("remote exact-candidate fixture was not mutated")
+			}
+			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, tt.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", tt.wantMessage, stderr)
+			}
+		})
 	}
 }
 
@@ -446,7 +499,7 @@ func TestAuditCIEnforcementRejectsBenchmarkGovernanceMutations(t *testing.T) {
 		},
 		{
 			name: "required dependency removed", old: "benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability",
-			replacement: "benchmark-timing-advisory, cross-platform, vulnerability", message: "required gate depends on security and Phase 3 reproducibility jobs",
+			replacement: "benchmark-timing-advisory, cross-platform, vulnerability", message: "required gate depends on security and hosted reproducibility jobs",
 		},
 	}
 	for _, tt := range tests {
