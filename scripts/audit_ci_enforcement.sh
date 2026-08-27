@@ -613,7 +613,9 @@ check_local_workflow() {
     echo "[audit] ok: benchmark source validation has no broad failure suppression"
   fi
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'runs-on: ubuntu-24\.04' 'benchmark calibration pins the runner family' || check_status=1
-  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" "go-version: '1\\.25\\.12'" 'benchmark calibration pins the Go patch' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" "go-version: '1\\.26\\.7'" 'benchmark calibration pins the certified Go patch' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'benchmark calibration disables automatic toolchain switching' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+check-latest: false$' 'benchmark calibration disables latest-version resolution' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'benchmark calibration pins the PostgreSQL image digest' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+compression: \[none, zstd\]$' 'benchmark calibration fixes compression profiles' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+workers: \[1, 4\]$' 'benchmark calibration fixes worker profiles' || check_status=1
@@ -632,7 +634,7 @@ check_local_workflow() {
   require_content_pattern "$benchmark_integrity_block" 'ci-paired-w4-v2' 'integrity matrix selects the bounded workers=4 fixture' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'python3 scripts/benchmark_gate\.py integrity' 'integrity matrix uses the hard candidate-only interface' || check_status=1
   require_content_pattern "$benchmark_integrity_block" '--command-timeout-seconds 600' 'integrity matrix fixes the 600-second command timeout' || check_status=1
-  require_content_pattern "$benchmark_integrity_block" "go-version: '1\.25\.12'" 'integrity matrix pins the Go patch version' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" "go-version: '1\.26\.7'" 'integrity matrix pins the certified Go patch version' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'integrity matrix pins PostgreSQL by digest' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'if-no-files-found: error' 'integrity artifact rejects missing evidence' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'if: \$\{\{ always\(\) \}\}' 'integrity artifact finalization and upload always run' || check_status=1
@@ -780,6 +782,32 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'merge_group:' 'merge queue trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CI workflow_dispatch trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
+  ci_setup_go_count="$(grep -Ec 'uses: actions/setup-go@' "$WORKFLOW_FILE")"
+  ci_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.7'$" "$WORKFLOW_FILE")"
+  ci_check_latest_false_count="$(grep -Ec '^\s+check-latest: false$' "$WORKFLOW_FILE")"
+  if [[ "$ci_setup_go_count" -eq 0 || "$ci_exact_go_count" -ne "$ci_setup_go_count" ]]; then
+    echo "[audit] ERROR: every required CI setup-go step must pin Go 1.26.7 exactly" >&2
+    check_status=1
+  else
+    echo "[audit] ok: every required CI setup-go step pins Go 1.26.7 exactly"
+  fi
+  if [[ "$ci_check_latest_false_count" -ne "$ci_setup_go_count" ]]; then
+    echo "[audit] ERROR: every required CI setup-go step must disable latest-version resolution" >&2
+    check_status=1
+  else
+    echo "[audit] ok: every required CI setup-go step disables latest-version resolution"
+  fi
+  require_pattern "$WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'required CI disables automatic toolchain switching' || check_status=1
+  codeql_setup_go_count="$(grep -Ec 'uses: actions/setup-go@' "$CODEQL_WORKFLOW_FILE")"
+  codeql_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.7'$" "$CODEQL_WORKFLOW_FILE")"
+  codeql_check_latest_false_count="$(grep -Ec '^\s+check-latest: false$' "$CODEQL_WORKFLOW_FILE")"
+  if [[ "$codeql_setup_go_count" -eq 0 || "$codeql_exact_go_count" -ne "$codeql_setup_go_count" || "$codeql_check_latest_false_count" -ne "$codeql_setup_go_count" ]]; then
+    echo "[audit] ERROR: CodeQL setup-go must pin Go 1.26.7 and disable latest-version resolution" >&2
+    check_status=1
+  else
+    echo "[audit] ok: CodeQL setup-go pins Go 1.26.7 without latest-version resolution"
+  fi
+  require_pattern "$CODEQL_WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'CodeQL disables automatic toolchain switching' || check_status=1
   upload_v5_count=$(grep -c 'actions/upload-artifact@v5' "$WORKFLOW_FILE" || true)
   upload_v6_count=$(grep -c 'actions/upload-artifact@v6' "$WORKFLOW_FILE" || true)
   upload_v7_count=$(grep -c 'actions/upload-artifact@v7' "$WORKFLOW_FILE" || true)
@@ -798,11 +826,14 @@ check_local_workflow() {
     quality_plain_block="$(extract_step_block_from_content "$quality_block" "Test packages (plain codec)")"
     quality_aes_gcm_block="$(extract_step_block_from_content "$quality_block" "Test packages (aes-gcm codec)")"
     validator_test_block="$(extract_step_block_from_content "$quality_block" "Test release-state validator")"
+    python_suite_block="$(extract_step_block_from_content "$quality_block" "Run complete Python validation suite")"
     validator_real_block="$(extract_step_block_from_content "$quality_block" "Validate repository release state")"
     require_content_pattern "$quality_checkout_block" '^        uses: actions/checkout@v6$' 'quality checkout uses actions/checkout@v6' || check_status=1
     require_content_pattern "$quality_checkout_block" '^          fetch-depth: 0$' 'quality checkout fetch-depth is 0' || check_status=1
     require_content_pattern "$validator_test_block" '^      - name: Test release-state validator$' 'release-state validator test step' || check_status=1
     require_content_pattern "$validator_test_block" '^        run: python3 scripts/test_validate_release_state\.py$' 'release-state validator test command' || check_status=1
+    require_content_pattern "$python_suite_block" '^      - name: Run complete Python validation suite$' 'complete Python validation suite step' || check_status=1
+    require_content_pattern "$python_suite_block" "^        run: python3 -m unittest discover -s scripts -p 'test_\\*\\.py' -v$" 'canonical complete Python validation command' || check_status=1
     require_content_pattern "$validator_real_block" '^      - name: Validate repository release state$' 'release-state validator real-state step' || check_status=1
     require_content_pattern "$validator_real_block" '^        run: python3 scripts/validate_release_state\.py --state auto$' 'release-state validator real-state command' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/heads/release/' 'release-state validator release branch condition' || check_status=1
@@ -814,11 +845,11 @@ check_local_workflow() {
     require_content_pattern "$quality_plain_block" '^        run: go test -race -count=1 \./cmd/\.\.\. \./internal/\.\.\.$' 'SQLite quality plain package command' || check_status=1
     require_content_pattern "$quality_aes_gcm_block" '^          COLDKEEP_CODEC: aes-gcm$' 'SQLite quality AES-GCM codec environment' || check_status=1
     require_content_pattern "$quality_aes_gcm_block" '^        run: go test -race -count=1 \./cmd/\.\.\. \./internal/\.\.\.$' 'SQLite quality AES-GCM package command' || check_status=1
-    if grep -Eq 'continue-on-error|\|\| true' <<<"$validator_test_block$validator_real_block"; then
-      echo "[audit] ERROR: release-state validator steps must remain blocking" >&2
+    if grep -Eq 'continue-on-error|\|\| true' <<<"$validator_test_block$validator_real_block$python_suite_block"; then
+      echo "[audit] ERROR: release-state and Python validation steps must remain blocking" >&2
       check_status=1
     else
-      echo "[audit] ok: release-state validator steps are blocking"
+      echo "[audit] ok: release-state and Python validation steps are blocking"
     fi
   fi
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
@@ -929,6 +960,9 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run native coordination runtime tests' 'cross-platform native coordination runtime step' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -v -count=1 -run '\\^\\(TestNativeLock\\|TestWindowsNativeLock\\|TestProductionCoordinator\\)' ./internal/coordination" 'cross-platform native coordination command covers native backends and production Coordinator' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run Windows secure-rename boundary tests' 'native Windows secure-rename boundary step' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "if:\s*runner\.os == 'Windows'" 'secure-rename boundary step is Windows-only' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test -v -count=1 -run '\\^TestWindowsRenameBuffer' ./internal/fsx/secureinstall" 'native Windows secure-rename boundary command' || check_status=1
   require_pattern "$NATIVE_UNIX_TEST_FILE" '^func TestNativeLockContentionAndReacquire' 'Unix native coordination source retains contention runtime test' || check_status=1
   require_pattern "$NATIVE_WINDOWS_TEST_FILE" '^func TestWindowsNativeLockContentionAndReacquire' 'Windows native coordination source retains contention runtime test' || check_status=1
   require_pattern "$COORDINATOR_NATIVE_TEST_FILE" '^func TestProductionCoordinatorsShareProcessRegistryAndProtectSuccessor' 'production Coordinator source retains registry and successor runtime test' || check_status=1
@@ -940,7 +974,19 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" "go test ./internal/engine/\\.\\.\\. -run '\\^TestRestore' -count=1" 'cross-platform engine restore command scopes to restore tests' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run snapshot restore cross-platform tests' 'cross-platform snapshot restore step' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test ./internal/snapshot/\\.\\.\\. -run '\\^TestRestoreSnapshot' -count=1" 'cross-platform snapshot restore command scopes to snapshot restore tests' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform\]' 'required gate depends separately on benchmark integrity and timing advisory evaluation' || check_status=1
+  vulnerability_block="$(extract_job_block vulnerability)"
+  require_content_pattern "$vulnerability_block" '^    runs-on: \$\{\{ matrix\.os \}\}$' 'reachable-vulnerability scan runs on its native OS matrix' || check_status=1
+  require_content_pattern "$vulnerability_block" 'os:\s*\[ubuntu-latest, windows-latest\]' 'reachable-vulnerability scan covers native Linux and Windows' || check_status=1
+  require_content_pattern "$vulnerability_block" 'name:\s*Run blocking reachable-vulnerability scan' 'blocking reachable-vulnerability scan step' || check_status=1
+  require_content_pattern "$vulnerability_block" '^        run: go run golang\.org/x/vuln/cmd/govulncheck@v1\.7\.0 \./\.\.\.$' 'ordinary-output govulncheck v1.7.0 command' || check_status=1
+  if grep -Eq 'continue-on-error|\|\| true|(^|[[:space:]])--?json([[:space:]]|$)|--?format[= ](json|sarif|openvex)' <<<"$vulnerability_block"; then
+    echo "[audit] ERROR: reachable-vulnerability scan must remain blocking and use ordinary output semantics" >&2
+    check_status=1
+  else
+    echo "[audit] ok: reachable-vulnerability scan is blocking and uses ordinary output semantics"
+  fi
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability\]' 'required gate depends separately on benchmark, cross-platform, and vulnerability evaluation' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT:\s*\$\{\{ needs\.vulnerability\.result \}\}' 'required gate captures vulnerability result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_smart_quotes\.sh' 'smart-quote guard command' || check_status=1
@@ -1028,6 +1074,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'BENCHMARK_INTEGRITY_RESULT.*!= "success"' 'required gate rejects skipped benchmark integrity job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'BENCHMARK_TIMING_ADVISORY_RESULT.*!= "success"' 'required gate rejects skipped benchmark timing advisory job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'CROSS_PLATFORM_RESULT.*!= "success"' 'required gate rejects skipped cross-platform job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT.*!= "success"' 'required gate rejects skipped vulnerability job' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" 'name:\s*CodeQL' 'CodeQL workflow file' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" '^  push:$' 'CodeQL push trigger' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- main$' 'CodeQL push branch retains main' || check_status=1

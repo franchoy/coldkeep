@@ -287,6 +287,7 @@ scripts/validate_release_linearity.sh --repo-root "$PWD"
 # release-lifecycle aware: run it from the active release branch, a main
 # candidate, or an annotated tag checkout. Neither command performs network calls.
 python3 scripts/test_validate_release_state.py
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
 python3 scripts/validate_release_state.py --state auto
 
 go build -o coldkeep ./cmd/coldkeep

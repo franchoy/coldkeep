@@ -17,13 +17,13 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 	workflow = strings.Replace(
 		workflow,
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform]",
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, vulnerability]",
 		1,
 	)
 
 	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
-	if !strings.Contains(stderr, "required gate depends separately on benchmark integrity") {
+	if !strings.Contains(stderr, "required gate depends separately on benchmark, cross-platform, and vulnerability evaluation") {
 		t.Fatalf("expected missing cross-platform dependency error, got:\n%s", stderr)
 	}
 }
@@ -159,14 +159,63 @@ func TestAuditCIEnforcementLocalWorkflowRequiresNativeCoordinationRuntime(t *tes
 	}
 }
 
+func TestAuditCIEnforcementRequiresCertifiedToolchainEverywhere(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	mutated := strings.Replace(workflow, "go-version: '1.26.7'", "go-version: '1.26.x'", 1)
+	if mutated == workflow {
+		t.Fatal("certified CI toolchain fixture not found")
+	}
+	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "every required CI setup-go step must pin Go 1.26.7 exactly") {
+		t.Fatalf("expected exact CI toolchain failure, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementRequiresBlockingOrdinaryGovulncheck(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	mutated := strings.Replace(
+		workflow,
+		"go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...",
+		"go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 -json ./...",
+		1,
+	)
+	if mutated == workflow {
+		t.Fatal("govulncheck command fixture not found")
+	}
+	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "reachable-vulnerability scan must remain blocking and use ordinary output semantics") {
+		t.Fatalf("expected ordinary-output govulncheck failure, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementRequiresNativeWindowsRenameBoundary(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	step := "      - name: Run Windows secure-rename boundary tests\n" +
+		"        if: runner.os == 'Windows'\n" +
+		"        run: go test -v -count=1 -run '^TestWindowsRenameBuffer' ./internal/fsx/secureinstall\n\n"
+	mutated := strings.Replace(workflow, step, "", 1)
+	if mutated == workflow {
+		t.Fatal("Windows secure-rename boundary fixture not found")
+	}
+	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+	if !strings.Contains(stderr, "native Windows secure-rename boundary step") {
+		t.Fatalf("expected Windows boundary-gate failure, got:\n%s", stderr)
+	}
+}
+
 func TestAuditCIEnforcementRequiresPinnedBenchmarkCalibrationToolchain(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 	baselineWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "benchmark-baseline.yml"))
-	baselineWorkflow = strings.Replace(baselineWorkflow, "go-version: '1.25.12'", "go-version: '1.25.x'", 1)
+	baselineWorkflow = strings.Replace(baselineWorkflow, "go-version: '1.26.7'", "go-version: '1.26.x'", 1)
 
 	stderr := runAuditLocalOnlyWithBaseline(t, workflow, codeqlWorkflow, baselineWorkflow, true)
-	if !strings.Contains(stderr, "benchmark calibration pins the Go patch") {
+	if !strings.Contains(stderr, "benchmark calibration pins the certified Go patch") {
 		t.Fatalf("expected benchmark calibration toolchain error, got:\n%s", stderr)
 	}
 }
@@ -393,8 +442,8 @@ func TestAuditCIEnforcementRejectsBenchmarkGovernanceMutations(t *testing.T) {
 			replacement: "      - name: Upload benchmark timing advisory evidence\n        if: ${{ success() }}", message: "timing artifact upload always runs",
 		},
 		{
-			name: "required dependency removed", old: "benchmark-integrity, benchmark-timing-advisory, cross-platform",
-			replacement: "benchmark-timing-advisory, cross-platform", message: "depends separately on benchmark integrity",
+			name: "required dependency removed", old: "benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability",
+			replacement: "benchmark-timing-advisory, cross-platform, vulnerability", message: "depends separately on benchmark, cross-platform, and vulnerability evaluation",
 		},
 	}
 	for _, tt := range tests {
@@ -515,8 +564,8 @@ func TestAuditCIEnforcementRejectsPrematurePairedBenchmarkDependency(t *testing.
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	workflow = strings.Replace(
 		workflow,
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform]",
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, benchmark-paired-decision, cross-platform]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability]",
+		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, benchmark-paired-decision, cross-platform, vulnerability]",
 		1,
 	)
 	stderr := runAuditLocalOnly(
@@ -822,8 +871,10 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformSuccessAssertion(t 
 	workflow = strings.Replace(
 		workflow,
 		`             [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ] || \
-             [ "${CROSS_PLATFORM_RESULT}" != "success" ]; then`,
-		`             [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ]; then`,
+             [ "${CROSS_PLATFORM_RESULT}" != "success" ] || \
+             [ "${VULNERABILITY_RESULT}" != "success" ]; then`,
+		`             [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ] || \
+             [ "${VULNERABILITY_RESULT}" != "success" ]; then`,
 		1,
 	)
 

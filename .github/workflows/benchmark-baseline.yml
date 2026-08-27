@@ -20,6 +20,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GOTOOLCHAIN: local
   COLDKEEP_AES_GCM_FIXTURE_HEX: ${{ format('{0}{1}{0}{1}{0}{1}{0}{1}', '01234567', '89abcdef') }}
   POSTGRES_IMAGE_DIGEST: sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
 
@@ -93,7 +94,8 @@ jobs:
         if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.7'
+          check-latest: false
           cache: false
 
       - name: Build benchmark binary once
