@@ -72,9 +72,11 @@ release contract and canonical v1.13.14 identity baseline. Phase 0B activated
 source identity 1.13.15 and current repository-agent authority. Phase 1
 implemented the Windows remediation. Phase 2 certified Go 1.26.7, the blocking
 native vulnerability gate, the complete Python suite, and the direct Windows
-boundary proof through its exact-head hosted candidate. Phase 3 is Next: Local
-Development, Containers, and Local Source Installation. Phases 4–10 are Not
-started. V2 implementation has not started.
+boundary proof through its exact-head hosted candidate. Phase 3 completed the
+safe development container, digest-pinned official product images, native
+Linux/macOS/Windows source-install proof, and multi-architecture product-image
+smokes. Phase 4 — Governance and Authority Reconciliation — is Next. Phases
+5–10 are Not started. V2 implementation has not started.
 
 v1.13.14 remains published and operationally closed historical state. Its tag,
 release, and historical evidence must not be mutated.
