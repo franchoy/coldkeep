@@ -1354,7 +1354,7 @@ jobs:
           go install "${module}/cmd/coldkeep@${CANDIDATE_SHA}"
           "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.15'
           go version -m "${GOBIN}/coldkeep" > binary-build-info.txt
-          grep -F "mod\t${module}\t${resolved_version}" binary-build-info.txt
+          grep -F "$(printf 'mod\t%s\t%s' "${module}" "${resolved_version}")" binary-build-info.txt
 
           {
             echo "CANDIDATE_SHA=${CANDIDATE_SHA}"
