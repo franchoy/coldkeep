@@ -565,15 +565,18 @@ func TestAuditCIEnforcementRejectsPrematurePairedBenchmarkGateSwitch(t *testing.
 
 func TestAuditCIEnforcementRejectsPrematurePairedBenchmarkDependency(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
-	workflow = strings.Replace(
+	mutated := strings.Replace(
 		workflow,
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability]",
-		"needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, benchmark-paired-decision, cross-platform, vulnerability]",
+		"benchmark-integrity, benchmark-timing-advisory, cross-platform",
+		"benchmark-integrity, benchmark-timing-advisory, benchmark-paired-decision, cross-platform",
 		1,
 	)
+	if mutated == workflow {
+		t.Fatal("required-gate paired-dependency fixture was not inserted")
+	}
 	stderr := runAuditLocalOnly(
 		t,
-		workflow,
+		mutated,
 		readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml")),
 		true,
 	)
