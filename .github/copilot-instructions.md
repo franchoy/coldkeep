@@ -4,12 +4,11 @@ Coldkeep is a correctness-first cold storage engine. The primary invariant is: n
 
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
 
-During v1.10.x:
+During the active v1.13.15 final v1.x closure train:
 
-- do not implement engine extraction;
-- do not implement catalog abstraction;
-- do not change the default database backend;
-- do not introduce product features;
+- treat v1.13.14 as immutable historical release state;
+- do not implement v2 or SQLite-first product-default behavior;
+- do not change public APIs, schema, storage format, or repository format;
 - do not perform broad refactors;
 - keep fixes narrow and phase-scoped;
 - preserve existing CLI, JSON, and exit-code behavior unless the task explicitly changes it.
@@ -28,9 +27,14 @@ Verify must fail closed on inconsistent catalog/storage state.
 Recovery must not legitimize corrupt mappings.
 Packed and legacy storage behavior must remain aligned.
 
-Coldkeep is moving toward SQLite-first local repositories while keeping PostgreSQL compatibility tested.
+SQLite and PostgreSQL engine/catalog compatibility is complete v1.x scope.
+SQLite-first local productization belongs to v2.x.
 Do not remove PostgreSQL compatibility.
 Do not introduce SQLite-only assumptions into engine or catalog contracts.
+
+The root `AGENTS.md` and active v1.13.15 release controls are authoritative.
+Stop on scope expansion, unexpected dependency movement, release-identity
+drift, or newly discovered private security impact.
 
 Codacy is signal, not authority.
 Do not chase style-only or generic maintainability warnings at the expense of correctness.

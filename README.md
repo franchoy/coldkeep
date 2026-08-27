@@ -21,13 +21,38 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.14%20published-blue)
+![Status](https://img.shields.io/badge/status-v1.13.15%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
 > Migration note (v1.9): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v16 schema at startup.
 
 ## Current release state
+
+`v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure` is
+the active unreleased release train on `release/v1.13.15`. Phase 0 is complete:
+Phase 0A persisted the frozen scope and v1.13.14 publication baseline, and
+Phase 0B activated version and repository-agent authority. Phase 1 — Windows
+Security and Rename Boundaries — is Next. All 15 findings remain open pending
+their owner phases. V2 implementation has not started.
+
+v1.13.14 remains published, operationally closed historical state. Its
+annotated tag object `a996b25b562de69749f41c3af56626aeb5d44e33` peels to
+`caac44d459609f89f2c971cb7b07a8678bd52d2c`; its canonical identity is frozen
+by the v1.13.15 Phase 0A baseline and must not be mutated.
+
+```text
+V1_13_15_STATE: ACTIVE_UNRELEASED
+V1_13_15_BRANCH: release/v1.13.15
+V1_13_15_FINDINGS_CLOSED: 0/15
+PHASE_0: COMPLETE
+PHASE_1: NEXT
+V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
+V1_X: CLOSURE_RELEASE_ACTIVE
+V2_IMPLEMENTATION: NOT_STARTED
+```
+
+## Historical release-state narrative through v1.13.14
 
 v1.13.10 is released: it completed closure-integrity, release-state validation,
 CI runtime hygiene, and truthful documentation of known limitations. It remains

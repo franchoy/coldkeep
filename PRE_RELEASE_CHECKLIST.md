@@ -79,7 +79,8 @@ promotes a section into the active gate for a special release.
 
 Install these before claiming CI parity locally:
 
-- Go 1.25.x, or the version required by `go.mod` / `toolchain`.
+- Go 1.26.7 exactly for v1.13.15 certification. The module language floor
+  remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
 - `docker compose`.
 - PostgreSQL client tools, including `psql`.
 - `jq`.
@@ -290,7 +291,7 @@ python3 scripts/validate_release_state.py --state auto
 
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.14"
+expected_version="1.13.15"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -318,7 +319,7 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.14 in both human and JSON modes.
+Expected: the built CLI reports exactly 1.13.15 in both human and JSON modes.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and

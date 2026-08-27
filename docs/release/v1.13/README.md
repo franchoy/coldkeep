@@ -66,6 +66,19 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
+`v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure` is
+the active unreleased train on `release/v1.13.15`. Phase 0A persisted the
+release contract and canonical v1.13.14 identity baseline. Phase 0B activated
+source identity 1.13.15 and current repository-agent authority. Phase 0 is
+Complete. Phase 1 is Next: Windows Security and Rename Boundaries. Phases 2–10
+are Not started. All 15 findings remain open. V2 implementation has not
+started.
+
+v1.13.14 remains published and operationally closed historical state. Its tag,
+release, and historical evidence must not be mutated.
+
+## Historical v1.13.14 current-state narrative
+
 `v1.13.13 — Final v1.x and v2 Handoff Gate` is published and operationally
 closed. `v1.13.14 — Final v1.x Correctness Remediation and Closure
 Certification` is published and operationally closed. Its annotated tag object
