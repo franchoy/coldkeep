@@ -874,17 +874,17 @@ jobs:
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformSuccessAssertion(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
-	workflow = strings.Replace(
+	mutated := strings.Replace(
 		workflow,
-		`             [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ] || \
-             [ "${CROSS_PLATFORM_RESULT}" != "success" ] || \
-             [ "${VULNERABILITY_RESULT}" != "success" ]; then`,
-		`             [ "${BENCHMARK_TIMING_ADVISORY_RESULT}" != "success" ] || \
-             [ "${VULNERABILITY_RESULT}" != "success" ]; then`,
+		"             [ \"${CROSS_PLATFORM_RESULT}\" != \"success\" ] || \\\n",
+		"",
 		1,
 	)
+	if mutated == workflow {
+		t.Fatal("required-gate cross-platform success assertion fixture was not removed")
+	}
 
-	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
 	if !strings.Contains(stderr, "required gate rejects skipped cross-platform job") {
 		t.Fatalf("expected missing cross-platform success assertion error, got:\n%s", stderr)
 	}
