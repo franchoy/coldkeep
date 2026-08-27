@@ -29,9 +29,15 @@ project, do not start here; start with [README.md](README.md).
   bounded Phase 0–10 lifecycle. Phase 1 Windows security and rename-boundary
   remediation is next.
 - Retained `go 1.25` as the language floor while freezing Go 1.26.7 as the
-  certified release toolchain. No dependency, workflow, runtime, container,
-  schema, storage-format, distribution, or v2 implementation change has landed
-  at the Phase 0B boundary.
+  certified release toolchain; upgraded only `x/sys` to v0.44.0; added blocking
+  ordinary-output govulncheck v1.7.0 on Linux and Windows; and bounded native
+  Windows rename construction at the UTF-16 limit.
+- Added an unprivileged, socket-free development container with development-
+  only PostgreSQL; pinned registry-verified official builder, runtime, and
+  PostgreSQL image indexes; and passed source installation on Linux, macOS,
+  and Windows plus product-image smokes on Linux amd64 and arm64.
+- Distribution remains source-only. No schema, storage-format, public API, or
+  v2 product implementation change has landed through Phase 3.
 
 ## v1.13.14 - 2026-08-26 — Final v1.x Correctness Remediation and Closure Certification
 

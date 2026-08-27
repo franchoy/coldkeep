@@ -116,9 +116,12 @@ Current release-gate sections:
 
 Historical v1.9 note:
 
-- Active v1.9 blockers are the current release-gate sections (1-11, 15-18).
+- For historical v1.9 sign-off, sections 1-11 and 15-18 were the active
+  blockers. They are not the current v1.13.15 lifecycle authority.
 - Historical template sections (12-14) are archived reference material only.
-- Unchecked boxes in sections 12-14 are intentional historical state and are not v1.9 blockers unless a release manager explicitly promotes one into the active v1.9 gate.
+- Unchecked boxes in sections 12-14 are intentional historical state and are
+  not current blockers unless a release manager explicitly promotes one into
+  a release-specific gate.
 
 ## Release freeze policy
 
@@ -794,7 +797,7 @@ Confirm:
 
 Sections 12-14 are retained as historical release templates for prior release
 tracks (v1.5/v1.6). Unchecked boxes in these sections are intentional and do
-not represent unfinished blockers for the current v1.9 release.
+not represent unfinished blockers for the current release.
 
 Historical status marker:
 
@@ -802,8 +805,9 @@ Historical status marker:
 - They are explicitly non-gating for v1.9 final sign-off.
 - Keep checklist boxes unchanged in these sections to preserve historical parity.
 
-For v1.9 final tagging, use the active release-gate flow in earlier sections
-plus the snapshot sign-off sections that follow.
+For the historical v1.9 final-tag context, the active flow was the earlier
+sections plus the snapshot sign-off sections that follow. Current v1.13.15
+authority is its release-specific checklist and gate.
 
 ## 12) Historical Template (Archived, Non-gating) - v1.5 CDC / chunker-evolution contract
 

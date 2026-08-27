@@ -1,4 +1,10 @@
-# Coldkeep v1.10 Phase Prompt
+# Historical Coldkeep v1.10 Phase Prompt
+
+**Authority:** `HISTORICAL_ONLY`
+
+This prompt preserves v1.10.x release provenance. It is not current repository
+authority and must not be used for v1.13.15 work. The root `AGENTS.md`, current
+provider instructions, and active v1.13.15 release controls override it.
 
 You are working on a Coldkeep v1.10.x stabilization phase.
 

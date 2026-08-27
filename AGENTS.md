@@ -31,5 +31,15 @@ v1.13.15 validation checklist. At minimum, run focused tests for the changed
 area before the broader applicable gate. Do not represent unavailable hosted
 evidence as passing.
 
+The baseline repository-governance commands are:
+
+- `python3 scripts/validate_release_state.py --state development --json`
+- `python3 scripts/validate_governance.py`
+- `python3 -m unittest discover -s scripts -p 'test_*.py' -v`
+- `bash scripts/audit_ci_enforcement.sh --local-only`
+
+Release-critical Go execution uses Go 1.26.7 with `GOTOOLCHAIN=local`; the
+module language floor remains Go 1.25.
+
 Stop and return to Plan mode on scope expansion, unexpected dependency
 movement, release-identity drift, or newly discovered private security impact.

@@ -7,6 +7,14 @@ stabilize the catalog contract surface, harden dependency direction, clarify eng
 correctness invariant ownership, prepare for SQLite-first local portability, and preserve
 PostgreSQL compatibility while the project moves toward future v2.x local-first productization.
 
+## Current roadmap authority
+
+v1.x completed the frozen Engine/Catalog correctness work and bounded
+SQLite/PostgreSQL backend compatibility. SQLite-first repository-local default
+product behavior belongs to v2.x. Older v1.x documents that implied the
+default-product switch must ship before v1 closure are historical and
+superseded on that timing point; their completed-release facts remain intact.
+
 v1.13.0 is the baseline release for that work. It is documentation and inventory only, and it
 must not change runtime behavior.
 
@@ -75,8 +83,10 @@ native vulnerability gate, the complete Python suite, and the direct Windows
 boundary proof through its exact-head hosted candidate. Phase 3 completed the
 safe development container, digest-pinned official product images, native
 Linux/macOS/Windows source-install proof, and multi-architecture product-image
-smokes. Phase 4 — Governance and Authority Reconciliation — is Next. Phases
-5–10 are Not started. V2 implementation has not started.
+smokes. Phase 4 reconciled current agent/provider, lifecycle, historical-prompt,
+and roadmap authority with deterministic validation. Phase 5 is Next:
+Integrated Local Closure. Phases 6–10 are Not started. V2 implementation has
+not started.
 
 v1.13.14 remains published and operationally closed historical state. Its tag,
 release, and historical evidence must not be mutated.
