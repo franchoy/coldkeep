@@ -83,7 +83,6 @@ def require_markers(path: Path, text: str, markers: tuple[str, ...]) -> list[str
 
 def validate_release_body(root: Path = ROOT) -> list[str]:
     """Validate the frozen publication body as exact raw bytes."""
-
     violations: list[str] = []
     body_path = root / CANONICAL_RELEASE_BODY
     checksum_path = root / CANONICAL_RELEASE_BODY_CHECKSUM
