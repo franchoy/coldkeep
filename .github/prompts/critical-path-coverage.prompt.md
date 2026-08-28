@@ -89,9 +89,10 @@ When proposing coverage, provide:
 - whether it is release-blocking or advisory;
 - scope risks.
 
-## v1.13.15 Boundaries
+## Frozen v1.x boundaries
 
-During the active v1.13.15 final v1.x closure train:
+v1.13.15 is published stable and planned v1 coverage work is closed. For any
+separately authorized future maintenance:
 
 - do not implement v2 or SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;
@@ -99,4 +100,7 @@ During the active v1.13.15 final v1.x closure train:
 - do not perform broad refactors;
 - do not use coverage work to force style-only cleanup;
 - do not remove PostgreSQL compatibility;
-- keep changes within the active phase allowlist.
+- keep changes within the separately authorized plan and allowlist.
+
+V2 planning review is authorized, but v2 implementation and SQLite-first
+product defaults require a separate plan.

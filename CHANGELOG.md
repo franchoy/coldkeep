@@ -55,6 +55,12 @@ project, do not start here; start with [README.md](README.md).
   zero custom assets, and a verified GitHub release attestation. Phase 9 is
   Complete and Phase 10 is Next; v1.x remains published but pending protected
   post-publication repository closure.
+- Phase 10 adds the six-record terminal closure bundle, closes the 15/15
+  v1.13.15 finding contract, transitions active repository/provider authority
+  to closed-and-frozen v1.x, and defines the separate immutable product and
+  protected repository-closure identities. Its terminal effect remains
+  conditional on normal protected merge, exact-final-main recertification,
+  five-branch cleanup, and successful read-only Phase 10T.
 - The final planned v1.x closure contract now requires Phase 9 immutable
   source-only publication followed by strengthened Phase 10 closure evidence,
   terminal authority, final-main proof, cleanup of all v1.13.15 temporary

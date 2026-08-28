@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.15%20published-blue)
+![Status](https://img.shields.io/badge/status-v1.13.15%20closed%20and%20frozen-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -43,15 +43,18 @@ installation passed on Linux, macOS, and Windows with resolved version
 `v1.13.15` and Origin.Hash equal to the product baseline. Tag-triggered CodeQL
 `33210164772` passed Actions, Go, Python, and Aggregate with zero open alerts.
 
-Phases 0–9 are Complete and Phase 10 is Next. The tracked lifecycle is
-`post-release-pending-closure`: the product release is immutable and complete,
-while final repository/governance closure, exact-final-main recertification,
-authorized temporary-branch cleanup, and the read-only Phase 10T audit remain.
+Phases 0–10 are Complete and tracked authority is `post-release-closed`.
+The terminal closure candidate freezes planned v1 work and distinguishes the
+immutable product baseline from the protected repository-closure commit. Full
+external effectiveness remains conditional on normal protected merge,
+exact-final-main recertification, authorized temporary-branch cleanup, and the
+read-only Phase 10T audit.
 
-v1.13.15 is the final planned v1.x release, but future v1 maintenance remains
-possible only for a newly discovered critical correctness or security defect
-under a separate plan. V2 planning review may follow terminal closure. V2
-implementation has not started and requires separate authorization.
+v1.13.15 is the final planned v1.x release. Planned v1 feature work is frozen;
+future v1 maintenance remains possible only for a newly discovered critical
+correctness or security defect under a separate plan and explicit
+authorization. V2 planning review is authorized. V2 implementation has not
+started and requires a separate plan.
 
 v1.13.14 remains published, operationally closed historical state. Its tag,
 release, identity, and historical evidence are immutable.
@@ -59,16 +62,19 @@ release, identity, and historical evidence are immutable.
     V1_13_15_STATE: PUBLISHED_STABLE
     V1_13_15_BRANCH: release/v1.13.15-post-publication-closure
     V1_PRODUCT_BASELINE_SHA: 6a2417e8189631b018779c2fd24fc559ed761f3f
-    V1_13_15_FINDINGS_CLOSED: 14/15
-    PHASE_0_TO_9: COMPLETE
+    V1_13_15_FINDINGS_CLOSED: 15/15
+    PHASE_0_TO_10: COMPLETE
     PHASE_8R: COMPLETE
     PHASE_9: COMPLETE
-    PHASE_10: NEXT
-    RELEASE_STATE: POST_RELEASE_PENDING_CLOSURE
+    PHASE_10: COMPLETE
+    RELEASE_STATE: POST_RELEASE_CLOSED
     V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
-    V1_X: PUBLISHED_BUT_POST_PUBLICATION_CLOSURE_PENDING
-    V2_PLANNING_REVIEW: AFTER_TERMINAL_CLOSURE
+    V1_X: CLOSED_AND_FROZEN
+    V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
+    V1_PLANNED_FEATURE_WORK: NONE
+    V2_PLANNING_REVIEW: AUTHORIZED
     V2_IMPLEMENTATION: NOT_STARTED
+    V2_IMPLEMENTATION_AUTHORIZATION: REQUIRES_SEPARATE_PLAN
 
 ## Historical release-state narrative through v1.13.14
 

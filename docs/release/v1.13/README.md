@@ -85,15 +85,14 @@ The canonical publication body remains `v1.13.15-release-body.md`, exactly
 1,815 bytes at SHA-256
 `477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`.
 The release was published at `2026-08-28T21:17:21Z` with zero custom assets and
-a verified immutable-release attestation. Phases 0–9 are Complete.
-Phase 10 is Next. The boundary-aware lifecycle is
-`post-release-pending-closure` until
-the protected Phase 10 merge, exact-final-main recertification, authorized
-cleanup of all five temporary branches, and read-only Phase 10T audit pass.
+a verified immutable-release attestation. Phases 0–10 are Complete and tracked
+authority is `post-release-closed`. Terminal effectiveness remains conditional
+on the protected Phase 10 merge, exact-final-main recertification, authorized
+cleanup of all five temporary branches, and successful read-only Phase 10T.
 
-v1.13.14 remains unchanged immutable published historical state. V1.x is
-published but not yet fully closed. V2 planning review may follow terminal
-closure; v2 implementation has not started and requires a separate plan.
+v1.13.14 remains unchanged immutable published historical state. V1.x planned
+work is closed and frozen in the terminal candidate. V2 planning review is
+authorized; v2 implementation has not started and requires a separate plan.
 
 ## Historical v1.13.14 current-state narrative
 
