@@ -43,13 +43,18 @@ project, do not start here; start with [README.md](README.md).
   merged normally through PR #117, and passed exact-main recertification at
   5c6e37d065c163f7050e015762e1a4c657e7565a. The unrecoverable historical
   Phase 7 digest is not attributed to this replacement body.
-- Nonnumeric Phase 9S repairs semantic-tag public installation and
-  tag-triggered CodeQL before tag creation. Tag events independently require
-  the public tag object and peeled commit, bind Go module origin to the peel,
-  and prove semantic version/build identity on Linux, macOS, and Windows.
-  Phase 9 remains Next and blocked until the Phase 9S protected merge and
-  exact-final-main recertification pass; v1.13.15 remains untagged and
-  unpublished.
+- Nonnumeric Phase 9S merged normally through PR #118 as protected main
+  `6a2417e8189631b018779c2fd24fc559ed761f3f` and passed exact-main
+  recertification. Annotated tag object
+  `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to that immutable product
+  baseline. Tag CI `33210164827`, tag-native installation on Linux, macOS, and
+  Windows, CodeQL `33210164772`, and zero open CodeQL alerts passed.
+- Stable immutable source-only release `378768097` was published at
+  `2026-08-28T21:17:21Z` with the canonical 1,815-byte body at SHA-256
+  `477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`,
+  zero custom assets, and a verified GitHub release attestation. Phase 9 is
+  Complete and Phase 10 is Next; v1.x remains published but pending protected
+  post-publication repository closure.
 - The final planned v1.x closure contract now requires Phase 9 immutable
   source-only publication followed by strengthened Phase 10 closure evidence,
   terminal authority, final-main proof, cleanup of all v1.13.15 temporary
