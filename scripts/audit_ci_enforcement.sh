@@ -156,6 +156,38 @@ extract_job_block_from_file() {
   ' "$file"
 }
 
+extract_yaml_mapping_block_from_content() {
+  local content="$1"
+  local mapping_name="$2"
+  local mapping_indent="$3"
+
+  awk -v mapping_name="$mapping_name" -v mapping_indent="$mapping_indent" '
+    BEGIN {
+      mapping_line = sprintf("%*s", mapping_indent, "") mapping_name ":"
+    }
+    {
+      candidate = $0
+      sub(/[[:space:]]+$/, "", candidate)
+    }
+    !in_mapping && candidate == mapping_line {
+      in_mapping = 1
+      print
+      next
+    }
+    in_mapping && $0 ~ /^[[:space:]]*$/ {
+      print
+      next
+    }
+    in_mapping {
+      match($0, /[^ ]/)
+      if (RSTART - 1 <= mapping_indent) {
+        exit
+      }
+      print
+    }
+  ' <<<"$content"
+}
+
 extract_step_block_from_content() {
   local content="$1"
   local step_name="$2"
@@ -1003,34 +1035,47 @@ check_local_workflow() {
   require_content_pattern "$remote_candidate_install_block" 'CANDIDATE_QUERY:\s*\$\{\{ github\.ref_type == '\''tag'\'' && github\.ref_name \|\| github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}' 'remote candidate installation selects semantic tags and exact non-tag revisions' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'PUBLIC_REPOSITORY_URL:\s*\$\{\{ github\.server_url \}\}/\$\{\{ github\.repository \}\}\.git' 'remote candidate installation binds the public repository URL' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'if \[\[ "\$\{EVENT_REF_TYPE\}" == "tag" \]\]; then' 'Unix remote installation has an explicit tag path' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'if \(\$env:EVENT_REF_TYPE -eq '\''tag'\''\)' 'Windows remote installation has an explicit tag path' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'test "\$\{CANDIDATE_QUERY\}" = "\$\{EVENT_REF_NAME\}"' 'Unix tag query equals the event ref name' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" '\$env:CANDIDATE_QUERY -ne \$env:EVENT_REF_NAME' 'Windows tag query equals the event ref name' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'test "\$\{CANDIDATE_QUERY\}" = "\$\{TRIGGER_SHA\}"' 'Unix non-tag query retains the exact candidate SHA' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" '\$env:CANDIDATE_QUERY -ne \$env:TRIGGER_SHA' 'Windows non-tag query retains the exact candidate SHA' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'tag_ref="refs/tags/\$\{CANDIDATE_QUERY\}"' 'Unix remote installation derives the public tag ref' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'peeled_ref="\$\{tag_ref\}\^\{\}"' 'Unix remote installation requires a peeled public tag ref' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" '\$tagRef = "refs/tags/\$env:CANDIDATE_QUERY"' 'Windows remote installation derives the public tag ref' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" '\$peeledRef = "\$tagRef\^\{\}"' 'Windows remote installation requires a peeled public tag ref' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'git ls-remote "\$\{PUBLIC_REPOSITORY_URL\}" "\$\{tag_ref\}" "\$\{peeled_ref\}"' 'Unix remote installation resolves public tag and peeled refs independently' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'git ls-remote \$env:PUBLIC_REPOSITORY_URL \$tagRef \$peeledRef' 'Windows remote installation resolves public tag and peeled refs independently' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'PUBLIC_TAG_OBJECT_SHA=.*tag_ref' 'Unix remote installation records the public tag object' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'PUBLIC_TAG_PEELED_COMMIT_SHA=.*peeled_ref' 'Unix remote installation records the public peeled commit' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" '\$publicTagObjectSha = \$tagEntries\[\$tagRef\]' 'Windows remote installation records the public tag object' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" '\$publicTagPeeledCommitSha = \$tagEntries\[\$peeledRef\]' 'Windows remote installation records the public peeled commit' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'EXPECTED_ORIGIN_SHA="\$\{PUBLIC_TAG_PEELED_COMMIT_SHA\}"' 'Unix tag origin authority is the public peeled commit' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" '\$env:EXPECTED_ORIGIN_SHA = \$publicTagPeeledCommitSha' 'Windows tag origin authority is the public peeled commit' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'GOPROXY=direct' 'Unix remote candidate installation resolves directly from the public repository' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "GOPROXY = 'direct'" 'Windows remote candidate installation resolves directly from the public repository' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'GOWORK=off' 'Unix remote candidate installation runs outside a workspace' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "GOWORK = 'off'" 'Windows remote candidate installation runs outside a workspace' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'go list -m -json "\$\{module\}@\$\{CANDIDATE_QUERY\}"' 'Unix module resolution uses the selected candidate query' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'go list -m -json "\$module@\$env:CANDIDATE_QUERY"' 'Windows module resolution uses the selected candidate query' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'test "\$\{resolved_hash\}" = "\$\{EXPECTED_ORIGIN_SHA\}"' 'Unix module origin equals the expected source commit' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'Origin\.Hash -ne \$env:EXPECTED_ORIGIN_SHA' 'Windows module origin equals the expected source commit' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'test "\$\{resolved_version\}" = "\$\{EXPECTED_VERSION\}"' 'Unix tag path proves the resolved semantic version' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'Version -ne \$env:EXPECTED_VERSION' 'Windows tag path proves the resolved semantic version' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'go install "\$\{module\}/cmd/coldkeep@\$\{CANDIDATE_QUERY\}"' 'Unix public installation uses the selected candidate query' || check_status=1
+  # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'go install "\$module/cmd/coldkeep@\$env:CANDIDATE_QUERY"' 'Windows public installation uses the selected candidate query' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.15" 'remote candidate installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "go1\\\.26\\\.7" 'remote candidate installation proves binary compiler identity' || check_status=1
@@ -1146,10 +1191,15 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'PRODUCT_CONTAINER_RESULT.*!= "success"' 'required gate rejects skipped product-container job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'DEVCONTAINER_RESULT.*!= "success"' 'required gate rejects skipped devcontainer job' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" 'name:\s*CodeQL' 'CodeQL workflow file' || check_status=1
-  require_pattern "$CODEQL_WORKFLOW_FILE" '^  push:$' 'CodeQL push trigger' || check_status=1
-  require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- main$' 'CodeQL push branch retains main' || check_status=1
-  require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- release/\*\*$' 'CodeQL push branch includes release/**' || check_status=1
-  require_pattern "$CODEQL_WORKFLOW_FILE" '^\s+- v\*$' 'CodeQL push tags include v*' || check_status=1
+  codeql_workflow_content="$(<"$CODEQL_WORKFLOW_FILE")"
+  codeql_on_block="$(extract_yaml_mapping_block_from_content "$codeql_workflow_content" on 0)"
+  codeql_push_block="$(extract_yaml_mapping_block_from_content "$codeql_on_block" push 2)"
+  codeql_push_branches_block="$(extract_yaml_mapping_block_from_content "$codeql_push_block" branches 4)"
+  codeql_push_tags_block="$(extract_yaml_mapping_block_from_content "$codeql_push_block" tags 4)"
+  require_content_pattern "$codeql_on_block" '^  push:$' 'CodeQL push trigger' || check_status=1
+  require_content_pattern "$codeql_push_branches_block" '^      - main$' 'CodeQL push branch retains main' || check_status=1
+  require_content_pattern "$codeql_push_branches_block" '^      - release/\*\*$' 'CodeQL push branch includes release/**' || check_status=1
+  require_content_pattern "$codeql_push_tags_block" '^      - v\*$' 'CodeQL push tags include v*' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CodeQL workflow_dispatch trigger' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" 'language:\s*actions' 'CodeQL retains actions analysis' || check_status=1
   require_pattern "$CODEQL_WORKFLOW_FILE" 'language:\s*go' 'CodeQL retains Go analysis' || check_status=1

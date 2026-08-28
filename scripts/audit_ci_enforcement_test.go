@@ -1073,16 +1073,15 @@ func TestAuditCIEnforcementLocalCodeQLRequiresReleaseBranchPushTrigger(t *testin
 	}
 }
 
-func TestAuditCIEnforcementRequiresTagCodeQLContract(t *testing.T) {
-	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
-	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+type codeQLContractMutation struct {
+	name        string
+	old         string
+	replacement string
+	wantMessage string
+}
 
-	tests := []struct {
-		name        string
-		old         string
-		replacement string
-		wantMessage string
-	}{
+func TestAuditCIEnforcementRequiresTagCodeQLContract(t *testing.T) {
+	runCodeQLContractMutations(t, []codeQLContractMutation{
 		{name: "tag trigger", old: "      - v*\n", wantMessage: "CodeQL push tags include v*"},
 		{name: "main trigger", old: "      - main\n", wantMessage: "CodeQL push branch retains main"},
 		{name: "release trigger", old: "      - release/**\n", wantMessage: "CodeQL push branch includes release/**"},
@@ -1096,7 +1095,50 @@ func TestAuditCIEnforcementRequiresTagCodeQLContract(t *testing.T) {
 			replacement: "  aggregate:\n    name: CodeQL Aggregate\n    runs-on: ubuntu-latest\n    continue-on-error: true\n",
 			wantMessage: "CodeQL aggregate must remain blocking",
 		},
-	}
+	})
+}
+
+func TestAuditCIEnforcementRejectsScopedCodeQLTriggerConfusion(t *testing.T) {
+	runCodeQLContractMutations(t, []codeQLContractMutation{
+		{
+			name: "main under wrong push mapping",
+			old:  "    branches:\n      - main\n      - release/**\n    tags:\n      - v*\n",
+			replacement: "    branches:\n      - release/**\n    tags:\n      - v*\n" +
+				"      - main\n",
+			wantMessage: "CodeQL push branch retains main",
+		},
+		{
+			name: "release under pull request trigger",
+			old: "    branches:\n      - main\n      - release/**\n    tags:\n      - v*\n" +
+				"  pull_request:\n    branches:\n      - main\n",
+			replacement: "    branches:\n      - main\n    tags:\n      - v*\n" +
+				"  pull_request:\n    branches:\n      - main\n      - release/**\n",
+			wantMessage: "CodeQL push branch includes release/**",
+		},
+		{
+			name: "tag under wrong push mapping",
+			old:  "    branches:\n      - main\n      - release/**\n    tags:\n      - v*\n",
+			replacement: "    branches:\n      - main\n      - release/**\n      - v*\n" +
+				"    tags:\n",
+			wantMessage: "CodeQL push tags include v*",
+		},
+		{
+			name:        "branches mapping",
+			old:         "    branches:\n      - main\n      - release/**\n",
+			wantMessage: "CodeQL push branch retains main",
+		},
+		{
+			name:        "tags mapping",
+			old:         "    tags:\n      - v*\n",
+			wantMessage: "CodeQL push tags include v*",
+		},
+	})
+}
+
+func runCodeQLContractMutations(t *testing.T, tests []codeQLContractMutation) {
+	t.Helper()
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
