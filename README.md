@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.15%20active-blue)
+![Status](https://img.shields.io/badge/status-v1.13.15%20ready%20for%20release-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -29,41 +29,38 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 ## Current release state
 
-`v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure` is
-the active unreleased release train on `release/v1.13.15`. Phase 0 is complete:
-Phase 0A persisted the frozen scope and v1.13.14 publication baseline, and
-Phase 0B activated version and repository-agent authority. Phase 1 implemented
-the Windows security and rename-boundary remediation. Phase 2 certified Go
-1.26.7, blocking native vulnerability gates, the complete Python suite, and
-the Windows boundary proof. Phase 3 completed safe development and product
-containers, registry-pinned official images, native Linux/macOS/Windows source
-installation, and Linux amd64/arm64 product-image smokes. Phase 4 — Governance
-and Authority Reconciliation — reconciled active provider instructions,
-historical prompts, lifecycle authority, and the v1/v2 roadmap. Phase 5
-completed the exact-candidate integrated local gate and historical-identity
-reconciliation. Phase 6 is Next: Hosted Candidate and Pre-Tag Governance
-Proof. V2 implementation has not started.
+v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure is
+ready for tag/publication after Phase 8R completes its protected recovery merge
+and exact-final-main recertification. PR #115 validly merged candidate
+90122c52172764a73e165b1bae63b2e54887839b as
+7c1e0466986aff156b3990c37f19fcd301639063; that merge and its reviewed tree
+remain immutable.
 
-v1.13.14 remains published, operationally closed historical state. Its
-annotated tag object `a996b25b562de69749f41c3af56626aeb5d44e33` peels to
-`caac44d459609f89f2c971cb7b07a8678bd52d2c`; its canonical identity is frozen
-by the v1.13.15 Phase 0A baseline and must not be mutated.
+Phases 0–8 are conditionally Complete. Phase 9 is next: annotated tag, tag CI
+in canonical tagged state, cross-platform tagged installation, immutable
+source-only publication, attestation, and product-baseline identity. Phase 10
+has not started and remains the sole owner of post-publication reconciliation,
+the final v1.x closure bundle, terminal authority, final-main recertification,
+and cleanup of all v1.13.15 temporary branches.
 
-```text
-V1_13_15_STATE: ACTIVE_UNRELEASED
-V1_13_15_BRANCH: release/v1.13.15
-V1_13_15_FINDINGS_CLOSED: 13/15
-PHASE_0: COMPLETE
-PHASE_1: COMPLETE
-PHASE_2: COMPLETE
-PHASE_3: COMPLETE
-PHASE_4: COMPLETE
-PHASE_5: COMPLETE
-PHASE_6: NEXT
-V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
-V1_X: CLOSURE_RELEASE_ACTIVE
-V2_IMPLEMENTATION: NOT_STARTED
-```
+v1.13.15 is the final planned v1.x release, but future v1 maintenance remains
+possible only for a newly discovered critical correctness or security defect
+under a separate plan. V2 planning review may follow terminal closure. V2
+implementation has not started and requires separate authorization.
+
+v1.13.14 remains published, operationally closed historical state. Its tag,
+release, identity, and historical evidence are immutable.
+
+    V1_13_15_STATE: READY_FOR_TAG_PUBLICATION_AFTER_PHASE8R
+    V1_13_15_BRANCH: recovery/v1.13.15-phase8-release-state
+    V1_13_15_FINDINGS_CLOSED: 13/15
+    PHASE_0_TO_8: COMPLETE_CONDITIONAL_ON_PHASE8R_FINAL_MAIN
+    PHASE_9: NEXT
+    PHASE_10: NOT_STARTED
+    V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
+    V1_X: NOT_YET_PUBLISHED_OR_CLOSED
+    V2_PLANNING_REVIEW: AFTER_TERMINAL_CLOSURE
+    V2_IMPLEMENTATION: NOT_STARTED
 
 ## Historical release-state narrative through v1.13.14
 

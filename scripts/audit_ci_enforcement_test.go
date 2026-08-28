@@ -1092,10 +1092,14 @@ func TestAuditCIEnforcementSelectsAuthoritativeReleasePRHead(t *testing.T) {
 
 	t.Run("ordinary release push uses HEAD", func(t *testing.T) {
 		probe, logPath := writeReleaseLinearityProbe(t)
+		auditRoot := cloneAuditRepositoryOnBranch(t, "release/v1.13.14")
+		t.Setenv("COLDKEEP_AUDIT_TEST_REPO_ROOT", auditRoot)
 		t.Setenv("COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE", probe)
 		t.Setenv("PHASE23R_LINEAGE_PROBE_LOG", logPath)
 		t.Setenv("GITHUB_EVENT_NAME", "push")
 		t.Setenv("GITHUB_HEAD_REF", "")
+		t.Setenv("GITHUB_REF_TYPE", "branch")
+		t.Setenv("GITHUB_REF_NAME", "release/v1.13.14")
 		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false)
 		if !strings.Contains(output, "[audit] PASSED") {
 			t.Fatalf("ordinary release push audit failed:\n%s", output)
@@ -1103,6 +1107,26 @@ func TestAuditCIEnforcementSelectsAuthoritativeReleasePRHead(t *testing.T) {
 		calls, err := os.ReadFile(logPath)
 		if err != nil || !strings.Contains(string(calls), "--candidate-ref HEAD") {
 			t.Fatalf("ordinary release push did not validate HEAD: err=%v calls=%q", err, calls)
+		}
+	})
+
+	t.Run("recovery branch push skips release lineage", func(t *testing.T) {
+		probe, logPath := writeReleaseLinearityProbe(t)
+		branch := "recovery/v1.13.15-phase8-release-state"
+		auditRoot := cloneAuditRepositoryOnBranch(t, branch)
+		t.Setenv("COLDKEEP_AUDIT_TEST_REPO_ROOT", auditRoot)
+		t.Setenv("COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE", probe)
+		t.Setenv("PHASE23R_LINEAGE_PROBE_LOG", logPath)
+		t.Setenv("GITHUB_EVENT_NAME", "push")
+		t.Setenv("GITHUB_HEAD_REF", "")
+		t.Setenv("GITHUB_REF_TYPE", "branch")
+		t.Setenv("GITHUB_REF_NAME", branch)
+		output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false)
+		if !strings.Contains(output, "real release-linearity check not required for context "+branch) {
+			t.Fatalf("recovery branch context proof omitted:\n%s", output)
+		}
+		if calls, err := os.ReadFile(logPath); err == nil && strings.TrimSpace(string(calls)) != "" {
+			t.Fatalf("release-linearity validator ran for recovery branch:\n%s", calls)
 		}
 	})
 
@@ -1176,6 +1200,22 @@ func setReleasePullRequestAuditEnvironment(t *testing.T, probe, logPath, eventPa
 	t.Setenv("GITHUB_EVENT_PATH", eventPath)
 	t.Setenv("GITHUB_HEAD_REF", headRef)
 	t.Setenv("GITHUB_REPOSITORY", repository)
+	t.Setenv("GITHUB_REF_TYPE", "branch")
+	t.Setenv("GITHUB_REF_NAME", "115/merge")
+}
+
+func cloneAuditRepositoryOnBranch(t *testing.T, branch string) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "repository")
+	clone := exec.Command("git", "clone", "--no-hardlinks", "--quiet", repoRoot(t), root)
+	if output, err := clone.CombinedOutput(); err != nil {
+		t.Fatalf("clone audit fixture repository: %v\n%s", err, output)
+	}
+	checkout := exec.Command("git", "-C", root, "checkout", "--quiet", "-B", branch)
+	if output, err := checkout.CombinedOutput(); err != nil {
+		t.Fatalf("create audit fixture branch %s: %v\n%s", branch, err, output)
+	}
+	return root
 }
 
 func runAuditTestCommand(t *testing.T, name string, args ...string) string {
@@ -1737,8 +1777,12 @@ func runAuditFixtureWithTimingValidator(
 		}
 	}
 
+	auditRoot := repoRoot(t)
+	if configured := os.Getenv("COLDKEEP_AUDIT_TEST_REPO_ROOT"); configured != "" {
+		auditRoot = configured
+	}
 	cmd := exec.Command("bash", "scripts/audit_ci_enforcement.sh", "--local-only")
-	cmd.Dir = repoRoot(t)
+	cmd.Dir = auditRoot
 	cmd.Env = append(os.Environ(),
 		"COLDKEEP_CI_WORKFLOW_FILE="+workflowPath,
 		"COLDKEEP_CODEQL_WORKFLOW_FILE="+codeqlWorkflowPath,
