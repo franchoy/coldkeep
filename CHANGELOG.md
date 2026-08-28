@@ -37,12 +37,19 @@ project, do not start here; start with [README.md](README.md).
   67a32788c0d7cf5ab02af7199b99d80236613977 and passed complete exact-main
   recertification, so Phases 0–8 are Complete. Phase 9 is Next and Phase 10 is
   Not started.
-- Phase 9R materializes the missing durable release-body authority before any
-  tag exists. The unrecoverable historical Phase 7 digest is superseded for
-  current publication by the tracked 1,815-byte body at SHA-256
-  477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357.
-  Phase 9 remains blocked until the Phase 9R protected merge and revised-main
-  recertification pass; v1.13.15 remains untagged and unpublished.
+- Phase 9R durably materialized the tracked 1,815-byte release body at
+  SHA-256
+  477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357,
+  merged normally through PR #117, and passed exact-main recertification at
+  5c6e37d065c163f7050e015762e1a4c657e7565a. The unrecoverable historical
+  Phase 7 digest is not attributed to this replacement body.
+- Nonnumeric Phase 9S repairs semantic-tag public installation and
+  tag-triggered CodeQL before tag creation. Tag events independently require
+  the public tag object and peeled commit, bind Go module origin to the peel,
+  and prove semantic version/build identity on Linux, macOS, and Windows.
+  Phase 9 remains Next and blocked until the Phase 9S protected merge and
+  exact-final-main recertification pass; v1.13.15 remains untagged and
+  unpublished.
 - The final planned v1.x closure contract now requires Phase 9 immutable
   source-only publication followed by strengthened Phase 10 closure evidence,
   terminal authority, final-main proof, cleanup of all v1.13.15 temporary

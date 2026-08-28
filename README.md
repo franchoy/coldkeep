@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.15%20ready%20for%20release-blue)
+![Status](https://img.shields.io/badge/status-v1.13.15%20Phase%209S%20recovery-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -30,25 +30,33 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ## Current release state
 
 v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure has
-completed Phase 8R at protected main
-67a32788c0d7cf5ab02af7199b99d80236613977. PR #115 and its reviewed tree
-remain preserved, and Phases 0–8 are Complete.
+completed Phases 8R and 9R. Phase 9R merged normally through PR #117 and its
+exact protected main
+5c6e37d065c163f7050e015762e1a4c657e7565a passed full recertification.
+Phases 0–8 are Complete, Phase 9 is Next, and Phase 10 is Not started.
 
-Phase 9 is Next but remains blocked while operational Phase 9R durably
-materializes and certifies the canonical publication body. The tracked body is
-`docs/release/v1.13/v1.13.15-release-body.md`, exactly 1,815 bytes at SHA-256
+Phase 9 remains blocked while nonnumeric Phase 9S repairs two pre-tag
+certification paths: semantic-tag public installation and tag-triggered
+CodeQL. The tracked canonical publication body remains exactly 1,815 bytes at
+SHA-256
 `477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`.
 The earlier frozen digest could not be recovered because its bytes were not
-retained; it is historical evidence only and is not attributed to this body.
-Phase 10 has not started. The release becomes ready for tag/publication only
-after the Phase 9R protected merge and exact revised-main recertification pass.
+retained; it remains historical evidence only.
 
-Phase 9 remains the sole owner of annotated tag creation, tag CI,
-cross-platform tagged installation, immutable source-only publication,
-attestation, and product-baseline identity. Phase 10 remains the sole owner of
-post-publication reconciliation, the final v1.x closure bundle, terminal
-authority, revised-final-main recertification, and cleanup of all four
-temporary release/recovery/closure branches.
+Phase 9S preserves exact-SHA public installation for non-tag events. Tag events
+select the tag name, independently resolve the public tag object and mandatory
+peeled commit, bind Go module Origin.Hash to that peeled commit, prove the
+semantic module version, and execute on Linux, macOS, and Windows. CodeQL gains
+the same `v*` tag trigger while retaining its existing coverage and aggregate
+gate. Phase 9S creates no tag or release.
+
+After the Phase 9S protected normal merge and exact-final-main recertification
+pass, the resulting exact main becomes ready only for a separate Phase 9 Build
+authorization. Phase 9 owns annotated tag creation, tag CI, tagged
+installation, immutable source-only publication, attestation, and
+product-baseline identity. Phase 10 owns final reconciliation, terminal
+authority, repository-closure identity, and cleanup of all five temporary
+release/recovery/closure branches.
 
 v1.13.15 is the final planned v1.x release, but future v1 maintenance remains
 possible only for a newly discovered critical correctness or security defect
@@ -58,8 +66,10 @@ implementation has not started and requires separate authorization.
 v1.13.14 remains published, operationally closed historical state. Its tag,
 release, identity, and historical evidence are immutable.
 
-    V1_13_15_STATE: BLOCKED_PENDING_PHASE9R_FINAL_MAIN
-    V1_13_15_BRANCH: recovery/v1.13.15-phase9-release-body-authority
+    V1_13_15_STATE: BLOCKED_PENDING_TAG_CERTIFICATION_AUTOMATION_RECOVERY
+    V1_13_15_BRANCH: recovery/v1.13.15-phase9-tag-certification-path
+    PHASE_9R_FINAL_MAIN: 5c6e37d065c163f7050e015762e1a4c657e7565a
+    PHASE_9S: CONDITIONAL_ON_PROTECTED_MERGE_AND_EXACT_FINAL_MAIN_RECERTIFICATION
     V1_13_15_FINDINGS_CLOSED: 13/15
     PHASE_0_TO_8: COMPLETE
     PHASE_8R: COMPLETE

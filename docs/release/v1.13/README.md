@@ -75,25 +75,31 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 ## Current Release State
 
 v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure has
-completed Phase 8R at protected main
-67a32788c0d7cf5ab02af7199b99d80236613977. Phases 0–8 are Complete. Phase 9 is Next, and Phase 10 is Not started. The
-release becomes ready for tag/publication only after Phase 9R merges and the
-revised exact main passes complete recertification.
+completed Phases 8R and 9R. Phase 9R merged normally through PR #117 and exact
+protected main
+5c6e37d065c163f7050e015762e1a4c657e7565a passed full recertification.
+Phases 0–8 are Complete, Phase 9 is Next, and Phase 10 is Not started.
 
-Phase 9 remains blocked while operational Phase 9R durably materializes the
-canonical publication body at `v1.13.15-release-body.md`, exactly 1,815 bytes
-with SHA-256
+Phase 9 remains blocked while nonnumeric Phase 9S repairs semantic-tag public
+installation and tag-triggered CodeQL before immutable tag creation. Non-tag
+CI retains exact-SHA resolution. Tag CI must select the semantic ref name,
+independently resolve both the public tag object and mandatory peeled commit,
+and bind Go module Origin.Hash to that peeled commit on Linux, macOS, and
+Windows. CodeQL retains all current coverage and adds `v*` push tags.
+
+The canonical publication body remains `v1.13.15-release-body.md`, exactly
+1,815 bytes at SHA-256
 `477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`.
-Phase 9R does not add a numeric lifecycle phase and performs no tag or release.
-Its protected normal merge and revised exact-main recertification must pass
-before separate Phase 9 authorization.
+Phase 9S does not add a numeric lifecycle phase and performs no tag, release,
+branch cleanup, Phase 10 work, or v2 implementation.
 
 The boundary-aware validator keeps publication and final closure truthfully
 pending, uses tagged for the immutable tag target, and reserves
-post-release-closed for all phases Complete. Phase 10 owns the final closure
+post-release-closed for all phases Complete. Successful Phase 9S merge and
+exact-final-main recertification make that resulting SHA ready only for a
+separate Phase 9 Build authorization. Phase 10 later owns the final closure
 bundle, terminal provider authority, repository-closure SHA, exact-main proof,
-and cleanup of the release, Phase 8R recovery, Phase 9R recovery, and
-post-publication closure branches. Phase 10T remains read-only.
+and cleanup of all five temporary branches. Phase 10T remains read-only.
 
 v1.13.14 remains immutable published historical state. V2 planning review may
 follow terminal v1.x closure; v2 implementation has not started and requires a

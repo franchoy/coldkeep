@@ -1314,6 +1314,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
 
+    env:
+      EVENT_REF_TYPE: ${{ github.ref_type }}
+      EVENT_REF_NAME: ${{ github.ref_name }}
+      TRIGGER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CANDIDATE_QUERY: ${{ github.ref_type == 'tag' && github.ref_name || github.event.pull_request.head.sha || github.sha }}
+      PUBLIC_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+
     strategy:
       fail-fast: false
       matrix:
@@ -1330,8 +1337,6 @@ jobs:
       - name: Install exact public candidate outside a module (Unix)
         if: runner.os != 'Windows'
         shell: bash
-        env:
-          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -Eeuo pipefail
           test "$(go env GOVERSION)" = "go1.26.7"
@@ -1346,21 +1351,57 @@ jobs:
           export GOWORK=off
 
           module='github.com/franchoy/coldkeep'
-          go list -m -json "${module}@${CANDIDATE_SHA}" > module.json
-          resolved_hash="$(go list -m -f '{{with .Origin}}{{.Hash}}{{end}}' "${module}@${CANDIDATE_SHA}")"
-          resolved_version="$(go list -m -f '{{.Version}}' "${module}@${CANDIDATE_SHA}")"
-          test "${resolved_hash}" = "${CANDIDATE_SHA}"
+          EXPECTED_ORIGIN_SHA="${TRIGGER_SHA}"
+          EXPECTED_VERSION=''
+          PUBLIC_TAG_OBJECT_SHA=''
+          PUBLIC_TAG_PEELED_COMMIT_SHA=''
 
-          go install "${module}/cmd/coldkeep@${CANDIDATE_SHA}"
+          if [[ "${EVENT_REF_TYPE}" == "tag" ]]; then
+            test "${CANDIDATE_QUERY}" = "${EVENT_REF_NAME}"
+            [[ "${CANDIDATE_QUERY}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]
+
+            tag_ref="refs/tags/${CANDIDATE_QUERY}"
+            peeled_ref="${tag_ref}^{}"
+            tag_rows="$(git ls-remote "${PUBLIC_REPOSITORY_URL}" "${tag_ref}" "${peeled_ref}")"
+            test "$(awk -v ref="${tag_ref}" '$2 == ref { count++ } END { print count + 0 }' <<<"${tag_rows}")" -eq 1
+            test "$(awk -v ref="${peeled_ref}" '$2 == ref { count++ } END { print count + 0 }' <<<"${tag_rows}")" -eq 1
+            test "$(wc -l <<<"${tag_rows}")" -eq 2
+
+            PUBLIC_TAG_OBJECT_SHA="$(awk -v ref="${tag_ref}" '$2 == ref { print $1 }' <<<"${tag_rows}")"
+            PUBLIC_TAG_PEELED_COMMIT_SHA="$(awk -v ref="${peeled_ref}" '$2 == ref { print $1 }' <<<"${tag_rows}")"
+            [[ "${PUBLIC_TAG_OBJECT_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            [[ "${PUBLIC_TAG_PEELED_COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]
+
+            EXPECTED_ORIGIN_SHA="${PUBLIC_TAG_PEELED_COMMIT_SHA}"
+            EXPECTED_VERSION="${CANDIDATE_QUERY}"
+          else
+            test "${CANDIDATE_QUERY}" = "${TRIGGER_SHA}"
+          fi
+
+          go list -m -json "${module}@${CANDIDATE_QUERY}" > module.json
+          resolved_hash="$(go list -m -f '{{with .Origin}}{{.Hash}}{{end}}' "${module}@${CANDIDATE_QUERY}")"
+          resolved_version="$(go list -m -f '{{.Version}}' "${module}@${CANDIDATE_QUERY}")"
+          test "${resolved_hash}" = "${EXPECTED_ORIGIN_SHA}"
+          if [[ "${EVENT_REF_TYPE}" == "tag" ]]; then
+            test "${resolved_version}" = "${EXPECTED_VERSION}"
+          fi
+
+          go install "${module}/cmd/coldkeep@${CANDIDATE_QUERY}"
           "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.15'
           go version -m "${GOBIN}/coldkeep" > binary-build-info.txt
           head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'
           grep -F "$(printf 'mod\t%s\t%s' "${module}" "${resolved_version}")" binary-build-info.txt
 
           {
-            echo "CANDIDATE_SHA=${CANDIDATE_SHA}"
+            echo "EVENT_REF_TYPE=${EVENT_REF_TYPE}"
+            echo "CANDIDATE_QUERY=${CANDIDATE_QUERY}"
+            echo "EXPECTED_ORIGIN_SHA=${EXPECTED_ORIGIN_SHA}"
             echo "RESOLVED_ORIGIN_HASH=${resolved_hash}"
             echo "RESOLVED_VERSION=${resolved_version}"
+            if [[ "${EVENT_REF_TYPE}" == "tag" ]]; then
+              echo "PUBLIC_TAG_OBJECT_SHA=${PUBLIC_TAG_OBJECT_SHA}"
+              echo "PUBLIC_TAG_PEELED_COMMIT_SHA=${PUBLIC_TAG_PEELED_COMMIT_SHA}"
+            fi
             echo "GO_VERSION=$(go version)"
             echo "GOTOOLCHAIN=$(go env GOTOOLCHAIN)"
             echo "GOOS=$(go env GOOS)"
@@ -1373,15 +1414,13 @@ jobs:
       - name: Install exact public candidate outside a module (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           if ((go env GOVERSION) -ne 'go1.26.7') { throw 'Go version drift' }
           if ((go env GOTOOLCHAIN) -ne 'local') { throw 'GOTOOLCHAIN drift' }
           if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { throw 'native gcc is unavailable' }
           gcc --version
 
-          $installRoot = Join-Path $env:RUNNER_TEMP "coldkeep-remote-install-$env:CANDIDATE_SHA"
+          $installRoot = Join-Path $env:RUNNER_TEMP "coldkeep-remote-install-$env:TRIGGER_SHA"
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
           Set-Location $installRoot
           $env:CGO_ENABLED = '1'
@@ -1390,12 +1429,52 @@ jobs:
           $env:GOWORK = 'off'
 
           $module = 'github.com/franchoy/coldkeep'
-          $moduleInfo = go list -m -json "$module@$env:CANDIDATE_SHA" | ConvertFrom-Json
+          $env:EXPECTED_ORIGIN_SHA = $env:TRIGGER_SHA
+          $env:EXPECTED_VERSION = ''
+          $publicTagObjectSha = ''
+          $publicTagPeeledCommitSha = ''
+
+          if ($env:EVENT_REF_TYPE -eq 'tag') {
+            if ($env:CANDIDATE_QUERY -ne $env:EVENT_REF_NAME) { throw 'tag query does not match event ref name' }
+            if ($env:CANDIDATE_QUERY -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$') {
+              throw 'tag query is not release-version-shaped'
+            }
+
+            $tagRef = "refs/tags/$env:CANDIDATE_QUERY"
+            $peeledRef = "$tagRef^{}"
+            $tagRows = @(git ls-remote $env:PUBLIC_REPOSITORY_URL $tagRef $peeledRef)
+            if ($LASTEXITCODE -ne 0) { throw 'public tag resolution failed' }
+            if ($tagRows.Count -ne 2) { throw 'public tag resolution did not return exactly tag and peeled refs' }
+
+            $tagEntries = @{}
+            foreach ($row in $tagRows) {
+              if ($row -notmatch '^([0-9a-f]{40})\s+(.+)$') { throw 'malformed public tag identity row' }
+              if ($tagEntries.ContainsKey($Matches[2])) { throw 'duplicate public tag identity row' }
+              $tagEntries[$Matches[2]] = $Matches[1]
+            }
+            if (-not $tagEntries.ContainsKey($tagRef)) { throw 'ordinary public tag ref is absent' }
+            if (-not $tagEntries.ContainsKey($peeledRef)) { throw 'peeled public tag ref is absent' }
+
+            $publicTagObjectSha = $tagEntries[$tagRef]
+            $publicTagPeeledCommitSha = $tagEntries[$peeledRef]
+            if ($publicTagObjectSha -notmatch '^[0-9a-f]{40}$') { throw 'public tag object identity is malformed' }
+            if ($publicTagPeeledCommitSha -notmatch '^[0-9a-f]{40}$') { throw 'public peeled tag identity is malformed' }
+
+            $env:EXPECTED_ORIGIN_SHA = $publicTagPeeledCommitSha
+            $env:EXPECTED_VERSION = $env:CANDIDATE_QUERY
+          } elseif ($env:CANDIDATE_QUERY -ne $env:TRIGGER_SHA) {
+            throw 'non-tag query does not match authoritative trigger SHA'
+          }
+
+          $moduleInfo = go list -m -json "$module@$env:CANDIDATE_QUERY" | ConvertFrom-Json
           $moduleInfo | ConvertTo-Json -Depth 8 | Out-File -FilePath module.json -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw 'module resolution failed' }
-          if ($moduleInfo.Origin.Hash -ne $env:CANDIDATE_SHA) { throw 'candidate origin mismatch' }
+          if ($moduleInfo.Origin.Hash -ne $env:EXPECTED_ORIGIN_SHA) { throw 'candidate origin mismatch' }
+          if (($env:EVENT_REF_TYPE -eq 'tag') -and ($moduleInfo.Version -ne $env:EXPECTED_VERSION)) {
+            throw 'tag semantic version mismatch'
+          }
 
-          go install "$module/cmd/coldkeep@$env:CANDIDATE_SHA"
+          go install "$module/cmd/coldkeep@$env:CANDIDATE_QUERY"
           if ($LASTEXITCODE -ne 0) { throw 'remote candidate installation failed' }
           $binary = Join-Path $env:GOBIN 'coldkeep.exe'
           if ((& $binary version) -ne 'coldkeep version 1.13.15') { throw 'binary identity mismatch' }
@@ -1406,9 +1485,15 @@ jobs:
             throw 'installed module build identity mismatch'
           }
 
-          "CANDIDATE_SHA=$env:CANDIDATE_SHA" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "EVENT_REF_TYPE=$env:EVENT_REF_TYPE" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "CANDIDATE_QUERY=$env:CANDIDATE_QUERY" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "EXPECTED_ORIGIN_SHA=$env:EXPECTED_ORIGIN_SHA" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "RESOLVED_ORIGIN_HASH=$($moduleInfo.Origin.Hash)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "RESOLVED_VERSION=$($moduleInfo.Version)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($env:EVENT_REF_TYPE -eq 'tag') {
+            "PUBLIC_TAG_OBJECT_SHA=$publicTagObjectSha" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            "PUBLIC_TAG_PEELED_COMMIT_SHA=$publicTagPeeledCommitSha" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
           "GO_VERSION=$(go version)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOTOOLCHAIN=$(go env GOTOOLCHAIN)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOOS=$(go env GOOS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
