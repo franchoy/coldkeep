@@ -33,9 +33,16 @@ project, do not start here; start with [README.md](README.md).
   Boundary-aware contracts now distinguish tagged,
   post-release-pending-closure, and terminal post-release-closed while legacy
   release contracts remain compatible.
-- Phases 0–8 are Complete conditionally on the protected Phase 8R recovery
-  merge and exact-final-main recertification. Phase 9 is Next and Phase 10 is
-  Not started. v1.13.15 is not tagged, published, or operationally closed.
+- Phase 8R merged normally through PR #116 as protected main
+  67a32788c0d7cf5ab02af7199b99d80236613977 and passed complete exact-main
+  recertification, so Phases 0–8 are Complete. Phase 9 is Next and Phase 10 is
+  Not started.
+- Phase 9R materializes the missing durable release-body authority before any
+  tag exists. The unrecoverable historical Phase 7 digest is superseded for
+  current publication by the tracked 1,815-byte body at SHA-256
+  477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357.
+  Phase 9 remains blocked until the Phase 9R protected merge and revised-main
+  recertification pass; v1.13.15 remains untagged and unpublished.
 - The final planned v1.x closure contract now requires Phase 9 immutable
   source-only publication followed by strengthened Phase 10 closure evidence,
   terminal authority, final-main proof, cleanup of all v1.13.15 temporary
