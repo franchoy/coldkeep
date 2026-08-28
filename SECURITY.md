@@ -10,17 +10,20 @@ for safer diagnostics.
 The current v1 architecture includes a reusable headless Engine, a neutral
 Catalog boundary, a thin CLI, supported SQLite and PostgreSQL backends within
 documented bounds, and cooperative same-host/local-filesystem repository
-coordination. v1.13.14 is the published stable final v1.x corrective release.
-All 17 confirmed findings and all 4 release-process gates are closed, including
-post-publication lifecycle reconciliation in Phase 26. The operational
-repository is `post-release-closed`; the published tag remains immutable at
-`caac44d459609f89f2c971cb7b07a8678bd52d2c`.
+coordination. v1.13.15 is the published stable final planned v1.x release.
+Annotated tag `v1.13.15` peels to immutable product baseline
+`6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
+attestation are immutable. The terminal repository authority is
+`post-release-closed`, with all planned v1 work closed and frozen subject to
+the Phase 10 protected-acceptance and Phase 10T execution predicates.
 
-v1.13.15 is the active final v1.x security, reproducibility, and operational-
-closure train. Its frozen work is limited to the accepted 15-finding contract,
-including Windows native-string safety, supported-toolchain/vulnerability
-gates, reproducible source builds, and release governance. v1.13.14 remains
-immutable historical release state. V2 implementation has not started.
+The former statement “v1.13.15 is the active final v1.x closure train” is a
+superseded governance sentinel and no longer describes an active
+implementation train. v1.13.14 remains immutable historical release state.
+Future v1 maintenance requires a newly discovered critical correctness or
+security defect, a separate plan, and explicit authorization. V2 planning
+review is authorized. V2 implementation has not started and requires a
+separate plan.
 
 It is suitable for controlled production environments where:
 

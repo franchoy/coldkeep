@@ -87,8 +87,8 @@ Do not add global coverage gates unless explicitly approved.
 
 ## v1.13.15 Release Boundary
 
-During the active v1.13.15 final v1.x closure train, do not use CI work to
-introduce:
+v1.13.15 is published stable and planned v1 work is closed and frozen. Do not
+use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;
@@ -97,8 +97,11 @@ introduce:
 - unassigned dependency or toolchain movement;
 - required gates outside the active phase allowlist.
 
-Treat v1.13.14 release evidence as immutable historical state. Stop on release
-identity drift or newly discovered private security impact.
+Treat v1.13.14 release evidence as immutable historical state. Preserve the
+v1.13.15 immutable product/release identity. Future v1 maintenance requires a
+new critical correctness or security defect and a separate authorized plan.
+V2 planning review is authorized; v2 implementation requires a separate plan.
+Stop on release identity drift or newly discovered private security impact.
 
 ## Required Review Questions
 

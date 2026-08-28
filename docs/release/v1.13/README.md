@@ -74,36 +74,25 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure has
-completed Phases 8R and 9R. Phase 9R merged normally through PR #117 and exact
-protected main
-5c6e37d065c163f7050e015762e1a4c657e7565a passed full recertification.
-Phases 0–8 are Complete, Phase 9 is Next, and Phase 10 is Not started.
-
-Phase 9 remains blocked while nonnumeric Phase 9S repairs semantic-tag public
-installation and tag-triggered CodeQL before immutable tag creation. Non-tag
-CI retains exact-SHA resolution. Tag CI must select the semantic ref name,
-independently resolve both the public tag object and mandatory peeled commit,
-and bind Go module Origin.Hash to that peeled commit on Linux, macOS, and
-Windows. CodeQL retains all current coverage and adds `v*` push tags.
+v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure is
+published as stable immutable release `378768097`. Annotated tag object
+`38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
+baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`. Tag CI `33210164827`,
+tag-native installation on Linux, macOS, and Windows, CodeQL `33210164772`,
+zero open CodeQL alerts, and the release attestation passed.
 
 The canonical publication body remains `v1.13.15-release-body.md`, exactly
 1,815 bytes at SHA-256
 `477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`.
-Phase 9S does not add a numeric lifecycle phase and performs no tag, release,
-branch cleanup, Phase 10 work, or v2 implementation.
+The release was published at `2026-08-28T21:17:21Z` with zero custom assets and
+a verified immutable-release attestation. Phases 0–10 are Complete and tracked
+authority is `post-release-closed`. Terminal effectiveness remains conditional
+on the protected Phase 10 merge, exact-final-main recertification, authorized
+cleanup of all five temporary branches, and successful read-only Phase 10T.
 
-The boundary-aware validator keeps publication and final closure truthfully
-pending, uses tagged for the immutable tag target, and reserves
-post-release-closed for all phases Complete. Successful Phase 9S merge and
-exact-final-main recertification make that resulting SHA ready only for a
-separate Phase 9 Build authorization. Phase 10 later owns the final closure
-bundle, terminal provider authority, repository-closure SHA, exact-main proof,
-and cleanup of all five temporary branches. Phase 10T remains read-only.
-
-v1.13.14 remains immutable published historical state. V2 planning review may
-follow terminal v1.x closure; v2 implementation has not started and requires a
-separate plan.
+v1.13.14 remains unchanged immutable published historical state. V1.x planned
+work is closed and frozen in the terminal candidate. V2 planning review is
+authorized; v2 implementation has not started and requires a separate plan.
 
 ## Historical v1.13.14 current-state narrative
 
