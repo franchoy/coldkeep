@@ -316,7 +316,11 @@ def parse_lifecycle_boundaries(
         if re.fullmatch(r"\d+", value) is None:
             return None, f"{name} is not a nonnegative integer"
         parsed.append(int(value))
-    return LifecycleBoundaries(*parsed), None
+    return LifecycleBoundaries(
+        merge=parsed[0],
+        publication=parsed[1],
+        closure=parsed[2],
+    ), None
 
 
 def lifecycle_boundaries_match_topology(
