@@ -74,23 +74,26 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-`v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure` is
-the active unreleased train on `release/v1.13.15`. Phase 0A persisted the
-release contract and canonical v1.13.14 identity baseline. Phase 0B activated
-source identity 1.13.15 and current repository-agent authority. Phase 1
-implemented the Windows remediation. Phase 2 certified Go 1.26.7, the blocking
-native vulnerability gate, the complete Python suite, and the direct Windows
-boundary proof through its exact-head hosted candidate. Phase 3 completed the
-safe development container, digest-pinned official product images, native
-Linux/macOS/Windows source-install proof, and multi-architecture product-image
-smokes. Phase 4 reconciled current agent/provider, lifecycle, historical-prompt,
-and roadmap authority with deterministic validation. Phase 5 completed the
-exact-candidate integrated local gate and v1.13.14 identity reconciliation.
-Phase 6 is Next: Hosted Candidate and Pre-Tag Governance Proof. Phases 7–10 are
-Not started. V2 implementation has not started.
+v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure is
+ready for tag/publication after the bounded Phase 8R recovery merges normally
+and its exact final main passes recertification. PR #115 merged candidate
+90122c52172764a73e165b1bae63b2e54887839b as protected merge
+7c1e0466986aff156b3990c37f19fcd301639063 without rewriting its reviewed tree.
 
-v1.13.14 remains published and operationally closed historical state. Its tag,
-release, and historical evidence must not be mutated.
+Phases 0–8 are conditionally Complete. Phase 9 is next. Phase 10 is Not
+started. The boundary-aware validator keeps publication and final closure
+truthfully pending, uses tagged for the immutable tag target, and reserves
+post-release-closed for all phases Complete.
+
+Phase 9 owns tag/publication and the immutable product-baseline SHA. Phase 10
+owns the final v1.x closure bundle, terminal provider authority, repository-
+closure SHA, exact-final-main proof, and cleanup of the release, Phase 8R
+recovery, and post-publication closure branches. Its Phase 10T audit is
+read-only and is not another numeric phase.
+
+v1.13.14 remains immutable published historical state. V2 planning review may
+follow terminal v1.x closure; v2 implementation has not started and requires a
+separate plan.
 
 ## Historical v1.13.14 current-state narrative
 

@@ -16,6 +16,9 @@ SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 CHANGELOG_HEADING = re.compile(r"^## (?:v|\[)(\d+\.\d+\.\d+)(?:\]|\b)(.*)$")
 PHASE_HEADING = re.compile(r"^## Phase (\d+)\b")
 METADATA = re.compile(r"^\*\*(Release|Status|Branch|Phase status):\*\*\s*(.*)$")
+LIFECYCLE_BOUNDARY = re.compile(
+    r"^\*\*(Merge-complete phase|Tag/publication phase|Post-publication closure phase):\*\*\s*(.*)$",
+)
 ProcessResult = subprocess.CompletedProcess[str]
 
 
@@ -89,6 +92,15 @@ class Document:
             if match and match.group(1) == name:
                 values.append((index, match.group(2).strip()))
         return values
+
+
+@dataclass(frozen=True)
+class LifecycleBoundaries:
+    """Numeric release phases that own merge, publication, and closure."""
+
+    merge: int
+    publication: int
+    closure: int
 
 
 def heading_closes_section(line: str, level: int) -> bool:
@@ -278,6 +290,52 @@ def parse_phase_states(
     return numbers, states
 
 
+def parse_lifecycle_boundaries(
+    doc: Optional[Document],
+) -> tuple[Optional[LifecycleBoundaries], Optional[str]]:
+    """Parse optional generic lifecycle-boundary metadata fail closed."""
+    if doc is None:
+        return None, None
+    expected = (
+        "Merge-complete phase",
+        "Tag/publication phase",
+        "Post-publication closure phase",
+    )
+    values: dict[str, list[str]] = {name: [] for name in expected}
+    for line in doc.lines:
+        match = LIFECYCLE_BOUNDARY.match(line)
+        if match:
+            values[match.group(1)].append(match.group(2).strip())
+    if not any(values.values()):
+        return None, None
+    if any(len(values[name]) != 1 for name in expected):
+        return None, "lifecycle boundaries are missing or ambiguous"
+    parsed: list[int] = []
+    for name in expected:
+        value = values[name][0]
+        if re.fullmatch(r"\d+", value) is None:
+            return None, f"{name} is not a nonnegative integer"
+        parsed.append(int(value))
+    return LifecycleBoundaries(*parsed), None
+
+
+def lifecycle_boundaries_match_topology(
+    boundaries: LifecycleBoundaries,
+    phase_numbers: list[int],
+) -> bool:
+    """Require three consecutive terminal lifecycle phases."""
+    if not phase_numbers:
+        return False
+    return (
+        boundaries.publication == boundaries.merge + 1
+        and boundaries.closure == boundaries.publication + 1
+        and boundaries.closure == phase_numbers[-1]
+        and boundaries.merge in phase_numbers
+        and boundaries.publication in phase_numbers
+        and boundaries.closure in phase_numbers
+    )
+
+
 def safe_relative_artifact(root: Path, containing: str, value: str) -> str:
     """Resolve one relative Markdown artifact without escaping the root."""
     first = PurePosixPath(value).parts[0] if PurePosixPath(value).parts else ""
@@ -316,7 +374,9 @@ def changelog_entry_valid(
     expected_dated = state in (
         "pre-release",
         "merged-not-tagged",
+        "tagged",
         "released",
+        "post-release-pending-closure",
         "post-release-closed",
     )
     dated = bool(re.search(r"-\s+\d{4}-\d{2}-\d{2}\b", suffix))
@@ -338,7 +398,7 @@ def readme_current_state_valid(
         "active"
         if state == "development"
         else "published"
-        if state == "post-release-closed"
+        if state in ("post-release-pending-closure", "post-release-closed")
         else "ready"
     )
     return (
@@ -477,6 +537,47 @@ def development_progression_valid(ordered: list[str]) -> bool:
     )
 
 
+def progression_at_phase(ordered: list[str], phase: int) -> bool:
+    """Return whether one exact phase is Next in a contiguous progression."""
+    return (
+        0 <= phase < len(ordered)
+        and all(value == "Complete" for value in ordered[:phase])
+        and ordered[phase] == "Next"
+        and all(value == "Not started" for value in ordered[phase + 1 :])
+    )
+
+
+def lifecycle_progression_valid(
+    state: str,
+    ordered: list[str],
+    boundaries: Optional[LifecycleBoundaries],
+) -> bool:
+    """Validate legacy or boundary-aware phase progression for one state."""
+    complete = bool(ordered) and all(value == "Complete" for value in ordered)
+    if boundaries is None:
+        if state == "development":
+            return development_progression_valid(ordered)
+        return state in (
+            "pre-release",
+            "merged-not-tagged",
+            "released",
+            "post-release-closed",
+        ) and complete
+    if state == "development":
+        if not development_progression_valid(ordered):
+            return False
+        return ordered.index("Next") < boundaries.merge
+    if state == "pre-release":
+        return progression_at_phase(ordered, boundaries.merge)
+    if state in ("merged-not-tagged", "tagged"):
+        return progression_at_phase(ordered, boundaries.publication)
+    if state == "post-release-pending-closure":
+        return progression_at_phase(ordered, boundaries.closure)
+    if state == "post-release-closed":
+        return complete
+    return False
+
+
 def github_context() -> dict[str, str]:
     """Return only GitHub environment fields used by lifecycle inference."""
     keys = (
@@ -499,21 +600,34 @@ def accepted_release_pr(version: str, env: dict[str, str]) -> bool:
     )
 
 
-def _post_release_pr_environment(
-    version: str,
+def _same_repository_pr(
     env: dict[str, str],
-) -> Optional[tuple[str, str, str]]:
-    """Return bounded post-release PR inputs after environment validation."""
-    release_branch = f"release/v{version}"
-    expected = ("pull_request", release_branch)
-    actual = (env["GITHUB_EVENT_NAME"], env["GITHUB_HEAD_REF"])
-    if actual != expected or not env["GITHUB_REF"].startswith("refs/pull/"):
+) -> Optional[tuple[object, object, object]]:
+    """Return validated base, head, and repository identity for one PR."""
+    if env["GITHUB_EVENT_NAME"] != "pull_request":
+        return None
+    if not env["GITHUB_REF"].startswith("refs/pull/"):
         return None
     event_path = env["GITHUB_EVENT_PATH"]
     repository = env["GITHUB_REPOSITORY"]
-    if not event_path or not repository:
+    head = env["GITHUB_HEAD_REF"]
+    if not event_path or not repository or not head:
         return None
-    return event_path, repository, release_branch
+    identity = _post_release_pr_identity(event_path)
+    if identity is None or identity[1] != head or identity[2] != repository:
+        return None
+    return identity
+
+
+def accepted_recovery_pr(version: str, env: dict[str, str]) -> bool:
+    """Accept a same-repository merged-state recovery PR to main."""
+    identity = _same_repository_pr(env)
+    prefix = f"recovery/v{version}-"
+    return bool(
+        identity
+        and identity[0] == "main"
+        and str(identity[1]).startswith(prefix)
+    )
 
 
 def _post_release_pr_identity(event_path: str) -> Optional[tuple[object, object, object]]:
@@ -540,13 +654,13 @@ def _post_release_pr_identity(event_path: str) -> Optional[tuple[object, object,
 
 
 def accepted_post_release_pr(version: str, env: dict[str, str]) -> bool:
-    """Validate a same-repository release PR from its authoritative payload."""
-    bounded = _post_release_pr_environment(version, env)
-    if bounded is None:
-        return False
-    event_path, repository, release_branch = bounded
-    expected = ("main", release_branch, repository)
-    return _post_release_pr_identity(event_path) == expected
+    """Validate a same-repository release or closure PR."""
+    identity = _same_repository_pr(env)
+    allowed = {
+        f"release/v{version}",
+        f"release/v{version}-post-publication-closure",
+    }
+    return bool(identity and identity[0] == "main" and identity[1] in allowed)
 
 
 def phases_complete(phase_doc: Optional[Document]) -> bool:
@@ -570,19 +684,31 @@ def git_context_matches(
     if state in ("development", "pre-release"):
         return branch == release_branch or accepted_release_pr(version, env)
     if state == "merged-not-tagged":
-        return branch == "main" or env["GITHUB_REF"] == "refs/heads/main"
-    if state == "post-release-closed":
         return (
-            branch in ("main", release_branch)
+            branch == "main"
+            or branch.startswith(f"recovery/v{version}-")
+            or env["GITHUB_REF"] == "refs/heads/main"
+            or accepted_recovery_pr(version, env)
+        )
+    if state in ("post-release-pending-closure", "post-release-closed"):
+        return (
+            branch in (
+                "main",
+                release_branch,
+                f"release/v{version}-post-publication-closure",
+            )
             or env["GITHUB_REF"] == "refs/heads/main"
             or accepted_post_release_pr(version, env)
         )
-    return state == "released"
+    return state in ("tagged", "released")
 
 
 def passed_gate(gate: Document) -> bool:
     """Return whether any unambiguous gate status is passed."""
-    return any("Passed" in value for _, value in gate.metadata("Status"))
+    return any(
+        re.match(r"^Passed(?:\b|\s|—)", value)
+        for _, value in gate.metadata("Status")
+    )
 
 
 def train_marker_index(doc: Document) -> Optional[int]:
@@ -663,14 +789,47 @@ def main_context(branch: str, env: dict[str, str]) -> bool:
     return branch == "main" or env["GITHUB_REF"] == "refs/heads/main"
 
 
-def development_gate_invalid(
-    gate: Optional[Document],
-    complete: bool,
+def gate_status_exact(gate: Document, expected: str) -> bool:
+    """Return whether a gate has one exact lifecycle status."""
+    return [value for _, value in gate.metadata("Status")] == [expected]
+
+
+def gate_verdict_present(gate: Document, *, allow_pending: bool = False) -> bool:
+    """Return whether the final verdict is nonempty and suitably final."""
+    verdict = gate.section("## Final verdict")
+    if verdict is None:
+        return False
+    lines = verdict[1]
+    if lines and lines[0] == "## Final verdict":
+        lines = lines[1:]
+    text = "\n".join(lines).strip()
+    return bool(text) and (
+        allow_pending or re.search(r"\bpending\b", text, re.I) is None
+    )
+
+
+def candidate_gate_valid(
+    gate: Document,
+    state: str,
+    progression_valid: bool,
+    boundaries: Optional[LifecycleBoundaries],
 ) -> bool:
-    """Return whether a development gate claims a premature pass."""
-    return gate is not None and passed_gate(gate) and not complete
-
-
-def candidate_gate_valid(gate: Document, complete: bool) -> bool:
-    """Return whether a release candidate has bounded passed evidence."""
-    return complete and passed_gate(gate) and gate.section("## Final verdict") is not None
+    """Return whether a candidate gate matches its exact lifecycle state."""
+    if not progression_valid:
+        return False
+    if boundaries is None:
+        statuses = [value for _, value in gate.metadata("Status")]
+        legacy_passed = (
+            len(statuses) == 1 and statuses[0].startswith("Passed")
+        )
+        return legacy_passed and gate_verdict_present(gate)
+    expected = {
+        "pre-release": "Passed — pre-merge prerequisites complete",
+        "merged-not-tagged": "Passed — pre-publication prerequisites complete",
+        "tagged": "Passed — pre-publication prerequisites complete",
+    }.get(state)
+    return bool(
+        expected
+        and gate_status_exact(gate, expected)
+        and gate_verdict_present(gate)
+    )

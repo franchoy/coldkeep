@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -178,6 +179,186 @@ class Fixture:
                 "## Final verdict\n\nREADY\n",
             )
 
+    def enable_lifecycle_boundaries(
+        self,
+        merge: int = 0,
+        publication: int = 1,
+        closure: int = 2,
+    ) -> None:
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-release-state-validator-contract.md",
+            "# Contract\n\n"
+            f"**Merge-complete phase:** {merge}\n"
+            f"**Tag/publication phase:** {publication}\n"
+            f"**Post-publication closure phase:** {closure}\n",
+        )
+
+    def set_phase_states(self, statuses: list[str]) -> None:
+        if len(statuses) != 3:
+            raise AssertionError("fixture requires exactly three phase states")
+        for relative, field in (
+            ("docs/release/v1.13/v1.13.10-phase-list.md", "Status"),
+            (
+                "docs/release/v1.13/v1.13.10-validation-checklist.md",
+                "Phase status",
+            ),
+        ):
+            target = self.root / relative
+            lines = target.read_text(encoding="utf-8").splitlines()
+            phase = None
+            output = []
+            for line in lines:
+                match = re.match(r"^## Phase (\d+)\b", line)
+                if match:
+                    phase = int(match.group(1))
+                if phase is not None and line.startswith(f"**{field}:**"):
+                    line = f"**{field}:** {statuses[phase]}"
+                output.append(line)
+            target.write_text("\n".join(output) + "\n", encoding="utf-8")
+        scope = self.root / "docs/release/v1.13/v1.13.10-scope.md"
+        prefix = scope.read_text(encoding="utf-8").split("## Phase summary", 1)[0]
+        summary = "\n".join(
+            f"- Phase {number}: {status}"
+            for number, status in enumerate(statuses)
+        )
+        scope.write_text(
+            prefix + "## Phase summary\n\n" + summary + "\n",
+            encoding="utf-8",
+        )
+        if "Next" in statuses:
+            next_phase = statuses.index("Next")
+            release_readme = self.root / "docs/release/v1.13/README.md"
+            content = release_readme.read_text(encoding="utf-8")
+            content = re.sub(r"Phase \d+ is next", f"Phase {next_phase} is next", content)
+            release_readme.write_text(content, encoding="utf-8")
+
+    def prepare_boundary_candidate(self) -> None:
+        self.enable_lifecycle_boundaries()
+        for relative in (
+            "docs/release/v1.13/v1.13.10-scope.md",
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+        ):
+            replace(
+                self.root,
+                relative,
+                "**Status:** Active",
+                "**Status:** Ready for release",
+            )
+        replace(
+            self.root,
+            "CHANGELOG.md",
+            "v1.13.10 - Unreleased",
+            "v1.13.10 - 2026-01-02",
+        )
+        replace(
+            self.root,
+            "README.md",
+            "v1.13.10 is active",
+            "v1.13.10 is ready for release",
+        )
+        replace(
+            self.root,
+            "docs/release/v1.13/README.md",
+            "v1.13.10 is active",
+            "v1.13.10 is ready for release",
+        )
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "# Gate\n\n"
+            "**Status:** Passed — pre-publication prerequisites complete\n\n"
+            "## Final verdict\n\nPASS — PRE-PUBLICATION GATE CLOSED\n",
+        )
+
+    def prepare_boundary_pre_release(self) -> None:
+        self.prepare_boundary_candidate()
+        self.set_phase_states(["Next", "Not started", "Not started"])
+        replace(
+            self.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "Passed — pre-publication prerequisites complete",
+            "Passed — pre-merge prerequisites complete",
+        )
+
+    def publish_boundary_pending(self) -> str:
+        self.prepare_boundary_candidate()
+        self.commit()
+        published = run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        git(self.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        for relative in (
+            "docs/release/v1.13/v1.13.10-scope.md",
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+        ):
+            replace(
+                self.root,
+                relative,
+                "**Status:** Ready for release",
+                "**Status:** Published; post-publication closure pending",
+            )
+        replace(
+            self.root,
+            "README.md",
+            "v1.13.10 is ready for release",
+            "v1.13.10 is published; post-publication closure pending",
+        )
+        replace(
+            self.root,
+            "docs/release/v1.13/README.md",
+            "v1.13.10 is ready for release",
+            "v1.13.10 is published; post-publication closure pending",
+        )
+        self.set_phase_states(["Complete", "Complete", "Next"])
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "# Gate\n\n"
+            "**Status:** Passed and released — closure pending\n\n"
+            "## Final verdict\n\nPASS — PUBLICATION COMPLETE; CLOSURE PENDING\n",
+        )
+        self.commit()
+        return published
+
+    def close_boundary_release(self) -> str:
+        published = self.publish_boundary_pending()
+        for relative in (
+            "docs/release/v1.13/v1.13.10-scope.md",
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+        ):
+            replace(
+                self.root,
+                relative,
+                "**Status:** Published; post-publication closure pending",
+                "**Status:** Released and operationally closed",
+            )
+        replace(
+            self.root,
+            "README.md",
+            "v1.13.10 is published; post-publication closure pending",
+            "v1.13.10 is published and operationally closed",
+        )
+        replace(
+            self.root,
+            "docs/release/v1.13/README.md",
+            "v1.13.10 is published; post-publication closure pending",
+            "v1.13.10 is published and operationally closed",
+        )
+        self.set_phase_states(["Complete", "Complete", "Complete"])
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "# Gate\n\n**Status:** Passed and released\n\n"
+            "## Final verdict\n\nPASS — PUBLISHED AND OPERATIONALLY CLOSED\n",
+        )
+        self.commit()
+        return published
+
     def close_post_release(self) -> None:
         for relative in (
             "docs/release/v1.13/v1.13.10-scope.md",
@@ -245,12 +426,16 @@ class Fixture:
         )
         return path
 
-    def post_release_pr_env(self, event_path: Path) -> dict[str, str]:
+    def post_release_pr_env(
+        self,
+        event_path: Path,
+        head: str = "release/v1.13.10",
+    ) -> dict[str, str]:
         return {
             "GITHUB_EVENT_NAME": "pull_request",
             "GITHUB_REF": "refs/pull/7/merge",
             "GITHUB_REF_NAME": "7/merge",
-            "GITHUB_HEAD_REF": "release/v1.13.10",
+            "GITHUB_HEAD_REF": head,
             "GITHUB_EVENT_PATH": str(event_path),
             "GITHUB_REPOSITORY": "fixture/coldkeep",
         }
@@ -793,6 +978,242 @@ class ReleaseStateValidatorTests(unittest.TestCase):
                     "ancestor",
                     "descendant",
                 )
+
+
+    def test_69_boundary_aware_pre_release_progression(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_pre_release()
+        self.assert_ok(fixture.run("--state", "auto"))
+        self.assertIn("state=pre-release", fixture.run().stdout)
+
+    def test_70_merged_not_tagged_publication_phase_next(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_ok(fixture.run())
+        self.assertIn("state=merged-not-tagged", fixture.run().stdout)
+
+    def test_71_merged_before_boundary_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_pre_release()
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_rules(fixture.run(), ["CKRS013", "CKRS018"])
+
+    def test_72_boundary_aware_exact_tag_infers_tagged(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.commit()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        git(fixture.root, "checkout", "--detach")
+        process = fixture.run()
+        self.assert_ok(process)
+        self.assertIn("state=tagged", process.stdout)
+
+    def test_73_explicit_tagged_publication_phase_next(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.commit()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        self.assert_ok(fixture.run("--state", "tagged"))
+
+    def test_74_boundary_contract_released_state_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.commit()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        self.assert_rules(
+            fixture.run("--state", "released"),
+            ["CKRS013", "CKRS018"],
+        )
+
+    def test_75_legacy_exact_tag_infers_released(self) -> None:
+        fixture = self.fixture()
+        fixture.complete_release()
+        fixture.commit()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "tag")
+        process = fixture.run()
+        self.assert_ok(process)
+        self.assertIn("state=released", process.stdout)
+
+    def test_76_legacy_all_complete_merged_state(self) -> None:
+        fixture = self.fixture()
+        fixture.complete_release()
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_ok(fixture.run("--state", "merged-not-tagged"))
+
+    def test_77_post_release_pending_closure_progression(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_boundary_pending()
+        git(
+            fixture.root,
+            "branch",
+            "-M",
+            "release/v1.13.10-post-publication-closure",
+        )
+        process = fixture.run()
+        self.assert_ok(process)
+        self.assertIn("state=post-release-pending-closure", process.stdout)
+
+    def test_78_boundary_post_release_closed_all_complete(self) -> None:
+        fixture = self.fixture()
+        fixture.close_boundary_release()
+        git(fixture.root, "branch", "-M", "main")
+        process = fixture.run()
+        self.assert_ok(process)
+        self.assertIn("state=post-release-closed", process.stdout)
+
+    def test_79_multiple_next_phases_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.set_phase_states(["Complete", "Next", "Next"])
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_rules(fixture.run(), ["CKRS013", "CKRS018"])
+
+    def test_80_status_gap_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.set_phase_states(["Complete", "Not started", "Next"])
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_rules(fixture.run(), ["CKRS013", "CKRS018"])
+
+    def test_81_next_followed_by_complete_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.enable_lifecycle_boundaries()
+        fixture.set_phase_states(["Next", "Complete", "Not started"])
+        self.assert_rules(
+            fixture.run("--state", "development"),
+            ["CKRS013"],
+        )
+
+    def test_82_false_operational_closure_with_next_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_boundary_pending()
+        for relative in (
+            "docs/release/v1.13/v1.13.10-scope.md",
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+        ):
+            replace(
+                fixture.root,
+                relative,
+                "**Status:** Published; post-publication closure pending",
+                "**Status:** Released and operationally closed",
+            )
+        self.assert_rules(
+            fixture.run("--state", "post-release-closed"),
+            ["CKRS013", "CKRS018"],
+        )
+
+    def test_83_premature_passed_and_released_gate_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        write(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "# Gate\n\n**Status:** Passed and released\n\n"
+            "## Final verdict\n\nPASS\n",
+        )
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_rules(fixture.run(), ["CKRS018"])
+
+    def test_84_missing_boundary_metadata_rejects_partial_candidate(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        write(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-release-state-validator-contract.md",
+            "# Contract\n",
+        )
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_rules(fixture.run(), ["CKRS013", "CKRS018"])
+
+    def test_85_duplicate_boundary_metadata_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        relative = (
+            "docs/release/v1.13/"
+            "v1.13.10-release-state-validator-contract.md"
+        )
+        target = fixture.root / relative
+        write(
+            fixture.root,
+            relative,
+            target.read_text(encoding="utf-8")
+            + "**Merge-complete phase:** 0\n",
+        )
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_rules(
+            fixture.run(),
+            ["CKRS013", "CKRS018", "CKRS019"],
+        )
+
+    def test_86_nonconsecutive_boundaries_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.enable_lifecycle_boundaries(0, 2, 3)
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_rules(
+            fixture.run(),
+            ["CKRS013", "CKRS018", "CKRS019"],
+        )
+
+    def test_87_nonterminal_boundaries_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.enable_lifecycle_boundaries(0, 1, 1)
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_rules(
+            fixture.run(),
+            ["CKRS019"],
+        )
+
+    def test_88_recovery_branch_and_pr_infer_merged_state(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_candidate()
+        fixture.commit()
+        recovery = "recovery/v1.13.10-phase8-release-state"
+        git(fixture.root, "branch", "-M", recovery)
+        self.assert_ok(fixture.run())
+        event = fixture.write_pr_event(head=recovery)
+        git(fixture.root, "checkout", "--detach")
+        self.assert_ok(
+            fixture.run(env=fixture.post_release_pr_env(event, recovery)),
+        )
+
+    def test_89_post_publication_closure_branch_and_pr(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_boundary_pending()
+        closure = "release/v1.13.10-post-publication-closure"
+        git(fixture.root, "branch", "-M", closure)
+        self.assert_ok(fixture.run())
+        event = fixture.write_pr_event(head=closure)
+        git(fixture.root, "checkout", "--detach")
+        self.assert_ok(
+            fixture.run(env=fixture.post_release_pr_env(event, closure)),
+        )
+
+    def test_90_closure_pr_wrong_base_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_boundary_pending()
+        closure = "release/v1.13.10-post-publication-closure"
+        event = fixture.write_pr_event(base="develop", head=closure)
+        git(fixture.root, "checkout", "--detach")
+        self.assertNotEqual(
+            fixture.run(
+                env=fixture.post_release_pr_env(event, closure),
+            ).returncode,
+            0,
+        )
 
 
 if __name__ == "__main__":

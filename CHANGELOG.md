@@ -20,24 +20,30 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.15 - Unreleased — Final v1.x Security, Reproducibility, and Operational Closure
+## v1.13.15 - 2026-08-28 — Final v1.x Security, Reproducibility, and Operational Closure
 
-- Persisted the final 15-finding/four-invariant closure contract and the
-  canonical v1.13.14 publication-identity baseline on a release branch created
-  from exact main `5337f955467e67e4cce9bcdae5904a4b2c6af670`.
-- Activated source identity `1.13.15`, current root agent authority, and the
-  bounded Phase 0–10 lifecycle. Phase 1 Windows security and rename-boundary
-  remediation is next.
-- Retained `go 1.25` as the language floor while freezing Go 1.26.7 as the
-  certified release toolchain; upgraded only `x/sys` to v0.44.0; added blocking
-  ordinary-output govulncheck v1.7.0 on Linux and Windows; and bounded native
-  Windows rename construction at the UTF-16 limit.
-- Added an unprivileged, socket-free development container with development-
-  only PostgreSQL; pinned registry-verified official builder, runtime, and
-  PostgreSQL image indexes; and passed source installation on Linux, macOS,
-  and Windows plus product-image smokes on Linux amd64 and arm64.
-- Distribution remains source-only. No schema, storage-format, public API, or
-  v2 product implementation change has landed through Phase 3.
+- PR #115 validly merged candidate
+  90122c52172764a73e165b1bae63b2e54887839b through protected main as
+  7c1e0466986aff156b3990c37f19fcd301639063, preserving ordered parents
+  5337f955467e67e4cce9bcdae5904a4b2c6af670 and
+  90122c52172764a73e165b1bae63b2e54887839b and reviewed tree
+  bd754aca4e0ff07e7aa61bc14e78be0f77a75282.
+- Phase 8R corrects the generic lifecycle validator so merged and tagged
+  repositories keep the publication and closure phases truthfully pending.
+  Boundary-aware contracts now distinguish tagged,
+  post-release-pending-closure, and terminal post-release-closed while legacy
+  release contracts remain compatible.
+- Phases 0–8 are Complete conditionally on the protected Phase 8R recovery
+  merge and exact-final-main recertification. Phase 9 is Next and Phase 10 is
+  Not started. v1.13.15 is not tagged, published, or operationally closed.
+- The final planned v1.x closure contract now requires Phase 9 immutable
+  source-only publication followed by strengthened Phase 10 closure evidence,
+  terminal authority, final-main proof, cleanup of all v1.13.15 temporary
+  branches, and a non-mutating terminal audit. V2 implementation remains
+  unauthorized without a separate plan.
+- The accepted Go 1.26.7 certification, Go 1.25 language floor, x/sys v0.44.0
+  Windows remediation, reproducible source installation, official product
+  images, and immutable v1.13.14 historical identity remain unchanged.
 
 ## v1.13.14 - 2026-08-26 — Final v1.x Correctness Remediation and Closure Certification
 
