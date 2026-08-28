@@ -48,18 +48,115 @@ func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T
 			wantMessage: "required gate depends on security and hosted reproducibility jobs",
 		},
 		{
-			name: "exact candidate head",
+			name: "semantic tag selection",
 			mutate: func(value string) string {
-				return strings.ReplaceAll(value, "github.event.pull_request.head.sha || github.sha", "github.sha")
+				return strings.Replace(
+					value,
+					"github.ref_type == 'tag' && github.ref_name || github.event.pull_request.head.sha || github.sha",
+					"github.event.pull_request.head.sha || github.sha",
+					1,
+				)
 			},
-			wantMessage: "remote candidate installation binds the exact public candidate head",
+			wantMessage: "remote candidate installation selects semantic tags and exact non-tag revisions",
 		},
 		{
-			name: "origin identity",
+			name: "explicit tag event detection",
 			mutate: func(value string) string {
-				return strings.ReplaceAll(value, "Origin.Hash", "Origin.Ref")
+				return strings.Replace(value, "EVENT_REF_TYPE: ${{ github.ref_type }}", "EVENT_REF_TYPE: branch", 1)
 			},
-			wantMessage: "remote candidate installation resolves origin identity",
+			wantMessage: "remote candidate installation detects tag events explicitly",
+		},
+		{
+			name: "event ref name",
+			mutate: func(value string) string {
+				return strings.Replace(value, "EVENT_REF_NAME: ${{ github.ref_name }}", "EVENT_REF_NAME: fixed", 1)
+			},
+			wantMessage: "remote candidate installation retains the triggering ref name",
+		},
+		{
+			name: "public tag resolution",
+			mutate: func(value string) string {
+				return strings.ReplaceAll(value, "git ls-remote", "git remote")
+			},
+			wantMessage: "Unix remote installation resolves public tag and peeled refs independently",
+		},
+		{
+			name: "peeled tag proof",
+			mutate: func(value string) string {
+				return strings.Replace(value, `peeled_ref="${tag_ref}^{}"`, `peeled_ref="${tag_ref}"`, 1)
+			},
+			wantMessage: "Unix remote installation requires a peeled public tag ref",
+		},
+		{
+			name: "peeled tag origin authority",
+			mutate: func(value string) string {
+				return strings.Replace(value, `EXPECTED_ORIGIN_SHA="${PUBLIC_TAG_PEELED_COMMIT_SHA}"`, `EXPECTED_ORIGIN_SHA="${resolved_hash}"`, 1)
+			},
+			wantMessage: "Unix tag origin authority is the public peeled commit",
+		},
+		{
+			name: "Unix origin equality",
+			mutate: func(value string) string {
+				return strings.Replace(value, `          test "${resolved_hash}" = "${EXPECTED_ORIGIN_SHA}"
+`, "", 1)
+			},
+			wantMessage: "Unix module origin equals the expected source commit",
+		},
+		{
+			name: "Windows origin equality",
+			mutate: func(value string) string {
+				return strings.Replace(value, `          if ($moduleInfo.Origin.Hash -ne $env:EXPECTED_ORIGIN_SHA) { throw 'candidate origin mismatch' }
+`, "", 1)
+			},
+			wantMessage: "Windows module origin equals the expected source commit",
+		},
+		{
+			name: "tag semantic version equality",
+			mutate: func(value string) string {
+				return strings.Replace(value, `            test "${resolved_version}" = "${EXPECTED_VERSION}"
+`, "", 1)
+			},
+			wantMessage: "Unix tag path proves the resolved semantic version",
+		},
+		{
+			name: "go list selected query",
+			mutate: func(value string) string {
+				return strings.Replace(value, `go list -m -json "${module}@${CANDIDATE_QUERY}"`, `go list -m -json "${module}@${TRIGGER_SHA}"`, 1)
+			},
+			wantMessage: "Unix module resolution uses the selected candidate query",
+		},
+		{
+			name: "go install selected query",
+			mutate: func(value string) string {
+				return strings.Replace(value, `go install "${module}/cmd/coldkeep@${CANDIDATE_QUERY}"`, `go install "${module}/cmd/coldkeep@${TRIGGER_SHA}"`, 1)
+			},
+			wantMessage: "Unix public installation uses the selected candidate query",
+		},
+		{
+			name: "checkout contamination",
+			mutate: func(value string) string {
+				return strings.Replace(
+					value,
+					"    steps:\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.7'\n          check-latest: false\n          cache: false",
+					"    steps:\n      - uses: actions/checkout@v6\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.7'\n          check-latest: false\n          cache: false",
+					1,
+				)
+			},
+			wantMessage: "remote candidate installation must run outside a checkout and remain blocking",
+		},
+		{
+			name: "continue on error",
+			mutate: func(value string) string {
+				return strings.Replace(value, "    timeout-minutes: 25\n\n    env:\n      EVENT_REF_TYPE:", "    timeout-minutes: 25\n    continue-on-error: true\n\n    env:\n      EVENT_REF_TYPE:", 1)
+			},
+			wantMessage: "remote candidate installation must run outside a checkout and remain blocking",
+		},
+		{
+			name: "broad failure suppression",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          cc --version\n\n          install_root=", "          cc --version || true\n\n          install_root=", 1)
+			},
+			wantMessage: "remote candidate installation must run outside a checkout and remain blocking",
 		},
 		{
 			name: "required-gate result",
@@ -973,6 +1070,87 @@ func TestAuditCIEnforcementLocalCodeQLRequiresReleaseBranchPushTrigger(t *testin
 	stderr := runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
 	if !strings.Contains(stderr, "CodeQL push branch includes release/**") {
 		t.Fatalf("expected missing CodeQL release branch trigger error, got:\n%s", stderr)
+	}
+}
+
+type codeQLContractMutation struct {
+	name        string
+	old         string
+	replacement string
+	wantMessage string
+}
+
+func TestAuditCIEnforcementRequiresTagCodeQLContract(t *testing.T) {
+	runCodeQLContractMutations(t, []codeQLContractMutation{
+		{name: "tag trigger", old: "      - v*\n", wantMessage: "CodeQL push tags include v*"},
+		{name: "main trigger", old: "      - main\n", wantMessage: "CodeQL push branch retains main"},
+		{name: "release trigger", old: "      - release/**\n", wantMessage: "CodeQL push branch includes release/**"},
+		{name: "actions language", old: "          - language: actions\n            build-mode: none\n", wantMessage: "CodeQL retains actions analysis"},
+		{name: "Go language", old: "          - language: go\n            build-mode: autobuild\n", wantMessage: "CodeQL retains Go analysis"},
+		{name: "Python language", old: "          - language: python\n            build-mode: none\n", wantMessage: "CodeQL retains Python analysis"},
+		{name: "aggregate dependency", old: "    needs: [analyze]\n", wantMessage: "CodeQL aggregate depends on the language matrix"},
+		{
+			name:        "aggregate blocking",
+			old:         "  aggregate:\n    name: CodeQL Aggregate\n    runs-on: ubuntu-latest\n",
+			replacement: "  aggregate:\n    name: CodeQL Aggregate\n    runs-on: ubuntu-latest\n    continue-on-error: true\n",
+			wantMessage: "CodeQL aggregate must remain blocking",
+		},
+	})
+}
+
+func TestAuditCIEnforcementRejectsScopedCodeQLTriggerConfusion(t *testing.T) {
+	runCodeQLContractMutations(t, []codeQLContractMutation{
+		{
+			name: "main under wrong push mapping",
+			old:  "    branches:\n      - main\n      - release/**\n    tags:\n      - v*\n",
+			replacement: "    branches:\n      - release/**\n    tags:\n      - v*\n" +
+				"      - main\n",
+			wantMessage: "CodeQL push branch retains main",
+		},
+		{
+			name: "release under pull request trigger",
+			old: "    branches:\n      - main\n      - release/**\n    tags:\n      - v*\n" +
+				"  pull_request:\n    branches:\n      - main\n",
+			replacement: "    branches:\n      - main\n    tags:\n      - v*\n" +
+				"  pull_request:\n    branches:\n      - main\n      - release/**\n",
+			wantMessage: "CodeQL push branch includes release/**",
+		},
+		{
+			name: "tag under wrong push mapping",
+			old:  "    branches:\n      - main\n      - release/**\n    tags:\n      - v*\n",
+			replacement: "    branches:\n      - main\n      - release/**\n      - v*\n" +
+				"    tags:\n",
+			wantMessage: "CodeQL push tags include v*",
+		},
+		{
+			name:        "branches mapping",
+			old:         "    branches:\n      - main\n      - release/**\n",
+			wantMessage: "CodeQL push branch retains main",
+		},
+		{
+			name:        "tags mapping",
+			old:         "    tags:\n      - v*\n",
+			wantMessage: "CodeQL push tags include v*",
+		},
+	})
+}
+
+func runCodeQLContractMutations(t *testing.T, tests []codeQLContractMutation) {
+	t.Helper()
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutated := strings.Replace(codeqlWorkflow, tt.old, tt.replacement, 1)
+			if mutated == codeqlWorkflow {
+				t.Fatal("CodeQL tag-certification fixture was not mutated")
+			}
+			stderr := runAuditLocalOnly(t, workflow, mutated, true)
+			if !strings.Contains(stderr, tt.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", tt.wantMessage, stderr)
+			}
+		})
 	}
 }
 
