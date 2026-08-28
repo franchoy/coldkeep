@@ -29,19 +29,26 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 ## Current release state
 
-v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure is
-ready for tag/publication after Phase 8R completes its protected recovery merge
-and exact-final-main recertification. PR #115 validly merged candidate
-90122c52172764a73e165b1bae63b2e54887839b as
-7c1e0466986aff156b3990c37f19fcd301639063; that merge and its reviewed tree
-remain immutable.
+v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure has
+completed Phase 8R at protected main
+67a32788c0d7cf5ab02af7199b99d80236613977. PR #115 and its reviewed tree
+remain preserved, and Phases 0–8 are Complete.
 
-Phases 0–8 are conditionally Complete. Phase 9 is next: annotated tag, tag CI
-in canonical tagged state, cross-platform tagged installation, immutable
-source-only publication, attestation, and product-baseline identity. Phase 10
-has not started and remains the sole owner of post-publication reconciliation,
-the final v1.x closure bundle, terminal authority, final-main recertification,
-and cleanup of all v1.13.15 temporary branches.
+Phase 9 is Next but remains blocked while operational Phase 9R durably
+materializes and certifies the canonical publication body. The tracked body is
+`docs/release/v1.13/v1.13.15-release-body.md`, exactly 1,815 bytes at SHA-256
+`477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`.
+The earlier frozen digest could not be recovered because its bytes were not
+retained; it is historical evidence only and is not attributed to this body.
+Phase 10 has not started. The release becomes ready for tag/publication only
+after the Phase 9R protected merge and exact revised-main recertification pass.
+
+Phase 9 remains the sole owner of annotated tag creation, tag CI,
+cross-platform tagged installation, immutable source-only publication,
+attestation, and product-baseline identity. Phase 10 remains the sole owner of
+post-publication reconciliation, the final v1.x closure bundle, terminal
+authority, revised-final-main recertification, and cleanup of all four
+temporary release/recovery/closure branches.
 
 v1.13.15 is the final planned v1.x release, but future v1 maintenance remains
 possible only for a newly discovered critical correctness or security defect
@@ -51,12 +58,14 @@ implementation has not started and requires separate authorization.
 v1.13.14 remains published, operationally closed historical state. Its tag,
 release, identity, and historical evidence are immutable.
 
-    V1_13_15_STATE: READY_FOR_TAG_PUBLICATION_AFTER_PHASE8R
-    V1_13_15_BRANCH: recovery/v1.13.15-phase8-release-state
+    V1_13_15_STATE: BLOCKED_PENDING_PHASE9R_FINAL_MAIN
+    V1_13_15_BRANCH: recovery/v1.13.15-phase9-release-body-authority
     V1_13_15_FINDINGS_CLOSED: 13/15
-    PHASE_0_TO_8: COMPLETE_CONDITIONAL_ON_PHASE8R_FINAL_MAIN
+    PHASE_0_TO_8: COMPLETE
+    PHASE_8R: COMPLETE
     PHASE_9: NEXT
     PHASE_10: NOT_STARTED
+    RELEASE_STATE: MERGED_NOT_TAGGED
     V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
     V1_X: NOT_YET_PUBLISHED_OR_CLOSED
     V2_PLANNING_REVIEW: AFTER_TERMINAL_CLOSURE

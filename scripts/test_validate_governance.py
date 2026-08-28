@@ -1,7 +1,94 @@
 from pathlib import Path
+import tempfile
 import unittest
 
 import validate_governance as governance
+
+
+class ReleaseBodyValidatorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.body = self.root / governance.CANONICAL_RELEASE_BODY
+        self.checksum = self.root / governance.CANONICAL_RELEASE_BODY_CHECKSUM
+        self.body.parent.mkdir(parents=True)
+        self.body.write_bytes(
+            (governance.ROOT / governance.CANONICAL_RELEASE_BODY).read_bytes()
+        )
+        self.checksum.write_bytes(
+            (governance.ROOT / governance.CANONICAL_RELEASE_BODY_CHECKSUM).read_bytes()
+        )
+
+    def assert_invalid(self) -> None:
+        self.assertNotEqual(governance.validate_release_body(self.root), [])
+
+    def test_exact_valid_identity_passes(self) -> None:
+        self.assertEqual(governance.validate_release_body(self.root), [])
+
+    def test_one_byte_body_drift_fails(self) -> None:
+        body = self.body.read_bytes()
+        self.body.write_bytes(body.replace(b"Coldkeep", b"coldkeep", 1))
+        self.assert_invalid()
+
+    def test_crlf_conversion_fails(self) -> None:
+        self.body.write_bytes(self.body.read_bytes().replace(b"\n", b"\r\n"))
+        self.assert_invalid()
+
+    def test_missing_body_terminal_lf_fails(self) -> None:
+        self.body.write_bytes(self.body.read_bytes().removesuffix(b"\n"))
+        self.assert_invalid()
+
+    def test_extra_body_terminal_lf_fails(self) -> None:
+        self.body.write_bytes(self.body.read_bytes() + b"\n")
+        self.assert_invalid()
+
+    def test_utf8_bom_fails(self) -> None:
+        self.body.write_bytes(b"\xef\xbb\xbf" + self.body.read_bytes())
+        self.assert_invalid()
+
+    def test_malformed_checksum_fails(self) -> None:
+        self.checksum.write_bytes(b"not a checksum\n")
+        self.assert_invalid()
+
+    def test_changed_checksum_digest_fails(self) -> None:
+        self.checksum.write_bytes(
+            self.checksum.read_bytes().replace(
+                governance.CANONICAL_RELEASE_BODY_SHA256.encode("ascii"), b"0" * 64
+            )
+        )
+        self.assert_invalid()
+
+    def test_changed_checksum_path_fails(self) -> None:
+        self.checksum.write_bytes(
+            self.checksum.read_bytes().replace(
+                governance.CANONICAL_RELEASE_BODY.as_posix().encode("ascii"),
+                b"docs/release/v1.13/not-the-body.md",
+            )
+        )
+        self.assert_invalid()
+
+    def test_missing_body_fails(self) -> None:
+        self.body.unlink()
+        self.assert_invalid()
+
+    def test_missing_checksum_fails(self) -> None:
+        self.checksum.unlink()
+        self.assert_invalid()
+
+    def test_body_symlink_fails(self) -> None:
+        target = self.root / "body-target"
+        target.write_bytes(self.body.read_bytes())
+        self.body.unlink()
+        self.body.symlink_to(target)
+        self.assert_invalid()
+
+    def test_checksum_symlink_fails(self) -> None:
+        target = self.root / "checksum-target"
+        target.write_bytes(self.checksum.read_bytes())
+        self.checksum.unlink()
+        self.checksum.symlink_to(target)
+        self.assert_invalid()
 
 
 class GovernanceValidatorTests(unittest.TestCase):

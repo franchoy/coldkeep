@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import re
 import sys
@@ -30,6 +31,15 @@ CURRENT_AUTHORITY_FILES = (
     Path("docs/release/v1.13/v1.13.15-release-state.md"),
 )
 HISTORICAL_PROVIDER_FILE = Path(".github/prompts/v110-phase.prompt.md")
+CANONICAL_RELEASE_BODY = Path(
+    "docs/release/v1.13/v1.13.15-release-body.md"
+)
+CANONICAL_RELEASE_BODY_CHECKSUM = Path(
+    "docs/release/v1.13/v1.13.15-release-body.sha256"
+)
+CANONICAL_RELEASE_BODY_SHA256 = (
+    "477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357"
+)
 
 
 def classify_path(path: Path) -> str:
@@ -71,8 +81,64 @@ def require_markers(path: Path, text: str, markers: tuple[str, ...]) -> list[str
     ]
 
 
-def validate(root: Path = ROOT) -> list[str]:
+def validate_release_body(root: Path = ROOT) -> list[str]:
+    """Validate the frozen publication body as exact raw bytes."""
+
     violations: list[str] = []
+    body_path = root / CANONICAL_RELEASE_BODY
+    checksum_path = root / CANONICAL_RELEASE_BODY_CHECKSUM
+
+    for relative, path in (
+        (CANONICAL_RELEASE_BODY, body_path),
+        (CANONICAL_RELEASE_BODY_CHECKSUM, checksum_path),
+    ):
+        if not path.is_file() or path.is_symlink():
+            violations.append(
+                f"{relative}: required regular non-symlink file is missing"
+            )
+
+    if violations:
+        return violations
+
+    body = body_path.read_bytes()
+    checksum = checksum_path.read_bytes()
+    expected_checksum = (
+        f"{CANONICAL_RELEASE_BODY_SHA256}  {CANONICAL_RELEASE_BODY.as_posix()}\n"
+    ).encode("ascii")
+
+    if body.startswith(b"\xef\xbb\xbf"):
+        violations.append(f"{CANONICAL_RELEASE_BODY}: UTF-8 BOM is forbidden")
+    try:
+        body.decode("utf-8")
+    except UnicodeDecodeError:
+        violations.append(f"{CANONICAL_RELEASE_BODY}: invalid UTF-8")
+    if b"\r" in body:
+        violations.append(f"{CANONICAL_RELEASE_BODY}: only LF newlines are allowed")
+    if not body.endswith(b"\n"):
+        violations.append(f"{CANONICAL_RELEASE_BODY}: terminal LF is required")
+    elif body.endswith(b"\n\n"):
+        violations.append(
+            f"{CANONICAL_RELEASE_BODY}: exactly one terminal LF is required"
+        )
+    if any(line.endswith((b" ", b"\t")) for line in body.splitlines()):
+        violations.append(f"{CANONICAL_RELEASE_BODY}: trailing whitespace is forbidden")
+
+    actual_digest = hashlib.sha256(body).hexdigest()
+    if actual_digest != CANONICAL_RELEASE_BODY_SHA256:
+        violations.append(
+            f"{CANONICAL_RELEASE_BODY}: SHA-256 {actual_digest} does not match "
+            f"frozen {CANONICAL_RELEASE_BODY_SHA256}"
+        )
+    if checksum != expected_checksum:
+        violations.append(
+            f"{CANONICAL_RELEASE_BODY_CHECKSUM}: bytes do not match frozen checksum"
+        )
+
+    return violations
+
+
+def validate(root: Path = ROOT) -> list[str]:
+    violations = validate_release_body(root)
     files = ACTIVE_PROVIDER_FILES + CURRENT_AUTHORITY_FILES + (HISTORICAL_PROVIDER_FILE,)
     texts: dict[Path, str] = {}
     for relative in files:
