@@ -76,12 +76,12 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
 Closure is the active exceptional critical-maintenance source train. Phase 0
-through Phase 2 are Complete, Phase 3 is Next, seven findings are confirmed,
-and zero are closed. Technical correctness closure is withheld; no product fix
-or release-readiness claim exists at this boundary.
+through Phase 3 are Complete, Phase 4 is Next, seven findings are confirmed,
+and zero are closed. Technical correctness closure is withheld; no product
+fix or release-readiness claim exists at this boundary.
 
 The earlier Phase 1 pointer, "Phase 2 is Next", is historical and superseded
-by the current Phase 2 Complete / Phase 3 Next authority above.
+by the current Phase 3 Complete / Phase 4 Next authority above.
 
 v1.13.15 remains the published stable immutable historical product baseline,
 release `378768097`. Annotated tag object
