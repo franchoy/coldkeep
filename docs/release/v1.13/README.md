@@ -76,10 +76,13 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
 Closure is the active exceptional critical-maintenance source train. Phases 0
-through 3 are Complete; Phase 4 is Next solely for hosted fixture/caller
-recovery, with completion withheld, and Phase 5 is not started or authorized.
-Seven findings are confirmed and zero are closed. The Phase 4 candidate
-implemented CK-V11316-001, but exact-head CI `33253782716` failed;
+through 3 are Complete; Phase 4 is Next as a locally certified recovery
+candidate pending exact-R3-head hosted certification, and Phase 5 is not
+started or authorized. Seven findings are confirmed and zero are closed. The
+Phase 4 candidate implemented CK-V11316-001, but exact-head CI `33253782716`
+failed. Authority `7ce47a912c1f7c683e295f73efe51afba7339179` and recovery
+`40bffbc9016f20ae6b36dda1e634bf1114b22b57` fix the fixture/caller defects with
+no production runtime change and pass local clean-tree certification;
 CK-V11316-002 remains open at its reproduced RED boundary. Technical
 correctness closure is withheld.
 
