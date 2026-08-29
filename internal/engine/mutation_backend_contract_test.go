@@ -216,11 +216,14 @@ func TestEngineMutationSnapshotLifecycleAcrossBackends(t *testing.T) {
 		fixture.store(t, "docs/a.txt", []byte("snapshot lifecycle A"))
 		fixture.store(t, "docs/sub/b.txt", []byte("snapshot lifecycle B"))
 		fixture.store(t, "img/c.txt", []byte("snapshot lifecycle C"))
+		fixture.useAbsoluteStoredPath(t, "docs/a.txt")
+		fixture.useAbsoluteStoredPath(t, "docs/sub/b.txt")
+		fixture.useAbsoluteStoredPath(t, "img/c.txt")
 		fixture.finalize(t)
 		eng := fixture.readEngine(t)
 
 		root, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
-			ID: "phase9-root", Label: "root",
+			ID: "phase9-root", Label: "root", SelectionBase: fixture.inputRoot,
 		})
 		if err != nil || root.SnapshotID != "phase9-root" ||
 			root.Type != engine.SnapshotTypeFull || root.FilesInserted != 3 ||
@@ -228,7 +231,7 @@ func TestEngineMutationSnapshotLifecycleAcrossBackends(t *testing.T) {
 			t.Fatalf("SnapshotCreate root: got (%+v, %v)", root, err)
 		}
 		child, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
-			ID: "phase9-child", Label: "child", ParentID: "phase9-root",
+			ID: "phase9-child", Label: "child", ParentID: "phase9-root", SelectionBase: fixture.inputRoot,
 		})
 		if err != nil || child.SnapshotID != "phase9-child" ||
 			child.Type != engine.SnapshotTypeFull || child.FilesInserted != 3 ||
@@ -237,7 +240,8 @@ func TestEngineMutationSnapshotLifecycleAcrossBackends(t *testing.T) {
 		}
 		partial, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
 			ID: "phase9-partial", Label: "partial",
-			Paths: []string{"docs/", "docs/a.txt", "docs/"},
+			SelectionBase: fixture.inputRoot,
+			Paths:         []string{"docs/", "docs/a.txt", "docs/"},
 		})
 		if err != nil || partial.SnapshotID != "phase9-partial" ||
 			partial.Type != engine.SnapshotTypePartial ||
@@ -329,14 +333,15 @@ func TestEngineMutationRestoreAcrossBackends(t *testing.T) {
 		payloadB := []byte("phase9 restore payload B")
 		storedA := fixture.store(t, "docs/a.txt", payloadA)
 		storedB := fixture.store(t, "docs/b.txt", payloadB)
+		fixture.useAbsoluteStoredPath(t, "docs/a.txt")
+		storedPathTarget := fixture.useAbsoluteStoredPath(t, "docs/b.txt")
 		fixture.finalize(t)
 		eng := fixture.readEngine(t)
 		if _, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
-			ID: "phase9-restore-snapshot",
+			ID: "phase9-restore-snapshot", SelectionBase: fixture.inputRoot,
 		}); err != nil {
 			t.Fatalf("create restore snapshot: %v", err)
 		}
-		storedPathTarget := fixture.useAbsoluteStoredPath(t, "docs/b.txt")
 		before := captureMutationRepositoryFingerprint(t, backend.DB, fixture.containerDir)
 
 		byIDRoot := filepath.Join(t.TempDir(), "by-id")
@@ -432,14 +437,14 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
 		fixture := newMutationBackendFixture(t, backend)
 		retained := fixture.store(t, "retained.txt", []byte("phase9 retained payload"))
+		retainedPath := fixture.useAbsoluteStoredPath(t, "retained.txt")
 		fixture.finalize(t)
 		eng := fixture.readEngine(t)
 		if _, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
-			ID: "phase9-retained",
+			ID: "phase9-retained", SelectionBase: fixture.inputRoot,
 		}); err != nil {
 			t.Fatalf("create retention snapshot: %v", err)
 		}
-		retainedPath := fixture.useAbsoluteStoredPath(t, "retained.txt")
 		baseline := captureMutationRepositoryFingerprint(t, backend.DB, fixture.containerDir)
 
 		cancelled, cancel := context.WithCancel(context.Background())
@@ -482,7 +487,7 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 				return err
 			}},
 			{"SnapshotCreate", func() error {
-				_, err := eng.SnapshotCreate(cancelled, engine.SnapshotCreateRequest{ID: "phase9-cancelled"})
+				_, err := eng.SnapshotCreate(cancelled, engine.SnapshotCreateRequest{ID: "phase9-cancelled", SelectionBase: fixture.inputRoot})
 				return err
 			}},
 			{"SnapshotDelete", func() error {
@@ -567,7 +572,7 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 			{
 				name: "duplicate snapshot",
 				call: func() error {
-					_, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{ID: "phase9-retained"})
+					_, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{ID: "phase9-retained", SelectionBase: fixture.inputRoot})
 					return err
 				},
 				want: "insert snapshot id=phase9-retained",
@@ -576,7 +581,7 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 				name: "missing snapshot parent",
 				call: func() error {
 					_, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
-						ID: "phase9-orphan", ParentID: "missing-parent",
+						ID: "phase9-orphan", ParentID: "missing-parent", SelectionBase: fixture.inputRoot,
 					})
 					return err
 				},
@@ -586,7 +591,7 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 				name: "missing snapshot create path",
 				call: func() error {
 					_, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
-						ID: "phase9-missing-path", Paths: []string{"missing.txt"},
+						ID: "phase9-missing-path", SelectionBase: fixture.inputRoot, Paths: []string{"missing.txt"},
 					})
 					return err
 				},
@@ -800,10 +805,11 @@ func TestEngineGCDryRunAcrossBackends(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
 		fixture := newMutationBackendFixture(t, backend)
 		fixture.store(t, "live.txt", []byte("phase9 live GC payload"))
+		fixture.useAbsoluteStoredPath(t, "live.txt")
 		fixture.finalize(t)
 		eng := fixture.readEngine(t)
 		if _, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
-			ID: "phase9-gc-live",
+			ID: "phase9-gc-live", SelectionBase: fixture.inputRoot,
 		}); err != nil {
 			t.Fatalf("create GC reachability snapshot: %v", err)
 		}

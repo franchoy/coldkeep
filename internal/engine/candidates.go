@@ -555,6 +555,9 @@ type SnapshotCreateRequest struct {
 	Label string
 	// ParentID establishes lineage for delta/reuse analysis (the --from source).
 	ParentID string
+	// SelectionBase is the existing absolute directory against which create
+	// selectors are resolved and snapshot-relative member paths are derived.
+	SelectionBase string
 	// Paths scopes a partial snapshot; empty means a full snapshot.
 	Paths []string
 }

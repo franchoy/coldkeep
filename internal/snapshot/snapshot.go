@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/catalog"
 	idb "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/iodebug"
 	"github.com/franchoy/coldkeep/internal/pathsafe"
@@ -218,11 +219,12 @@ type SnapshotQuery struct {
 // SnapshotCreateOptions configures snapshot creation.
 // ParentID is metadata-only lineage and does not alter snapshot contents.
 type SnapshotCreateOptions struct {
-	ID       string
-	Type     string
-	Label    *string
-	ParentID *string
-	Paths    []string
+	ID            string
+	Type          string
+	Label         *string
+	ParentID      *string
+	SelectionBase string
+	Paths         []string
 }
 
 // CreateSnapshotResult reports the committed outcome of an atomic snapshot
@@ -1678,18 +1680,21 @@ func createSnapshotWithOptionsInTx(
 }
 
 type snapshotCreateRequest struct {
-	snapshotID   string
-	snapshotType string
-	label        *string
-	parentID     *string
-	paths        []string
-	hasPaths     bool
+	snapshotID    string
+	snapshotType  string
+	label         *string
+	parentID      *string
+	selectionBase string
+	paths         []string
+	hasPaths      bool
+	legacyPaths   bool
 }
 
 type snapshotCreateFilters struct {
 	exactFilters []string
 	dirPrefixes  []string
 	exactSet     map[string]struct{}
+	exactDisplay map[string]string
 }
 
 type pendingSnapshotFile struct {
@@ -1702,12 +1707,13 @@ type pendingSnapshotFile struct {
 
 func prepareSnapshotCreateOptionsResult(dbconn *sql.DB, opts SnapshotCreateOptions) (snapshotCreateRequest, error) {
 	req := snapshotCreateRequest{
-		snapshotID:   opts.ID,
-		snapshotType: opts.Type,
-		label:        opts.Label,
-		parentID:     opts.ParentID,
-		paths:        opts.Paths,
-		hasPaths:     len(opts.Paths) > 0,
+		snapshotID:    opts.ID,
+		snapshotType:  opts.Type,
+		label:         opts.Label,
+		parentID:      opts.ParentID,
+		selectionBase: opts.SelectionBase,
+		paths:         opts.Paths,
+		hasPaths:      len(opts.Paths) > 0,
 	}
 	if dbconn == nil {
 		return snapshotCreateRequest{}, errors.New("snapshot db cannot be nil")
@@ -1718,6 +1724,11 @@ func prepareSnapshotCreateOptionsResult(dbconn *sql.DB, opts SnapshotCreateOptio
 	if err := validateSnapshotCreateTypeRequest(req); err != nil {
 		return snapshotCreateRequest{}, err
 	}
+	selectionBase, err := canonicalizeSnapshotSelectionBase(req.selectionBase)
+	if err != nil {
+		return snapshotCreateRequest{}, err
+	}
+	req.selectionBase = selectionBase
 	return req, nil
 }
 
@@ -1830,7 +1841,18 @@ func buildSnapshotCreateInsertRows(
 	if err != nil {
 		return nil, nil, err
 	}
-	pending, err := collectPendingSnapshotCreateFiles(ctx, tx, dbconn, filters)
+	if req.legacyPaths {
+		pending, legacyErr := collectPendingSnapshotCreateFilesLegacy(ctx, tx, dbconn, filters)
+		if legacyErr != nil {
+			return nil, nil, legacyErr
+		}
+		return resolveSnapshotCreateInsertRows(ctx, tx, req.snapshotID, pending)
+	}
+	filters, err = resolveSnapshotCreateFilters(req.selectionBase, filters)
+	if err != nil {
+		return nil, nil, err
+	}
+	pending, err := collectPendingSnapshotCreateFiles(ctx, tx, dbconn, req, filters)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1838,7 +1860,10 @@ func buildSnapshotCreateInsertRows(
 }
 
 func buildSnapshotCreateFilters(paths []string, hasPaths bool) (snapshotCreateFilters, error) {
-	filters := snapshotCreateFilters{exactSet: make(map[string]struct{})}
+	filters := snapshotCreateFilters{
+		exactSet:     make(map[string]struct{}),
+		exactDisplay: make(map[string]string),
+	}
 	if !hasPaths {
 		return filters, nil
 	}
@@ -1859,6 +1884,7 @@ func buildSnapshotCreateFilters(paths []string, hasPaths bool) (snapshotCreateFi
 		}
 		filters.exactFilters = append(filters.exactFilters, normalizedPath)
 		filters.exactSet[normalizedPath] = struct{}{}
+		filters.exactDisplay[normalizedPath] = normalizedPath
 	}
 
 	sort.Strings(filters.exactFilters)
@@ -1873,6 +1899,7 @@ func collectPendingSnapshotCreateFiles(
 	ctx context.Context,
 	tx *sql.Tx,
 	dbconn *sql.DB,
+	req snapshotCreateRequest,
 	filters snapshotCreateFilters,
 ) ([]pendingSnapshotFile, error) {
 	rows, err := tx.QueryContext(ctx, snapshotSourceQuery(dbconn))
@@ -1882,26 +1909,35 @@ func collectPendingSnapshotCreateFiles(
 	defer func() { _ = rows.Close() }()
 
 	foundExact := make(map[string]struct{})
-	seenPaths := make(map[string]struct{})
+	seenPaths := make(map[string]int64)
 	pending := make([]pendingSnapshotFile, 0, 128)
 	for rows.Next() {
-		entry, matched, err := scanPendingSnapshotCreateFile(rows, filters, foundExact)
+		entry, matched, err := scanPendingSnapshotCreateFile(rows, req, filters, foundExact)
 		if err != nil {
 			return nil, err
 		}
 		if !matched {
 			continue
 		}
-		if _, duplicate := seenPaths[entry.normalizedPath]; duplicate {
-			continue
+		if existingLogicalID, duplicate := seenPaths[entry.normalizedPath]; duplicate {
+			if existingLogicalID == entry.logicalFileID {
+				continue
+			}
+			return nil, catalog.NewError(
+				catalog.ErrorConflict,
+				"create snapshot",
+				"",
+				fmt.Sprintf("multiple current sources map to snapshot member %q", entry.normalizedPath),
+				nil,
+			)
 		}
-		seenPaths[entry.normalizedPath] = struct{}{}
+		seenPaths[entry.normalizedPath] = entry.logicalFileID
 		pending = append(pending, entry)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate snapshot source rows: %w", err)
 	}
-	if err := validateSnapshotCreateExactMatches(filters.exactFilters, foundExact); err != nil {
+	if err := validateSnapshotCreateExactMatches(filters, foundExact); err != nil {
 		return nil, err
 	}
 	return pending, nil
@@ -1909,6 +1945,7 @@ func collectPendingSnapshotCreateFiles(
 
 func scanPendingSnapshotCreateFile(
 	rows *sql.Rows,
+	req snapshotCreateRequest,
 	filters snapshotCreateFilters,
 	foundExact map[string]struct{},
 ) (pendingSnapshotFile, bool, error) {
@@ -1923,11 +1960,30 @@ func scanPendingSnapshotCreateFile(
 		return pendingSnapshotFile{}, false, fmt.Errorf("scan snapshot source row: %w", err)
 	}
 
-	normalizedPath, err := normalizeSourcePathForSnapshot(path)
+	canonicalSource, err := canonicalSnapshotPhysicalSource(path)
 	if err != nil {
-		return pendingSnapshotFile{}, false, fmt.Errorf("normalize source physical_file path %q: %w", path, err)
+		return pendingSnapshotFile{}, false, err
 	}
-	matched := snapshotCreatePathMatches(normalizedPath, filters, foundExact)
+	matched := snapshotCreatePhysicalPathMatches(canonicalSource, filters, foundExact)
+	if !matched && req.hasPaths {
+		return pendingSnapshotFile{}, false, nil
+	}
+	normalizedPath, contained, err := snapshotMemberPath(req.selectionBase, canonicalSource)
+	if err != nil {
+		return pendingSnapshotFile{}, false, err
+	}
+	if !contained {
+		if req.hasPaths {
+			return pendingSnapshotFile{}, false, nil
+		}
+		return pendingSnapshotFile{}, false, catalog.NewError(
+			catalog.ErrorConflict,
+			"create snapshot",
+			"",
+			fmt.Sprintf("physical source %q is outside snapshot selection base %q", canonicalSource, req.selectionBase),
+			nil,
+		)
+	}
 	return pendingSnapshotFile{
 		normalizedPath: normalizedPath,
 		logicalFileID:  logicalFileID,
@@ -1957,10 +2013,20 @@ func snapshotCreatePathMatches(
 	return false
 }
 
-func validateSnapshotCreateExactMatches(exactFilters []string, foundExact map[string]struct{}) error {
-	for _, exactPath := range exactFilters {
+func validateSnapshotCreateExactMatches(filters snapshotCreateFilters, foundExact map[string]struct{}) error {
+	for _, exactPath := range filters.exactFilters {
 		if _, ok := foundExact[exactPath]; !ok {
-			return fmt.Errorf("path not found in current state: %s", exactPath)
+			displayPath := filters.exactDisplay[exactPath]
+			if displayPath == "" {
+				displayPath = exactPath
+			}
+			return catalog.NewError(
+				catalog.ErrorNotFound,
+				"create snapshot",
+				"",
+				fmt.Sprintf("path not found in current state: %s", displayPath),
+				nil,
+			)
 		}
 	}
 	return nil
@@ -2075,11 +2141,34 @@ func CreateSnapshot(
 	parentID *string,
 	paths []string,
 ) error {
-	return CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{
-		ID:       snapshotID,
-		Type:     snapshotType,
-		Label:    label,
-		ParentID: parentID,
-		Paths:    paths,
-	})
+	request := snapshotCreateRequest{
+		snapshotID:   snapshotID,
+		snapshotType: snapshotType,
+		label:        label,
+		parentID:     parentID,
+		paths:        paths,
+		hasPaths:     len(paths) > 0,
+		legacyPaths:  true,
+	}
+	if db == nil {
+		return errors.New("snapshot db cannot be nil")
+	}
+	if request.snapshotID == "" {
+		return errors.New("snapshot id cannot be empty")
+	}
+	if err := validateSnapshotCreateTypeRequest(request); err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin snapshot transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := createSnapshotWithOptionsInTx(ctx, tx, db, request); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit snapshot transaction: %w", err)
+	}
+	return nil
 }

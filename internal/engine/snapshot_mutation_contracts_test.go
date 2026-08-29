@@ -14,6 +14,7 @@ func TestSnapshotMutationCreateContractShape(t *testing.T) {
 		{"ID", reflect.TypeOf("")},
 		{"Label", reflect.TypeOf("")},
 		{"ParentID", reflect.TypeOf("")},
+		{"SelectionBase", reflect.TypeOf("")},
 		{"Paths", reflect.TypeOf([]string{})},
 	})
 	assertStructOmitsFields(t, reflect.TypeOf(engine.SnapshotCreateRequest{}), []string{

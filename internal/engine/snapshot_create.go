@@ -2,18 +2,21 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/snapshot"
 )
 
 type preparedSnapshotCreateRequest struct {
-	snapshotID   string
-	label        string
-	parentID     string
-	paths        []string
-	snapshotType SnapshotType
+	snapshotID    string
+	label         string
+	parentID      string
+	selectionBase string
+	paths         []string
+	snapshotType  SnapshotType
 }
 
 func (e *DefaultEngine) SnapshotCreate(ctx context.Context, req SnapshotCreateRequest) (_ SnapshotCreateResult, outErr error) {
@@ -31,9 +34,10 @@ func (e *DefaultEngine) SnapshotCreate(ctx context.Context, req SnapshotCreateRe
 	}
 
 	opts := snapshot.SnapshotCreateOptions{
-		ID:    prepared.snapshotID,
-		Type:  string(prepared.snapshotType),
-		Paths: prepared.paths,
+		ID:            prepared.snapshotID,
+		Type:          string(prepared.snapshotType),
+		SelectionBase: prepared.selectionBase,
+		Paths:         prepared.paths,
 	}
 	if prepared.label != "" {
 		label := prepared.label
@@ -61,6 +65,9 @@ func (e *DefaultEngine) SnapshotCreate(ctx context.Context, req SnapshotCreateRe
 
 func (e *DefaultEngine) prepareSnapshotCreateRequest(req SnapshotCreateRequest) (preparedSnapshotCreateRequest, error) {
 	paths := append([]string(nil), req.Paths...)
+	if err := validateSnapshotCreateSelectionBase(req.SelectionBase); err != nil {
+		return preparedSnapshotCreateRequest{}, TranslateErrorAs("snapshot_create", ErrorInvalidArgument, err)
+	}
 	snapshotID := strings.TrimSpace(req.ID)
 	if snapshotID == "" {
 		generatedID, err := e.generateSnapshotID()
@@ -84,12 +91,26 @@ func (e *DefaultEngine) prepareSnapshotCreateRequest(req SnapshotCreateRequest) 
 	}
 
 	return preparedSnapshotCreateRequest{
-		snapshotID:   snapshotID,
-		label:        label,
-		parentID:     parentID,
-		paths:        paths,
-		snapshotType: snapshotType,
+		snapshotID:    snapshotID,
+		label:         label,
+		parentID:      parentID,
+		selectionBase: req.SelectionBase,
+		paths:         paths,
+		snapshotType:  snapshotType,
 	}, nil
+}
+
+func validateSnapshotCreateSelectionBase(base string) error {
+	if strings.TrimSpace(base) == "" {
+		return errors.New("snapshot selection base cannot be empty")
+	}
+	if strings.IndexByte(base, 0) >= 0 {
+		return errors.New("snapshot selection base contains NUL byte")
+	}
+	if !filepath.IsAbs(base) {
+		return fmt.Errorf("snapshot selection base must be absolute: %q", base)
+	}
+	return nil
 }
 
 func deriveSnapshotCreateType(paths []string) (SnapshotType, error) {

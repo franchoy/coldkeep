@@ -120,8 +120,9 @@ func TestV110S0ChunkReuseBoundsStabilizationHarness(t *testing.T) {
 				if round%11 == 10 {
 					snapID := fmt.Sprintf("v110-s0-%s-%s-%03d", strings.ToLower(string(codec)), runToken, round)
 					if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
-						ID:   snapID,
-						Type: "full",
+						ID:            snapID,
+						Type:          "full",
+						SelectionBase: pathsDir,
 					}); err != nil {
 						writeFailureArtifactV110S0(t, dbconn, codec, round, "snapshot_create", err)
 						t.Fatalf("snapshot create round=%d: %v", round, err)

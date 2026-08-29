@@ -65,17 +65,19 @@ func TestSnapshotDeletePreviewReportsMissingParentCompatibilityState(t *testing.
 
 func TestSnapshotDeleteExecuteRoutesThroughEngine(t *testing.T) {
 	dbconn := openSnapshotCreateEngineDB(t)
-	seedSnapshotCreateEngineFiles(t, dbconn)
+	selectionBase := seedSnapshotCreateEngineFiles(t, dbconn)
 	eng := newSnapshotCreateEngine(t, dbconn)
 
 	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:   "snap-delete-exec-parent",
-		Type: "full",
+		ID:            "snap-delete-exec-parent",
+		Type:          "full",
+		SelectionBase: selectionBase,
 	})
 	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:       "snap-delete-exec-target",
-		Type:     "full",
-		ParentID: stringPtr("snap-delete-exec-parent"),
+		ID:            "snap-delete-exec-target",
+		Type:          "full",
+		ParentID:      stringPtr("snap-delete-exec-parent"),
+		SelectionBase: selectionBase,
 	})
 	insertEngineSnapshotRow(t, dbconn, "snap-delete-exec-child", "full", "snap-delete-exec-target")
 
@@ -170,22 +172,25 @@ func setupSnapshotDeletePreviewEngineCase(t *testing.T) (*sql.DB, *DefaultEngine
 	t.Helper()
 
 	dbconn := openSnapshotCreateEngineDB(t)
-	seedSnapshotCreateEngineFiles(t, dbconn)
+	selectionBase := seedSnapshotCreateEngineFiles(t, dbconn)
 	eng := newSnapshotCreateEngine(t, dbconn)
 
 	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:   "snap-delete-parent",
-		Type: "full",
+		ID:            "snap-delete-parent",
+		Type:          "full",
+		SelectionBase: selectionBase,
 	})
 	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:       "snap-delete-target",
-		Type:     "full",
-		ParentID: stringPtr("snap-delete-parent"),
+		ID:            "snap-delete-target",
+		Type:          "full",
+		ParentID:      stringPtr("snap-delete-parent"),
+		SelectionBase: selectionBase,
 	})
 	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:       "snap-delete-child",
-		Type:     "full",
-		ParentID: stringPtr("snap-delete-target"),
+		ID:            "snap-delete-child",
+		Type:          "full",
+		ParentID:      stringPtr("snap-delete-target"),
+		SelectionBase: selectionBase,
 	})
 
 	return dbconn, eng

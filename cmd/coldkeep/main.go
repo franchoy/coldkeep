@@ -6015,6 +6015,11 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		parentID = trimmed
 	}
 
+	selectionBase, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve snapshot selection base: %w", err)
+	}
+
 	session, err := openCommandSession("snapshot-create", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
@@ -6027,10 +6032,11 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	defer cancel()
 
 	result, err := eng.SnapshotCreate(ctx, engine.SnapshotCreateRequest{
-		ID:       snapshotID,
-		Label:    label,
-		ParentID: parentID,
-		Paths:    append([]string(nil), paths...),
+		ID:            snapshotID,
+		Label:         label,
+		ParentID:      parentID,
+		SelectionBase: selectionBase,
+		Paths:         append([]string(nil), paths...),
 	})
 	if err != nil {
 		return err

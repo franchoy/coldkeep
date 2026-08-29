@@ -150,8 +150,9 @@ func TestPhase7BuildDeterministicV17StyleFixtureIntegration(t *testing.T) {
 	retainedLogicalBefore := logicalIDForStoredPath(t, dbconn, retainedStoredPath)
 
 	if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
-		ID:   "phase7-v17-fixture-snap",
-		Type: "full",
+		ID:            "phase7-v17-fixture-snap",
+		Type:          "full",
+		SelectionBase: inputsRoot,
 	}); err != nil {
 		t.Fatalf("create full snapshot for phase7 fixture: %v", err)
 	}
@@ -1198,8 +1199,9 @@ func TestPhase7SnapshotCompatibilityIntegration(t *testing.T) {
 
 	// Step 2: Create snapshot of legacy data
 	if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
-		ID:   "phase7-legacy-snapshot",
-		Type: "full",
+		ID:            "phase7-legacy-snapshot",
+		Type:          "full",
+		SelectionBase: legacyRoot,
 	}); err != nil {
 		_ = dbconn.Close()
 		t.Fatalf("create legacy snapshot: %v", err)
@@ -1254,8 +1256,9 @@ func TestPhase7SnapshotCompatibilityIntegration(t *testing.T) {
 
 	// Step 5: Create new snapshot
 	if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
-		ID:   "phase7-packed-snapshot",
-		Type: "full",
+		ID:            "phase7-packed-snapshot",
+		Type:          "full",
+		SelectionBase: tmp,
 	}); err != nil {
 		t.Fatalf("create packed snapshot: %v", err)
 	}
@@ -1465,8 +1468,9 @@ func TestPhase8MetadataMigrationIntegration(t *testing.T) {
 
 	// Create a legacy snapshot for data preservation validation
 	if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
-		ID:   "phase8-migration-legacy-snapshot",
-		Type: "full",
+		ID:            "phase8-migration-legacy-snapshot",
+		Type:          "full",
+		SelectionBase: legacyRoot,
 	}); err != nil {
 		_ = dbconn.Close()
 		t.Fatalf("create legacy snapshot for migration test: %v", err)

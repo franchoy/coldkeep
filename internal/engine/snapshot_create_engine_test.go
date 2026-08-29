@@ -158,7 +158,7 @@ func insertSnapshotRow(t *testing.T, dbconn *sql.DB, snapshotID, snapshotType st
 	}
 }
 
-func seedSnapshotCreateEngineFiles(t *testing.T, dbconn *sql.DB) {
+func seedSnapshotCreateEngineFiles(t *testing.T, dbconn *sql.DB) string {
 	t.Helper()
 
 	root := t.TempDir()
@@ -166,6 +166,7 @@ func seedSnapshotCreateEngineFiles(t *testing.T, dbconn *sql.DB) {
 	storeSnapshotCreateCurrentFile(t, dbconn, sgctx, root, "docs/a.txt", "snapshot-create-a")
 	storeSnapshotCreateCurrentFile(t, dbconn, sgctx, root, "docs/sub/b.txt", "snapshot-create-b-content")
 	storeSnapshotCreateCurrentFile(t, dbconn, sgctx, root, "img/c.png", "snapshot-create-image-payload")
+	return root
 }
 
 func storeSnapshotCreateCurrentFile(
@@ -179,7 +180,12 @@ func storeSnapshotCreateCurrentFile(
 	t.Helper()
 
 	fileID := storeSnapshotCreateEngineFile(t, sgctx, root, storedPath, content)
-	updateSnapshotCreateStoredPathMapping(t, dbconn, fileID, storedPath)
+	updateSnapshotCreateStoredPathMapping(t, dbconn, fileID, filepath.Join(root, filepath.FromSlash(storedPath)))
+}
+
+func snapshotCreateRequestWithBase(base string, req SnapshotCreateRequest) SnapshotCreateRequest {
+	req.SelectionBase = base
+	return req
 }
 
 func updateSnapshotCreateStoredPathMapping(t *testing.T, dbconn *sql.DB, fileID int64, storedPath string) {
@@ -193,10 +199,10 @@ func updateSnapshotCreateStoredPathMapping(t *testing.T, dbconn *sql.DB, fileID 
 func TestSnapshotCreateFullAndPartialRouteThroughEngine(t *testing.T) {
 	t.Run("full", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
-		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{ID: "snap-full-engine"})
+		result, err := eng.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(base, SnapshotCreateRequest{ID: "snap-full-engine"}))
 		if err != nil {
 			t.Fatalf("SnapshotCreate full: %v", err)
 		}
@@ -208,10 +214,10 @@ func TestSnapshotCreateFullAndPartialRouteThroughEngine(t *testing.T) {
 
 	t.Run("partial", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
-		req := SnapshotCreateRequest{ID: "snap-partial-engine", Paths: []string{"docs/", "docs/a.txt", "img/c.png"}}
+		req := snapshotCreateRequestWithBase(base, SnapshotCreateRequest{ID: "snap-partial-engine", Paths: []string{"docs/", "docs/a.txt", "img/c.png"}})
 		result, err := eng.SnapshotCreate(context.Background(), req)
 		if err != nil {
 			t.Fatalf("SnapshotCreate partial: %v", err)
@@ -227,8 +233,9 @@ func TestSnapshotCreateEmptyAndParentedRouteThroughEngine(t *testing.T) {
 	t.Run("empty full", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
 		eng := newSnapshotCreateEngine(t, dbconn)
+		base := t.TempDir()
 
-		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{ID: "snap-empty-engine"})
+		result, err := eng.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(base, SnapshotCreateRequest{ID: "snap-empty-engine"}))
 		if err != nil {
 			t.Fatalf("SnapshotCreate empty full: %v", err)
 		}
@@ -240,14 +247,15 @@ func TestSnapshotCreateEmptyAndParentedRouteThroughEngine(t *testing.T) {
 
 	t.Run("parented full", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		insertSnapshotRow(t, dbconn, "snap-parent-engine", "full")
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
-			ID:       "snap-child-engine",
-			Label:    "  child label  ",
-			ParentID: "  snap-parent-engine  ",
+			ID:            "snap-child-engine",
+			Label:         "  child label  ",
+			ParentID:      "  snap-parent-engine  ",
+			SelectionBase: base,
 		})
 		if err != nil {
 			t.Fatalf("SnapshotCreate parented full: %v", err)
@@ -267,9 +275,10 @@ func TestSnapshotCreateGeneratedIDBehavior(t *testing.T) {
 	t.Run("generated id is returned and committed", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
 		eng := newSnapshotCreateEngine(t, dbconn)
+		base := t.TempDir()
 		setSnapshotCreateIDGenerator(t, eng, func() (string, error) { return " snap-generated-01 ", nil })
 
-		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{})
+		result, err := eng.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(base, SnapshotCreateRequest{}))
 		if err != nil {
 			t.Fatalf("SnapshotCreate generated id: %v", err)
 		}
@@ -282,8 +291,9 @@ func TestSnapshotCreateGeneratedIDBehavior(t *testing.T) {
 	t.Run("default generator keeps format", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
 		eng := newSnapshotCreateEngine(t, dbconn)
+		base := t.TempDir()
 
-		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{})
+		result, err := eng.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(base, SnapshotCreateRequest{}))
 		if err != nil {
 			t.Fatalf("SnapshotCreate default generated id: %v", err)
 		}
@@ -296,9 +306,10 @@ func TestSnapshotCreateGeneratedIDBehavior(t *testing.T) {
 	t.Run("generator errors and empty results fail before mutation", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
 		eng := newSnapshotCreateEngine(t, dbconn)
+		base := t.TempDir()
 		setSnapshotCreateIDGenerator(t, eng, func() (string, error) { return "", errors.New("generate snapshot id entropy: boom") })
 
-		_, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{})
+		_, err := eng.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(base, SnapshotCreateRequest{}))
 		if err == nil || !strings.Contains(err.Error(), "generate snapshot id entropy: boom") {
 			t.Fatalf("expected generator error, got %v", err)
 		}
@@ -307,7 +318,7 @@ func TestSnapshotCreateGeneratedIDBehavior(t *testing.T) {
 		}
 
 		setSnapshotCreateIDGenerator(t, eng, func() (string, error) { return "   ", nil })
-		_, err = eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{})
+		_, err = eng.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(base, SnapshotCreateRequest{}))
 		if err == nil || !strings.Contains(err.Error(), "generated snapshot id cannot be empty") {
 			t.Fatalf("expected whitespace-only generator rejection, got %v", err)
 		}
@@ -317,13 +328,14 @@ func TestSnapshotCreateGeneratedIDBehavior(t *testing.T) {
 func TestSnapshotCreateFailureAndImmutabilityBehavior(t *testing.T) {
 	t.Run("request failures return zero result and leave no rows", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
-			ID:       "snap-fail-engine",
-			ParentID: "snap-parent",
-			Paths:    []string{"docs/"},
+			ID:            "snap-fail-engine",
+			ParentID:      "snap-parent",
+			SelectionBase: base,
+			Paths:         []string{"docs/"},
 		})
 		if err == nil || !strings.Contains(err.Error(), "--from is currently supported only for full snapshots") {
 			t.Fatalf("expected parent-plus-paths rejection, got result=%+v err=%v", result, err)
@@ -338,11 +350,11 @@ func TestSnapshotCreateFailureAndImmutabilityBehavior(t *testing.T) {
 
 	t.Run("caller path slice is copied", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		paths := []string{"docs/"}
-		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{ID: "snap-copy-engine", Paths: paths})
+		result, err := eng.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(base, SnapshotCreateRequest{ID: "snap-copy-engine", Paths: paths}))
 		paths[0] = "img/"
 		if err != nil {
 			t.Fatalf("SnapshotCreate copy test: %v", err)
@@ -358,6 +370,7 @@ func TestSnapshotCreateGeneratedDuplicateIDIsNotRetried(t *testing.T) {
 	dbconn := openSnapshotCreateEngineDB(t)
 	insertSnapshotRow(t, dbconn, "snap-duplicate-engine", "full")
 	eng := newSnapshotCreateEngine(t, dbconn)
+	base := t.TempDir()
 
 	calls := 0
 	setSnapshotCreateIDGenerator(t, eng, func() (string, error) {
@@ -365,7 +378,7 @@ func TestSnapshotCreateGeneratedDuplicateIDIsNotRetried(t *testing.T) {
 		return "snap-duplicate-engine", nil
 	})
 
-	_, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{})
+	_, err := eng.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(base, SnapshotCreateRequest{}))
 	if err == nil {
 		t.Fatal("expected duplicate snapshot id error")
 	}
@@ -379,6 +392,8 @@ func TestSnapshotCreateGeneratorIsolationAcrossEngines(t *testing.T) {
 	dbB := openSnapshotCreateEngineDB(t)
 	engA := newSnapshotCreateEngine(t, dbA)
 	engB := newSnapshotCreateEngine(t, dbB)
+	baseA := t.TempDir()
+	baseB := t.TempDir()
 	setSnapshotCreateIDGenerator(t, engA, func() (string, error) { return "snap-engine-a", nil })
 	setSnapshotCreateIDGenerator(t, engB, func() (string, error) { return "snap-engine-b", nil })
 
@@ -387,12 +402,12 @@ func TestSnapshotCreateGeneratorIsolationAcrossEngines(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, err := engA.SnapshotCreate(context.Background(), SnapshotCreateRequest{})
+		_, err := engA.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(baseA, SnapshotCreateRequest{}))
 		errs <- err
 	}()
 	go func() {
 		defer wg.Done()
-		_, err := engB.SnapshotCreate(context.Background(), SnapshotCreateRequest{})
+		_, err := engB.SnapshotCreate(context.Background(), snapshotCreateRequestWithBase(baseB, SnapshotCreateRequest{}))
 		errs <- err
 	}()
 	wg.Wait()
@@ -411,13 +426,14 @@ func TestSnapshotCreateGeneratorIsolationAcrossEngines(t *testing.T) {
 func TestSnapshotCreateSuppliedIDAndEmptyPartialBehavior(t *testing.T) {
 	t.Run("supplied id is trimmed and whitespace label is absent", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
-			ID:    "  snap-trimmed-engine  ",
-			Label: "   ",
-			Paths: []string{"docs/a.txt"},
+			ID:            "  snap-trimmed-engine  ",
+			Label:         "   ",
+			SelectionBase: base,
+			Paths:         []string{"docs/a.txt"},
 		})
 		if err != nil {
 			t.Fatalf("SnapshotCreate trimmed ID: %v", err)
@@ -427,12 +443,13 @@ func TestSnapshotCreateSuppliedIDAndEmptyPartialBehavior(t *testing.T) {
 
 	t.Run("empty directory prefix partial snapshot still commits", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
-			ID:    "snap-empty-prefix-engine",
-			Paths: []string{"missing/"},
+			ID:            "snap-empty-prefix-engine",
+			SelectionBase: base,
+			Paths:         []string{"missing/"},
 		})
 		if err != nil {
 			t.Fatalf("SnapshotCreate empty partial: %v", err)
@@ -447,23 +464,25 @@ func TestSnapshotCreateSuppliedIDAndEmptyPartialBehavior(t *testing.T) {
 func TestSnapshotCreateValidationAndRollbackCases(t *testing.T) {
 	t.Run("invalid path fails before mutation", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		assertSnapshotCreateFailure(t, dbconn, eng, SnapshotCreateRequest{
-			ID:    "snap-invalid-path-engine",
-			Paths: []string{"/absolute/invalid"},
+			ID:            "snap-invalid-path-engine",
+			SelectionBase: base,
+			Paths:         []string{"/absolute/invalid"},
 		}, "snapshot path")
 	})
 
 	t.Run("missing exact path rolls back", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		assertSnapshotCreateFailure(t, dbconn, eng, SnapshotCreateRequest{
-			ID:    "snap-missing-path-engine",
-			Paths: []string{"docs/a.txt", "missing.txt"},
+			ID:            "snap-missing-path-engine",
+			SelectionBase: base,
+			Paths:         []string{"docs/a.txt", "missing.txt"},
 		}, "path not found in current state")
 	})
 }
@@ -471,35 +490,38 @@ func TestSnapshotCreateValidationAndRollbackCases(t *testing.T) {
 func TestSnapshotCreateParentValidationCases(t *testing.T) {
 	t.Run("missing parent rolls back", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		assertSnapshotCreateFailure(t, dbconn, eng, SnapshotCreateRequest{
-			ID:       "snap-missing-parent-engine",
-			ParentID: "snap-parent-missing",
+			ID:            "snap-missing-parent-engine",
+			ParentID:      "snap-parent-missing",
+			SelectionBase: base,
 		}, `parent snapshot "snap-parent-missing" not found`)
 	})
 
 	t.Run("partial parent rolls back", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		insertSnapshotRow(t, dbconn, "snap-parent-partial-engine", "partial")
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		assertSnapshotCreateFailure(t, dbconn, eng, SnapshotCreateRequest{
-			ID:       "snap-child-full-engine",
-			ParentID: "snap-parent-partial-engine",
+			ID:            "snap-child-full-engine",
+			ParentID:      "snap-parent-partial-engine",
+			SelectionBase: base,
 		}, `is partial; --from is currently supported only for full snapshots`)
 	})
 
 	t.Run("self parent fails before mutation", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
-		seedSnapshotCreateEngineFiles(t, dbconn)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
 
 		assertSnapshotCreateFailure(t, dbconn, eng, SnapshotCreateRequest{
-			ID:       "snap-self-parent-engine",
-			ParentID: "snap-self-parent-engine",
+			ID:            "snap-self-parent-engine",
+			ParentID:      "snap-self-parent-engine",
+			SelectionBase: base,
 		}, `cannot reference itself`)
 	})
 }

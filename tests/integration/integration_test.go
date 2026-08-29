@@ -9842,8 +9842,9 @@ func TestRefCountContainmentStressMatrix(t *testing.T) {
 
 				snapshotID := fmt.Sprintf("stress-%s-%04d", tc.name, i)
 				if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
-					ID:   snapshotID,
-					Type: "full",
+					ID:            snapshotID,
+					Type:          "full",
+					SelectionBase: base,
 				}); err != nil {
 					t.Fatalf("iter %d create snapshot: %v", i, err)
 				}

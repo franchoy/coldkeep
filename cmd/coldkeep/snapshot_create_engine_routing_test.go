@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -74,6 +75,17 @@ func newTrackingQueryDB(queryCount *int32) (*sql.DB, error) {
 	)
 	sql.Register(driverName, trackingQueryDriver{queryCount: queryCount})
 	return sql.Open(driverName, "")
+}
+
+func assertSnapshotCreateSelectionBase(t *testing.T, req engine.SnapshotCreateRequest) {
+	t.Helper()
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if req.SelectionBase != want {
+		t.Fatalf("expected explicit CLI selection base %q, got %q", want, req.SelectionBase)
+	}
 }
 
 func TestTrackingQueryDBFixtureIsRepeatableAndIsolated(t *testing.T) {
@@ -147,6 +159,7 @@ func TestRunSnapshotCommandCreateOmitsIDForEngineGeneration(t *testing.T) {
 	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
 		return stubCommandEngine{
 			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				assertSnapshotCreateSelectionBase(t, req)
 				if req.ID != "" {
 					t.Fatalf("expected omitted --id to forward empty ID, got %q", req.ID)
 				}
@@ -209,6 +222,7 @@ func TestRunSnapshotCommandCreateUsesEngineResultProjection(t *testing.T) {
 	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
 		return stubCommandEngine{
 			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				assertSnapshotCreateSelectionBase(t, req)
 				return engine.SnapshotCreateResult{
 					SnapshotID:    "snap-parented",
 					Type:          engine.SnapshotTypeFull,
@@ -348,6 +362,7 @@ func TestRunSnapshotCommandCreateSkipsLegacyCountQuery(t *testing.T) {
 	newCommandEngine = func(_ *sql.DB, _ string) (engine.Engine, error) {
 		return stubCommandEngine{
 			snapshotCreateFunc: func(_ context.Context, req engine.SnapshotCreateRequest) (engine.SnapshotCreateResult, error) {
+				assertSnapshotCreateSelectionBase(t, req)
 				return engine.SnapshotCreateResult{
 					SnapshotID:    "snap-no-query",
 					Type:          engine.SnapshotTypeFull,
