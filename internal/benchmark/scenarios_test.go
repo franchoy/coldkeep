@@ -81,7 +81,9 @@ func TestScenarioGCAfterChurnRunsExpectedFlow(t *testing.T) {
 	}
 	scenario := scenarioByName(t, CoreScenarios(cfg), "gc-after-churn")
 
-	if err := scenario.Run(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}); err != nil {
+	repoPath := t.TempDir()
+	dataPath := t.TempDir()
+	if err := scenario.Run(BenchmarkContext{RepoPath: repoPath, DataPath: dataPath}); err != nil {
 		t.Fatalf("scenario run failed: %v", err)
 	}
 
@@ -93,11 +95,49 @@ func TestScenarioGCAfterChurnRunsExpectedFlow(t *testing.T) {
 	}
 
 	joined := runner.joinedCommands()
-	if !containsCommand(joined, "snapshot create --id bench-snapshot-gc") {
+	if !containsCommand(joined, "snapshot create churn/ --id bench-snapshot-gc") {
 		t.Fatalf("expected snapshot create command, got=%v", joined)
+	}
+	for _, call := range runner.calls {
+		if len(call.Args) >= 2 && call.Args[0] == "snapshot" && call.Args[1] == "create" && call.WorkingDir != dataPath {
+			t.Fatalf("snapshot create working directory mismatch: got=%q want=%q", call.WorkingDir, dataPath)
+		}
+		if !(len(call.Args) >= 2 && call.Args[0] == "snapshot" && call.Args[1] == "create") && call.WorkingDir != repoPath {
+			t.Fatalf("ordinary command working directory mismatch: args=%v got=%q want=%q", call.Args, call.WorkingDir, repoPath)
+		}
 	}
 	if !containsCommand(joined, "gc") {
 		t.Fatalf("expected gc command, got=%v", joined)
+	}
+}
+
+func TestScenarioSnapshotCreationUsesDataSelectionBase(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:                runner.run,
+		ColdkeepExecutable:    "coldkeep",
+		MixedFileCount:        2,
+		MixedMinFileSizeBytes: 64,
+		MixedMaxFileSizeBytes: 128,
+	}
+	repoPath := t.TempDir()
+	dataPath := t.TempDir()
+	scenario := scenarioByName(t, CoreScenarios(cfg), "snapshot-creation")
+
+	if err := scenario.Run(BenchmarkContext{RepoPath: repoPath, DataPath: dataPath}); err != nil {
+		t.Fatalf("scenario run failed: %v", err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected store and snapshot calls, got %d", len(runner.calls))
+	}
+	if got := strings.Join(runner.calls[1].Args, " "); got != "snapshot create snapshot/ --id bench-snapshot-core" {
+		t.Fatalf("snapshot command mismatch: got=%q", got)
+	}
+	if runner.calls[1].WorkingDir != dataPath {
+		t.Fatalf("snapshot create working directory mismatch: got=%q want=%q", runner.calls[1].WorkingDir, dataPath)
+	}
+	if runner.calls[0].WorkingDir != repoPath {
+		t.Fatalf("store command working directory mismatch: got=%q want=%q", runner.calls[0].WorkingDir, repoPath)
 	}
 }
 

@@ -127,11 +127,11 @@ func BuildCommandEnv(overrides map[string]string) []string {
 	return env
 }
 
-func RunColdkeepCommand(t *testing.T, repoRoot, binPath string, env map[string]string, args ...string) CLIExecResult {
+func RunColdkeepCommand(t *testing.T, workingDir, binPath string, env map[string]string, args ...string) CLIExecResult {
 	t.Helper()
 
 	cmd := exec.Command(binPath, args...)
-	cmd.Dir = repoRoot
+	cmd.Dir = workingDir
 	cmd.Env = BuildCommandEnv(env)
 
 	var Stdout bytes.Buffer

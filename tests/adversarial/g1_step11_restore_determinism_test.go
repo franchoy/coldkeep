@@ -234,7 +234,7 @@ func TestAdversarialStep11RestoreDeterminismMatrix(t *testing.T) {
 		snapshotID := "step11-snapshot-a"
 		testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(
 			t,
-			repoRoot,
+			dataset.inputRoot,
 			binPath,
 			env,
 			"snapshot", "create", "--id", snapshotID, "--output", "json",

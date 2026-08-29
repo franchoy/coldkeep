@@ -232,7 +232,7 @@ func scenarioSnapshotCreation(cfg ScenarioConfig) func(ctx BenchmarkContext) err
 		if err := runColdkeep(ctx, cfg, "store-folder", "--codec", cfg.Codec, datasetDir); err != nil {
 			return err
 		}
-		if err := runColdkeep(ctx, cfg, "snapshot", "create", "--id", snapshotID("bench-snapshot-core", cfg.RunTag)); err != nil {
+		if err := runColdkeepInDir(ctx, cfg, ctx.DataPath, "snapshot", "create", "snapshot/", "--id", snapshotID("bench-snapshot-core", cfg.RunTag)); err != nil {
 			return err
 		}
 
@@ -261,7 +261,7 @@ func scenarioGCAfterChurn(cfg ScenarioConfig) func(ctx BenchmarkContext) error {
 			}
 		}
 
-		if err := runColdkeep(ctx, cfg, "snapshot", "create", "--id", snapshotID("bench-snapshot-gc", cfg.RunTag)); err != nil {
+		if err := runColdkeepInDir(ctx, cfg, ctx.DataPath, "snapshot", "create", "churn/", "--id", snapshotID("bench-snapshot-gc", cfg.RunTag)); err != nil {
 			return err
 		}
 		if err := runColdkeep(ctx, cfg, "gc"); err != nil {
@@ -415,6 +415,10 @@ func writeDeterministicFile(path string, size int64, seed int64) error {
 }
 
 func runColdkeep(ctx BenchmarkContext, cfg ScenarioConfig, args ...string) error {
+	return runColdkeepInDir(ctx, cfg, ctx.RepoPath, args...)
+}
+
+func runColdkeepInDir(ctx BenchmarkContext, cfg ScenarioConfig, workingDir string, args ...string) error {
 	cfg = cfg.withDefaults()
 	if strings.TrimSpace(cfg.ColdkeepExecutable) == "" {
 		return fmt.Errorf("coldkeep executable cannot be empty")
@@ -436,7 +440,7 @@ func runColdkeep(ctx BenchmarkContext, cfg ScenarioConfig, args ...string) error
 	spec := CommandSpec{
 		Executable: cfg.ColdkeepExecutable,
 		Args:       append([]string(nil), args...),
-		WorkingDir: ctx.RepoPath,
+		WorkingDir: workingDir,
 		Env:        env,
 	}
 

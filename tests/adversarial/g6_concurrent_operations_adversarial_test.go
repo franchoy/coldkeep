@@ -2402,7 +2402,7 @@ func TestAdversarialG6ConcurrentSnapshotCreateAndGCPreserveRetainedData(t *testi
 					}
 				}()
 				args := []string{"snapshot", "create", "--id", snapshotID, "--output", "json"}
-				res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, args...)
+				res := testutils.RunColdkeepCommand(t, inputDir, binPath, env, args...)
 				if res.ExitCode != 0 {
 					snapErr = fmt.Errorf("snapshot create exited %d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 				}

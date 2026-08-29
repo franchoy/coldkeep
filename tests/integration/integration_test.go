@@ -61,6 +61,15 @@ import (
 //
 //	COLDKEEP_TEST_DB=1 go test ./tests/... -short -v
 
+func snapshotMemberPathIntegration(t *testing.T, selectionBase, storedPath string) string {
+	t.Helper()
+	relative, err := filepath.Rel(selectionBase, storedPath)
+	if err != nil {
+		t.Fatalf("derive snapshot member from base %q and stored path %q: %v", selectionBase, storedPath, err)
+	}
+	return filepath.ToSlash(relative)
+}
+
 func TestIntegrationHarnessSmoke(t *testing.T) {
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Log("COLDKEEP_TEST_DB is not set; DB-backed integration tests may be skipped")
@@ -945,7 +954,7 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
 	}
 
-	snap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	snap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-it-1", "--output", "json"), "snapshot")
 	snap1Data := testutils.JSONMap(t, snap1, "data")
 	if got, _ := snap1Data["snapshot_id"].(string); got != "snap-it-1" {
@@ -971,8 +980,8 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("snapshot row count mismatch: snapshot=%d physical=%d", snap1Count, physicalCount)
 	}
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
-	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
+	trimmedImg := snapshotMemberPathIntegration(t, inputDir, storedImgPath)
 
 	var snap1DocsRows int
 	if err := dbconn.QueryRow(`
@@ -1054,7 +1063,7 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"remove", "--stored-path", storedDocsPath, "--output", "json"), "remove")
 
-	snap2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	snap2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-it-2", "--output", "json"), "snapshot")
 	snap2Data := testutils.JSONMap(t, snap2, "data")
 	if got, _ := snap2Data["snapshot_id"].(string); got != "snap-it-2" {
@@ -1082,7 +1091,7 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("expected removed docs path to be absent from second snapshot, got count=%d", snap2DocsRows)
 	}
 
-	snapPartial := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	snapPartial := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedImg, "--id", "snap-it-partial", "--output", "json"), "snapshot")
 	partialData := testutils.JSONMap(t, snapPartial, "data")
 	if got, _ := partialData["type"].(string); got != "partial" {
@@ -1210,10 +1219,10 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
 	}
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
-	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
+	trimmedImg := snapshotMemberPathIntegration(t, inputDir, storedImgPath)
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase2-regression-v1", "--output", "json"), "snapshot")
 
 	dbconn, err = db.ConnectDB()
@@ -1316,9 +1325,9 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 	if !ok || strings.TrimSpace(storedNotesPath) == "" {
 		t.Fatalf("store notes JSON missing stored_path: payload=%v", storeNotes)
 	}
-	trimmedNotes := strings.TrimLeft(filepath.ToSlash(storedNotesPath), "/")
+	trimmedNotes := snapshotMemberPathIntegration(t, inputDir, storedNotesPath)
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase2-regression-v2", "--output", "json"), "snapshot")
 
 	var normalizedDocsRows int
@@ -1370,7 +1379,7 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 	}
 
 	docsDirPrefix := filepath.ToSlash(filepath.Dir(trimmedDocs)) + "/"
-	partialCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	partialCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, docsDirPrefix, "--id", "snap-phase2-regression-partial", "--output", "json"), "snapshot")
 	partialCreateData := testutils.JSONMap(t, partialCreate, "data")
 	if got, _ := partialCreateData["type"].(string); got != "partial" {
@@ -1492,7 +1501,7 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 	if !ok || strings.TrimSpace(storedPath) == "" {
 		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
 	}
-	trimmedStoredPath := strings.TrimLeft(filepath.ToSlash(storedPath), "/")
+	trimmedStoredPath := snapshotMemberPathIntegration(t, inputDir, storedPath)
 
 	dbconn, err = db.ConnectDB()
 	if err != nil {
@@ -1534,7 +1543,7 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 		t.Fatalf("direct restore hash mismatch: got=%s want=%s", got, wantHash)
 	}
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase2-post-migration", "--output", "json"), "snapshot")
 
 	snapshotRestoreRoot := filepath.Join(tmp, "snapshot-restore")
@@ -1621,18 +1630,18 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
 	}
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
-	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
+	trimmedImg := snapshotMemberPathIntegration(t, inputDir, storedImgPath)
 
 	// Baseline full snapshot without --from.
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-baseline", "--output", "json"), "snapshot")
 
 	// Full parent and child with --from.
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-parent-full", "--output", "json"), "snapshot")
 
-	childCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	childCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-child", "--from", "snap-phase3-parent-full", "--output", "json"), "snapshot")
 	childCreateData := testutils.JSONMap(t, childCreate, "data")
 	if got, _ := childCreateData["parent_id"].(string); got != "snap-phase3-parent-full" {
@@ -1640,7 +1649,7 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	}
 
 	// Scope validation (Strategy B): child partial with --from is rejected.
-	childPartialFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	childPartialFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, "--id", "snap-phase3-child-partial", "--from", "snap-phase3-parent-full", "--output", "json")
 	if childPartialFail.ExitCode == 0 {
 		t.Fatalf("expected filtered child with --from to fail\nstdout:\n%s\nstderr:\n%s", childPartialFail.Stdout, childPartialFail.Stderr)
@@ -1650,10 +1659,10 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	}
 
 	// Scope validation (Strategy B): parent partial with --from is rejected.
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, "--id", "snap-phase3-parent-partial", "--output", "json"), "snapshot")
 
-	parentPartialFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	parentPartialFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-child-from-partial", "--from", "snap-phase3-parent-partial", "--output", "json")
 	if parentPartialFail.ExitCode == 0 {
 		t.Fatalf("expected full child with partial parent to fail\nstdout:\n%s\nstderr:\n%s", parentPartialFail.Stdout, parentPartialFail.Stderr)
@@ -1663,7 +1672,7 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	}
 
 	// Missing parent and self-parent validation.
-	missingParentFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	missingParentFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-missing-parent", "--from", "snap-phase3-nope", "--output", "json")
 	if missingParentFail.ExitCode == 0 {
 		t.Fatalf("expected missing parent create to fail\nstdout:\n%s\nstderr:\n%s", missingParentFail.Stdout, missingParentFail.Stderr)
@@ -1676,7 +1685,7 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 		t.Fatalf("expected missing parent error message, got payload=%v", missingErrPayload)
 	}
 
-	selfParentFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	selfParentFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-self", "--from", "snap-phase3-self", "--output", "json")
 	if selfParentFail.ExitCode == 0 {
 		t.Fatalf("expected self-parent create to fail\nstdout:\n%s\nstderr:\n%s", selfParentFail.Stdout, selfParentFail.Stderr)
@@ -1878,15 +1887,15 @@ func TestSnapshotLineageSafetyMixedChainDeleteMiddleIntegration(t *testing.T) {
 		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
 	}
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
-	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
+	trimmedImg := snapshotMemberPathIntegration(t, inputDir, storedImgPath)
 
 	// day1 -> day2 -> day3 lineage
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "day1", "--output", "json"), "snapshot")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "day2", "--from", "day1", "--output", "json"), "snapshot")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "day3", "--from", "day2", "--output", "json"), "snapshot")
 
 	// Delete the middle snapshot.
@@ -2046,10 +2055,10 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", imgPath, "--output", "json"), "store")
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
 
 	// A) Create -> stats -> diff
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "cross-s1", "--output", "json"), "snapshot")
 
 	statsS1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2066,7 +2075,7 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", addedPath, "--output", "json"), "store")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "cross-s2", "--output", "json"), "snapshot")
 
 	diffS1S2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2077,7 +2086,7 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	}
 
 	// B) Create with --from -> delete -> diff
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "cross-s3", "--from", "cross-s2", "--output", "json"), "snapshot")
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "cross-s2", "--force", "--output", "json"), "snapshot")
@@ -2103,10 +2112,10 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	}
 
 	// C) Partial snapshots + lineage policy (Strategy B currently disallows partial+--from)
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, "--id", "cross-partial", "--output", "json"), "snapshot")
 
-	partialFromFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	partialFromFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, "--id", "cross-partial-from", "--from", "cross-s1", "--output", "json")
 	if partialFromFail.ExitCode == 0 {
 		t.Fatalf("expected partial snapshot with --from to fail under current policy\nstdout:\n%s\nstderr:\n%s", partialFromFail.Stdout, partialFromFail.Stderr)
@@ -2247,7 +2256,7 @@ func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
 	}
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase7-e2e", "--output", "json"), "snapshot")
 
 	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2382,7 +2391,7 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 		"store-folder", storeDir, "--output", "json"), "store-folder")
 
 	snapID := "snapshot-filter-contract"
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", snapID, "--output", "json"), "snapshot")
 
 	// Test 1: snapshot show --prefix filtering
@@ -2401,9 +2410,9 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 	}
 
 	// Test 2: snapshot show --pattern filtering (non-empty result).
-	// Snapshot paths are normalized slash paths rooted at stored physical paths,
-	// so derive the glob from storeDir for backend-agnostic matching.
-	normalizedStoreDir := strings.TrimPrefix(filepath.ToSlash(storeDir), "/")
+	// Snapshot paths are normalized slash paths relative to the explicit input
+	// selection base, so derive the glob from storeDir for backend-agnostic matching.
+	normalizedStoreDir := snapshotMemberPathIntegration(t, inputDir, storeDir)
 	pattern := normalizedStoreDir + "/docs/*.txt"
 	showPattern := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "show", snapID, "--pattern", pattern, "--output", "json"), "snapshot")
@@ -2493,7 +2502,7 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store-folder", storeDir1, "--output", "json"), "store-folder")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-diff-v1", "--output", "json"), "snapshot")
 
 	// Create version 2 (add and modify files)
@@ -2510,13 +2519,13 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store-folder", storeDir2, "--output", "json"), "store-folder")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-diff-v2", "--output", "json"), "snapshot")
 
-	// Snapshot paths are normalized slash paths rooted at stored physical paths.
+	// Snapshot paths are normalized slash paths relative to the input selection base.
 	// Derive a prefix that intentionally excludes the v1 and v2/misc paths while
 	// matching the newly stored v2/docs path.
-	normalizedStoreDir2 := strings.TrimPrefix(filepath.ToSlash(storeDir2), "/")
+	normalizedStoreDir2 := snapshotMemberPathIntegration(t, inputDir, storeDir2)
 	docsPrefix := normalizedStoreDir2 + "/docs/"
 
 	// Test: snapshot diff with --prefix filter.
@@ -2629,7 +2638,7 @@ func TestSnapshotDiffSummaryJSONContractMatchesDetailedSummary(t *testing.T) {
 		"store", aPath, "--output", "json"), "store")
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", bPath, "--output", "json"), "store")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "sum-v1", "--output", "json"), "snapshot")
 
 	cPath := filepath.Join(inputDir, "docs", "c.txt")
@@ -2638,7 +2647,7 @@ func TestSnapshotDiffSummaryJSONContractMatchesDetailedSummary(t *testing.T) {
 	}
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", cPath, "--output", "json"), "store")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "sum-v2", "--output", "json"), "snapshot")
 
 	summaryOnly := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2717,11 +2726,11 @@ func TestSnapshotListTreeJSONContract(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", f1, "--output", "json"), "store")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "tree-day1", "--output", "json"), "snapshot")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "tree-day2", "--from", "tree-day1", "--output", "json"), "snapshot")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "tree-day3", "--from", "tree-day2", "--output", "json"), "snapshot")
 
 	treeJSON := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2817,7 +2826,7 @@ func TestSnapshotStatsLineageEnhancedFieldsJSONContract(t *testing.T) {
 		"store", aPath, "--output", "json"), "store")
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", bPath, "--output", "json"), "store")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "stats-v1", "--output", "json"), "snapshot")
 
 	// Keep a and b reused, add c as new.
@@ -2828,7 +2837,7 @@ func TestSnapshotStatsLineageEnhancedFieldsJSONContract(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", cPath, "--output", "json"), "store")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "stats-v2", "--from", "stats-v1", "--output", "json"), "snapshot")
 
 	statsV2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -11122,7 +11131,7 @@ func TestSnapshotBatchInsertFailureRecoversAndPreservesVerifyRestoreGC(t *testin
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
-	snapCmd := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	snapCmd := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", snapshotID, "--output", "json")
 	if snapCmd.ExitCode == 0 {
 		t.Fatalf("expected snapshot create to fail under injected batch failure, stdout=%s", snapCmd.Stdout)
@@ -14959,7 +14968,7 @@ func TestSnapshotRetentionChurnLongRun(t *testing.T) {
 			snapshotIDCounter++
 			snapID := fmt.Sprintf("snapshot-churn-%03d", snapshotIDCounter)
 
-			result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "snapshot", "create", "--id", snapID, "--output", "json")
+			result := testutils.RunColdkeepCommand(t, inputDir, binPath, map[string]string{}, "snapshot", "create", "--id", snapID, "--output", "json")
 			if result.ExitCode != 0 {
 				t.Fatalf("iteration %d: snapshot create failed: %s", iteration, result.Stderr)
 			}

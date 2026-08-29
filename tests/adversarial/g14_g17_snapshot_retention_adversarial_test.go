@@ -103,12 +103,21 @@ func gcDryRunData(t *testing.T, repoRoot, binPath string, env map[string]string)
 	return testutils.JSONMap(t, payload, "data")
 }
 
-func snapshotCreateWithID(t *testing.T, repoRoot, binPath string, env map[string]string, snapshotID string, paths ...string) {
+func snapshotCreateWithID(t *testing.T, selectionBase, binPath string, env map[string]string, snapshotID string, paths ...string) {
 	t.Helper()
 	args := []string{"snapshot", "create"}
 	args = append(args, paths...)
 	args = append(args, "--id", snapshotID, "--output", "json")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env, args...), "snapshot")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, selectionBase, binPath, env, args...), "snapshot")
+}
+
+func snapshotPathRelativeTo(t *testing.T, selectionBase, storedPath string) string {
+	t.Helper()
+	relative, err := filepath.Rel(selectionBase, storedPath)
+	if err != nil {
+		t.Fatalf("derive snapshot member from base %q and stored path %q: %v", selectionBase, storedPath, err)
+	}
+	return filepath.ToSlash(relative)
 }
 
 func snapshotDeleteWithForce(t *testing.T, repoRoot, binPath string, env map[string]string, snapshotID string) {
@@ -163,13 +172,13 @@ func TestAdversarialG14SnapshotRetainedGCGuardUnderChurn(t *testing.T) {
 		fileID, storedPath, wantHash := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, inputDir, name, 64*1024+round*997)
 
 		s1 := fmt.Sprintf("g14-snap-%d-a", round)
-		snapshotCreateWithID(t, repoRoot, binPath, env, s1)
+		snapshotCreateWithID(t, inputDir, binPath, env, s1)
 
 		var snapshots []string
 		snapshots = append(snapshots, s1)
 		if r.Intn(2) == 0 {
 			s2 := fmt.Sprintf("g14-snap-%d-b", round)
-			snapshotCreateWithID(t, repoRoot, binPath, env, s2)
+			snapshotCreateWithID(t, inputDir, binPath, env, s2)
 			snapshots = append(snapshots, s2)
 		}
 
@@ -216,7 +225,7 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	}
 
 	_, storedPath, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, inputDir, "g15-valid.bin", 80*1024)
-	snapshotCreateWithID(t, repoRoot, binPath, env, "g15-valid-snap")
+	snapshotCreateWithID(t, inputDir, binPath, env, "g15-valid-snap")
 
 	// 1) Invalid lifecycle state referenced by snapshot_file.
 	var invalidLifecycleID int64
@@ -417,10 +426,10 @@ func TestAdversarialG16SnapshotQueryContractChaos(t *testing.T) {
 	_, p2, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, filepath.Join(inputDir, "docs"), "g16-b.txt", 14*1024)
 	_, p3, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, filepath.Join(inputDir, "img"), "g16-c.png", 12*1024)
 
-	snapshotCreateWithID(t, repoRoot, binPath, env, "g16-snap-1", strings.TrimLeft(filepath.ToSlash(p1), "/"), strings.TrimLeft(filepath.ToSlash(p2), "/"))
-	snapshotCreateWithID(t, repoRoot, binPath, env, "g16-snap-2", strings.TrimLeft(filepath.ToSlash(p2), "/"), strings.TrimLeft(filepath.ToSlash(p3), "/"))
+	snapshotCreateWithID(t, inputDir, binPath, env, "g16-snap-1", snapshotPathRelativeTo(t, inputDir, p1), snapshotPathRelativeTo(t, inputDir, p2))
+	snapshotCreateWithID(t, inputDir, binPath, env, "g16-snap-2", snapshotPathRelativeTo(t, inputDir, p2), snapshotPathRelativeTo(t, inputDir, p3))
 
-	exactPaths := []string{strings.TrimLeft(filepath.ToSlash(p1), "/"), strings.TrimLeft(filepath.ToSlash(p2), "/"), strings.TrimLeft(filepath.ToSlash(p3), "/")}
+	exactPaths := []string{snapshotPathRelativeTo(t, inputDir, p1), snapshotPathRelativeTo(t, inputDir, p2), snapshotPathRelativeTo(t, inputDir, p3)}
 	prefixes := []string{filepath.ToSlash(filepath.Dir(exactPaths[0])) + "/", filepath.ToSlash(filepath.Dir(exactPaths[2])) + "/"}
 
 	r := rand.New(rand.NewSource(16016))
@@ -475,7 +484,7 @@ func TestAdversarialG17RetentionRootTransitionChurn(t *testing.T) {
 	snapshots := make([]string, 0, 8)
 	for i := 0; i < 6; i++ {
 		sid := fmt.Sprintf("g17-snap-%d", i)
-		snapshotCreateWithID(t, repoRoot, binPath, env, sid)
+		snapshotCreateWithID(t, inputDir, binPath, env, sid)
 		snapshots = append(snapshots, sid)
 
 		// While at least one snapshot retains the file, current-path removal must be blocked.
@@ -517,7 +526,7 @@ func TestAdversarialG14SnapshotSurvivesCrashAndRecovery(t *testing.T) {
 
 	fileID, _, wantHash := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, inputDir, "g14-crash-survive.txt", 220*1024)
 	snapshotID := "g14-crash-recovery-snap"
-	snapshotCreateWithID(t, repoRoot, binPath, env, snapshotID)
+	snapshotCreateWithID(t, inputDir, binPath, env, snapshotID)
 
 	// Simulate a crash residue by injecting PROCESSING state before doctor recovery.
 	if _, err := dbconn.Exec(`
@@ -591,7 +600,7 @@ func TestAdversarialG14SnapshotRestoreFailsClearlyWhenContainerCorrupted(t *test
 
 	fileID, _, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, inputDir, "g14-corrupt-restore.txt", 256*1024)
 	const snapshotID = "g14-corrupt-container-snap"
-	snapshotCreateWithID(t, repoRoot, binPath, env, snapshotID)
+	snapshotCreateWithID(t, inputDir, binPath, env, snapshotID)
 
 	record := testutils.FetchFirstFileChunkRecord(t, dbconn, fileID)
 	containerPath := testutils.ContainerPathForRecord(record)
