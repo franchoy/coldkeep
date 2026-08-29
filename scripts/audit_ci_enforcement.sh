@@ -1025,7 +1025,7 @@ check_local_workflow() {
   require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.7'" 'source installation pins Go 1.26.7' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
-  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.15" 'source installation proves binary identity' || check_status=1
+  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.16" 'source installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'remote candidate installation covers Linux, macOS, and Windows' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.7'" 'remote candidate installation pins Go 1.26.7' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'cache:\s*false' 'remote candidate installation does not require checkout-backed Go caching' || check_status=1
@@ -1077,7 +1077,7 @@ check_local_workflow() {
   require_content_pattern "$remote_candidate_install_block" 'go install "\$\{module\}/cmd/coldkeep@\$\{CANDIDATE_QUERY\}"' 'Unix public installation uses the selected candidate query' || check_status=1
   # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'go install "\$module/cmd/coldkeep@\$env:CANDIDATE_QUERY"' 'Windows public installation uses the selected candidate query' || check_status=1
-  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.15" 'remote candidate installation proves binary identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.16" 'remote candidate installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "go1\\\.26\\\.7" 'remote candidate installation proves binary compiler identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'grep -F .*resolved_version.*binary-build-info\.txt' 'Unix remote installation proves module build metadata' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'installed module build identity mismatch' 'Windows remote installation proves module build metadata' || check_status=1

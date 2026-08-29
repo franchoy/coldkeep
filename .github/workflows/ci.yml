@@ -1279,7 +1279,7 @@ jobs:
           cc --version
           CGO_ENABLED=1 go build ./cmd/coldkeep
           CGO_ENABLED=1 go install ./cmd/coldkeep
-          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 1.13.15'
+          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 1.13.16'
           {
             echo "GO_VERSION=$(go version)"
             echo "GOTOOLCHAIN=$(go env GOTOOLCHAIN)"
@@ -1302,7 +1302,7 @@ jobs:
           go build ./cmd/coldkeep
           go install ./cmd/coldkeep
           $binary = Join-Path (go env GOPATH) 'bin/coldkeep.exe'
-          if ((& $binary version) -ne 'coldkeep version 1.13.15') { throw 'binary identity mismatch' }
+          if ((& $binary version) -ne 'coldkeep version 1.13.16') { throw 'binary identity mismatch' }
           "GO_VERSION=$(go version)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOTOOLCHAIN=$(go env GOTOOLCHAIN)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOOS=$(go env GOOS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
@@ -1387,7 +1387,7 @@ jobs:
           fi
 
           go install "${module}/cmd/coldkeep@${CANDIDATE_QUERY}"
-          "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.15'
+          "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.16'
           go version -m "${GOBIN}/coldkeep" > binary-build-info.txt
           head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'
           grep -F "$(printf 'mod\t%s\t%s' "${module}" "${resolved_version}")" binary-build-info.txt
@@ -1477,7 +1477,7 @@ jobs:
           go install "$module/cmd/coldkeep@$env:CANDIDATE_QUERY"
           if ($LASTEXITCODE -ne 0) { throw 'remote candidate installation failed' }
           $binary = Join-Path $env:GOBIN 'coldkeep.exe'
-          if ((& $binary version) -ne 'coldkeep version 1.13.15') { throw 'binary identity mismatch' }
+          if ((& $binary version) -ne 'coldkeep version 1.13.16') { throw 'binary identity mismatch' }
           $buildInfo = go version -m $binary
           $buildInfo | Out-File -FilePath binary-build-info.txt -Encoding utf8
           if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }

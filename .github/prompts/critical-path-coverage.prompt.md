@@ -89,10 +89,11 @@ When proposing coverage, provide:
 - whether it is release-blocking or advisory;
 - scope risks.
 
-## Frozen v1.x boundaries
+## Active v1.13.16 maintenance boundaries
 
-v1.13.15 is published stable and planned v1 coverage work is closed. For any
-separately authorized future maintenance:
+v1.13.16 is the active exceptional critical-maintenance train. Seven findings
+are Open and none is fixed. v1.13.15 remains published stable and immutable.
+Follow the 20-phase plan, exact phase mode, and phase allowlist:
 
 - do not implement v2 or SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;

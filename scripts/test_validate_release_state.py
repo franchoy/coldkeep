@@ -16,7 +16,14 @@ from unittest import mock
 
 import release_state_support
 import validate_release_state
-from release_state_support import ProcessResult, resolved_executable, run_process
+from release_state_support import (
+    LifecycleBoundaries,
+    ProcessResult,
+    lifecycle_boundaries_match_topology,
+    lifecycle_progression_valid,
+    resolved_executable,
+    run_process,
+)
 
 
 SCRIPT = Path(__file__).with_name("validate_release_state.py").resolve()
@@ -195,8 +202,6 @@ class Fixture:
         )
 
     def set_phase_states(self, statuses: list[str]) -> None:
-        if len(statuses) != 3:
-            raise AssertionError("fixture requires exactly three phase states")
         for relative, field in (
             ("docs/release/v1.13/v1.13.10-phase-list.md", "Status"),
             (
@@ -232,6 +237,52 @@ class Fixture:
             content = release_readme.read_text(encoding="utf-8")
             content = re.sub(r"Phase \d+ is next", f"Phase {next_phase} is next", content)
             release_readme.write_text(content, encoding="utf-8")
+
+    def set_phase_topology(self, statuses: list[str]) -> None:
+        """Replace both phase replicas with one contiguous fixture topology."""
+        header = (
+            "# Fixture\n\n"
+            "**Release:** `v1.13.10 — Fixture Release`\n"
+            "**Status:** Active\n"
+            "**Branch:** `release/v1.13.10`\n"
+        )
+        phase_blocks = []
+        checklist_blocks = []
+        for number, status in enumerate(statuses):
+            phase_blocks.append(
+                f"## Phase {number} — Fixture phase {number}\n\n"
+                f"**Status:** {status}\n"
+            )
+            checklist_blocks.append(
+                f"## Phase {number}\n\n**Phase status:** {status}\n"
+            )
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-phase-list.md",
+            header + "\n" + "\n".join(phase_blocks),
+        )
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-validation-checklist.md",
+            header + "\n" + "\n".join(checklist_blocks),
+        )
+        summary = "\n".join(
+            f"- Phase {number}: {status}"
+            for number, status in enumerate(statuses)
+        )
+        write(
+            self.root,
+            "docs/release/v1.13/v1.13.10-scope.md",
+            header + "\n## Phase summary\n\n" + summary + "\n",
+        )
+        if "Next" in statuses:
+            next_phase = statuses.index("Next")
+            write(
+                self.root,
+                "docs/release/v1.13/README.md",
+                "# v1.13\n\n## Current Release State\n\n"
+                f"v1.13.10 is active. Phase {next_phase} is next.\n",
+            )
 
     def prepare_boundary_candidate(self) -> None:
         self.enable_lifecycle_boundaries()
@@ -1155,7 +1206,7 @@ class ReleaseStateValidatorTests(unittest.TestCase):
             ["CKRS013", "CKRS018", "CKRS019"],
         )
 
-    def test_86_nonconsecutive_boundaries_rejected(self) -> None:
+    def test_86_missing_nonconsecutive_boundary_rejected(self) -> None:
         fixture = self.fixture()
         fixture.prepare_boundary_candidate()
         fixture.enable_lifecycle_boundaries(0, 2, 3)
@@ -1163,7 +1214,7 @@ class ReleaseStateValidatorTests(unittest.TestCase):
         git(fixture.root, "branch", "-M", "main")
         self.assert_rules(
             fixture.run(),
-            ["CKRS013", "CKRS018", "CKRS019"],
+            ["CKRS019"],
         )
 
     def test_87_nonterminal_boundaries_rejected(self) -> None:
@@ -1213,6 +1264,132 @@ class ReleaseStateValidatorTests(unittest.TestCase):
                 env=fixture.post_release_pr_env(event, closure),
             ).returncode,
             0,
+        )
+
+
+class LifecycleBoundaryCompatibilityTests(unittest.TestCase):
+    boundaries = LifecycleBoundaries(merge=16, publication=18, closure=19)
+
+    @staticmethod
+    def progression(next_phase: int) -> list[str]:
+        return [
+            "Complete" if phase < next_phase else
+            "Next" if phase == next_phase else
+            "Not started"
+            for phase in range(20)
+        ]
+
+    def test_consecutive_lifecycle_contract_remains_valid(self) -> None:
+        boundaries = LifecycleBoundaries(merge=0, publication=1, closure=2)
+        self.assertTrue(
+            lifecycle_boundaries_match_topology(boundaries, [0, 1, 2])
+        )
+
+    def test_nonconsecutive_16_18_19_topology_is_valid(self) -> None:
+        self.assertTrue(
+            lifecycle_boundaries_match_topology(
+                self.boundaries,
+                list(range(20)),
+            )
+        )
+
+    def test_invalid_boundary_topologies_fail(self) -> None:
+        phases = list(range(20))
+        invalid = (
+            LifecycleBoundaries(18, 16, 19),
+            LifecycleBoundaries(16, 16, 19),
+            LifecycleBoundaries(16, 18, 20),
+            LifecycleBoundaries(16, 18, 18),
+        )
+        for boundaries in invalid:
+            with self.subTest(boundaries=boundaries):
+                self.assertFalse(
+                    lifecycle_boundaries_match_topology(boundaries, phases)
+                )
+
+    def test_development_phase_2_next_is_valid(self) -> None:
+        self.assertTrue(
+            lifecycle_progression_valid(
+                "development", self.progression(2), self.boundaries
+            )
+        )
+
+    def test_pre_release_phase_16_next_is_valid(self) -> None:
+        self.assertTrue(
+            lifecycle_progression_valid(
+                "pre-release", self.progression(16), self.boundaries
+            )
+        )
+
+    def test_merged_not_tagged_phase_17_next_is_valid(self) -> None:
+        self.assertTrue(
+            lifecycle_progression_valid(
+                "merged-not-tagged", self.progression(17), self.boundaries
+            )
+        )
+
+    def test_merged_not_tagged_phase_18_next_is_valid(self) -> None:
+        self.assertTrue(
+            lifecycle_progression_valid(
+                "merged-not-tagged", self.progression(18), self.boundaries
+            )
+        )
+
+    def test_tagged_uses_same_bounded_next_window(self) -> None:
+        for phase in (17, 18):
+            with self.subTest(phase=phase):
+                self.assertTrue(
+                    lifecycle_progression_valid(
+                        "tagged", self.progression(phase), self.boundaries
+                    )
+                )
+
+    def test_merged_next_at_or_before_merge_is_invalid(self) -> None:
+        for phase in (15, 16):
+            with self.subTest(phase=phase):
+                self.assertFalse(
+                    lifecycle_progression_valid(
+                        "merged-not-tagged",
+                        self.progression(phase),
+                        self.boundaries,
+                    )
+                )
+
+    def test_merged_or_tagged_next_after_publication_is_invalid(self) -> None:
+        for state in ("merged-not-tagged", "tagged"):
+            with self.subTest(state=state):
+                self.assertFalse(
+                    lifecycle_progression_valid(
+                        state, self.progression(19), self.boundaries
+                    )
+                )
+
+    def test_post_release_pending_requires_phase_19_next(self) -> None:
+        self.assertTrue(
+            lifecycle_progression_valid(
+                "post-release-pending-closure",
+                self.progression(19),
+                self.boundaries,
+            )
+        )
+        self.assertFalse(
+            lifecycle_progression_valid(
+                "post-release-pending-closure",
+                self.progression(18),
+                self.boundaries,
+            )
+        )
+
+    def test_post_release_closed_requires_all_complete(self) -> None:
+        self.assertTrue(
+            lifecycle_progression_valid(
+                "post-release-closed", ["Complete"] * 20, self.boundaries
+            )
+        )
+        self.assertFalse(
+            lifecycle_progression_valid(
+                "post-release-closed", self.progression(19), self.boundaries
+            )
         )
 
 

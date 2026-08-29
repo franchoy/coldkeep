@@ -13,15 +13,13 @@ documented bounds, and cooperative same-host/local-filesystem repository
 coordination. v1.13.15 is the published stable final planned v1.x release.
 Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
-attestation are immutable. The terminal repository authority is
-`post-release-closed`, with all planned v1 work closed and frozen subject to
-the Phase 10 protected-acceptance and Phase 10T execution predicates.
+attestation are immutable. v1.13.16 is the active exceptional
+critical-maintenance source train with seven confirmed findings and none
+closed. Planned v1 feature and architecture work remains closed and frozen;
+technical correctness closure is withheld pending the 20-phase maintenance
+plan. Existing security and crash-consistency limitations below are unchanged.
 
-The former statement “v1.13.15 is the active final v1.x closure train” is a
-superseded governance sentinel and no longer describes an active
-implementation train. v1.13.14 remains immutable historical release state.
-Future v1 maintenance requires a newly discovered critical correctness or
-security defect, a separate plan, and explicit authorization. V2 planning
+v1.13.14 and v1.13.15 remain immutable historical release state. V2 planning
 review is authorized. V2 implementation has not started and requires a
 separate plan.
 

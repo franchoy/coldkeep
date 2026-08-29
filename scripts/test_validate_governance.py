@@ -119,6 +119,29 @@ class GovernanceValidatorTests(unittest.TestCase):
             "historical-release",
         )
 
+    def test_v11316_current_authority_is_classified_current(self) -> None:
+        self.assertEqual(
+            governance.classify_path(
+                Path("docs/release/v1.13/v1.13.16-release-state.md")
+            ),
+            "current-authority",
+        )
+
+    def test_v11315_release_control_is_historical(self) -> None:
+        self.assertEqual(
+            governance.classify_path(
+                Path("docs/release/v1.13/v1.13.15-release-state.md")
+            ),
+            "historical-release",
+        )
+
+    def test_stale_v11315_active_provider_wording_fails(self) -> None:
+        violations = governance.active_text_violations(
+            Path(".github/copilot-instructions.md"),
+            "The active v1.13.15 final v1.x closure train is authoritative.",
+        )
+        self.assertEqual(len(violations), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

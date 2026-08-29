@@ -74,8 +74,14 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure is
-published as stable immutable release `378768097`. Annotated tag object
+v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
+Closure is the active exceptional critical-maintenance source train. Phase 0
+and Phase 1 are Complete, Phase 2 is Next, seven findings are confirmed, and
+zero are closed. Technical correctness closure is withheld; no product fix or
+release-readiness claim exists at this boundary.
+
+v1.13.15 remains the published stable immutable historical product baseline,
+release `378768097`. Annotated tag object
 `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
 baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`. Tag CI `33210164827`,
 tag-native installation on Linux, macOS, and Windows, CodeQL `33210164772`,
@@ -85,13 +91,11 @@ The canonical publication body remains `v1.13.15-release-body.md`, exactly
 1,815 bytes at SHA-256
 `477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`.
 The release was published at `2026-08-28T21:17:21Z` with zero custom assets and
-a verified immutable-release attestation. Phases 0–10 are Complete and tracked
-authority is `post-release-closed`. Terminal effectiveness remains conditional
-on the protected Phase 10 merge, exact-final-main recertification, authorized
-cleanup of all five temporary branches, and successful read-only Phase 10T.
+a verified immutable-release attestation. Its Phases 0–10 and
+`post-release-closed` state remain historical release truth.
 
-v1.13.14 remains unchanged immutable published historical state. V1.x planned
-work is closed and frozen in the terminal candidate. V2 planning review is
+v1.13.14 remains unchanged immutable published historical state. Planned v1
+feature and architecture work remains closed and frozen. V2 planning review is
 authorized; v2 implementation has not started and requires a separate plan.
 
 ## Historical v1.13.14 current-state narrative

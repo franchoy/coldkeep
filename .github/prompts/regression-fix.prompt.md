@@ -34,13 +34,15 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
-- v1.13.15 is published stable and planned v1 work is closed and frozen.
-- Future v1 maintenance requires a newly discovered critical correctness or
-  security defect plus a separate plan and explicit authorization.
+- v1.13.16 is the active exceptional critical-maintenance train with seven
+  Open findings and none fixed; follow its 20-phase plan and exact phase mode.
+- v1.13.15 remains published stable and immutable; planned v1 feature and
+  architecture work remains closed and frozen.
 - Do not implement v2 or SQLite-first product-default behavior without a
   separate implementation plan.
 - Do not change public APIs, schemas, storage formats, or repository formats.
-- Keep changes within the separately authorized plan and allowlist.
+- Keep changes within the active phase's exact plan and allowlist; do not make
+  an out-of-phase repair.
 - Do not remove PostgreSQL compatibility.
 - Do not introduce SQLite-only assumptions into engine or catalog contracts.
 - Do not close issue-tracker or remediation-matrix rows unless explicitly asked.

@@ -26,9 +26,9 @@ CURRENT_AUTHORITY_FILES = (
     Path("docs/architecture/engine-boundary-plan.md"),
     Path("docs/release/v1.13/README.md"),
     Path("docs/release/v1.13/v1.13.x-release-train.md"),
-    Path("docs/release/v1.13/v1.13.15-scope.md"),
-    Path("docs/release/v1.13/v1.13.15-phase-list.md"),
-    Path("docs/release/v1.13/v1.13.15-release-state.md"),
+    Path("docs/release/v1.13/v1.13.16-scope.md"),
+    Path("docs/release/v1.13/v1.13.16-phase-list.md"),
+    Path("docs/release/v1.13/v1.13.16-release-state.md"),
 )
 HISTORICAL_PROVIDER_FILE = Path(".github/prompts/v110-phase.prompt.md")
 CANONICAL_RELEASE_BODY = Path(
@@ -50,9 +50,9 @@ def classify_path(path: Path) -> str:
         return "historical-provider"
     if re.match(r"docs/release/v1\.(?:10|11|12)/", value):
         return "historical-release"
-    if re.match(r"docs/release/v1\.13/v1\.13\.(?:[0-9]|1[0-4])(?:[-./])", value):
+    if re.match(r"docs/release/v1\.13/v1\.13\.(?:[0-9]|1[0-5])(?:[-./])", value):
         return "historical-release"
-    if path in CURRENT_AUTHORITY_FILES or value.startswith("docs/release/v1.13/v1.13.15-"):
+    if path in CURRENT_AUTHORITY_FILES or value.startswith("docs/release/v1.13/v1.13.16-"):
         return "current-authority"
     return "other"
 
@@ -65,6 +65,8 @@ def active_text_violations(path: Path, text: str) -> list[str]:
         r"Phase 2 — Certified Toolchain and Security Gates — is Next",
         r"Phase 3 is Next: Local Development",
         r"Active v1\.9 blockers are the current release-gate sections",
+        r"active v1\.13\.15 final v1\.x closure train",
+        r"## v1\.13\.15 Release Boundary",
     )
     for pattern in stale_patterns:
         if re.search(pattern, text):
@@ -154,6 +156,7 @@ def validate(root: Path = ROOT) -> list[str]:
     marker_contracts = {
         Path("AGENTS.md"): (
             "never lose user data",
+            "v1.13.16",
             "v1.13.15",
             "v1.13.14",
             "Do not implement v2",
@@ -162,20 +165,22 @@ def validate(root: Path = ROOT) -> list[str]:
             "GOTOOLCHAIN=local",
         ),
         Path(".github/copilot-instructions.md"): (
-            "active v1.13.15 final v1.x closure train",
+            "v1.13.16 is the active exceptional critical-maintenance train",
             "v1.13.14 as immutable historical release state",
             "SQLite-first local productization belongs to v2.x",
         ),
         Path(".github/instructions/ci.instructions.md"): (
-            "v1.13.15 Release Boundary",
-            "Treat v1.13.14 release evidence as immutable historical state",
+            "v1.13.16 Maintenance Boundary",
+            "Treat v1.13.14 and v1.13.15 release evidence as immutable historical state",
         ),
         Path("README.md"): (
-            "v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure",
+            "v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure",
+            "FINDINGS_CLOSED: 0/7",
             "V2 implementation has not started",
         ),
         Path("SECURITY.md"): (
-            "v1.13.15 is the active final v1.x",
+            "v1.13.16 is the active exceptional critical-maintenance source train",
+            "none closed",
             "V2 implementation has not started",
         ),
         Path("docs/architecture/engine-boundary-plan.md"): (
@@ -187,6 +192,8 @@ def validate(root: Path = ROOT) -> list[str]:
             "v1.x completed the frozen Engine/Catalog correctness work",
             "Older v1.x documents",
             "historical and superseded",
+            "v1.13.16",
+            "Phase 2 is Next",
         ),
     }
     for relative, markers in marker_contracts.items():

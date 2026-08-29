@@ -327,12 +327,11 @@ def lifecycle_boundaries_match_topology(
     boundaries: LifecycleBoundaries,
     phase_numbers: list[int],
 ) -> bool:
-    """Require three consecutive terminal lifecycle phases."""
+    """Require ordered lifecycle boundaries ending at the final phase."""
     if not phase_numbers:
         return False
     return (
-        boundaries.publication == boundaries.merge + 1
-        and boundaries.closure == boundaries.publication + 1
+        boundaries.merge < boundaries.publication < boundaries.closure
         and boundaries.closure == phase_numbers[-1]
         and boundaries.merge in phase_numbers
         and boundaries.publication in phase_numbers
@@ -574,7 +573,16 @@ def lifecycle_progression_valid(
     if state == "pre-release":
         return progression_at_phase(ordered, boundaries.merge)
     if state in ("merged-not-tagged", "tagged"):
-        return progression_at_phase(ordered, boundaries.publication)
+        next_positions = [
+            index for index, value in enumerate(ordered) if value == "Next"
+        ]
+        if len(next_positions) != 1:
+            return False
+        next_phase = next_positions[0]
+        return (
+            boundaries.merge < next_phase <= boundaries.publication
+            and progression_at_phase(ordered, next_phase)
+        )
     if state == "post-release-pending-closure":
         return progression_at_phase(ordered, boundaries.closure)
     if state == "post-release-closed":

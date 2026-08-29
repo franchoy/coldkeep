@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.15%20closed%20and%20frozen-blue)
+![Status](https://img.shields.io/badge/status-v1.13.16%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -29,52 +29,32 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 ## Current release state
 
-v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure is
-published as the stable immutable source-only release. Annotated tag object
+v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
+Closure is the active exceptional critical-maintenance source train. It has
+seven confirmed findings, zero closed findings, and Phase 2 Next. No product
+fix or release-readiness claim exists at Phase 1. Planned v1 feature and
+architecture work remains closed and frozen; technical correctness closure is
+withheld pending this maintenance train.
+
+The latest published stable release remains v1.13.15. Its annotated tag object
 `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
-baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`. Release `378768097` was
-published at `2026-08-28T21:17:21Z`; its canonical 1,815-byte body remains at
-SHA-256
-`477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`,
-with zero custom assets and a verified immutable-release attestation.
+baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`; release `378768097`, canonical
+body, checksum, and attestation remain immutable. Published installation and
+source-install instructions therefore continue to target v1.13.15.
 
-Tag CI `33210164827` passed all 36 jobs and Required Gate. Tag-native public
-installation passed on Linux, macOS, and Windows with resolved version
-`v1.13.15` and Origin.Hash equal to the product baseline. Tag-triggered CodeQL
-`33210164772` passed Actions, Go, Python, and Aggregate with zero open alerts.
+V2 planning review is authorized. V2 implementation has not started and
+requires a separate plan.
 
-Phases 0–10 are Complete and tracked authority is `post-release-closed`.
-The terminal closure candidate freezes planned v1 work and distinguishes the
-immutable product baseline from the protected repository-closure commit. Full
-external effectiveness remains conditional on normal protected merge,
-exact-final-main recertification, authorized temporary-branch cleanup, and the
-read-only Phase 10T audit.
-
-v1.13.15 is the final planned v1.x release. Planned v1 feature work is frozen;
-future v1 maintenance remains possible only for a newly discovered critical
-correctness or security defect under a separate plan and explicit
-authorization. V2 planning review is authorized. V2 implementation has not
-started and requires a separate plan.
-
-v1.13.14 remains published, operationally closed historical state. Its tag,
-release, identity, and historical evidence are immutable.
-
-    V1_13_15_STATE: PUBLISHED_STABLE
-    V1_13_15_BRANCH: release/v1.13.15-post-publication-closure
-    V1_PRODUCT_BASELINE_SHA: 6a2417e8189631b018779c2fd24fc559ed761f3f
-    V1_13_15_FINDINGS_CLOSED: 15/15
-    PHASE_0_TO_10: COMPLETE
-    PHASE_8R: COMPLETE
-    PHASE_9: COMPLETE
-    PHASE_10: COMPLETE
-    RELEASE_STATE: POST_RELEASE_CLOSED
-    V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
-    V1_X: CLOSED_AND_FROZEN
-    V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
-    V1_PLANNED_FEATURE_WORK: NONE
-    V2_PLANNING_REVIEW: AUTHORIZED
+    V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
+    V1_13_16: ACTIVE_EXCEPTIONAL_CRITICAL_MAINTENANCE
+    RELEASE_STATE: DEVELOPMENT
+    PHASE_0: COMPLETE
+    PHASE_1: COMPLETE
+    PHASE_2: NEXT
+    FINDINGS_CONFIRMED: 7
+    FINDINGS_CLOSED: 0/7
+    V1_X_TECHNICAL_CORRECTNESS_CLOSURE: WITHHELD
     V2_IMPLEMENTATION: NOT_STARTED
-    V2_IMPLEMENTATION_AUTHORIZATION: REQUIRES_SEPARATE_PLAN
 
 ## Historical release-state narrative through v1.13.14
 

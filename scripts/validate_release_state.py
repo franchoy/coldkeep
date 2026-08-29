@@ -675,8 +675,8 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
             "CKRS019",
             docs["contract"].path if docs["contract"] else "",
             0,
-            "lifecycle boundary metadata must name three consecutive "
-            "terminal phases",
+            "lifecycle boundary metadata must name ordered merge, publication, "
+            "and final closure phases present in the contiguous phase topology",
         )
     if requested_state == "auto":
         state, context = infer_state(

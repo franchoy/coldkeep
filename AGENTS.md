@@ -4,18 +4,19 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 
 ## Active authority
 
-- `v1.13.15` is published stable and is the final planned v1.x release.
-- v1.x planned feature and architecture work is closed and frozen. A future
-  v1 maintenance train requires a newly discovered critical correctness or
-  security defect, a separate plan, and explicit authorization.
+- `v1.13.16` is the active exceptional critical-maintenance train with seven
+  confirmed findings and none fixed or closed.
+- `v1.13.15` remains published stable, immutable, and the final planned v1.x
+  release. Planned v1 feature and architecture work stays closed and frozen.
 - `v1.13.14` is immutable historical release state. Do not edit its release
   evidence or mutate its tag or GitHub release.
 - Do not implement v2. V2 planning review is authorized, but implementation
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The terminal v1.13.15 closure bundle, release state, scope, source/test
-  allowlist, and release gate under `docs/release/v1.13/` are binding.
+- The v1.13.16 scope, 20-phase list, validation checklist, remediation tracker,
+  source/test allowlist, release state, and release gate under
+  `docs/release/v1.13/` are binding current authority.
 - Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
   boundary.
 
@@ -32,7 +33,7 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 ## Validation
 
 Use the canonical commands in `PRE_RELEASE_CHECKLIST.md` and the active
-v1.13.15 validation checklist. At minimum, run focused tests for the changed
+v1.13.16 validation checklist. At minimum, run focused tests for the changed
 area before the broader applicable gate. Do not represent unavailable hosted
 evidence as passing.
 
@@ -46,10 +47,13 @@ The baseline repository-governance commands are:
 The frozen v1 release-critical execution contract uses Go 1.26.7 with
 `GOTOOLCHAIN=local`; the module language floor remains Go 1.25.
 
-    V1_X: CLOSED_AND_FROZEN
-    V1_13_15: PUBLISHED_STABLE
+    V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
-    V1_PLANNED_FEATURE_WORK: NONE
+    V1_13_16: ACTIVE_EXCEPTIONAL_CRITICAL_MAINTENANCE
+    RELEASE_STATE: DEVELOPMENT
+    PHASE_2: NEXT
+    FINDINGS_CLOSED: 0/7
+    V1_X_TECHNICAL_CORRECTNESS_CLOSURE: WITHHELD
     V2_PLANNING_REVIEW: AUTHORIZED
     V2_IMPLEMENTATION: NOT_STARTED
     V2_IMPLEMENTATION_AUTHORIZATION: REQUIRES_SEPARATE_PLAN

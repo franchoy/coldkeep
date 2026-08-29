@@ -4,10 +4,10 @@ Coldkeep is a correctness-first cold storage engine. The primary invariant is: n
 
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
 
-The phrase “active v1.13.15 final v1.x closure train” is retained as a
-governance compatibility sentinel only; it no longer describes an active
-implementation train. v1.13.15 is published stable, and planned v1 work is
-closed and frozen.
+v1.13.16 is the active exceptional critical-maintenance train. Seven findings
+are Open and none is fixed or closed. v1.13.15 remains published stable and
+immutable as the final planned v1.x release; planned v1 feature and
+architecture work remains closed and frozen.
 
 For future work:
 
@@ -37,14 +37,15 @@ SQLite-first local productization belongs to v2.x.
 Do not remove PostgreSQL compatibility.
 Do not introduce SQLite-only assumptions into engine or catalog contracts.
 
-The root `AGENTS.md` and terminal v1.13.15 closure controls are authoritative.
+The root `AGENTS.md` and v1.13.16 20-phase controls are authoritative. Follow
+the exact phase mode and allowlist; do not perform an out-of-phase repair.
 Stop on scope expansion, unexpected dependency movement, release-identity
 drift, or newly discovered private security impact.
 
 V2 planning review is authorized. V2 implementation has not started and
-requires a separate plan and explicit authorization. Future v1 maintenance is
-limited to a newly discovered critical correctness or security defect under a
-separate plan.
+requires a separate plan and explicit authorization. Do not introduce broad
+refactors, dependency movement, schema/format changes, or unplanned product
+work during v1.13.16.
 
 Codacy is signal, not authority.
 Do not chase style-only or generic maintainability warnings at the expense of correctness.

@@ -66,7 +66,7 @@ Codacy must not be treated as:
 - architecture authority;
 - correctness authority;
 - invariant authority;
-- a reason for broad refactors during the active v1.13.15 closure train;
+- a reason for broad refactors during the active v1.13.16 maintenance train;
 - a blocker for style-only findings.
 
 ## Coverage Boundary
@@ -85,10 +85,12 @@ Critical-path coverage should focus on:
 
 Do not add global coverage gates unless explicitly approved.
 
-## v1.13.15 Release Boundary
+## v1.13.16 Maintenance Boundary
 
-v1.13.15 is published stable and planned v1 work is closed and frozen. Do not
-use CI work to introduce:
+v1.13.16 is the active exceptional critical-maintenance train with seven Open
+findings and none fixed. v1.13.15 remains published stable and immutable. Use
+development-state validation on `release/v1.13.16`, follow the 20-phase plan
+and exact phase mode, and do not use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;
@@ -97,11 +99,11 @@ use CI work to introduce:
 - unassigned dependency or toolchain movement;
 - required gates outside the active phase allowlist.
 
-Treat v1.13.14 release evidence as immutable historical state. Preserve the
-v1.13.15 immutable product/release identity. Future v1 maintenance requires a
-new critical correctness or security defect and a separate authorized plan.
-V2 planning review is authorized; v2 implementation requires a separate plan.
-Stop on release identity drift or newly discovered private security impact.
+Treat v1.13.14 and v1.13.15 release evidence as immutable historical state.
+Do not perform out-of-phase repair, dependency movement, or schema/format
+change. V2 planning review is authorized; v2 implementation requires a
+separate plan. Stop on release identity drift or newly discovered private
+security impact.
 
 ## Required Review Questions
 

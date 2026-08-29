@@ -20,6 +20,21 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.16 — Unreleased — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
+
+- Activates the separately authorized exceptional v1.x critical-maintenance
+  train from immutable v1.13.15 product baseline
+  `6a2417e8189631b018779c2fd24fc559ed761f3f` and repository-closure main
+  `1eea2ac63c4da3933143e13d32d41c1f9eb45671`.
+- Phase 0/0R reconciled the clean release-source boundary; earlier review
+  patches remain external reference material and ignored operator state stays
+  untouched.
+- Phase 1 activates source version 1.13.16, isolated sibling-worktree
+  authority, the 20-phase release controls, and backward-compatible ordered
+  lifecycle boundaries 16/18/19.
+- Seven findings are confirmed and zero are closed. Phase 2 is Next. No
+  product fix or release-readiness claim exists yet.
+
 ## v1.13.15 - 2026-08-28 — Final v1.x Security, Reproducibility, and Operational Closure
 
 - PR #115 validly merged candidate
