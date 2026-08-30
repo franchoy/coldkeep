@@ -772,13 +772,53 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 	legacyRoot := filepath.Join(tmp, "mixed-gc-legacy-input")
 	legacySet := createPhase7FixtureInputSet(t, legacyRoot)
 
+	sealFixtureContainer := func(label string) {
+		t.Helper()
+
+		var containerID int64
+		var filename string
+		if err := dbconn.QueryRow(`
+			SELECT id, filename
+			FROM container
+			WHERE sealed = FALSE AND sealing = FALSE AND quarantine = FALSE
+			ORDER BY id DESC
+			LIMIT 1
+		`).Scan(&containerID, &filename); err != nil {
+			t.Fatalf("query active %s fixture container: %v", label, err)
+		}
+
+		tx, err := dbconn.Begin()
+		if err != nil {
+			t.Fatalf("begin %s fixture container seal: %v", label, err)
+		}
+		if err := container.SealContainerInDir(tx, containerID, filename, container.ContainersDir); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("seal %s fixture container: %v", label, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit %s fixture container seal: %v", label, err)
+		}
+	}
+
 	sgctx := storage.StorageContext{
 		DB:           dbconn,
 		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
 		ContainerDir: container.ContainersDir,
 	}
 
+	// Give the unique legacy file its own sealed physical unit so the fixture
+	// proves non-vacuously that live GC reclaims truly dead legacy content.
+	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, legacySet.largePath, blocks.CodecPlain, false); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("seed isolated mixed-gc legacy data %s: %v", legacySet.largePath, err)
+	}
+	sealFixtureContainer("isolated legacy")
+
+	sgctx.Writer = container.NewLocalWriter(container.GetContainerMaxSize())
 	for _, p := range legacySet.allStorePaths {
+		if p == legacySet.largePath {
+			continue
+		}
 		if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, p, blocks.CodecPlain, false); err != nil {
 			_ = dbconn.Close()
 			t.Fatalf("seed mixed-gc legacy data %s: %v", p, err)
@@ -863,6 +903,7 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, packedBPath, blocks.CodecPlain, false); err != nil {
 		t.Fatalf("store packed B: %v", err)
 	}
+	sealFixtureContainer("retained packed")
 	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, packedCPath, blocks.CodecPlain, false); err != nil {
 		t.Fatalf("store packed C: %v", err)
 	}
@@ -870,6 +911,7 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 	// Remove subset of legacy data.
 	removeCtx := storage.StorageContext{DB: dbconn}
 	legacyRemove := []string{
+		legacySet.largePath,
 		legacySet.manySmallPaths[0],
 		legacySet.manySmallPaths[1],
 		legacySet.duplicatePathA,
@@ -881,7 +923,7 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 	}
 
 	// Remove subset of packed data.
-	packedRemove := []string{packedAPath, packedCPath}
+	packedRemove := []string{packedCPath}
 	for _, p := range packedRemove {
 		if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(removeCtx, p); err != nil {
 			t.Fatalf("remove packed subset path %s: %v", p, err)
@@ -919,9 +961,21 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 			FROM chunk_block_refs r
 			JOIN chunk c ON c.id = r.chunk_id
 			WHERE r.block_id = sb.id
-			  AND (c.live_ref_count > 0 OR c.pin_count > 0)
+			  AND (
+				c.live_ref_count > 0
+				OR c.pin_count > 0
+				OR EXISTS (
+					SELECT 1
+					FROM snapshot_file sf
+					JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+					WHERE fc.chunk_id = c.id
+				)
+			  )
 		  )
 	`)
+	if len(deadWholeBlockIDsBefore) == 0 {
+		t.Fatal("expected at least one whole-dead packed block before GC")
+	}
 
 	partialLiveBlockIDsBefore := collectBlockIDs(`
 		SELECT sb.id
@@ -931,15 +985,32 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 			FROM chunk_block_refs r
 			JOIN chunk c ON c.id = r.chunk_id
 			WHERE r.block_id = sb.id
-			  AND (c.live_ref_count > 0 OR c.pin_count > 0)
+			  AND (
+				c.live_ref_count > 0
+				OR c.pin_count > 0
+				OR EXISTS (
+					SELECT 1
+					FROM snapshot_file sf
+					JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+					WHERE fc.chunk_id = c.id
+				)
+			  )
 		)
 		AND EXISTS (
 			SELECT 1
 			FROM chunk_block_refs r
 			JOIN chunk c ON c.id = r.chunk_id
 			WHERE r.block_id = sb.id
-			  AND c.live_ref_count = 0
-			  AND c.pin_count = 0
+			  AND NOT (
+				c.live_ref_count > 0
+				OR c.pin_count > 0
+				OR EXISTS (
+					SELECT 1
+					FROM snapshot_file sf
+					JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+					WHERE fc.chunk_id = c.id
+				)
+			  )
 		)
 	`)
 
@@ -948,11 +1019,17 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 	var legacyDeadChunksBefore int
 	if err := dbconn.QueryRow(`
 		SELECT COUNT(*)
-		FROM chunk
-		WHERE id <= $1
-		  AND status = 'COMPLETED'
-		  AND live_ref_count = 0
-		  AND pin_count = 0
+		FROM chunk c
+		WHERE c.id <= $1
+		  AND c.status = 'COMPLETED'
+		  AND c.live_ref_count = 0
+		  AND c.pin_count = 0
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM snapshot_file sf
+			JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+			WHERE fc.chunk_id = c.id
+		  )
 	`, oldMaxChunkID).Scan(&legacyDeadChunksBefore); err != nil {
 		t.Fatalf("count legacy dead chunks before GC: %v", err)
 	}
@@ -1008,11 +1085,17 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 	var legacyDeadChunksAfter int
 	if err := dbconn.QueryRow(`
 		SELECT COUNT(*)
-		FROM chunk
-		WHERE id <= $1
-		  AND status = 'COMPLETED'
-		  AND live_ref_count = 0
-		  AND pin_count = 0
+		FROM chunk c
+		WHERE c.id <= $1
+		  AND c.status = 'COMPLETED'
+		  AND c.live_ref_count = 0
+		  AND c.pin_count = 0
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM snapshot_file sf
+			JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+			WHERE fc.chunk_id = c.id
+		  )
 	`, oldMaxChunkID).Scan(&legacyDeadChunksAfter); err != nil {
 		t.Fatalf("count legacy dead chunks after GC: %v", err)
 	}
@@ -1265,6 +1348,49 @@ func TestPhase7SnapshotCompatibilityIntegration(t *testing.T) {
 
 	// Step 6: Remove live files from both old and new data
 	removeCtx := storage.StorageContext{DB: dbconn}
+	assertSnapshotRetainedUnlink := func(storedPath, snapshotID string) {
+		t.Helper()
+
+		normalizedPath := filepath.ToSlash(storedPath)
+		logicalID := logicalIDForStoredPath(t, dbconn, normalizedPath)
+		if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(removeCtx, storedPath); err != nil {
+			t.Fatalf("unlink snapshot-retained stored path %s: %v", storedPath, err)
+		}
+
+		var currentMappings int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path = $1`, normalizedPath).Scan(&currentMappings); err != nil {
+			t.Fatalf("count current mappings after unlink for %s: %v", storedPath, err)
+		}
+		if currentMappings != 0 {
+			t.Fatalf("expected current mapping to be removed after unlink for %s, got=%d", storedPath, currentMappings)
+		}
+
+		var snapshotMembership int
+		if err := dbconn.QueryRow(`
+			SELECT COUNT(*)
+			FROM snapshot_file
+			WHERE snapshot_id = $1 AND logical_file_id = $2
+		`, snapshotID, logicalID).Scan(&snapshotMembership); err != nil {
+			t.Fatalf("count snapshot membership after unlink for %s: %v", storedPath, err)
+		}
+		if snapshotMembership == 0 {
+			t.Fatalf("expected snapshot membership to remain after unlink for %s", storedPath)
+		}
+
+		var completedRecipes int
+		if err := dbconn.QueryRow(`
+			SELECT COUNT(*)
+			FROM logical_file lf
+			WHERE lf.id = $1
+			  AND lf.status = 'COMPLETED'
+			  AND EXISTS (SELECT 1 FROM file_chunk fc WHERE fc.logical_file_id = lf.id)
+		`, logicalID).Scan(&completedRecipes); err != nil {
+			t.Fatalf("count logical recipes after unlink for %s: %v", storedPath, err)
+		}
+		if completedRecipes != 1 {
+			t.Fatalf("expected completed logical recipe to remain after unlink for %s, got=%d", storedPath, completedRecipes)
+		}
+	}
 
 	// Remove some legacy files
 	legacyRemove := []string{
@@ -1273,21 +1399,13 @@ func TestPhase7SnapshotCompatibilityIntegration(t *testing.T) {
 		legacySet.duplicatePathA,
 	}
 	for _, p := range legacyRemove {
-		if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(removeCtx, p); err == nil {
-			t.Fatalf("expected snapshot-retained legacy path removal to be refused for %s", p)
-		} else if !strings.Contains(err.Error(), "retained by one or more snapshots") {
-			t.Fatalf("remove snapshot legacy path %s: %v", p, err)
-		}
+		assertSnapshotRetainedUnlink(p, "phase7-legacy-snapshot")
 	}
 
 	// Remove some packed files
 	packedRemove := []string{packedFilePath, packedFolderFiles[0]}
 	for _, p := range packedRemove {
-		if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(removeCtx, p); err == nil {
-			t.Fatalf("expected snapshot-retained packed path removal to be refused for %s", p)
-		} else if !strings.Contains(err.Error(), "retained by one or more snapshots") {
-			t.Fatalf("remove snapshot packed path %s: %v", p, err)
-		}
+		assertSnapshotRetainedUnlink(p, "phase7-packed-snapshot")
 	}
 
 	// Step 7: Run GC (dry-run and real)
