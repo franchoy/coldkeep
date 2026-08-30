@@ -48,7 +48,7 @@ func (e *DefaultEngine) SnapshotCreate(ctx context.Context, req SnapshotCreateRe
 		opts.ParentID = &parentID
 	}
 
-	result, err := snapshot.CreateSnapshotWithOptionsResult(ctx, e.config.DB, opts)
+	result, err := snapshot.CreateSnapshotWithOptionsResultStrictSelectors(ctx, e.config.DB, opts)
 	if err != nil {
 		return SnapshotCreateResult{}, err
 	}

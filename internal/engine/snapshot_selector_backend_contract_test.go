@@ -165,6 +165,63 @@ func TestEngineSnapshotSelectorErrorsAcrossBackends(t *testing.T) {
 	})
 }
 
+func TestEngineSnapshotCreateSelectorAtomicityAcrossBackends(t *testing.T) {
+	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
+		fixture := newMutationBackendFixture(t, backend)
+		fixture.store(t, "docs/a.txt", []byte("selector atomicity backend payload"))
+		fixture.useAbsoluteStoredPath(t, "docs/a.txt")
+		fixture.finalize(t)
+		eng := fixture.readEngine(t)
+
+		if _, err := backend.DB.ExecContext(context.Background(),
+			`INSERT INTO snapshot_path (path) VALUES ($1)`, "shared/preexisting.txt"); err != nil {
+			t.Fatalf("seed preexisting snapshot_path: %v", err)
+		}
+		initialPathRows := requireEngineReadInt64(t, backend.DB, `SELECT COUNT(*) FROM snapshot_path`)
+
+		assertRolledBack := func(snapshotID string) {
+			t.Helper()
+			if got := requireEngineReadInt64(t, backend.DB, `SELECT COUNT(*) FROM snapshot WHERE id = $1`, snapshotID); got != 0 {
+				t.Fatalf("failed create left %d snapshot rows for %q", got, snapshotID)
+			}
+			if got := requireEngineReadInt64(t, backend.DB, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID); got != 0 {
+				t.Fatalf("failed create left %d snapshot_file rows for %q", got, snapshotID)
+			}
+			if got := requireEngineReadInt64(t, backend.DB, `SELECT COUNT(*) FROM snapshot_path`); got != initialPathRows {
+				t.Fatalf("failed create changed snapshot_path rows: got %d want %d", got, initialPathRows)
+			}
+			if got := requireEngineReadInt64(t, backend.DB, `SELECT COUNT(*) FROM snapshot_path WHERE path = $1`, "shared/preexisting.txt"); got != 1 {
+				t.Fatalf("failed create changed preexisting snapshot_path row: got %d", got)
+			}
+		}
+
+		if _, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
+			ID: "selector-missing-prefix", SelectionBase: fixture.inputRoot, Paths: []string{"missing/"},
+		}); !engine.IsCode(err, engine.ErrorNotFound) {
+			t.Fatalf("missing prefix: expected not_found, got code=%q err=%v", engine.CodeOf(err), err)
+		}
+		assertRolledBack("selector-missing-prefix")
+
+		if _, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
+			ID: "selector-mixed-miss", SelectionBase: fixture.inputRoot, Paths: []string{"docs/a.txt", "missing/"},
+		}); !engine.IsCode(err, engine.ErrorNotFound) {
+			t.Fatalf("mixed selector miss: expected not_found, got code=%q err=%v", engine.CodeOf(err), err)
+		}
+		assertRolledBack("selector-mixed-miss")
+
+		result, err := eng.SnapshotCreate(context.Background(), engine.SnapshotCreateRequest{
+			ID: "selector-overlap", SelectionBase: fixture.inputRoot,
+			Paths: []string{"docs/", "./docs//", "docs/a.txt", "./docs/a.txt"},
+		})
+		if err != nil || result.FilesInserted != 1 {
+			t.Fatalf("duplicate/overlap create: got result=%+v err=%v", result, err)
+		}
+		if got := requireEngineReadInt64(t, backend.DB, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, result.SnapshotID); got != 1 {
+			t.Fatalf("duplicate/overlap create inserted %d members, want 1", got)
+		}
+	})
+}
+
 func int64Pointer(value int64) *int64 { return &value }
 
 func timePointer(value time.Time) *time.Time { return &value }

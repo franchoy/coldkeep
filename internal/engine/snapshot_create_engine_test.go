@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -423,7 +424,7 @@ func TestSnapshotCreateGeneratorIsolationAcrossEngines(t *testing.T) {
 	}
 }
 
-func TestSnapshotCreateSuppliedIDAndEmptyPartialBehavior(t *testing.T) {
+func TestSnapshotCreateSuppliedIDAndMissingPrefixBehavior(t *testing.T) {
 	t.Run("supplied id is trimmed and whitespace label is absent", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
 		base := seedSnapshotCreateEngineFiles(t, dbconn)
@@ -441,23 +442,24 @@ func TestSnapshotCreateSuppliedIDAndEmptyPartialBehavior(t *testing.T) {
 		assertSnapshotCreateEngineResult(t, result, "snap-trimmed-engine", SnapshotTypePartial, 1, 1, "", "")
 	})
 
-	t.Run("empty directory prefix partial snapshot still commits", func(t *testing.T) {
+	t.Run("missing directory prefix rolls back", func(t *testing.T) {
 		dbconn := openSnapshotCreateEngineDB(t)
 		base := seedSnapshotCreateEngineFiles(t, dbconn)
 		eng := newSnapshotCreateEngine(t, dbconn)
+		initialPathRows := phase3TableCount(t, eng, `SELECT COUNT(*) FROM snapshot_path`)
 
 		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
 			ID:            "snap-empty-prefix-engine",
 			SelectionBase: base,
 			Paths:         []string{"missing/"},
 		})
-		if err != nil {
-			t.Fatalf("SnapshotCreate empty partial: %v", err)
+		if !IsCode(err, ErrorNotFound) {
+			t.Fatalf("SnapshotCreate missing prefix: expected not_found, got result=%+v code=%q err=%v", result, CodeOf(err), err)
 		}
-		assertSnapshotCreateEngineResult(t, result, "snap-empty-prefix-engine", SnapshotTypePartial, 1, 0, "", "")
-		if !snapshotExists(t, dbconn, "snap-empty-prefix-engine") {
-			t.Fatal("expected empty partial snapshot row to be committed")
+		if result != (SnapshotCreateResult{}) {
+			t.Fatalf("SnapshotCreate missing prefix returned nonzero result: %+v", result)
 		}
+		phase3AssertCreateRollback(t, eng, "snap-empty-prefix-engine", initialPathRows)
 	})
 }
 
@@ -484,6 +486,104 @@ func TestSnapshotCreateValidationAndRollbackCases(t *testing.T) {
 			SelectionBase: base,
 			Paths:         []string{"docs/a.txt", "missing.txt"},
 		}, "path not found in current state")
+	})
+}
+
+func TestSnapshotCreateSelectorAtomicityAndAccounting(t *testing.T) {
+	t.Run("multiple misses are stable and rollback preserves shared paths", func(t *testing.T) {
+		dbconn := openSnapshotCreateEngineDB(t)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
+		eng := newSnapshotCreateEngine(t, dbconn)
+		if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "shared/preexisting.txt"); err != nil {
+			t.Fatalf("seed preexisting snapshot_path: %v", err)
+		}
+		initialPathRows := phase3TableCount(t, eng, `SELECT COUNT(*) FROM snapshot_path`)
+
+		_, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
+			ID:            "snap-multiple-misses-engine",
+			SelectionBase: base,
+			Paths:         []string{"z-missing/", "docs/a.txt", "a-missing.txt"},
+		})
+		if !IsCode(err, ErrorNotFound) {
+			t.Fatalf("multiple misses: expected not_found, got code=%q err=%v", CodeOf(err), err)
+		}
+		if !strings.Contains(err.Error(), "a-missing.txt, z-missing/") {
+			t.Fatalf("multiple misses: expected sorted selector report, got %v", err)
+		}
+		phase3AssertCreateRollback(t, eng, "snap-multiple-misses-engine", initialPathRows)
+		if got := phase3TableCount(t, eng, `SELECT COUNT(*) FROM snapshot_path WHERE path = ?`, "shared/preexisting.txt"); got != 1 {
+			t.Fatalf("failed create changed preexisting snapshot_path row: got %d", got)
+		}
+	})
+
+	t.Run("matched prefix and missing exact rollback together", func(t *testing.T) {
+		dbconn := openSnapshotCreateEngineDB(t)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
+		eng := newSnapshotCreateEngine(t, dbconn)
+		initialPathRows := phase3TableCount(t, eng, `SELECT COUNT(*) FROM snapshot_path`)
+
+		_, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
+			ID:            "snap-prefix-exact-miss-engine",
+			SelectionBase: base,
+			Paths:         []string{"docs/", "missing.txt"},
+		})
+		if !IsCode(err, ErrorNotFound) || !strings.Contains(err.Error(), "missing.txt") {
+			t.Fatalf("matched prefix plus missing exact: code=%q err=%v", CodeOf(err), err)
+		}
+		phase3AssertCreateRollback(t, eng, "snap-prefix-exact-miss-engine", initialPathRows)
+	})
+
+	t.Run("duplicates and overlaps count independently without duplicate members", func(t *testing.T) {
+		dbconn := openSnapshotCreateEngineDB(t)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
+		oldBoundaryPath := filepath.Join(base, "img", "c.png")
+		newBoundaryPath := filepath.Join(base, "docs-old", "outside.txt")
+		ensureSnapshotCreateInputDir(t, filepath.Dir(newBoundaryPath))
+		if err := os.Rename(oldBoundaryPath, newBoundaryPath); err != nil {
+			t.Fatalf("move prefix-boundary fixture: %v", err)
+		}
+		if _, err := dbconn.Exec(`UPDATE physical_file SET path = ? WHERE path = ?`, newBoundaryPath, oldBoundaryPath); err != nil {
+			t.Fatalf("update prefix-boundary fixture mapping: %v", err)
+		}
+		eng := newSnapshotCreateEngine(t, dbconn)
+
+		result, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
+			ID:            "snap-overlap-engine",
+			SelectionBase: base,
+			Paths:         []string{"docs/", "./docs//", "docs/a.txt", "./docs/a.txt", "docs/sub/"},
+		})
+		if err != nil {
+			t.Fatalf("duplicate and overlapping selectors: %v", err)
+		}
+		if result.FilesInserted != 2 || snapshotMembershipCount(t, dbconn, result.SnapshotID) != 2 {
+			t.Fatalf("duplicate and overlapping selectors produced duplicate/boundary members: %+v", result)
+		}
+		members := phase3SnapshotMembers(t, eng, result.SnapshotID)
+		if !reflect.DeepEqual(members, []string{"docs/a.txt", "docs/sub/b.txt"}) {
+			t.Fatalf("prefix boundary/overlap members: got %v", members)
+		}
+	})
+
+	t.Run("non-completed source does not satisfy selector", func(t *testing.T) {
+		dbconn := openSnapshotCreateEngineDB(t)
+		base := seedSnapshotCreateEngineFiles(t, dbconn)
+		eng := newSnapshotCreateEngine(t, dbconn)
+		if _, err := dbconn.Exec(`UPDATE logical_file SET status = 'PROCESSING' WHERE id = (
+			SELECT logical_file_id FROM physical_file WHERE path = ?
+		)`, filepath.Join(base, "docs", "a.txt")); err != nil {
+			t.Fatalf("mark selected source non-completed: %v", err)
+		}
+		initialPathRows := phase3TableCount(t, eng, `SELECT COUNT(*) FROM snapshot_path`)
+
+		_, err := eng.SnapshotCreate(context.Background(), SnapshotCreateRequest{
+			ID:            "snap-ineligible-engine",
+			SelectionBase: base,
+			Paths:         []string{"docs/a.txt"},
+		})
+		if !IsCode(err, ErrorNotFound) {
+			t.Fatalf("non-completed selector: expected not_found, got code=%q err=%v", CodeOf(err), err)
+		}
+		phase3AssertCreateRollback(t, eng, "snap-ineligible-engine", initialPathRows)
 	})
 }
 

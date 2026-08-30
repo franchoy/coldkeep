@@ -1631,10 +1631,30 @@ func CreateSnapshotWithOptionsResult(
 	dbconn *sql.DB,
 	opts SnapshotCreateOptions,
 ) (CreateSnapshotResult, error) {
+	return createSnapshotWithOptionsResult(ctx, dbconn, opts, false)
+}
+
+// CreateSnapshotWithOptionsResultStrictSelectors creates a snapshot while requiring every
+// distinct explicit selector to match at least one eligible source.
+func CreateSnapshotWithOptionsResultStrictSelectors(
+	ctx context.Context,
+	dbconn *sql.DB,
+	opts SnapshotCreateOptions,
+) (CreateSnapshotResult, error) {
+	return createSnapshotWithOptionsResult(ctx, dbconn, opts, true)
+}
+
+func createSnapshotWithOptionsResult(
+	ctx context.Context,
+	dbconn *sql.DB,
+	opts SnapshotCreateOptions,
+	requireSelectorMatches bool,
+) (CreateSnapshotResult, error) {
 	req, err := prepareSnapshotCreateOptionsResult(dbconn, opts)
 	if err != nil {
 		return CreateSnapshotResult{}, err
 	}
+	req.requireSelectorMatches = requireSelectorMatches
 
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
@@ -1680,14 +1700,15 @@ func createSnapshotWithOptionsInTx(
 }
 
 type snapshotCreateRequest struct {
-	snapshotID    string
-	snapshotType  string
-	label         *string
-	parentID      *string
-	selectionBase string
-	paths         []string
-	hasPaths      bool
-	legacyPaths   bool
+	snapshotID             string
+	snapshotType           string
+	label                  *string
+	parentID               *string
+	selectionBase          string
+	paths                  []string
+	hasPaths               bool
+	legacyPaths            bool
+	requireSelectorMatches bool
 }
 
 type snapshotCreateFilters struct {
@@ -1848,11 +1869,27 @@ func buildSnapshotCreateInsertRows(
 		}
 		return resolveSnapshotCreateInsertRows(ctx, tx, req.snapshotID, pending)
 	}
+	if !req.requireSelectorMatches {
+		filters, err = resolveSnapshotCreateFilters(req.selectionBase, filters)
+		if err != nil {
+			return nil, nil, err
+		}
+		pending, collectErr := collectPendingSnapshotCreateFiles(ctx, tx, dbconn, req, filters, nil)
+		if collectErr != nil {
+			return nil, nil, collectErr
+		}
+		return resolveSnapshotCreateInsertRows(ctx, tx, req.snapshotID, pending)
+	}
+	inputFilters := filters
 	filters, err = resolveSnapshotCreateFilters(req.selectionBase, filters)
 	if err != nil {
 		return nil, nil, err
 	}
-	pending, err := collectPendingSnapshotCreateFiles(ctx, tx, dbconn, req, filters)
+	accounting, err := newPhysicalSnapshotCreateSelectorAccounting(req.selectionBase, inputFilters, filters)
+	if err != nil {
+		return nil, nil, err
+	}
+	pending, err := collectPendingSnapshotCreateFiles(ctx, tx, dbconn, req, filters, accounting)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1901,6 +1938,7 @@ func collectPendingSnapshotCreateFiles(
 	dbconn *sql.DB,
 	req snapshotCreateRequest,
 	filters snapshotCreateFilters,
+	accounting *snapshotCreateSelectorAccounting,
 ) ([]pendingSnapshotFile, error) {
 	rows, err := tx.QueryContext(ctx, snapshotSourceQuery(dbconn))
 	if err != nil {
@@ -1912,7 +1950,7 @@ func collectPendingSnapshotCreateFiles(
 	seenPaths := make(map[string]int64)
 	pending := make([]pendingSnapshotFile, 0, 128)
 	for rows.Next() {
-		entry, matched, err := scanPendingSnapshotCreateFile(rows, req, filters, foundExact)
+		entry, matched, err := scanPendingSnapshotCreateFile(rows, req, filters, foundExact, accounting)
 		if err != nil {
 			return nil, err
 		}
@@ -1937,7 +1975,11 @@ func collectPendingSnapshotCreateFiles(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate snapshot source rows: %w", err)
 	}
-	if err := validateSnapshotCreateExactMatches(filters, foundExact); err != nil {
+	if accounting == nil {
+		if err := validateSnapshotCreateExactMatches(filters, foundExact); err != nil {
+			return nil, err
+		}
+	} else if err := accounting.validate(); err != nil {
 		return nil, err
 	}
 	return pending, nil
@@ -1948,6 +1990,7 @@ func scanPendingSnapshotCreateFile(
 	req snapshotCreateRequest,
 	filters snapshotCreateFilters,
 	foundExact map[string]struct{},
+	accounting *snapshotCreateSelectorAccounting,
 ) (pendingSnapshotFile, bool, error) {
 	var (
 		path          string
@@ -1965,6 +2008,9 @@ func scanPendingSnapshotCreateFile(
 		return pendingSnapshotFile{}, false, err
 	}
 	matched := snapshotCreatePhysicalPathMatches(canonicalSource, filters, foundExact)
+	if accounting != nil {
+		matched = accounting.matchPhysical(canonicalSource)
+	}
 	if !matched && req.hasPaths {
 		return pendingSnapshotFile{}, false, nil
 	}
