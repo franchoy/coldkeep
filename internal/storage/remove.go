@@ -119,18 +119,6 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 		return err
 	}
 
-	retainedBySnapshot, err := retention.IsLogicalFileReferencedBySnapshot(ctx, tx, result.LogicalFileID)
-	if err != nil {
-		return err
-	}
-	if retainedBySnapshot {
-		return invariants.New(
-			invariants.CodeSnapshotRetainedDeleteBlocked,
-			fmt.Sprintf("remove refused: logical_file id=%d is retained by one or more snapshots", result.LogicalFileID),
-			nil,
-		)
-	}
-
 	deleteRes, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, result.StoredPath)
 	if err != nil {
 		return err
@@ -178,6 +166,11 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 			result.RemainingRefCount,
 			actualMappings,
 		)
+	}
+	if result.RemainingRefCount == 0 {
+		if err := adjustCompletedLogicalRecipeLiveness(ctx, tx, result.LogicalFileID, -1); err != nil {
+			return fmt.Errorf("deactivate logical_file recipe id=%d after last stored-path unlink: %w", result.LogicalFileID, err)
+		}
 	}
 
 	return nil
@@ -332,25 +325,6 @@ func RemoveFileWithDBResultContext(parent context.Context, dbconn *sql.DB, fileI
 		chunkIDs = append(chunkIDs, id)
 	}
 	result.RemovedMappings = len(chunkIDs)
-
-	// Decrement live_ref_count
-	for _, chunkID := range chunkIDs {
-		var refCount int64
-		err := tx.QueryRowContext(ctx, `
-			UPDATE chunk
-			SET live_ref_count = live_ref_count - 1
-			WHERE id = $1
-			AND live_ref_count > 0
-			RETURNING live_ref_count
-		`, chunkID).Scan(&refCount)
-
-		if err == sql.ErrNoRows {
-			return RemoveFileResult{}, fmt.Errorf("invalid live_ref_count transition for chunk %d", chunkID)
-		}
-		if err != nil {
-			return RemoveFileResult{}, err
-		}
-	}
 
 	// Remove mappings
 	_, err = tx.ExecContext(ctx, `DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID)

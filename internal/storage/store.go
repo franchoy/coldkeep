@@ -288,7 +288,7 @@ func commitPreparedChunksWithContext(
 		if err != nil {
 			return StoreFileResult{}, err
 		}
-		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, commitInfo.normalizedPath, commitInfo.fileID, commitInfo.physicalMetadata, commitInfo.replace); err != nil {
+		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, commitInfo.normalizedPath, commitInfo.fileID, commitInfo.physicalMetadata, commitInfo.replace, recipeLivenessAlreadyAccounted); err != nil {
 			_ = tx.Rollback()
 			return StoreFileResult{}, err
 		}
@@ -724,7 +724,7 @@ func commitPreparedChunksWithContext(
 	if err != nil {
 		return StoreFileResult{}, err
 	}
-	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, commitInfo.normalizedPath, commitInfo.fileID, commitInfo.physicalMetadata, commitInfo.replace); err != nil {
+	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, commitInfo.normalizedPath, commitInfo.fileID, commitInfo.physicalMetadata, commitInfo.replace, recipeLivenessAlreadyAccounted); err != nil {
 		_ = tx.Rollback()
 		return StoreFileResult{}, err
 	}
@@ -2946,7 +2946,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		if err != nil {
 			return StoreFileResult{}, err
 		}
-		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, prepared.PhysicalMetadata, replace); err != nil {
+		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, prepared.PhysicalMetadata, replace, recipeLivenessActivateOnFirstMapping); err != nil {
 			_ = tx.Rollback()
 			return StoreFileResult{}, err
 		}

@@ -13,20 +13,36 @@ import (
 
 func checkReferenceCountsContext(ctx context.Context, dbconn *sql.DB) error {
 
-	// Check that all chunks have correct reference counts (chunk.live_ref_count should match the actual number of file_chunk references)
+	// Durable chunk liveness counts recipe occurrences owned by completed logical
+	// files that currently have at least one physical mapping. Snapshot-only and
+	// otherwise zero-current recipes remain structurally valid but contribute 0.
 	log.Printf("Checking chunk reference counts consistency...")
 	var errorList []error
 	var errorCount int
 	rows, err := dbconn.QueryContext(ctx, `
 			SELECT chunk.id,
 				chunk.live_ref_count,
-				COUNT(file_chunk.chunk_id) AS actual
+				COALESCE(SUM(CASE
+					WHEN logical_file.status = $1
+					AND EXISTS (
+						SELECT 1
+						FROM physical_file
+						WHERE physical_file.logical_file_id = logical_file.id
+					)
+					THEN 1 ELSE 0 END), 0) AS actual
 			FROM chunk
-			LEFT JOIN file_chunk
-			ON chunk.id = file_chunk.chunk_id
+			LEFT JOIN file_chunk ON chunk.id = file_chunk.chunk_id
+			LEFT JOIN logical_file ON logical_file.id = file_chunk.logical_file_id
 			GROUP BY chunk.id
-			HAVING chunk.live_ref_count != COUNT(file_chunk.chunk_id)
-			`)
+			HAVING chunk.live_ref_count != COALESCE(SUM(CASE
+				WHEN logical_file.status = $1
+				AND EXISTS (
+					SELECT 1
+					FROM physical_file
+					WHERE physical_file.logical_file_id = logical_file.id
+				)
+				THEN 1 ELSE 0 END), 0)
+			`, filestate.LogicalFileCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query chunk reference counts: %v", err)

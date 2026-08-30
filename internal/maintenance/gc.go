@@ -18,6 +18,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/graph"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/retention"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -189,6 +190,11 @@ func runGCWithDBOptions(ctx context.Context, dbconn *sql.DB, dryRun bool, contai
 
 	if err := gcIntegrityPreFlight(dbconn); err != nil {
 		return GCResult{}, err
+	}
+	if !dryRun {
+		if _, err := cleanupRootlessLogicalRecipes(ctx, dbconn); err != nil {
+			return GCResult{}, fmt.Errorf("cleanup rootless logical recipes: %w", err)
+		}
 	}
 
 	state, err := buildGCPreFlightState(ctx, dbconn)
@@ -483,6 +489,149 @@ func gcIntegrityPreFlight(dbconn *sql.DB) error {
 		)
 	}
 	return nil
+}
+
+const gcRootlessRecipeCleanupLimit = 1000
+
+// cleanupRootlessLogicalRecipes removes a bounded batch of completed logical
+// recipes that have no current or snapshot root and no pinned recipe chunk.
+// It runs before chunk sweep so the file_chunk -> chunk RESTRICT edge cannot
+// obstruct physical reclamation. Snapshot deletion itself remains metadata-only.
+func cleanupRootlessLogicalRecipes(ctx context.Context, dbconn *sql.DB) (deleted int64, err error) {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT lf.id
+		FROM logical_file lf
+		WHERE lf.status = $1
+		AND NOT EXISTS (
+			SELECT 1 FROM physical_file pf WHERE pf.logical_file_id = lf.id
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = lf.id
+		)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM file_chunk fc
+			JOIN chunk ch ON ch.id = fc.chunk_id
+			WHERE fc.logical_file_id = lf.id AND ch.pin_count > 0
+		)
+		ORDER BY lf.id
+		LIMIT $2`, filestate.LogicalFileCompleted, gcRootlessRecipeCleanupLimit)
+	if err != nil {
+		return 0, err
+	}
+	candidates := make([]int64, 0)
+	for rows.Next() {
+		var logicalFileID int64
+		if err := rows.Scan(&logicalFileID); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		candidates = append(candidates, logicalFileID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	for _, logicalFileID := range candidates {
+		lockLogicalQuery := db.QueryWithOptionalForUpdate(dbconn, `
+			SELECT lf.id
+			FROM logical_file lf
+			WHERE lf.id = $1
+			AND lf.status = $2
+			AND NOT EXISTS (
+				SELECT 1 FROM physical_file pf WHERE pf.logical_file_id = lf.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = lf.id
+			)`)
+		var lockedLogicalFileID int64
+		if err := tx.QueryRowContext(ctx, lockLogicalQuery, logicalFileID, filestate.LogicalFileCompleted).Scan(&lockedLogicalFileID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return 0, err
+		}
+
+		lockChunksQuery := db.QueryWithOptionalForUpdate(dbconn, `
+			SELECT ch.id, ch.pin_count
+			FROM file_chunk fc
+			JOIN chunk ch ON ch.id = fc.chunk_id
+			WHERE fc.logical_file_id = $1
+			ORDER BY ch.id, fc.chunk_order`)
+		chunkRows, err := tx.QueryContext(ctx, lockChunksQuery, logicalFileID)
+		if err != nil {
+			return 0, err
+		}
+		pinned := false
+		for chunkRows.Next() {
+			var chunkID int64
+			var pinCount int64
+			if err := chunkRows.Scan(&chunkID, &pinCount); err != nil {
+				_ = chunkRows.Close()
+				return 0, err
+			}
+			if pinCount > 0 {
+				pinned = true
+			}
+		}
+		if err := chunkRows.Err(); err != nil {
+			_ = chunkRows.Close()
+			return 0, err
+		}
+		if err := chunkRows.Close(); err != nil {
+			return 0, err
+		}
+		if pinned {
+			continue
+		}
+
+		result, err := tx.ExecContext(ctx, `
+			DELETE FROM logical_file
+			WHERE id = $1
+			AND status = $2
+			AND NOT EXISTS (
+				SELECT 1 FROM physical_file pf WHERE pf.logical_file_id = logical_file.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = logical_file.id
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM file_chunk fc
+				JOIN chunk ch ON ch.id = fc.chunk_id
+				WHERE fc.logical_file_id = logical_file.id AND ch.pin_count > 0
+			)`, logicalFileID, filestate.LogicalFileCompleted)
+		if err != nil {
+			return 0, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if rowsAffected > 1 {
+			return 0, fmt.Errorf("rootless logical recipe cleanup id=%d deleted %d rows", logicalFileID, rowsAffected)
+		}
+		deleted += rowsAffected
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 // buildGCPreFlightState computes the snapshot-reachability summary, the
