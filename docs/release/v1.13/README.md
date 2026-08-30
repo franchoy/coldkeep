@@ -76,21 +76,23 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
 Closure is the active exceptional critical-maintenance source train. Phases 0
-through 4 are Complete. Phase 5 is Next with its implementation locally
-certified and exact-head hosted certification pending; Phase 6 is not started
-or authorized. Seven findings are confirmed and zero are closed.
+through 5 are Complete. Phase 6 is the next authorized test-and-certification
+phase; Phase 7 is not started. Seven findings are confirmed and one is closed.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
 36/36 jobs, reused CodeQL `33303282125` passed 4/4, and open alerts remain zero.
 CK-V11316-001 remains open pending Phase 6 retention proof. Phase 5 product
 commit `cc4186b1c095bae06ee92e12048c1262d53e843d` implements fail-closed
 selector accounting and atomic rollback and has passed clean-tree, SQLite, and
-PostgreSQL plain/AES-GCM certification. CK-V11316-002 remains open pending
-exact-head hosted certification. Technical correctness closure is withheld.
+PostgreSQL plain/AES-GCM certification. Evidence commit
+`4ba598fb57a3594d094ed3297c3fb5549dbc401f` passed exact-head CI run
+`33307923059` with 36/36 jobs including Required Gate and CodeQL run
+`33307923075` with 4/4 jobs and zero open alerts. CK-V11316-002 is closed
+certified. Technical correctness closure is withheld.
 
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
-historical and superseded by the current local-candidate authority above.
+historical and superseded by the current Phase 6 authority above.
 
 v1.13.15 remains the published stable immutable historical product baseline,
 release `378768097`. Annotated tag object
