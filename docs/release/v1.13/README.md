@@ -78,8 +78,9 @@ v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
 Closure is the active exceptional critical-maintenance source train. Phases 0
 through 5 are Complete. Phase 6 is Next and locally certified pending exact-
 head hosted gates; Phase 6R2 is the locally certified snapshot-only lifecycle
-correction. Phase 7 is not started. Eight findings are confirmed and one is
-closed at this candidate state.
+correction, and Phase 6R3 is locally certified pending exact-head hosted
+recertification. Phase 7 is not started. Eight findings are confirmed and one
+is closed at this candidate state.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
 36/36 jobs, reused CodeQL `33303282125` passed 4/4, and open alerts remain zero.
@@ -104,10 +105,15 @@ Exact-head CI `33331967865` at that evidence commit passed quality,
 cross-platform validation, critical coverage, legacy compatibility, benchmark
 integrity, and timing advisories, while both PostgreSQL correctness profiles
 failed on the same two stale migration-compatibility expectations. CodeQL
-`33331967855` passed 4/4 with zero open alerts. Phase 6R3 authorizes only
+`33331967855` passed 4/4 with zero open alerts. Phase 6R3 authority
+`a72602ed988978476bd500c130d428a8c4471cfe` authorized only
 `tests/integration/v18_migration_compatibility_integration_test.go` to reconcile
-stored-path unlink and current/pin/snapshot root-union assertions. Product
-runtime remains frozen and Phase 7 is not authorized.
+stored-path unlink and current/pin/snapshot root-union assertions. Test commit
+`81df6a497a2ae07ecba177fb645e1b4bf556fa15` completed that reconciliation
+with zero product runtime changes and passed exact-affected and complete
+PostgreSQL plain/AES-GCM short/race profiles plus the clean detached full local
+gate. Exact-head hosted certification remains pending; Phase 7 is not
+authorized.
 
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
