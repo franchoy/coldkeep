@@ -76,8 +76,9 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
 Closure is the active exceptional critical-maintenance source train. Phases 0
-through 5 are Complete. Phase 6 is the next authorized test-and-certification
-phase; Phase 7 is not started. Seven findings are confirmed and one is closed.
+through 5 are Complete. Phase 6 is Next, with proof withheld at the stored-path retention stop;
+Phase 6R2 is the authorized snapshot-only lifecycle correction
+phase; Phase 7 is not started. Eight findings are confirmed and one is closed.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
 36/36 jobs, reused CodeQL `33303282125` passed 4/4, and open alerts remain zero.
