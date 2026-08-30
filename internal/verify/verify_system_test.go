@@ -109,7 +109,43 @@ func TestVerifySystemStandardDetectsLogicalRefCountMismatch(t *testing.T) {
 	}
 }
 
-func TestVerifySystemStandardAcceptsValidZeroReferenceLogicalFile(t *testing.T) {
+func TestVerifySystemStandardAcceptsValidSnapshotOnlyZeroReferenceLogicalFile(t *testing.T) {
+	containersDir := t.TempDir()
+	dbconn := openPreV15MigratedVerifyDB(t, containersDir)
+	defer func() { _ = dbconn.Close() }()
+
+	var logicalID int64
+	if err := dbconn.QueryRow(`SELECT id FROM logical_file LIMIT 1`).Scan(&logicalID); err != nil {
+		t.Fatalf("read logical_file id: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM physical_file WHERE logical_file_id = $1`, logicalID); err != nil {
+		t.Fatalf("delete physical mappings: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = 0 WHERE id = $1`, logicalID); err != nil {
+		t.Fatalf("set zero ref_count: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE chunk SET live_ref_count = 0 WHERE id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1)`, logicalID); err != nil {
+		t.Fatalf("deactivate snapshot-only recipe liveness: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('verify-snapshot-only', CURRENT_TIMESTAMP, 'full')`); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES ('verify/snapshot-only.bin')`); err != nil {
+		t.Fatalf("insert snapshot path: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id)
+		VALUES ('verify-snapshot-only', (SELECT id FROM snapshot_path WHERE path = 'verify/snapshot-only.bin'), $1)
+	`, logicalID); err != nil {
+		t.Fatalf("insert snapshot membership: %v", err)
+	}
+
+	if err := VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
+		t.Fatalf("verify standard should accept valid snapshot-only zero-reference logical file: %v", err)
+	}
+}
+
+func TestVerifySystemStandardDetectsWrongSnapshotOnlyCurrentRootCount(t *testing.T) {
 	containersDir := t.TempDir()
 	dbconn := openPreV15MigratedVerifyDB(t, containersDir)
 	defer func() { _ = dbconn.Close() }()
@@ -125,8 +161,9 @@ func TestVerifySystemStandardAcceptsValidZeroReferenceLogicalFile(t *testing.T) 
 		t.Fatalf("set zero ref_count: %v", err)
 	}
 
-	if err := VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
-		t.Fatalf("verify standard should accept valid zero-reference logical file: %v", err)
+	err := VerifySystemStandardWithContainersDir(dbconn, containersDir)
+	if err == nil {
+		t.Fatalf("expected wrong snapshot-only current-root count detection, got: %v", err)
 	}
 }
 

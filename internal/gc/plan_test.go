@@ -244,12 +244,12 @@ func TestBuildPlanStoredPathOneOfManyUnlinkDoesNotMakePayloadReclaimable(t *test
 	assertGCPlanNoReclaimablePayload(t, repo, "after one-of-many unlink")
 }
 
-func TestBuildPlanLastStoredPathUnlinkDoesNotTransferPayloadOwnershipAwayFromGC(t *testing.T) {
+func TestBuildPlanModelsRootlessRecipeCleanupWithoutMutation(t *testing.T) {
 	repo := newGCTestRepository(t)
 	stored := seedStoredPathGCFixture(t, repo, "gc-last-mapping.txt", "gc-last-mapping-payload")
 	removeStoredPathGCMapping(t, repo, stored.Path, "remove final mapping")
 	assertPayloadContainerStillPresent(t, repo)
-	assertGCPlanKeepsPayloadOwnership(t, repo, "after final unlink")
+	assertGCPlanModelsRootlessCleanup(t, repo, stored.FileID, "after final unlink")
 }
 
 func seedStoredPathGCFixture(t *testing.T, repo *gcTestRepository, name, payload string) storage.StoreFileResult {
@@ -308,8 +308,15 @@ func assertPayloadContainerStillPresent(t *testing.T, repo *gcTestRepository) {
 	}
 }
 
-func assertGCPlanKeepsPayloadOwnership(t *testing.T, repo *gcTestRepository, phase string) {
+func assertGCPlanModelsRootlessCleanup(t *testing.T, repo *gcTestRepository, logicalID int64, phase string) {
 	t.Helper()
+	var logicalBefore, recipeBefore int64
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = $1`, logicalID).Scan(&logicalBefore); err != nil {
+		t.Fatalf("count logical recipe before plan %s: %v", phase, err)
+	}
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, logicalID).Scan(&recipeBefore); err != nil {
+		t.Fatalf("count recipe rows before plan %s: %v", phase, err)
+	}
 	plan, err := BuildPlan(context.Background(), repo.DB, PlanOptions{})
 	if err != nil {
 		t.Fatalf("BuildPlan %s: %v", phase, err)
@@ -317,8 +324,18 @@ func assertGCPlanKeepsPayloadOwnership(t *testing.T, repo *gcTestRepository, pha
 	if plan.UnreachableChunks == 0 {
 		t.Fatalf("expected unreachable chunks %s", phase)
 	}
-	if plan.ReclaimableBytes != 0 || plan.PhysicallyReclaimableBytes != 0 {
-		t.Fatalf("expected GC to retain ownership %s, got logical=%d physical=%d", phase, plan.ReclaimableBytes, plan.PhysicallyReclaimableBytes)
+	if plan.ReclaimableBytes == 0 || plan.PhysicallyReclaimableBytes == 0 {
+		t.Fatalf("expected rootless cleanup reclaimability %s, got logical=%d physical=%d", phase, plan.ReclaimableBytes, plan.PhysicallyReclaimableBytes)
+	}
+	var logicalAfter, recipeAfter int64
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = $1`, logicalID).Scan(&logicalAfter); err != nil {
+		t.Fatalf("count logical recipe after plan %s: %v", phase, err)
+	}
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, logicalID).Scan(&recipeAfter); err != nil {
+		t.Fatalf("count recipe rows after plan %s: %v", phase, err)
+	}
+	if logicalAfter != logicalBefore || recipeAfter != recipeBefore {
+		t.Fatalf("BuildPlan mutated rootless recipe %s: logical %d->%d recipe %d->%d", phase, logicalBefore, logicalAfter, recipeBefore, recipeAfter)
 	}
 }
 

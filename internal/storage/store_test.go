@@ -6050,3 +6050,124 @@ func TestDuplicateStoresDoNotCreateNewChunkStorageAcrossCompressionModesStep310(
 		t.Fatalf("restore mismatch after duplicate store across compression modes")
 	}
 }
+
+func TestStoreReattachesCompletedZeroCurrentRecipeWithoutDoubleAccounting(t *testing.T) {
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "off")
+	repo := NewTestRepository(t)
+	payload := bytes.Repeat([]byte("phase6r2-reattach-current-root-"), 8192)
+	firstPath := filepath.Join(t.TempDir(), "first.bin")
+	secondPath := filepath.Join(t.TempDir(), "second.bin")
+	if err := os.WriteFile(firstPath, payload, 0o600); err != nil {
+		t.Fatalf("write first input: %v", err)
+	}
+	if err := os.WriteFile(secondPath, payload, 0o600); err != nil {
+		t.Fatalf("write second input: %v", err)
+	}
+
+	first, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, firstPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store first input: %v", err)
+	}
+	preRows, err := repo.DB.Query(`
+		SELECT fc.chunk_id, COUNT(*), ch.live_ref_count
+		FROM file_chunk fc
+		JOIN chunk ch ON ch.id = fc.chunk_id
+		WHERE fc.logical_file_id = $1
+		GROUP BY fc.chunk_id, ch.live_ref_count
+		ORDER BY fc.chunk_id
+	`, first.FileID)
+	if err != nil {
+		t.Fatalf("query active recipe: %v", err)
+	}
+	for preRows.Next() {
+		var chunkID, occurrences, liveRef int64
+		if err := preRows.Scan(&chunkID, &occurrences, &liveRef); err != nil {
+			_ = preRows.Close()
+			t.Fatalf("scan active recipe: %v", err)
+		}
+		if liveRef != occurrences {
+			_ = preRows.Close()
+			t.Fatalf("new recipe chunk %d liveness=%d, want occurrences=%d", chunkID, liveRef, occurrences)
+		}
+	}
+	if err := preRows.Close(); err != nil {
+		t.Fatalf("close active recipe rows: %v", err)
+	}
+	if _, err := RemoveFileByStoredPathWithStorageContextResult(repo.Storage, first.Path); err != nil {
+		t.Fatalf("unlink first current mapping: %v", err)
+	}
+
+	rows, err := repo.DB.Query(`
+		SELECT fc.chunk_id, COUNT(*), ch.live_ref_count
+		FROM file_chunk fc
+		JOIN chunk ch ON ch.id = fc.chunk_id
+		WHERE fc.logical_file_id = $1
+		GROUP BY fc.chunk_id, ch.live_ref_count
+		ORDER BY fc.chunk_id
+	`, first.FileID)
+	if err != nil {
+		t.Fatalf("query inactive recipe: %v", err)
+	}
+	type recipeCount struct {
+		chunkID     int64
+		occurrences int64
+	}
+	recipe := make([]recipeCount, 0)
+	for rows.Next() {
+		var item recipeCount
+		var liveRef int64
+		if err := rows.Scan(&item.chunkID, &item.occurrences, &liveRef); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan inactive recipe: %v", err)
+		}
+		if liveRef != 0 {
+			_ = rows.Close()
+			t.Fatalf("chunk %d remained live after last unlink: %d", item.chunkID, liveRef)
+		}
+		recipe = append(recipe, item)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close inactive recipe rows: %v", err)
+	}
+	if len(recipe) == 0 {
+		t.Fatal("expected non-empty completed recipe")
+	}
+
+	second, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, secondPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("reattach completed recipe: %v", err)
+	}
+	if !second.AlreadyStored || second.FileID != first.FileID {
+		t.Fatalf("expected completed recipe reuse: first=%+v second=%+v", first, second)
+	}
+	for _, item := range recipe {
+		var liveRef int64
+		if err := repo.DB.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, item.chunkID).Scan(&liveRef); err != nil {
+			t.Fatalf("read reactivated chunk %d: %v", item.chunkID, err)
+		}
+		if liveRef != item.occurrences {
+			t.Fatalf("chunk %d reactivation=%d, want recipe occurrences=%d", item.chunkID, liveRef, item.occurrences)
+		}
+	}
+
+	thirdPath := filepath.Join(t.TempDir(), "third.bin")
+	if err := os.WriteFile(thirdPath, payload, 0o600); err != nil {
+		t.Fatalf("write third input: %v", err)
+	}
+	third, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, thirdPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("add second mapping to active recipe: %v", err)
+	}
+	if !third.AlreadyStored || third.FileID != first.FileID {
+		t.Fatalf("expected active recipe reuse: first=%+v third=%+v", first, third)
+	}
+	for _, item := range recipe {
+		var liveRef int64
+		if err := repo.DB.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, item.chunkID).Scan(&liveRef); err != nil {
+			t.Fatalf("read multiply-mapped chunk %d: %v", item.chunkID, err)
+		}
+		if liveRef != item.occurrences {
+			t.Fatalf("additional mapping multiplied chunk %d liveness: got=%d want=%d", item.chunkID, liveRef, item.occurrences)
+		}
+	}
+}

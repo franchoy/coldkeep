@@ -10,7 +10,6 @@ import (
 
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/invariants"
 )
 
 func TestRemoveStoredPathsRejectsCancelledContext(t *testing.T) {
@@ -219,7 +218,7 @@ func TestRemoveStoredPathsDryRunDoesNotMutateCatalog(t *testing.T) {
 	assertRemoveStoredPathStateEqual(t, before, after)
 }
 
-func TestRemoveStoredPathsDryRunPreservesSnapshotRetentionParityGap(t *testing.T) {
+func TestRemoveStoredPathsDryRunAndLiveAllowSnapshotRetainedUnlink(t *testing.T) {
 	fixture := newRemoveStoredPathFixture(t, []string{"dry-run-snapshot-gap.txt"}, 1)
 	seedSnapshotRetentionReference(t, fixture.db, fixture.logicalID, fixture.storedPath)
 	before := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
@@ -244,11 +243,18 @@ func TestRemoveStoredPathsDryRunPreservesSnapshotRetentionParityGap(t *testing.T
 		t.Fatalf("RemoveStoredPaths live retained: %v", err)
 	}
 	item := liveResult.Items[0]
-	if item.Status != engine.BatchItemFailed || item.InvariantCode != invariants.CodeSnapshotRetainedDeleteBlocked || item.RecommendedAction == "" {
+	if item.Status != engine.BatchItemOK || !item.MappingRemoved || item.RemainingRefCount != 0 || item.InvariantCode != "" || item.RecommendedAction != "" {
 		t.Fatalf("unexpected retained live item: %+v", item)
 	}
 	afterLive := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	assertRemoveStoredPathStateEqual(t, before, afterLive)
+	if !afterLive.logicalExists || afterLive.refCount != 0 || afterLive.physicalCount != 0 || afterLive.snapshotCount != 1 || afterLive.fileChunkCount != before.fileChunkCount {
+		t.Fatalf("unexpected snapshot-only state: before=%+v after=%+v", before, afterLive)
+	}
+	for chunkID, beforeLive := range before.chunkLiveRefs {
+		if got := afterLive.chunkLiveRefs[chunkID]; got != beforeLive-1 {
+			t.Fatalf("snapshot-only unlink did not deactivate chunk %d exactly once: before=%d after=%d", chunkID, beforeLive, got)
+		}
+	}
 }
 
 func TestRemoveStoredPathsRemovesOneOfMultipleMappings(t *testing.T) {

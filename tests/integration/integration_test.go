@@ -1017,12 +1017,10 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("snapshot stats file count mismatch: got=%d want=%d payload=%v", got, snap1Count, statsPayload)
 	}
 
-	// Retention contract: remove --stored-path must be refused while a snapshot retains the file.
-	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedDocsPath, "--output", "json")
-	if removeBlocked.ExitCode == 0 {
-		t.Fatalf("expected remove --stored-path to be blocked while snapshot-retained, but it succeeded: stdout=%s", removeBlocked.Stdout)
-	}
+	// Retention contract: stored-path unlink removes only the current mapping;
+	// snapshot membership continues to retain the logical recipe and payload.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedDocsPath, "--output", "json"), "remove")
 
 	// Restore snap-it-1 while it still exists.
 	restoreRoot := filepath.Join(tmp, "restored")
@@ -1056,12 +1054,10 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("expected docs path not restored in partial exact restore, stat err=%v", err)
 	}
 
-	// Clear retention by deleting snap-it-1, then remove docs.
+	// Clear retention by deleting snap-it-1. The docs current mapping was
+	// already unlinked while the snapshot retained it.
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "snap-it-1", "--force", "--output", "json"), "snapshot")
-
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedDocsPath, "--output", "json"), "remove")
 
 	snap2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-it-2", "--output", "json"), "snapshot")
@@ -2197,13 +2193,12 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 //
 //  1. store file A
 //  2. create snapshot S1 retaining A
-//  3. remove --stored-path is refused while snapshot-retained
+//  3. remove --stored-path creates a valid snapshot-only logical file
 //  4. restore by ID still works
 //  5. gc --dry-run reports snapshot protection
 //  6. verify system --standard passes
 //  7. delete snapshot S1
-//  8. remove --stored-path succeeds
-//  9. gc --dry-run shows snapshot-retained roots dropped (eligibility gate)
+//  8. gc --dry-run shows snapshot-retained roots dropped (eligibility gate)
 func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 	testgate.RequireDB(t)
 
@@ -2259,21 +2254,8 @@ func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase7-e2e", "--output", "json"), "snapshot")
 
-	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedPath, "--output", "json")
-	if removeBlocked.ExitCode == 0 {
-		t.Fatalf("remove --stored-path should be refused while snapshot-retained\nstdout:\n%s\nstderr:\n%s", removeBlocked.Stdout, removeBlocked.Stderr)
-	}
-	errPayload, ok := testutils.FindCLIErrorPayload(removeBlocked.Stderr)
-	if !ok {
-		errPayload, ok = testutils.FindCLIErrorPayload(removeBlocked.Stdout + "\n" + removeBlocked.Stderr)
-	}
-	if !ok {
-		t.Fatalf("remove blocked path produced no machine-readable error payload\nstdout:\n%s\nstderr:\n%s", removeBlocked.Stdout, removeBlocked.Stderr)
-	}
-	if got, _ := errPayload["invariant_code"].(string); got != "SNAPSHOT_RETAINED_DELETE_BLOCKED" {
-		t.Fatalf("expected invariant_code SNAPSHOT_RETAINED_DELETE_BLOCKED, got %q payload=%v", got, errPayload)
-	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedPath, "--output", "json"), "remove")
 
 	restoreDir := filepath.Join(tmp, "restored")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
@@ -2315,9 +2297,6 @@ func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "snap-phase7-e2e", "--force", "--output", "json"), "snapshot")
-
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedPath, "--output", "json"), "remove")
 
 	gcAfter := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"gc", "--dry-run", "--output", "json"), "gc")

@@ -179,7 +179,7 @@ func TestRemoveStoredPathsSummaryMatchesItemOutcomes(t *testing.T) {
 	assertRemoveStoredPathsBatchSummary(t, result.Summary, 1, 1, 1)
 }
 
-func TestRemoveStoredPathsProjectsSnapshotInvariantMetadata(t *testing.T) {
+func TestRemoveStoredPathsSnapshotRetainedUnlinkHasNoInvariantFailure(t *testing.T) {
 	fixture := newRemoveStoredPathFixture(t, []string{"snapshot-metadata.txt"}, 1)
 	seedSnapshotRetentionReference(t, fixture.db, fixture.logicalID, fixture.storedPath)
 
@@ -190,7 +190,7 @@ func TestRemoveStoredPathsProjectsSnapshotInvariantMetadata(t *testing.T) {
 		t.Fatalf("RemoveStoredPaths snapshot metadata: %v", err)
 	}
 	item := result.Items[0]
-	if item.InvariantCode != invariants.CodeSnapshotRetainedDeleteBlocked || item.RecommendedAction != invariants.RecommendedActionForCode(invariants.CodeSnapshotRetainedDeleteBlocked) {
+	if item.Status != engine.BatchItemOK || !item.MappingRemoved || item.RemainingRefCount != 0 || item.InvariantCode != "" || item.RecommendedAction != "" {
 		t.Fatalf("unexpected snapshot invariant metadata: %+v", item)
 	}
 }

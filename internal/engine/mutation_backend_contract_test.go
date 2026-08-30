@@ -549,20 +549,32 @@ func TestEngineMutationErrorsAcrossBackends(t *testing.T) {
 			remove.Items[0].RecommendedAction == "" {
 			t.Fatalf("snapshot-retained Remove: got (%+v, %v)", remove, err)
 		}
-		unlink, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
-			StoredPaths: []string{retainedPath},
-		})
-		if err != nil || len(unlink.Items) != 1 ||
-			unlink.Items[0].Status != engine.BatchItemFailed ||
-			unlink.Items[0].InvariantCode != invariants.CodeSnapshotRetainedDeleteBlocked ||
-			unlink.Items[0].RecommendedAction == "" {
-			t.Fatalf("snapshot-retained RemoveStoredPaths: got (%+v, %v)", unlink, err)
-		}
 		assertMutationFingerprintEqual(
 			t,
 			baseline,
 			captureMutationRepositoryFingerprint(t, backend.DB, fixture.containerDir),
 		)
+		unlink, err := eng.RemoveStoredPaths(context.Background(), engine.RemoveStoredPathsRequest{
+			StoredPaths: []string{retainedPath},
+		})
+		if err != nil || len(unlink.Items) != 1 ||
+			unlink.Items[0].Status != engine.BatchItemOK ||
+			!unlink.Items[0].MappingRemoved ||
+			unlink.Items[0].RemainingRefCount != 0 ||
+			unlink.Items[0].InvariantCode != "" ||
+			unlink.Items[0].RecommendedAction != "" {
+			t.Fatalf("snapshot-retained RemoveStoredPaths: got (%+v, %v)", unlink, err)
+		}
+		if currentMappings := mutationBackendInt64(t, backend.DB, `SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, retained.LogicalFileID); currentMappings != 0 {
+			t.Fatalf("snapshot-retained unlink left %d current mappings", currentMappings)
+		}
+		if snapshotMappings := mutationBackendInt64(t, backend.DB, `SELECT COUNT(*) FROM snapshot_file WHERE logical_file_id = $1`, retained.LogicalFileID); snapshotMappings != 1 {
+			t.Fatalf("snapshot-retained unlink changed membership count to %d", snapshotMappings)
+		}
+		if liveRefs := mutationBackendInt64(t, backend.DB, `SELECT COALESCE(SUM(DISTINCT ch.live_ref_count), 0) FROM file_chunk fc JOIN chunk ch ON ch.id = fc.chunk_id WHERE fc.logical_file_id = $1`, retained.LogicalFileID); liveRefs != 0 {
+			t.Fatalf("snapshot-only recipe retained current-root liveness=%d", liveRefs)
+		}
+		baseline = captureMutationRepositoryFingerprint(t, backend.DB, fixture.containerDir)
 
 		for _, operation := range []struct {
 			name string

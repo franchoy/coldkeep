@@ -77,12 +77,12 @@ func storeAdversarialSnapshotFile(t *testing.T, repoRoot, binPath string, env ma
 	return fileID, storedPath, wantHash
 }
 
-func assertRemoveStoredPathBlocked(t *testing.T, repoRoot, binPath string, env map[string]string, storedPath string) {
+func assertRemoveByIDBlocked(t *testing.T, repoRoot, binPath string, env map[string]string, fileID int64) {
 	t.Helper()
 	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedPath, "--output", "json")
+		"remove", strconv.FormatInt(fileID, 10), "--output", "json")
 	if res.ExitCode == 0 {
-		t.Fatalf("expected remove --stored-path to be blocked while snapshot-retained\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		t.Fatalf("expected by-ID remove to be blocked while snapshot-retained\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 	if !ok {
@@ -93,6 +93,15 @@ func assertRemoveStoredPathBlocked(t *testing.T, repoRoot, binPath string, env m
 	}
 	if got, _ := errPayload["invariant_code"].(string); got != "SNAPSHOT_RETAINED_DELETE_BLOCKED" {
 		t.Fatalf("expected invariant_code SNAPSHOT_RETAINED_DELETE_BLOCKED, got %q payload=%v", got, errPayload)
+	}
+}
+
+func assertRemoveStoredPathAllowed(t *testing.T, repoRoot, binPath string, env map[string]string, storedPath string) {
+	t.Helper()
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedPath, "--output", "json")
+	if res.ExitCode != 0 {
+		t.Fatalf("expected remove --stored-path to unlink current mapping while snapshot-retained\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 }
 
@@ -182,7 +191,7 @@ func TestAdversarialG14SnapshotRetainedGCGuardUnderChurn(t *testing.T) {
 			snapshots = append(snapshots, s2)
 		}
 
-		assertRemoveStoredPathBlocked(t, repoRoot, binPath, env, storedPath)
+		assertRemoveStoredPathAllowed(t, repoRoot, binPath, env, storedPath)
 		before := gcDryRunData(t, repoRoot, binPath, env)
 		if got := testutils.JSONInt64(t, before, "snapshot_retained_logical_files"); got < 1 {
 			t.Fatalf("expected snapshot_retained_logical_files >= 1 before snapshot delete, got %d payload=%v", got, before)
@@ -196,7 +205,8 @@ func TestAdversarialG14SnapshotRetainedGCGuardUnderChurn(t *testing.T) {
 		testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 			"verify", "system", "--standard", "--output", "json"), "verify")
 
-		// Delete snapshots in randomized order, then current-path remove should become eligible.
+		// Delete snapshots in randomized order. The current path was already
+		// unlinked while snapshot retention preserved the recipe and payload.
 		if len(snapshots) == 2 && r.Intn(2) == 0 {
 			snapshots[0], snapshots[1] = snapshots[1], snapshots[0]
 		}
@@ -204,8 +214,6 @@ func TestAdversarialG14SnapshotRetainedGCGuardUnderChurn(t *testing.T) {
 			snapshotDeleteWithForce(t, repoRoot, binPath, env, sid)
 		}
 
-		testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-			"remove", "--stored-path", storedPath, "--output", "json"), "remove")
 		after := gcDryRunData(t, repoRoot, binPath, env)
 		if got := testutils.JSONInt64(t, after, "snapshot_retained_logical_files"); got != 0 {
 			t.Fatalf("expected snapshot_retained_logical_files=0 after deleting all snapshots and removing current mapping, got %d payload=%v", got, after)
@@ -224,7 +232,7 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 		t.Fatalf("mkdir input: %v", err)
 	}
 
-	_, storedPath, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, inputDir, "g15-valid.bin", 80*1024)
+	fileID, _, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, inputDir, "g15-valid.bin", 80*1024)
 	snapshotCreateWithID(t, inputDir, binPath, env, "g15-valid-snap")
 
 	// 1) Invalid lifecycle state referenced by snapshot_file.
@@ -305,8 +313,9 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 		t.Log("orphan snapshot_file.logical_file_id subcase injected successfully")
 	}
 
-	// GC remains conservative: it should not enable removal of valid snapshot-retained data.
-	assertRemoveStoredPathBlocked(t, repoRoot, binPath, env, storedPath)
+	// GC remains conservative and logical deletion of valid snapshot-retained
+	// data remains blocked even when unrelated snapshot metadata is corrupt.
+	assertRemoveByIDBlocked(t, repoRoot, binPath, env, fileID)
 	before := gcDryRunData(t, repoRoot, binPath, env)
 	if got := testutils.JSONInt64(t, before, "snapshot_retained_logical_files"); got < 1 {
 		t.Fatalf("expected snapshot_retained_logical_files >= 1 on corrupted state, got %d payload=%v", got, before)
@@ -487,8 +496,11 @@ func TestAdversarialG17RetentionRootTransitionChurn(t *testing.T) {
 		snapshotCreateWithID(t, inputDir, binPath, env, sid)
 		snapshots = append(snapshots, sid)
 
-		// While at least one snapshot retains the file, current-path removal must be blocked.
-		assertRemoveStoredPathBlocked(t, repoRoot, binPath, env, storedPath)
+		// The first retaining snapshot permits transition to snapshot-only state.
+		// Later iterations churn snapshot roots without re-unlinking the path.
+		if i == 0 {
+			assertRemoveStoredPathAllowed(t, repoRoot, binPath, env, storedPath)
+		}
 		if got := testutils.JSONInt64(t, gcDryRunData(t, repoRoot, binPath, env), "snapshot_retained_logical_files"); got < 1 {
 			t.Fatalf("expected retained snapshot roots while snapshots exist, got %d", got)
 		}
@@ -506,8 +518,6 @@ func TestAdversarialG17RetentionRootTransitionChurn(t *testing.T) {
 		snapshotDeleteWithForce(t, repoRoot, binPath, env, sid)
 	}
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedPath, "--output", "json"), "remove")
 	if got := testutils.JSONInt64(t, gcDryRunData(t, repoRoot, binPath, env), "snapshot_retained_logical_files"); got != 0 {
 		t.Fatalf("expected snapshot_retained_logical_files=0 after deleting last retaining root, got %d", got)
 	}

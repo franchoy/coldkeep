@@ -11,7 +11,6 @@ import (
 
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/invariants"
 )
 
 type removeStoredPathFixture struct {
@@ -32,7 +31,7 @@ type removeStoredPathState struct {
 	chunkPinCounts map[int64]int64
 }
 
-func TestRemoveStoredPathsRefusesSnapshotRetainedMapping(t *testing.T) {
+func TestRemoveStoredPathsAllowsSnapshotRetainedMapping(t *testing.T) {
 	fixture := newRemoveStoredPathFixture(t, []string{"snapshot-retained.txt"}, 1)
 	seedSnapshotRetentionReference(t, fixture.db, fixture.logicalID, fixture.storedPath)
 	before := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
@@ -45,11 +44,18 @@ func TestRemoveStoredPathsRefusesSnapshotRetainedMapping(t *testing.T) {
 	}
 
 	item := result.Items[0]
-	if item.Status != engine.BatchItemFailed || item.InvariantCode != invariants.CodeSnapshotRetainedDeleteBlocked || item.RecommendedAction == "" || item.MappingRemoved {
-		t.Fatalf("unexpected retained refusal item: %+v", item)
+	if item.Status != engine.BatchItemOK || item.InvariantCode != "" || item.RecommendedAction != "" || !item.MappingRemoved || item.RemainingRefCount != 0 {
+		t.Fatalf("unexpected retained unlink item: %+v", item)
 	}
 	after := queryRemoveStoredPathState(t, fixture.db, fixture.logicalID)
-	assertRemoveStoredPathStateEqual(t, before, after)
+	if !after.logicalExists || after.refCount != 0 || after.physicalCount != 0 || after.snapshotCount != 1 || after.fileChunkCount != before.fileChunkCount {
+		t.Fatalf("unexpected snapshot-only state: before=%+v after=%+v", before, after)
+	}
+	for chunkID, beforeLive := range before.chunkLiveRefs {
+		if got := after.chunkLiveRefs[chunkID]; got != beforeLive-1 {
+			t.Fatalf("snapshot-retained unlink did not deactivate chunk %d exactly once: before=%d after=%d", chunkID, beforeLive, got)
+		}
+	}
 }
 
 func newRemoveStoredPathFixture(t *testing.T, names []string, refCount int64) removeStoredPathFixture {
