@@ -748,6 +748,24 @@ physical_file rows (audited coherent)
 - `TestRunGCSucceedsAfterRepairLogicalRefCounts` — repair unblocks GC (unit)
 - `TestRepairThenVerifyThenGCSmoke` — full operator recovery loop (integration): store → corrupt → verify fails → doctor fails → repair succeeds → verify passes → gc dry-run passes → gc passes → restore matches
 
+#### v1.13.16 snapshot-only current-root correction
+
+Current recipe liveness is distinct from retained reachability. A completed
+logical recipe contributes each `file_chunk` occurrence to
+`chunk.live_ref_count` exactly once when it has at least one current
+`physical_file` mapping. Additional mappings do not multiply that contribution;
+the last unlink deactivates it, and the first reattachment reactivates it.
+Snapshot membership and restore pins do not alter `live_ref_count`.
+
+Snapshot-only recipes remain GC roots through `snapshot_file`. Live GC removes
+a rootless completed recipe before sweeping chunks only when it has no current
+mapping, no snapshot membership, and no pinned recipe chunk. Dry-run models the
+same eligibility without mutation. By-ID logical deletion remains blocked for
+snapshot-retained content, while stored-path unlink is permitted. The
+v1.13.16 Phase 6R2 certification proves byte-identical snapshot restore after
+GC, unreachable-control reclamation, current-live preservation, and pin-aware
+cleanup on SQLite and PostgreSQL plain/AES-GCM.
+
 ### Phase 7 — Operator ergonomics and observability hardening
 
 Phase 7 adds an internal invariant taxonomy layer to make failures easier to consume in text output, JSON output, tests, and logs without changing command boundaries.

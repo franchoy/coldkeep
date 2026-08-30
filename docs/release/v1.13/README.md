@@ -76,13 +76,15 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
 Closure is the active exceptional critical-maintenance source train. Phases 0
-through 5 are Complete. Phase 6 is Next, with proof withheld at the stored-path retention stop;
-Phase 6R2 is the authorized snapshot-only lifecycle correction
-phase; Phase 7 is not started. Eight findings are confirmed and one is closed.
+through 5 are Complete. Phase 6 is Next and locally certified pending exact-
+head hosted gates; Phase 6R2 is the locally certified snapshot-only lifecycle
+correction. Phase 7 is not started. Eight findings are confirmed and one is
+closed at this candidate state.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
 36/36 jobs, reused CodeQL `33303282125` passed 4/4, and open alerts remain zero.
-CK-V11316-001 remains open pending Phase 6 retention proof. Phase 5 product
+CK-V11316-001 and CK-V11316-008 are implemented and locally certified pending
+exact-head hosted closure. Phase 5 product
 commit `cc4186b1c095bae06ee92e12048c1262d53e843d` implements fail-closed
 selector accounting and atomic rollback and has passed clean-tree, SQLite, and
 PostgreSQL plain/AES-GCM certification. Evidence commit
@@ -90,6 +92,13 @@ PostgreSQL plain/AES-GCM certification. Evidence commit
 `33307923059` with 36/36 jobs including Required Gate and CodeQL run
 `33307923075` with 4/4 jobs and zero open alerts. CK-V11316-002 is closed
 certified. Technical correctness closure is withheld.
+
+Phase 6R2 sealed product
+`e8cc9b3650ab9548ce46e7df18e9c6f3483e2574` and permanent test
+`854a3187adc66dcc04d7e95f41f8925cdcd608bf` passed clean detached full-Go,
+vet, SQLite, PostgreSQL plain/AES-GCM, race, release-state, governance, Python,
+and CI-enforcement certification. Exact-head CI, Required Gate, CodeQL,
+zero-open-alert confirmation, and Codacy truth remain pending.
 
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are

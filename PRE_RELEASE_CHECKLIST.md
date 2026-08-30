@@ -1077,40 +1077,40 @@ pre-PR Profile A validation unless the release manager promotes it.
 
 ### Phase 7 - snapshot-aware retention / GC
 
-- [ ] Retained logical roots are computed from `physical_file` union `snapshot_file`
-- [ ] Snapshot-only retained content is GC-safe
-- [ ] Deleting a snapshot changes only future GC eligibility; eligibility changes only when all retaining snapshots are removed
+- [x] Retained logical roots are computed from `physical_file` union `snapshot_file`
+- [x] Snapshot-only retained content is GC-safe
+- [x] Deleting a snapshot changes only future GC eligibility; eligibility changes only when all retaining snapshots are removed
 - [ ] Child snapshot remains restorable after deleting its lineage parent
 - [ ] Stats expose snapshot retention pressure
 - [ ] Verify audits persisted snapshot reachability anomalies
 - [ ] Doctor/reporting surfaces snapshot-retention integrity context
-- [ ] G14-G17 are reflected in `VALIDATION_MATRIX.md` as covered
+- [x] G14-G17 are reflected in `VALIDATION_MATRIX.md` as covered
 
 ### C. Test surface checklist
 
 Package tests:
 
 - [ ] `internal/snapshot` covers create / restore / diff / query behavior
-- [ ] `internal/retention` covers current-only / snapshot-only / shared retention
-- [ ] `internal/maintenance` covers snapshot-retained container protection
-- [ ] `internal/verify` covers snapshot reachability anomalies
+- [x] `internal/retention` covers current-only / snapshot-only / shared retention
+- [x] `internal/maintenance` covers snapshot-retained container protection
+- [x] `internal/verify` covers snapshot reachability anomalies
 - [ ] Stats/reporting tests include snapshot retention visibility
 
 Integration tests:
 
-- [ ] Snapshot lifecycle end-to-end works
+- [x] Snapshot lifecycle end-to-end works
 - [ ] Filtered snapshot show returns correct matched counts
 - [ ] Filtered snapshot diff summary matches returned entries
-- [ ] Snapshot-retained content blocks GC until all retaining snapshots are deleted
-- [ ] Long-run snapshot churn test remains green
+- [x] Snapshot-retained content blocks GC until all retaining snapshots are deleted
+- [x] Long-run snapshot churn test remains green
 
 Adversarial tests:
 
-- [ ] G14 snapshot-retained GC guard
-- [ ] G15 corrupted snapshot metadata detection with conservative GC
-- [ ] G16 snapshot query contract chaos
-- [ ] G17 retention root transition churn
-- [ ] Older G1-G13 adversarial tests still pass
+- [x] G14 snapshot-retained GC guard
+- [x] G15 corrupted snapshot metadata detection with conservative GC
+- [x] G16 snapshot query contract chaos
+- [x] G17 retention root transition churn
+- [x] Older G1-G13 adversarial tests still pass
 
 Smoke:
 
