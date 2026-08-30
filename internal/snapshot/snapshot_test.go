@@ -106,17 +106,6 @@ func storeSnapshotCanonicalFixtureFile(t *testing.T, sgctx storage.StorageContex
 	return storeResult
 }
 
-func storeSnapshotFixtureFile(t *testing.T, db *sql.DB, sgctx storage.StorageContext, sourceRoot, storedPath string, content []byte) storage.StoreFileResult {
-	t.Helper()
-	storeResult := storeSnapshotCanonicalFixtureFile(t, sgctx, sourceRoot, storedPath, content)
-	if _, err := db.Exec(`UPDATE physical_file SET path = ? WHERE logical_file_id = ?`, storedPath, storeResult.FileID); err != nil {
-		t.Fatalf("rewrite physical_file path for snapshot fixture: %v", err)
-	}
-
-	storeResult.Path = storedPath
-	return storeResult
-}
-
 func storeSnapshotCaptureRootFixtureFile(t *testing.T, db *sql.DB, sgctx storage.StorageContext, sourceRoot, storedPath string, content []byte) storage.StoreFileResult {
 	t.Helper()
 	return storeSnapshotCanonicalFixtureFile(t, sgctx, sourceRoot, storedPath, content)

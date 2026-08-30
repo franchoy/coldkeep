@@ -102,7 +102,7 @@ func TestScenarioGCAfterChurnRunsExpectedFlow(t *testing.T) {
 		if len(call.Args) >= 2 && call.Args[0] == "snapshot" && call.Args[1] == "create" && call.WorkingDir != dataPath {
 			t.Fatalf("snapshot create working directory mismatch: got=%q want=%q", call.WorkingDir, dataPath)
 		}
-		if !(len(call.Args) >= 2 && call.Args[0] == "snapshot" && call.Args[1] == "create") && call.WorkingDir != repoPath {
+		if (len(call.Args) < 2 || call.Args[0] != "snapshot" || call.Args[1] != "create") && call.WorkingDir != repoPath {
 			t.Fatalf("ordinary command working directory mismatch: args=%v got=%q want=%q", call.Args, call.WorkingDir, repoPath)
 		}
 	}
