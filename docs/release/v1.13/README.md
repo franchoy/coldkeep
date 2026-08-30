@@ -100,6 +100,15 @@ vet, SQLite, PostgreSQL plain/AES-GCM, race, release-state, governance, Python,
 and CI-enforcement certification. Exact-head CI, Required Gate, CodeQL,
 zero-open-alert confirmation, and Codacy truth remain pending.
 
+Exact-head CI `33331967865` at that evidence commit passed quality,
+cross-platform validation, critical coverage, legacy compatibility, benchmark
+integrity, and timing advisories, while both PostgreSQL correctness profiles
+failed on the same two stale migration-compatibility expectations. CodeQL
+`33331967855` passed 4/4 with zero open alerts. Phase 6R3 authorizes only
+`tests/integration/v18_migration_compatibility_integration_test.go` to reconcile
+stored-path unlink and current/pin/snapshot root-union assertions. Product
+runtime remains frozen and Phase 7 is not authorized.
+
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
 historical and superseded by the current Phase 6 authority above.
