@@ -79,8 +79,9 @@ Closure is the active exceptional critical-maintenance source train. Phases 0
 through 5 are Complete. Phase 6 is Next and locally certified pending exact-
 head hosted gates; Phase 6R2 is the locally certified snapshot-only lifecycle
 correction, and Phase 6R3 is locally certified pending exact-head hosted
-recertification. Phase 7 is not started. Eight findings are confirmed and one
-is closed at this candidate state.
+recertification. Phase 6R7 is authorized as a bounded test-only recovery after
+the repeated single-connection verification timeout. Phase 7 is not started.
+Nine findings are confirmed and one is closed at this candidate state.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
 36/36 jobs, reused CodeQL `33303282125` passed 4/4, and open alerts remain zero.
@@ -128,8 +129,22 @@ test `d7deb4097d681751f7373ac7f11ef6bb8bb18790` completed the bounded
 reconciliation. Plain/AES-GCM smoke, focused and complete adversarial,
 PostgreSQL correctness, migration compatibility, race, and the detached full
 local gate passed with zero product runtime changes. Phase 6 is now a candidate
-pending exact-head hosted certification; the finding state remains `1/8`, and
+pending exact-head hosted certification; the prior finding state was `1/8`, and
 Phase 7 is not authorized.
+
+Final CI `33365683050` at `bd45a0e611d3dacb726490c3beb5fac5cd598f34`
+then failed the plain quality gate because
+`TestVerifySystemDeepPackedSQLiteSingleConnection` applied its 250 ms
+verification timeout to packed-fixture Store setup. The same boundary had
+failed under coverage in CI `33303282081` attempt 1. Phase 6R6 classified the
+repetition as `COMBINATION`: primarily fixture-isolation drift, with a
+contributing test-timeout-policy defect; no product or CI-infrastructure defect
+is established. [Phase 6R7](v1.13.16-phase6r7-single-connection-verify-test-recovery.md)
+authorizes only `internal/verify/verify_system_single_connection_test.go` to
+separate default-timeout fixture construction from successful and deliberately
+blocked 250 ms verification children. CK-V11316-009 is open, findings are
+`1/9` closed, the failed run must not be retried, Phase 6 remains withheld, and
+Phase 7 remains unauthorized.
 
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
