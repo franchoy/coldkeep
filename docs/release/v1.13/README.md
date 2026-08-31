@@ -79,8 +79,9 @@ Closure is the active exceptional critical-maintenance source train. Phases 0
 through 5 are Complete. Phase 6 is Next and locally certified pending exact-
 head hosted gates; Phase 6R2 is the locally certified snapshot-only lifecycle
 correction, and Phase 6R3 is locally certified pending exact-head hosted
-recertification. Phase 6R7 is authorized as a bounded test-only recovery after
-the repeated single-connection verification timeout. Phase 7 is not started.
+recertification. Phase 6R7 is locally certified pending exact-head hosted
+certification after the bounded single-connection verification test recovery.
+Phase 7 is not started.
 Nine findings are confirmed and one is closed at this candidate state.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
@@ -140,11 +141,19 @@ failed under coverage in CI `33303282081` attempt 1. Phase 6R6 classified the
 repetition as `COMBINATION`: primarily fixture-isolation drift, with a
 contributing test-timeout-policy defect; no product or CI-infrastructure defect
 is established. [Phase 6R7](v1.13.16-phase6r7-single-connection-verify-test-recovery.md)
-authorizes only `internal/verify/verify_system_single_connection_test.go` to
+authorized only `internal/verify/verify_system_single_connection_test.go` to
 separate default-timeout fixture construction from successful and deliberately
-blocked 250 ms verification children. CK-V11316-009 is open, findings are
-`1/9` closed, the failed run must not be retried, Phase 6 remains withheld, and
-Phase 7 remains unauthorized.
+blocked 250 ms verification children. Authority
+`ce815419c0e72d341da6892eec01662de734292f` and test
+`7399b38b22c2f19fe0e12e1c0a8ec06cadc7ebce` completed that one-file
+recovery. The 100/50/50 targeted repetitions, exact local `golangci-lint`
+v2.9.0, full Go/race/vet and 215 Python tests passed. An isolated PostgreSQL
+16.15 service pinned by digest and bound only to dynamic localhost port 32768
+then passed the complete plain/AES-GCM Phase 6R5 preservation matrix; the
+existing port-5432 service was unchanged. CK-V11316-009 is implemented pending
+exact-head hosted certification, findings remain `1/9` closed, CI
+`33365683050` was not retried, Phase 6 remains withheld, and Phase 7 remains
+unauthorized.
 
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
