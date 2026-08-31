@@ -1,7 +1,9 @@
 package scripts_test
 
 import (
+	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 var phase14SnapshotEvidenceNames = []string{
@@ -212,32 +215,31 @@ func TestBenchmarkEvidenceLifecycleLeavesCleanWorktree(t *testing.T) {
 			"COLDKEEP_EVIDENCE_TEST_STAGE_READY_FIFO="+readyFIFO,
 			"COLDKEEP_EVIDENCE_TEST_STAGE_RELEASE_FIFO="+releaseFIFO,
 		)
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("start signal fixture: %v", err)
-		}
-		ready, err := os.ReadFile(readyFIFO)
+		finalRoot := filepath.Join(repo, ".release-evidence", "v1.13.14", sha)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		result, err := runPhase14SignalHarness(ctx, cmd, readyFIFO, releaseFIFO, "release\n", finalRoot)
+		removePhase14TestFIFO(t, readyFIFO)
+		removePhase14TestFIFO(t, releaseFIFO)
 		if err != nil {
-			_ = cmd.Process.Kill()
-			t.Fatalf("read staging-ready FIFO: %v", err)
+			t.Fatalf("bounded signal fixture: %v", err)
 		}
-		staging := strings.TrimSpace(string(ready))
-		if staging == "" {
-			_ = cmd.Process.Kill()
-			t.Fatal("promotion did not report its staging directory")
+		if result.ExitCode != 130 {
+			t.Fatalf("signal fixture exit code = %d, want 130", result.ExitCode)
 		}
-		if err := cmd.Process.Signal(os.Interrupt); err != nil {
-			_ = cmd.Process.Kill()
-			t.Fatalf("interrupt promotion: %v", err)
+		if result.ForcedKill || result.FallbackUsed {
+			t.Fatalf("successful signal proof used failure cleanup: %+v", result)
 		}
-		if err := cmd.Wait(); err == nil {
-			t.Fatal("interrupted promotion unexpectedly succeeded")
+		if !result.ChildWaited || !result.ReadyReaderJoined || !result.ReleaseWriterJoined || !result.ReleaseWriterClosed {
+			t.Fatalf("successful signal proof left helper ownership incomplete: %+v", result)
 		}
-		if _, err := os.Stat(staging); !os.IsNotExist(err) {
-			t.Fatalf("interrupted staging survived at %s: %v", staging, err)
+		if _, err := os.Stat(result.Staging); !os.IsNotExist(err) {
+			t.Fatalf("interrupted staging survived at %s: %v", result.Staging, err)
 		}
-		if _, err := os.Stat(filepath.Join(repo, ".release-evidence", "v1.13.14", sha)); !os.IsNotExist(err) {
+		if _, err := os.Stat(finalRoot); !os.IsNotExist(err) {
 			t.Fatalf("interrupted promotion exposed final SHA directory: %v", err)
 		}
+		t.Logf("benchmark signal cleanup evidence: pid=%d exit=130 staging=%s elapsed=%s", result.PID, result.Staging, result.Elapsed)
 	})
 
 	t.Run("transient profile roots are external and disjoint", func(t *testing.T) {
@@ -251,6 +253,60 @@ func TestBenchmarkEvidenceLifecycleLeavesCleanWorktree(t *testing.T) {
 			t.Fatal("runner permits a filesystem-root evidence path")
 		}
 	})
+}
+
+func TestBenchmarkEvidenceSignalHarnessBoundsMissingReadiness(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal and FIFO proof is Unix-specific")
+	}
+	if _, err := exec.LookPath("mkfifo"); err != nil {
+		t.Skip("mkfifo is unavailable")
+	}
+
+	root := t.TempDir()
+	readyFIFO := filepath.Join(root, "ready.fifo")
+	releaseFIFO := filepath.Join(root, "release.fifo")
+	markerFIFO := filepath.Join(root, "blocked-child.fifo")
+	for _, path := range []string{readyFIFO, releaseFIFO, markerFIFO} {
+		runPhase14Command(t, root, true, "mkfifo", path)
+	}
+
+	cmd := exec.Command("bash", "-c", `read -r value < "$1"`, "phase14-missing-readiness", markerFIFO)
+	cmd.Dir = root
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	result, err := runPhase14SignalHarness(ctx, cmd, readyFIFO, releaseFIFO, "release\n", "")
+	for _, path := range []string{readyFIFO, releaseFIFO, markerFIFO} {
+		removePhase14TestFIFO(t, path)
+	}
+
+	if err == nil {
+		t.Fatal("missing-readiness fixture unexpectedly succeeded")
+	}
+	var phaseErr *phase14SignalHarnessError
+	if !errors.As(err, &phaseErr) || phaseErr.Phase != "readiness" {
+		t.Fatalf("missing-readiness error did not identify readiness phase: %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("missing-readiness error did not preserve deadline: %v", err)
+	}
+	if !result.ForcedKill || !result.FallbackUsed {
+		t.Fatalf("missing-readiness fixture did not exercise bounded failure cleanup: %+v", result)
+	}
+	if !result.ChildWaited || !result.ReadyReaderJoined {
+		t.Fatalf("missing-readiness fixture left child or reader ownership incomplete: %+v", result)
+	}
+	if result.ReleaseWriterStarted || result.ReleaseWriterJoined {
+		t.Fatalf("missing-readiness fixture incorrectly entered release-writer phase: %+v", result)
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil {
+		t.Fatalf("inspect missing-readiness fixture root: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("missing-readiness fixture residue survived: %v", entries)
+	}
+	t.Logf("benchmark signal harness missing-readiness cleanup: phase=readiness deadline=500ms forced_kill=true fallback=true child_waited=true ready_joined=true elapsed=%s", result.Elapsed)
 }
 
 func TestReleaseLinearityValidatorAllowsInheritedAndRejectsLocalMerges(t *testing.T) {
@@ -497,6 +553,332 @@ func mustReadPhase14File(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(content)
+}
+
+type phase14SignalHarnessResult struct {
+	PID                   int
+	ExitCode              int
+	Staging               string
+	Elapsed               time.Duration
+	ChildWaited           bool
+	ReadyReaderStarted    bool
+	ReadyReaderJoined     bool
+	ReleaseWriterStarted  bool
+	ReleaseWriterJoined   bool
+	ReleaseWriterClosed   bool
+	ReleaseWriteTolerated bool
+	FallbackUsed          bool
+	ForcedKill            bool
+}
+
+type phase14SignalHarnessError struct {
+	Phase string
+	Err   error
+}
+
+func (e *phase14SignalHarnessError) Error() string {
+	return fmt.Sprintf("benchmark signal harness %s phase: %v", e.Phase, e.Err)
+}
+
+func (e *phase14SignalHarnessError) Unwrap() error {
+	return e.Err
+}
+
+type phase14ReadyReadResult struct {
+	data []byte
+	err  error
+}
+
+type phase14FIFOOpenResult struct {
+	file *os.File
+	err  error
+}
+
+func runPhase14SignalHarness(ctx context.Context, cmd *exec.Cmd, readyFIFO, releaseFIFO, releaseRecord, finalRoot string) (result phase14SignalHarnessResult, retErr error) {
+	startedAt := time.Now()
+	if !strings.HasSuffix(releaseRecord, "\n") {
+		return result, &phase14SignalHarnessError{Phase: "setup", Err: errors.New("release record must end in a newline")}
+	}
+	if err := cmd.Start(); err != nil {
+		result.Elapsed = time.Since(startedAt)
+		return result, &phase14SignalHarnessError{Phase: "start", Err: err}
+	}
+	result.PID = cmd.Process.Pid
+
+	var waitErr error
+	waitDone := make(chan struct{})
+	go func() {
+		waitErr = cmd.Wait()
+		close(waitDone)
+	}()
+
+	var releaseWriter *os.File
+	var readyResult <-chan phase14ReadyReadResult
+	var readyDone <-chan struct{}
+	var releaseResult <-chan phase14FIFOOpenResult
+	var releaseDone <-chan struct{}
+	readyResultConsumed := false
+	releaseResultConsumed := false
+
+	defer func() {
+		result.Elapsed = time.Since(startedAt)
+		if retErr == nil {
+			return
+		}
+
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var cleanupProblems []string
+
+		if releaseWriter != nil {
+			if err := releaseWriter.Close(); err != nil {
+				cleanupProblems = append(cleanupProblems, "close release writer: "+err.Error())
+			}
+			releaseWriter = nil
+			result.ReleaseWriterClosed = true
+		}
+
+		if !result.ChildWaited {
+			select {
+			case <-waitDone:
+				result.ChildWaited = true
+			default:
+			}
+		}
+		if !result.ChildWaited {
+			result.ForcedKill = true
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				cleanupProblems = append(cleanupProblems, "kill exact child: "+err.Error())
+			}
+		}
+
+		unblockFIFO := func(label, path string) {
+			result.FallbackUsed = true
+			file, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err != nil {
+				cleanupProblems = append(cleanupProblems, "fallback open "+label+": "+err.Error())
+				return
+			}
+			if err := file.Close(); err != nil {
+				cleanupProblems = append(cleanupProblems, "fallback close "+label+": "+err.Error())
+			}
+		}
+
+		if result.ReadyReaderStarted && !result.ReadyReaderJoined {
+			select {
+			case <-readyDone:
+				result.ReadyReaderJoined = true
+			default:
+				unblockFIFO("ready FIFO", readyFIFO)
+			}
+		}
+		if result.ReadyReaderStarted && !result.ReadyReaderJoined {
+			select {
+			case <-readyDone:
+				result.ReadyReaderJoined = true
+			case <-cleanupCtx.Done():
+				cleanupProblems = append(cleanupProblems, "join ready reader: "+cleanupCtx.Err().Error())
+			}
+		}
+		if result.ReadyReaderJoined && !readyResultConsumed {
+			select {
+			case <-readyResult:
+				readyResultConsumed = true
+			default:
+				cleanupProblems = append(cleanupProblems, "ready reader completed without a result")
+			}
+		}
+
+		if result.ReleaseWriterStarted && !result.ReleaseWriterJoined {
+			select {
+			case <-releaseDone:
+				result.ReleaseWriterJoined = true
+			default:
+				unblockFIFO("release FIFO", releaseFIFO)
+			}
+		}
+		if result.ReleaseWriterStarted && !result.ReleaseWriterJoined {
+			select {
+			case <-releaseDone:
+				result.ReleaseWriterJoined = true
+			case <-cleanupCtx.Done():
+				cleanupProblems = append(cleanupProblems, "join release writer: "+cleanupCtx.Err().Error())
+			}
+		}
+		if result.ReleaseWriterJoined && !releaseResultConsumed {
+			select {
+			case opened := <-releaseResult:
+				releaseResultConsumed = true
+				if opened.file != nil {
+					if err := opened.file.Close(); err != nil {
+						cleanupProblems = append(cleanupProblems, "close cleanup release writer: "+err.Error())
+					}
+					result.ReleaseWriterClosed = true
+				}
+			default:
+				cleanupProblems = append(cleanupProblems, "release writer completed without a result")
+			}
+		}
+
+		if !result.ChildWaited {
+			select {
+			case <-waitDone:
+				result.ChildWaited = true
+			case <-cleanupCtx.Done():
+				cleanupProblems = append(cleanupProblems, "join child wait owner: "+cleanupCtx.Err().Error())
+			}
+		}
+
+		diagnostic := fmt.Sprintf("forced_kill=%t fallback=%t child_waited=%t ready_joined=%t release_joined=%t release_closed=%t",
+			result.ForcedKill, result.FallbackUsed, result.ChildWaited, result.ReadyReaderJoined, result.ReleaseWriterJoined, result.ReleaseWriterClosed)
+		if len(cleanupProblems) > 0 {
+			diagnostic += " problems=" + strings.Join(cleanupProblems, "; ")
+		}
+		retErr = fmt.Errorf("%w; cleanup: %s", retErr, diagnostic)
+	}()
+
+	readyResults := make(chan phase14ReadyReadResult, 1)
+	readyFinished := make(chan struct{})
+	readyResult = readyResults
+	readyDone = readyFinished
+	result.ReadyReaderStarted = true
+	go func() {
+		data, err := os.ReadFile(readyFIFO)
+		readyResults <- phase14ReadyReadResult{data: data, err: err}
+		close(readyFinished)
+	}()
+
+	var ready phase14ReadyReadResult
+	select {
+	case ready = <-readyResults:
+		readyResultConsumed = true
+	case <-waitDone:
+		result.ChildWaited = true
+		return result, &phase14SignalHarnessError{Phase: "readiness", Err: fmt.Errorf("child exited before readiness: %w", waitErr)}
+	case <-ctx.Done():
+		return result, &phase14SignalHarnessError{Phase: "readiness", Err: ctx.Err()}
+	}
+	select {
+	case <-readyFinished:
+		result.ReadyReaderJoined = true
+	case <-ctx.Done():
+		return result, &phase14SignalHarnessError{Phase: "readiness", Err: fmt.Errorf("join reader: %w", ctx.Err())}
+	}
+	if ready.err != nil {
+		return result, &phase14SignalHarnessError{Phase: "readiness", Err: ready.err}
+	}
+	result.Staging = strings.TrimSpace(string(ready.data))
+	if result.Staging == "" {
+		return result, &phase14SignalHarnessError{Phase: "readiness", Err: errors.New("promotion reported an empty staging path")}
+	}
+	select {
+	case <-waitDone:
+		result.ChildWaited = true
+		return result, &phase14SignalHarnessError{Phase: "readiness", Err: fmt.Errorf("child exited after readiness: %w", waitErr)}
+	default:
+	}
+
+	releaseResults := make(chan phase14FIFOOpenResult, 1)
+	releaseFinished := make(chan struct{})
+	releaseResult = releaseResults
+	releaseDone = releaseFinished
+	result.ReleaseWriterStarted = true
+	go func() {
+		file, err := os.OpenFile(releaseFIFO, os.O_WRONLY, 0)
+		releaseResults <- phase14FIFOOpenResult{file: file, err: err}
+		close(releaseFinished)
+	}()
+
+	var opened phase14FIFOOpenResult
+	select {
+	case opened = <-releaseResults:
+		releaseResultConsumed = true
+	case <-waitDone:
+		result.ChildWaited = true
+		return result, &phase14SignalHarnessError{Phase: "release-writer", Err: fmt.Errorf("child exited before writer establishment: %w", waitErr)}
+	case <-ctx.Done():
+		return result, &phase14SignalHarnessError{Phase: "release-writer", Err: ctx.Err()}
+	}
+	select {
+	case <-releaseFinished:
+		result.ReleaseWriterJoined = true
+	case <-ctx.Done():
+		return result, &phase14SignalHarnessError{Phase: "release-writer", Err: fmt.Errorf("join writer: %w", ctx.Err())}
+	}
+	if opened.err != nil {
+		return result, &phase14SignalHarnessError{Phase: "release-writer", Err: opened.err}
+	}
+	releaseWriter = opened.file
+	select {
+	case <-waitDone:
+		result.ChildWaited = true
+		return result, &phase14SignalHarnessError{Phase: "release-writer", Err: fmt.Errorf("child exited after writer establishment: %w", waitErr)}
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return result, &phase14SignalHarnessError{Phase: "signal", Err: ctx.Err()}
+	default:
+	}
+
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		return result, &phase14SignalHarnessError{Phase: "signal", Err: err}
+	}
+	_, writeErr := releaseWriter.Write([]byte(releaseRecord))
+	closeErr := releaseWriter.Close()
+	releaseWriter = nil
+	result.ReleaseWriterClosed = closeErr == nil
+	if closeErr != nil {
+		return result, &phase14SignalHarnessError{Phase: "release-write", Err: fmt.Errorf("close release writer: %w", closeErr)}
+	}
+
+	select {
+	case <-waitDone:
+		result.ChildWaited = true
+	case <-ctx.Done():
+		return result, &phase14SignalHarnessError{Phase: "child-exit", Err: ctx.Err()}
+	}
+	if waitErr == nil {
+		return result, &phase14SignalHarnessError{Phase: "child-exit", Err: errors.New("interrupted promotion exited successfully")}
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		return result, &phase14SignalHarnessError{Phase: "child-exit", Err: fmt.Errorf("missing process-state exit evidence: %w", waitErr)}
+	}
+	result.ExitCode = exitErr.ExitCode()
+	if result.ExitCode != 130 {
+		return result, &phase14SignalHarnessError{Phase: "child-exit", Err: fmt.Errorf("exit code = %d, want 130", result.ExitCode)}
+	}
+	if writeErr != nil {
+		// Exact exit 130 independently proves the interrupt result, so a release
+		// write error is tolerable only after the Wait owner has reported it.
+		result.ReleaseWriteTolerated = true
+	}
+	if _, err := os.Stat(result.Staging); !os.IsNotExist(err) {
+		return result, &phase14SignalHarnessError{Phase: "assertion", Err: fmt.Errorf("staging survived at %s: %v", result.Staging, err)}
+	}
+	if finalRoot != "" {
+		if _, err := os.Stat(finalRoot); !os.IsNotExist(err) {
+			return result, &phase14SignalHarnessError{Phase: "assertion", Err: fmt.Errorf("final evidence root survived at %s: %v", finalRoot, err)}
+		}
+	}
+	if !result.ChildWaited || !result.ReadyReaderJoined || !result.ReleaseWriterJoined || !result.ReleaseWriterClosed {
+		return result, &phase14SignalHarnessError{Phase: "assertion", Err: errors.New("helper ownership did not fully join and close")}
+	}
+	if result.ForcedKill || result.FallbackUsed {
+		return result, &phase14SignalHarnessError{Phase: "assertion", Err: errors.New("successful proof used failure cleanup")}
+	}
+	return result, nil
+}
+
+func removePhase14TestFIFO(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove test-owned FIFO %s: %v", path, err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("test-owned FIFO survived at %s: %v", path, err)
+	}
 }
 
 func runPhase14Command(t *testing.T, dir string, wantSuccess bool, name string, args ...string) string {
