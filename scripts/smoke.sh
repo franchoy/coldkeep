@@ -15,6 +15,8 @@ set -euo pipefail
 
 SMOKE_TEMP_STORAGE_DIR=""
 SNAP_RESTORE_PATTERN_DIR=""
+V13_CAPTURE_STDOUT=""
+V13_CAPTURE_STDERR=""
 
 cleanup() {
   rm -rf ./_smoke_out
@@ -26,6 +28,12 @@ cleanup() {
   fi
   if [[ -n "$SNAP_RESTORE_PATTERN_DIR" ]]; then
     rm -rf "$SNAP_RESTORE_PATTERN_DIR"
+  fi
+  if [[ -n "$V13_CAPTURE_STDOUT" ]]; then
+    rm -f "$V13_CAPTURE_STDOUT"
+  fi
+  if [[ -n "$V13_CAPTURE_STDERR" ]]; then
+    rm -f "$V13_CAPTURE_STDERR"
   fi
 }
 
@@ -174,6 +182,85 @@ test_invalid_command() {
     return 1
   fi
   echo "[smoke]   ok: command correctly rejected invalid input"
+}
+
+v13_snapshot_alpha_state() {
+  local snapshot_id="$1"
+  local alpha_id="$2"
+  local show_output
+  local show_payload
+  local alpha_state
+
+  show_output=$(coldkeep snapshot show "$snapshot_id" --output json)
+  show_payload=$(echo "$show_output" | grep -E '^\{.*\}$' | tail -n1)
+  alpha_state=$(echo "$show_payload" | jq -cS --argjson id "$alpha_id" '
+    [.data.files[] | select(.logical_file_id == $id)]
+  ')
+  if ! echo "$alpha_state" | jq -e 'length == 1 and (.[0].path | type == "string" and length > 0)' > /dev/null 2>&1; then
+    echo "[smoke] ERROR: snapshot $snapshot_id does not contain exactly one alpha member" >&2
+    echo "$show_output" >&2
+    return 1
+  fi
+  echo "$alpha_state"
+}
+
+assert_v13_remove_by_id_blocked() {
+  local alpha_id="$1"
+  shift
+  local snapshots=("$@")
+  local list_before
+  local list_after
+  local state_before=""
+  local state_after=""
+  local snapshot_id
+  local exit_code
+  local remove_payload
+
+  list_before=$(coldkeep list --output json | jq -cS '.files | sort_by(.id)')
+  for snapshot_id in "${snapshots[@]}"; do
+    state_before+=$'\n'"$(v13_snapshot_alpha_state "$snapshot_id" "$alpha_id")"
+  done
+
+  V13_CAPTURE_STDOUT=$(mktemp)
+  V13_CAPTURE_STDERR=$(mktemp)
+  if coldkeep remove "$alpha_id" --output json >"$V13_CAPTURE_STDOUT" 2>"$V13_CAPTURE_STDERR"; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+  if [[ "$exit_code" -ne 3 ]]; then
+    echo "[smoke] ERROR: by-ID alpha remove exit=$exit_code, want 3"
+    cat "$V13_CAPTURE_STDOUT" "$V13_CAPTURE_STDERR"
+    exit 1
+  fi
+
+  remove_payload=$(grep -E '^\{.*\}$' "$V13_CAPTURE_STDOUT" | tail -n1 || true)
+  if ! echo "$remove_payload" | jq -e --argjson id "$alpha_id" '
+    .status == "error"
+    and .command == "remove"
+    and .summary.failed == 1
+    and ([.results[] | select(.id == $id)] | length == 1)
+    and ([.results[] | select(.id == $id)][0].status == "failed")
+    and ([.results[] | select(.id == $id)][0].invariant_code == "SNAPSHOT_RETAINED_DELETE_BLOCKED")
+    and ([.results[] | select(.id == $id)][0].recommended_action | type == "string" and length > 0)
+  ' > /dev/null 2>&1; then
+    echo "[smoke] ERROR: by-ID alpha remove stdout item contract invalid"
+    cat "$V13_CAPTURE_STDOUT" "$V13_CAPTURE_STDERR"
+    exit 1
+  fi
+
+  list_after=$(coldkeep list --output json | jq -cS '.files | sort_by(.id)')
+  for snapshot_id in "${snapshots[@]}"; do
+    state_after+=$'\n'"$(v13_snapshot_alpha_state "$snapshot_id" "$alpha_id")"
+  done
+  if [[ "$list_before" != "$list_after" || "$state_before" != "$state_after" ]]; then
+    echo "[smoke] ERROR: blocked by-ID alpha remove mutated current/snapshot state"
+    exit 1
+  fi
+
+  rm -f "$V13_CAPTURE_STDOUT" "$V13_CAPTURE_STDERR"
+  V13_CAPTURE_STDOUT=""
+  V13_CAPTURE_STDERR=""
 }
 
 echo "[smoke] starting"
@@ -739,14 +826,23 @@ printf 'snapshot-gamma-%s\n' "$(date +%s%N)" > "$V13_DIR/gamma.txt"
 
 STORE_V13_ALPHA=$(coldkeep store "$V13_DIR/alpha.txt" --output json)
 STORE_V13_ALPHA_PAYLOAD=$(echo "$STORE_V13_ALPHA" | grep -E '^\{.*\}$' | tail -n1)
+V13_ALPHA_ID=$(echo "$STORE_V13_ALPHA_PAYLOAD" | jq -r '.data.file_id // empty')
 V13_ALPHA_STORED_PATH=$(echo "$STORE_V13_ALPHA_PAYLOAD" | jq -r '.data.stored_path // empty')
+V13_ALPHA_HASH=$(echo "$STORE_V13_ALPHA_PAYLOAD" | jq -r '.data.file_hash // empty')
 
 STORE_V13_BETA=$(coldkeep store "$V13_DIR/beta.txt" --output json)
 STORE_V13_BETA_PAYLOAD=$(echo "$STORE_V13_BETA" | grep -E '^\{.*\}$' | tail -n1)
+V13_BETA_ID=$(echo "$STORE_V13_BETA_PAYLOAD" | jq -r '.data.file_id // empty')
 V13_BETA_STORED_PATH=$(echo "$STORE_V13_BETA_PAYLOAD" | jq -r '.data.stored_path // empty')
+V13_BETA_HASH=$(echo "$STORE_V13_BETA_PAYLOAD" | jq -r '.data.file_hash // empty')
 
-if [[ -z "$V13_ALPHA_STORED_PATH" || -z "$V13_BETA_STORED_PATH" ]]; then
-  echo "[smoke] ERROR: v1.3 store payload missing stored_path"
+if [[ ! "$V13_ALPHA_ID" =~ ^[0-9]+$ || -z "$V13_ALPHA_STORED_PATH" || ! "$V13_ALPHA_HASH" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "[smoke] ERROR: v1.3 alpha Store payload missing valid file_id, stored_path, or file_hash"
+  echo "$STORE_V13_ALPHA"
+  exit 1
+fi
+if [[ ! "$V13_BETA_ID" =~ ^[0-9]+$ || -z "$V13_BETA_STORED_PATH" || ! "$V13_BETA_HASH" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "[smoke] ERROR: v1.3 beta Store payload missing valid file_id, stored_path, or file_hash"
   echo "$STORE_V13_ALPHA"
   echo "$STORE_V13_BETA"
   exit 1
@@ -768,45 +864,22 @@ if ! echo "$SNAP_SHOW_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snaps
   exit 1
 fi
 
-echo "[smoke] verifying remove --stored-path is blocked while snapshot-retained"
-if REMOVE_BLOCKED_OUTPUT=$(coldkeep remove --stored-path "$V13_ALPHA_STORED_PATH" --output json 2>&1); then
-  echo "[smoke] ERROR: remove --stored-path should fail while file is snapshot-retained"
+V13_ALPHA_MEMBER=$(echo "$SNAP_SHOW_1_PAYLOAD" | jq -r --argjson id "$V13_ALPHA_ID" '
+  [.data.files[] | select(.logical_file_id == $id)]
+  | if length == 1 then .[0].path else empty end
+')
+if [[ -z "$V13_ALPHA_MEMBER" ]] || ! v13_snapshot_alpha_state "$V13_SNAPSHOT_1" "$V13_ALPHA_ID" > /dev/null; then
+  echo "[smoke] ERROR: snapshot 1 missing stable alpha member identity"
+  echo "$SNAP_SHOW_1"
   exit 1
 fi
-if ! echo "$REMOVE_BLOCKED_OUTPUT" | grep -q "SNAPSHOT_RETAINED_DELETE_BLOCKED"; then
-  echo "[smoke] ERROR: expected snapshot-retained invariant code in remove failure"
-  echo "$REMOVE_BLOCKED_OUTPUT"
-  exit 1
-fi
-echo "[smoke]   ok: remove blocked with SNAPSHOT_RETAINED_DELETE_BLOCKED"
-
-GC_V13_BEFORE=$(coldkeep gc --dry-run --output json)
-GC_V13_BEFORE_PAYLOAD=$(echo "$GC_V13_BEFORE" | grep -E '^\{.*\}$' | tail -n1)
-V13_SNAPSHOT_RETAINED_BEFORE=$(echo "$GC_V13_BEFORE_PAYLOAD" | jq -r '.data.snapshot_retained_logical_files // 0')
-if [[ "$V13_SNAPSHOT_RETAINED_BEFORE" -le 0 ]]; then
-  echo "[smoke] ERROR: gc --dry-run should report snapshot_retained_logical_files > 0"
-  echo "$GC_V13_BEFORE"
-  exit 1
-fi
-echo "[smoke]   ok: gc --dry-run reports snapshot-protected retention (${V13_SNAPSHOT_RETAINED_BEFORE})"
-
-SNAP_RESTORE_1=$(coldkeep snapshot restore "$V13_SNAPSHOT_1" --mode prefix --destination "$V13_RESTORE_DIR" --output json)
-SNAP_RESTORE_1_PAYLOAD=$(echo "$SNAP_RESTORE_1" | grep -E '^\{.*\}$' | tail -n1)
-if ! echo "$SNAP_RESTORE_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "restore" and (.data.restored_files >= 1)' > /dev/null 2>&1; then
-  echo "[smoke] ERROR: snapshot restore (v1.3) failed"
-  echo "$SNAP_RESTORE_1"
-  exit 1
-fi
-
-if [[ -z "$(find "$V13_RESTORE_DIR" -type f -print -quit)" ]]; then
-  echo "[smoke] ERROR: snapshot restore reported success but no files were written"
-  exit 1
-fi
-echo "[smoke]   ok: snapshot restore wrote files to destination prefix"
+echo "[smoke]   ok: snapshot 1 contains alpha member $V13_ALPHA_MEMBER"
 
 STORE_V13_GAMMA=$(coldkeep store "$V13_DIR/gamma.txt" --output json)
 STORE_V13_GAMMA_PAYLOAD=$(echo "$STORE_V13_GAMMA" | grep -E '^\{.*\}$' | tail -n1)
-if ! echo "$STORE_V13_GAMMA_PAYLOAD" | jq -e '.status == "ok" and .command == "store" and (.data.file_id != null)' > /dev/null 2>&1; then
+V13_GAMMA_ID=$(echo "$STORE_V13_GAMMA_PAYLOAD" | jq -r '.data.file_id // empty')
+V13_GAMMA_HASH=$(echo "$STORE_V13_GAMMA_PAYLOAD" | jq -r '.data.file_hash // empty')
+if [[ ! "$V13_GAMMA_ID" =~ ^[0-9]+$ || ! "$V13_GAMMA_HASH" =~ ^[0-9a-f]{64}$ ]] || ! echo "$STORE_V13_GAMMA_PAYLOAD" | jq -e '.status == "ok" and .command == "store"' > /dev/null 2>&1; then
   echo "[smoke] ERROR: v1.3 gamma store failed"
   echo "$STORE_V13_GAMMA"
   exit 1
@@ -819,6 +892,20 @@ if ! echo "$SNAP_CREATE_2_PAYLOAD" | jq -e '.status == "ok" and .command == "sna
   echo "$SNAP_CREATE_2"
   exit 1
 fi
+
+SNAP_SHOW_2=$(coldkeep snapshot show "$V13_SNAPSHOT_2" --output json)
+SNAP_SHOW_2_PAYLOAD=$(echo "$SNAP_SHOW_2" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_SHOW_2_PAYLOAD" | jq -e --argjson id "$V13_ALPHA_ID" --arg path "$V13_ALPHA_MEMBER" '
+  .status == "ok"
+  and .command == "snapshot"
+  and .data.action == "show"
+  and ([.data.files[] | select(.logical_file_id == $id and .path == $path)] | length == 1)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot 2 missing the intended alpha member"
+  echo "$SNAP_SHOW_2"
+  exit 1
+fi
+echo "[smoke]   ok: both snapshots independently contain alpha"
 
 SNAP_DIFF=$(coldkeep snapshot diff "$V13_SNAPSHOT_1" "$V13_SNAPSHOT_2" --output json)
 SNAP_DIFF_PAYLOAD=$(echo "$SNAP_DIFF" | grep -E '^\{.*\}$' | tail -n1)
@@ -859,6 +946,95 @@ if echo "$SNAP_DIFF_FILTER_PAYLOAD" | jq -e '.data.total_diff_entry_count' > /de
   echo "[smoke]   ok: snapshot diff --filter reports entry count"
 fi
 
+echo "[smoke] unlinking alpha current mapping exactly once while two snapshots retain it"
+REMOVE_V13_ALPHA=$(coldkeep remove --stored-path "$V13_ALPHA_STORED_PATH" --output json)
+REMOVE_V13_ALPHA_PAYLOAD=$(echo "$REMOVE_V13_ALPHA" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$REMOVE_V13_ALPHA_PAYLOAD" | jq -e --argjson id "$V13_ALPHA_ID" '
+  .status == "ok"
+  and .command == "remove"
+  and .data.logical_file_id == $id
+  and .data.removed == true
+  and .data.remaining_ref_count == 0
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot-retained alpha stored-path unlink contract invalid"
+  echo "$REMOVE_V13_ALPHA"
+  exit 1
+fi
+
+LIST_V13_AFTER_UNLINK=$(coldkeep list --output json)
+LIST_V13_AFTER_UNLINK_PAYLOAD=$(echo "$LIST_V13_AFTER_UNLINK" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$LIST_V13_AFTER_UNLINK_PAYLOAD" | jq -e --argjson alpha "$V13_ALPHA_ID" --argjson beta "$V13_BETA_ID" --argjson gamma "$V13_GAMMA_ID" '
+  .status == "ok"
+  and .command == "list"
+  and ([.files[] | select(.id == $alpha)] | length == 0)
+  and ([.files[] | select(.id == $beta)] | length == 1)
+  and ([.files[] | select(.id == $gamma)] | length == 1)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: alpha mapping was not removed or current controls disappeared"
+  echo "$LIST_V13_AFTER_UNLINK"
+  exit 1
+fi
+if ! v13_snapshot_alpha_state "$V13_SNAPSHOT_1" "$V13_ALPHA_ID" > /dev/null ||
+   ! v13_snapshot_alpha_state "$V13_SNAPSHOT_2" "$V13_ALPHA_ID" > /dev/null; then
+  echo "[smoke] ERROR: alpha logical recipe or two-snapshot membership was not preserved"
+  exit 1
+fi
+if ! coldkeep verify system --standard --output json > /dev/null; then
+  echo "[smoke] ERROR: verify failed after alpha entered snapshot-only state"
+  exit 1
+fi
+echo "[smoke]   ok: alpha mapping absent; recipe and both memberships preserved"
+
+assert_v13_remove_by_id_blocked "$V13_ALPHA_ID" "$V13_SNAPSHOT_1" "$V13_SNAPSHOT_2"
+echo "[smoke]   ok: structured by-ID guard blocked alpha without mutation under two snapshots"
+
+GC_V13_BEFORE=$(coldkeep gc --dry-run --output json)
+GC_V13_BEFORE_PAYLOAD=$(echo "$GC_V13_BEFORE" | grep -E '^\{.*\}$' | tail -n1)
+V13_SNAPSHOT_RETAINED_BEFORE=$(echo "$GC_V13_BEFORE_PAYLOAD" | jq -r '.data.snapshot_retained_logical_files // 0')
+if ! echo "$GC_V13_BEFORE_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "gc"
+  and .data.dry_run == true
+  and (.data.snapshot_retained_logical_files >= 1)
+  and (.data.retained_snapshot_only_logical_files >= 1)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: GC dry-run did not conservatively retain snapshot-only alpha"
+  echo "$GC_V13_BEFORE"
+  exit 1
+fi
+
+GC_V13_LIVE=$(coldkeep gc --output json)
+GC_V13_LIVE_PAYLOAD=$(echo "$GC_V13_LIVE" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$GC_V13_LIVE_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "gc"
+  and .data.dry_run == false
+  and (.data.snapshot_retained_logical_files >= 1)
+  and (.data.retained_snapshot_only_logical_files >= 1)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: live GC did not conservatively retain snapshot-only alpha"
+  echo "$GC_V13_LIVE"
+  exit 1
+fi
+
+rm -rf "$V13_RESTORE_DIR/alpha-after-gc"
+mkdir -p "$V13_RESTORE_DIR/alpha-after-gc"
+SNAP_RESTORE_1=$(coldkeep snapshot restore "$V13_SNAPSHOT_1" --path "$V13_ALPHA_MEMBER" --mode prefix --destination "$V13_RESTORE_DIR/alpha-after-gc" --output json)
+SNAP_RESTORE_1_PAYLOAD=$(echo "$SNAP_RESTORE_1" | grep -E '^\{.*\}$' | tail -n1)
+V13_ALPHA_RESTORED_PATH="$V13_RESTORE_DIR/alpha-after-gc/${V13_ALPHA_MEMBER}"
+if ! echo "$SNAP_RESTORE_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "restore" and .data.restored_files == 1' > /dev/null 2>&1 ||
+   [[ ! -f "$V13_ALPHA_RESTORED_PATH" ]]; then
+  echo "[smoke] ERROR: post-live-GC snapshot restore did not write the intended alpha member"
+  echo "$SNAP_RESTORE_1"
+  exit 1
+fi
+V13_ALPHA_RESTORED_HASH=$(sha256sum "$V13_ALPHA_RESTORED_PATH" | awk '{print $1}')
+if [[ "$V13_ALPHA_RESTORED_HASH" != "$V13_ALPHA_HASH" ]]; then
+  echo "[smoke] ERROR: restored alpha hash mismatch: want=$V13_ALPHA_HASH got=$V13_ALPHA_RESTORED_HASH"
+  exit 1
+fi
+echo "[smoke]   ok: live GC preserved byte-identical alpha snapshot restore ($V13_ALPHA_RESTORED_HASH)"
+
 SNAP_DELETE_1=$(coldkeep snapshot delete "$V13_SNAPSHOT_1" --force --output json)
 SNAP_DELETE_1_PAYLOAD=$(echo "$SNAP_DELETE_1" | grep -E '^\{.*\}$' | tail -n1)
 if ! echo "$SNAP_DELETE_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "delete"' > /dev/null 2>&1; then
@@ -867,17 +1043,12 @@ if ! echo "$SNAP_DELETE_1_PAYLOAD" | jq -e '.status == "ok" and .command == "sna
   exit 1
 fi
 
-echo "[smoke] verifying remove remains blocked while any retaining snapshot exists"
-if REMOVE_AFTER_DELETE1_OUTPUT=$(coldkeep remove --stored-path "$V13_ALPHA_STORED_PATH" --output json 2>&1); then
-  echo "[smoke] ERROR: remove --stored-path should remain blocked while second snapshot still retains file"
+if ! v13_snapshot_alpha_state "$V13_SNAPSHOT_2" "$V13_ALPHA_ID" > /dev/null; then
+  echo "[smoke] ERROR: snapshot 2 did not retain alpha after deleting snapshot 1"
   exit 1
 fi
-if ! echo "$REMOVE_AFTER_DELETE1_OUTPUT" | grep -q "SNAPSHOT_RETAINED_DELETE_BLOCKED"; then
-  echo "[smoke] ERROR: expected snapshot-retained invariant code after deleting first snapshot"
-  echo "$REMOVE_AFTER_DELETE1_OUTPUT"
-  exit 1
-fi
-echo "[smoke]   ok: remove remains blocked until all retaining snapshots are deleted"
+assert_v13_remove_by_id_blocked "$V13_ALPHA_ID" "$V13_SNAPSHOT_2"
+echo "[smoke]   ok: structured by-ID guard remains active under the final snapshot"
 
 SNAP_DELETE_2=$(coldkeep snapshot delete "$V13_SNAPSHOT_2" --force --output json)
 SNAP_DELETE_2_PAYLOAD=$(echo "$SNAP_DELETE_2" | grep -E '^\{.*\}$' | tail -n1)
@@ -887,23 +1058,99 @@ if ! echo "$SNAP_DELETE_2_PAYLOAD" | jq -e '.status == "ok" and .command == "sna
   exit 1
 fi
 
-echo "[smoke] verifying remove succeeds after deleting all retaining snapshots"
-if ! coldkeep remove --stored-path "$V13_ALPHA_STORED_PATH" --output json > /dev/null; then
-  echo "[smoke] ERROR: remove --stored-path should succeed after deleting all retaining snapshots"
+SNAP_LIST_V13_AFTER=$(coldkeep snapshot list --output json)
+SNAP_LIST_V13_AFTER_PAYLOAD=$(echo "$SNAP_LIST_V13_AFTER" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_LIST_V13_AFTER_PAYLOAD" | jq -e --arg first "$V13_SNAPSHOT_1" --arg second "$V13_SNAPSHOT_2" '
+  .status == "ok"
+  and .command == "snapshot"
+  and ([.data.snapshots[] | select(.id == $first or .id == $second)] | length == 0)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: retaining snapshots still present after final deletion"
+  echo "$SNAP_LIST_V13_AFTER"
   exit 1
 fi
 
 GC_V13_AFTER=$(coldkeep gc --dry-run --output json)
 GC_V13_AFTER_PAYLOAD=$(echo "$GC_V13_AFTER" | grep -E '^\{.*\}$' | tail -n1)
 V13_SNAPSHOT_RETAINED_AFTER=$(echo "$GC_V13_AFTER_PAYLOAD" | jq -r '.data.snapshot_retained_logical_files // 0')
-
-if [[ "$V13_SNAPSHOT_RETAINED_AFTER" -ge "$V13_SNAPSHOT_RETAINED_BEFORE" ]]; then
-  echo "[smoke] ERROR: expected snapshot_retained_logical_files to decrease after deleting retaining snapshots and removing current mapping"
+if ! echo "$GC_V13_AFTER_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "gc"
+  and .data.dry_run == true
+  and .data.snapshot_retained_logical_files == 0
+  and (.data.retained_current_only_logical_files >= 2)
+' > /dev/null 2>&1 || [[ "$V13_SNAPSHOT_RETAINED_AFTER" -ge "$V13_SNAPSHOT_RETAINED_BEFORE" ]]; then
+  echo "[smoke] ERROR: final GC plan did not expose alpha's rootless transition while retaining controls"
   echo "[smoke] before=${V13_SNAPSHOT_RETAINED_BEFORE} after=${V13_SNAPSHOT_RETAINED_AFTER}"
   echo "$GC_V13_AFTER"
   exit 1
 fi
-echo "[smoke]   ok: snapshot-retained count decreased only after deleting all retaining snapshots + remove"
+
+GC_V13_FINAL_LIVE=$(coldkeep gc --output json)
+GC_V13_FINAL_LIVE_PAYLOAD=$(echo "$GC_V13_FINAL_LIVE" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$GC_V13_FINAL_LIVE_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "gc"
+  and .data.dry_run == false
+  and .data.snapshot_retained_logical_files == 0
+  and (.data.retained_current_only_logical_files >= 2)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: final live GC did not reclaim rootless alpha while retaining controls"
+  echo "$GC_V13_FINAL_LIVE"
+  exit 1
+fi
+
+mkdir -p "$V13_RESTORE_DIR/alpha-after-final-gc"
+V13_CAPTURE_STDOUT=$(mktemp)
+V13_CAPTURE_STDERR=$(mktemp)
+if coldkeep restore "$V13_ALPHA_ID" "$V13_RESTORE_DIR/alpha-after-final-gc/" --output json >"$V13_CAPTURE_STDOUT" 2>"$V13_CAPTURE_STDERR"; then
+  echo "[smoke] ERROR: rootless alpha remained restorable after final live GC"
+  cat "$V13_CAPTURE_STDOUT" "$V13_CAPTURE_STDERR"
+  exit 1
+fi
+RESTORE_V13_ALPHA_FINAL_PAYLOAD=$(grep -E '^\{.*\}$' "$V13_CAPTURE_STDOUT" | tail -n1 || true)
+if ! echo "$RESTORE_V13_ALPHA_FINAL_PAYLOAD" | jq -e --argjson id "$V13_ALPHA_ID" '
+  .command == "restore"
+  and ([.results[] | select(.id == $id and .status == "failed")] | length == 1)
+' > /dev/null 2>&1 || [[ -n "$(find "$V13_RESTORE_DIR/alpha-after-final-gc" -type f -print -quit)" ]]; then
+  echo "[smoke] ERROR: final alpha cleanup proof was not target-specific"
+  cat "$V13_CAPTURE_STDOUT" "$V13_CAPTURE_STDERR"
+  exit 1
+fi
+rm -f "$V13_CAPTURE_STDOUT" "$V13_CAPTURE_STDERR"
+V13_CAPTURE_STDOUT=""
+V13_CAPTURE_STDERR=""
+
+LIST_V13_FINAL=$(coldkeep list --output json)
+LIST_V13_FINAL_PAYLOAD=$(echo "$LIST_V13_FINAL" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$LIST_V13_FINAL_PAYLOAD" | jq -e --argjson alpha "$V13_ALPHA_ID" --argjson beta "$V13_BETA_ID" --argjson gamma "$V13_GAMMA_ID" '
+  .status == "ok"
+  and .command == "list"
+  and ([.files[] | select(.id == $alpha)] | length == 0)
+  and ([.files[] | select(.id == $beta)] | length == 1)
+  and ([.files[] | select(.id == $gamma)] | length == 1)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: final current-root identities are invalid"
+  echo "$LIST_V13_FINAL"
+  exit 1
+fi
+if ! coldkeep verify system --standard --output json > /dev/null; then
+  echo "[smoke] ERROR: verify failed after final alpha reclamation"
+  exit 1
+fi
+
+mkdir -p "$V13_RESTORE_DIR/beta-current" "$V13_RESTORE_DIR/gamma-current"
+coldkeep restore "$V13_BETA_ID" "$V13_RESTORE_DIR/beta-current/" --output json > /dev/null
+coldkeep restore "$V13_GAMMA_ID" "$V13_RESTORE_DIR/gamma-current/" --output json > /dev/null
+V13_BETA_RESTORED=$(find "$V13_RESTORE_DIR/beta-current" -type f -print -quit)
+V13_GAMMA_RESTORED=$(find "$V13_RESTORE_DIR/gamma-current" -type f -print -quit)
+if [[ -z "$V13_BETA_RESTORED" || -z "$V13_GAMMA_RESTORED" ]] ||
+   [[ "$(sha256sum "$V13_BETA_RESTORED" | awk '{print $1}')" != "$V13_BETA_HASH" ]] ||
+   [[ "$(sha256sum "$V13_GAMMA_RESTORED" | awk '{print $1}')" != "$V13_GAMMA_HASH" ]]; then
+  echo "[smoke] ERROR: beta/gamma current-live controls were not byte-readable after final GC"
+  exit 1
+fi
+echo "[smoke]   ok: alpha became rootless and was reclaimed; beta/gamma current roots survived"
 
 echo "[smoke] v1.3 snapshot lifecycle gate PASSED"
 
