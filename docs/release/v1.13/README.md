@@ -81,11 +81,13 @@ head hosted gates; Phase 6R2 is the locally certified snapshot-only lifecycle
 correction, and Phase 6R3 is locally certified pending exact-head hosted
 recertification. Phase 6R7 passed corrected detached certification, including
 all 12 retained PostgreSQL selectors, and its accepted head was pushed once.
-[Phase 6R9](v1.13.16-phase6r9-critical-coverage-throughput-recovery.md) is
-authorized for the remaining critical-coverage throughput isolation. Its
-one-file implementation and branch-worktree local matrix passed; committed,
-detached, and hosted certification remain pending. Phase 7 is not started. Ten
-findings are confirmed and one is closed at this candidate state.
+[Phase 6R9](v1.13.16-phase6r9-critical-coverage-throughput-recovery.md)
+completed its one-file throughput isolation and passed branch-worktree and
+clean committed-tree certification. Detached certification stopped only in
+the unchanged benchmark signal-cleanup regression. [Phase 6R9R2](v1.13.16-phase6r9r2-benchmark-signal-test-recovery.md)
+authorizes the bounded one-file test-harness recovery for CK-V11316-011.
+Phase 7 is not started. Eleven findings are confirmed and one is closed at
+this candidate state.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
 36/36 jobs, reused CodeQL `33303282125` passed 4/4, and open alerts remain zero.
