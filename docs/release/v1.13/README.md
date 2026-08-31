@@ -82,9 +82,10 @@ correction, and Phase 6R3 is locally certified pending exact-head hosted
 recertification. Phase 6R7 passed corrected detached certification, including
 all 12 retained PostgreSQL selectors, and its accepted head was pushed once.
 [Phase 6R9](v1.13.16-phase6r9-critical-coverage-throughput-recovery.md) is
-authorized for the remaining critical-coverage throughput isolation; its
-implementation is pending. Phase 7 is not started. Ten findings are confirmed
-and one is closed at this authority state.
+authorized for the remaining critical-coverage throughput isolation. Its
+one-file implementation and branch-worktree local matrix passed; committed,
+detached, and hosted certification remain pending. Phase 7 is not started. Ten
+findings are confirmed and one is closed at this candidate state.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
 36/36 jobs, reused CodeQL `33303282125` passed 4/4, and open alerts remain zero.
@@ -171,7 +172,12 @@ including all 12 retained PostgreSQL selectors, and head
 `33407340517` passed 4 of 4 with zero alerts. CK-V11316-010 classifies that
 failure as primary gate composition, secondary measurement stability, with
 coverage instrumentation contributing. It is not a product or CI
-infrastructure regression. Phase 6R9 implementation is pending.
+infrastructure regression. Phase 6R9 authority `6be80e391...` and test
+`9439c433...` completed the one-file implementation. Ordinary 20x, race 10x,
+atomic 10x, full Phase 1 coverage, three critical reports, full repository
+ordinary/race, exact lint, and 215 Python tests passed. CK-V11316-010 is
+implemented pending exact-head hosted certification; committed and detached
+certification remain pending.
 
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
