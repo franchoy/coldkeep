@@ -656,8 +656,15 @@ reconstruction and must restore pin state on success and failure.
 Neither remove path directly deletes payload bytes, container files, or block
 files. GC alone owns physical payload reclamation.
 
-Both live remove forms refuse snapshot-retained logical files with
-`SNAPSHOT_RETAINED_DELETE_BLOCKED`.
+The two live remove forms have intentionally different retention semantics.
+By-ID `Engine.Remove` is logical deletion and refuses a target while any
+snapshot retains it, reporting `SNAPSHOT_RETAINED_DELETE_BLOCKED` on the exact
+failed batch item. Stored-path `Engine.RemoveStoredPaths` unlinks only a
+current mapping and is allowed while snapshot-retained. Unlinking the final
+current mapping deactivates current-root liveness but preserves the logical
+recipe and snapshot membership. That snapshot-only state remains GC-live until
+the final snapshot root disappears; a later GC pass owns cleanup of the
+unpinned rootless recipe and content.
 
 ### Invariant-Driven Concurrency Safety
 

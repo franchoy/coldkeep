@@ -1198,8 +1198,11 @@ metadata only (never as a command target).
 # create snapshot
 ./coldkeep snapshot create --id pre-gc-gate --output json
 
-# confirm current-path removal is blocked while the logical file is retained by a snapshot
+# unlink the current mapping; snapshot membership preserves the logical recipe
 ./coldkeep remove --stored-path <stored-path-from-store-output> --output json
+
+# confirm by-ID logical deletion remains blocked while the snapshot retains it
+./coldkeep remove <logical-id-from-store-output> --output json
 
 # confirm GC dry-run reports snapshot-retained logical files
 ./coldkeep gc --dry-run --output json
@@ -1220,7 +1223,11 @@ metadata only (never as a command target).
 Confirm:
 
 - [ ] Snapshot create succeeds
-- [ ] Removing current mapping is refused while the logical file is snapshot-retained
+- [ ] Stored-path removal succeeds while snapshot-retained and reports
+  `remaining_ref_count: 0` for the final current mapping
+- [ ] By-ID logical removal exits `3` and its exact stdout item reports
+  `SNAPSHOT_RETAINED_DELETE_BLOCKED`
+- [ ] The stored-path unlink preserves the logical recipe and snapshot membership
 - [ ] GC dry-run reports snapshot-retained logical files before snapshot delete
 - [ ] Snapshot restore succeeds from retained snapshot data
 - [ ] Snapshot diff works and output is consistent with returned entries

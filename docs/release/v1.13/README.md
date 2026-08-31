@@ -123,6 +123,14 @@ alerts. No product runtime defect is established: only `scripts/smoke.sh` and
 the G14–G17 adversarial test may change. Phase 6 is withheld pending this
 reconciliation and exact-head hosted certification; Phase 7 is not authorized.
 
+Phase 6R5 authority `2870ef1e8504e8ac42640d41c05fff6b8fd4b008` and
+test `d7deb4097d681751f7373ac7f11ef6bb8bb18790` completed the bounded
+reconciliation. Plain/AES-GCM smoke, focused and complete adversarial,
+PostgreSQL correctness, migration compatibility, race, and the detached full
+local gate passed with zero product runtime changes. Phase 6 is now a candidate
+pending exact-head hosted certification; the finding state remains `1/8`, and
+Phase 7 is not authorized.
+
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
 historical and superseded by the current Phase 6 authority above.
