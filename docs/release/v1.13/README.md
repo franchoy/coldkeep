@@ -115,6 +115,14 @@ PostgreSQL plain/AES-GCM short/race profiles plus the clean detached full local
 gate. Exact-head hosted certification remains pending; Phase 7 is not
 authorized.
 
+Phase 6R5 is the authorized final gate reconciliation after exact-head CI
+`33334609160` at `ce7271a068aea1656d7239c5e282752928ed2e31` exposed a stale
+stored-path lifecycle in smoke and stdout batch-item parsing plus incomplete
+conservative-state proof in G15. CodeQL `33334609155` passed 4/4 with zero open
+alerts. No product runtime defect is established: only `scripts/smoke.sh` and
+the G14–G17 adversarial test may change. Phase 6 is withheld pending this
+reconciliation and exact-head hosted certification; Phase 7 is not authorized.
+
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
 historical and superseded by the current Phase 6 authority above.
