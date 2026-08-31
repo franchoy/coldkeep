@@ -79,9 +79,10 @@ Closure is the active exceptional critical-maintenance source train. Phases 0
 through 5 are Complete. Phase 6 is Next and locally certified pending exact-
 head hosted gates; Phase 6R2 is the locally certified snapshot-only lifecycle
 correction, and Phase 6R3 is locally certified pending exact-head hosted
-recertification. Phase 6R7 is locally certified pending exact-head hosted
-certification after the bounded single-connection verification test recovery.
-Phase 7 is not started.
+recertification. Phase 6R7 has passed branch-worktree local certification after
+the bounded single-connection verification test recovery; corrected detached
+exact-head execution and hosted certification remain pending. Phase 7 is not
+started.
 Nine findings are confirmed and one is closed at this candidate state.
 Phase 4 completed exact-head certification at
 `6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
@@ -154,6 +155,17 @@ existing port-5432 service was unchanged. CK-V11316-009 is implemented pending
 exact-head hosted certification, findings remain `1/9` closed, CI
 `33365683050` was not retried, Phase 6 remains withheld, and Phase 7 remains
 unauthorized.
+
+Evidence commit `96f19cbd333b0120ab1e18a65c6309eb6d9a2210` was created after
+the branch-worktree and isolated PostgreSQL matrices passed but before detached
+certification completed. Its earlier locally-certified wording is superseded:
+the later detached attempt passed lint, targeted ordinary/race/atomic coverage,
+and full `internal/verify` ordinary/race, then stopped in
+`TestEngineDependencyDirection`. Phase 6R7R3 proved a linked-worktree VCS
+stamping environment defect; `GOFLAGS=-buildvcs=false` is authorized only as a
+source-neutral detached validation policy. Corrected detached execution and
+hosted certification remain pending, no push occurred, CK-V11316-010 was not
+created, and all finding and phase states remain unchanged.
 
 The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
 Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
