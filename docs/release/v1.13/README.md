@@ -85,7 +85,9 @@ all 12 retained PostgreSQL selectors, and its accepted head was pushed once.
 completed its one-file throughput isolation and passed branch-worktree and
 clean committed-tree certification. Detached certification stopped only in
 the unchanged benchmark signal-cleanup regression. [Phase 6R9R2](v1.13.16-phase6r9r2-benchmark-signal-test-recovery.md)
-authorizes the bounded one-file test-harness recovery for CK-V11316-011.
+implemented the bounded one-file test-harness recovery for CK-V11316-011 and
+passed the complete branch-worktree matrix. Clean committed-tree, detached,
+and hosted certification remain pending.
 Phase 7 is not started. Eleven findings are confirmed and one is closed at
 this candidate state.
 Phase 4 completed exact-head certification at
