@@ -74,6 +74,31 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
+### Current Phase 6R10 authority
+
+v1.13.16 remains the active exceptional critical-maintenance source train.
+[Phase 6R10](v1.13.16-phase6r10-hosted-certification-reconciliation.md)
+reconciles the exact executable head
+`fe308d8ae51fef3f003953fd42368e2712d9f415`: CI `33560172954` attempt 1
+passed 36/36, CodeQL `33560172936` attempt 1 passed 4/4, and open alerts were
+zero. The accepted branch, clean committed-tree, detached, and isolated
+PostgreSQL 12/12 evidence is retained. CK-V11316-001, CK-V11316-002, and
+CK-V11316-008 through CK-V11316-011 are closed certified; CK-V11316-003
+through CK-V11316-007 remain open. Findings are 11 confirmed and 6/11 closed.
+
+Phase 6 is complete. Phase 7 is next in PLAN mode, but execution has not
+started and Phase 7 Build is not authorized. The documentation-only Phase
+6R10 authority head requires fresh exact-head hosted certification before
+owner review may authorize the Phase 7 Plan prompt. No Phase 7 work was
+performed, no post-hosted commit is authorized, and v1.x technical correctness
+closure remains withheld.
+
+### Historical Phase 6 chronology
+
+The chronology below preserves the pre-closure recovery states and is
+superseded where its pending wording conflicts with the current Phase 6R10
+authority above.
+
 v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
 Closure is the active exceptional critical-maintenance source train. Phases 0
 through 5 are Complete. Phase 6 is Next and locally certified pending exact-
