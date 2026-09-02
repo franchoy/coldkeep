@@ -90,6 +90,24 @@ CK-V11316-011 remain closed certified; findings remain 11 confirmed and 6/11
 closed. Phase 9 is not authorized, no new finding is created, and v1.x
 technical correctness closure remains withheld.
 
+Phase 8 authority commit `1967df264919a908680db4bc2a3dbf1fa5f673da`
+remains local, unamended, and unpushed. The complete 8/8 red/control baseline,
+the twelve-path uncommitted implementation candidate, targeted SQLite and
+PostgreSQL green results, explicit Go 1.26.7 production package loading, and
+the engine dependency-direction pass are retained. Broader certification
+stopped only because the in-package `internal/graph` test variant imported
+`internal/storage`, which imports retention after the authorized
+`retention -> graph` production edge. Production remains acyclic.
+
+The append-only Phase 8R2R1R4 recovery authorizes only moving the stored-path
+unlink regression from `internal/graph/reachability_test.go` into the new
+external-package test
+`internal/graph/reachability_storage_integration_test.go`. The regression must
+keep the real storage unlink API and the production graph design remains
+unchanged. The Phase 8 topology is now the retained authority commit, one
+graph test-package recovery-authority commit, the implementation fix commit,
+and the evidence commit. No test-only commit is authorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
