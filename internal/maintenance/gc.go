@@ -224,28 +224,27 @@ func runGCWithDBOptions(ctx context.Context, dbconn *sql.DB, dryRun bool, contai
 		return result, sealedErr
 	}
 
-	if !dryRun {
-		activeCandidates, activeErr := queryFullyDeadActiveContainers(ctx, dbconn)
-		if activeErr != nil {
-			return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
-		}
-		activePlan := planActiveGCUnits(activeCandidates, len(sealedPlan))
-		activeResults := executeGCPlan(ctx, activePlan, opts, func(unit gcPlannedUnit) gcUnitResult {
-			outcome, physicalBytes, unitErr := sweepDeadActiveContainerResult(
-				ctx,
-				dbconn,
-				containersDir,
-				state.reachableChunks,
-				state.liveUnits,
-				fsys,
-				unit.dispatch.ContainerID,
-				unit.dispatch.Filename,
-			)
-			return gcUnitResult{plan: unit, outcome: outcome, physicalBytes: physicalBytes, err: unitErr}
-		})
-		if activeErr := aggregateGCUnitResults(activeResults, ctx.Err(), &result); activeErr != nil {
-			return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
-		}
+	activeCandidates, activeErr := queryFullyDeadActiveContainers(ctx, dbconn)
+	if activeErr != nil {
+		return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
+	}
+	activePlan := planActiveGCUnits(activeCandidates, len(sealedPlan))
+	activeResults := executeGCPlan(ctx, activePlan, opts, func(unit gcPlannedUnit) gcUnitResult {
+		outcome, physicalBytes, unitErr := sweepDeadActiveContainerResultMode(
+			ctx,
+			dbconn,
+			containersDir,
+			state.reachableChunks,
+			state.liveUnits,
+			fsys,
+			unit.dispatch.ContainerID,
+			unit.dispatch.Filename,
+			dryRun,
+		)
+		return gcUnitResult{plan: unit, outcome: outcome, physicalBytes: physicalBytes, err: unitErr}
+	})
+	if activeErr := aggregateGCUnitResults(activeResults, ctx.Err(), &result); activeErr != nil {
+		return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
 	}
 
 	return result, nil
@@ -1376,6 +1375,10 @@ func sweepDeadActiveContainer(ctx context.Context, dbconn *sql.DB, containersDir
 }
 
 func sweepDeadActiveContainerResult(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS, containerID int64, filename string) (sealedContainerGCResult, int64, error) {
+	return sweepDeadActiveContainerResultMode(ctx, dbconn, containersDir, reachableChunkIDs, liveUnits, fsys, containerID, filename, false)
+}
+
+func sweepDeadActiveContainerResultMode(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS, containerID int64, filename string, dryRun bool) (sealedContainerGCResult, int64, error) {
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return sealedContainerSkipped, 0, err
@@ -1415,6 +1418,10 @@ func sweepDeadActiveContainerResult(ctx context.Context, dbconn *sql.DB, contain
 	if err != nil {
 		_ = tx.Rollback()
 		return sealedContainerSkipped, 0, err
+	}
+	if dryRun {
+		_ = tx.Rollback()
+		return sealedContainerAffected, physicalBytes, nil
 	}
 	if err := commitGCContainerDeletionWithPath(ctx, tx, containerID, containerPath, fsys); err != nil {
 		return sealedContainerSkipped, 0, err

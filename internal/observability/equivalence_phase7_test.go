@@ -58,6 +58,14 @@ func TestPhase7EquivalenceAcrossScenarios(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dbconn := openSimulateTestDB(t)
 			refs := tc.setup(t, dbconn)
+			if _, err := dbconn.Exec(`
+				UPDATE container
+				SET current_size =
+					(SELECT COALESCE(SUM(stored_size), 0) FROM blocks WHERE container_id = container.id)
+					+ (SELECT COALESCE(SUM(stored_size), 0) FROM storage_blocks WHERE container_id = container.id)
+			`); err != nil {
+				t.Fatalf("normalize physical fixture sizes: %v", err)
+			}
 			ctx := context.Background()
 			fixedNow := time.Date(2026, time.May, 1, 12, 0, 0, 0, time.UTC)
 			svc := newServiceForTest(dbconn, func() time.Time { return fixedNow })

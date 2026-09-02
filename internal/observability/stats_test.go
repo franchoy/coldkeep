@@ -329,6 +329,69 @@ func TestStatsDelegatesAndMapsMaintenanceStats(t *testing.T) {
 	}
 }
 
+func TestPhase8DefectAnchorPhysicalFileCountOneMapping(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	logicalResult, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version) VALUES (?, ?, ?, ?, ?, ?)`,
+		"phase8-one.txt", 1, "phase8-one-hash", "COMPLETED", 1, "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+	logicalFileID, err := logicalResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("logical file id: %v", err)
+	}
+	insertSimPhysicalFile(t, dbconn, "/phase8/one.txt", logicalFileID)
+
+	svc := newServiceForTest(dbconn, time.Now)
+	result, err := svc.Stats(context.Background(), StatsOptions{})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if result.Physical.TotalPhysicalFiles != 1 {
+		t.Fatalf("DEFECT_ANCHOR physical.total_physical_files = %d, want 1 current mapping", result.Physical.TotalPhysicalFiles)
+	}
+}
+
+func TestPhase8DefectAnchorPhysicalFileCountTwoPathsOneLogical(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	logicalResult, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version) VALUES (?, ?, ?, ?, ?, ?)`,
+		"phase8-shared.txt", 1, "phase8-shared-hash", "COMPLETED", 2, "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+	logicalFileID, err := logicalResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("logical file id: %v", err)
+	}
+	insertSimPhysicalFile(t, dbconn, "/phase8/first.txt", logicalFileID)
+	insertSimPhysicalFile(t, dbconn, "/phase8/second.txt", logicalFileID)
+
+	svc := newServiceForTest(dbconn, time.Now)
+	result, err := svc.Stats(context.Background(), StatsOptions{})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if result.Physical.TotalPhysicalFiles != 2 {
+		t.Fatalf("DEFECT_ANCHOR physical.total_physical_files = %d, want 2 current mappings to one logical file", result.Physical.TotalPhysicalFiles)
+	}
+}
+
+func TestPhase8PreservationControlEmptyPhysicalFileCount(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, time.Now)
+	result, err := svc.Stats(context.Background(), StatsOptions{})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if result.Physical.TotalPhysicalFiles != 0 {
+		t.Fatalf("PRESERVATION_CONTROL physical.total_physical_files = %d, want 0", result.Physical.TotalPhysicalFiles)
+	}
+}
+
 func TestStatsEnrichesGraphSnapshotReachabilityForNumericSnapshotIDs(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 

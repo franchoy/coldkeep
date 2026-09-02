@@ -1,9 +1,5 @@
-// Package gc provides GC planning logic shared between real GC execution and
-// simulation. BuildPlan is a pure read-only phase: it performs the GC mark
-// traversal and computes the sweep candidates without deleting anything.
-//
-// Real GC (internal/maintenance) calls BuildPlan then executes the sweep.
-// Simulation (internal/observability) calls BuildPlan and stops there.
+// Package gc provides read-only GC planning and simulation logic. Real GC has
+// an independent locked execution path in internal/maintenance.
 package gc
 
 import (
@@ -13,10 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
 	chunkmeta "github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/graph"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -71,8 +66,8 @@ type Plan struct {
 	ReachableChunks int64
 	// UnreachableChunks is TotalChunks - ReachableChunks.
 	UnreachableChunks int64
-	// ReclaimableBytes is the logical reclaimability estimate: sum of stored_size
-	// for dead chunks, even in partially-dead containers.
+	// ReclaimableBytes is the logical reclaimability estimate: sum of chunk.size
+	// once per unprotected completed chunk with an eligible physical placement.
 	ReclaimableBytes int64
 	// PhysicallyReclaimableBytes is what can be freed immediately with current GC
 	// behavior (whole-container deletion only).
@@ -88,8 +83,7 @@ type Plan struct {
 
 type chunkRecord struct {
 	ID             int64
-	LiveRefCount   int64
-	PinCount       int64
+	Size           int64
 	ChunkerVersion string
 }
 
@@ -97,7 +91,6 @@ type warningInputs struct {
 	UnknownChunkerVersions    []string
 	MissingContainerChunks    int64
 	QuarantinedDeadContainers int64
-	InconsistentContainers    int64
 	PartiallyDeadContainers   int64
 }
 
@@ -127,26 +120,14 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 	if dbconn == nil {
 		return nil, fmt.Errorf("gc.BuildPlan: nil db")
 	}
-	metadata, err := catalog.NewServiceFromSQL(dbconn).LoadGCPlanMetadata(ctx, catalog.GCPlanInput{ExcludeSnapshotIDs: opts.AssumeDeletedSnapshots})
-	if err != nil {
-		if catalog.IsCode(err, catalog.ErrorInvalidArgument) || catalog.IsCode(err, catalog.ErrorNotFound) {
-			return nil, fmt.Errorf("gc.BuildPlan: validate assumed-deleted snapshots: %w", err)
-		}
-		return nil, fmt.Errorf("gc.BuildPlan: gc roots: %w", err)
-	}
 	if err := refuseOnIntegrityIssues(dbconn); err != nil {
 		return nil, fmt.Errorf("gc.BuildPlan: %w", err)
 	}
-
-	g := graph.NewService(dbconn)
-	roots := make([]graph.NodeID, 0, len(metadata.Roots))
-	for _, root := range metadata.Roots {
-		roots = append(roots, graph.NodeID{Type: graph.EntityLogicalFile, ID: root.LogicalFileID})
-	}
-
-	reachableChunkIDs, err := g.ReachableChunksFromRoots(ctx, roots)
+	protected, err := retention.BuildProtectedStorageSet(ctx, dbconn, retention.ProtectionOptions{
+		ExcludeSnapshotIDs: opts.AssumeDeletedSnapshots,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: reachable chunks from roots: %w", err)
+		return nil, fmt.Errorf("gc.BuildPlan: protected storage set: %w", err)
 	}
 
 	allChunks, err := loadAllCompletedChunks(ctx, dbconn)
@@ -154,36 +135,24 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 		return nil, fmt.Errorf("gc.BuildPlan: load completed chunks: %w", err)
 	}
 	unknownVersions := make(map[string]struct{})
-	liveChunkIDs := make(map[int64]struct{})
 	for _, ch := range allChunks {
 		if version := ch.ChunkerVersion; version != string(chunkmeta.VersionV1SimpleRolling) && version != string(chunkmeta.VersionV2FastCDC) {
 			unknownVersions[version] = struct{}{}
 		}
-		if ch.LiveRefCount > 0 || ch.PinCount > 0 {
-			liveChunkIDs[ch.ID] = struct{}{}
-		}
 	}
 
-	livePackedBlockIDs, err := packedBlockIDsForChunks(ctx, dbconn, liveChunkIDs)
-	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: live packed blocks from live chunks: %w", err)
-	}
-	reachablePackedBlockIDs, err := packedBlockIDsForChunks(ctx, dbconn, reachableChunkIDs)
-	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: reachable packed blocks from roots: %w", err)
-	}
-
-	unreachable := make([]chunkRecord, 0)
+	unprotected := make([]chunkRecord, 0)
 	var reachableCompletedCount int64
 	for _, ch := range allChunks {
-		if _, ok := reachableChunkIDs[ch.ID]; ok {
+		if _, ok := protected.GraphReachableCompletedChunkIDs[ch.ID]; ok {
 			reachableCompletedCount++
-			continue
 		}
-		unreachable = append(unreachable, ch)
+		if _, ok := protected.ProtectedCompletedChunkIDs[ch.ID]; !ok {
+			unprotected = append(unprotected, ch)
+		}
 	}
 
-	plan, err := buildPlanFromUnreachable(ctx, dbconn, int64(len(allChunks)), reachableCompletedCount, reachableChunkIDs, livePackedBlockIDs, reachablePackedBlockIDs, unreachable, unknownVersions)
+	plan, err := buildPlanFromProtection(ctx, dbconn, int64(len(allChunks)), reachableCompletedCount, protected, unprotected, unknownVersions)
 	if err != nil {
 		return nil, fmt.Errorf("gc.BuildPlan: build plan from unreachable: %w", err)
 	}
@@ -193,7 +162,7 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 
 func loadAllCompletedChunks(ctx context.Context, dbconn *sql.DB) ([]chunkRecord, error) {
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT id, live_ref_count, pin_count, chunker_version
+		SELECT id, size, chunker_version
 		FROM chunk
 		WHERE status = 'COMPLETED'
 		ORDER BY id ASC
@@ -206,7 +175,7 @@ func loadAllCompletedChunks(ctx context.Context, dbconn *sql.DB) ([]chunkRecord,
 	out := make([]chunkRecord, 0)
 	for rows.Next() {
 		var ch chunkRecord
-		if err := rows.Scan(&ch.ID, &ch.LiveRefCount, &ch.PinCount, &ch.ChunkerVersion); err != nil {
+		if err := rows.Scan(&ch.ID, &ch.Size, &ch.ChunkerVersion); err != nil {
 			return nil, err
 		}
 		out = append(out, ch)
@@ -251,37 +220,34 @@ func refuseOnIntegrityIssues(dbconn *sql.DB) error {
 	return nil
 }
 
-func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, reachableChunks int64, reachableChunkIDs map[int64]struct{}, livePackedBlockIDs, reachablePackedBlockIDs map[int64]struct{}, unreachable []chunkRecord, unknownVersions map[string]struct{}) (*Plan, error) {
-	unreachableChunkIDs := make(map[int64]struct{}, len(unreachable))
-	for _, ch := range unreachable {
-		unreachableChunkIDs[ch.ID] = struct{}{}
+func buildPlanFromProtection(ctx context.Context, dbconn *sql.DB, totalChunks, reachableChunks int64, protected *retention.ProtectedStorageSet, unprotected []chunkRecord, unknownVersions map[string]struct{}) (*Plan, error) {
+	unprotectedChunkIDs := make(map[int64]struct{}, len(unprotected))
+	unprotectedChunkSizes := make(map[int64]int64, len(unprotected))
+	for _, ch := range unprotected {
+		unprotectedChunkIDs[ch.ID] = struct{}{}
+		unprotectedChunkSizes[ch.ID] = ch.Size
 	}
 
-	affectedContainers, logicalReclaimableBytes, physicalReclaimableBytes, fullyReclaimableContainers, partiallyDeadContainers, inconsistentContainers, err := planContainerImpact(ctx, dbconn, unreachableChunkIDs, livePackedBlockIDs)
+	affectedContainers, physicalReclaimableBytes, fullyReclaimableContainers, partiallyDeadContainers, err := planContainerImpact(ctx, dbconn, protected.ProtectedCompletedChunkIDs, protected.ProtectedPackedBlockIDs)
 	if err != nil {
 		return nil, err
 	}
-	activeContainers, activeLogicalReclaimableBytes, activePhysicalReclaimableBytes, activeFullyReclaimableContainers, activeInconsistentContainers, err := planActiveContainerImpact(ctx, dbconn, reachableChunkIDs, unreachableChunkIDs, livePackedBlockIDs, reachablePackedBlockIDs)
-	if err != nil {
-		return nil, err
-	}
-	affectedContainers = append(affectedContainers, activeContainers...)
-	logicalReclaimableBytes += activeLogicalReclaimableBytes
-	physicalReclaimableBytes += activePhysicalReclaimableBytes
-	fullyReclaimableContainers += activeFullyReclaimableContainers
-	inconsistentContainers += activeInconsistentContainers
 	sort.Slice(affectedContainers, func(i, j int) bool {
 		return affectedContainers[i].ContainerID < affectedContainers[j].ContainerID
 	})
-	missingContainerChunks, err := countUnreachableChunksWithoutContainer(ctx, dbconn, unreachableChunkIDs)
+	logicalReclaimableBytes, err := sumEligibleUnprotectedChunkSizes(ctx, dbconn, unprotectedChunkSizes)
 	if err != nil {
 		return nil, err
 	}
-	quarantinedDeadContainers, err := countQuarantinedContainersWithDeadChunks(ctx, dbconn, unreachableChunkIDs)
+	missingContainerChunks, err := countUnreachableChunksWithoutContainer(ctx, dbconn, unprotectedChunkIDs)
 	if err != nil {
 		return nil, err
 	}
-	packedBlocksLive, packedBlocksDead, packedBytesLive, packedBytesReclaimable, retainedDeadBytesDueToPackedBlocks, err := computePackedSimulationMetrics(ctx, dbconn, livePackedBlockIDs)
+	quarantinedDeadContainers, err := countQuarantinedContainersWithDeadChunks(ctx, dbconn, unprotectedChunkIDs)
+	if err != nil {
+		return nil, err
+	}
+	packedBlocksLive, packedBlocksDead, packedBytesLive, packedBytesReclaimable, retainedDeadBytesDueToPackedBlocks, err := computePackedSimulationMetrics(ctx, dbconn, protected.ProtectedPackedBlockIDs, unprotectedChunkIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -294,18 +260,17 @@ func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, 
 		UnknownChunkerVersions:    unknown,
 		MissingContainerChunks:    missingContainerChunks,
 		QuarantinedDeadContainers: quarantinedDeadContainers,
-		InconsistentContainers:    inconsistentContainers,
 		PartiallyDeadContainers:   partiallyDeadContainers,
 	})
 
 	return &Plan{
 		TotalChunks:                totalChunks,
 		ReachableChunks:            reachableChunks,
-		UnreachableChunks:          int64(len(unreachable)),
+		UnreachableChunks:          totalChunks - reachableChunks,
 		ReclaimableBytes:           logicalReclaimableBytes,
 		PhysicallyReclaimableBytes: physicalReclaimableBytes,
 		Summary: SimulationSummary{
-			UnreachableChunks:                  int64(len(unreachable)),
+			UnreachableChunks:                  totalChunks - reachableChunks,
 			LogicallyReclaimableBytes:          logicalReclaimableBytes,
 			PhysicallyReclaimableBytes:         physicalReclaimableBytes,
 			FullyReclaimableContainers:         fullyReclaimableContainers,
@@ -321,193 +286,181 @@ func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, 
 	}, nil
 }
 
-func computePackedSimulationMetrics(ctx context.Context, dbconn *sql.DB, livePackedBlockIDs map[int64]struct{}) (int64, int64, int64, int64, int64, error) {
-	blockRows, err := dbconn.QueryContext(ctx, `
-		SELECT id, stored_size
-		FROM storage_blocks
-	`)
-	if err != nil {
-		return 0, 0, 0, 0, 0, err
-	}
-	defer func() { _ = blockRows.Close() }()
-
-	var packedBlocksLive int64
-	var packedBlocksDead int64
-	var packedBytesLive int64
-	var packedBytesReclaimable int64
-
-	for blockRows.Next() {
-		var blockID int64
-		var storedSize int64
-		if err := blockRows.Scan(&blockID, &storedSize); err != nil {
-			return 0, 0, 0, 0, 0, err
-		}
-		if _, live := livePackedBlockIDs[blockID]; live {
-			packedBlocksLive++
-			packedBytesLive += storedSize
-			continue
-		}
-		packedBlocksDead++
-		packedBytesReclaimable += storedSize
-	}
-	if err := blockRows.Err(); err != nil {
-		return 0, 0, 0, 0, 0, err
-	}
-
-	deadInLiveRows, err := dbconn.QueryContext(ctx, `
-		SELECT cbr.block_id, cbr.size_in_block
-		FROM chunk_block_refs cbr
-		JOIN chunk ch ON ch.id = cbr.chunk_id
-		WHERE ch.status = 'COMPLETED'
-		AND ch.live_ref_count = 0
-		AND ch.pin_count = 0
-	`)
-	if err != nil {
-		return 0, 0, 0, 0, 0, err
-	}
-	defer func() { _ = deadInLiveRows.Close() }()
-
-	var retainedDeadBytesDueToPackedBlocks int64
-	for deadInLiveRows.Next() {
-		var blockID int64
-		var sizeInBlock int64
-		if err := deadInLiveRows.Scan(&blockID, &sizeInBlock); err != nil {
-			return 0, 0, 0, 0, 0, err
-		}
-		if _, live := livePackedBlockIDs[blockID]; live {
-			retainedDeadBytesDueToPackedBlocks += sizeInBlock
-		}
-	}
-	if err := deadInLiveRows.Err(); err != nil {
-		return 0, 0, 0, 0, 0, err
-	}
-
-	return packedBlocksLive, packedBlocksDead, packedBytesLive, packedBytesReclaimable, retainedDeadBytesDueToPackedBlocks, nil
-}
-
-// planContainerImpact scans sealed non-quarantined containers and returns the
-// per-container impact summary and total reclaimable bytes.
-func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}, livePackedBlockIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, int64, error) {
+func computePackedSimulationMetrics(ctx context.Context, dbconn *sql.DB, protectedBlockIDs, unprotectedChunkIDs map[int64]struct{}) (int64, int64, int64, int64, int64, error) {
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT id, filename, current_size
-		FROM container
-		WHERE sealed = TRUE AND quarantine = FALSE
-		ORDER BY id ASC
+		SELECT sb.id, sb.stored_size
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		WHERE c.quarantine = FALSE
+		AND ((c.sealed = TRUE AND c.sealing = FALSE) OR c.sealed = FALSE)
+		ORDER BY sb.id
 	`)
 	if err != nil {
-		return nil, 0, 0, 0, 0, 0, err
+		return 0, 0, 0, 0, 0, err
 	}
 	defer func() { _ = rows.Close() }()
 
+	eligibleBlocks := make(map[int64]struct{})
+	var liveBlocks, deadBlocks, liveBytes, reclaimableBytes int64
+	for rows.Next() {
+		var blockID, storedSize int64
+		if err := rows.Scan(&blockID, &storedSize); err != nil {
+			return 0, 0, 0, 0, 0, err
+		}
+		if storedSize <= 0 {
+			return 0, 0, 0, 0, 0, fmt.Errorf("storage block %d has invalid stored_size %d", blockID, storedSize)
+		}
+		eligibleBlocks[blockID] = struct{}{}
+		if _, protected := protectedBlockIDs[blockID]; protected {
+			liveBlocks++
+			liveBytes += storedSize
+		} else {
+			deadBlocks++
+			reclaimableBytes += storedSize
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+
+	refRows, err := dbconn.QueryContext(ctx, `
+		SELECT chunk_id, block_id, size_in_block
+		FROM chunk_block_refs
+		ORDER BY chunk_id
+	`)
+	if err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+	defer func() { _ = refRows.Close() }()
+	var retainedDeadBytes int64
+	for refRows.Next() {
+		var chunkID, blockID, sizeInBlock int64
+		if err := refRows.Scan(&chunkID, &blockID, &sizeInBlock); err != nil {
+			return 0, 0, 0, 0, 0, err
+		}
+		_, eligible := eligibleBlocks[blockID]
+		_, protectedBlock := protectedBlockIDs[blockID]
+		_, unprotectedChunk := unprotectedChunkIDs[chunkID]
+		if eligible && protectedBlock && unprotectedChunk {
+			retainedDeadBytes += sizeInBlock
+		}
+	}
+	if err := refRows.Err(); err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+
+	return liveBlocks, deadBlocks, liveBytes, reclaimableBytes, retainedDeadBytes, nil
+}
+
+// planContainerImpact classifies every physical storage unit in an eligible
+// container exactly once. Stable sealed containers may be partially dead;
+// active containers are reported only when every storage unit is reclaimable.
+func planContainerImpact(ctx context.Context, dbconn *sql.DB, protectedChunkIDs, protectedBlockIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT id, filename, current_size
+		FROM container
+		WHERE quarantine = FALSE
+		AND ((sealed = TRUE AND sealing = FALSE) OR sealed = FALSE)
+		ORDER BY id
+	`)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	defer func() { _ = rows.Close() }()
 	type containerRow struct {
 		id       int64
 		filename string
 		size     int64
 	}
-	var containers []containerRow
+	containers := make([]containerRow, 0)
 	for rows.Next() {
 		var c containerRow
 		if err := rows.Scan(&c.id, &c.filename, &c.size); err != nil {
-			return nil, 0, 0, 0, 0, 0, err
+			return nil, 0, 0, 0, err
+		}
+		if c.size < 0 {
+			return nil, 0, 0, 0, fmt.Errorf("container %d has negative current_size %d", c.id, c.size)
 		}
 		containers = append(containers, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, 0, 0, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 
-	var affected []ContainerImpact
-	var totalLogicalReclaimable int64
-	var totalPhysicalReclaimable int64
-	var fullyReclaimableContainers int64
-	var partiallyDeadContainers int64
-	var inconsistentContainers int64
-
+	affected := make([]ContainerImpact, 0)
+	var physicalReclaimable, fullyReclaimable, partiallyDead int64
 	for _, c := range containers {
-		if err := ctx.Err(); err != nil {
-			return nil, 0, 0, 0, 0, 0, err
-		}
-
-		chunkRows, err := dbconn.QueryContext(ctx, `
-			SELECT b.chunk_id, b.stored_size, ch.live_ref_count, ch.pin_count
+		var totalUnits, reclaimUnits, classifiedBytes, reclaimBytes int64
+		legacyRows, err := dbconn.QueryContext(ctx, `
+			SELECT b.chunk_id, b.stored_size, ch.status
 			FROM blocks b
 			JOIN chunk ch ON ch.id = b.chunk_id
 			WHERE b.container_id = $1
-			AND ch.status = 'COMPLETED'
+			AND NOT EXISTS (SELECT 1 FROM chunk_block_refs cbr WHERE cbr.chunk_id = b.chunk_id)
+			ORDER BY b.id
 		`, c.id)
 		if err != nil {
-			return nil, 0, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query blocks for container %d: %w", c.id, err)
+			return nil, 0, 0, 0, err
 		}
-
-		var totalUnits, reclaimUnits int64
-		var reclaimBytes int64
-		var totalBlockBytes int64
-
-		for chunkRows.Next() {
-			var chunkID int64
-			var storedSize int64
-			var liveRefCount, pinCount int64
-			if err := chunkRows.Scan(&chunkID, &storedSize, &liveRefCount, &pinCount); err != nil {
-				_ = chunkRows.Close()
-				return nil, 0, 0, 0, 0, 0, err
+		for legacyRows.Next() {
+			var chunkID, storedSize int64
+			var status string
+			if err := legacyRows.Scan(&chunkID, &storedSize, &status); err != nil {
+				_ = legacyRows.Close()
+				return nil, 0, 0, 0, err
 			}
 			totalUnits++
-			totalBlockBytes += storedSize
-			_, isUnreachable := unreachableChunkIDs[chunkID]
-			isLive := liveRefCount > 0 || pinCount > 0
-			if isUnreachable && !isLive {
+			classifiedBytes += storedSize
+			_, protected := protectedChunkIDs[chunkID]
+			if status == "COMPLETED" && !protected {
 				reclaimUnits++
 				reclaimBytes += storedSize
 			}
 		}
-		_ = chunkRows.Close()
-		if err := chunkRows.Err(); err != nil {
-			return nil, 0, 0, 0, 0, 0, err
+		if err := legacyRows.Err(); err != nil {
+			_ = legacyRows.Close()
+			return nil, 0, 0, 0, err
 		}
+		_ = legacyRows.Close()
 
-		packedRows, err := dbconn.QueryContext(ctx, `
-			SELECT id, stored_size
-			FROM storage_blocks
-			WHERE container_id = $1
-		`, c.id)
+		packedRows, err := dbconn.QueryContext(ctx, `SELECT id, stored_size FROM storage_blocks WHERE container_id = $1 ORDER BY id`, c.id)
 		if err != nil {
-			return nil, 0, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query storage_blocks for container %d: %w", c.id, err)
+			return nil, 0, 0, 0, err
 		}
 		for packedRows.Next() {
-			var blockID int64
-			var storedSize int64
+			var blockID, storedSize int64
 			if err := packedRows.Scan(&blockID, &storedSize); err != nil {
 				_ = packedRows.Close()
-				return nil, 0, 0, 0, 0, 0, err
+				return nil, 0, 0, 0, err
 			}
 			totalUnits++
-			totalBlockBytes += storedSize
-			if _, live := livePackedBlockIDs[blockID]; !live {
+			classifiedBytes += storedSize
+			if _, protected := protectedBlockIDs[blockID]; !protected {
 				reclaimUnits++
 				reclaimBytes += storedSize
 			}
 		}
-		_ = packedRows.Close()
 		if err := packedRows.Err(); err != nil {
-			return nil, 0, 0, 0, 0, 0, err
+			_ = packedRows.Close()
+			return nil, 0, 0, 0, err
 		}
+		_ = packedRows.Close()
 
-		if reclaimUnits == 0 {
+		if classifiedBytes > c.size {
+			return nil, 0, 0, 0, fmt.Errorf("container %d classified storage bytes %d exceed current_size %d", c.id, classifiedBytes, c.size)
+		}
+		if totalUnits == 0 || reclaimUnits == 0 {
 			continue
 		}
-
-		fullyReclaimable := totalUnits > 0 && reclaimUnits == totalUnits
-		requiresCompaction := reclaimUnits > 0 && !fullyReclaimable
+		full := reclaimUnits == totalUnits
 		liveBytesAfterGC := c.size - reclaimBytes
-		if liveBytesAfterGC < 0 {
-			inconsistentContainers++
-			liveBytesAfterGC = 0
+		if full {
+			physicalReclaimable += c.size
+			fullyReclaimable++
+		} else {
+			partiallyDead++
 		}
-		if totalBlockBytes > c.size {
-			inconsistentContainers++
-		}
-
-		impact := ContainerImpact{
+		affected = append(affected, ContainerImpact{
 			ContainerID:        c.id,
 			Filename:           c.filename,
 			TotalBytes:         c.size,
@@ -515,181 +468,53 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			ReclaimableBytes:   reclaimBytes,
 			ReclaimableChunks:  reclaimUnits,
 			TotalChunks:        totalUnits,
-			FullyReclaimable:   fullyReclaimable,
-			RequiresCompaction: requiresCompaction,
-		}
-		affected = append(affected, impact)
-		totalLogicalReclaimable += reclaimBytes
-		if fullyReclaimable {
-			fullyReclaimableContainers++
-			totalPhysicalReclaimable += c.size
-		} else {
-			partiallyDeadContainers++
-		}
+			FullyReclaimable:   full,
+			RequiresCompaction: !full,
+		})
 	}
-
-	return affected, totalLogicalReclaimable, totalPhysicalReclaimable, fullyReclaimableContainers, partiallyDeadContainers, inconsistentContainers, nil
+	return affected, physicalReclaimable, fullyReclaimable, partiallyDead, nil
 }
 
-func planActiveContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChunkIDs, unreachableChunkIDs map[int64]struct{}, livePackedBlockIDs, reachablePackedBlockIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, error) {
+func sumEligibleUnprotectedChunkSizes(ctx context.Context, dbconn *sql.DB, sizes map[int64]int64) (int64, error) {
+	if len(sizes) == 0 {
+		return 0, nil
+	}
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT c.id, c.filename, c.current_size
-		FROM container c
-		WHERE c.sealed = FALSE AND c.quarantine = FALSE
-		AND NOT EXISTS (
-			SELECT 1
+		SELECT DISTINCT placement.chunk_id
+		FROM (
+			SELECT b.chunk_id
 			FROM blocks b
-			JOIN chunk ch ON ch.id = b.chunk_id
-			WHERE b.container_id = c.id
-			AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
-		)
-		AND NOT EXISTS (
-			SELECT 1
-			FROM storage_blocks sb
-			JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
-			JOIN chunk ch ON ch.id = cbr.chunk_id
-			WHERE sb.container_id = c.id
-			AND ch.status = 'COMPLETED'
-			AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
-		)
-		AND EXISTS (
-			SELECT 1 FROM blocks WHERE container_id = c.id
+			JOIN container c ON c.id = b.container_id
+			WHERE c.quarantine = FALSE
+			AND ((c.sealed = TRUE AND c.sealing = FALSE) OR c.sealed = FALSE)
 			UNION ALL
-			SELECT 1 FROM storage_blocks WHERE container_id = c.id
-		)
-		ORDER BY c.id ASC
+			SELECT cbr.chunk_id
+			FROM chunk_block_refs cbr
+			JOIN storage_blocks sb ON sb.id = cbr.block_id
+			JOIN container c ON c.id = sb.container_id
+			WHERE c.quarantine = FALSE
+			AND ((c.sealed = TRUE AND c.sealing = FALSE) OR c.sealed = FALSE)
+		) placement
+		ORDER BY placement.chunk_id
 	`)
 	if err != nil {
-		return nil, 0, 0, 0, 0, err
+		return 0, err
 	}
 	defer func() { _ = rows.Close() }()
-
-	type containerRow struct {
-		id       int64
-		filename string
-		size     int64
-	}
-	var containers []containerRow
+	var total int64
 	for rows.Next() {
-		var c containerRow
-		if err := rows.Scan(&c.id, &c.filename, &c.size); err != nil {
-			return nil, 0, 0, 0, 0, err
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			return 0, err
 		}
-		containers = append(containers, c)
+		if size, ok := sizes[chunkID]; ok {
+			total += size
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, 0, 0, 0, err
+		return 0, err
 	}
-
-	var affected []ContainerImpact
-	var totalLogicalReclaimable int64
-	var totalPhysicalReclaimable int64
-	var fullyReclaimableContainers int64
-	var inconsistentContainers int64
-
-	for _, c := range containers {
-		if err := ctx.Err(); err != nil {
-			return nil, 0, 0, 0, 0, err
-		}
-
-		chunkRows, err := dbconn.QueryContext(ctx, `
-			SELECT b.chunk_id, b.stored_size, ch.status
-			FROM blocks b
-			JOIN chunk ch ON ch.id = b.chunk_id
-			WHERE b.container_id = $1
-		`, c.id)
-		if err != nil {
-			return nil, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query blocks for active container %d: %w", c.id, err)
-		}
-
-		var totalUnits int64
-		var reclaimUnits int64
-		var reclaimBytes int64
-		var totalBlockBytes int64
-		var hasRetained bool
-
-		for chunkRows.Next() {
-			var chunkID int64
-			var storedSize int64
-			var status string
-			if err := chunkRows.Scan(&chunkID, &storedSize, &status); err != nil {
-				_ = chunkRows.Close()
-				return nil, 0, 0, 0, 0, err
-			}
-			if _, retained := reachableChunkIDs[chunkID]; retained {
-				hasRetained = true
-			}
-			if status != "COMPLETED" {
-				continue
-			}
-			totalUnits++
-			totalBlockBytes += storedSize
-			if _, unreachable := unreachableChunkIDs[chunkID]; !unreachable {
-				continue
-			}
-			reclaimUnits++
-			reclaimBytes += storedSize
-		}
-		_ = chunkRows.Close()
-		if err := chunkRows.Err(); err != nil {
-			return nil, 0, 0, 0, 0, err
-		}
-
-		packedRows, err := dbconn.QueryContext(ctx, `
-			SELECT id, stored_size
-			FROM storage_blocks
-			WHERE container_id = $1
-		`, c.id)
-		if err != nil {
-			return nil, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query storage_blocks for active container %d: %w", c.id, err)
-		}
-		for packedRows.Next() {
-			var blockID int64
-			var storedSize int64
-			if err := packedRows.Scan(&blockID, &storedSize); err != nil {
-				_ = packedRows.Close()
-				return nil, 0, 0, 0, 0, err
-			}
-			totalUnits++
-			totalBlockBytes += storedSize
-			if _, retained := reachablePackedBlockIDs[blockID]; retained {
-				hasRetained = true
-			}
-			if _, live := livePackedBlockIDs[blockID]; live {
-				continue
-			}
-			reclaimUnits++
-			reclaimBytes += storedSize
-		}
-		_ = packedRows.Close()
-		if err := packedRows.Err(); err != nil {
-			return nil, 0, 0, 0, 0, err
-		}
-
-		if hasRetained || totalUnits == 0 || reclaimUnits != totalUnits {
-			continue
-		}
-		if totalBlockBytes > c.size {
-			inconsistentContainers++
-		}
-
-		affected = append(affected, ContainerImpact{
-			ContainerID:        c.id,
-			Filename:           c.filename,
-			TotalBytes:         c.size,
-			LiveBytesAfterGC:   0,
-			ReclaimableBytes:   reclaimBytes,
-			ReclaimableChunks:  reclaimUnits,
-			TotalChunks:        totalUnits,
-			FullyReclaimable:   true,
-			RequiresCompaction: false,
-		})
-		totalLogicalReclaimable += reclaimBytes
-		totalPhysicalReclaimable += c.size
-		fullyReclaimableContainers++
-	}
-
-	return affected, totalLogicalReclaimable, totalPhysicalReclaimable, fullyReclaimableContainers, inconsistentContainers, nil
+	return total, nil
 }
 
 func countUnreachableChunksWithoutContainer(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) (int64, error) {
@@ -762,17 +587,11 @@ func countQuarantinedContainersWithDeadChunks(ctx context.Context, dbconn *sql.D
 }
 
 func buildWarnings(inputs warningInputs) []Warning {
-	warnings := make([]Warning, 0, 5)
+	warnings := make([]Warning, 0, 4)
 	if inputs.QuarantinedDeadContainers > 0 {
 		warnings = append(warnings, Warning{
 			Code:    "QUARANTINED_CONTAINER",
 			Message: fmt.Sprintf("quarantined containers are excluded from physical reclaim calculation (%d affected container(s))", inputs.QuarantinedDeadContainers),
-		})
-	}
-	if inputs.InconsistentContainers > 0 {
-		warnings = append(warnings, Warning{
-			Code:    "INCONSISTENT_METADATA",
-			Message: fmt.Sprintf("inconsistent container metadata found; physical reclaim calculation may be approximate (%d container(s))", inputs.InconsistentContainers),
 		})
 	}
 	if inputs.MissingContainerChunks > 0 {
@@ -794,35 +613,4 @@ func buildWarnings(inputs warningInputs) []Warning {
 		})
 	}
 	return warnings
-}
-
-func packedBlockIDsForChunks(ctx context.Context, dbconn *sql.DB, chunkIDs map[int64]struct{}) (map[int64]struct{}, error) {
-	if len(chunkIDs) == 0 {
-		return map[int64]struct{}{}, nil
-	}
-
-	rows, err := dbconn.QueryContext(ctx, `
-		SELECT chunk_id, block_id
-		FROM chunk_block_refs
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	blockIDs := make(map[int64]struct{})
-	for rows.Next() {
-		var chunkID, blockID int64
-		if err := rows.Scan(&chunkID, &blockID); err != nil {
-			return nil, err
-		}
-		if _, ok := chunkIDs[chunkID]; ok {
-			blockIDs[blockID] = struct{}{}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return blockIDs, nil
 }

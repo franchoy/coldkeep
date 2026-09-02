@@ -152,6 +152,27 @@ func insertPhysicalFile(t *testing.T, dbconn *sql.DB, path string, fileID int64)
 	}
 }
 
+func insertPhase8SnapshotRoot(t *testing.T, dbconn *sql.DB, snapshotID, path string, fileID int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, CURRENT_TIMESTAMP, 'full')`, snapshotID); err != nil {
+		t.Fatalf("insert snapshot %q: %v", snapshotID, err)
+	}
+	pathResult, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, path)
+	if err != nil {
+		t.Fatalf("insert snapshot path %q: %v", path, err)
+	}
+	pathID, err := pathResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("snapshot path id: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`,
+		snapshotID, pathID, fileID,
+	); err != nil {
+		t.Fatalf("insert snapshot file: %v", err)
+	}
+}
+
 func TestBuildPlanNilDB(t *testing.T) {
 	_, err := BuildPlan(context.Background(), nil, PlanOptions{})
 	if err == nil {
@@ -748,6 +769,155 @@ func TestBuildPlanPackedBlockFromLiveChunkNotReclaimable(t *testing.T) {
 	}
 }
 
+func TestPhase8PreservationControlPinnedOnlyPackedBlockIsProtected(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	chunkID := insertChunk(t, dbconn, "phase8-pinned-packed", 200, 0, 1)
+	containerID := insertContainer(t, dbconn, "phase8-pinned-packed.bin", 200)
+	insertStorageBlockRef(t, dbconn, chunkID, containerID, 200, []byte{0x80, 0x45})
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.Summary.PackedBlocksLive != 1 || plan.Summary.PackedBlocksDead != 0 {
+		t.Fatalf("DEFECT_ANCHOR pinned-only packed blocks live=%d dead=%d, want live=1 dead=0", plan.Summary.PackedBlocksLive, plan.Summary.PackedBlocksDead)
+	}
+	if plan.Summary.PackedBytesLive != 200 || plan.Summary.PackedBytesReclaimable != 0 {
+		t.Fatalf("DEFECT_ANCHOR pinned-only packed bytes live=%d reclaimable=%d, want live=200 reclaimable=0", plan.Summary.PackedBytesLive, plan.Summary.PackedBytesReclaimable)
+	}
+	if len(plan.AffectedContainers) != 0 {
+		t.Fatalf("DEFECT_ANCHOR pinned-only protected packed container is affected: %+v", plan.AffectedContainers)
+	}
+}
+
+func TestPhase8DefectAnchorPackedContainerImpactUsesProtectedSetNotNarrowLiveSet(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	const narrowStoredSize int64 = 100
+	const graphOnlyStoredSize int64 = 120
+
+	narrowChunkID := insertChunk(t, dbconn, "phase8-container-narrow-live", int(narrowStoredSize), 1, 0)
+	graphLogicalFileID := insertLogicalFile(t, dbconn, "phase8-container-graph-only.txt")
+	graphChunkID := insertChunk(t, dbconn, "phase8-container-graph-only", int(graphOnlyStoredSize), 0, 0)
+	linkFileChunk(t, dbconn, graphLogicalFileID, graphChunkID, 0)
+	insertPhase8SnapshotRoot(t, dbconn, "phase8-container-graph-only", "/phase8/container-graph-only.txt", graphLogicalFileID)
+
+	containerID := insertContainer(t, dbconn, "phase8-container-authority.bin", narrowStoredSize+graphOnlyStoredSize)
+	insertStorageBlockRef(t, dbconn, narrowChunkID, containerID, narrowStoredSize, []byte{0x80, 0x46})
+	graphBlockResult, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', ?, ?, ?, ?, ?)`,
+		graphOnlyStoredSize, graphOnlyStoredSize, containerID, narrowStoredSize, []byte{0x80, 0x47},
+	)
+	if err != nil {
+		t.Fatalf("insert graph-only packed block: %v", err)
+	}
+	graphBlockID, err := graphBlockResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("graph-only packed block id: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, ?)`,
+		graphChunkID, graphBlockID, graphOnlyStoredSize,
+	); err != nil {
+		t.Fatalf("insert graph-only packed ref: %v", err)
+	}
+
+	var sealed, sealing, quarantine bool
+	var blockCount, storedSizeTotal int64
+	if err := dbconn.QueryRow(
+		`SELECT sealed, sealing, quarantine FROM container WHERE id = ?`,
+		containerID,
+	).Scan(&sealed, &sealing, &quarantine); err != nil {
+		t.Fatalf("inspect container state: %v", err)
+	}
+	if !sealed || sealing || quarantine {
+		t.Fatalf("fixture container state sealed=%v sealing=%v quarantine=%v, want stable sealed non-quarantined", sealed, sealing, quarantine)
+	}
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(stored_size), 0) FROM storage_blocks WHERE container_id = ?`,
+		containerID,
+	).Scan(&blockCount, &storedSizeTotal); err != nil {
+		t.Fatalf("inspect packed fixture: %v", err)
+	}
+	if blockCount != 2 || storedSizeTotal != narrowStoredSize+graphOnlyStoredSize {
+		t.Fatalf("fixture packed blocks=%d stored_size=%d, want 2 and %d", blockCount, storedSizeTotal, narrowStoredSize+graphOnlyStoredSize)
+	}
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.ReachableChunks != 1 {
+		t.Fatalf("fixture graph reachability=%d, want snapshot-root chunk count 1", plan.ReachableChunks)
+	}
+	if len(plan.AffectedContainers) != 0 {
+		t.Fatalf("DEFECT_ANCHOR AffectedContainers = %d, want 0: snapshot-protected packed block must not make the container partially dead", len(plan.AffectedContainers))
+	}
+}
+
+func TestPhase8DefectAnchorSnapshotOnlyPackedBlockIsProtected(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	logicalFileID := insertLogicalFile(t, dbconn, "phase8-snapshot-packed.txt")
+	chunkID := insertChunk(t, dbconn, "phase8-snapshot-packed", 200, 0, 0)
+	linkFileChunk(t, dbconn, logicalFileID, chunkID, 0)
+	insertPhase8SnapshotRoot(t, dbconn, "phase8-snapshot-packed", "/phase8/snapshot-packed.txt", logicalFileID)
+	containerID := insertContainer(t, dbconn, "phase8-snapshot-packed.bin", 200)
+	insertStorageBlockRef(t, dbconn, chunkID, containerID, 200, []byte{0x80, 0x43})
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.Summary.PackedBlocksLive != 1 || plan.Summary.PackedBlocksDead != 0 {
+		t.Fatalf("DEFECT_ANCHOR snapshot-only packed blocks live=%d dead=%d, want live=1 dead=0", plan.Summary.PackedBlocksLive, plan.Summary.PackedBlocksDead)
+	}
+	if plan.Summary.PackedBytesLive != 200 || plan.Summary.PackedBytesReclaimable != 0 {
+		t.Fatalf("DEFECT_ANCHOR snapshot-only packed bytes live=%d reclaimable=%d, want live=200 reclaimable=0", plan.Summary.PackedBytesLive, plan.Summary.PackedBytesReclaimable)
+	}
+	if len(plan.AffectedContainers) != 0 {
+		t.Fatalf("DEFECT_ANCHOR snapshot-only protected packed container is affected: %+v", plan.AffectedContainers)
+	}
+}
+
+func TestPhase8DefectAnchorSnapshotOnlySliceIsNotRetainedDead(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	snapshotFileID := insertLogicalFile(t, dbconn, "phase8-snapshot-slice.txt")
+	snapshotChunkID := insertChunk(t, dbconn, "phase8-snapshot-slice", 120, 0, 0)
+	linkFileChunk(t, dbconn, snapshotFileID, snapshotChunkID, 0)
+	insertPhase8SnapshotRoot(t, dbconn, "phase8-snapshot-slice", "/phase8/snapshot-slice.txt", snapshotFileID)
+	deadChunkID := insertChunk(t, dbconn, "phase8-dead-slice", 80, 0, 0)
+	protectorChunkID := insertChunk(t, dbconn, "phase8-live-protector", 40, 1, 0)
+	containerID := insertContainer(t, dbconn, "phase8-mixed-protected.bin", 240)
+	blockResult, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 240, 240, ?, 0, ?)`,
+		containerID, []byte{0x80, 0x44},
+	)
+	if err != nil {
+		t.Fatalf("insert mixed storage block: %v", err)
+	}
+	blockID, err := blockResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("mixed block id: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 120), (?, ?, 120, 80), (?, ?, 200, 40)`,
+		snapshotChunkID, blockID, deadChunkID, blockID, protectorChunkID, blockID,
+	); err != nil {
+		t.Fatalf("insert mixed packed refs: %v", err)
+	}
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.Summary.RetainedDeadBytesDueToPackedBlocks != 80 {
+		t.Fatalf("DEFECT_ANCHOR retained dead packed slice bytes=%d, want only unprotected slice=80", plan.Summary.RetainedDeadBytesDueToPackedBlocks)
+	}
+}
+
 func TestBuildPlanPackedBlockFromDeadChunkIsReclaimable(t *testing.T) {
 	dbconn := openTestDB(t)
 
@@ -851,6 +1021,65 @@ func TestBuildPlanPackedDryRunMetrics(t *testing.T) {
 	}
 	if plan.Summary.RetainedDeadBytesDueToPackedBlocks != 120 {
 		t.Fatalf("RetainedDeadBytesDueToPackedBlocks = %d, want 120", plan.Summary.RetainedDeadBytesDueToPackedBlocks)
+	}
+}
+
+func TestBuildPlanSeparatesLogicalStoredAndContainerByteDomains(t *testing.T) {
+	dbconn := openTestDB(t)
+	chunkID := insertChunk(t, dbconn, "phase8-byte-domains", 100, 0, 0)
+	containerID := insertContainer(t, dbconn, "phase8-byte-domains.bin", 120)
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 100, 60, ?, 0)`,
+		chunkID, containerID,
+	); err != nil {
+		t.Fatalf("insert byte-domain block: %v", err)
+	}
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.ReclaimableBytes != 100 {
+		t.Fatalf("logical reclaimable bytes=%d, want chunk.size 100", plan.ReclaimableBytes)
+	}
+	if plan.PhysicallyReclaimableBytes != 120 {
+		t.Fatalf("physical reclaimable bytes=%d, want container.current_size 120", plan.PhysicallyReclaimableBytes)
+	}
+	if len(plan.AffectedContainers) != 1 {
+		t.Fatalf("affected containers=%d, want 1", len(plan.AffectedContainers))
+	}
+	impact := plan.AffectedContainers[0]
+	if impact.ReclaimableBytes != 60 || impact.LiveBytesAfterGC != 60 {
+		t.Fatalf("container byte domains=%+v, want reclaimable stored_size 60 and live-after 60", impact)
+	}
+}
+
+func TestBuildPlanExcludesQuarantineAndMidSealFromReclaimability(t *testing.T) {
+	dbconn := openTestDB(t)
+	activeChunkID := insertChunk(t, dbconn, "phase8-active-eligible", 30, 0, 0)
+	activeContainerID := insertContainerWithState(t, dbconn, "phase8-active-eligible.bin", 30, false, false)
+	insertBlock(t, dbconn, activeChunkID, activeContainerID, 30)
+
+	midSealChunkID := insertChunk(t, dbconn, "phase8-midseal-excluded", 40, 0, 0)
+	midSealContainerID := insertContainer(t, dbconn, "phase8-midseal-excluded.bin", 40)
+	insertBlock(t, dbconn, midSealChunkID, midSealContainerID, 40)
+	if _, err := dbconn.Exec(`UPDATE container SET sealing = TRUE WHERE id = ?`, midSealContainerID); err != nil {
+		t.Fatalf("mark mid-seal container: %v", err)
+	}
+
+	quarantineChunkID := insertChunk(t, dbconn, "phase8-quarantine-excluded", 50, 0, 0)
+	quarantineContainerID := insertContainerWithState(t, dbconn, "phase8-quarantine-excluded.bin", 50, true, true)
+	insertBlock(t, dbconn, quarantineChunkID, quarantineContainerID, 50)
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.ReclaimableBytes != 30 || plan.PhysicallyReclaimableBytes != 30 {
+		t.Fatalf("eligible reclaimability logical=%d physical=%d, want active-only 30/30", plan.ReclaimableBytes, plan.PhysicallyReclaimableBytes)
+	}
+	if len(plan.AffectedContainers) != 1 || plan.AffectedContainers[0].ContainerID != activeContainerID {
+		t.Fatalf("affected containers=%+v, want only active container %d", plan.AffectedContainers, activeContainerID)
 	}
 }
 

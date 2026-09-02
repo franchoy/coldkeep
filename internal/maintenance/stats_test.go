@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -431,7 +432,7 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 
 	t.Setenv("COLDKEEP_BLOCK_TARGET_SIZE_MB", "2")
 
-	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, ?, ?, 1, 0)`, "stats-blocks.bin", 0, 64*1024*1024)
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, ?, ?, 1, 0)`, "stats-blocks.bin", 608, 64*1024*1024)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
 	}
@@ -450,8 +451,13 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 		t.Fatalf("insert chunk B: %v", err)
 	}
 	chunkBID, _ := chunkBRes.LastInsertId()
+	legacyChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, 'COMPLETED', 0, 'v2-fastcdc')`, "blk-stats-legacy", 128)
+	if err != nil {
+		t.Fatalf("insert legacy chunk: %v", err)
+	}
+	legacyChunkID, _ := legacyChunkRes.LastInsertId()
 
-	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 128, 128, ?, 0)`, chunkAID, containerID); err != nil {
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 128, 128, ?, 0)`, legacyChunkID, containerID); err != nil {
 		t.Fatalf("insert legacy block: %v", err)
 	}
 
@@ -539,11 +545,141 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	}
 }
 
+func TestPhase8DefectAnchorPackedBytesAppearInDescriptiveStatsOnce(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	containerResult, err := dbconn.Exec(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, ?, ?, 1, 0)`,
+		"phase8-packed-stats.bin", 200, 1024,
+	)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := containerResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("container id: %v", err)
+	}
+	chunkResult, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES (?, ?, 'COMPLETED', 1, 0, 'v2-fastcdc')`,
+		"phase8-packed-stats-chunk", 200,
+	)
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, err := chunkResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk id: %v", err)
+	}
+	blockResult, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 200, 200, ?, 0, x'8042')`,
+		containerID,
+	)
+	if err != nil {
+		t.Fatalf("insert storage block: %v", err)
+	}
+	blockID, err := blockResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("block id: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 200)`,
+		chunkID, blockID,
+	); err != nil {
+		t.Fatalf("insert packed ref: %v", err)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+	if stats.LiveBlockBytes != 200 || stats.DeadBlockBytes != 0 {
+		t.Fatalf("DEFECT_ANCHOR global packed descriptive bytes live=%d dead=%d, want live=200 dead=0", stats.LiveBlockBytes, stats.DeadBlockBytes)
+	}
+	if len(stats.Containers) != 1 {
+		t.Fatalf("container records=%d, want 1", len(stats.Containers))
+	}
+	if stats.Containers[0].LiveBytes != 200 || stats.Containers[0].DeadBytes != 0 {
+		t.Fatalf("DEFECT_ANCHOR packed container stats=%+v, want live=200 dead=0", stats.Containers[0])
+	}
+}
+
+func TestPhase8DescriptiveStatsIncludeQuarantineButExcludeItFromFragmentation(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	type fixture struct {
+		filename   string
+		chunkHash  string
+		storedSize int64
+		quarantine bool
+	}
+	for _, item := range []fixture{
+		{filename: "phase8-healthy-dead.bin", chunkHash: "phase8-healthy-dead", storedSize: 60},
+		{filename: "phase8-quarantine-dead.bin", chunkHash: "phase8-quarantine-dead", storedSize: 80, quarantine: true},
+	} {
+		containerResult, err := dbconn.Exec(
+			`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, 100, 1024, 1, ?)`,
+			item.filename, item.quarantine,
+		)
+		if err != nil {
+			t.Fatalf("insert container %q: %v", item.filename, err)
+		}
+		containerID, _ := containerResult.LastInsertId()
+		chunkResult, err := dbconn.Exec(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES (?, ?, 'COMPLETED', 0, 0, 'v2-fastcdc')`,
+			item.chunkHash, item.storedSize,
+		)
+		if err != nil {
+			t.Fatalf("insert chunk %q: %v", item.chunkHash, err)
+		}
+		chunkID, _ := chunkResult.LastInsertId()
+		if _, err := dbconn.Exec(
+			`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, ?, ?, ?, 0)`,
+			chunkID, item.storedSize, item.storedSize, containerID,
+		); err != nil {
+			t.Fatalf("insert block %q: %v", item.chunkHash, err)
+		}
+	}
+
+	stats, err := runStatsResultWithDB(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+	if stats.DeadBlockBytes != 140 || stats.LiveBlockBytes != 0 {
+		t.Fatalf("descriptive bytes live=%d dead=%d, want 0/140 including quarantine", stats.LiveBlockBytes, stats.DeadBlockBytes)
+	}
+	if stats.FragmentationRatioPct != 60 {
+		t.Fatalf("fragmentation=%v, want 60 from non-quarantined dead bytes only", stats.FragmentationRatioPct)
+	}
+	if len(stats.Containers) != 2 || !stats.Containers[1].Quarantine || stats.Containers[1].DeadBytes != 80 {
+		t.Fatalf("container records=%+v, want quarantined dead unit visible", stats.Containers)
+	}
+}
+
+func TestPhase8DescriptiveStatsFailWhenClassifiedBytesExceedContainerSize(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	containerResult, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES ('phase8-overflow.bin', 10, 1024, 1, 0)`)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := containerResult.LastInsertId()
+	chunkResult, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('phase8-overflow', 20, 'COMPLETED', 0, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkResult.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 20, 20, ?, 0)`, chunkID, containerID); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+	if _, err := runStatsResultWithDB(context.Background(), dbconn); err == nil || !strings.Contains(err.Error(), "exceed current_size") {
+		t.Fatalf("classified-byte overflow error=%v", err)
+	}
+}
+
 func TestCollectBlockStatsCompressionAggregatesMixedRepository(t *testing.T) {
 	dbconn := openStatsTestDB(t)
 	ctx := context.Background()
 
-	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, ?, ?, 1, 0)`, "stats-compression.bin", 0, 64*1024*1024)
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, ?, ?, 1, 0)`, "stats-compression.bin", 450, 64*1024*1024)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
 	}
@@ -562,6 +698,30 @@ func TestCollectBlockStatsCompressionAggregatesMixedRepository(t *testing.T) {
 	}
 	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_size = 300 WHERE block_hash = x'22'`); err != nil {
 		t.Fatalf("set zstd compressed_size: %v", err)
+	}
+	for _, fixture := range []struct {
+		hash      string
+		size      int64
+		blockHash string
+	}{
+		{hash: "stats-compression-none", size: 100, blockHash: "11"},
+		{hash: "stats-compression-zstd", size: 1000, blockHash: "22"},
+	} {
+		chunkResult, err := dbconn.Exec(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES (?, ?, 'COMPLETED', 0, 0, 'v2-fastcdc')`,
+			fixture.hash, fixture.size,
+		)
+		if err != nil {
+			t.Fatalf("insert compression chunk %q: %v", fixture.hash, err)
+		}
+		chunkID, _ := chunkResult.LastInsertId()
+		if _, err := dbconn.Exec(
+			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+			 VALUES (?, (SELECT id FROM storage_blocks WHERE lower(hex(block_hash)) = ?), 0, ?)`,
+			chunkID, fixture.blockHash, fixture.size,
+		); err != nil {
+			t.Fatalf("insert compression packed ref %q: %v", fixture.hash, err)
+		}
 	}
 
 	blockStats, err := CollectBlockStats(ctx, dbconn)

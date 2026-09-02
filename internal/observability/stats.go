@@ -111,6 +111,9 @@ func (s *Service) mapMaintenanceStats(raw *maintenance.StatsResult, opts StatsOp
 		CompletedSizeBytes:     raw.CompletedSizeBytes,
 		EstimatedDedupRatioPct: raw.EstimatedDedupRatioPct,
 	}
+	r.Physical = PhysicalStats{
+		TotalPhysicalFiles: raw.TotalPhysicalFiles,
+	}
 	r.Chunks = ChunkStats{
 		TotalChunks:      raw.TotalChunks,
 		CompletedChunks:  raw.CompletedChunks,

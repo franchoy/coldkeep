@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -655,5 +656,176 @@ func TestSharedRetentionSurvivesSnapshotDeleteWhenCurrentExists(t *testing.T) {
 	ac := ClassifyRetention(after)
 	if len(ac.CurrentOnly) != 1 || len(ac.Shared) != 0 || len(ac.SnapshotOnly) != 0 {
 		t.Fatalf("expected current-only after snapshot delete, got %+v", ac)
+	}
+}
+
+func insertProtectionChunk(t *testing.T, dbconn *sql.DB, hash string, liveRefs, pins int64) int64 {
+	t.Helper()
+	result, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES (?, 100, 'COMPLETED', ?, ?, 'v2-fastcdc')`,
+		hash, liveRefs, pins,
+	)
+	if err != nil {
+		t.Fatalf("insert protection chunk %q: %v", hash, err)
+	}
+	id, _ := result.LastInsertId()
+	return id
+}
+
+func insertProtectionBlock(t *testing.T, dbconn *sql.DB, containerID, chunkID, offset int64, hash byte) int64 {
+	t.Helper()
+	result, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 100, 100, ?, ?, ?)`,
+		containerID, offset, []byte{hash},
+	)
+	if err != nil {
+		t.Fatalf("insert protection storage block: %v", err)
+	}
+	blockID, _ := result.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 100)`, chunkID, blockID); err != nil {
+		t.Fatalf("insert protection block ref: %v", err)
+	}
+	return blockID
+}
+
+func TestBuildProtectedStorageSetUnionsGraphLiveRefAndPinProtection(t *testing.T) {
+	dbconn := openTestDB(t)
+	currentLogicalID := insertLogical(t, dbconn, "protection-current")
+	snapshotLogicalID := insertLogical(t, dbconn, "protection-snapshot")
+	currentChunkID := insertProtectionChunk(t, dbconn, "protection-current", 0, 0)
+	snapshotChunkID := insertProtectionChunk(t, dbconn, "protection-snapshot", 0, 0)
+	liveChunkID := insertProtectionChunk(t, dbconn, "protection-live", 1, 0)
+	pinnedChunkID := insertProtectionChunk(t, dbconn, "protection-pinned", 0, 1)
+	deadChunkID := insertProtectionChunk(t, dbconn, "protection-dead", 0, 0)
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, 0), (?, ?, 0)`, currentLogicalID, currentChunkID, snapshotLogicalID, snapshotChunkID); err != nil {
+		t.Fatalf("insert graph edges: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES ('/protection/current', ?)`, currentLogicalID); err != nil {
+		t.Fatalf("insert current root: %v", err)
+	}
+	insertSnapshot(t, dbconn, "protection-snapshot")
+	insertSnapshotFileRef(t, dbconn, "protection-snapshot", "/protection/snapshot", snapshotLogicalID)
+	containerResult, err := dbconn.Exec(`INSERT INTO container (filename, sealed, sealing, quarantine, current_size, max_size) VALUES ('protection.bin', 1, 0, 0, 500, 1024)`)
+	if err != nil {
+		t.Fatalf("insert protection container: %v", err)
+	}
+	containerID, _ := containerResult.LastInsertId()
+	currentBlockID := insertProtectionBlock(t, dbconn, containerID, currentChunkID, 0, 1)
+	snapshotBlockID := insertProtectionBlock(t, dbconn, containerID, snapshotChunkID, 100, 2)
+	liveBlockID := insertProtectionBlock(t, dbconn, containerID, liveChunkID, 200, 3)
+	pinnedBlockID := insertProtectionBlock(t, dbconn, containerID, pinnedChunkID, 300, 4)
+	deadBlockID := insertProtectionBlock(t, dbconn, containerID, deadChunkID, 400, 5)
+
+	set, err := BuildProtectedStorageSet(context.Background(), dbconn, ProtectionOptions{})
+	if err != nil {
+		t.Fatalf("BuildProtectedStorageSet: %v", err)
+	}
+	for _, id := range []int64{currentChunkID, snapshotChunkID} {
+		if _, ok := set.GraphReachableCompletedChunkIDs[id]; !ok {
+			t.Fatalf("graph-reachable chunk %d absent", id)
+		}
+	}
+	for _, id := range []int64{currentChunkID, snapshotChunkID, liveChunkID, pinnedChunkID} {
+		if _, ok := set.ProtectedCompletedChunkIDs[id]; !ok {
+			t.Fatalf("protected chunk %d absent", id)
+		}
+	}
+	for _, id := range []int64{currentBlockID, snapshotBlockID, liveBlockID, pinnedBlockID} {
+		if _, ok := set.ProtectedPackedBlockIDs[id]; !ok {
+			t.Fatalf("protected packed block %d absent", id)
+		}
+	}
+	if _, ok := set.ProtectedCompletedChunkIDs[deadChunkID]; ok {
+		t.Fatalf("dead chunk %d unexpectedly protected", deadChunkID)
+	}
+	if _, ok := set.ProtectedPackedBlockIDs[deadBlockID]; ok {
+		t.Fatalf("dead block %d unexpectedly protected", deadBlockID)
+	}
+
+	excluded, err := BuildProtectedStorageSet(context.Background(), dbconn, ProtectionOptions{ExcludeSnapshotIDs: []string{"protection-snapshot"}})
+	if err != nil {
+		t.Fatalf("BuildProtectedStorageSet excluded snapshot: %v", err)
+	}
+	if _, ok := excluded.ProtectedCompletedChunkIDs[snapshotChunkID]; ok {
+		t.Fatalf("excluded snapshot chunk %d remained protected", snapshotChunkID)
+	}
+	if _, ok := excluded.ProtectedPackedBlockIDs[snapshotBlockID]; ok {
+		t.Fatalf("excluded snapshot block %d remained protected", snapshotBlockID)
+	}
+}
+
+func TestBuildProtectedStorageSetFailsClosedOnPackedMetadata(t *testing.T) {
+	t.Run("block without refs", func(t *testing.T) {
+		dbconn := openTestDB(t)
+		containerResult, err := dbconn.Exec(`INSERT INTO container (filename, sealed, current_size, max_size) VALUES ('no-refs.bin', 1, 100, 1024)`)
+		if err != nil {
+			t.Fatalf("insert container: %v", err)
+		}
+		containerID, _ := containerResult.LastInsertId()
+		if _, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 100, 100, ?, 0, x'01')`, containerID); err != nil {
+			t.Fatalf("insert ref-free block: %v", err)
+		}
+		if _, err := BuildProtectedStorageSet(context.Background(), dbconn, ProtectionOptions{}); err == nil || !strings.Contains(err.Error(), "has no chunk references") {
+			t.Fatalf("ref-free block error = %v", err)
+		}
+	})
+
+	t.Run("slice outside plaintext extent", func(t *testing.T) {
+		dbconn := openTestDB(t)
+		chunkID := insertProtectionChunk(t, dbconn, "outside-extent", 0, 0)
+		containerResult, err := dbconn.Exec(`INSERT INTO container (filename, sealed, current_size, max_size) VALUES ('outside.bin', 1, 100, 1024)`)
+		if err != nil {
+			t.Fatalf("insert container: %v", err)
+		}
+		containerID, _ := containerResult.LastInsertId()
+		blockResult, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 100, 100, ?, 0, x'02')`, containerID)
+		if err != nil {
+			t.Fatalf("insert storage block: %v", err)
+		}
+		blockID, _ := blockResult.LastInsertId()
+		if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 50, 100)`, chunkID, blockID); err != nil {
+			t.Fatalf("insert out-of-bounds ref: %v", err)
+		}
+		if _, err := BuildProtectedStorageSet(context.Background(), dbconn, ProtectionOptions{}); err == nil || !strings.Contains(err.Error(), "outside storage block") {
+			t.Fatalf("out-of-bounds error = %v", err)
+		}
+	})
+
+	t.Run("invalid dual placement", func(t *testing.T) {
+		dbconn := openTestDB(t)
+		chunkID := insertProtectionChunk(t, dbconn, "invalid-dual", 0, 0)
+		containerResult, err := dbconn.Exec(`INSERT INTO container (filename, sealed, current_size, max_size) VALUES ('invalid-dual.bin', 1, 200, 1024)`)
+		if err != nil {
+			t.Fatalf("insert container: %v", err)
+		}
+		containerID, _ := containerResult.LastInsertId()
+		if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 100, 100, ?, 0)`, chunkID, containerID); err != nil {
+			t.Fatalf("insert legacy placement: %v", err)
+		}
+		insertProtectionBlock(t, dbconn, containerID, chunkID, 100, 3)
+		if _, err := BuildProtectedStorageSet(context.Background(), dbconn, ProtectionOptions{}); err == nil || !strings.Contains(err.Error(), "impossible simultaneous") {
+			t.Fatalf("invalid dual-placement error = %v", err)
+		}
+	})
+}
+
+func TestBuildProtectedStorageSetAcceptsValidPackedLegacyCompanion(t *testing.T) {
+	dbconn := openTestDB(t)
+	chunkID := insertProtectionChunk(t, dbconn, "valid-companion", 1, 0)
+	containerResult, err := dbconn.Exec(`INSERT INTO container (filename, sealed, current_size, max_size) VALUES ('valid-companion.bin', 1, 100, 1024)`)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := containerResult.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 100, 100, ?, 0)`, chunkID, containerID); err != nil {
+		t.Fatalf("insert legacy companion: %v", err)
+	}
+	blockID := insertProtectionBlock(t, dbconn, containerID, chunkID, 0, 4)
+	set, err := BuildProtectedStorageSet(context.Background(), dbconn, ProtectionOptions{})
+	if err != nil {
+		t.Fatalf("BuildProtectedStorageSet valid companion: %v", err)
+	}
+	if _, ok := set.ProtectedPackedBlockIDs[blockID]; !ok {
+		t.Fatalf("valid companion block %d is not protected", blockID)
 	}
 }

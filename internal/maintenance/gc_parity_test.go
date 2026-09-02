@@ -304,6 +304,73 @@ func TestRunGCDryRunIsNonMutating(t *testing.T) {
 	assertContainerRowCountByID(t, dbconn, containerID, 1)
 }
 
+func TestPhase8DefectAnchorActiveContainerDryRunIsNonMutating(t *testing.T) {
+	requireParityDB(t)
+
+	dbconn, containersDir := setupParityRunEnv(t)
+	payload := []byte("phase8-active-dry-run-payload")
+	containerID, chunkID, containerPath := insertDeadContainerFixture(
+		t,
+		dbconn,
+		containersDir,
+		"phase8-active-dry-run.bin",
+		payload,
+		"phase8-active-dry-run-chunk",
+	)
+	if _, err := dbconn.Exec(`UPDATE container SET sealed = FALSE WHERE id = $1`, containerID); err != nil {
+		t.Fatalf("make container active: %v", err)
+	}
+
+	result, err := maintenance.RunGCWithContainersDirResult(true, containersDir)
+	if err != nil {
+		t.Fatalf("dry-run gc: %v", err)
+	}
+	if result.AffectedContainers != 1 || result.BytesReclaimed != int64(len(payload)) {
+		t.Fatalf("DEFECT_ANCHOR active dry-run result=%+v, want one candidate and %d inspected bytes", result, len(payload))
+	}
+	assertFileExistsState(t, containerPath, true)
+	assertContainerRowCountByID(t, dbconn, containerID, 1)
+	var chunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE id = $1`, chunkID).Scan(&chunkCount); err != nil {
+		t.Fatalf("count active dry-run chunk: %v", err)
+	}
+	if chunkCount != 1 {
+		t.Fatalf("active dry-run chunk count=%d, want 1", chunkCount)
+	}
+}
+
+func TestPhase8DefectAnchorPostgreSQLPhysicalFileCount(t *testing.T) {
+	requireParityDB(t)
+
+	dbconn, _ := setupParityRunEnv(t)
+	var logicalFileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, 1, $2, 'COMPLETED', 2, 'v2-fastcdc') RETURNING id`,
+		"phase8-postgres-physical.txt", "phase8-postgres-physical-hash",
+	).Scan(&logicalFileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id) VALUES ($1, $3), ($2, $3)`,
+		"/phase8/postgres-a.txt", "/phase8/postgres-b.txt", logicalFileID,
+	); err != nil {
+		t.Fatalf("insert physical mappings: %v", err)
+	}
+
+	svc, err := observability.NewService(dbconn)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	stats, err := svc.Stats(context.Background(), observability.StatsOptions{})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Physical.TotalPhysicalFiles != 2 {
+		t.Fatalf("DEFECT_ANCHOR PostgreSQL physical.total_physical_files=%d, want 2", stats.Physical.TotalPhysicalFiles)
+	}
+}
+
 func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
 	requireParityDB(t)
 

@@ -64,6 +64,7 @@ type BlockStats struct {
 // StatsResult holds the snapshot emitted by RunStatsResult.
 type StatsResult struct {
 	TotalFiles                 int64                  `json:"total_files"`
+	TotalPhysicalFiles         int64                  `json:"total_physical_files"`
 	TotalLogicalSizeBytes      int64                  `json:"total_logical_size_bytes"`
 	CompletedFiles             int64                  `json:"completed_files"`
 	CompletedSizeBytes         int64                  `json:"completed_size_bytes"`
@@ -149,7 +150,6 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 	r.ActiveWriteChunker = activeWriteChunker
 
-	var liveBytes, deadBytes sql.NullInt64
 	var totalFileRetries, maxFileRetries, totalChunkRetries, maxChunkRetries sql.NullInt64
 	var avgFileRetries, avgChunkRetries sql.NullFloat64
 
@@ -176,6 +176,9 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	); err != nil {
 		return nil, fmt.Errorf("failed to query logical file aggregate stats: %w", err)
 	}
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM physical_file`).Scan(&r.TotalPhysicalFiles); err != nil {
+		return nil, fmt.Errorf("failed to count physical files: %w", err)
+	}
 
 	if err := dbconn.QueryRowContext(ctx, `
 		SELECT
@@ -191,23 +194,23 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	r.TotalContainers = r.HealthyContainers + r.QuarantineContainers
 	r.TotalContainerBytes = r.HealthyContainerBytes + r.QuarantineContainerBytes
 
-	if err := dbconn.QueryRowContext(ctx, `
-		SELECT
-			COALESCE(SUM(CASE WHEN (ch.live_ref_count > 0 OR ch.pin_count > 0) THEN b.stored_size ELSE 0 END),0),
-			COALESCE(SUM(CASE WHEN (ch.live_ref_count = 0 AND ch.pin_count = 0) THEN b.stored_size ELSE 0 END),0)
-		FROM blocks b
-		JOIN chunk ch ON ch.id = b.chunk_id
-	`).Scan(&liveBytes, &deadBytes); err != nil {
-		return nil, fmt.Errorf("failed to query chunk live/dead stats: %w", err)
+	protected, err := retention.BuildProtectedStorageSet(ctx, dbconn, retention.ProtectionOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to classify protected storage: %w", err)
 	}
-	r.LiveBlockBytes = liveBytes.Int64
-	r.DeadBlockBytes = deadBytes.Int64
+	containerRecords, liveBlockBytes, deadBlockBytes, healthyDeadBlockBytes, err := collectPhysicalStorageStats(ctx, dbconn, protected)
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect physical storage stats: %w", err)
+	}
+	r.Containers = containerRecords
+	r.LiveBlockBytes = liveBlockBytes
+	r.DeadBlockBytes = deadBlockBytes
 
 	if r.CompletedSizeBytes > 0 {
 		r.GlobalDedupRatioPct = (1.0 - float64(r.LiveBlockBytes)/float64(r.CompletedSizeBytes)) * 100
 	}
 	if r.HealthyContainerBytes > 0 {
-		r.FragmentationRatioPct = float64(r.DeadBlockBytes) / float64(r.HealthyContainerBytes) * 100
+		r.FragmentationRatioPct = float64(healthyDeadBlockBytes) / float64(r.HealthyContainerBytes) * 100
 	}
 
 	if err := dbconn.QueryRowContext(ctx, `
@@ -333,41 +336,110 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 		return nil, err
 	}
 
-	// Per-container breakdown
-	ctrRows, err := dbconn.QueryContext(ctx, `
-		SELECT
-			c.id,
-			c.filename,
-			c.current_size,
-			COALESCE(SUM(CASE WHEN (ch.live_ref_count > 0 OR ch.pin_count > 0) THEN b.stored_size ELSE 0 END),0) AS live,
-			COALESCE(SUM(CASE WHEN (ch.live_ref_count = 0 AND ch.pin_count = 0) THEN b.stored_size ELSE 0 END),0) AS dead,
-			c.quarantine
-		FROM container c
-		LEFT JOIN blocks b ON b.container_id = c.id
-		LEFT JOIN chunk ch ON ch.id = b.chunk_id
-		GROUP BY c.id
-		ORDER BY c.id
+	return r, nil
+}
+
+func collectPhysicalStorageStats(ctx context.Context, dbconn *sql.DB, protected *retention.ProtectedStorageSet) ([]ContainerStatRecord, int64, int64, int64, error) {
+	rows, err := dbconn.QueryContext(ctx, `SELECT id, filename, current_size, quarantine FROM container ORDER BY id`)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	records := make([]ContainerStatRecord, 0)
+	byID := make(map[int64]int)
+	for rows.Next() {
+		var record ContainerStatRecord
+		if err := rows.Scan(&record.ID, &record.Filename, &record.TotalBytes, &record.Quarantine); err != nil {
+			return nil, 0, 0, 0, err
+		}
+		if record.TotalBytes < 0 {
+			return nil, 0, 0, 0, fmt.Errorf("container %d has negative current_size %d", record.ID, record.TotalBytes)
+		}
+		records = append(records, record)
+		byID[record.ID] = len(records) - 1
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, 0, err
+	}
+
+	legacyRows, err := dbconn.QueryContext(ctx, `
+		SELECT b.chunk_id, b.stored_size, b.container_id
+		FROM blocks b
+		WHERE NOT EXISTS (SELECT 1 FROM chunk_block_refs cbr WHERE cbr.chunk_id = b.chunk_id)
+		ORDER BY b.id
 	`)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, 0, err
 	}
-	defer func() { _ = ctrRows.Close() }()
-
-	for ctrRows.Next() {
-		var c ContainerStatRecord
-		if err := ctrRows.Scan(&c.ID, &c.Filename, &c.TotalBytes, &c.LiveBytes, &c.DeadBytes, &c.Quarantine); err != nil {
-			return nil, err
+	for legacyRows.Next() {
+		var chunkID, storedSize, containerID int64
+		if err := legacyRows.Scan(&chunkID, &storedSize, &containerID); err != nil {
+			_ = legacyRows.Close()
+			return nil, 0, 0, 0, err
 		}
-		if c.TotalBytes > 0 {
-			c.LiveRatioPct = float64(c.LiveBytes) / float64(c.TotalBytes) * 100
+		recordIndex, ok := byID[containerID]
+		if !ok {
+			_ = legacyRows.Close()
+			return nil, 0, 0, 0, fmt.Errorf("legacy chunk %d references missing container %d", chunkID, containerID)
 		}
-		r.Containers = append(r.Containers, c)
+		record := &records[recordIndex]
+		if _, live := protected.ProtectedCompletedChunkIDs[chunkID]; live {
+			record.LiveBytes += storedSize
+		} else {
+			record.DeadBytes += storedSize
+		}
 	}
-	if err := ctrRows.Err(); err != nil {
-		return nil, err
+	if err := legacyRows.Err(); err != nil {
+		_ = legacyRows.Close()
+		return nil, 0, 0, 0, err
 	}
+	_ = legacyRows.Close()
 
-	return r, nil
+	packedRows, err := dbconn.QueryContext(ctx, `SELECT id, stored_size, container_id FROM storage_blocks ORDER BY id`)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	for packedRows.Next() {
+		var blockID, storedSize, containerID int64
+		if err := packedRows.Scan(&blockID, &storedSize, &containerID); err != nil {
+			_ = packedRows.Close()
+			return nil, 0, 0, 0, err
+		}
+		recordIndex, ok := byID[containerID]
+		if !ok {
+			_ = packedRows.Close()
+			return nil, 0, 0, 0, fmt.Errorf("storage block %d references missing container %d", blockID, containerID)
+		}
+		record := &records[recordIndex]
+		if _, live := protected.ProtectedPackedBlockIDs[blockID]; live {
+			record.LiveBytes += storedSize
+		} else {
+			record.DeadBytes += storedSize
+		}
+	}
+	if err := packedRows.Err(); err != nil {
+		_ = packedRows.Close()
+		return nil, 0, 0, 0, err
+	}
+	_ = packedRows.Close()
+
+	var liveBytes, deadBytes, healthyDeadBytes int64
+	for i := range records {
+		record := &records[i]
+		classified := record.LiveBytes + record.DeadBytes
+		if classified > record.TotalBytes {
+			return nil, 0, 0, 0, fmt.Errorf("container %d classified storage bytes %d exceed current_size %d", record.ID, classified, record.TotalBytes)
+		}
+		if record.TotalBytes > 0 {
+			record.LiveRatioPct = float64(record.LiveBytes) / float64(record.TotalBytes) * 100
+		}
+		liveBytes += record.LiveBytes
+		deadBytes += record.DeadBytes
+		if !record.Quarantine {
+			healthyDeadBytes += record.DeadBytes
+		}
+	}
+	return records, liveBytes, deadBytes, healthyDeadBytes, nil
 }
 
 // CollectBlockStats gathers packed/legacy block metrics used in stats and
