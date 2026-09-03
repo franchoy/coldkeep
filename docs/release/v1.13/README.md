@@ -84,29 +84,29 @@ exact-head checks succeeded, and direct repository and release-branch alert
 enumeration returned zero. Phase 7 is complete and Phase 8 is next in BUILD
 mode for only the physical-file and packed-block accounting correction.
 
-CK-V11316-003 and CK-V11316-004 remain open with frozen implementation
-contracts. CK-V11316-001, CK-V11316-002, and CK-V11316-008 through
+CK-V11316-003 and CK-V11316-004 remain open with their implementation recorded
+pending exact-head hosted certification. CK-V11316-001, CK-V11316-002, and CK-V11316-008 through
 CK-V11316-011 remain closed certified; findings remain 11 confirmed and 6/11
 closed. Phase 9 is not authorized, no new finding is created, and v1.x
 technical correctness closure remains withheld.
 
 Phase 8 authority commit `1967df264919a908680db4bc2a3dbf1fa5f673da`
-remains local, unamended, and unpushed. The complete 8/8 red/control baseline,
-the twelve-path uncommitted implementation candidate, targeted SQLite and
-PostgreSQL green results, explicit Go 1.26.7 production package loading, and
-the engine dependency-direction pass are retained. Broader certification
-stopped only because the in-package `internal/graph` test variant imported
-`internal/storage`, which imports retention after the authorized
-`retention -> graph` production edge. Production remains acyclic.
+and graph recovery authority `800cfc81ca453a9aa800da57819da0a58118b3e2`
+remain unamended and unpushed. Fix `55d976177d0a9e25446726ad018d52a0b180293a`
+contains exactly the five authorized production paths and nine authorized test
+paths. The external `graph_test` split preserves the real storage unlink API,
+the production graph remains acyclic, and the complete 8/8 red/control
+baseline is retained.
 
-The append-only Phase 8R2R1R4 recovery authorizes only moving the stored-path
-unlink regression from `internal/graph/reachability_test.go` into the new
-external-package test
-`internal/graph/reachability_storage_integration_test.go`. The regression must
-keep the real storage unlink API and the production graph design remains
-unchanged. The Phase 8 topology is now the retained authority commit, one
-graph test-package recovery-authority commit, the implementation fix commit,
-and the evidence commit. No test-only commit is authorized.
+Branch certification passed full Go/race, plain/AES-GCM quality, snapshot,
+critical-coverage 3/3, exact golangci-lint 2.9.0, release-state 102/102, and
+Python 215/215 gates. Phase 8R2R1R4 then stopped before loading a Go package
+because an ambient Go 1.23.1 binary was paired with `GOTOOLCHAIN=local`.
+Phase 8R2R1R5 did not rerun that command or reuse its twelve database names;
+it bound every new profile to the absolute Go 1.26.7 binary and passed twelve
+fresh branch PostgreSQL profiles 12/12 on the retained healthy phase-owned
+PostgreSQL 16.15 service. Clean committed-tree, detached, cleanup, one-push,
+and hosted certification remain pending after this evidence commit.
 
 ### Historical Phase 6 chronology
 
