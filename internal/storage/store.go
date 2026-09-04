@@ -1347,13 +1347,6 @@ func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx,
 	return nil
 }
 
-func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
-	return validateReusableCompletedChunkWithPolicy(ctx, dbconn, chunkID, reusableValidationPolicy{
-		scope:         reusableValidationFullRepository,
-		containersDir: containersDir,
-	})
-}
-
 func validateReusableCompletedChunkWithPolicy(ctx context.Context, dbconn *sql.DB, chunkID int64, policy reusableValidationPolicy) error {
 	if err := policy.validate(); err != nil {
 		return err
@@ -2443,13 +2436,6 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, activeVersion, container.ContainersDir)
-}
-
-func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {
-	return prepareLogicalFileForStoreWithValidationPolicy(ctx, dbconn, fileinfo, fileHash, activeVersion, reusableValidationPolicy{
-		scope:         reusableValidationFullRepository,
-		containersDir: containersDir,
-	})
 }
 
 func prepareLogicalFileForStoreWithValidationPolicy(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, policy reusableValidationPolicy) (fileID int64, filestatus string, err error) {
