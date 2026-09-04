@@ -104,8 +104,10 @@ CK-V11316-003 and CK-V11316-004 are closed certified. CK-V11316-001,
 CK-V11316-002, and CK-V11316-008 through CK-V11316-011 remain closed
 certified; CK-V11316-005 through CK-V11316-007 remain open. Findings are 11
 confirmed and 8/11 closed, and CK-V11316-012 was not created. Phase 8 is
-Complete. Phase 9 is Next but its execution is not started and its BUILD is
-not authorized. v1.x technical correctness closure remains withheld because
+Complete. Phase 9 remains the aggregate Next phase; its externally frozen
+[implementation contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md)
+is authorized and implementation is in progress. v1.x technical correctness
+closure remains withheld because
 CK-V11316-005, CK-V11316-006, and CK-V11316-007 remain open.
 
 ### Historical Phase 6 chronology
