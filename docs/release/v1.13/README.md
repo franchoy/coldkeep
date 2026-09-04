@@ -74,39 +74,39 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 7 contract and Phase 8 authority
+### Current Phase 8 closure and Phase 9 next state
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
-The [Phase 7 retention-aware observability contract](v1.13.16-phase7-retention-aware-observability-contract.md)
-is frozen at base `4305d46377e37cb9d4a3d69c2a5455e750dae517` after authority-head
-CI `33603837698` passed 36/36, CodeQL `33603837715` passed 4/4, all 40
-exact-head checks succeeded, and direct repository and release-branch alert
-enumeration returned zero. Phase 7 is complete and Phase 8 is next in BUILD
-mode for only the physical-file and packed-block accounting correction.
+Phase 8 implementation and certification are complete at executable/evidence
+head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
+`1967df264919a908680db4bc2a3dbf1fa5f673da`,
+`800cfc81ca453a9aa800da57819da0a58118b3e2`,
+`55d976177d0a9e25446726ad018d52a0b180293a`, and `f884ecba...`.
+The implementation retains the complete 8/8 red/control baseline, the exact
+five production and nine test paths, the external `graph_test` split, and an
+acyclic production graph.
 
-CK-V11316-003 and CK-V11316-004 remain open with their implementation recorded
-pending exact-head hosted certification. CK-V11316-001, CK-V11316-002, and CK-V11316-008 through
-CK-V11316-011 remain closed certified; findings remain 11 confirmed and 6/11
-closed. Phase 9 is not authorized, no new finding is created, and v1.x
-technical correctness closure remains withheld.
+Branch PostgreSQL certification passed 12/12 and detached PostgreSQL
+certification passed 12/12. The detached R7 profiles were the original
+authorized serialized execution completing after a premature terminal report;
+they were not a retry, and the R8 replacement execution was not performed.
+After final evidence capture, the Phase 8-owned PostgreSQL, PyYAML, detached
+worktree, and covered cache/temp resources were removed. No post-hosted commit
+occurred before this separately authorized current-authority reconciliation.
 
-Phase 8 authority commit `1967df264919a908680db4bc2a3dbf1fa5f673da`
-and graph recovery authority `800cfc81ca453a9aa800da57819da0a58118b3e2`
-remain unamended and unpushed. Fix `55d976177d0a9e25446726ad018d52a0b180293a`
-contains exactly the five authorized production paths and nine authorized test
-paths. The external `graph_test` split preserves the real storage unlink API,
-the production graph remains acyclic, and the complete 8/8 red/control
-baseline is retained.
+Fresh push-triggered CI `33802189644` attempt 1 passed 36/36 and CodeQL
+`33802189741` attempt 1 passed 4/4 at `f884ecba...`. All 40 exact-head checks
+completed successfully, the critical-coverage artifact was produced, direct
+repository and release-branch open CodeQL alert enumeration each returned
+zero, and direct Codacy truth was `NOT_EXPOSED`.
 
-Branch certification passed full Go/race, plain/AES-GCM quality, snapshot,
-critical-coverage 3/3, exact golangci-lint 2.9.0, release-state 102/102, and
-Python 215/215 gates. Phase 8R2R1R4 then stopped before loading a Go package
-because an ambient Go 1.23.1 binary was paired with `GOTOOLCHAIN=local`.
-Phase 8R2R1R5 did not rerun that command or reuse its twelve database names;
-it bound every new profile to the absolute Go 1.26.7 binary and passed twelve
-fresh branch PostgreSQL profiles 12/12 on the retained healthy phase-owned
-PostgreSQL 16.15 service. Clean committed-tree, detached, cleanup, one-push,
-and hosted certification remain pending after this evidence commit.
+CK-V11316-003 and CK-V11316-004 are closed certified. CK-V11316-001,
+CK-V11316-002, and CK-V11316-008 through CK-V11316-011 remain closed
+certified; CK-V11316-005 through CK-V11316-007 remain open. Findings are 11
+confirmed and 8/11 closed, and CK-V11316-012 was not created. Phase 8 is
+Complete. Phase 9 is Next but its execution is not started and its BUILD is
+not authorized. v1.x technical correctness closure remains withheld because
+CK-V11316-005, CK-V11316-006, and CK-V11316-007 remain open.
 
 ### Historical Phase 6 chronology
 
