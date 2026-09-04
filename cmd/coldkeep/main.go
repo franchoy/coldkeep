@@ -55,6 +55,14 @@ const (
 	exitUsage    = 2
 	exitVerify   = 3
 	exitRecovery = 4
+
+	restoreByIDUsage = "Usage: coldkeep restore <fileID> [<fileID> ...] <outputDir>\n" +
+		"  [--input <file>] [--dry-run] [--overwrite] [--fail-fast]\n" +
+		"  [--output <human|text|json>] [--json]"
+	restoreStoredPathUsage = "Usage: coldkeep restore --stored-path <path>\n" +
+		"  [--mode <original|prefix|override>] [--destination <path>]\n" +
+		"  [--overwrite] [--strict|--no-metadata]\n" +
+		"  [--output <human|text|json>] [--json]"
 )
 
 var stdoutRedirectMu sync.Mutex
@@ -1340,10 +1348,14 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata", "help", "h"); err != nil {
 		return err
 	}
-	if err := rejectBlankFlagValues(parsed, "stored-path"); err != nil {
+	if parsed.hasFlag("help", "h") {
+		printRestoreHelp()
+		return nil
+	}
+	if err := rejectBlankFlagValues(parsed, "stored-path", "mode", "destination"); err != nil {
 		return err
 	}
 
@@ -1353,7 +1365,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 
 	if hasStoredPath {
 		if len(parsed.positionals) != 0 {
-			return usageErrorf("Usage: coldkeep restore --stored-path <path> [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata]")
+			return usageErrorf("%s", restoreStoredPathUsage)
 		}
 		if parsed.hasFlag("input") {
 			return usageErrorf("--input is not supported with --stored-path")
@@ -1429,6 +1441,9 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return nil
 	}
 
+	if parsed.hasFlag("mode", "destination") {
+		return usageErrorf("--mode and --destination are only supported with --stored-path")
+	}
 	if parsed.hasFlag("strict", "no-metadata") {
 		return usageErrorf("--strict and --no-metadata are only supported with --stored-path")
 	}
@@ -1436,10 +1451,10 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	inputFile, _ := parsed.lastFlagValue("input")
 	hasInput := strings.TrimSpace(inputFile) != ""
 	if len(parsed.positionals) < 1 {
-		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+		return usageErrorf("%s", restoreByIDUsage)
 	}
 	if !hasInput && len(parsed.positionals) < 2 {
-		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+		return usageErrorf("%s", restoreByIDUsage)
 	}
 	dryRun := parsed.hasFlag("dry-run", "dryRun")
 	failFast := parsed.hasFlag("fail-fast", "failFast")
@@ -1670,7 +1685,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 func ensureRestoreOutputDir(path string, createIfMissing bool) (string, error) {
 	if strings.TrimSpace(path) == "" {
-		return "", usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+		return "", usageErrorf("%s", restoreByIDUsage)
 	}
 
 	if createIfMissing {
@@ -6469,7 +6484,8 @@ func printHelp() {
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
-		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs byte-identically (chunker-version independent)"},
+		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <human|text|json>] [--json]", "Restore one or more logical file IDs byte-identically (chunker-version independent)"},
+		{"  restore --stored-path <path> [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict|--no-metadata] [--output <human|text|json>] [--json]", "Restore one current stored path using its persisted path metadata"},
 		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs (legacy mode)"},
 		{"  remove --stored-path <path> [--output <text|json>]", "Remove one current-state physical path mapping"},
 		{"  remove --stored-paths <path> [<path> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Batch remove physical path mappings in deterministic input order"},
@@ -6654,6 +6670,16 @@ func printStatsHelp() {
 	fmt.Println("  for identical repository state and flags, rendered output order is deterministic")
 }
 
+func printRestoreHelp() {
+	fmt.Println("Usage:")
+	fmt.Println(strings.TrimPrefix(restoreByIDUsage, "Usage: "))
+	fmt.Println()
+	fmt.Println(strings.TrimPrefix(restoreStoredPathUsage, "Usage: "))
+	fmt.Println()
+	fmt.Println("Restore logical file IDs or one current stored path byte-identically.")
+	fmt.Println("--json is shorthand for --output json.")
+}
+
 func printInspectHelp() {
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep inspect repository [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
@@ -6757,6 +6783,13 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 		if arg == "--" {
 			parsed.positionals = append(parsed.positionals, args[i+1:]...)
 			break
+		}
+		if arg == "-h" {
+			if err := rejectDuplicateSingletonFlag("h", seenSingletons, valueFlags); err != nil {
+				return parsedCommandLine{}, err
+			}
+			parsed.flags["h"] = append(parsed.flags["h"], "")
+			continue
 		}
 
 		if !strings.HasPrefix(arg, "--") {
