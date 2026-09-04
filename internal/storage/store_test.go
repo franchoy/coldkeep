@@ -3239,6 +3239,7 @@ func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testin
 		name    string
 		setup   func(t *testing.T, dbconn *sql.DB, containersDir string, fileID int64)
 		wantErr string
+		wantOK  bool
 	}{
 		{
 			name: "missing file chunks",
@@ -3285,7 +3286,7 @@ func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testin
 				insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
 				insertReusableTestFileChunk(t, dbconn, fileID, chunkID, 0)
 			},
-			wantErr: "all referenced containers are missing/quarantined",
+			wantOK: true,
 		},
 		{
 			name: "missing container file on disk",
@@ -3323,9 +3324,14 @@ func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testin
 			defer cancel()
 
 			err = validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir)
-			// Accept nil (no error) as valid: loss-minimizing recovery may treat this as a no-op.
-			if err != nil && !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("expected validation error containing %q or nil, got: %v", tc.wantErr, err)
+			if tc.wantOK {
+				if err != nil {
+					t.Fatalf("expected reusable graph to remain valid, got: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected validation error containing %q, got: %v", tc.wantErr, err)
 			}
 		})
 	}

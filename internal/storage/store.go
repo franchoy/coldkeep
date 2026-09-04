@@ -249,12 +249,12 @@ func prepareFileForStoreWithContext(
 
 // commitInfoForChunks captures immutable information needed for commit phase.
 type commitInfoForChunks struct {
-	fileID                 int64
-	fileHash               string
-	normalizedPath         string
-	physicalMetadata       physicalFileMetadata
-	validationContainerDir string
-	replace                bool
+	fileID           int64
+	fileHash         string
+	normalizedPath   string
+	physicalMetadata physicalFileMetadata
+	reuseValidation  reusableValidationPolicy
+	replace          bool
 }
 
 // commitPreparedChunksWithContext commits prepared chunks to storage sequentially.
@@ -607,7 +607,14 @@ func commitPreparedChunksWithContext(
 
 		// Use precomputed hash and data; no re-allocation or re-hashing in this loop.
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, isNewChunkClaim, err := claimChunkWithContext(ctx, dbconn, prepared.Hash, int64(prepared.Size), activeVersionString, commitInfo.validationContainerDir)
+		claimedChunkID, chunkStatus, isNewChunkClaim, err := claimChunkWithValidationPolicy(
+			ctx,
+			dbconn,
+			prepared.Hash,
+			int64(prepared.Size),
+			activeVersionString,
+			commitInfo.reuseValidation,
+		)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
@@ -750,16 +757,16 @@ func commitPreparedFileWithContext(
 	fileID int64,
 	normalizedPath string,
 	physicalMetadata physicalFileMetadata,
-	validationContainerDir string,
+	reuseValidation reusableValidationPolicy,
 	replace bool,
 ) (StoreFileResult, error) {
 	commitInfo := commitInfoForChunks{
-		fileID:                 fileID,
-		fileHash:               prepared.LogicalHash,
-		normalizedPath:         normalizedPath,
-		physicalMetadata:       physicalMetadata,
-		validationContainerDir: validationContainerDir,
-		replace:                replace,
+		fileID:           fileID,
+		fileHash:         prepared.LogicalHash,
+		normalizedPath:   normalizedPath,
+		physicalMetadata: physicalMetadata,
+		reuseValidation:  reuseValidation,
+		replace:          replace,
 	}
 
 	return commitPreparedChunksWithContext(
@@ -928,14 +935,14 @@ type StoreFileResult struct {
 // storeFileRuntime captures immutable per-operation dependencies reused across
 // many file stores (for example StoreFolder with many small files).
 type storeFileRuntime struct {
-	codec                  blocks.Codec
-	transformer            blocks.Transformer
-	compression            storeRuntimeCompression
-	blockRepo              *blocks.Repository
-	storeService           *StoreService
-	validationContainerDir string
-	interleavingHooks      *storeInterleavingHooks
-	interleavingSeq        *atomic.Uint64
+	codec             blocks.Codec
+	transformer       blocks.Transformer
+	compression       storeRuntimeCompression
+	blockRepo         *blocks.Repository
+	storeService      *StoreService
+	reuseValidation   reusableValidationPolicy
+	interleavingHooks *storeInterleavingHooks
+	interleavingSeq   *atomic.Uint64
 }
 
 // storeRuntimeCompression groups the optional compression transform and its codec name.
@@ -954,9 +961,12 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 		return nil, fmt.Errorf("initialize codec %s: %w", codec, err)
 	}
 
-	validationContainerDir := sgctx.EffectiveContainerDir()
+	reuseValidation := reusableValidationPolicy{
+		scope:         reusableValidationFullRepository,
+		containersDir: sgctx.EffectiveContainerDir(),
+	}
 	if sgctx.IsSimulated() {
-		validationContainerDir = ""
+		reuseValidation = reusableValidationPolicy{scope: reusableValidationSimulationGraphOnly}
 	}
 
 	tx, err := sgctx.DB.Begin()
@@ -1014,14 +1024,14 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 	}
 
 	return &storeFileRuntime{
-		codec:                  codec,
-		transformer:            transformer,
-		compression:            compressionRuntime,
-		blockRepo:              &blocks.Repository{DB: sgctx.DB},
-		storeService:           NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker),
-		validationContainerDir: validationContainerDir,
-		interleavingHooks:      sgctx.interleavingHooks,
-		interleavingSeq:        sgctx.interleavingSeq,
+		codec:             codec,
+		transformer:       transformer,
+		compression:       compressionRuntime,
+		blockRepo:         &blocks.Repository{DB: sgctx.DB},
+		storeService:      NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker),
+		reuseValidation:   reuseValidation,
+		interleavingHooks: sgctx.interleavingHooks,
+		interleavingSeq:   sgctx.interleavingSeq,
 	}, nil
 }
 
@@ -1246,6 +1256,33 @@ type reusableCompletedChunkSummary struct {
 	quarantinedContainerRows int64
 }
 
+type reusableValidationScope uint8
+
+const (
+	reusableValidationInvalid reusableValidationScope = iota
+	reusableValidationFullRepository
+	reusableValidationSimulationGraphOnly
+)
+
+type reusableValidationPolicy struct {
+	scope         reusableValidationScope
+	containersDir string
+}
+
+func (p reusableValidationPolicy) validate() error {
+	switch p.scope {
+	case reusableValidationFullRepository:
+		if strings.TrimSpace(p.containersDir) == "" {
+			return fmt.Errorf("full repository reuse validation container directory is required")
+		}
+		return nil
+	case reusableValidationSimulationGraphOnly:
+		return nil
+	default:
+		return fmt.Errorf("invalid reusable validation scope %d", p.scope)
+	}
+}
+
 func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx, fileID int64, markChunksSuspicious bool) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
@@ -1311,6 +1348,17 @@ func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx,
 }
 
 func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
+	return validateReusableCompletedChunkWithPolicy(ctx, dbconn, chunkID, reusableValidationPolicy{
+		scope:         reusableValidationFullRepository,
+		containersDir: containersDir,
+	})
+}
+
+func validateReusableCompletedChunkWithPolicy(ctx context.Context, dbconn *sql.DB, chunkID int64, policy reusableValidationPolicy) error {
+	if err := policy.validate(); err != nil {
+		return err
+	}
+
 	var summary reusableCompletedChunkSummary
 	err := dbconn.QueryRowContext(ctx, `
 		SELECT
@@ -1353,10 +1401,6 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	// if summary.quarantinedContainerRows != 0 {
 	//     return fmt.Errorf("chunk %d references quarantined container", chunkID)
 	// }
-	if strings.TrimSpace(containersDir) == "" {
-		return nil
-	}
-
 	var (
 		containerID   int64
 		filename      string
@@ -1406,8 +1450,11 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	if blockOffset > containerSize-storedSize {
 		return fmt.Errorf("chunk %d has out-of-bounds placement in container %d: block_offset=%d stored_size=%d container_size=%d", chunkID, containerID, blockOffset, storedSize, containerSize)
 	}
+	if policy.scope == reusableValidationSimulationGraphOnly {
+		return nil
+	}
 
-	fullPath, err := container.SafeContainerPath(containersDir, filename)
+	fullPath, err := container.SafeContainerPath(policy.containersDir, filename)
 	if err != nil {
 		return fmt.Errorf("invalid container filename %q: %w", filename, err)
 	}
@@ -1684,6 +1731,17 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 }
 
 func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) error {
+	return validateReusableLogicalFileGraphWithPolicy(ctx, dbconn, fileID, reusableValidationPolicy{
+		scope:         reusableValidationFullRepository,
+		containersDir: containersDir,
+	})
+}
+
+func validateReusableLogicalFileGraphWithPolicy(ctx context.Context, dbconn *sql.DB, fileID int64, policy reusableValidationPolicy) error {
+	if err := policy.validate(); err != nil {
+		return err
+	}
+
 	var summary reusableLogicalFileGraphSummary
 	err := dbconn.QueryRowContext(ctx, `
 		WITH target_file AS (
@@ -1756,15 +1814,17 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	if summary.missingBlocks > 0 {
 		return fmt.Errorf("logical file %d references chunks without block metadata", fileID)
 	}
+	if summary.invalidContainers > 0 {
+		return fmt.Errorf("logical file %d references missing container metadata", fileID)
+	}
+	if policy.scope == reusableValidationSimulationGraphOnly {
+		return validateReusableLogicalFileChunksWithPolicy(ctx, dbconn, fileID, policy)
+	}
 	// Only treat as invalid if the container is missing, not merely quarantined.
 	// For v1.0, allow logical files referencing quarantined containers to be restored.
 	// Optionally, log a warning or set a degraded status here.
 	// log.Printf("warning: logical file %d references quarantined container(s)", fileID)
 	// (If you want to distinguish missing vs quarantined, you can refine the SQL above.)
-
-	if strings.TrimSpace(containersDir) == "" {
-		return nil
-	}
 
 	rows, err := dbconn.QueryContext(ctx, `
 		       SELECT DISTINCT ctr.id, ctr.filename
@@ -1789,7 +1849,7 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 		if err := rows.Scan(&containerID, &filename); err != nil {
 			return fmt.Errorf("scan reusable logical file container for file %d: %w", fileID, err)
 		}
-		fullPath, err := container.SafeContainerPath(containersDir, filename)
+		fullPath, err := container.SafeContainerPath(policy.containersDir, filename)
 		if err != nil {
 			return fmt.Errorf("invalid container filename %q: %w", filename, err)
 		}
@@ -1811,6 +1871,42 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	}
 	if missingCount > 0 {
 		log.Printf("warning: logical file %d: %d referenced containers are missing/quarantined", fileID, missingCount)
+	}
+	return nil
+}
+
+func validateReusableLogicalFileChunksWithPolicy(ctx context.Context, dbconn *sql.DB, fileID int64, policy reusableValidationPolicy) error {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT chunk_id
+		FROM file_chunk
+		WHERE logical_file_id = $1
+		ORDER BY chunk_order
+	`, fileID)
+	if err != nil {
+		return fmt.Errorf("query reusable logical file chunks %d: %w", fileID, err)
+	}
+
+	var chunkIDs []int64
+	for rows.Next() {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan reusable logical file chunk for file %d: %w", fileID, err)
+		}
+		chunkIDs = append(chunkIDs, chunkID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate reusable logical file chunks %d: %w", fileID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close reusable logical file chunks %d: %w", fileID, err)
+	}
+
+	for _, chunkID := range chunkIDs {
+		if err := validateReusableCompletedChunkWithPolicy(ctx, dbconn, chunkID, policy); err != nil {
+			return fmt.Errorf("logical file %d has invalid reusable chunk %d: %w", fileID, chunkID, err)
+		}
 	}
 	return nil
 }
@@ -2023,8 +2119,18 @@ func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn
 }
 
 func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) error {
-	if err := validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir); err != nil {
+	return validateReusableLogicalFileForStoreWithPolicy(ctx, dbconn, fileID, reusableValidationPolicy{
+		scope:         reusableValidationFullRepository,
+		containersDir: containersDir,
+	})
+}
+
+func validateReusableLogicalFileForStoreWithPolicy(ctx context.Context, dbconn *sql.DB, fileID int64, policy reusableValidationPolicy) error {
+	if err := validateReusableLogicalFileGraphWithPolicy(ctx, dbconn, fileID, policy); err != nil {
 		return err
+	}
+	if policy.scope == reusableValidationSimulationGraphOnly {
+		return nil
 	}
 
 	// Check if any referenced container is quarantined; if so, skip semantic validation.
@@ -2056,7 +2162,7 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 		return nil
 	}
 
-	if err := validateReusableLogicalFileSemanticsWithContext(ctx, dbconn, fileID, containersDir); err != nil {
+	if err := validateReusableLogicalFileSemanticsWithContext(ctx, dbconn, fileID, policy.containersDir); err != nil {
 		return fmt.Errorf("semantic reuse validation failed (%s): %w", reason, err)
 	}
 
@@ -2147,6 +2253,16 @@ func assertChunkVersionMatchesActive(insertedChunkVersion string, activeVersion 
 // -----------------------------------------------------------------------------
 
 func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	return claimLogicalFileWithValidationPolicy(ctx, dbconn, fileinfo, fileHash, activeVersion, reusableValidationPolicy{
+		scope:         reusableValidationFullRepository,
+		containersDir: containersDir,
+	})
+}
+
+func claimLogicalFileWithValidationPolicy(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, policy reusableValidationPolicy) (fileID int64, filestatus string, err error) {
+	if err := policy.validate(); err != nil {
+		return 0, "", err
+	}
 	if strings.TrimSpace(activeVersion) == "" {
 		return 0, "", fmt.Errorf("logical_file.chunker_version must not be empty")
 	}
@@ -2205,8 +2321,7 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 			_ = tx.Rollback() // Don't hold locks while validating
 			txclosed = true
 
-			validationContainerDir := containersDir
-			reuseErr := validateReusableLogicalFileGraphWithContext(ctx, dbconn, existingID, validationContainerDir)
+			reuseErr := validateReusableLogicalFileGraphWithPolicy(ctx, dbconn, existingID, policy)
 			if reuseErr == nil {
 				return existingID, filestatus, nil
 			}
@@ -2331,6 +2446,17 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion
 }
 
 func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	return prepareLogicalFileForStoreWithValidationPolicy(ctx, dbconn, fileinfo, fileHash, activeVersion, reusableValidationPolicy{
+		scope:         reusableValidationFullRepository,
+		containersDir: containersDir,
+	})
+}
+
+func prepareLogicalFileForStoreWithValidationPolicy(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, policy reusableValidationPolicy) (fileID int64, filestatus string, err error) {
+	if err := policy.validate(); err != nil {
+		return 0, "", err
+	}
+
 	// Reuse acceptance is intentionally two-phase:
 	//  1) claim by content identity (file_hash + size), then
 	//  2) validate graph/semantic replay safety for COMPLETED candidates.
@@ -2338,7 +2464,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 	// and claim again so the caller rebuilds a fresh canonical recipe.
 	//
 	// This is deliberate safety behavior, not opportunistic best-effort reuse.
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, activeVersion, containersDir)
+	fileID, filestatus, err = claimLogicalFileWithValidationPolicy(ctx, dbconn, fileinfo, fileHash, activeVersion, policy)
 	if err != nil {
 		return 0, "", err
 	}
@@ -2347,7 +2473,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return fileID, filestatus, nil
 	}
 
-	reuseErr := validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
+	reuseErr := validateReusableLogicalFileForStoreWithPolicy(ctx, dbconn, fileID, policy)
 	if reuseErr == nil {
 		return fileID, filestatus, nil
 	}
@@ -2357,7 +2483,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return 0, "", errors.Join(reuseErr, err)
 	}
 
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, activeVersion, containersDir)
+	fileID, filestatus, err = claimLogicalFileWithValidationPolicy(ctx, dbconn, fileinfo, fileHash, activeVersion, policy)
 	if err != nil {
 		return 0, "", err
 	}
@@ -2365,7 +2491,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return fileID, filestatus, nil
 	}
 
-	reuseErr = validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
+	reuseErr = validateReusableLogicalFileForStoreWithPolicy(ctx, dbconn, fileID, policy)
 	if reuseErr != nil {
 		return 0, "", fmt.Errorf("logical file %d remained non-reusable after retry: %w", fileID, reuseErr)
 	}
@@ -2374,6 +2500,16 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 }
 
 func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion string, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
+	return claimChunkWithValidationPolicy(ctx, dbconn, chunkHash, chunksize, activeVersion, reusableValidationPolicy{
+		scope:         reusableValidationFullRepository,
+		containersDir: containersDir,
+	})
+}
+
+func claimChunkWithValidationPolicy(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion string, policy reusableValidationPolicy) (chunkID int64, chunkstatus string, isNew bool, err error) {
+	if err := policy.validate(); err != nil {
+		return 0, "", false, err
+	}
 	if strings.TrimSpace(activeVersion) == "" {
 		return 0, "", false, fmt.Errorf("chunk.chunker_version must not be empty")
 	}
@@ -2430,7 +2566,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
 
-			reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
+			reuseErr := validateReusableCompletedChunkWithPolicy(ctx, dbconn, chunkID, policy)
 			if reuseErr == nil {
 				return chunkID, chunkstatus, false, nil
 			}
@@ -2449,7 +2585,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 				return 0, "", false, waitErr
 			}
 			if finalStatus == filestate.ChunkCompleted {
-				reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
+				reuseErr := validateReusableCompletedChunkWithPolicy(ctx, dbconn, chunkID, policy)
 				if reuseErr == nil {
 					return chunkID, finalStatus, false, nil
 				}
@@ -2522,7 +2658,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 				}
 				switch latestStatus {
 				case filestate.ChunkCompleted:
-					reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
+					reuseErr := validateReusableCompletedChunkWithPolicy(ctx, dbconn, chunkID, policy)
 					if reuseErr == nil {
 						return chunkID, latestStatus, false, nil
 					}
@@ -2539,7 +2675,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 						return 0, "", false, waitErr
 					}
 					if finalStatus == filestate.ChunkCompleted {
-						reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
+						reuseErr := validateReusableCompletedChunkWithPolicy(ctx, dbconn, chunkID, policy)
 						if reuseErr == nil {
 							return chunkID, finalStatus, false, nil
 						}
@@ -2889,7 +3025,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 			return StoreFileResult{}, err
 		}
 	}
-	validationContainerDir := runtime.validationContainerDir
+	reuseValidation := runtime.reuseValidation
 
 	// Current store flow pattern:
 	//  1. resolve one active chunker for the whole operation
@@ -2935,7 +3071,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	result.FileHash = fileHash
 
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, dbconn, fileinfo, fileHash, activeVersionString, validationContainerDir)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithValidationPolicy(ctx, dbconn, fileinfo, fileHash, activeVersionString, reuseValidation)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -2996,7 +3132,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		fileID,
 		normalizedPath,
 		prepared.PhysicalMetadata,
-		validationContainerDir,
+		reuseValidation,
 		replace,
 	)
 	if err != nil {
