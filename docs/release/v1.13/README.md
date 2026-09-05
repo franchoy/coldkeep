@@ -127,17 +127,18 @@ CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
 CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-011
 are closed certified; CK-V11316-007 remains open. Findings are 13 confirmed
-and 10/13 closed. Phase 9 is Complete and Phase 10 remains Next. Phase 10R1
+and 10/13 closed. Phase 9 and Phase 10 are Complete. Phase 10R1
 successfully corrected CK-V11316-012's refcount fixture and proved the final
 13/13 plain and AES concurrency selectors with zero skips, then the fresh
 complete matrix stopped because the required G1 unrelated-container proof
-self-skipped. [Phase 10R2 recovery authority](v1.13.16-phase10-integrated-local-validation.md)
-creates CK-V11316-013 as `OPEN_RECOVERY_AUTHORIZED` and authorizes only the
-exact G1 CLI environment/non-skippable fixture correction. Product packing,
-container, storage, and restore behavior remain unchanged. Complete Phase 10
-certification must restart again from the committed R2 correction; no push or
-Phase 11 execution is authorized. v1.x technical correctness closure remains
-withheld.
+self-skipped. [Phase 10R2 local certification](v1.13.16-phase10-integrated-local-validation.md)
+created CK-V11316-013, committed the exact G1 CLI environment/non-skippable
+fixture correction at `6f0d7693e4621c0f2eb528354c46d523ea94ec02`, and passed
+the complete fresh local matrix. CK-V11316-012 and CK-V11316-013 are
+`IMPLEMENTED_PENDING_EXACT_HEAD_HOSTED_CERTIFICATION`. Product packing,
+container, storage, restore, scripts, and workflows remain unchanged.
+Phase 11 is Next but not started and Build is not authorized; no push occurred.
+v1.x technical correctness closure remains withheld.
 
 ### Historical Phase 6 chronology
 
