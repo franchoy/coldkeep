@@ -126,11 +126,15 @@ retry occurred.
 CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
 CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-011
-are closed certified; CK-V11316-007 remains open. Findings are 11 confirmed
-and 10/11 closed, and CK-V11316-012 was not created. Phase 9 is Complete.
-Phase 10 is Next but execution is not started and its Build is not authorized.
-v1.x technical correctness closure remains withheld solely because
-CK-V11316-007 remains open.
+are closed certified; CK-V11316-007 remains open. Findings are 12 confirmed
+and 10/12 closed. Phase 9 is Complete. Phase 10 remains Next after its
+source-neutral execution stopped on the tracked refcount stress fixture's
+selection-base drift. [Phase 10R1 recovery authority](v1.13.16-phase10-integrated-local-validation.md)
+creates CK-V11316-012 as `OPEN_RECOVERY_AUTHORIZED`, authorizes exactly the
+one-line `SelectionBase: base` to `SelectionBase: inputDir` correction inside
+`TestRefCountContainmentStressMatrix`, and requires a complete Phase 10 restart
+from the committed correction. No product path or Phase 11 execution is
+authorized. v1.x technical correctness closure remains withheld.
 
 ### Historical Phase 6 chronology
 
