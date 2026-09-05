@@ -337,11 +337,7 @@ func TestAdversarialG1UnrelatedContainerDamagePreservesHealthyRestore(t *testing
 
 			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG1Env(t)
 			defer dbconn.Close()
-
-			originalMaxSize := container.GetContainerMaxSize()
-			// Force container separation: set max size below file size
-			container.SetContainerMaxSize(600 * 1024)
-			defer container.SetContainerMaxSize(originalMaxSize)
+			env["COLDKEEP_CONTAINER_MAX_SIZE_MB"] = "1"
 
 			inputDir := filepath.Join(tmp, "input")
 			restoreDir := filepath.Join(tmp, "restore")
@@ -375,7 +371,7 @@ func TestAdversarialG1UnrelatedContainerDamagePreservesHealthyRestore(t *testing
 			anchorRecord := testutils.FetchFirstFileChunkRecord(t, dbconn, anchorID)
 			otherRecord := testutils.FetchFirstFileChunkRecord(t, dbconn, otherID)
 			if anchorRecord.ContainerID == otherRecord.ContainerID {
-				t.Skip("files ended up in same container due to packing; skipping isolation assertion")
+				t.Fatalf("fixture failed to isolate anchor and damaged file: both use container %d", anchorRecord.ContainerID)
 			}
 
 			damagedPath := testutils.ContainerPathForRecord(otherRecord)
