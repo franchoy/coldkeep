@@ -74,7 +74,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 9 candidate state
+### Current Phase 9 certified state
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 8 implementation and certification are complete at executable/evidence
@@ -100,33 +100,37 @@ completed successfully, the critical-coverage artifact was produced, direct
 repository and release-branch open CodeQL alert enumeration each returned
 zero, and direct Codacy truth was `NOT_EXPOSED`.
 
-Phase 9 retained authority `c31cbd45236c3ce5e569b3b34dd621ba5b6e0f3d`,
-simulation fix `ecede474f3df0027c198dff165addcf1065519cc`, and
-stored-path fix `99017d1ae84e1ac8bac51c4c7b1f06a7f92d93bc`. The initial
-Build passed the functional contract and stopped at exact golangci-lint 2.9.0
-on only two obsolete private wrappers. Append-only Phase 9R1 recovery deleted
-only those proven-unused wrappers in
-`7b7f89afe43783b0e61ce10e240cd699d23252c8`; it did not rewrite the three
-existing commits or change product behavior.
+Phase 9P externally froze the simulation duplicate-reuse and stored-path
+contract. Phase 9 retained authority
+`c31cbd45236c3ce5e569b3b34dd621ba5b6e0f3d`, simulation fix
+`ecede474f3df0027c198dff165addcf1065519cc`, and stored-path fix
+`99017d1ae84e1ac8bac51c4c7b1f06a7f92d93bc`. The initial Build passed the
+functional contract and stopped at exact golangci-lint 2.9.0 on only two
+obsolete private wrappers. Append-only Phase 9R1 recovery deleted only those
+proven-unused wrappers in `7b7f89afe43783b0e61ce10e240cd699d23252c8`;
+no history rewrite or product-behavior change occurred. Candidate evidence is
+`4e65ea22395c0839dc4ce6d95fd48b617a32ffe4`.
 
-The corrected four-commit source passed branch certification under Go 1.26.7,
-including four simulation codec/compression profiles, SQLite/PostgreSQL graph
-parity, PostgreSQL real Store reuse in `off`, `suspicious`, and `always`, four
-stored-path PostgreSQL preservation tests, affected ordinary/race and Phase
-6/8/3 preservation, full Go/race/vet, exact lint with zero issues, three
-independent critical-coverage reports, and release/governance/Python/CI gates.
-Detached and hosted exact-head certification remain external pending evidence.
+Branch and detached certification passed under Go 1.26.7, including four
+simulation codec/compression profiles, SQLite/PostgreSQL graph parity,
+PostgreSQL real Store reuse in `off`, `suspicious`, and `always`, PostgreSQL
+stored-path preservation, affected ordinary/race and Phase 6/8/3 preservation,
+full Go/race/vet, exact lint with zero issues, three independent
+critical-coverage reports, and release/governance/Python/CI gates. Fresh
+push-triggered CI `33919209386` passed 36/36 and CodeQL `33919209398` passed
+4/4 at the candidate head. All 40 exact-head checks succeeded, direct
+repository and release-branch open alerts were zero, the critical-coverage
+artifact was present, direct Codacy truth was `NOT_EXPOSED`, and no automatic
+retry occurred.
 
-CK-V11316-003 and CK-V11316-004 are closed certified. CK-V11316-001,
-CK-V11316-002, and CK-V11316-008 through CK-V11316-011 remain closed
-certified; CK-V11316-005 through CK-V11316-007 remain open. Findings are 11
-confirmed and 8/11 closed, and CK-V11316-012 was not created. Phase 8 is
-Complete. Phase 9 remains the aggregate Next phase; CK-V11316-005 and
-CK-V11316-006 are implemented pending exact-head hosted certification under
-the externally frozen
-[implementation contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
-Neither finding is closed. v1.x technical correctness closure remains withheld because
-CK-V11316-005, CK-V11316-006, and CK-V11316-007 remain open.
+CK-V11316-005 and CK-V11316-006 are closed certified under the
+[Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
+CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-011
+are closed certified; CK-V11316-007 remains open. Findings are 11 confirmed
+and 10/11 closed, and CK-V11316-012 was not created. Phase 9 is Complete.
+Phase 10 is Next but execution is not started and its Build is not authorized.
+v1.x technical correctness closure remains withheld solely because
+CK-V11316-007 remains open.
 
 ### Historical Phase 6 chronology
 
