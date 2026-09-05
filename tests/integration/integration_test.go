@@ -9832,7 +9832,7 @@ func TestRefCountContainmentStressMatrix(t *testing.T) {
 				if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
 					ID:            snapshotID,
 					Type:          "full",
-					SelectionBase: base,
+					SelectionBase: inputDir,
 				}); err != nil {
 					t.Fatalf("iter %d create snapshot: %v", i, err)
 				}
