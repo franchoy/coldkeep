@@ -74,7 +74,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 9 certified state
+### Current Phase 11 certified state
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 8 implementation and certification are complete at executable/evidence
@@ -125,20 +125,24 @@ retry occurred.
 
 CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
-CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-011
+CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-013
 are closed certified; CK-V11316-007 remains open. Findings are 13 confirmed
-and 10/13 closed. Phase 9 and Phase 10 are Complete. Phase 10R1
+and 12/13 closed. Phase 9, Phase 10, and Phase 11 are Complete. Phase 10R1
 successfully corrected CK-V11316-012's refcount fixture and proved the final
 13/13 plain and AES concurrency selectors with zero skips, then the fresh
 complete matrix stopped because the required G1 unrelated-container proof
 self-skipped. [Phase 10R2 local certification](v1.13.16-phase10-integrated-local-validation.md)
 created CK-V11316-013, committed the exact G1 CLI environment/non-skippable
 fixture correction at `6f0d7693e4621c0f2eb528354c46d523ea94ec02`, and passed
-the complete fresh local matrix. CK-V11316-012 and CK-V11316-013 are
-`IMPLEMENTED_PENDING_EXACT_HEAD_HOSTED_CERTIFICATION`. Product packing,
-container, storage, restore, scripts, and workflows remain unchanged.
-Phase 11 is Next but not started and Build is not authorized; no push occurred.
-v1.x technical correctness closure remains withheld.
+the complete fresh local matrix. [Phase 11 exact-head hosted certification](v1.13.16-phase11-exact-head-hosted-certification.md)
+then pushed candidate `a4c59448c44dd537a4df47ef259392a711919f14`
+exactly once. CI `33963259615` passed 36/36, CodeQL `33963259529` passed 4/4,
+all 40 exact-head checks passed, direct repository and release-branch alerts
+were zero, and Codacy was `NOT_EXPOSED`. CK-V11316-012 and CK-V11316-013 are
+closed certified. Product packing, container, storage, restore, scripts, and
+workflows remain unchanged. Phase 12 is Next but not started; its mode is PLAN
+and its Plan is not authorized. v1.x technical correctness closure remains
+withheld because CK-V11316-007 remains open.
 
 ### Historical Phase 6 chronology
 
