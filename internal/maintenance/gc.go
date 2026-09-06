@@ -246,6 +246,11 @@ func runGCWithDBOptions(ctx context.Context, dbconn *sql.DB, dryRun bool, contai
 	if activeErr := aggregateGCUnitResults(activeResults, ctx.Err(), &result); activeErr != nil {
 		return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
 	}
+	if !dryRun {
+		if _, err := cleanupRootlessLogicalRecipes(ctx, dbconn); err != nil {
+			return result, fmt.Errorf("final cleanup rootless logical recipes: %w", err)
+		}
+	}
 
 	return result, nil
 }
@@ -518,6 +523,9 @@ func cleanupRootlessLogicalRecipes(ctx context.Context, dbconn *sql.DB) (deleted
 			SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = lf.id
 		)
 		AND NOT EXISTS (
+			SELECT 1 FROM store_repair_attempt a WHERE a.logical_file_id = lf.id
+		)
+		AND NOT EXISTS (
 			SELECT 1
 			FROM file_chunk fc
 			JOIN chunk ch ON ch.id = fc.chunk_id
@@ -556,6 +564,9 @@ func cleanupRootlessLogicalRecipes(ctx context.Context, dbconn *sql.DB) (deleted
 			)
 			AND NOT EXISTS (
 				SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = lf.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM store_repair_attempt a WHERE a.logical_file_id = lf.id
 			)`)
 		var lockedLogicalFileID int64
 		if err := tx.QueryRowContext(ctx, lockLogicalQuery, logicalFileID, filestate.LogicalFileCompleted).Scan(&lockedLogicalFileID); err != nil {
@@ -607,6 +618,9 @@ func cleanupRootlessLogicalRecipes(ctx context.Context, dbconn *sql.DB) (deleted
 			)
 			AND NOT EXISTS (
 				SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = logical_file.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM store_repair_attempt a WHERE a.logical_file_id = logical_file.id
 			)
 			AND NOT EXISTS (
 				SELECT 1
@@ -1138,8 +1152,44 @@ func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, container
 	if _, err := execer.ExecContext(ctx, `DELETE FROM blocks WHERE container_id = $1`, containerID); err != nil {
 		return err
 	}
+	if _, err := execer.ExecContext(ctx, `DELETE FROM retired_legacy_block_extent WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+	if err := deleteStoreRepairStagingAccountingForContainer(ctx, execer, containerID); err != nil {
+		return err
+	}
 
 	return deleteUnreachableChunkRows(ctx, execer, chunkIDsToDelete)
+}
+
+func deleteStoreRepairStagingAccountingForContainer(ctx context.Context, execer gcSweepExecer, containerID int64) error {
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM store_repair_chunk
+		WHERE EXISTS (
+			SELECT 1 FROM store_repair_block rb
+			WHERE rb.attempt_id = store_repair_chunk.attempt_id
+			AND rb.block_ordinal = store_repair_chunk.block_ordinal
+			AND rb.container_id = $1
+		)`, containerID); err != nil {
+		return err
+	}
+	if _, err := execer.ExecContext(ctx, `DELETE FROM store_repair_block WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+	if _, err := execer.ExecContext(ctx, `DELETE FROM store_repair_container WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM store_repair_attempt
+		WHERE status = 'PUBLISHED'
+		AND NOT EXISTS (SELECT 1 FROM store_repair_container rc WHERE rc.attempt_id = store_repair_attempt.id)
+		AND NOT EXISTS (SELECT 1 FROM store_repair_block rb WHERE rb.attempt_id = store_repair_attempt.id)
+		AND NOT EXISTS (SELECT 1 FROM store_repair_chunk rch WHERE rch.attempt_id = store_repair_attempt.id)
+		AND NOT EXISTS (SELECT 1 FROM retired_chunk_block_ref rr WHERE rr.repair_attempt_id = store_repair_attempt.id)
+		AND NOT EXISTS (SELECT 1 FROM retired_legacy_block_extent rl WHERE rl.repair_attempt_id = store_repair_attempt.id)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // collectLegacyChunkIDsForContainer returns the set of chunk IDs referenced by
@@ -1265,6 +1315,12 @@ func deletePackedBlockMetadata(ctx context.Context, execer gcSweepExecer, blockI
 	`, blockID); err != nil {
 		return err
 	}
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM retired_chunk_block_ref
+		WHERE block_id = $1
+	`, blockID); err != nil {
+		return err
+	}
 
 	result, err := execer.ExecContext(ctx, `
 		DELETE FROM storage_blocks
@@ -1344,6 +1400,8 @@ func queryFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB) ([]acti
 			SELECT 1 FROM blocks WHERE container_id = c.id
 			UNION ALL
 			SELECT 1 FROM storage_blocks WHERE container_id = c.id
+			UNION ALL
+			SELECT 1 FROM retired_legacy_block_extent WHERE container_id = c.id
 		)
 		ORDER BY c.id ASC, c.filename ASC
 	`)

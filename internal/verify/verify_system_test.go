@@ -561,8 +561,8 @@ func TestVerifyRepositoryDetectsStorageBlockWithoutChunkBlockRefs(t *testing.T) 
 	}
 
 	err := VerifyRepository(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "missing chunk_block_refs") {
-		t.Fatalf("expected verifyPackedManifestIndex missing chunk_block_refs error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "missing active and retired membership") {
+		t.Fatalf("expected verifyPackedManifestIndex missing active/retired membership error, got: %v", err)
 	}
 }
 
@@ -578,7 +578,7 @@ func TestVerifyRepositoryDetectsConflictingChunkBlockRefOffsets(t *testing.T) {
 	}
 
 	err := VerifyRepository(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "conflicting chunk_block_refs offsets") {
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "conflicting active/retired packed offsets") {
 		t.Fatalf("expected verifyPackedManifestIndex conflicting offsets error, got: %v", err)
 	}
 }
@@ -595,7 +595,7 @@ func TestVerifyRepositoryFastRejectsInvalidManifestIndexBeforePayloadRead(t *tes
 	}
 
 	err := VerifyRepositoryFast(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "missing chunk_block_refs") {
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "missing active and retired membership") {
 		t.Fatalf("expected VerifyRepositoryFast manifest/index failure, got: %v", err)
 	}
 	if strings.Contains(err.Error(), "verifyBlockPayloads") {

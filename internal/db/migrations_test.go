@@ -194,8 +194,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 16 {
-		t.Fatalf("expected schema version 16 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 17 {
+		t.Fatalf("expected schema version 17 after first migration pass, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -264,8 +264,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 16 {
-		t.Fatalf("expected schema version to stay 16 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 17 {
+		t.Fatalf("expected schema version to stay 17 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -369,8 +369,8 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if schemaVersion != 16 {
-		t.Fatalf("expected direct sqlite bootstrap schema version 16, got %d", schemaVersion)
+	if schemaVersion != 17 {
+		t.Fatalf("expected direct sqlite bootstrap schema version 17, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -514,8 +514,8 @@ func TestLoadSQLiteSchemaNormalizesLegacySchemaVersionHistory(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&maxVersion); err != nil {
 		t.Fatalf("read max schema_version after normalization: %v", err)
 	}
-	if maxVersion != 16 {
-		t.Fatalf("expected max schema_version=16 after normalization, got %d", maxVersion)
+	if maxVersion != 17 {
+		t.Fatalf("expected max schema_version=17 after normalization, got %d", maxVersion)
 	}
 
 	var rowCount int
@@ -636,8 +636,8 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 16 {
-		t.Fatalf("expected schema version 16 after migration, got %d", schemaVersion)
+	if schemaVersion != 17 {
+		t.Fatalf("expected schema version 17 after migration, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -918,8 +918,8 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 16 {
-		t.Fatalf("expected schema version 16 after v12 migration, got %d", schemaVersion)
+	if schemaVersion != 17 {
+		t.Fatalf("expected schema version 17 after v12 migration, got %d", schemaVersion)
 	}
 
 	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash", "compression_ratio", "payload_hash"} {
@@ -1294,8 +1294,8 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version after bootstrap: %v", err)
 	}
-	if schemaVersion != 16 {
-		t.Fatalf("expected schema_version=16 after fresh postgres bootstrap, got %d", schemaVersion)
+	if schemaVersion != 17 {
+		t.Fatalf("expected schema_version=17 after fresh postgres bootstrap, got %d", schemaVersion)
 	}
 
 	for _, tableName := range []string{"snapshot", "snapshot_path", "snapshot_file"} {
@@ -1532,7 +1532,7 @@ func TestPostgresSchemaMigratesLegacyPreV6LogicalFileMapping(t *testing.T) {
 		physicalRows: 1,
 		migratedRows: 1,
 	})
-	assertPostgresSchemaVersion(t, dbconn, 16)
+	assertPostgresSchemaVersion(t, dbconn, 17)
 
 	applyCurrentPostgresSchemaFixture(t, dbconn)
 	assertPostgresPhysicalRowCount(t, dbconn, logicalID, 1, "count physical mappings after rerun")
@@ -1570,8 +1570,8 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 	if err := opened.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version after auto-migration: %v", err)
 	}
-	if schemaVersion != 16 {
-		t.Fatalf("expected schema_version=16 after automatic postgres migration from v11, got %d", schemaVersion)
+	if schemaVersion != 17 {
+		t.Fatalf("expected schema_version=17 after automatic postgres migration from v11, got %d", schemaVersion)
 	}
 }
 
@@ -2505,7 +2505,7 @@ func TestRunMigrationsPreservesCurrentZeroReferenceLogicalFile(t *testing.T) {
 	logicalID := insertMigrationLogicalFile(t, dbconn, "zero-current.bin", 7, "zero-current-hash", 0)
 	rerunSQLiteMigrations(t, dbconn)
 	assertSQLiteMigrationPhysicalFileState(t, dbconn, logicalID, migrationPhysicalFileState{refCount: 0, mappingCount: 0, migratedCount: 0})
-	assertSQLiteMigrationSchemaVersion(t, dbconn, 16)
+	assertSQLiteMigrationSchemaVersion(t, dbconn, 17)
 }
 
 func TestRunMigrationsPreservesSnapshotRetainedZeroReferenceLogicalFile(t *testing.T) {

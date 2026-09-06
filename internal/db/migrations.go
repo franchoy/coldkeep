@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 16
+const requiredPostgresSchemaVersion = 17
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -955,6 +955,105 @@ func runSQLiteStorageBlocksUniqueOffsetConstraintMigration(dbconn sqliteContextE
 	return nil
 }
 
+func runSQLiteStoreRepairSchemaMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS store_repair_attempt (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			logical_file_id INTEGER NOT NULL REFERENCES logical_file(id) ON DELETE RESTRICT,
+			source_file_hash TEXT NOT NULL,
+			source_total_size INTEGER NOT NULL CHECK (source_total_size >= 0),
+			recipe_fingerprint TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('PREPARING', 'READY', 'PUBLISHED', 'ABORTED')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_store_repair_attempt_live
+			ON store_repair_attempt(logical_file_id)
+			WHERE status IN ('PREPARING', 'READY')`,
+		`CREATE TABLE IF NOT EXISTS store_repair_container (
+			attempt_id INTEGER NOT NULL REFERENCES store_repair_attempt(id) ON DELETE CASCADE,
+			container_id INTEGER NOT NULL UNIQUE REFERENCES container(id) ON DELETE RESTRICT,
+			physical_size INTEGER NOT NULL CHECK (physical_size >= 64),
+			physical_hash TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('ALLOCATED', 'DURABLE', 'PUBLISHED')),
+			PRIMARY KEY (attempt_id, container_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS store_repair_block (
+			attempt_id INTEGER NOT NULL REFERENCES store_repair_attempt(id) ON DELETE CASCADE,
+			block_ordinal INTEGER NOT NULL CHECK (block_ordinal >= 0),
+			format_version INTEGER NOT NULL CHECK (format_version > 0),
+			codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
+			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+			compression_codec TEXT NOT NULL CHECK (compression_codec IN ('none', 'zstd')),
+			compression_level INTEGER,
+			compressed_size INTEGER NOT NULL CHECK (compressed_size > 0),
+			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
+			container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+			container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
+			block_hash BLOB NOT NULL,
+			compression_ratio REAL NOT NULL,
+			payload_hash TEXT NOT NULL,
+			compressed_hash BLOB NOT NULL,
+			physical_hash BLOB NOT NULL,
+			legacy_nonce BLOB,
+			PRIMARY KEY (attempt_id, block_ordinal),
+			UNIQUE (container_id, container_offset),
+			CHECK (
+				(compression_codec = 'none' AND compression_level IS NULL) OR
+				(compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+			)
+		)`,
+		`CREATE TABLE IF NOT EXISTS store_repair_chunk (
+			attempt_id INTEGER NOT NULL REFERENCES store_repair_attempt(id) ON DELETE CASCADE,
+			chunk_id INTEGER NOT NULL REFERENCES chunk(id) ON DELETE RESTRICT,
+			chunk_order INTEGER NOT NULL CHECK (chunk_order >= 0),
+			block_ordinal INTEGER NOT NULL CHECK (block_ordinal >= 0),
+			offset_in_block INTEGER NOT NULL CHECK (offset_in_block >= 0),
+			size_in_block INTEGER NOT NULL CHECK (size_in_block > 0),
+			PRIMARY KEY (attempt_id, chunk_id),
+			UNIQUE (attempt_id, chunk_order),
+			FOREIGN KEY (attempt_id, block_ordinal)
+				REFERENCES store_repair_block(attempt_id, block_ordinal) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS retired_chunk_block_ref (
+			block_id INTEGER NOT NULL REFERENCES storage_blocks(id) ON DELETE RESTRICT,
+			embedded_chunk_id INTEGER NOT NULL,
+			offset_in_block INTEGER NOT NULL CHECK (offset_in_block >= 0),
+			size_in_block INTEGER NOT NULL CHECK (size_in_block > 0),
+			repair_attempt_id INTEGER NOT NULL REFERENCES store_repair_attempt(id) ON DELETE RESTRICT,
+			retired_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (block_id, embedded_chunk_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_retired_chunk_block_ref_attempt
+			ON retired_chunk_block_ref(repair_attempt_id)`,
+		`CREATE TABLE IF NOT EXISTS retired_legacy_block_extent (
+			container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+			block_offset INTEGER NOT NULL CHECK (block_offset >= 0),
+			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
+			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+			codec TEXT NOT NULL CHECK (codec IN ('plain', 'aes-gcm')),
+			format_version INTEGER NOT NULL CHECK (format_version > 0),
+			nonce BLOB,
+			historical_block_id INTEGER NOT NULL,
+			historical_chunk_id INTEGER NOT NULL,
+			repair_attempt_id INTEGER NOT NULL REFERENCES store_repair_attempt(id) ON DELETE RESTRICT,
+			retired_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (container_id, block_offset)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_retired_legacy_block_extent_attempt
+			ON retired_legacy_block_extent(repair_attempt_id)`,
+		`DELETE FROM schema_version WHERE version < 17`,
+		`INSERT OR IGNORE INTO schema_version(version) VALUES (17)`,
+	}
+
+	for _, statement := range statements {
+		if _, err := dbconn.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("apply sqlite store-repair schema: %w", err)
+		}
+	}
+	return nil
+}
+
 func isSQLiteSchemaApplyCompatibilityError(err error) bool {
 	if err == nil {
 		return false
@@ -1137,6 +1236,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteStorageBlocksUniqueOffsetConstraintMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteStoreRepairSchemaMigration(tx, ctx); err != nil {
 		return err
 	}
 

@@ -192,6 +192,33 @@ Any semantic change requires:
 3. full verification test evidence
 4. operator-facing documentation update
 
+### Exceptional v1.13.16 completed-object repair
+
+The CK-V11316-015 critical-maintenance repair preserves the v1.x requirement
+that Store may reconstruct an invalid `COMPLETED` object when its logical
+identity and ordered recipe remain trustworthy. It adds these correctness
+constraints without changing public APIs or physical container format:
+
+- repair is copy-on-write from the perspective of authoritative
+  recoverability;
+- the source-derived recipe validates, but never replaces, the existing
+  `file_chunk` recipe;
+- attempt-owned containers are fully written, file-synced, closed,
+  directory-synced, sealed, and hash-validated at their final immutable paths
+  before publication;
+- publication performs no filesystem mutation and switches authority only in
+  one bounded database transaction;
+- a failed repair does not worsen the pre-existing logical or physical graph;
+- a successful repair preserves logical identity and ordered recipe, switches
+  physical placements atomically, and reports `AlreadyStored=false`;
+- retained packed membership is the exact union of active and retired encoded
+  members; retired embedded IDs are opaque provenance, not live chunk
+  identities;
+- retired legacy identity is `(container_id, block_offset)`, while historical
+  block and chunk IDs are non-unique diagnostic provenance;
+- Verify, recovery, stats, GC planning, and live GC account for all active,
+  staged, and retired physical state under schema v17.
+
 ## 11. Foundation Mapping
 
 This contract is the behavioral foundation for:

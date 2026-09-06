@@ -48,6 +48,8 @@ const (
 	storeInterleavingEventBeforeChunkRetryCAS        storeInterleavingEvent = "before_chunk_retry_cas"
 	storeInterleavingEventBeforeMarkChunkForRebuild  storeInterleavingEvent = "before_mark_chunk_for_rebuild"
 	storeInterleavingEventAfterMarkChunkForRebuild   storeInterleavingEvent = "after_mark_chunk_for_rebuild"
+	storeInterleavingEventBeforeRepairPublication    storeInterleavingEvent = "before_repair_publication"
+	storeInterleavingEventAfterRepairRetirement      storeInterleavingEvent = "after_repair_retirement"
 )
 
 type storeInterleavingHookEvent struct {
@@ -111,6 +113,8 @@ const (
 	TestStoreInterleavingEventBeforeChunkRetryCAS        = storeInterleavingEventBeforeChunkRetryCAS
 	TestStoreInterleavingEventBeforeMarkChunkForRebuild  = storeInterleavingEventBeforeMarkChunkForRebuild
 	TestStoreInterleavingEventAfterMarkChunkForRebuild   = storeInterleavingEventAfterMarkChunkForRebuild
+	TestStoreInterleavingEventBeforeRepairPublication    = storeInterleavingEventBeforeRepairPublication
+	TestStoreInterleavingEventAfterRepairRetirement      = storeInterleavingEventAfterRepairRetirement
 )
 
 func InstallTestStoreInterleavingHooks(
@@ -3055,6 +3059,17 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		})
 	}
 	result.FileHash = fileHash
+
+	// An invalid COMPLETED candidate owns an authoritative recipe that must not
+	// be demolished by a repair attempt. CK-V11316-015 repairs that candidate
+	// through durable copy-on-write staging and a database-only publication
+	// transaction. Healthy candidates and non-repair claims remain on the
+	// established path below.
+	if handled, repairResult, repairErr := tryRepairCompletedLogicalFile(
+		ctx, sgctx, runtime, prepared, normalizedPath, replace,
+	); handled {
+		return repairResult, repairErr
+	}
 
 	// Try to claim logical file for this hash (concurrency-safe)
 	fileID, filestatus, err := prepareLogicalFileForStoreWithValidationPolicy(ctx, dbconn, fileinfo, fileHash, activeVersionString, reuseValidation)

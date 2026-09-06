@@ -423,6 +423,32 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, protectedChunkIDs,
 		}
 		_ = legacyRows.Close()
 
+		retiredLegacyRows, err := dbconn.QueryContext(ctx, `
+			SELECT stored_size
+			FROM retired_legacy_block_extent
+			WHERE container_id = $1
+			ORDER BY block_offset
+		`, c.id)
+		if err != nil {
+			return nil, 0, 0, 0, err
+		}
+		for retiredLegacyRows.Next() {
+			var storedSize int64
+			if err := retiredLegacyRows.Scan(&storedSize); err != nil {
+				_ = retiredLegacyRows.Close()
+				return nil, 0, 0, 0, err
+			}
+			totalUnits++
+			reclaimUnits++
+			classifiedBytes += storedSize
+			reclaimBytes += storedSize
+		}
+		if err := retiredLegacyRows.Err(); err != nil {
+			_ = retiredLegacyRows.Close()
+			return nil, 0, 0, 0, err
+		}
+		_ = retiredLegacyRows.Close()
+
 		packedRows, err := dbconn.QueryContext(ctx, `SELECT id, stored_size FROM storage_blocks WHERE container_id = $1 ORDER BY id`, c.id)
 		if err != nil {
 			return nil, 0, 0, 0, err

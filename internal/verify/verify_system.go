@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -153,6 +154,95 @@ func runLogicalReconstructionChecksContext(ctx context.Context, dbconn *sql.DB) 
 	return nil
 }
 
+type containerPayloadExtent struct {
+	kind   string
+	offset int64
+	size   int64
+}
+
+// verifyContainerPayloadOccupancyContext accounts for every authoritative
+// byte after the immutable container header exactly once. Packed companion
+// rows in blocks are excluded because storage_blocks owns that physical
+// extent; retired legacy extents retain ownership after their active row is
+// replaced.
+func verifyContainerPayloadOccupancyContext(ctx context.Context, dbconn *sql.DB) error {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT id, current_size
+		FROM container
+		WHERE quarantine = FALSE
+		ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("query container occupancy owners: %w", err)
+	}
+	type containerSize struct{ id, size int64 }
+	var containers []containerSize
+	for rows.Next() {
+		var item containerSize
+		if err := rows.Scan(&item.id, &item.size); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		containers = append(containers, item)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, item := range containers {
+		if item.size < container.ContainerHdrLen {
+			return fmt.Errorf("container %d current_size=%d is smaller than header", item.id, item.size)
+		}
+		extentRows, err := dbconn.QueryContext(ctx, `
+			SELECT 'active_legacy', b.block_offset, b.stored_size
+			FROM blocks b
+			WHERE b.container_id = $1
+			AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id)
+			UNION ALL
+			SELECT 'retired_legacy', r.block_offset, r.stored_size
+			FROM retired_legacy_block_extent r
+			WHERE r.container_id = $1
+			UNION ALL
+			SELECT 'packed', sb.container_offset, sb.stored_size
+			FROM storage_blocks sb
+			WHERE sb.container_id = $1`, item.id)
+		if err != nil {
+			return fmt.Errorf("query container %d payload occupancy: %w", item.id, err)
+		}
+		var extents []containerPayloadExtent
+		for extentRows.Next() {
+			var extent containerPayloadExtent
+			if err := extentRows.Scan(&extent.kind, &extent.offset, &extent.size); err != nil {
+				_ = extentRows.Close()
+				return err
+			}
+			extents = append(extents, extent)
+		}
+		if err := extentRows.Close(); err != nil {
+			return err
+		}
+		sort.Slice(extents, func(i, j int) bool {
+			if extents[i].offset != extents[j].offset {
+				return extents[i].offset < extents[j].offset
+			}
+			return extents[i].kind < extents[j].kind
+		})
+		expected := int64(container.ContainerHdrLen)
+		for _, extent := range extents {
+			if extent.size <= 0 || extent.offset < container.ContainerHdrLen || extent.offset > item.size || extent.size > item.size-extent.offset {
+				return fmt.Errorf("container %d has invalid %s extent offset=%d size=%d current_size=%d", item.id, extent.kind, extent.offset, extent.size, item.size)
+			}
+			if extent.offset != expected {
+				return fmt.Errorf("container %d payload occupancy gap or overlap: expected_offset=%d actual_offset=%d kind=%s", item.id, expected, extent.offset, extent.kind)
+			}
+			expected += extent.size
+		}
+		if expected != item.size {
+			return fmt.Errorf("container %d payload occupancy leaves trailing bytes: accounted_end=%d current_size=%d", item.id, expected, item.size)
+		}
+	}
+	return nil
+}
+
 func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	return verifySystemStandardWithContainersDir(dbconn, containersDir, nil)
 }
@@ -239,6 +329,9 @@ func verifySystemFullWithContainersDirContext(ctx context.Context, dbconn *sql.D
 
 	// Standard checks first (physical + logical reconstruction).
 	if err = verifySystemStandardWithContainersDirContext(ctx, dbconn, containersDir, ledger); err != nil {
+		return err
+	}
+	if err = verifyContainerPayloadOccupancyContext(ctx, dbconn); err != nil {
 		return err
 	}
 

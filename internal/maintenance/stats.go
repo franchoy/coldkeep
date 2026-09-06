@@ -395,6 +395,33 @@ func collectPhysicalStorageStats(ctx context.Context, dbconn *sql.DB, protected 
 	}
 	_ = legacyRows.Close()
 
+	retiredLegacyRows, err := dbconn.QueryContext(ctx, `
+		SELECT container_id, stored_size
+		FROM retired_legacy_block_extent
+		ORDER BY container_id, block_offset`)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	for retiredLegacyRows.Next() {
+		var containerID, storedSize int64
+		if err := retiredLegacyRows.Scan(&containerID, &storedSize); err != nil {
+			_ = retiredLegacyRows.Close()
+			return nil, 0, 0, 0, err
+		}
+		recordIndex, ok := byID[containerID]
+		if !ok {
+			_ = retiredLegacyRows.Close()
+			return nil, 0, 0, 0, fmt.Errorf("retired legacy extent references missing container %d", containerID)
+		}
+		record := &records[recordIndex]
+		record.DeadBytes += storedSize
+	}
+	if err := retiredLegacyRows.Err(); err != nil {
+		_ = retiredLegacyRows.Close()
+		return nil, 0, 0, 0, err
+	}
+	_ = retiredLegacyRows.Close()
+
 	packedRows, err := dbconn.QueryContext(ctx, `SELECT id, stored_size, container_id FROM storage_blocks ORDER BY id`)
 	if err != nil {
 		return nil, 0, 0, 0, err

@@ -3,10 +3,12 @@ package recovery
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/container"
@@ -97,7 +99,11 @@ func SystemRecoveryReportWithDBContext(ctx context.Context, dbconn *sql.DB, cont
 	}
 	logRecoveryEvent("start", "containers_dir="+containersDir)
 
-	err := abortProcessingLogicalFilesWithContext(ctx, dbconn, stats)
+	err := recoverAbandonedStoreRepairsWithContext(ctx, dbconn, containersDir)
+	if err != nil {
+		return buildReport(stats), err
+	}
+	err = abortProcessingLogicalFilesWithContext(ctx, dbconn, stats)
 	if err != nil {
 		return buildReport(stats), err
 	}
@@ -137,6 +143,125 @@ func SystemRecoveryReportWithDBContext(ctx context.Context, dbconn *sql.DB, cont
 	)
 
 	return buildReport(stats), nil
+}
+
+type abandonedRepairContainer struct {
+	attemptID   int64
+	containerID int64
+	filename    string
+}
+
+// recoverAbandonedStoreRepairsWithContext runs only while startup/doctor owns
+// the repository's OS-backed exclusive lease. PREPARING, READY, and ABORTED
+// therefore identify non-authoritative work whose creating process is no
+// longer live. PUBLISHED attempts are authoritative history and are never
+// cleaned here.
+func recoverAbandonedStoreRepairsWithContext(ctx context.Context, dbconn *sql.DB, containersDir string) error {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT a.id, c.id, c.filename
+		FROM store_repair_attempt a
+		JOIN store_repair_container rc ON rc.attempt_id = a.id
+		JOIN container c ON c.id = rc.container_id
+		WHERE a.status IN ('PREPARING', 'READY', 'ABORTED')
+		ORDER BY a.id, c.id`)
+	if err != nil {
+		return fmt.Errorf("query abandoned store repairs: %w", err)
+	}
+	var candidates []abandonedRepairContainer
+	for rows.Next() {
+		var candidate abandonedRepairContainer
+		if err := rows.Scan(&candidate.attemptID, &candidate.containerID, &candidate.filename); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan abandoned store repair: %w", err)
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close abandoned store repair rows: %w", err)
+	}
+
+	for _, candidate := range candidates {
+		path, err := container.SafeContainerPath(containersDir, candidate.filename)
+		if err != nil {
+			return fmt.Errorf("invalid abandoned repair container filename %q: %w", candidate.filename, err)
+		}
+		var quarantine bool
+		var activePacked, activeLegacy int64
+		if err := dbconn.QueryRowContext(ctx, `
+			SELECT c.quarantine,
+			       (SELECT COUNT(*) FROM storage_blocks sb WHERE sb.container_id = c.id),
+			       (SELECT COUNT(*) FROM blocks b WHERE b.container_id = c.id)
+			FROM container c WHERE c.id = $1`, candidate.containerID,
+		).Scan(&quarantine, &activePacked, &activeLegacy); err != nil {
+			return fmt.Errorf("validate abandoned repair container %d: %w", candidate.containerID, err)
+		}
+		if !quarantine || activePacked != 0 || activeLegacy != 0 {
+			return fmt.Errorf("refuse abandoned repair cleanup for container %d: quarantine=%t packed_refs=%d legacy_refs=%d", candidate.containerID, quarantine, activePacked, activeLegacy)
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove abandoned repair container %d: %w", candidate.containerID, err)
+		}
+		if err := fsx.SyncDir(filepath.Dir(path)); err != nil {
+			return fmt.Errorf("sync abandoned repair container directory: %w", err)
+		}
+
+		tx, err := dbconn.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin abandoned repair cleanup: %w", err)
+		}
+		rollback := true
+		defer func() {
+			if rollback {
+				_ = tx.Rollback()
+			}
+		}()
+		if _, err := tx.ExecContext(ctx, `DELETE FROM store_repair_chunk WHERE attempt_id = $1`, candidate.attemptID); err != nil {
+			_ = tx.Rollback()
+			rollback = false
+			return fmt.Errorf("delete abandoned repair chunks for attempt %d: %w", candidate.attemptID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM store_repair_block WHERE attempt_id = $1 AND container_id = $2`, candidate.attemptID, candidate.containerID); err != nil {
+			_ = tx.Rollback()
+			rollback = false
+			return fmt.Errorf("delete abandoned repair blocks for container %d: %w", candidate.containerID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM store_repair_container WHERE attempt_id = $1 AND container_id = $2`, candidate.attemptID, candidate.containerID); err != nil {
+			_ = tx.Rollback()
+			rollback = false
+			return fmt.Errorf("unlink abandoned repair container %d: %w", candidate.containerID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, candidate.containerID); err != nil {
+			_ = tx.Rollback()
+			rollback = false
+			return fmt.Errorf("delete abandoned repair container %d: %w", candidate.containerID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE store_repair_attempt
+			SET status = 'ABORTED', updated_at = CURRENT_TIMESTAMP
+			WHERE id = $1 AND status IN ('PREPARING', 'READY')`, candidate.attemptID,
+		); err != nil {
+			_ = tx.Rollback()
+			rollback = false
+			return fmt.Errorf("abort abandoned repair attempt %d: %w", candidate.attemptID, err)
+		}
+		if err := tx.Commit(); err != nil {
+			rollback = false
+			return fmt.Errorf("commit abandoned repair cleanup: %w", err)
+		}
+		rollback = false
+		logRecoveryEvent("store_repair_abandoned_cleaned", fmt.Sprintf("attempt_id=%d", candidate.attemptID), fmt.Sprintf("container_id=%d", candidate.containerID))
+	}
+	if _, err := dbconn.ExecContext(ctx, `
+		UPDATE store_repair_attempt
+		SET status = 'ABORTED', updated_at = CURRENT_TIMESTAMP
+		WHERE status IN ('PREPARING', 'READY')
+		AND NOT EXISTS (
+			SELECT 1 FROM store_repair_container rc
+			WHERE rc.attempt_id = store_repair_attempt.id
+		)`); err != nil {
+		return fmt.Errorf("abort empty abandoned repair attempts: %w", err)
+	}
+	return nil
 }
 
 func buildReport(stats *recoveryStats) Report {

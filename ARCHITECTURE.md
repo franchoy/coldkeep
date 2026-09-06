@@ -154,6 +154,11 @@ Core entities:
 - storage_blocks: v1.8+ packed physical block (container placement, block hash, codec, sizes, transform metadata)
 - chunk_block_refs: v1.8+ per-chunk placement inside a packed storage block
 - container: physical append-only container file on disk
+- store_repair_attempt/store_repair_container/store_repair_block/store_repair_chunk:
+  schema-v17 attempt-owned physical preparation that remains quarantined and
+  non-authoritative until one publication transaction succeeds
+- retired_chunk_block_ref/retired_legacy_block_extent: schema-v17 accounting
+  for immutable old physical bytes retained after repair publication
 
 Storage pipeline:
 
@@ -216,7 +221,16 @@ Non-obvious safety gate (important for future maintenance):
 
 - completed-file/chunk reuse is never accepted on content hash alone;
 - store runs structural and (mode-dependent) semantic replay validation before returning `AlreadyStored=true`;
-- if a claimed completed candidate fails validation, store marks it aborted, cleans stale recipe links, and reclaims to rebuild a fresh canonical recipe;
+- if a claimed completed candidate fails validation but retains an intact,
+  trustworthy ordered recipe, store stages replacement physical data
+  copy-on-write and publishes it atomically without rewriting `file_chunk`;
+- failed completed-object repair preserves the old logical status, retry state,
+  mappings, recipe, liveness, pins, snapshots, and physical placements;
+- successful completed-object repair preserves logical identity and recipe
+  order, atomically switches physical placement authority, and reports
+  `AlreadyStored=false`;
+- a completed candidate whose recipe is not trustworthy fails closed without
+  attempting to invent replacement logical metadata;
 - semantic reuse mode is controlled by `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off`, `suspicious`, `always`; default `suspicious`).
 
 This avoids hidden "magic reuse" behavior: reuse is explicit, gated, and fail-closed when integrity signals disagree.
@@ -319,6 +333,15 @@ These invariants should hold across store, restore, GC, recovery, and verificati
 
 - every COMPLETED chunk has exactly one valid block record
 - every block record references a valid container (or an explicitly quarantined/missing container state)
+- repair staging performs no publication-time filesystem rename, copy, or
+  delete: staged container bytes are already durable at their final immutable
+  path, and the publication authority switch is database-transaction-only
+- every retained packed block's encoded directory equals the exact union of
+  active `chunk_block_refs` and opaque `retired_chunk_block_ref` membership,
+  with no duplicate, overlap, unexplained member, or invalid range
+- every non-quarantined container payload byte after the fixed header is owned
+  exactly once by an active legacy extent, retired legacy extent, or packed
+  storage-block extent
 - every COMPLETED logical file has a complete, contiguous, ordered file_chunk graph
 - live_ref_count > 0 protects a chunk from GC deletion
 - pin_count > 0 protects a chunk from concurrent deletion while restore-like operations are active
@@ -577,7 +600,7 @@ Guarantees hold within the documented operating assumptions:
 - container files are not manually altered
 - filesystem honors write + fsync semantics
 - PostgreSQL deployment provides expected transactional, locking, and advisory-lock behavior
-- Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v16 schema at startup.
+- Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v17 schema at startup.
 
 ## Interface Correctness Layer (v1.1)
 
