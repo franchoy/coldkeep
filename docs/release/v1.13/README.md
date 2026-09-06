@@ -126,8 +126,9 @@ retry occurred.
 CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
 CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-013
-are closed certified; CK-V11316-007 remains open. Findings are 13 confirmed
-and 12/13 closed. Phase 9, Phase 10, and Phase 11 are Complete. Phase 10R1
+are closed certified; CK-V11316-007 and CK-V11316-015 remain open.
+CK-V11316-014 remains external and is excluded from repository totals.
+Findings are 14 confirmed and 12/14 closed. Phase 9, Phase 10, and Phase 11 are Complete. Phase 10R1
 successfully corrected CK-V11316-012's refcount fixture and proved the final
 13/13 plain and AES concurrency selectors with zero skips, then the fresh
 complete matrix stopped because the required G1 unrelated-container proof
@@ -140,9 +141,11 @@ exactly once. CI `33963259615` passed 36/36, CodeQL `33963259529` passed 4/4,
 all 40 exact-head checks passed, direct repository and release-branch alerts
 were zero, and Codacy was `NOT_EXPOSED`. CK-V11316-012 and CK-V11316-013 are
 closed certified. Product packing, container, storage, restore, scripts, and
-workflows remain unchanged. Phase 12 is Next but not started; its mode is PLAN
-and its Plan is not authorized. v1.x technical correctness closure remains
-withheld because CK-V11316-007 remains open.
+workflows remain unchanged. Phase 12 remains the Next lifecycle phase, and
+Phase 12R1R5 now authorizes CK-V11316-015's frozen
+atomic Store-repair Build only through attached and detached local evidence.
+Push and hosted execution remain unauthorized. v1.x technical correctness
+closure remains withheld because CK-V11316-007 and CK-V11316-015 remain open.
 
 ### Historical Phase 6 chronology
 
