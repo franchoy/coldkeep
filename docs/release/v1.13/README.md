@@ -151,13 +151,18 @@ unauthorized. v1.x technical correctness closure remains withheld because
 CK-V11316-007 and CK-V11316-015 remain open.
 
 [Phase 12R1R7](v1.13.16-phase12r1r7-schema-v17-backward-version-fence.md)
-authorizes the four-commit local-only Build that completes CK-V11316-015's
-backward-version compatibility requirement. Schema 17 is frozen as exactly one
+records the completed four-commit local-only Build that implements
+CK-V11316-015's backward-version compatibility requirement at exact executable
+head `e2c2b922e2a4a3f72aef621ea8ff8ab8ccc5fa29`. Schema 17 is exactly one
 `schema_version(catalog_version)` row containing 17; valid legacy metadata is
 normalized transactionally and pre-v17 binaries must fail on their mandatory
 old-column query before semantic repository mutation. The tracked-source
 consumer audit is complete, including the direct SQL in `scripts/smoke.sh`.
-Push, hosted certification, Phase 13, and finding closure remain unauthorized.
+Complete attached and fresh-detached Go/race, PostgreSQL 16.15, historical
+binary, lint, vet, governance/Python/local-CI, platform, and manifest proof
+passed. CK-V11316-015 remains implemented pending exact-head hosted
+certification. Push, hosted certification, Phase 13, and finding closure remain
+unauthorized.
 
 ### Historical Phase 6 chronology
 
