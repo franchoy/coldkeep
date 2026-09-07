@@ -93,7 +93,11 @@ var completedRepairLocks sync.Map
 
 func completedRepairLock(fileID int64) *sync.Mutex {
 	value, _ := completedRepairLocks.LoadOrStore(fileID, &sync.Mutex{})
-	return value.(*sync.Mutex)
+	lock, ok := value.(*sync.Mutex)
+	if !ok {
+		panic("storage: completed repair lock has unexpected type")
+	}
+	return lock
 }
 
 // tryRepairCompletedLogicalFile intercepts only an invalid COMPLETED object
