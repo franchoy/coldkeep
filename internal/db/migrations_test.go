@@ -190,8 +190,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 		t.Fatalf("run migrations first pass: %v", err)
 	}
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
 	if schemaVersion != 17 {
@@ -260,8 +260,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 		t.Fatalf("run migrations second pass (idempotency): %v", err)
 	}
 
-	var schemaVersionAfterSecondRun int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
+	schemaVersionAfterSecondRun, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
 	if schemaVersionAfterSecondRun != 17 {
@@ -310,6 +310,10 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"UPDATE schema_version SET version = 14 WHERE version < 14",
 		"UPDATE schema_version SET version = 15 WHERE version < 15",
 		"UPDATE schema_version SET version = 16 WHERE version < 16",
+		"UPDATE schema_version SET version = 17 WHERE version < 17",
+		"-- SCHEMA_V17_METADATA_FENCE",
+		"ALTER TABLE schema_version RENAME COLUMN version TO catalog_version",
+		"INSERT INTO schema_version(catalog_version) VALUES (17)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_blocks_container_id_offset ON storage_blocks(container_id, container_offset)",
 		"ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT",
 		"CREATE TABLE IF NOT EXISTS repository_config",
@@ -365,8 +369,8 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 		t.Fatalf("apply sqlite schema directly: %v", err)
 	}
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
 	if schemaVersion != 17 {
@@ -510,8 +514,8 @@ func TestLoadSQLiteSchemaNormalizesLegacySchemaVersionHistory(t *testing.T) {
 		t.Fatalf("apply sqlite schema with historical schema_version rows: %v", err)
 	}
 
-	var maxVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&maxVersion); err != nil {
+	maxVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read max schema_version after normalization: %v", err)
 	}
 	if maxVersion != 17 {
@@ -632,8 +636,8 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 		t.Fatalf("run migrations v7->v8: %v", err)
 	}
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
 	if schemaVersion != 17 {
@@ -914,8 +918,8 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 		t.Fatalf("run migrations v12->current: %v", err)
 	}
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
 	if schemaVersion != 17 {
@@ -1290,8 +1294,8 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema_version after bootstrap: %v", err)
 	}
 	if schemaVersion != 17 {
@@ -1432,12 +1436,8 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 		t.Fatalf("count physical_file rows before schema rerun: %v", err)
 	}
 
-	schemaSQL, err := loadPostgresSchema()
-	if err != nil {
-		t.Fatalf("load postgres schema for idempotency rerun: %v", err)
-	}
-	if _, err := dbconn.Exec(schemaSQL); err != nil {
-		t.Fatalf("rerun postgres schema SQL for idempotency: %v", err)
+	if err := EnsurePostgresSchema(dbconn); err != nil {
+		t.Fatalf("reopen postgres schema for idempotency: %v", err)
 	}
 
 	var pathRows int
@@ -1553,7 +1553,7 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 		t.Fatalf("apply postgres schema SQL: %v", err)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE schema_version SET version = 11 WHERE version < 11`); err != nil {
+	if _, err := dbconn.Exec(`ALTER TABLE schema_version RENAME COLUMN catalog_version TO version; UPDATE schema_version SET version = 11`); err != nil {
 		t.Fatalf("downgrade schema_version to 11 for migration test: %v", err)
 	}
 
@@ -1566,8 +1566,8 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 	}
 	defer func() { _ = opened.Close() }()
 
-	var schemaVersion int
-	if err := opened.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(opened)
+	if err != nil {
 		t.Fatalf("read schema_version after auto-migration: %v", err)
 	}
 	if schemaVersion != 17 {
@@ -2102,11 +2102,11 @@ func countPostgresRefCountMismatches(t *testing.T, dbconn *sql.DB, logicalID int
 
 func assertPostgresSchemaVersion(t *testing.T, dbconn *sql.DB, want int) {
 	t.Helper()
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version after schema application: %v", err)
 	}
-	if schemaVersion != want {
+	if schemaVersion != int64(want) {
 		t.Fatalf("unexpected schema version after schema application: got %d want %d", schemaVersion, want)
 	}
 }
@@ -2479,8 +2479,8 @@ func TestRunMigrationsBackfillsPhysicalFileForLegacyLogicalFiles(t *testing.T) {
 		t.Fatalf("unexpected physical_file.is_metadata_complete after migration: got %d want 0", physicalMetadataComplete)
 	}
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
 	if schemaVersion < 6 {
@@ -2661,11 +2661,11 @@ func assertSQLiteMigrationPhysicalFileState(t *testing.T, dbconn *sql.DB, logica
 
 func assertSQLiteMigrationSchemaVersion(t *testing.T, dbconn *sql.DB, want int) {
 	t.Helper()
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version after rerun: %v", err)
 	}
-	if schemaVersion != want {
+	if schemaVersion != int64(want) {
 		t.Fatalf("expected schema version %d after rerun, got %d", want, schemaVersion)
 	}
 }
@@ -2825,8 +2825,8 @@ func TestRunMigrationsCreatesCompressionConfigDefaults(t *testing.T) {
 	}
 
 	// Verify schema_version is at least 15
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
 	if schemaVersion < 16 {
@@ -2846,8 +2846,8 @@ func TestRunMigrationsCompressionConfigIsIdempotent(t *testing.T) {
 		t.Fatalf("first run migrations: %v", err)
 	}
 
-	var versionAfterFirstRun int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&versionAfterFirstRun); err != nil {
+	versionAfterFirstRun, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema_version after first run: %v", err)
 	}
 
@@ -2856,8 +2856,8 @@ func TestRunMigrationsCompressionConfigIsIdempotent(t *testing.T) {
 		t.Fatalf("second run migrations: %v", err)
 	}
 
-	var versionAfterSecondRun int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&versionAfterSecondRun); err != nil {
+	versionAfterSecondRun, err := CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema_version after second run: %v", err)
 	}
 

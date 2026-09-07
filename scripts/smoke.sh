@@ -1823,12 +1823,12 @@ if [[ "${COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE}" == "1" ]]; then
   PGPASSWORD="${DB_PASSWORD:-}" psql \
     -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${OLD_SCHEMA_DB}" \
     -v ON_ERROR_STOP=1 \
-    -c "UPDATE schema_version SET version = 1;" >/dev/null
+    -c "ALTER TABLE schema_version RENAME COLUMN catalog_version TO version; UPDATE schema_version SET version = 1;" >/dev/null
 
   if OLD_MSG=$(COLDKEEP_DB_AUTO_BOOTSTRAP=false DB_NAME="${OLD_SCHEMA_DB}" coldkeep stats 2>&1); then
     OLD_VER=$(PGPASSWORD="${DB_PASSWORD:-}" psql \
       -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${OLD_SCHEMA_DB}" \
-      -Atqc 'SELECT version FROM schema_version LIMIT 1;' 2>/dev/null || true)
+      -Atqc 'SELECT catalog_version FROM schema_version LIMIT 1;' 2>/dev/null || true)
     if [[ -z "$OLD_VER" || "$OLD_VER" -le 1 ]]; then
       echo "[smoke] ERROR: outdated-schema probe succeeded but schema_version did not advance"
       cleanup_schema_gate_dbs

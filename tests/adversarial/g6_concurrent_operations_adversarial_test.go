@@ -1781,7 +1781,7 @@ func diagStoreResultsG6(ctx *g6FailureDiagnosticContext) []g6StoreOperationResul
 
 func g6SchemaVersion(dbconn *sql.DB) (int64, error) {
 	var version int64
-	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&version); err != nil {
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(catalog_version), 0) FROM schema_version`).Scan(&version); err != nil {
 		return 0, err
 	}
 	return version, nil

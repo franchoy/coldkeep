@@ -70,7 +70,7 @@ fi
 : "${DB_HOST:=127.0.0.1}"
 : "${DB_PORT:=5432}"
 : "${DB_USER:=coldkeep}"
-: "${DB_PASSWORD:=coldkeep}"
+: "${DB_PASSWORD:=coldkeep-development-only}"
 : "${DB_SSLMODE:=disable}"
 export DB_HOST DB_PORT DB_USER DB_PASSWORD DB_SSLMODE
 export PGHOST="$DB_HOST" PGPORT="$DB_PORT" PGUSER="$DB_USER"
@@ -128,7 +128,11 @@ if ! cmp -s "$PG_BEFORE" "$PG_AFTER"; then
   exit 1
 fi
 
-OWNER_ROWS=$(psql -Atqc 'SELECT COUNT(*) FROM repository_operation_owner' "$POSTGRES_V16_DB")
+OWNER_TABLE=$(psql -Atqc "SELECT COALESCE(to_regclass('public.repository_operation_owner')::text, '')" "$POSTGRES_V16_DB")
+OWNER_ROWS=0
+if [[ -n "$OWNER_TABLE" ]]; then
+  OWNER_ROWS=$(psql -Atqc 'SELECT COUNT(*) FROM repository_operation_owner' "$POSTGRES_V16_DB")
+fi
 if [[ "$OWNER_ROWS" != 0 ]]; then
   echo "[schema-v17-fence] ERROR: historical rejection left $OWNER_ROWS coordination owner row(s)" >&2
   exit 1

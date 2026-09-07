@@ -61,6 +61,15 @@ Correctness has ten explicit layers:
 Migration philosophy:
 
 - coldkeep prefers non-destructive evolution over automatic optimization.
+- schema 17 is fenced from older binaries by retaining the `schema_version`
+  table while replacing its legacy `version` column with exactly one
+  `catalog_version INTEGER PRIMARY KEY` row containing 17;
+- v16-to-v17 migration, including legacy metadata inspection, all schema/data
+  migration work, column rename, singleton normalization, and final validation,
+  is one backend transaction, so failure restores the complete v16 metadata
+  representation and rows;
+- pre-v17 binaries fail on their mandatory legacy-column query before recovery
+  or correctness-relevant command work; schema-17 downgrade is unsupported.
 
 ## Deep Design View
 

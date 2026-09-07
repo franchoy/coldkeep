@@ -4,9 +4,6 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-DELETE FROM schema_version WHERE version < 17;
-INSERT OR IGNORE INTO schema_version(version) VALUES (17);
-
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   filename TEXT NOT NULL UNIQUE,
@@ -279,5 +276,10 @@ CREATE TABLE IF NOT EXISTS retired_legacy_block_extent (
 );
 CREATE INDEX IF NOT EXISTS idx_retired_legacy_block_extent_attempt
   ON retired_legacy_block_extent(repair_attempt_id);
+
+-- SCHEMA_V17_METADATA_FENCE
+ALTER TABLE schema_version RENAME COLUMN version TO catalog_version;
+DELETE FROM schema_version;
+INSERT INTO schema_version(catalog_version) VALUES (17);
 
 COMMIT;

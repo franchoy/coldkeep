@@ -393,7 +393,7 @@ func TestCKV11316015SuccessfulRepairBackendCodecCompressionLayoutMatrix(t *testi
 func TestCKV11316015SchemaV17ProvidesDurableCopyOnWriteRepairState(t *testing.T) {
 	repo := NewTestRepository(t)
 	var version int
-	if err := repo.DB.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
+	if err := repo.DB.QueryRow(`SELECT MAX(catalog_version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
 	if version != 17 {

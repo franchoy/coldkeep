@@ -741,4 +741,9 @@ CREATE INDEX IF NOT EXISTS idx_retired_legacy_block_extent_attempt
 
 UPDATE schema_version SET version = 17 WHERE version < 17;
 
+-- SCHEMA_V17_METADATA_FENCE
+ALTER TABLE schema_version RENAME COLUMN version TO catalog_version;
+DELETE FROM schema_version;
+INSERT INTO schema_version(catalog_version) VALUES (17);
+
 COMMIT;

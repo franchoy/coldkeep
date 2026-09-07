@@ -1469,8 +1469,8 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 		t.Fatalf("truncate fixtures: %v", err)
 	}
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := db.CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
 	if schemaVersion < 10 {
@@ -5775,10 +5775,14 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		// Connect raw; bypass EnsurePostgresSchema so we can manipulate schema_version.
 		mainDB := testutils.OpenRawPostgresDB(t, "")
 		defer func() { _ = mainDB.Close() }()
+		t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+		if err := db.EnsurePostgresSchema(mainDB); err != nil {
+			t.Fatalf("prepare current schema_version fixture: %v", err)
+		}
 
 		// Save the current live schema version.
-		var savedVersion int
-		if err := mainDB.QueryRow(`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&savedVersion); err != nil {
+		savedVersion, err := db.CurrentSchemaVersion(mainDB)
+		if err != nil {
 			t.Fatalf("read schema_version: %v", err)
 		}
 
@@ -5786,13 +5790,31 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		t.Cleanup(func() {
 			restoreDB := testutils.OpenRawPostgresDB(t, "")
 			defer func() { _ = restoreDB.Close() }()
-			if _, err := restoreDB.Exec(`UPDATE schema_version SET version = $1`, savedVersion); err != nil {
+			if _, err := restoreDB.Exec(`
+				DO $$
+				BEGIN
+				  IF EXISTS (
+				    SELECT 1 FROM information_schema.columns
+				    WHERE table_schema = 'public' AND table_name = 'schema_version' AND column_name = 'version'
+				  ) THEN
+				    ALTER TABLE schema_version RENAME COLUMN version TO catalog_version;
+				  END IF;
+				END $$
+			`); err != nil {
+				t.Errorf("CRITICAL: restore schema_version column failed: %v", err)
+				return
+			}
+			if _, err := restoreDB.Exec(`DELETE FROM schema_version`); err != nil {
+				t.Errorf("CRITICAL: clear schema_version during restoration failed: %v", err)
+				return
+			}
+			if _, err := restoreDB.Exec(`INSERT INTO schema_version(catalog_version) VALUES ($1)`, savedVersion); err != nil {
 				t.Errorf("CRITICAL: restore schema_version to %d failed: %v", savedVersion, err)
 			}
 		})
 
 		// Downgrade schema_version to 1 (auto-commits outside a transaction).
-		if _, err := mainDB.Exec(`UPDATE schema_version SET version = 1`); err != nil {
+		if _, err := mainDB.Exec(`ALTER TABLE schema_version RENAME COLUMN catalog_version TO version; UPDATE schema_version SET version = 1`); err != nil {
 			t.Fatalf("downgrade schema_version: %v", err)
 		}
 
@@ -5804,8 +5826,8 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 			t.Fatalf("EnsurePostgresSchema must auto-migrate old schema version: %v", err)
 		}
 
-		var migratedVersion int
-		if err := testDB.QueryRow(`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&migratedVersion); err != nil {
+		migratedVersion, err := db.CurrentSchemaVersion(testDB)
+		if err != nil {
 			t.Fatalf("read migrated schema_version: %v", err)
 		}
 		if migratedVersion <= 1 {
@@ -5954,7 +5976,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 		if _, err := testDB.Exec(dbschema.PostgresSchema); err != nil {
 			t.Fatalf("apply schema to temp DB: %v", err)
 		}
-		if _, err := testDB.Exec(`UPDATE schema_version SET version = 1`); err != nil {
+		if _, err := testDB.Exec(`ALTER TABLE schema_version RENAME COLUMN catalog_version TO version; UPDATE schema_version SET version = 1`); err != nil {
 			t.Fatalf("downgrade schema_version in temp DB: %v", err)
 		}
 

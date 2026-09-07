@@ -182,7 +182,7 @@ func TestPhase1CompatMigrationReachesSchemaV15(t *testing.T) {
 	repo := newPhase1Repo(t)
 
 	var version int
-	if err := repo.dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
+	if err := repo.dbconn.QueryRow(`SELECT MAX(catalog_version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
 	if version != phase1SchemaVersion {
@@ -268,7 +268,7 @@ func TestPhase1CompatMigrationIsIdempotent(t *testing.T) {
 	blocksBefore := countRows(`SELECT COUNT(*) FROM storage_blocks`)
 	chunksBefore := countRows(`SELECT COUNT(*) FROM chunk`)
 	physicalBefore := countRows(`SELECT COUNT(*) FROM physical_file`)
-	versionBefore := countRows(`SELECT MAX(version) FROM schema_version`)
+	versionBefore := countRows(`SELECT MAX(catalog_version) FROM schema_version`)
 	refCountMismatchesBefore := countRows(`
 		SELECT COUNT(*)
 		FROM logical_file lf
@@ -287,7 +287,7 @@ func TestPhase1CompatMigrationIsIdempotent(t *testing.T) {
 	blocksAfter := countRows(`SELECT COUNT(*) FROM storage_blocks`)
 	chunksAfter := countRows(`SELECT COUNT(*) FROM chunk`)
 	physicalAfter := countRows(`SELECT COUNT(*) FROM physical_file`)
-	versionAfter := countRows(`SELECT MAX(version) FROM schema_version`)
+	versionAfter := countRows(`SELECT MAX(catalog_version) FROM schema_version`)
 	refCountMismatchesAfter := countRows(`
 		SELECT COUNT(*)
 		FROM logical_file lf

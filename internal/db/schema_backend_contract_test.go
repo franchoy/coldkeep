@@ -32,7 +32,7 @@ func TestSCH001AndSCH002BootstrapVersionAndIdempotency(t *testing.T) {
 			t.Fatalf("preserved logical-file name = %q, want contract", name)
 		}
 		var currentVersionRows int
-		if err := backend.DB.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE version = $1`, phase5SchemaVersion).Scan(&currentVersionRows); err != nil {
+		if err := backend.DB.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE catalog_version = $1`, phase5SchemaVersion).Scan(&currentVersionRows); err != nil {
 			t.Fatalf("count current schema-version rows: %v", err)
 		}
 		if currentVersionRows != 1 {
@@ -74,7 +74,7 @@ func TestSCH003CurrentSchemaMetadata(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
 		assertCurrentSchemaVersion(t, backend.DB)
 		var rows int
-		if err := backend.DB.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE version = $1`, phase5SchemaVersion).Scan(&rows); err != nil {
+		if err := backend.DB.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE catalog_version = $1`, phase5SchemaVersion).Scan(&rows); err != nil {
 			t.Fatalf("read current schema metadata: %v", err)
 		}
 		if rows != 1 {

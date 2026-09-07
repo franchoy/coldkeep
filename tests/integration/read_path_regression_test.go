@@ -65,11 +65,11 @@ func mustReadSchemaVersion(t *testing.T) int {
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := db.CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	return schemaVersion
+	return int(schemaVersion)
 }
 
 func TestReadPathRestoreAfterMigrationIntegration(t *testing.T) {

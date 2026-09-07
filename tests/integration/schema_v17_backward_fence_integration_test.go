@@ -256,7 +256,11 @@ func TestSchemaV17BackwardFenceRejectsMultiplePostgresRows(t *testing.T) {
 
 func TestSchemaV17BackwardFenceMigrationRollbackRestoresLegacyMetadata(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{Schema: backendtest.EmptySchema}, func(t *testing.T, backend backendtest.Backend) {
-		if _, err := backend.DB.Exec(`CREATE TABLE schema_version (version INTEGER PRIMARY KEY); INSERT INTO schema_version(version) VALUES (16)`); err != nil {
+		versions := `(16)`
+		if backend.Kind == db.BackendSQLite {
+			versions = `(8), (9), (16)`
+		}
+		if _, err := backend.DB.Exec(`CREATE TABLE schema_version (version INTEGER PRIMARY KEY); INSERT INTO schema_version(version) VALUES ` + versions); err != nil {
 			t.Fatalf("create rollback metadata fixture: %v", err)
 		}
 		// This deliberately incompatible table makes schema application fail after
@@ -273,12 +277,16 @@ func TestSchemaV17BackwardFenceMigrationRollbackRestoresLegacyMetadata(t *testin
 		if fmt.Sprint(columns) != "[version]" {
 			t.Fatalf("rollback schema_version columns = %v, want [version]", columns)
 		}
-		var version, rows int
-		if err := backend.DB.QueryRow(`SELECT COUNT(*), MIN(version) FROM schema_version`).Scan(&rows, &version); err != nil {
+		var minimum, maximum, rows int
+		if err := backend.DB.QueryRow(`SELECT COUNT(*), MIN(version), MAX(version) FROM schema_version`).Scan(&rows, &minimum, &maximum); err != nil {
 			t.Fatalf("read rolled-back legacy metadata: %v", err)
 		}
-		if rows != 1 || version != 16 {
-			t.Fatalf("rolled-back legacy metadata = rows:%d version:%d, want rows:1 version:16", rows, version)
+		wantRows, wantMinimum := 1, 16
+		if backend.Kind == db.BackendSQLite {
+			wantRows, wantMinimum = 3, 8
+		}
+		if rows != wantRows || minimum != wantMinimum || maximum != 16 {
+			t.Fatalf("rolled-back legacy metadata = rows:%d range:%d..%d, want rows:%d range:%d..16", rows, minimum, maximum, wantRows, wantMinimum)
 		}
 	})
 }

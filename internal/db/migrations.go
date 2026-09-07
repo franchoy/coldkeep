@@ -24,6 +24,7 @@ type sqlitePreSchemaState struct {
 	hadDefaultChunkerBeforeSchema bool
 	hadSchemaVersionBeforeSchema  bool
 	schemaVersionBeforeSchema     int
+	metadata                      schemaMetadataState
 }
 
 const (
@@ -44,7 +45,7 @@ func sqliteTableExistsWithContext(dbconn sqliteContextExecutor, ctx context.Cont
 	return count > 0, nil
 }
 
-func inspectSQLitePreSchemaState(dbconn *sql.DB, ctx context.Context) (sqlitePreSchemaState, error) {
+func inspectSQLitePreSchemaState(dbconn sqliteContextExecutor, ctx context.Context) (sqlitePreSchemaState, error) {
 	var state sqlitePreSchemaState
 
 	var userTableCount int
@@ -55,22 +56,19 @@ func inspectSQLitePreSchemaState(dbconn *sql.DB, ctx context.Context) (sqlitePre
 		return state, fmt.Errorf("inspect sqlite user table count: %w", err)
 	}
 
-	hasSchemaVersion, err := sqliteTableExistsWithContext(dbconn, ctx, "schema_version")
+	metadata, err := inspectSchemaMetadata(ctx, dbconn, BackendSQLite)
 	if err != nil {
-		return state, fmt.Errorf("inspect sqlite schema_version table: %w", err)
+		return state, err
 	}
-	state.hadSchemaVersionBeforeSchema = hasSchemaVersion
-	if hasSchemaVersion {
-		if err := dbconn.QueryRowContext(
-			ctx,
-			`SELECT COALESCE(MAX(version), 0) FROM schema_version`,
-		).Scan(&state.schemaVersionBeforeSchema); err != nil {
-			return state, fmt.Errorf("inspect sqlite schema_version value: %w", err)
-		}
-	}
+	state.metadata = metadata
+	state.hadSchemaVersionBeforeSchema = metadata.representation != schemaMetadataMissing
+	state.schemaVersionBeforeSchema = metadata.version
 
 	// Fresh install signal: empty sqlite file with no app tables and no version table.
-	state.freshInstall = !hasSchemaVersion && userTableCount == 0
+	state.freshInstall = metadata.representation == schemaMetadataMissing && userTableCount == 0
+	if metadata.representation == schemaMetadataMissing && !state.freshInstall {
+		return state, errors.New("malformed sqlite repository: schema_version table is missing")
+	}
 
 	hasRepositoryConfig, err := sqliteTableExistsWithContext(dbconn, ctx, "repository_config")
 	if err != nil {
@@ -224,7 +222,7 @@ func runSQLitePhysicalFileMigration(dbconn sqliteContextExecutor, ctx context.Co
 			return err
 		}
 	}
-	return finalizeSQLitePhysicalFileMigration(dbconn, ctx)
+	return nil
 }
 
 func ensureSQLiteLogicalFileRefCount(dbconn sqliteContextExecutor, ctx context.Context) error {
@@ -299,23 +297,6 @@ func applySQLiteLegacyPhysicalFileBackfill(dbconn sqliteContextExecutor, ctx con
 		)
 	`); err != nil {
 		return fmt.Errorf("backfill physical_file: %w", err)
-	}
-	return nil
-}
-
-func finalizeSQLitePhysicalFileMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
-	if _, err := dbconn.ExecContext(ctx, `
-		UPDATE schema_version
-		SET version = 6
-		WHERE version < 6
-	`); err != nil {
-		return fmt.Errorf("update sqlite schema_version to 6: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO schema_version(version) VALUES (6)
-	`); err != nil {
-		return fmt.Errorf("insert sqlite schema_version 6: %w", err)
 	}
 	return nil
 }
@@ -479,18 +460,6 @@ func runSQLiteSnapshotMigration(dbconn sqliteContextExecutor, ctx context.Contex
 		return fmt.Errorf("create idx_snapshot_file_unique: %w", err)
 	}
 
-	if _, err := dbconn.ExecContext(ctx, `
-		DELETE FROM schema_version WHERE version < 8
-	`); err != nil {
-		return fmt.Errorf("clean sqlite schema_version before 8: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO schema_version(version) VALUES (8)
-	`); err != nil {
-		return fmt.Errorf("insert sqlite schema_version 8: %w", err)
-	}
-
 	return nil
 }
 
@@ -511,18 +480,6 @@ func runSQLiteChunkerVersionMigration(dbconn sqliteContextExecutor, ctx context.
 		WHERE chunker_version IS NULL
 	`); err != nil {
 		return fmt.Errorf("backfill logical_file.chunker_version: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		DELETE FROM schema_version WHERE version < 9
-	`); err != nil {
-		return fmt.Errorf("clean sqlite schema_version before 9: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO schema_version(version) VALUES (9)
-	`); err != nil {
-		return fmt.Errorf("insert sqlite schema_version 9: %w", err)
 	}
 
 	return nil
@@ -546,19 +503,6 @@ func runSQLiteChunkChunkerVersionMigration(dbconn sqliteContextExecutor, ctx con
 		return fmt.Errorf("inspect chunk table existence: %w", err)
 	}
 	if !tableExists {
-		// chunk table absent in legacy schemas; still advance schema version.
-		if _, err := dbconn.ExecContext(ctx, `
-			DELETE FROM schema_version WHERE version < 10
-		`); err != nil {
-			return fmt.Errorf("clean sqlite schema_version before 10: %w", err)
-		}
-
-		if _, err := dbconn.ExecContext(ctx, `
-			INSERT OR IGNORE INTO schema_version(version) VALUES (10)
-		`); err != nil {
-			return fmt.Errorf("insert sqlite schema_version 10: %w", err)
-		}
-
 		return nil
 	}
 
@@ -578,18 +522,6 @@ func runSQLiteChunkChunkerVersionMigration(dbconn sqliteContextExecutor, ctx con
 		WHERE chunker_version IS NULL
 	`); err != nil {
 		return fmt.Errorf("backfill chunk.chunker_version: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		DELETE FROM schema_version WHERE version < 10
-	`); err != nil {
-		return fmt.Errorf("clean sqlite schema_version before 10: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO schema_version(version) VALUES (10)
-	`); err != nil {
-		return fmt.Errorf("insert sqlite schema_version 10: %w", err)
 	}
 
 	return nil
@@ -613,18 +545,6 @@ func runSQLiteRepositoryConfigMigration(dbconn sqliteContextExecutor, ctx contex
 		`, desiredDefaultChunker); err != nil {
 			return fmt.Errorf("seed repository_config.default_chunker: %w", err)
 		}
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		DELETE FROM schema_version WHERE version < 11
-	`); err != nil {
-		return fmt.Errorf("clean sqlite schema_version before 11: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO schema_version(version) VALUES (11)
-	`); err != nil {
-		return fmt.Errorf("insert sqlite schema_version 11: %w", err)
 	}
 
 	return nil
@@ -678,18 +598,6 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 		CREATE INDEX IF NOT EXISTS idx_chunk_block_refs_block_id ON chunk_block_refs(block_id)
 	`); err != nil {
 		return fmt.Errorf("create idx_chunk_block_refs_block_id: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		DELETE FROM schema_version WHERE version < 12
-	`); err != nil {
-		return fmt.Errorf("clean sqlite schema_version before 12: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO schema_version(version) VALUES (12)
-	`); err != nil {
-		return fmt.Errorf("insert sqlite schema_version 12: %w", err)
 	}
 
 	return nil
@@ -785,18 +693,6 @@ func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ct
 		return fmt.Errorf("create repository_config table for transform metadata defaults: %w", err)
 	}
 
-	if _, err := dbconn.ExecContext(ctx, `
-		DELETE FROM schema_version WHERE version < 13
-	`); err != nil {
-		return fmt.Errorf("clean sqlite schema_version before 13: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO schema_version(version) VALUES (13)
-	`); err != nil {
-		return fmt.Errorf("insert sqlite schema_version 13: %w", err)
-	}
-
 	return nil
 }
 
@@ -818,18 +714,6 @@ func runSQLiteRepositoryCompressionConfigMigration(dbconn sqliteContextExecutor,
 		return fmt.Errorf("seed repository_config.compression_level: %w", err)
 	}
 
-	if _, err := dbconn.ExecContext(ctx, `
-		DELETE FROM schema_version WHERE version < 14
-	`); err != nil {
-		return fmt.Errorf("clean sqlite schema_version before 14: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO schema_version(version) VALUES (14)
-	`); err != nil {
-		return fmt.Errorf("insert sqlite schema_version 14: %w", err)
-	}
-
 	return nil
 }
 
@@ -838,6 +722,21 @@ func loadSQLiteSchema() (string, error) {
 		return "", errors.New("embedded sqlite schema is empty")
 	}
 	return dbschema.SQLiteSchema, nil
+}
+
+const schemaV17MetadataFenceMarker = "-- SCHEMA_V17_METADATA_FENCE"
+
+func splitSchemaV17Transaction(schemaSQL string) (string, string, error) {
+	trimmed := strings.TrimSpace(schemaSQL)
+	if !strings.HasPrefix(trimmed, "BEGIN;") || !strings.HasSuffix(trimmed, "COMMIT;") {
+		return "", "", errors.New("embedded schema must have exact outer BEGIN/COMMIT transaction")
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(trimmed, "BEGIN;")), "COMMIT;"))
+	parts := strings.Split(body, schemaV17MetadataFenceMarker)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", errors.New("embedded schema must contain exactly one schema-v17 metadata fence marker")
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 }
 
 func runSQLiteStorageBlocksCompressionMetadataMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
@@ -864,14 +763,6 @@ func runSQLiteStorageBlocksCompressionMetadataMigration(dbconn sqliteContextExec
 		if _, err := dbconn.ExecContext(ctx, "ALTER TABLE storage_blocks ADD COLUMN payload_hash TEXT"); err != nil {
 			return fmt.Errorf("add payload_hash column: %w", err)
 		}
-	}
-
-	if _, err := dbconn.ExecContext(ctx, "DELETE FROM schema_version WHERE version < 15"); err != nil {
-		return fmt.Errorf("clean schema_version before 15: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, "INSERT OR IGNORE INTO schema_version(version) VALUES (15)"); err != nil {
-		return fmt.Errorf("insert schema_version 15: %w", err)
 	}
 
 	return nil
@@ -943,13 +834,6 @@ func runSQLiteStorageBlocksUniqueOffsetConstraintMigration(dbconn sqliteContextE
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_blocks_container_id_offset ON storage_blocks(container_id, container_offset)`,
 	); err != nil {
 		return fmt.Errorf("create unique offset index on storage_blocks: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, "DELETE FROM schema_version WHERE version < 16"); err != nil {
-		return fmt.Errorf("clean schema_version before 16: %w", err)
-	}
-	if _, err := dbconn.ExecContext(ctx, "INSERT OR IGNORE INTO schema_version(version) VALUES (16)"); err != nil {
-		return fmt.Errorf("insert schema_version 16: %w", err)
 	}
 
 	return nil
@@ -1042,8 +926,6 @@ func runSQLiteStoreRepairSchemaMigration(dbconn sqliteContextExecutor, ctx conte
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_retired_legacy_block_extent_attempt
 			ON retired_legacy_block_extent(repair_attempt_id)`,
-		`DELETE FROM schema_version WHERE version < 17`,
-		`INSERT OR IGNORE INTO schema_version(version) VALUES (17)`,
 	}
 
 	for _, statement := range statements {
@@ -1063,18 +945,6 @@ func isSQLiteSchemaApplyCompatibilityError(err error) bool {
 		strings.Contains(errText, "no such column: path_id")
 }
 
-func ensurePostgresVersion(dbconn *sql.DB, ctx context.Context) (int, error) {
-	var version int
-	err := dbconn.QueryRowContext(ctx, `SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&version)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, errors.New("schema_version table is empty")
-		}
-		return 0, fmt.Errorf("query schema_version: %w", err)
-	}
-	return version, nil
-}
-
 // EnsurePostgresSchema validates the runtime PostgreSQL schema.
 // If COLDKEEP_DB_AUTO_BOOTSTRAP is enabled and schema_version is missing,
 // it bootstraps by applying the embedded db/schema_postgres.sql.
@@ -1086,12 +956,21 @@ func EnsurePostgresSchema(dbconn *sql.DB) error {
 	ctx, cancel := NewOperationContext(context.Background())
 	defer cancel()
 
-	var schemaVersionTable sql.NullString
-	if err := dbconn.QueryRowContext(ctx, `SELECT to_regclass('public.schema_version')`).Scan(&schemaVersionTable); err != nil {
-		return fmt.Errorf("check schema_version table: %w", err)
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin postgres schema transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	metadata, err := inspectSchemaMetadata(ctx, tx, BackendPostgres)
+	if err != nil {
+		return err
+	}
+	if metadata.representation == schemaMetadataFenced {
+		return nil
 	}
 
-	if !schemaVersionTable.Valid {
+	if metadata.representation == schemaMetadataMissing {
 		autoBootstrapEnabled, parseErr := loadPostgresAutoBootstrapEnabled()
 		if parseErr != nil {
 			return parseErr
@@ -1101,37 +980,42 @@ func EnsurePostgresSchema(dbconn *sql.DB) error {
 				"postgres schema is not initialized (missing schema_version table); apply db/schema_postgres.sql or set COLDKEEP_DB_AUTO_BOOTSTRAP=true",
 			)
 		}
-
-		schemaSQL, err := loadPostgresSchema()
-		if err != nil {
-			return err
+		var publicTables int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+		`).Scan(&publicTables); err != nil {
+			return fmt.Errorf("inspect postgres bootstrap state: %w", err)
 		}
-		if _, err := dbconn.ExecContext(ctx, schemaSQL); err != nil {
-			return fmt.Errorf("bootstrap postgres schema: %w", err)
+		if publicTables != 0 {
+			return errors.New("malformed postgres repository: schema_version table is missing")
 		}
 	}
 
-	version, err := ensurePostgresVersion(dbconn, ctx)
+	schemaSQL, err := loadPostgresSchema()
 	if err != nil {
 		return err
 	}
-
-	if version < requiredPostgresSchemaVersion {
-		schemaSQL, err := loadPostgresSchema()
-		if err != nil {
-			return err
-		}
-		if _, err := dbconn.ExecContext(ctx, schemaSQL); err != nil {
-			return fmt.Errorf("auto-migrate postgres schema from version %d to >= %d: %w", version, requiredPostgresSchemaVersion, err)
-		}
-
-		version, err = ensurePostgresVersion(dbconn, ctx)
-		if err != nil {
-			return err
-		}
-		if version < requiredPostgresSchemaVersion {
-			return fmt.Errorf("postgres schema version too old after auto-migration: have %d, need at least %d", version, requiredPostgresSchemaVersion)
-		}
+	beforeFence, fence, err := splitSchemaV17Transaction(schemaSQL)
+	if err != nil {
+		return fmt.Errorf("load postgres schema transaction: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, beforeFence); err != nil {
+		return fmt.Errorf("apply postgres schema from version %d: %w", metadata.version, err)
+	}
+	if _, err := tx.ExecContext(ctx, fence); err != nil {
+		return fmt.Errorf("apply postgres schema-v17 metadata fence: %w", err)
+	}
+	finalMetadata, err := inspectSchemaMetadata(ctx, tx, BackendPostgres)
+	if err != nil {
+		return fmt.Errorf("validate postgres schema-v17 metadata fence: %w", err)
+	}
+	if finalMetadata.representation != schemaMetadataFenced || finalMetadata.version != requiredPostgresSchemaVersion {
+		return errors.New("postgres schema-v17 metadata fence is incomplete")
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit postgres schema transaction: %w", err)
 	}
 
 	return nil
@@ -1167,25 +1051,8 @@ func RunMigrations(dbconn *sql.DB) error {
 	ctx, cancel := NewOperationContext(context.Background())
 	defer cancel()
 
-	preSchemaState, err := inspectSQLitePreSchemaState(dbconn, ctx)
-	if err != nil {
-		return err
-	}
-
 	if _, err := dbconn.ExecContext(ctx, `PRAGMA foreign_keys = ON;`); err != nil {
 		return fmt.Errorf("enable sqlite foreign keys: %w", err)
-	}
-
-	schemaSQL, err := loadSQLiteSchema()
-	if err != nil {
-		return err
-	}
-
-	if _, err := dbconn.ExecContext(ctx, schemaSQL); err != nil {
-		if !isSQLiteSchemaApplyCompatibilityError(err) {
-			return fmt.Errorf("apply sqlite schema: %w", err)
-		}
-		_, _ = dbconn.ExecContext(ctx, `ROLLBACK`)
 	}
 
 	tx, err := dbconn.BeginTx(ctx, nil)
@@ -1193,6 +1060,26 @@ func RunMigrations(dbconn *sql.DB) error {
 		return fmt.Errorf("begin sqlite migration transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	preSchemaState, err := inspectSQLitePreSchemaState(tx, ctx)
+	if err != nil {
+		return err
+	}
+	if preSchemaState.metadata.representation == schemaMetadataFenced {
+		return nil
+	}
+
+	schemaSQL, err := loadSQLiteSchema()
+	if err != nil {
+		return err
+	}
+	beforeFence, fence, err := splitSchemaV17Transaction(schemaSQL)
+	if err != nil {
+		return fmt.Errorf("load sqlite schema transaction: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, beforeFence); err != nil && !isSQLiteSchemaApplyCompatibilityError(err) {
+		return fmt.Errorf("apply sqlite schema: %w", err)
+	}
 
 	if err := runSQLitePhysicalFileMigration(tx, ctx, preSchemaState.requiresLegacyPhysicalFileBackfill()); err != nil {
 		return err
@@ -1241,6 +1128,17 @@ func RunMigrations(dbconn *sql.DB) error {
 
 	if err := runSQLiteStoreRepairSchemaMigration(tx, ctx); err != nil {
 		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, fence); err != nil {
+		return fmt.Errorf("apply sqlite schema-v17 metadata fence: %w", err)
+	}
+	finalMetadata, err := inspectSchemaMetadata(ctx, tx, BackendSQLite)
+	if err != nil {
+		return fmt.Errorf("validate sqlite schema-v17 metadata fence: %w", err)
+	}
+	if finalMetadata.representation != schemaMetadataFenced || finalMetadata.version != currentCatalogSchemaVersion {
+		return errors.New("sqlite schema-v17 metadata fence is incomplete")
 	}
 
 	if err := tx.Commit(); err != nil {

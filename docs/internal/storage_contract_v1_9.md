@@ -77,6 +77,15 @@ Explicit non-guarantees:
 - no automatic historical rewrite
 - no automatic historical recompression
 - no eager background migration of historical block layout
+- no schema-17 access or downgrade through a pre-v17 binary
+
+Schema-metadata normalization is not a historical storage-data rewrite. Schema
+17 commits only as the singleton `schema_version(catalog_version=17)`
+representation. Valid legacy SQLite history derives its authoritative value
+with `MAX(version)`; valid legacy PostgreSQL metadata is a singleton. The
+conversion and all schema-17 DDL share one transaction, and rollback restores
+the complete prior metadata column and rows. Current runtimes reject malformed,
+ambiguous, empty, or future metadata before repository migration or operation.
 
 ## 4. Repository Defaults vs Block Reality (Frozen)
 
