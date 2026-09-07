@@ -142,10 +142,13 @@ all 40 exact-head checks passed, direct repository and release-branch alerts
 were zero, and Codacy was `NOT_EXPOSED`. CK-V11316-012 and CK-V11316-013 are
 closed certified. Product packing, container, storage, restore, scripts, and
 workflows remain unchanged. Phase 12 remains the Next lifecycle phase, and
-Phase 12R1R5 now authorizes CK-V11316-015's frozen
-atomic Store-repair Build only through attached and detached local evidence.
-Push and hosted execution remain unauthorized. v1.x technical correctness
-closure remains withheld because CK-V11316-007 and CK-V11316-015 remain open.
+Phase 12R1R5 implemented CK-V11316-015's frozen schema-v17 atomic Store repair
+at exact local head `c080dbd912502683ec06066d02a9e8aa2e9370f4`. Complete attached
+and fresh-detached Go, race, PostgreSQL 16.15, exact golangci-lint 2.9.0,
+governance, and platform certification passed. CK-V11316-015 remains open
+pending exact-head hosted certification. Push and hosted execution remain
+unauthorized. v1.x technical correctness closure remains withheld because
+CK-V11316-007 and CK-V11316-015 remain open.
 
 ### Historical Phase 6 chronology
 
