@@ -175,6 +175,16 @@ scripts-package regression, and append-only authority/evidence reconciliation.
 This is not a new finding or CK-V11316-015 defect. Push, hosted certification,
 Phase 13, and finding closure remain unauthorized.
 
+The R1R8 correction is complete at
+`c6f27359a5d8e37ce5e5a38be9fe700994f0cc93`. Dedicated RED/GREEN proof,
+both matcher implementations, the real-repository gate, attached and fresh-
+detached scripts/tooling certification, all 215 Python tests, exact lint,
+governance, byte identity, allowlist, and clean-tree checks passed. The
+detached real-state validator correctly rejected the untagged detached
+development context with `CKRS016`; attached real-state validation passed.
+R1R7 product/schema/test bytes remain unchanged. Push and hosted certification
+remain unauthorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
