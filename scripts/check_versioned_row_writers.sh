@@ -7,7 +7,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
 
 search_versioned_writers() {
-  local pattern="INSERT INTO (logical_file|chunk)"
+  local pattern="INSERT INTO (logical_file|chunk)([[:space:](]|$)"
 
   if command -v rg >/dev/null 2>&1; then
     rg -n "$pattern" internal cmd \
