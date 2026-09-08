@@ -164,6 +164,17 @@ passed. CK-V11316-015 remains implemented pending exact-head hosted
 certification. Push, hosted certification, Phase 13, and finding closure remain
 unauthorized.
 
+[Phase 12R1R8](v1.13.16-phase12r1r8-versioned-row-writer-guard-precision-recovery.md)
+records the accepted mandatory-gate stop after that evidence commit. The
+schema-v17 product implementation and its substantive certification remain
+unchanged, but the R1R7 local-certification record is not final because the
+versioned-row-writer guard prefix-matches the authorized
+`chunk_block_refs` insert in `internal/storage/store_repair.go`. R1R8
+authorizes only a complete-identifier boundary correction, one dedicated
+scripts-package regression, and append-only authority/evidence reconciliation.
+This is not a new finding or CK-V11316-015 defect. Push, hosted certification,
+Phase 13, and finding closure remain unauthorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
