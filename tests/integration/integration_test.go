@@ -6555,6 +6555,15 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED after concurrent retry, got %s", status)
 	}
+	var liveRepairAttempts int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*) FROM store_repair_attempt
+		WHERE status IN ('PREPARING', 'READY')`).Scan(&liveRepairAttempts); err != nil {
+		t.Fatalf("count live repair attempts after concurrent retry: %v", err)
+	}
+	if liveRepairAttempts != 0 {
+		t.Fatalf("concurrent retry left %d live repair attempts", liveRepairAttempts)
+	}
 	testutils.AssertNoProcessingRows(t, dbconn)
 	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 

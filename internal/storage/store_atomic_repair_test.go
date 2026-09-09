@@ -13,10 +13,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
+	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	verifypkg "github.com/franchoy/coldkeep/internal/verify"
 )
@@ -413,6 +415,322 @@ func TestCKV11316015ConcurrentRepairsPublishOneAuthoritativeReplacement(t *testi
 	}
 }
 
+func TestCKV11316015ProcessingCompletionWaitsOutsideRepairLockAndReuses(t *testing.T) {
+	fixture := newCKV11316015ConcurrentFixture(t)
+	chunkID := ckV11316015FirstRecipeChunkID(t, fixture.repo.DB, fixture.fileID)
+	var logicalRetryBefore, chunkRetryBefore int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalRetryBefore); err != nil {
+		t.Fatalf("query logical retry before contention: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&chunkRetryBefore); err != nil {
+		t.Fatalf("query chunk retry before contention: %v", err)
+	}
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkProcessing, chunkID); err != nil {
+		t.Fatalf("mark recipe chunk PROCESSING: %v", err)
+	}
+
+	type outcome struct {
+		result StoreFileResult
+		err    error
+	}
+	start := make(chan struct{})
+	outcomes := make(chan outcome, 2)
+	paths := []string{fixture.duplicatePath, filepath.Join(filepath.Dir(fixture.duplicatePath), "same-logical-third.bin")}
+	if err := os.WriteFile(paths[1], fixture.payload, 0o600); err != nil {
+		t.Fatalf("write same-logical contender: %v", err)
+	}
+	for _, path := range paths {
+		go func(path string) {
+			<-start
+			result, err := StoreFileWithStorageContextAndCodecResult(fixture.repo.Storage, path, blocks.CodecPlain)
+			outcomes <- outcome{result: result, err: err}
+		}(path)
+	}
+	close(start)
+
+	select {
+	case got := <-outcomes:
+		t.Fatalf("same-logical Store returned before PROCESSING became terminal: result=%+v err=%v", got.result, got.err)
+	case <-time.After(75 * time.Millisecond):
+	}
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, chunkID); err != nil {
+		t.Fatalf("complete competing chunk claim: %v", err)
+	}
+	for range paths {
+		select {
+		case got := <-outcomes:
+			if got.err != nil || got.result.FileID != fixture.fileID || !got.result.AlreadyStored {
+				t.Fatalf("same-logical contention did not converge to healthy reuse: result=%+v err=%v", got.result, got.err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("same-logical contention deadlocked")
+		}
+	}
+	var logicalRetryAfter, chunkRetryAfter int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalRetryAfter); err != nil {
+		t.Fatalf("query logical retry after contention: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&chunkRetryAfter); err != nil {
+		t.Fatalf("query chunk retry after contention: %v", err)
+	}
+	if logicalRetryAfter != logicalRetryBefore || chunkRetryAfter != chunkRetryBefore {
+		t.Fatalf("healthy winner gained waiter retry increments: logical=%d->%d chunk=%d->%d", logicalRetryBefore, logicalRetryAfter, chunkRetryBefore, chunkRetryAfter)
+	}
+	ckV11316015AssertNoLiveRepairState(t, fixture.repo.DB, fixture.fileID)
+}
+
+func TestCKV11316015SharedProcessingChunkWaitersConvergeWithoutDeadlock(t *testing.T) {
+	fixture := newCKV11316015ConcurrentFixture(t)
+	unrelatedPath, unrelatedPayload := seedCKV11316015UnrelatedSharedLogical(t, fixture)
+	if err := os.WriteFile(unrelatedPath, unrelatedPayload, 0o600); err != nil {
+		t.Fatalf("write unrelated shared Store source: %v", err)
+	}
+	var unrelatedID, sharedChunkID int64
+	if err := fixture.repo.DB.QueryRow(`SELECT logical_file_id FROM physical_file WHERE path = $1`, unrelatedPath).Scan(&unrelatedID); err != nil {
+		t.Fatalf("load unrelated shared logical identity: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`, unrelatedID).Scan(&sharedChunkID); err != nil {
+		t.Fatalf("load shared chunk identity: %v", err)
+	}
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkProcessing, sharedChunkID); err != nil {
+		t.Fatalf("mark shared chunk PROCESSING: %v", err)
+	}
+
+	type outcome struct {
+		result StoreFileResult
+		err    error
+	}
+	outcomes := make(chan outcome, 2)
+	for _, path := range []string{fixture.duplicatePath, unrelatedPath} {
+		go func(path string) {
+			result, err := StoreFileWithStorageContextAndCodecResult(fixture.repo.Storage, path, blocks.CodecPlain)
+			outcomes <- outcome{result: result, err: err}
+		}(path)
+	}
+	select {
+	case got := <-outcomes:
+		t.Fatalf("shared-chunk Store returned before PROCESSING became terminal: result=%+v err=%v", got.result, got.err)
+	case <-time.After(75 * time.Millisecond):
+	}
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, sharedChunkID); err != nil {
+		t.Fatalf("complete shared competing chunk claim: %v", err)
+	}
+	wantIDs := map[int64]bool{fixture.fileID: false, unrelatedID: false}
+	for range wantIDs {
+		select {
+		case got := <-outcomes:
+			if got.err != nil || !got.result.AlreadyStored {
+				t.Fatalf("shared-chunk contention did not converge to healthy reuse: result=%+v err=%v", got.result, got.err)
+			}
+			if _, ok := wantIDs[got.result.FileID]; !ok {
+				t.Fatalf("shared-chunk contention returned unexpected logical identity: %+v", got.result)
+			}
+			wantIDs[got.result.FileID] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("shared-chunk contention deadlocked")
+		}
+	}
+	for fileID, seen := range wantIDs {
+		if !seen {
+			t.Fatalf("shared-chunk logical object %d did not converge", fileID)
+		}
+		ckV11316015AssertNoLiveRepairState(t, fixture.repo.DB, fileID)
+	}
+}
+
+func TestCKV11316015ProcessingAbortWaiterPublishesOneRepair(t *testing.T) {
+	fixture := newCKV11316015ConcurrentFixture(t)
+	chunkID := ckV11316015FirstRecipeChunkID(t, fixture.repo.DB, fixture.fileID)
+	var logicalBefore, chunkBefore int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalBefore); err != nil {
+		t.Fatalf("query logical retry before aborted contention: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&chunkBefore); err != nil {
+		t.Fatalf("query chunk retry before aborted contention: %v", err)
+	}
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1, retry_count = retry_count + 1 WHERE id = $2`, filestate.ChunkProcessing, chunkID); err != nil {
+		t.Fatalf("claim competing chunk retry: %v", err)
+	}
+	type outcome struct {
+		result StoreFileResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := StoreFileWithStorageContextAndCodecResult(fixture.repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+		done <- outcome{result: result, err: err}
+	}()
+	select {
+	case got := <-done:
+		t.Fatalf("aborted-contention Store returned before terminal state: result=%+v err=%v", got.result, got.err)
+	case <-time.After(75 * time.Millisecond):
+	}
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID); err != nil {
+		t.Fatalf("abort competing chunk claim: %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil || got.result.FileID != fixture.fileID || got.result.AlreadyStored {
+			t.Fatalf("aborted contention did not converge to one repair: result=%+v err=%v", got.result, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("aborted contention repair deadlocked")
+	}
+	var status string
+	var logicalAfter, chunkAfter int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalAfter); err != nil {
+		t.Fatalf("query logical retry after aborted contention: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT status, retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&status, &chunkAfter); err != nil {
+		t.Fatalf("query chunk after aborted contention: %v", err)
+	}
+	if status != filestate.ChunkCompleted || logicalAfter != logicalBefore+1 || chunkAfter != chunkBefore+2 {
+		t.Fatalf("aborted contention state=%s logical=%d->%d chunk=%d->%d, want competitor +1 then repair +1", status, logicalBefore, logicalAfter, chunkBefore, chunkAfter)
+	}
+	ckV11316015AssertNoLiveRepairState(t, fixture.repo.DB, fixture.fileID)
+}
+
+func TestCKV11316015ProcessingContentionCancellationAndTimeoutAreMutationFree(t *testing.T) {
+	t.Run("cancellation", func(t *testing.T) {
+		fixture := newCKV11316015Fixture(t, false)
+		chunkID := ckV11316015FirstRecipeChunkID(t, fixture.repo.DB, fixture.fileID)
+		if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkProcessing, chunkID); err != nil {
+			t.Fatalf("mark cancellation chunk PROCESSING: %v", err)
+		}
+		before := ckV11316015AuthoritativeSnapshot(t, fixture.repo.DB, fixture.fileID)
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(50*time.Millisecond, cancel)
+		_, err := StoreFileWithStorageContextAndCodecResultContext(ctx, fixture.repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("contention cancellation error=%v, want context.Canceled", err)
+		}
+		after := ckV11316015AuthoritativeSnapshot(t, fixture.repo.DB, fixture.fileID)
+		if !reflect.DeepEqual(before, after) {
+			t.Fatalf("contention cancellation mutated authoritative state\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+
+	t.Run("timeout", func(t *testing.T) {
+		fixture := newCKV11316015Fixture(t, false)
+		chunkID := ckV11316015FirstRecipeChunkID(t, fixture.repo.DB, fixture.fileID)
+		if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkProcessing, chunkID); err != nil {
+			t.Fatalf("mark timeout chunk PROCESSING: %v", err)
+		}
+		before := ckV11316015AuthoritativeSnapshot(t, fixture.repo.DB, fixture.fileID)
+		oldChunkWait, oldMaxPoll, oldMaxWait := chunkWaitingtime, maxClaimPollingWait, maxClaimWaitDuration
+		chunkWaitingtime, maxClaimPollingWait, maxClaimWaitDuration = 5*time.Millisecond, 10*time.Millisecond, 40*time.Millisecond
+		t.Cleanup(func() {
+			chunkWaitingtime, maxClaimPollingWait, maxClaimWaitDuration = oldChunkWait, oldMaxPoll, oldMaxWait
+		})
+		started := time.Now()
+		_, err := StoreFileWithStorageContextAndCodecResult(fixture.repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+		if err == nil || !strings.Contains(err.Error(), "timeout waiting for chunk") {
+			t.Fatalf("contention timeout error=%v, want bounded chunk timeout", err)
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("contention timeout was not bounded: %s", elapsed)
+		}
+		after := ckV11316015AuthoritativeSnapshot(t, fixture.repo.DB, fixture.fileID)
+		if !reflect.DeepEqual(before, after) {
+			t.Fatalf("contention timeout mutated authoritative state\nbefore=%v\nafter=%v", before, after)
+		}
+	})
+}
+
+func TestCKV11316015PublicationDisplacementCleansBeforeWaitingAndRevalidates(t *testing.T) {
+	fixture := newCKV11316015ConcurrentFixture(t)
+	chunkID := ckV11316015FirstRecipeChunkID(t, fixture.repo.DB, fixture.fileID)
+	fixture.moveRequiredContainer(t)
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID); err != nil {
+		t.Fatalf("prepare displaced repair chunk: %v", err)
+	}
+	var logicalBefore, chunkBefore int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalBefore); err != nil {
+		t.Fatalf("query displaced logical retry: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&chunkBefore); err != nil {
+		t.Fatalf("query displaced chunk retry: %v", err)
+	}
+
+	displaced := make(chan struct{})
+	competitorDone := make(chan error, 1)
+	go func() {
+		<-displaced
+		time.Sleep(75 * time.Millisecond)
+		_, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID)
+		competitorDone <- err
+	}()
+	var once sync.Once
+	restoreHooks := InstallTestStoreInterleavingHooks(&fixture.repo.Storage, func(_ context.Context, event TestStoreInterleavingHookEvent) error {
+		if event.Event != TestStoreInterleavingEventBeforeRepairPublication {
+			return nil
+		}
+		var hookErr error
+		once.Do(func() {
+			_, hookErr = fixture.repo.DB.Exec(`UPDATE chunk SET status = $1, retry_count = retry_count + 1 WHERE id = $2`, filestate.ChunkProcessing, chunkID)
+			close(displaced)
+		})
+		return hookErr
+	})
+	defer restoreHooks()
+
+	result, err := StoreFileWithStorageContextAndCodecResult(fixture.repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+	if competitorErr := <-competitorDone; competitorErr != nil {
+		t.Fatalf("terminate displaced competitor: %v", competitorErr)
+	}
+	if err != nil || result.FileID != fixture.fileID || result.AlreadyStored {
+		t.Fatalf("publication displacement did not revalidate and repair: result=%+v err=%v", result, err)
+	}
+	var logicalAfter, chunkAfter int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalAfter); err != nil {
+		t.Fatalf("query displaced logical retry after repair: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&chunkAfter); err != nil {
+		t.Fatalf("query displaced chunk retry after repair: %v", err)
+	}
+	if logicalAfter != logicalBefore+1 || chunkAfter != chunkBefore+2 {
+		t.Fatalf("displaced retry accounting logical=%d->%d chunk=%d->%d", logicalBefore, logicalAfter, chunkBefore, chunkAfter)
+	}
+	var attempts, liveAttempts, quarantinedRepairContainers int
+	if err := fixture.repo.DB.QueryRow(`SELECT COUNT(*) FROM store_repair_attempt WHERE logical_file_id = $1`, fixture.fileID).Scan(&attempts); err != nil {
+		t.Fatalf("count displacement repair attempts: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT COUNT(*) FROM store_repair_attempt WHERE logical_file_id = $1 AND status IN ('PREPARING','READY')`, fixture.fileID).Scan(&liveAttempts); err != nil {
+		t.Fatalf("count live displacement repair attempts: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT COUNT(*) FROM container WHERE filename LIKE 'container_repair_%' AND quarantine = TRUE`).Scan(&quarantinedRepairContainers); err != nil {
+		t.Fatalf("count losing quarantined repair containers: %v", err)
+	}
+	if attempts != 1 || liveAttempts != 0 || quarantinedRepairContainers != 0 {
+		t.Fatalf("losing publication state remains: attempts=%d live=%d quarantined_containers=%d", attempts, liveAttempts, quarantinedRepairContainers)
+	}
+	assertCKV11316015Restore(t, fixture, fixture.duplicatePath, "after-displacement-repair.bin")
+	fixture.restoreRequiredContainer(t)
+}
+
+func ckV11316015FirstRecipeChunkID(t *testing.T, dbconn *sql.DB, fileID int64) int64 {
+	t.Helper()
+	var chunkID int64
+	if err := dbconn.QueryRow(`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order LIMIT 1`, fileID).Scan(&chunkID); err != nil {
+		t.Fatalf("load first recipe chunk: %v", err)
+	}
+	return chunkID
+}
+
+func ckV11316015AssertNoLiveRepairState(t *testing.T, dbconn *sql.DB, fileID int64) {
+	t.Helper()
+	var processing, liveAttempts int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1 AND id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $2)`, filestate.ChunkProcessing, fileID).Scan(&processing); err != nil {
+		t.Fatalf("count PROCESSING repair chunks: %v", err)
+	}
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM store_repair_attempt WHERE logical_file_id = $1 AND status IN ('PREPARING','READY')`, fileID).Scan(&liveAttempts); err != nil {
+		t.Fatalf("count live repair attempts: %v", err)
+	}
+	if processing != 0 || liveAttempts != 0 {
+		t.Fatalf("live repair state remains: processing_chunks=%d live_attempts=%d", processing, liveAttempts)
+	}
+}
+
 func TestCKV11316015RepairPublicationRefusesActiveRestorePins(t *testing.T) {
 	fixture := newCKV11316015Fixture(t, false)
 	fixture.repo.DB.SetMaxOpenConns(1)
@@ -567,12 +885,53 @@ func newCKV11316015Fixture(t *testing.T, legacyOnly bool) *ckV11316015Fixture {
 
 func newCKV11316015FixtureWithCodec(t *testing.T, legacyOnly bool, codec blocks.Codec) *ckV11316015Fixture {
 	t.Helper()
+	return newCKV11316015FixtureWithRepository(t, legacyOnly, codec, NewTestRepository(t))
+}
+
+func newCKV11316015ConcurrentFixture(t *testing.T) *ckV11316015Fixture {
+	t.Helper()
+	databasePath := filepath.Join(t.TempDir(), "concurrent-repair.sqlite")
+	dbconn, err := sql.Open("sqlite3", "file:"+databasePath+"?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on")
+	if err != nil {
+		t.Fatalf("open concurrent repair SQLite database: %v", err)
+	}
+	dbconn.SetMaxOpenConns(8)
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("migrate concurrent repair SQLite database: %v", err)
+	}
+	tx, err := dbconn.Begin()
+	if err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("begin concurrent repair repository configuration: %v", err)
+	}
+	if err := SetDefaultCompression(tx, "none"); err != nil {
+		_ = tx.Rollback()
+		_ = dbconn.Close()
+		t.Fatalf("set concurrent repair compression: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("commit concurrent repair repository configuration: %v", err)
+	}
+	containersDir := t.TempDir()
+	storageContext := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: containersDir,
+	}
+	repo := &TestRepository{DB: dbconn, Storage: storageContext, ContainersDir: containersDir}
+	t.Cleanup(func() { _ = repo.Storage.Close() })
+	return newCKV11316015FixtureWithRepository(t, false, blocks.CodecPlain, repo)
+}
+
+func newCKV11316015FixtureWithRepository(t *testing.T, legacyOnly bool, codec blocks.Codec, repo *TestRepository) *ckV11316015Fixture {
+	t.Helper()
 	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "always")
 	left := bytesForCKV11316015("left", 64*1024)
 	right := bytesForCKV11316015("right", 64*1024)
 	payload := append(append([]byte(nil), left...), right...)
 
-	repo := NewTestRepository(t)
 	repo.Storage.Chunker = scriptedChunker{
 		version:  chunk.VersionV1SimpleRolling,
 		payloads: [][]byte{left, right},
