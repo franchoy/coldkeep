@@ -9,13 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/fsx"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_hash"
 )
@@ -103,6 +106,23 @@ type stagedRepairChunk struct {
 	size   int64
 }
 
+type completedRepairContentionError struct {
+	chunkID   int64
+	chunkHash string
+	reason    string
+}
+
+func (err *completedRepairContentionError) Error() string {
+	return fmt.Sprintf("completed repair contended on chunk %d (%s): %s", err.chunkID, err.chunkHash, err.reason)
+}
+
+type completedRepairContentionBudget struct {
+	deadline    time.Time
+	pollAttempt int
+}
+
+var errCompletedRepairNoEntity = errors.New("reuse failed without an identifiable repair entity")
+
 var completedRepairLocks sync.Map
 
 func completedRepairLock(fileID int64) *sync.Mutex {
@@ -144,12 +164,57 @@ func tryRepairCompletedLogicalFile(
 	}
 
 	lock := completedRepairLock(fileID)
-	lock.Lock()
-	defer lock.Unlock()
+	var contentionBudget completedRepairContentionBudget
+	for {
+		lock.Lock()
+		handled, result, repairErr := tryRepairCompletedLogicalFileLocked(
+			ctx, sgctx, runtime, prepared, normalizedPath, replace, fileID,
+			!contentionBudget.deadline.IsZero(),
+		)
+		lock.Unlock()
+
+		var contention *completedRepairContentionError
+		if !errors.As(repairErr, &contention) {
+			return handled, result, repairErr
+		}
+		if err := waitForCompletedRepairContention(ctx, dbconn, contention, &contentionBudget); err != nil {
+			return true, StoreFileResult{}, err
+		}
+	}
+}
+
+func tryRepairCompletedLogicalFileLocked(
+	ctx context.Context,
+	sgctx StorageContext,
+	runtime *storeFileRuntime,
+	prepared preparedFile,
+	normalizedPath string,
+	replace bool,
+	fileID int64,
+	contentionObserved bool,
+) (bool, StoreFileResult, error) {
+	dbconn := runtime.storeService.Repository().DB()
 
 	// Another Store may have repaired this candidate while this caller waited.
 	if err := validateReusableLogicalFileForStoreWithPolicy(ctx, dbconn, fileID, runtime.reuseValidation); err == nil {
-		return false, StoreFileResult{}, nil
+		tx, err := dbconn.BeginTx(ctx, nil)
+		if err != nil {
+			return true, StoreFileResult{}, err
+		}
+		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(
+			ctx, dbconn, tx, normalizedPath, fileID, prepared.PhysicalMetadata,
+			replace, recipeLivenessActivateOnFirstMapping,
+		); err != nil {
+			_ = tx.Rollback()
+			return true, StoreFileResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			_ = tx.Rollback()
+			return true, StoreFileResult{}, err
+		}
+		return true, StoreFileResult{
+			FileID: fileID, FileHash: prepared.LogicalHash, Path: normalizedPath, AlreadyStored: true,
+		}, nil
 	}
 
 	recipe, err := loadCompletedRepairRecipe(ctx, dbconn, fileID, prepared)
@@ -161,6 +226,12 @@ func tryRepairCompletedLogicalFile(
 	}
 	plan, err := buildCompletedRepairPlan(ctx, dbconn, sgctx.EffectiveContainerDir(), recipe, prepared)
 	if err != nil {
+		if contentionObserved && errors.Is(err, errCompletedRepairNoEntity) {
+			return true, StoreFileResult{}, &completedRepairContentionError{
+				chunkID: recipe.chunks[0].id, chunkHash: recipe.chunks[0].hash,
+				reason: "terminal competitor state requires serialized healthy revalidation",
+			}
+		}
 		return true, StoreFileResult{}, fmt.Errorf("completed object %d repair plan is unsafe: %w", fileID, err)
 	}
 
@@ -211,6 +282,13 @@ func tryRepairCompletedLogicalFile(
 	}
 
 	if err := publishCompletedRepair(ctx, dbconn, attemptID, sgctx, recipe, plan, prepared, normalizedPath, replace, staged); err != nil {
+		var contention *completedRepairContentionError
+		if errors.As(err, &contention) {
+			if cleanupErr := cleanupContendedStoreRepairAttempt(ctx, dbconn, attemptID, recipe.logicalID, sgctx.EffectiveContainerDir()); cleanupErr != nil {
+				return true, StoreFileResult{}, errors.Join(err, fmt.Errorf("clean contended repair attempt %d: %w", attemptID, cleanupErr))
+			}
+			return true, StoreFileResult{}, err
+		}
 		_, _ = dbconn.ExecContext(context.Background(),
 			`UPDATE store_repair_attempt SET status = 'ABORTED', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status <> 'PUBLISHED'`, attemptID)
 		return true, StoreFileResult{}, err
@@ -218,6 +296,183 @@ func tryRepairCompletedLogicalFile(
 	return true, StoreFileResult{
 		FileID: fileID, FileHash: prepared.LogicalHash, Path: normalizedPath, AlreadyStored: false,
 	}, nil
+}
+
+func waitForCompletedRepairContention(
+	ctx context.Context,
+	dbconn *sql.DB,
+	contention *completedRepairContentionError,
+	budget *completedRepairContentionBudget,
+) error {
+	if contention == nil || contention.chunkID <= 0 {
+		return fmt.Errorf("invalid completed repair contention identity")
+	}
+	if budget.deadline.IsZero() {
+		budget.deadline = time.Now().Add(maxClaimWaitDuration)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		remaining := time.Until(budget.deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("timeout waiting for chunk %d to finish processing", contention.chunkID)
+		}
+		wait := claimPollingBackoff(chunkWaitingtime, budget.pollAttempt)
+		budget.pollAttempt++
+		if wait > remaining {
+			wait = remaining
+		}
+		if err := sleepWithContext(ctx, wait); err != nil {
+			return err
+		}
+		var status string
+		if err := dbconn.QueryRowContext(ctx, `SELECT status FROM chunk WHERE id = $1`, contention.chunkID).Scan(&status); err != nil {
+			return err
+		}
+		switch status {
+		case filestate.ChunkCompleted, filestate.ChunkAborted:
+			return nil
+		case filestate.ChunkProcessing:
+			continue
+		default:
+			return fmt.Errorf("unexpected chunk %d status during completed repair contention: %s", contention.chunkID, status)
+		}
+	}
+}
+
+type contendedRepairContainer struct {
+	id       int64
+	filename string
+	path     string
+}
+
+func cleanupContendedStoreRepairAttempt(
+	ctx context.Context,
+	dbconn *sql.DB,
+	attemptID int64,
+	logicalID int64,
+	containersDir string,
+) error {
+	var ownedLogicalID int64
+	var status string
+	if err := dbconn.QueryRowContext(ctx,
+		`SELECT logical_file_id, status FROM store_repair_attempt WHERE id = $1`, attemptID,
+	).Scan(&ownedLogicalID, &status); err != nil {
+		return fmt.Errorf("load contended repair attempt: %w", err)
+	}
+	if ownedLogicalID != logicalID || (status != "PREPARING" && status != "READY") {
+		return fmt.Errorf("contended repair attempt ownership changed: logical=%d status=%s", ownedLogicalID, status)
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT c.id, c.filename, c.quarantine,
+		       (SELECT COUNT(*) FROM storage_blocks sb WHERE sb.container_id = c.id),
+		       (SELECT COUNT(*) FROM blocks b WHERE b.container_id = c.id),
+		       rc.status
+		FROM store_repair_container rc
+		JOIN container c ON c.id = rc.container_id
+		WHERE rc.attempt_id = $1
+		ORDER BY c.id`, attemptID)
+	if err != nil {
+		return fmt.Errorf("load contended repair containers: %w", err)
+	}
+	var candidates []contendedRepairContainer
+	for rows.Next() {
+		var candidate contendedRepairContainer
+		var quarantine bool
+		var activePacked, activeLegacy int64
+		var containerStatus string
+		if err := rows.Scan(&candidate.id, &candidate.filename, &quarantine, &activePacked, &activeLegacy, &containerStatus); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan contended repair container: %w", err)
+		}
+		if !quarantine || activePacked != 0 || activeLegacy != 0 ||
+			(containerStatus != "ALLOCATED" && containerStatus != "DURABLE") {
+			_ = rows.Close()
+			return fmt.Errorf(
+				"refuse contended repair cleanup for container %d: quarantine=%t packed_refs=%d legacy_refs=%d status=%s",
+				candidate.id, quarantine, activePacked, activeLegacy, containerStatus,
+			)
+		}
+		candidate.path, err = container.SafeContainerPath(containersDir, candidate.filename)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("invalid contended repair container filename %q: %w", candidate.filename, err)
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate contended repair containers: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close contended repair containers: %w", err)
+	}
+
+	syncedDirs := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if err := os.Remove(candidate.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove contended repair container %d: %w", candidate.id, err)
+		}
+		syncedDirs[filepath.Dir(candidate.path)] = struct{}{}
+	}
+	for dir := range syncedDirs {
+		if err := fsx.SyncDir(dir); err != nil {
+			return fmt.Errorf("sync contended repair container directory: %w", err)
+		}
+	}
+
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin contended repair cleanup: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := db.AcquireRepositoryMutationLock(ctx, dbconn, tx); err != nil {
+		return fmt.Errorf("lock contended repair cleanup: %w", err)
+	}
+	var lockedLogicalID int64
+	var lockedStatus string
+	if err := tx.QueryRowContext(ctx, db.QueryWithOptionalForUpdate(dbconn,
+		`SELECT logical_file_id, status FROM store_repair_attempt WHERE id = $1`), attemptID,
+	).Scan(&lockedLogicalID, &lockedStatus); err != nil {
+		return fmt.Errorf("lock contended repair attempt: %w", err)
+	}
+	if lockedLogicalID != logicalID || (lockedStatus != "PREPARING" && lockedStatus != "READY") {
+		return fmt.Errorf("contended repair attempt changed before cleanup: logical=%d status=%s", lockedLogicalID, lockedStatus)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM store_repair_chunk WHERE attempt_id = $1`, attemptID); err != nil {
+		return fmt.Errorf("delete contended repair chunks: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM store_repair_block WHERE attempt_id = $1`, attemptID); err != nil {
+		return fmt.Errorf("delete contended repair blocks: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM store_repair_container WHERE attempt_id = $1`, attemptID); err != nil {
+		return fmt.Errorf("delete contended repair container ownership: %w", err)
+	}
+	for _, candidate := range candidates {
+		result, err := tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1 AND quarantine = TRUE`, candidate.id)
+		if err != nil {
+			return fmt.Errorf("delete contended repair container %d: %w", candidate.id, err)
+		}
+		if err := db.RequireExactlyOneRow(result, "delete contended repair container"); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx,
+		`DELETE FROM store_repair_attempt WHERE id = $1 AND logical_file_id = $2 AND status IN ('PREPARING', 'READY')`,
+		attemptID, logicalID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete contended repair attempt: %w", err)
+	}
+	if err := db.RequireExactlyOneRow(result, "delete contended repair attempt"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit contended repair cleanup: %w", err)
+	}
+	return nil
 }
 
 func loadCompletedRepairRecipe(ctx context.Context, q repairQueryer, fileID int64, prepared preparedFile) (completedRepairRecipe, error) {
@@ -284,6 +539,12 @@ func loadCompletedRepairRecipe(ctx context.Context, q repairQueryer, fileID int6
 		if item.order != index || source.Index != index || item.hash != source.Hash || item.size != int64(source.Size) {
 			return recipe, fmt.Errorf("ordered recipe differs from source at index %d", index)
 		}
+		if item.status == filestate.ChunkProcessing {
+			return recipe, &completedRepairContentionError{
+				chunkID: item.id, chunkHash: item.hash,
+				reason: "another Store owns the transient PROCESSING claim",
+			}
+		}
 		if item.status != filestate.ChunkCompleted && item.status != filestate.ChunkAborted {
 			return recipe, fmt.Errorf("recipe chunk %d status=%s", item.id, item.status)
 		}
@@ -337,7 +598,7 @@ func buildCompletedRepairPlan(
 		}
 	}
 	if len(plan.repairedChunkIDs) == 0 {
-		return plan, fmt.Errorf("reuse failed without an identifiable repair entity")
+		return plan, errCompletedRepairNoEntity
 	}
 	return plan, nil
 }
@@ -668,7 +929,10 @@ func publishCompletedRepair(
 		return fmt.Errorf("revalidate repair recipe at publication: %w", err)
 	}
 	if current.fingerprint != original.fingerprint {
-		return fmt.Errorf("repair publication fingerprint changed: before=%s current=%s", original.fingerprint, current.fingerprint)
+		return &completedRepairContentionError{
+			chunkID: current.chunks[0].id, chunkHash: current.chunks[0].hash,
+			reason: fmt.Sprintf("repair publication fingerprint displaced: before=%s current=%s", original.fingerprint, current.fingerprint),
+		}
 	}
 	currentByID := make(map[int64]completedRepairChunk, len(current.chunks))
 	for _, item := range current.chunks {

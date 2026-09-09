@@ -417,6 +417,7 @@ func TestCKV11316015ConcurrentRepairsPublishOneAuthoritativeReplacement(t *testi
 
 func TestCKV11316015ProcessingCompletionWaitsOutsideRepairLockAndReuses(t *testing.T) {
 	fixture := newCKV11316015ConcurrentFixture(t)
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "suspicious")
 	chunkID := ckV11316015FirstRecipeChunkID(t, fixture.repo.DB, fixture.fileID)
 	var logicalRetryBefore, chunkRetryBefore int64
 	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalRetryBefore); err != nil {
@@ -440,11 +441,12 @@ func TestCKV11316015ProcessingCompletionWaitsOutsideRepairLockAndReuses(t *testi
 		t.Fatalf("write same-logical contender: %v", err)
 	}
 	for _, path := range paths {
-		go func(path string) {
+		storeContext := ckV11316015ConcurrentStorageContext(fixture)
+		go func(path string, storeContext StorageContext) {
 			<-start
-			result, err := StoreFileWithStorageContextAndCodecResult(fixture.repo.Storage, path, blocks.CodecPlain)
+			result, err := StoreFileWithStorageContextAndCodecResult(storeContext, path, blocks.CodecPlain)
 			outcomes <- outcome{result: result, err: err}
-		}(path)
+		}(path, storeContext)
 	}
 	close(start)
 
@@ -481,6 +483,7 @@ func TestCKV11316015ProcessingCompletionWaitsOutsideRepairLockAndReuses(t *testi
 
 func TestCKV11316015SharedProcessingChunkWaitersConvergeWithoutDeadlock(t *testing.T) {
 	fixture := newCKV11316015ConcurrentFixture(t)
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "suspicious")
 	unrelatedPath, unrelatedPayload := seedCKV11316015UnrelatedSharedLogical(t, fixture)
 	if err := os.WriteFile(unrelatedPath, unrelatedPayload, 0o600); err != nil {
 		t.Fatalf("write unrelated shared Store source: %v", err)
@@ -501,11 +504,26 @@ func TestCKV11316015SharedProcessingChunkWaitersConvergeWithoutDeadlock(t *testi
 		err    error
 	}
 	outcomes := make(chan outcome, 2)
-	for _, path := range []string{fixture.duplicatePath, unrelatedPath} {
-		go func(path string) {
-			result, err := StoreFileWithStorageContextAndCodecResult(fixture.repo.Storage, path, blocks.CodecPlain)
+	unrelatedStorage := ckV11316015ConcurrentStorageContext(fixture)
+	unrelatedStorage.Chunker = scriptedChunker{
+		version:  chunk.VersionV1SimpleRolling,
+		payloads: [][]byte{unrelatedPayload},
+	}
+	stores := []struct {
+		storage StorageContext
+		path    string
+	}{
+		{storage: ckV11316015ConcurrentStorageContext(fixture), path: fixture.duplicatePath},
+		{storage: unrelatedStorage, path: unrelatedPath},
+	}
+	for _, store := range stores {
+		go func(store struct {
+			storage StorageContext
+			path    string
+		}) {
+			result, err := StoreFileWithStorageContextAndCodecResult(store.storage, store.path, blocks.CodecPlain)
 			outcomes <- outcome{result: result, err: err}
-		}(path)
+		}(store)
 	}
 	select {
 	case got := <-outcomes:
@@ -715,6 +733,14 @@ func ckV11316015FirstRecipeChunkID(t *testing.T, dbconn *sql.DB, fileID int64) i
 		t.Fatalf("load first recipe chunk: %v", err)
 	}
 	return chunkID
+}
+
+func ckV11316015ConcurrentStorageContext(fixture *ckV11316015Fixture) StorageContext {
+	storageContext := fixture.repo.Storage
+	storageContext.Writer = container.NewLocalWriterWithDirAndDB(
+		fixture.repo.ContainersDir, container.GetContainerMaxSize(), fixture.repo.DB,
+	)
+	return storageContext
 }
 
 func ckV11316015AssertNoLiveRepairState(t *testing.T, dbconn *sql.DB, fileID int64) {
