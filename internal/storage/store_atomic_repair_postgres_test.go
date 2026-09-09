@@ -96,6 +96,33 @@ func TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery(t *testing.T) {
 	}
 	beforeRecipe := ckV11316015QueryStrings(t, storageContext.DB,
 		`SELECT CAST(chunk_id AS TEXT) || '|' || CAST(chunk_order AS TEXT) FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`, stored.FileID)
+	var logicalRetryBefore int64
+	if err := storageContext.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, stored.FileID).Scan(&logicalRetryBefore); err != nil {
+		t.Fatalf("query PostgreSQL logical retry before repair: %v", err)
+	}
+	chunkRetriesBefore := make(map[int64]int64)
+	rows, err := storageContext.DB.Query(`
+		SELECT DISTINCT c.id, c.retry_count
+		FROM chunk c JOIN file_chunk fc ON fc.chunk_id = c.id
+		WHERE fc.logical_file_id = $1`, stored.FileID)
+	if err != nil {
+		t.Fatalf("query PostgreSQL chunk retries before repair: %v", err)
+	}
+	for rows.Next() {
+		var chunkID, retryCount int64
+		if err := rows.Scan(&chunkID, &retryCount); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan PostgreSQL chunk retry before repair: %v", err)
+		}
+		chunkRetriesBefore[chunkID] = retryCount
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate PostgreSQL chunk retries before repair: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close PostgreSQL chunk retries before repair: %v", err)
+	}
 
 	var filename string
 	if err := storageContext.DB.QueryRow(`
@@ -133,6 +160,22 @@ func TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery(t *testing.T) {
 		`SELECT CAST(chunk_id AS TEXT) || '|' || CAST(chunk_order AS TEXT) FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`, stored.FileID)
 	if !reflect.DeepEqual(beforeRecipe, afterRecipe) {
 		t.Fatalf("PostgreSQL repair changed ordered recipe: before=%v after=%v", beforeRecipe, afterRecipe)
+	}
+	var logicalRetryAfter int64
+	if err := storageContext.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, stored.FileID).Scan(&logicalRetryAfter); err != nil {
+		t.Fatalf("query PostgreSQL logical retry after repair: %v", err)
+	}
+	if logicalRetryAfter != logicalRetryBefore+1 {
+		t.Fatalf("PostgreSQL logical retry=%d->%d, want exactly +1", logicalRetryBefore, logicalRetryAfter)
+	}
+	for chunkID, before := range chunkRetriesBefore {
+		var after int64
+		if err := storageContext.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&after); err != nil {
+			t.Fatalf("query PostgreSQL chunk %d retry after repair: %v", chunkID, err)
+		}
+		if after != before+1 {
+			t.Fatalf("PostgreSQL repaired chunk %d retry=%d->%d, want exactly +1", chunkID, before, after)
+		}
 	}
 
 	fixture := &ckV11316015Fixture{

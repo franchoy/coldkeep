@@ -186,6 +186,124 @@ func TestCKV11316015SharedPackedRepairPublishesWithoutHarmingOtherMembers(t *tes
 	}
 }
 
+func TestCKV11316015RepeatedAbortedChunkRepairsOneEntity(t *testing.T) {
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "always")
+	left := bytesForCKV11316015("repeated-left", 64*1024)
+	right := bytesForCKV11316015("repeated-right", 64*1024)
+	payload := append(append(append([]byte(nil), left...), left...), right...)
+	repo := NewTestRepository(t)
+	repo.Storage.Chunker = scriptedChunker{
+		version:  chunk.VersionV1SimpleRolling,
+		payloads: [][]byte{left, left, right},
+	}
+	inputDir := t.TempDir()
+	originalPath := filepath.Join(inputDir, "repeated-original.bin")
+	duplicatePath := filepath.Join(inputDir, "repeated-duplicate.bin")
+	if err := os.WriteFile(originalPath, payload, 0o600); err != nil {
+		t.Fatalf("write repeated original: %v", err)
+	}
+	if err := os.WriteFile(duplicatePath, payload, 0o600); err != nil {
+		t.Fatalf("write repeated duplicate: %v", err)
+	}
+	stored, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, originalPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store repeated recipe: %v", err)
+	}
+	recipeBefore := ckV11316015QueryStrings(t, repo.DB,
+		`SELECT chunk_id || '|' || chunk_order FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`, stored.FileID)
+	if len(recipeBefore) != 3 {
+		t.Fatalf("repeated recipe entries=%v, want three", recipeBefore)
+	}
+	var repeatedID, repeatedAgainID, unchangedID int64
+	rows, err := repo.DB.Query(`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`, stored.FileID)
+	if err != nil {
+		t.Fatalf("query repeated recipe IDs: %v", err)
+	}
+	ids := []*int64{&repeatedID, &repeatedAgainID, &unchangedID}
+	for index := 0; rows.Next(); index++ {
+		if index >= len(ids) {
+			_ = rows.Close()
+			t.Fatal("repeated recipe returned too many rows")
+		}
+		if err := rows.Scan(ids[index]); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan repeated recipe ID: %v", err)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close repeated recipe rows: %v", err)
+	}
+	if repeatedID != repeatedAgainID || repeatedID == unchangedID {
+		t.Fatalf("recipe IDs=(%d,%d,%d), want first two repeated and third distinct", repeatedID, repeatedAgainID, unchangedID)
+	}
+
+	var logicalBefore, repeatedBefore, unchangedBefore int64
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, stored.FileID).Scan(&logicalBefore); err != nil {
+		t.Fatalf("query logical retry before repeated repair: %v", err)
+	}
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, repeatedID).Scan(&repeatedBefore); err != nil {
+		t.Fatalf("query repeated chunk retry before repair: %v", err)
+	}
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, unchangedID).Scan(&unchangedBefore); err != nil {
+		t.Fatalf("query unchanged chunk retry before repair: %v", err)
+	}
+	unchangedPlacement := ckV11316015QueryStrings(t, repo.DB,
+		`SELECT block_id || '|' || offset_in_block || '|' || size_in_block FROM chunk_block_refs WHERE chunk_id = $1`, unchangedID)
+	if _, err := repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, repeatedID); err != nil {
+		t.Fatalf("mark repeated chunk aborted: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, duplicatePath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("repair repeated ABORTED chunk: %v", err)
+	}
+	if result.FileID != stored.FileID || result.AlreadyStored {
+		t.Fatalf("repeated repair result=%+v", result)
+	}
+	var logicalAfter, repeatedAfter, unchangedAfter int64
+	var repeatedStatus string
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, stored.FileID).Scan(&logicalAfter); err != nil {
+		t.Fatalf("query logical retry after repeated repair: %v", err)
+	}
+	if err := repo.DB.QueryRow(`SELECT status, retry_count FROM chunk WHERE id = $1`, repeatedID).Scan(&repeatedStatus, &repeatedAfter); err != nil {
+		t.Fatalf("query repeated chunk after repair: %v", err)
+	}
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, unchangedID).Scan(&unchangedAfter); err != nil {
+		t.Fatalf("query unchanged chunk after repair: %v", err)
+	}
+	if logicalAfter != logicalBefore+1 || repeatedAfter != repeatedBefore+1 || unchangedAfter != unchangedBefore {
+		t.Fatalf("retry counts logical=%d->%d repeated=%d->%d unchanged=%d->%d",
+			logicalBefore, logicalAfter, repeatedBefore, repeatedAfter, unchangedBefore, unchangedAfter)
+	}
+	if repeatedStatus != filestate.ChunkCompleted {
+		t.Fatalf("repeated repaired status=%s, want COMPLETED", repeatedStatus)
+	}
+	recipeAfter := ckV11316015QueryStrings(t, repo.DB,
+		`SELECT chunk_id || '|' || chunk_order FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`, stored.FileID)
+	if !reflect.DeepEqual(recipeBefore, recipeAfter) {
+		t.Fatalf("repeated repair changed recipe: before=%v after=%v", recipeBefore, recipeAfter)
+	}
+	if got := ckV11316015QueryStrings(t, repo.DB,
+		`SELECT block_id || '|' || offset_in_block || '|' || size_in_block FROM chunk_block_refs WHERE chunk_id = $1`, unchangedID); !reflect.DeepEqual(got, unchangedPlacement) {
+		t.Fatalf("repeated repair changed healthy placement: before=%v after=%v", unchangedPlacement, got)
+	}
+	var stagedRows int
+	if err := repo.DB.QueryRow(`
+		SELECT COUNT(*) FROM store_repair_chunk rc
+		JOIN store_repair_attempt ra ON ra.id = rc.attempt_id
+		WHERE ra.logical_file_id = $1 AND ra.status = 'PUBLISHED'`, stored.FileID).Scan(&stagedRows); err != nil {
+		t.Fatalf("count repeated repair staging rows: %v", err)
+	}
+	if stagedRows != 0 {
+		t.Fatalf("status-only repeated repair staged rows=%d, want zero", stagedRows)
+	}
+	fixture := &ckV11316015Fixture{
+		repo: repo, originalPath: originalPath, duplicatePath: duplicatePath,
+		fileID: stored.FileID, payload: payload,
+	}
+	assertCKV11316015Restore(t, fixture, duplicatePath, "repeated-after-repair.bin")
+}
+
 func seedCKV11316015UnrelatedSharedLogical(t *testing.T, fixture *ckV11316015Fixture) (string, []byte) {
 	t.Helper()
 	sharedPayload := append([]byte(nil), fixture.payload[len(fixture.payload)/2:]...)

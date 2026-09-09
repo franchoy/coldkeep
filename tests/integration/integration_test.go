@@ -70,6 +70,75 @@ func snapshotMemberPathIntegration(t *testing.T, selectionBase, storedPath strin
 	return filepath.ToSlash(relative)
 }
 
+func r1r10CatalogSnapshot(t *testing.T, dbconn *sql.DB) []string {
+	t.Helper()
+	queries := []string{
+		`SELECT 'logical|' || id || '|' || status || '|' || retry_count || '|' || ref_count FROM logical_file ORDER BY id`,
+		`SELECT 'chunk|' || id || '|' || status || '|' || retry_count || '|' || live_ref_count || '|' || pin_count FROM chunk ORDER BY id`,
+		`SELECT 'recipe|' || logical_file_id || '|' || chunk_id || '|' || chunk_order FROM file_chunk ORDER BY logical_file_id, chunk_order`,
+		`SELECT 'path|' || path || '|' || logical_file_id FROM physical_file ORDER BY path`,
+		`SELECT 'legacy|' || id || '|' || chunk_id || '|' || container_id || '|' || block_offset || '|' || stored_size FROM blocks ORDER BY id`,
+		`SELECT 'packed-ref|' || chunk_id || '|' || block_id || '|' || offset_in_block || '|' || size_in_block FROM chunk_block_refs ORDER BY chunk_id`,
+		`SELECT 'packed|' || id || '|' || container_id || '|' || container_offset || '|' || stored_size FROM storage_blocks ORDER BY id`,
+		`SELECT 'container|' || id || '|' || filename || '|' || sealed || '|' || sealing || '|' || quarantine || '|' || current_size FROM container ORDER BY id`,
+		`SELECT 'attempt|' || id || '|' || logical_file_id || '|' || status FROM store_repair_attempt ORDER BY id`,
+		`SELECT 'retired-packed|' || block_id || '|' || embedded_chunk_id || '|' || repair_attempt_id FROM retired_chunk_block_ref ORDER BY block_id, embedded_chunk_id`,
+		`SELECT 'retired-legacy|' || container_id || '|' || block_offset || '|' || repair_attempt_id FROM retired_legacy_block_extent ORDER BY container_id, block_offset`,
+	}
+	var snapshot []string
+	for _, query := range queries {
+		rows, err := dbconn.Query(query)
+		if err != nil {
+			t.Fatalf("query R1R10 catalog snapshot: %v", err)
+		}
+		for rows.Next() {
+			var row string
+			if err := rows.Scan(&row); err != nil {
+				_ = rows.Close()
+				t.Fatalf("scan R1R10 catalog snapshot: %v", err)
+			}
+			snapshot = append(snapshot, row)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate R1R10 catalog snapshot: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close R1R10 catalog snapshot: %v", err)
+		}
+		snapshot = append(snapshot, "--")
+	}
+	return snapshot
+}
+
+func r1r10PhysicalSnapshot(t *testing.T, root string) []string {
+	t.Helper()
+	var snapshot []string
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(payload)
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		snapshot = append(snapshot, fmt.Sprintf("%s|%d|%x", filepath.ToSlash(relative), len(payload), digest))
+		return nil
+	}); err != nil {
+		t.Fatalf("snapshot R1R10 physical state: %v", err)
+	}
+	slices.Sort(snapshot)
+	return snapshot
+}
+
 func TestIntegrationHarnessSmoke(t *testing.T) {
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Log("COLDKEEP_TEST_DB is not set; DB-backed integration tests may be skipped")
@@ -5429,36 +5498,22 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 	if fileChunkCount != 0 {
 		t.Fatalf("expected corrupted graph to have 0 file_chunk rows, got %d", fileChunkCount)
 	}
+	catalogBefore := r1r10CatalogSnapshot(t, dbconn)
+	physicalBefore := r1r10PhysicalSnapshot(t, container.ContainersDir)
 
 	restoreCtx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextResult(restoreCtx, inPath)
-	if err != nil {
-		t.Fatalf("re-store after graph corruption: %v", err)
+	if err == nil {
+		t.Fatalf("re-store with missing authoritative recipe unexpectedly succeeded: %+v", result)
 	}
-	if result.AlreadyStored {
-		t.Fatalf("expected rebuild path, got AlreadyStored=true")
+	if !strings.Contains(err.Error(), "not safely repairable without changing its recipe") {
+		t.Fatalf("missing-recipe failure did not preserve fail-closed classification: %v", err)
 	}
-	if result.FileID != fileID {
-		t.Fatalf("expected reclaim on existing logical_file row %d, got %d", fileID, result.FileID)
+	if catalogAfter := r1r10CatalogSnapshot(t, dbconn); !slices.Equal(catalogBefore, catalogAfter) {
+		t.Fatalf("missing-recipe Store mutated catalog\nbefore=%v\nafter=%v", catalogBefore, catalogAfter)
 	}
-
-	var status string
-	var retryCount int
-	if err := dbconn.QueryRow(`SELECT status, retry_count FROM logical_file WHERE id = $1`, fileID).Scan(&status, &retryCount); err != nil {
-		t.Fatalf("query rebuilt logical_file status: %v", err)
-	}
-	if status != filestate.LogicalFileCompleted {
-		t.Fatalf("expected rebuilt logical_file status COMPLETED, got %s", status)
-	}
-	if retryCount < 1 {
-		t.Fatalf("expected retry_count >= 1 after rebuild, got %d", retryCount)
-	}
-
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&fileChunkCount); err != nil {
-		t.Fatalf("count file_chunk rows after rebuild: %v", err)
-	}
-	if fileChunkCount == 0 {
-		t.Fatalf("expected rebuilt graph to recreate file_chunk rows")
+	if physicalAfter := r1r10PhysicalSnapshot(t, container.ContainersDir); !slices.Equal(physicalBefore, physicalAfter) {
+		t.Fatalf("missing-recipe Store mutated physical state\nbefore=%v\nafter=%v", physicalBefore, physicalAfter)
 	}
 
 	testutils.AssertNoProcessingRows(t, dbconn)
@@ -6363,19 +6418,40 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, ChunkID); err != nil {
 		t.Fatalf("set chunk status to ABORTED: %v", err)
 	}
+	var logicalID, logicalRetryBefore, chunkRetryBefore int64
+	if err := dbconn.QueryRow(`
+		SELECT lf.id, lf.retry_count, c.retry_count
+		FROM logical_file lf
+		JOIN file_chunk fc ON fc.logical_file_id = lf.id
+		JOIN chunk c ON c.id = fc.chunk_id
+		WHERE c.id = $1 LIMIT 1`, ChunkID).Scan(&logicalID, &logicalRetryBefore, &chunkRetryBefore); err != nil {
+		t.Fatalf("query retry counts before ABORTED repair: %v", err)
+	}
 
 	// Now try to store the same file again - it should retry the aborted chunk and succeed
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	result, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
 		t.Fatalf("retry store after chunk abort: %v", err)
+	}
+	if result.AlreadyStored || result.FileID != logicalID {
+		t.Fatalf("ABORTED repair result=%+v, want repaired logical %d", result, logicalID)
 	}
 
 	// Verify the chunk is now marked as COMPLETED
 	var status string
-	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, ChunkID).Scan(&status); err != nil {
+	var logicalRetryAfter, chunkRetryAfter int64
+	if err := dbconn.QueryRow(`SELECT status, retry_count FROM chunk WHERE id = $1`, ChunkID).Scan(&status, &chunkRetryAfter); err != nil {
 		t.Fatalf("check chunk status: %v", err)
+	}
+	if err := dbconn.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, logicalID).Scan(&logicalRetryAfter); err != nil {
+		t.Fatalf("check logical retry count: %v", err)
 	}
 	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED, got %s", status)
+	}
+	if logicalRetryAfter != logicalRetryBefore+1 || chunkRetryAfter != chunkRetryBefore+1 {
+		t.Fatalf("ABORTED repair retry counts logical=%d->%d chunk=%d->%d",
+			logicalRetryBefore, logicalRetryAfter, chunkRetryBefore, chunkRetryAfter)
 	}
 }
 
@@ -11040,14 +11116,14 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 		t.Fatalf("recovery: %v", err)
 	}
 
-	// After recovery, the sealing container should be either sealed or quarantined
-	err = dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, ContainerID).Scan(&isSealed, &isSealing)
+	// Its payload has no authoritative owner, so recovery must quarantine it.
+	var isQuarantined bool
+	err = dbconn.QueryRow(`SELECT sealed, sealing, quarantine FROM container WHERE id = $1`, ContainerID).Scan(&isSealed, &isSealing, &isQuarantined)
 	if err != nil {
 		t.Fatalf("query container state after recovery: %v", err)
 	}
-
-	if !isSealed && isSealing {
-		t.Fatalf("after recovery, container should be sealed or sealing cleared, got sealed=%v sealing=%v", isSealed, isSealing)
+	if isSealed || isSealing || !isQuarantined {
+		t.Fatalf("unowned sealing container state sealed=%v sealing=%v quarantine=%v, want quarantined and unsealed", isSealed, isSealing, isQuarantined)
 	}
 
 	// Verify system integrity
@@ -11388,6 +11464,26 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 			}
 
 			fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
+			recipeBefore := r1r10CatalogSnapshot(t, dbconn)
+			chunkRetriesBefore := make(map[int64]int64)
+			rows, err := dbconn.Query(`
+				SELECT DISTINCT c.id, c.retry_count
+				FROM chunk c JOIN file_chunk fc ON fc.chunk_id = c.id
+				WHERE fc.logical_file_id = $1`, fileID)
+			if err != nil {
+				t.Fatalf("query semantic chunk retries before repair: %v", err)
+			}
+			for rows.Next() {
+				var chunkID, retryCount int64
+				if err := rows.Scan(&chunkID, &retryCount); err != nil {
+					_ = rows.Close()
+					t.Fatalf("scan semantic chunk retry before repair: %v", err)
+				}
+				chunkRetriesBefore[chunkID] = retryCount
+			}
+			if err := rows.Close(); err != nil {
+				t.Fatalf("close semantic chunk retries before repair: %v", err)
+			}
 			record := testutils.FetchFirstFileChunkRecord(t, dbconn, fileID)
 			if record.StoredSize <= 0 {
 				t.Fatalf("expected first stored block Size > 0, got %d", record.StoredSize)
@@ -11441,8 +11537,20 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 			if status != filestate.LogicalFileCompleted {
 				t.Fatalf("expected logical_file status COMPLETED after rebuild, got %s", status)
 			}
-			if retryCount < 1 {
-				t.Fatalf("expected retry_count >= 1 after semantic corruption rebuild, got %d", retryCount)
+			if retryCount != 1 {
+				t.Fatalf("expected logical retry_count exactly 1 after semantic corruption rebuild, got %d", retryCount)
+			}
+			for chunkID, before := range chunkRetriesBefore {
+				var after int64
+				if err := dbconn.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&after); err != nil {
+					t.Fatalf("query semantic chunk %d retry after repair: %v", chunkID, err)
+				}
+				if after != before+1 {
+					t.Fatalf("semantic repaired chunk %d retry=%d->%d, want exactly +1", chunkID, before, after)
+				}
+			}
+			if catalogAfter := r1r10CatalogSnapshot(t, dbconn); len(catalogAfter) == len(recipeBefore) && slices.Equal(catalogAfter, recipeBefore) {
+				t.Fatal("semantic repair did not publish a replacement catalog placement")
 			}
 		})
 	}
