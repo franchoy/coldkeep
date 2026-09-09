@@ -194,6 +194,16 @@ No new finding is established. Exactly two production files, four test files,
 and the named authority documents may change in four append-only commits.
 Push, hosted certification, and Phase 13 remain unauthorized.
 
+[Phase 12R1R13](v1.13.16-phase12r1r13-concurrent-aborted-repair-contention-recovery.md)
+retains R1R10 implementation head `dcb2e1e...` and classifies its Profile A
+concurrency stop as a CK-V11316-015 remediation regression. A transient
+`PROCESSING` recipe chunk requires bounded waiting outside the completed-
+repair mutex and every publication/database lock, followed by complete fresh
+validation. Safe losing-attempt cleanup deletes quarantined staging before
+waiting; cleanup failure is terminal and preserves owned state for startup
+recovery. No new finding, schema change, push, hosted certification, or Phase
+13 work is authorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
