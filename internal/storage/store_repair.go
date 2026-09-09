@@ -46,6 +46,20 @@ type completedRepairChunk struct {
 	packed   *retiredPackedPlacement
 }
 
+type completedRepairEntity struct {
+	chunk            completedRepairChunk
+	source           preparedChunk
+	stagingOrdinal   int
+	replacePlacement bool
+	repairStatus     bool
+}
+
+type completedRepairPlan struct {
+	entities         []completedRepairEntity
+	staged           []completedRepairEntity
+	repairedChunkIDs []int64
+}
+
 type retiredLegacyPlacement struct {
 	id            int64
 	codec         string
@@ -145,6 +159,10 @@ func tryRepairCompletedLogicalFile(
 	if len(recipe.chunks) == 0 {
 		return true, StoreFileResult{}, fmt.Errorf("completed object %d has no repairable recipe", fileID)
 	}
+	plan, err := buildCompletedRepairPlan(ctx, dbconn, sgctx.EffectiveContainerDir(), recipe, prepared)
+	if err != nil {
+		return true, StoreFileResult{}, fmt.Errorf("completed object %d repair plan is unsafe: %w", fileID, err)
+	}
 
 	state := storeInterleavingStateFromContext(ctx)
 	storeOpID, storeCodec := "", string(runtime.codec)
@@ -165,7 +183,7 @@ func tryRepairCompletedLogicalFile(
 	if err != nil {
 		return true, StoreFileResult{}, err
 	}
-	staged, err := stageCompletedRepair(ctx, dbconn, attemptID, sgctx, runtime, recipe, prepared)
+	staged, err := stageCompletedRepair(ctx, dbconn, attemptID, sgctx, runtime, plan)
 	if err != nil {
 		_, _ = dbconn.ExecContext(context.Background(),
 			`UPDATE store_repair_attempt SET status = 'ABORTED', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status <> 'PUBLISHED'`, attemptID)
@@ -192,7 +210,7 @@ func tryRepairCompletedLogicalFile(
 		return true, StoreFileResult{}, err
 	}
 
-	if err := publishCompletedRepair(ctx, dbconn, attemptID, sgctx, recipe, prepared, normalizedPath, replace, staged); err != nil {
+	if err := publishCompletedRepair(ctx, dbconn, attemptID, sgctx, recipe, plan, prepared, normalizedPath, replace, staged); err != nil {
 		_, _ = dbconn.ExecContext(context.Background(),
 			`UPDATE store_repair_attempt SET status = 'ABORTED', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status <> 'PUBLISHED'`, attemptID)
 		return true, StoreFileResult{}, err
@@ -266,7 +284,7 @@ func loadCompletedRepairRecipe(ctx context.Context, q repairQueryer, fileID int6
 		if item.order != index || source.Index != index || item.hash != source.Hash || item.size != int64(source.Size) {
 			return recipe, fmt.Errorf("ordered recipe differs from source at index %d", index)
 		}
-		if item.status != filestate.ChunkCompleted {
+		if item.status != filestate.ChunkCompleted && item.status != filestate.ChunkAborted {
 			return recipe, fmt.Errorf("recipe chunk %d status=%s", item.id, item.status)
 		}
 	}
@@ -276,6 +294,164 @@ func loadCompletedRepairRecipe(ctx context.Context, q repairQueryer, fileID int6
 	}
 	recipe.fingerprint = fingerprint
 	return recipe, nil
+}
+
+func buildCompletedRepairPlan(
+	ctx context.Context,
+	dbconn *sql.DB,
+	containersDir string,
+	recipe completedRepairRecipe,
+	prepared preparedFile,
+) (completedRepairPlan, error) {
+	var plan completedRepairPlan
+	byID := make(map[int64]int, len(recipe.chunks))
+	for index, item := range recipe.chunks {
+		if existingIndex, ok := byID[item.id]; ok {
+			existing := plan.entities[existingIndex]
+			if !sameCompletedRepairEntity(existing.chunk, item) ||
+				existing.source.Hash != prepared.Chunks[index].Hash ||
+				existing.source.Size != prepared.Chunks[index].Size {
+				return plan, fmt.Errorf("repeated recipe chunk %d has inconsistent identity or placement", item.id)
+			}
+			continue
+		}
+		entity := completedRepairEntity{chunk: item, source: prepared.Chunks[index]}
+		entity.repairStatus = item.status == filestate.ChunkAborted
+		replacePlacement, err := completedRepairPlacementNeedsRepair(ctx, dbconn, containersDir, item, entity.source)
+		if err != nil {
+			return plan, err
+		}
+		entity.replacePlacement = replacePlacement
+		byID[item.id] = len(plan.entities)
+		plan.entities = append(plan.entities, entity)
+	}
+
+	for index := range plan.entities {
+		entity := &plan.entities[index]
+		if entity.replacePlacement {
+			entity.stagingOrdinal = len(plan.staged)
+			plan.staged = append(plan.staged, *entity)
+		}
+		if entity.replacePlacement || entity.repairStatus {
+			plan.repairedChunkIDs = append(plan.repairedChunkIDs, entity.chunk.id)
+		}
+	}
+	if len(plan.repairedChunkIDs) == 0 {
+		return plan, fmt.Errorf("reuse failed without an identifiable repair entity")
+	}
+	return plan, nil
+}
+
+func sameCompletedRepairEntity(left, right completedRepairChunk) bool {
+	if left.id != right.id || left.hash != right.hash || left.size != right.size ||
+		left.status != right.status || left.liveRefs != right.liveRefs || left.pins != right.pins ||
+		left.legacy.id != right.legacy.id || left.legacy.codec != right.legacy.codec ||
+		left.legacy.formatVersion != right.legacy.formatVersion ||
+		left.legacy.plaintextSize != right.legacy.plaintextSize ||
+		left.legacy.storedSize != right.legacy.storedSize ||
+		!bytes.Equal(left.legacy.nonce, right.legacy.nonce) ||
+		left.legacy.containerID != right.legacy.containerID || left.legacy.offset != right.legacy.offset {
+		return false
+	}
+	if left.packed == nil || right.packed == nil {
+		return left.packed == nil && right.packed == nil
+	}
+	return *left.packed == *right.packed
+}
+
+func completedRepairPlacementNeedsRepair(
+	ctx context.Context,
+	dbconn *sql.DB,
+	containersDir string,
+	item completedRepairChunk,
+	source preparedChunk,
+) (bool, error) {
+	containerID := item.legacy.containerID
+	offset := item.legacy.offset
+	storedSize := item.legacy.storedSize
+	if item.packed != nil {
+		if err := dbconn.QueryRowContext(ctx, `
+			SELECT sb.container_id, sb.container_offset, sb.stored_size
+			FROM storage_blocks sb
+			JOIN chunk_block_refs r ON r.block_id = sb.id
+			WHERE r.chunk_id = $1`, item.id,
+		).Scan(&containerID, &offset, &storedSize); err != nil {
+			return false, fmt.Errorf("load packed placement for chunk %d: %w", item.id, err)
+		}
+	}
+	var filename string
+	var currentSize, maxSize int64
+	if err := dbconn.QueryRowContext(ctx,
+		`SELECT filename, current_size, max_size FROM container WHERE id = $1`, containerID,
+	).Scan(&filename, &currentSize, &maxSize); err != nil {
+		return false, fmt.Errorf("load container %d for chunk %d: %w", containerID, item.id, err)
+	}
+	if currentSize < int64(container.ContainerHdrLen) || storedSize <= 0 ||
+		offset < int64(container.ContainerHdrLen) || offset > currentSize || storedSize > currentSize-offset {
+		return false, fmt.Errorf("chunk %d has invalid authoritative placement bounds", item.id)
+	}
+	path, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat repair placement for chunk %d: %w", item.id, err)
+	}
+	if info.Size() < offset+storedSize {
+		return true, nil
+	}
+
+	var plaintext []byte
+	if item.packed != nil {
+		reader := NewStorageBlockReader(dbconn, containersDir)
+		block, err := reader.ReadBlock(ctx, item.packed.blockID)
+		if err != nil {
+			return true, nil
+		}
+		plaintext, err = blocks.SliceChunkFromPayload(block.Payload, blocks.ChunkEntry{
+			Offset: uint64(item.packed.offsetInBlock),
+			Size:   uint64(item.packed.sizeInBlock),
+		})
+		if err != nil {
+			return true, nil
+		}
+	} else {
+		filecontainer, err := container.OpenReadOnlyContainer(path, maxSize)
+		if err != nil {
+			return true, nil
+		}
+		payload, readErr := container.ReadPayloadAt(filecontainer, offset, storedSize)
+		closeErr := filecontainer.Close()
+		if readErr != nil || closeErr != nil {
+			return true, nil
+		}
+		transformer, err := blocks.GetBlockTransformer(blocks.Codec(item.legacy.codec))
+		if err != nil {
+			return false, fmt.Errorf("get repair validator for chunk %d codec %s: %w", item.id, item.legacy.codec, err)
+		}
+		plaintext, err = transformer.Decode(ctx, blocks.DecodeInput{
+			ChunkHash: item.hash,
+			Descriptor: blocks.Descriptor{
+				ChunkID:       item.id,
+				Codec:         blocks.Codec(item.legacy.codec),
+				FormatVersion: item.legacy.formatVersion,
+				PlaintextSize: item.legacy.plaintextSize,
+				StoredSize:    item.legacy.storedSize,
+				Nonce:         item.legacy.nonce,
+				ContainerID:   item.legacy.containerID,
+				BlockOffset:   item.legacy.offset,
+			},
+			Payload: payload,
+		})
+		if err != nil {
+			return true, nil
+		}
+	}
+	return !bytes.Equal(plaintext, source.Data), nil
 }
 
 func completedRepairFingerprint(ctx context.Context, q repairQueryer, recipe completedRepairRecipe) (string, error) {
@@ -333,8 +509,7 @@ func stageCompletedRepair(
 	attemptID int64,
 	sgctx StorageContext,
 	runtime *storeFileRuntime,
-	recipe completedRepairRecipe,
-	prepared preparedFile,
+	plan completedRepairPlan,
 ) ([]stagedRepairBlock, error) {
 	maxSize := container.GetContainerMaxSize()
 	target := packedBlockTargetSizeBytesFromEnv()
@@ -389,21 +564,21 @@ func stageCompletedRepair(
 		return nil
 	}
 
-	for index, source := range prepared.Chunks {
+	for _, entity := range plan.staged {
+		source := entity.source
 		if builder.ShouldFlushBeforeAdd(int64(source.Size)) {
 			if err := flush(); err != nil {
 				return nil, err
 			}
 		}
-		item := recipe.chunks[index]
 		hashBytes, err := hex.DecodeString(source.Hash)
 		if err != nil {
 			return nil, fmt.Errorf("decode chunk hash %s: %w", source.Hash, err)
 		}
-		if err := builder.Add(blocks.PendingChunk{ChunkID: item.id, Hash: hashBytes, Data: source.Data, Size: int64(source.Size)}); err != nil {
+		if err := builder.Add(blocks.PendingChunk{ChunkID: entity.chunk.id, Hash: hashBytes, Data: source.Data, Size: int64(source.Size)}); err != nil {
 			return nil, err
 		}
-		pending = append(pending, stagedRepairChunk{id: item.id, order: index, size: int64(source.Size)})
+		pending = append(pending, stagedRepairChunk{id: entity.chunk.id, order: entity.stagingOrdinal, size: int64(source.Size)})
 	}
 	if err := flush(); err != nil {
 		return nil, err
@@ -455,6 +630,7 @@ func publishCompletedRepair(
 	attemptID int64,
 	sgctx StorageContext,
 	original completedRepairRecipe,
+	plan completedRepairPlan,
 	prepared preparedFile,
 	normalizedPath string,
 	replace bool,
@@ -479,7 +655,7 @@ func publishCompletedRepair(
 	if err := db.AcquireRepositoryMutationLock(ctx, dbconn, tx); err != nil {
 		return err
 	}
-	if err := validateRepairStageForPublication(ctx, dbconn, tx, attemptID, original, prepared, staged); err != nil {
+	if err := validateRepairStageForPublication(ctx, dbconn, tx, attemptID, original, plan, prepared, staged); err != nil {
 		return err
 	}
 	var lockedID int64
@@ -494,13 +670,22 @@ func publishCompletedRepair(
 	if current.fingerprint != original.fingerprint {
 		return fmt.Errorf("repair publication fingerprint changed: before=%s current=%s", original.fingerprint, current.fingerprint)
 	}
+	currentByID := make(map[int64]completedRepairChunk, len(current.chunks))
 	for _, item := range current.chunks {
+		if _, exists := currentByID[item.id]; exists {
+			continue
+		}
+		currentByID[item.id] = item
 		if item.pins != 0 {
 			return fmt.Errorf("repair publication requires zero restore pins: chunk=%d pins=%d", item.id, item.pins)
 		}
 	}
 
-	for _, item := range current.chunks {
+	for _, entity := range plan.staged {
+		item, ok := currentByID[entity.chunk.id]
+		if !ok {
+			return fmt.Errorf("repair publication lost staged chunk %d", entity.chunk.id)
+		}
 		if item.packed != nil {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO retired_chunk_block_ref
@@ -605,6 +790,30 @@ func publishCompletedRepair(
 		original.logicalID, prepared.PhysicalMetadata, replace, recipeLivenessAlreadyAccounted); err != nil {
 		return err
 	}
+	logicalResult, err := tx.ExecContext(ctx,
+		`UPDATE logical_file SET retry_count = retry_count + 1 WHERE id = $1 AND status = $2`,
+		original.logicalID, filestate.LogicalFileCompleted,
+	)
+	if err != nil {
+		return fmt.Errorf("increment repaired logical file %d retry count: %w", original.logicalID, err)
+	}
+	if err := db.RequireExactlyOneRow(logicalResult, "increment repaired logical retry count"); err != nil {
+		return err
+	}
+	for _, chunkID := range plan.repairedChunkIDs {
+		chunkResult, err := tx.ExecContext(ctx, `
+			UPDATE chunk
+			SET status = $1, retry_count = retry_count + 1
+			WHERE id = $2 AND status IN ($1, $3)`,
+			filestate.ChunkCompleted, chunkID, filestate.ChunkAborted,
+		)
+		if err != nil {
+			return fmt.Errorf("publish repaired chunk %d status and retry count: %w", chunkID, err)
+		}
+		if err := db.RequireExactlyOneRow(chunkResult, "publish repaired chunk status and retry count"); err != nil {
+			return err
+		}
+	}
 	result, err := tx.ExecContext(ctx,
 		`UPDATE store_repair_attempt SET status = 'PUBLISHED', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status = 'READY'`, attemptID,
 	)
@@ -623,6 +832,7 @@ func validateRepairStageForPublication(
 	tx *sql.Tx,
 	attemptID int64,
 	original completedRepairRecipe,
+	plan completedRepairPlan,
 	prepared preparedFile,
 	staged []stagedRepairBlock,
 ) error {
@@ -648,7 +858,7 @@ func validateRepairStageForPublication(
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM store_repair_chunk WHERE attempt_id = $1`, attemptID).Scan(&chunkCount); err != nil {
 		return err
 	}
-	if containerCount != len(staged) || blockCount != len(staged) || chunkCount != len(original.chunks) {
+	if containerCount != len(staged) || blockCount != len(staged) || chunkCount != len(plan.staged) {
 		return fmt.Errorf("repair stage cardinality changed before publication: containers=%d blocks=%d chunks=%d", containerCount, blockCount, chunkCount)
 	}
 
@@ -722,12 +932,12 @@ func validateRepairStageForPublication(
 		if err := rows.Scan(&chunkID, &order, &blockOrdinal, &offset, &size); err != nil {
 			return err
 		}
-		if order != seen || seen >= len(original.chunks) {
+		if order != seen || seen >= len(plan.staged) {
 			return fmt.Errorf("staged repair chunk order changed before publication")
 		}
-		want := original.chunks[seen]
-		if chunkID != want.id || size != want.size {
-			return fmt.Errorf("staged repair chunk %d changed before publication", want.id)
+		want := plan.staged[seen]
+		if chunkID != want.chunk.id || size != want.chunk.size {
+			return fmt.Errorf("staged repair chunk %d changed before publication", want.chunk.id)
 		}
 		found := false
 		for _, block := range staged {
@@ -748,7 +958,7 @@ func validateRepairStageForPublication(
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if seen != len(original.chunks) {
+	if seen != len(plan.staged) {
 		return fmt.Errorf("staged repair chunk count changed before publication")
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/container"
@@ -29,6 +30,12 @@ type recoveryStats struct {
 	totalDiskFilesChecked  int64
 	sealingCompleted       int64
 	sealingQuarantined     int64
+}
+
+type sealingOccupancyExtent struct {
+	offset int64
+	size   int64
+	kind   string
 }
 
 type Report struct {
@@ -328,36 +335,48 @@ func recoverSealingContainersWithContext(ctx context.Context, dbconn *sql.DB, co
 func recoverSealingContainersWithFSContext(ctx context.Context, dbconn *sql.DB, containersDir string, stats *recoveryStats, fsys fsx.FS) error {
 	logRecoveryEvent("recover_sealing_containers_start")
 
-	// Clean up stale markers where a previous run sealed successfully but did not
-	// clear sealing (e.g., interrupted runs or manual DB edits).
-	if _, err := dbconn.ExecContext(ctx, `UPDATE container SET sealing = FALSE WHERE sealed = TRUE AND sealing = TRUE`); err != nil {
-		return fmt.Errorf("clear stale sealing markers: %w", err)
-	}
-
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT id, filename, current_size
+		SELECT id, filename, current_size, sealed
 		FROM container
-		WHERE sealed = FALSE AND sealing = TRUE AND quarantine = FALSE
+		WHERE sealing = TRUE AND quarantine = FALSE
+		ORDER BY id
 	`)
 	if err != nil {
 		return fmt.Errorf("query sealing containers: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
+	type sealingCandidate struct {
+		id          int64
+		filename    string
+		currentSize int64
+		sealed      bool
+	}
+	var candidates []sealingCandidate
 	for rows.Next() {
-		var id int64
-		var filename string
-		var currentSize int64
-		if err := rows.Scan(&id, &filename, &currentSize); err != nil {
+		var candidate sealingCandidate
+		if err := rows.Scan(&candidate.id, &candidate.filename, &candidate.currentSize, &candidate.sealed); err != nil {
+			_ = rows.Close()
 			return fmt.Errorf("scan sealing container row: %w", err)
 		}
-		if err := recoverOneSealingContainer(ctx, dbconn, id, filename, currentSize, containersDir, fsys, stats); err != nil {
-			return err
-		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close sealing container rows: %w", err)
 	}
 
-	if err := rows.Err(); err != nil {
-		return err
+	for _, candidate := range candidates {
+		if candidate.sealed {
+			if err := clearStaleSealingMarkerAfterOccupancyCheck(ctx, dbconn, candidate.id, candidate.filename, candidate.currentSize, stats); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := recoverOneSealingContainer(ctx, dbconn, candidate.id, candidate.filename, candidate.currentSize, containersDir, fsys, stats); err != nil {
+			return err
+		}
 	}
 
 	logRecoveryEvent(
@@ -368,6 +387,23 @@ func recoverSealingContainersWithFSContext(ctx context.Context, dbconn *sql.DB, 
 	return nil
 }
 
+func clearStaleSealingMarkerAfterOccupancyCheck(ctx context.Context, dbconn *sql.DB, id int64, filename string, currentSize int64, stats *recoveryStats) error {
+	extents, err := loadSealingOccupancy(ctx, dbconn, id)
+	if err != nil {
+		return fmt.Errorf("observe sealed container %d occupancy before clearing stale sealing marker: %w", id, err)
+	}
+	if err := validateExactSealingOccupancy(currentSize, extents); err != nil {
+		return quarantineSealingContainerSealFailed(ctx, dbconn, id, filename, err, stats)
+	}
+	result, err := dbconn.ExecContext(ctx,
+		`UPDATE container SET sealing = FALSE WHERE id = $1 AND sealed = TRUE AND sealing = TRUE AND quarantine = FALSE`, id,
+	)
+	if err != nil {
+		return fmt.Errorf("clear stale sealing marker for container %d: %w", id, err)
+	}
+	return db.RequireExactlyOneRow(result, "clear stale sealing marker after occupancy check")
+}
+
 // quarantineMissingContainerIfNeeded handles the per-container stat result
 // during the missing-container scan. If the file is confirmed absent it marks
 // the container row quarantined. Any other stat error is returned as fatal.
@@ -376,6 +412,11 @@ func recoverSealingContainersWithFSContext(ctx context.Context, dbconn *sql.DB, 
 // recovery scan. It quarantines the container if the physical file size does not
 // match the DB record, completes the seal if possible, or quarantines on failure.
 func recoverOneSealingContainer(ctx context.Context, dbconn *sql.DB, id int64, filename string, currentSize int64, containersDir string, fsys fsx.FS, stats *recoveryStats) error {
+	extents, err := loadSealingOccupancy(ctx, dbconn, id)
+	if err != nil {
+		return fmt.Errorf("observe sealing container %d occupancy before mutation: %w", id, err)
+	}
+	occupancyErr := validateExactSealingOccupancy(currentSize, extents)
 	path, err := container.SafeContainerPath(containersDir, filename)
 	if err != nil {
 		return fmt.Errorf("invalid container filename %q: %w", filename, err)
@@ -400,6 +441,9 @@ func recoverOneSealingContainer(ctx context.Context, dbconn *sql.DB, id int64, f
 		)
 		return nil
 	}
+	if occupancyErr != nil {
+		return quarantineSealingContainerSealFailed(ctx, dbconn, id, filename, occupancyErr, stats)
+	}
 	sealErr := container.SealContainerInDir(dbconn, id, filename, containersDir)
 	if sealErr == nil {
 		stats.sealingCompleted++
@@ -412,6 +456,70 @@ func recoverOneSealingContainer(ctx context.Context, dbconn *sql.DB, id int64, f
 	}
 	// Physical file missing/unreadable: quarantine and clear sealing marker.
 	return quarantineSealingContainerSealFailed(ctx, dbconn, id, filename, sealErr, stats)
+}
+
+func loadSealingOccupancy(ctx context.Context, dbconn *sql.DB, containerID int64) ([]sealingOccupancyExtent, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT b.block_offset, b.stored_size, 'active_legacy'
+		FROM blocks b
+		WHERE b.container_id = $1
+		  AND NOT EXISTS (
+			SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id
+		  )
+		UNION ALL
+		SELECT r.block_offset, r.stored_size, 'retired_legacy'
+		FROM retired_legacy_block_extent r
+		WHERE r.container_id = $1
+		UNION ALL
+		SELECT sb.container_offset, sb.stored_size, 'packed'
+		FROM storage_blocks sb
+		WHERE sb.container_id = $1`, containerID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var extents []sealingOccupancyExtent
+	for rows.Next() {
+		var extent sealingOccupancyExtent
+		if err := rows.Scan(&extent.offset, &extent.size, &extent.kind); err != nil {
+			return nil, err
+		}
+		extents = append(extents, extent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return extents, nil
+}
+
+func validateExactSealingOccupancy(currentSize int64, extents []sealingOccupancyExtent) error {
+	headerEnd := int64(container.ContainerHdrLen)
+	if currentSize < headerEnd {
+		return fmt.Errorf("current_size=%d is before container header end=%d", currentSize, headerEnd)
+	}
+	sort.Slice(extents, func(left, right int) bool {
+		if extents[left].offset == extents[right].offset {
+			return extents[left].size < extents[right].size
+		}
+		return extents[left].offset < extents[right].offset
+	})
+	cursor := headerEnd
+	for _, extent := range extents {
+		if extent.size <= 0 || extent.offset < headerEnd || extent.offset > currentSize || extent.size > currentSize-extent.offset {
+			return fmt.Errorf("invalid %s extent offset=%d size=%d payload=[%d,%d)", extent.kind, extent.offset, extent.size, headerEnd, currentSize)
+		}
+		if extent.offset < cursor {
+			return fmt.Errorf("overlapping %s extent offset=%d before covered end=%d", extent.kind, extent.offset, cursor)
+		}
+		if extent.offset > cursor {
+			return fmt.Errorf("unexplained payload gap [%d,%d) before %s extent", cursor, extent.offset, extent.kind)
+		}
+		cursor = extent.offset + extent.size
+	}
+	if cursor != currentSize {
+		return fmt.Errorf("unaccounted trailing container bytes [%d,%d)", cursor, currentSize)
+	}
+	return nil
 }
 
 func quarantineSealingContainerSealFailed(ctx context.Context, dbconn *sql.DB, id int64, filename string, sealErr error, stats *recoveryStats) error {
