@@ -185,6 +185,15 @@ development context with `CKRS016`; attached real-state validation passed.
 R1R7 product/schema/test bytes remain unchanged. Push and hosted certification
 remain unauthorized.
 
+[Phase 12R1R10](v1.13.16-phase12r1r10-exact-candidate-profile-a-failure-recovery.md)
+accepts the genuine Profile A failure at exact candidate `de4a7821...` as a
+mixed recovery: the missing-recipe test is reconciled to the already-frozen
+fail-closed contract, while trustworthy ABORTED retry, semantic repair retry
+accounting, and sealing occupancy are CK-V11316-015 remediation regressions.
+No new finding is established. Exactly two production files, four test files,
+and the named authority documents may change in four append-only commits.
+Push, hosted certification, and Phase 13 remain unauthorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
