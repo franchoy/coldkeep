@@ -38,15 +38,16 @@ type completedRepairRecipe struct {
 }
 
 type completedRepairChunk struct {
-	order    int
-	id       int64
-	hash     string
-	size     int64
-	status   string
-	liveRefs int64
-	pins     int64
-	legacy   retiredLegacyPlacement
-	packed   *retiredPackedPlacement
+	order      int
+	id         int64
+	hash       string
+	size       int64
+	status     string
+	retryCount int64
+	liveRefs   int64
+	pins       int64
+	legacy     retiredLegacyPlacement
+	packed     *retiredPackedPlacement
 }
 
 type completedRepairEntity struct {
@@ -489,7 +490,7 @@ func loadCompletedRepairRecipe(ctx context.Context, q repairQueryer, fileID int6
 
 	rows, err := q.QueryContext(ctx, `
 		SELECT fc.chunk_order, c.id, c.chunk_hash, c.size, c.status,
-		       c.live_ref_count, c.pin_count,
+		       c.retry_count, c.live_ref_count, c.pin_count,
 		       b.id, b.codec, b.format_version, b.plaintext_size,
 		       b.stored_size, b.nonce, b.container_id, b.block_offset
 		FROM file_chunk fc
@@ -504,7 +505,7 @@ func loadCompletedRepairRecipe(ctx context.Context, q repairQueryer, fileID int6
 		var item completedRepairChunk
 		if err := rows.Scan(
 			&item.order, &item.id, &item.hash, &item.size, &item.status,
-			&item.liveRefs, &item.pins,
+			&item.retryCount, &item.liveRefs, &item.pins,
 			&item.legacy.id, &item.legacy.codec, &item.legacy.formatVersion,
 			&item.legacy.plaintextSize, &item.legacy.storedSize, &item.legacy.nonce,
 			&item.legacy.containerID, &item.legacy.offset,
@@ -605,7 +606,8 @@ func buildCompletedRepairPlan(
 
 func sameCompletedRepairEntity(left, right completedRepairChunk) bool {
 	if left.id != right.id || left.hash != right.hash || left.size != right.size ||
-		left.status != right.status || left.liveRefs != right.liveRefs || left.pins != right.pins ||
+		left.status != right.status || left.retryCount != right.retryCount ||
+		left.liveRefs != right.liveRefs || left.pins != right.pins ||
 		left.legacy.id != right.legacy.id || left.legacy.codec != right.legacy.codec ||
 		left.legacy.formatVersion != right.legacy.formatVersion ||
 		left.legacy.plaintextSize != right.legacy.plaintextSize ||
@@ -718,7 +720,7 @@ func completedRepairPlacementNeedsRepair(
 func completedRepairFingerprint(ctx context.Context, q repairQueryer, recipe completedRepairRecipe) (string, error) {
 	parts := []string{fmt.Sprintf("logical|%d|%s|%d|%d", recipe.logicalID, recipe.status, recipe.retryCount, recipe.refCount)}
 	for _, item := range recipe.chunks {
-		parts = append(parts, fmt.Sprintf("chunk|%d|%d|%s|%d|%s|%d|%d", item.order, item.id, item.hash, item.size, item.status, item.liveRefs, item.pins))
+		parts = append(parts, fmt.Sprintf("chunk|%d|%d|%s|%d|%s|%d|%d|%d", item.order, item.id, item.hash, item.size, item.status, item.retryCount, item.liveRefs, item.pins))
 		parts = append(parts, fmt.Sprintf("legacy|%d|%s|%d|%d|%d|%x|%d|%d", item.legacy.id, item.legacy.codec, item.legacy.formatVersion, item.legacy.plaintextSize, item.legacy.storedSize, item.legacy.nonce, item.legacy.containerID, item.legacy.offset))
 		if item.packed != nil {
 			parts = append(parts, fmt.Sprintf("packed|%d|%d|%d", item.packed.blockID, item.packed.offsetInBlock, item.packed.sizeInBlock))
@@ -924,11 +926,20 @@ func publishCompletedRepair(
 		`SELECT id FROM logical_file WHERE id = $1`), original.logicalID).Scan(&lockedID); err != nil {
 		return fmt.Errorf("lock repair logical object: %w", err)
 	}
+	if err := lockCompletedRepairPublicationRows(ctx, dbconn, tx, original); err != nil {
+		return err
+	}
 	current, err := loadCompletedRepairRecipe(ctx, tx, original.logicalID, prepared)
 	if err != nil {
 		return fmt.Errorf("revalidate repair recipe at publication: %w", err)
 	}
 	if current.fingerprint != original.fingerprint {
+		if !completedRepairHasSupportedTerminalDisplacement(original, current) {
+			return fmt.Errorf(
+				"repair publication fingerprint changed without a supported Store chunk transition: before=%s current=%s",
+				original.fingerprint, current.fingerprint,
+			)
+		}
 		return &completedRepairContentionError{
 			chunkID: current.chunks[0].id, chunkHash: current.chunks[0].hash,
 			reason: fmt.Sprintf("repair publication fingerprint displaced: before=%s current=%s", original.fingerprint, current.fingerprint),
@@ -1065,11 +1076,15 @@ func publishCompletedRepair(
 		return err
 	}
 	for _, chunkID := range plan.repairedChunkIDs {
+		validated, ok := currentByID[chunkID]
+		if !ok {
+			return fmt.Errorf("repair publication lost repaired chunk %d", chunkID)
+		}
 		chunkResult, err := tx.ExecContext(ctx, `
 			UPDATE chunk
 			SET status = $1, retry_count = retry_count + 1
-			WHERE id = $2 AND status IN ($1, $3)`,
-			filestate.ChunkCompleted, chunkID, filestate.ChunkAborted,
+			WHERE id = $2 AND status = $3 AND retry_count = $4`,
+			filestate.ChunkCompleted, chunkID, validated.status, validated.retryCount,
 		)
 		if err != nil {
 			return fmt.Errorf("publish repaired chunk %d status and retry count: %w", chunkID, err)
@@ -1088,6 +1103,108 @@ func publishCompletedRepair(
 		return err
 	}
 	return tx.Commit()
+}
+
+func completedRepairHasSupportedTerminalDisplacement(original, current completedRepairRecipe) bool {
+	if original.logicalID != current.logicalID || len(original.chunks) != len(current.chunks) {
+		return false
+	}
+	displaced := false
+	for index := range original.chunks {
+		before, after := original.chunks[index], current.chunks[index]
+		if before.order != after.order || before.id != after.id || before.hash != after.hash || before.size != after.size {
+			return false
+		}
+		if before.status == after.status && before.retryCount == after.retryCount {
+			continue
+		}
+		if after.retryCount < before.retryCount ||
+			(after.status != filestate.ChunkCompleted && after.status != filestate.ChunkAborted) {
+			return false
+		}
+		switch {
+		case before.status == filestate.ChunkCompleted && after.status == filestate.ChunkAborted:
+		case after.retryCount > before.retryCount:
+		default:
+			return false
+		}
+		displaced = true
+	}
+	return displaced
+}
+
+func lockCompletedRepairPublicationRows(
+	ctx context.Context,
+	dbconn *sql.DB,
+	tx *sql.Tx,
+	original completedRepairRecipe,
+) error {
+	packedIDs := make(map[int64]struct{}, len(original.chunks))
+	chunkIDs := make(map[int64]struct{}, len(original.chunks))
+	legacyIDs := make(map[int64]struct{}, len(original.chunks))
+	for _, item := range original.chunks {
+		chunkIDs[item.id] = struct{}{}
+		legacyIDs[item.legacy.id] = struct{}{}
+		if item.packed != nil {
+			packedIDs[item.packed.blockID] = struct{}{}
+		}
+	}
+
+	for _, blockID := range sortedCompletedRepairLockIDs(packedIDs) {
+		var lockedBlockID int64
+		if err := tx.QueryRowContext(ctx, db.QueryWithOptionalForUpdate(dbconn,
+			`SELECT id FROM storage_blocks WHERE id = $1`), blockID,
+		).Scan(&lockedBlockID); err != nil {
+			return fmt.Errorf("lock repair packed block %d: %w", blockID, err)
+		}
+		rows, err := tx.QueryContext(ctx, db.QueryWithOptionalForUpdate(dbconn,
+			`SELECT chunk_id FROM chunk_block_refs WHERE block_id = $1 ORDER BY chunk_id`), blockID)
+		if err != nil {
+			return fmt.Errorf("lock repair packed block %d membership: %w", blockID, err)
+		}
+		for rows.Next() {
+			var memberChunkID int64
+			if err := rows.Scan(&memberChunkID); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan repair packed block %d membership lock: %w", blockID, err)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("iterate repair packed block %d membership locks: %w", blockID, err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close repair packed block %d membership locks: %w", blockID, err)
+		}
+	}
+
+	for _, chunkID := range sortedCompletedRepairLockIDs(chunkIDs) {
+		var lockedChunkID int64
+		if err := tx.QueryRowContext(ctx, db.QueryWithOptionalForUpdate(dbconn,
+			`SELECT id FROM chunk WHERE id = $1`), chunkID,
+		).Scan(&lockedChunkID); err != nil {
+			return fmt.Errorf("lock repair chunk %d: %w", chunkID, err)
+		}
+	}
+
+	for _, blockID := range sortedCompletedRepairLockIDs(legacyIDs) {
+		var lockedBlockID int64
+		if err := tx.QueryRowContext(ctx, db.QueryWithOptionalForUpdate(dbconn,
+			`SELECT id FROM blocks WHERE id = $1`), blockID,
+		).Scan(&lockedBlockID); err != nil {
+			return fmt.Errorf("lock repair legacy block %d: %w", blockID, err)
+		}
+	}
+	return nil
+}
+
+func sortedCompletedRepairLockIDs(ids map[int64]struct{}) []int64 {
+	sorted := make([]int64, 0, len(ids))
+	for id := range ids {
+		sorted = append(sorted, id)
+	}
+	sort.Slice(sorted, func(left, right int) bool { return sorted[left] < sorted[right] })
+	return sorted
 }
 
 func validateRepairStageForPublication(

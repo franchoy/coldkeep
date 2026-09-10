@@ -335,8 +335,8 @@ func TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication(t *te
 
 	terminalDone := make(chan error, 1)
 	go func() {
-		_, terminalErr := repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2 AND status = $3`,
-			filestate.ChunkCompleted, chunkID, filestate.ChunkProcessing)
+		_, terminalErr := repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`,
+			filestate.ChunkCompleted, chunkID)
 		terminalDone <- terminalErr
 	}()
 	if err := competitorTx.Commit(); err != nil {
