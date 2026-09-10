@@ -204,6 +204,15 @@ waiting; cleanup failure is terminal and preserves owned state for startup
 recovery. No new finding, schema change, push, hosted certification, or Phase
 13 work is authorized.
 
+[Phase 12R1R15](v1.13.16-phase12r1r15-postgresql-concurrent-repair-publication-recovery.md)
+classifies the PostgreSQL publication race as a CK-V11316-015 remediation
+regression: affected chunk rows were not locked before final fingerprint
+revalidation. It authorizes deterministic placement/chunk/legacy row locking,
+fresh locked validation, and a defensive exact status/retry CAS. Contention is
+handled only after rollback, attempt cleanup, and release of all locks. No new
+finding, schema change, push, hosted certification, or Phase 13 work is
+authorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
