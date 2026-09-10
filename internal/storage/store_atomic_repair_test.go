@@ -381,18 +381,43 @@ func TestCKV11316015ConcurrentRepairsPublishOneAuthoritativeReplacement(t *testi
 	paths := []string{fixture.duplicatePath, thirdPath}
 	results := make([]StoreFileResult, len(paths))
 	errs := make([]error, len(paths))
+	workerContexts := make([]StorageContext, len(paths))
+	workerWriters := make([]*container.LocalWriter, len(paths))
+	for index := range paths {
+		workerContexts[index] = ckV11316015ConcurrentStorageContext(fixture)
+		writer, ok := workerContexts[index].Writer.(*container.LocalWriter)
+		if !ok || writer == nil {
+			t.Fatalf("concurrent repair worker %d writer=%T, want non-nil *container.LocalWriter", index, workerContexts[index].Writer)
+		}
+		workerWriters[index] = writer
+		if workerContexts[index].DB != fixture.repo.DB {
+			t.Fatalf("concurrent repair worker %d does not share fixture database", index)
+		}
+		if workerContexts[index].EffectiveContainerDir() != fixture.repo.ContainersDir || writer.Dir() != fixture.repo.ContainersDir {
+			t.Fatalf("concurrent repair worker %d container directories=(context=%q writer=%q), want %q",
+				index, workerContexts[index].EffectiveContainerDir(), writer.Dir(), fixture.repo.ContainersDir)
+		}
+	}
+	if workerWriters[0] == workerWriters[1] {
+		t.Fatal("concurrent repair workers share one LocalWriter")
+	}
 	start := make(chan struct{})
 	var workers sync.WaitGroup
 	for index := range paths {
 		workers.Add(1)
-		go func(index int) {
+		go func(index int, storeContext StorageContext) {
 			defer workers.Done()
 			<-start
-			results[index], errs[index] = StoreFileWithStorageContextAndCodecResult(fixture.repo.Storage, paths[index], blocks.CodecPlain)
-		}(index)
+			results[index], errs[index] = StoreFileWithStorageContextAndCodecResult(storeContext, paths[index], blocks.CodecPlain)
+		}(index, workerContexts[index])
 	}
 	close(start)
 	workers.Wait()
+	for index, writer := range workerWriters {
+		if _, _, active := writer.ActiveContainerState(); active {
+			t.Fatalf("concurrent repair worker %d retained an active writer after Store cleanup", index)
+		}
+	}
 	for index, err := range errs {
 		if err != nil {
 			t.Fatalf("concurrent repair %d failed: %v", index, err)
