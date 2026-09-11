@@ -124,6 +124,14 @@ type completedRepairContentionBudget struct {
 
 var errCompletedRepairNoEntity = errors.New("reuse failed without an identifiable repair entity")
 
+const (
+	storeInterleavingEventAfterCompletedRepairValidationRejected storeInterleavingEvent = "after_completed_repair_validation_rejected"
+	storeInterleavingEventAfterCompletedRepairZeroEntity         storeInterleavingEvent = "after_completed_repair_zero_entity"
+
+	TestStoreInterleavingEventAfterCompletedRepairValidationRejected = storeInterleavingEventAfterCompletedRepairValidationRejected
+	TestStoreInterleavingEventAfterCompletedRepairZeroEntity         = storeInterleavingEventAfterCompletedRepairZeroEntity
+)
+
 var completedRepairLocks sync.Map
 
 func completedRepairLock(fileID int64) *sync.Mutex {
@@ -217,6 +225,13 @@ func tryRepairCompletedLogicalFileLocked(
 			FileID: fileID, FileHash: prepared.LogicalHash, Path: normalizedPath, AlreadyStored: true,
 		}, nil
 	}
+	if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+		ChunkHash: prepared.LogicalHash,
+		Codec:     string(runtime.codec),
+		Event:     storeInterleavingEventAfterCompletedRepairValidationRejected,
+	}); err != nil {
+		return true, StoreFileResult{}, err
+	}
 
 	recipe, err := loadCompletedRepairRecipe(ctx, dbconn, fileID, prepared)
 	if err != nil {
@@ -227,6 +242,16 @@ func tryRepairCompletedLogicalFileLocked(
 	}
 	plan, err := buildCompletedRepairPlan(ctx, dbconn, sgctx.EffectiveContainerDir(), recipe, prepared)
 	if err != nil {
+		if errors.Is(err, errCompletedRepairNoEntity) {
+			if hookErr := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
+				ChunkID:   recipe.chunks[0].id,
+				ChunkHash: recipe.chunks[0].hash,
+				Codec:     string(runtime.codec),
+				Event:     storeInterleavingEventAfterCompletedRepairZeroEntity,
+			}); hookErr != nil {
+				return true, StoreFileResult{}, hookErr
+			}
+		}
 		if contentionObserved && errors.Is(err, errCompletedRepairNoEntity) {
 			return true, StoreFileResult{}, &completedRepairContentionError{
 				chunkID: recipe.chunks[0].id, chunkHash: recipe.chunks[0].hash,

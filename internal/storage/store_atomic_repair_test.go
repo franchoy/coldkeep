@@ -506,6 +506,61 @@ func TestCKV11316015ProcessingCompletionWaitsOutsideRepairLockAndReuses(t *testi
 	ckV11316015AssertNoLiveRepairState(t, fixture.repo.DB, fixture.fileID)
 }
 
+func TestCKV11316015SharedChunkHealingBetweenValidationAndPlanReclassifies(t *testing.T) {
+	fixture := newCKV11316015ConcurrentFixture(t)
+	sharedChunkID := ckV11316015FirstRecipeChunkID(t, fixture.repo.DB, fixture.fileID)
+	var logicalRetryBefore, chunkRetryBefore int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalRetryBefore); err != nil {
+		t.Fatalf("query logical retry before pre-plan healing: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, sharedChunkID).Scan(&chunkRetryBefore); err != nil {
+		t.Fatalf("query chunk retry before pre-plan healing: %v", err)
+	}
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1, retry_count = retry_count + 1 WHERE id = $2`, filestate.ChunkProcessing, sharedChunkID); err != nil {
+		t.Fatalf("claim shared chunk for competing Store: %v", err)
+	}
+	loserStorage := ckV11316015ConcurrentStorageContext(fixture)
+	var validationOnce sync.Once
+	restoreLoserHooks := InstallTestStoreInterleavingHooks(&loserStorage, func(_ context.Context, event TestStoreInterleavingHookEvent) error {
+		if event.Event == TestStoreInterleavingEventAfterCompletedRepairValidationRejected {
+			var transitionErr error
+			validationOnce.Do(func() {
+				_, transitionErr = fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, sharedChunkID)
+			})
+			return transitionErr
+		}
+		return nil
+	})
+	defer restoreLoserHooks()
+
+	loserResult, loserErr := StoreFileWithStorageContextAndCodecResult(loserStorage, fixture.duplicatePath, blocks.CodecPlain)
+	if loserErr != nil {
+		t.Fatalf("healed loser did not reclassify to healthy reuse: %v", loserErr)
+	}
+	if loserResult.FileID != fixture.fileID || !loserResult.AlreadyStored {
+		t.Fatalf("healed loser result=%+v, want healthy reuse of %d", loserResult, fixture.fileID)
+	}
+	writer, ok := loserStorage.Writer.(*container.LocalWriter)
+	if !ok || writer == nil {
+		t.Fatalf("convergence loser writer=%T", loserStorage.Writer)
+	}
+	if _, _, active := writer.ActiveContainerState(); active {
+		t.Fatal("convergence loser retained an active writer")
+	}
+	var logicalRetryAfter, chunkRetryAfter int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalRetryAfter); err != nil {
+		t.Fatalf("query logical retry after pre-plan healing: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, sharedChunkID).Scan(&chunkRetryAfter); err != nil {
+		t.Fatalf("query chunk retry after pre-plan healing: %v", err)
+	}
+	if logicalRetryAfter != logicalRetryBefore || chunkRetryAfter != chunkRetryBefore+1 {
+		t.Fatalf("pre-plan healing retry accounting logical=%d->%d chunk=%d->%d", logicalRetryBefore, logicalRetryAfter, chunkRetryBefore, chunkRetryAfter)
+	}
+	ckV11316015AssertNoLiveRepairState(t, fixture.repo.DB, fixture.fileID)
+	assertCKV11316015Restore(t, fixture, fixture.duplicatePath, "convergence-loser.bin")
+}
+
 func TestCKV11316015SharedProcessingChunkWaitersConvergeWithoutDeadlock(t *testing.T) {
 	fixture := newCKV11316015ConcurrentFixture(t)
 	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "suspicious")
