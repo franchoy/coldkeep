@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -122,6 +124,46 @@ type completedRepairContentionBudget struct {
 	pollAttempt int
 }
 
+type completedRepairZeroDecisionError struct {
+	signature          string
+	freshCause         error
+	chunkID            int64
+	chunkHash          string
+	concurrentEvidence bool
+}
+
+func (err *completedRepairZeroDecisionError) Error() string {
+	return fmt.Sprintf("completed repair decision displaced for chunk %d (%s): %v", err.chunkID, err.chunkHash, err.freshCause)
+}
+
+type completedRepairZeroStability struct {
+	signature   string
+	count       int
+	backoffUsed bool
+	sawZero     bool
+}
+
+type completedRepairZeroStabilityAction uint8
+
+const (
+	completedRepairZeroRestartImmediate completedRepairZeroStabilityAction = iota
+	completedRepairZeroRestartAfterBackoff
+	completedRepairZeroStableFailClosed
+)
+
+type completedRepairValidationReasonCode string
+
+const (
+	completedRepairValidationRecipeGraph        completedRepairValidationReasonCode = "RECIPE_OR_GRAPH_STRUCTURE_INVALID"
+	completedRepairValidationChunkState         completedRepairValidationReasonCode = "CHUNK_TERMINAL_STATUS_OR_RETRY_INVALID"
+	completedRepairValidationPlacement          completedRepairValidationReasonCode = "ACTIVE_PLACEMENT_ACCOUNTING_INVALID"
+	completedRepairValidationPayloadUnavailable completedRepairValidationReasonCode = "PHYSICAL_PAYLOAD_UNAVAILABLE"
+	completedRepairValidationSemanticHash       completedRepairValidationReasonCode = "SEMANTIC_CHUNK_OR_FILE_HASH_MISMATCH"
+	completedRepairValidationCodec              completedRepairValidationReasonCode = "CODEC_DECODE_OR_AUTHENTICATION_FAILURE"
+	completedRepairValidationContainer          completedRepairValidationReasonCode = "CONTAINER_QUARANTINE_OR_STATE_INVALID"
+	completedRepairValidationOther              completedRepairValidationReasonCode = "OTHER_TRUSTWORTHY_GRAPH_VALIDATION_FAILURE"
+)
+
 var errCompletedRepairNoEntity = errors.New("reuse failed without an identifiable repair entity")
 
 const (
@@ -168,28 +210,71 @@ func tryRepairCompletedLogicalFile(
 		return true, StoreFileResult{}, err
 	}
 
-	if err := validateReusableLogicalFileForStoreWithPolicy(ctx, dbconn, fileID, runtime.reuseValidation); err == nil {
-		return false, StoreFileResult{}, nil
-	}
-
 	lock := completedRepairLock(fileID)
 	var contentionBudget completedRepairContentionBudget
+	var zeroStability completedRepairZeroStability
 	for {
 		lock.Lock()
 		handled, result, repairErr := tryRepairCompletedLogicalFileLocked(
 			ctx, sgctx, runtime, prepared, normalizedPath, replace, fileID,
-			!contentionBudget.deadline.IsZero(),
 		)
 		lock.Unlock()
 
 		var contention *completedRepairContentionError
-		if !errors.As(repairErr, &contention) {
+		if errors.As(repairErr, &contention) {
+			zeroStability = completedRepairZeroStability{}
+			if err := waitForCompletedRepairContention(ctx, dbconn, contention, &contentionBudget); err != nil {
+				return true, StoreFileResult{}, err
+			}
+			continue
+		}
+
+		var displaced *completedRepairZeroDecisionError
+		if !errors.As(repairErr, &displaced) {
 			return handled, result, repairErr
 		}
-		if err := waitForCompletedRepairContention(ctx, dbconn, contention, &contentionBudget); err != nil {
-			return true, StoreFileResult{}, err
+		switch advanceCompletedRepairZeroStability(&zeroStability, displaced) {
+		case completedRepairZeroStableFailClosed:
+			return true, StoreFileResult{}, fmt.Errorf(
+				"completed object %d has stable invalid state without a safe repair entity: %w",
+				fileID, displaced.freshCause,
+			)
+		case completedRepairZeroRestartImmediate:
+			ensureCompletedRepairContentionDeadline(&contentionBudget)
+			continue
+		case completedRepairZeroRestartAfterBackoff:
+			if err := waitForCompletedRepairConvergenceBackoff(ctx, &contentionBudget); err != nil {
+				return true, StoreFileResult{}, err
+			}
+			zeroStability.backoffUsed = true
 		}
 	}
+}
+
+func advanceCompletedRepairZeroStability(
+	stability *completedRepairZeroStability,
+	displaced *completedRepairZeroDecisionError,
+) completedRepairZeroStabilityAction {
+	if displaced.concurrentEvidence {
+		sawZero := stability.sawZero
+		*stability = completedRepairZeroStability{}
+		stability.sawZero = sawZero
+	}
+	if stability.signature == displaced.signature {
+		stability.count++
+	} else {
+		stability.signature = displaced.signature
+		stability.count = 1
+		stability.backoffUsed = false
+	}
+	if stability.count >= 3 && stability.backoffUsed && !displaced.concurrentEvidence {
+		return completedRepairZeroStableFailClosed
+	}
+	if !stability.sawZero {
+		stability.sawZero = true
+		return completedRepairZeroRestartImmediate
+	}
+	return completedRepairZeroRestartAfterBackoff
 }
 
 func tryRepairCompletedLogicalFileLocked(
@@ -200,30 +285,13 @@ func tryRepairCompletedLogicalFileLocked(
 	normalizedPath string,
 	replace bool,
 	fileID int64,
-	contentionObserved bool,
 ) (bool, StoreFileResult, error) {
 	dbconn := runtime.storeService.Repository().DB()
 
 	// Another Store may have repaired this candidate while this caller waited.
-	if err := validateReusableLogicalFileForStoreWithPolicy(ctx, dbconn, fileID, runtime.reuseValidation); err == nil {
-		tx, err := dbconn.BeginTx(ctx, nil)
-		if err != nil {
-			return true, StoreFileResult{}, err
-		}
-		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(
-			ctx, dbconn, tx, normalizedPath, fileID, prepared.PhysicalMetadata,
-			replace, recipeLivenessActivateOnFirstMapping,
-		); err != nil {
-			_ = tx.Rollback()
-			return true, StoreFileResult{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			_ = tx.Rollback()
-			return true, StoreFileResult{}, err
-		}
-		return true, StoreFileResult{
-			FileID: fileID, FileHash: prepared.LogicalHash, Path: normalizedPath, AlreadyStored: true,
-		}, nil
+	validationErr := validateReusableLogicalFileForStoreWithPolicy(ctx, dbconn, fileID, runtime.reuseValidation)
+	if validationErr == nil {
+		return attachCompletedRepairHealthyReuse(ctx, dbconn, prepared, normalizedPath, replace, fileID)
 	}
 	if err := fireStoreInterleavingHook(ctx, storeInterleavingHookEvent{
 		ChunkHash: prepared.LogicalHash,
@@ -231,6 +299,9 @@ func tryRepairCompletedLogicalFileLocked(
 		Event:     storeInterleavingEventAfterCompletedRepairValidationRejected,
 	}); err != nil {
 		return true, StoreFileResult{}, err
+	}
+	if completedRepairValidationIsOperational(ctx, validationErr) {
+		return true, StoreFileResult{}, validationErr
 	}
 
 	recipe, err := loadCompletedRepairRecipe(ctx, dbconn, fileID, prepared)
@@ -252,10 +323,17 @@ func tryRepairCompletedLogicalFileLocked(
 				return true, StoreFileResult{}, hookErr
 			}
 		}
-		if contentionObserved && errors.Is(err, errCompletedRepairNoEntity) {
-			return true, StoreFileResult{}, &completedRepairContentionError{
+		if errors.Is(err, errCompletedRepairNoEntity) {
+			signature, concurrentEvidence, signatureErr := completedRepairZeroDecisionSignature(
+				ctx, dbconn, sgctx.EffectiveContainerDir(), recipe, prepared,
+			)
+			if signatureErr != nil {
+				return true, StoreFileResult{}, signatureErr
+			}
+			return true, StoreFileResult{}, &completedRepairZeroDecisionError{
+				signature: signature, freshCause: validationErr,
 				chunkID: recipe.chunks[0].id, chunkHash: recipe.chunks[0].hash,
-				reason: "terminal competitor state requires serialized healthy revalidation",
+				concurrentEvidence: concurrentEvidence,
 			}
 		}
 		return true, StoreFileResult{}, fmt.Errorf("completed object %d repair plan is unsafe: %w", fileID, err)
@@ -324,6 +402,291 @@ func tryRepairCompletedLogicalFileLocked(
 	}, nil
 }
 
+func completedRepairValidationIsOperational(ctx context.Context, validationErr error) bool {
+	if validationErr == nil {
+		return false
+	}
+	if ctx.Err() != nil || errors.Is(validationErr, sql.ErrConnDone) || errors.Is(validationErr, driver.ErrBadConn) {
+		return true
+	}
+	if _, err := loadReuseSemanticValidationModeFromEnv(); err != nil {
+		return true
+	}
+	var pathErr *os.PathError
+	if errors.As(validationErr, &pathErr) && !errors.Is(validationErr, os.ErrNotExist) {
+		return true
+	}
+	var sqlState interface{ SQLState() string }
+	return errors.As(validationErr, &sqlState)
+}
+
+func attachCompletedRepairHealthyReuse(
+	ctx context.Context,
+	dbconn *sql.DB,
+	prepared preparedFile,
+	normalizedPath string,
+	replace bool,
+	fileID int64,
+) (bool, StoreFileResult, error) {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return true, StoreFileResult{}, err
+	}
+	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(
+		ctx, dbconn, tx, normalizedPath, fileID, prepared.PhysicalMetadata,
+		replace, recipeLivenessActivateOnFirstMapping,
+	); err != nil {
+		_ = tx.Rollback()
+		return true, StoreFileResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return true, StoreFileResult{}, err
+	}
+	return true, StoreFileResult{
+		FileID: fileID, FileHash: prepared.LogicalHash, Path: normalizedPath, AlreadyStored: true,
+	}, nil
+}
+
+func ensureCompletedRepairContentionDeadline(budget *completedRepairContentionBudget) {
+	if budget.deadline.IsZero() {
+		budget.deadline = time.Now().Add(maxClaimWaitDuration)
+	}
+}
+
+func waitForCompletedRepairConvergenceBackoff(ctx context.Context, budget *completedRepairContentionBudget) error {
+	ensureCompletedRepairContentionDeadline(budget)
+	remaining := time.Until(budget.deadline)
+	if remaining <= 0 {
+		return fmt.Errorf("timeout waiting for completed repair state to converge")
+	}
+	wait := claimPollingBackoff(chunkWaitingtime, budget.pollAttempt)
+	budget.pollAttempt++
+	if wait > remaining {
+		wait = remaining
+	}
+	if err := sleepWithContext(ctx, wait); err != nil {
+		return err
+	}
+	return nil
+}
+
+type completedRepairObservedExtent struct {
+	containerID int64
+	offset      int64
+	size        int64
+	expected    []byte
+}
+
+func completedRepairZeroDecisionSignature(
+	ctx context.Context,
+	dbconn *sql.DB,
+	containersDir string,
+	previous completedRepairRecipe,
+	prepared preparedFile,
+) (string, bool, error) {
+	// Reload current authority. The previous zero plan is used only to identify
+	// the logical object; none of its recipe or placement state is reused.
+	recipe, err := loadCompletedRepairRecipe(ctx, dbconn, previous.logicalID, prepared)
+	if err != nil {
+		return "", false, err
+	}
+
+	reason := completedRepairValidationOther
+	chunkTuples := make([]string, 0, len(recipe.chunks))
+	placementTuples := make([]string, 0, len(recipe.chunks)*2)
+	extents := make([]completedRepairObservedExtent, 0, len(recipe.chunks))
+	seenChunks := make(map[int64]struct{}, len(recipe.chunks))
+	for _, item := range recipe.chunks {
+		if _, ok := seenChunks[item.id]; ok {
+			continue
+		}
+		seenChunks[item.id] = struct{}{}
+		var chunkerVersion string
+		if err := dbconn.QueryRowContext(ctx, `SELECT chunker_version FROM chunk WHERE id = $1`, item.id).Scan(&chunkerVersion); err != nil {
+			return "", false, fmt.Errorf("observe zero-decision chunk %d version: %w", item.id, err)
+		}
+		chunkTuples = append(chunkTuples, fmt.Sprintf(
+			"%d|%s|%d|%s|%d|%d|%d|%s",
+			item.id, item.hash, item.size, item.status, item.retryCount, item.liveRefs, item.pins, chunkerVersion,
+		))
+		if item.status != filestate.ChunkCompleted {
+			reason = completedRepairValidationChunkState
+		}
+
+		placementTuples = append(placementTuples, fmt.Sprintf(
+			"legacy|%d|%d|%s|%d|%d|%d|%x|%d|%d",
+			item.id, item.legacy.id, item.legacy.codec, item.legacy.formatVersion,
+			item.legacy.plaintextSize, item.legacy.storedSize, item.legacy.nonce,
+			item.legacy.containerID, item.legacy.offset,
+		))
+		if item.packed == nil {
+			extents = append(extents, completedRepairObservedExtent{
+				containerID: item.legacy.containerID,
+				offset:      item.legacy.offset,
+				size:        item.legacy.storedSize,
+			})
+			continue
+		}
+
+		var (
+			formatVersion, compressionLevel           sql.NullInt64
+			codec, compressionCodec, payloadHash      string
+			plaintextSize, compressedSize, storedSize sql.NullInt64
+			containerID, containerOffset              int64
+			blockHash, compressedHash, physicalHash   []byte
+			compressionRatio                          float64
+		)
+		err := dbconn.QueryRowContext(ctx, `
+			SELECT format_version, codec, plaintext_size, compression_codec,
+			       compression_level, compressed_size, stored_size, container_id,
+			       container_offset, block_hash, compression_ratio, payload_hash,
+			       compressed_hash, physical_hash
+			FROM storage_blocks WHERE id = $1`, item.packed.blockID,
+		).Scan(
+			&formatVersion, &codec, &plaintextSize, &compressionCodec,
+			&compressionLevel, &compressedSize, &storedSize, &containerID,
+			&containerOffset, &blockHash, &compressionRatio, &payloadHash,
+			&compressedHash, &physicalHash,
+		)
+		if err != nil {
+			return "", false, fmt.Errorf("observe zero-decision packed block %d: %w", item.packed.blockID, err)
+		}
+		placementTuples = append(placementTuples, fmt.Sprintf(
+			"packed|%d|%d|%d|%d|%d|%d|%s|%d|%d|%s|%t|%d|%t|%d|%d|%d|%x|%g|%s|%x|%x",
+			item.id, item.packed.blockID, item.packed.offsetInBlock, item.packed.sizeInBlock,
+			containerID, containerOffset, codec, formatVersion.Int64, plaintextSize.Int64,
+			compressionCodec, compressionLevel.Valid, compressionLevel.Int64,
+			compressedSize.Valid, compressedSize.Int64, storedSize.Int64, item.legacy.id,
+			blockHash, compressionRatio, payloadHash, compressedHash, physicalHash,
+		))
+		if !storedSize.Valid || storedSize.Int64 <= 0 {
+			reason = completedRepairValidationPlacement
+			continue
+		}
+		extents = append(extents, completedRepairObservedExtent{
+			containerID: containerID,
+			offset:      containerOffset,
+			size:        storedSize.Int64,
+			expected:    append([]byte(nil), physicalHash...),
+		})
+	}
+
+	containerTuples := make([]string, 0, len(extents)*2)
+	seenContainers := make(map[int64]struct{}, len(extents))
+	seenExtents := make(map[string]struct{}, len(extents))
+	for _, extent := range extents {
+		if _, ok := seenContainers[extent.containerID]; !ok {
+			seenContainers[extent.containerID] = struct{}{}
+			var filename string
+			var currentSize, maxSize int64
+			var sealed, sealing, quarantine bool
+			if err := dbconn.QueryRowContext(ctx, `
+				SELECT filename, current_size, max_size, sealed, sealing, quarantine
+				FROM container WHERE id = $1`, extent.containerID,
+			).Scan(&filename, &currentSize, &maxSize, &sealed, &sealing, &quarantine); err != nil {
+				return "", false, fmt.Errorf("observe zero-decision container %d: %w", extent.containerID, err)
+			}
+			path, err := container.SafeContainerPath(containersDir, filename)
+			if err != nil {
+				return "", false, err
+			}
+			info, err := os.Stat(path)
+			if errors.Is(err, os.ErrNotExist) {
+				containerTuples = append(containerTuples, fmt.Sprintf(
+					"container|%d|%s|%d|%d|%t|%t|%t|MISSING", extent.containerID,
+					filename, currentSize, maxSize, sealed, sealing, quarantine,
+				))
+				reason = completedRepairValidationPayloadUnavailable
+			} else if err != nil {
+				return "", false, fmt.Errorf("observe zero-decision container %d file: %w", extent.containerID, err)
+			} else {
+				containerTuples = append(containerTuples, fmt.Sprintf(
+					"container|%d|%s|%d|%d|%t|%t|%t|%d", extent.containerID,
+					filename, currentSize, maxSize, sealed, sealing, quarantine, info.Size(),
+				))
+				if quarantine || sealing || currentSize > maxSize {
+					reason = completedRepairValidationContainer
+				}
+			}
+		}
+
+		extentKey := fmt.Sprintf("%d|%d|%d", extent.containerID, extent.offset, extent.size)
+		if _, ok := seenExtents[extentKey]; ok {
+			continue
+		}
+		seenExtents[extentKey] = struct{}{}
+		var filename string
+		if err := dbconn.QueryRowContext(ctx, `SELECT filename FROM container WHERE id = $1`, extent.containerID).Scan(&filename); err != nil {
+			return "", false, err
+		}
+		path, err := container.SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return "", false, err
+		}
+		file, err := os.Open(path)
+		if errors.Is(err, os.ErrNotExist) {
+			containerTuples = append(containerTuples, "extent|"+extentKey+"|MISSING")
+			reason = completedRepairValidationPayloadUnavailable
+			continue
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("open zero-decision extent %s: %w", extentKey, err)
+		}
+		hasher := sha256.New()
+		_, copyErr := io.CopyN(hasher, io.NewSectionReader(file, extent.offset, extent.size), extent.size)
+		closeErr := file.Close()
+		if copyErr != nil || closeErr != nil {
+			return "", false, errors.Join(copyErr, closeErr)
+		}
+		actual := hasher.Sum(nil)
+		containerTuples = append(containerTuples, "extent|"+extentKey+"|"+hex.EncodeToString(actual))
+		if len(extent.expected) > 0 && !bytes.Equal(actual, extent.expected) {
+			reason = completedRepairValidationSemanticHash
+		}
+	}
+
+	var concurrentEvidence bool
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM store_repair_attempt a
+			WHERE a.status IN ('PREPARING','READY')
+			  AND (
+				a.logical_file_id = $1 OR EXISTS (
+					SELECT 1 FROM store_repair_chunk rc
+					WHERE rc.attempt_id = a.id
+					  AND rc.chunk_id IN (
+						SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1
+					  )
+				)
+			  )
+		)`, recipe.logicalID,
+	).Scan(&concurrentEvidence); err != nil {
+		return "", false, fmt.Errorf("observe zero-decision competing attempts: %w", err)
+	}
+
+	parts := []string{
+		"AUTHORITATIVE_RECIPE_FINGERPRINT|" + recipe.fingerprint,
+		"DISTINCT_CHUNK_STATE_FINGERPRINT|" + completedRepairCanonicalDigest(chunkTuples),
+		"ACTIVE_PLACEMENT_ACCOUNTING_FINGERPRINT|" + completedRepairCanonicalDigest(placementTuples),
+		"RELEVANT_CONTAINER_STATE_FINGERPRINT|" + completedRepairCanonicalDigest(containerTuples),
+		"VALIDATION_REASON_CODE|" + string(reason),
+		"ZERO_PLAN_DISPOSITION|NO_DISTINCT_STATUS_OR_PLACEMENT_REPAIR_ENTITY",
+	}
+	return completedRepairCanonicalDigest(parts), concurrentEvidence, nil
+}
+
+func completedRepairCanonicalDigest(parts []string) string {
+	sorted := append([]string(nil), parts...)
+	sort.Strings(sorted)
+	hasher := sha256.New()
+	for _, part := range sorted {
+		_, _ = fmt.Fprintf(hasher, "%d:", len(part))
+		_, _ = hasher.Write([]byte(part))
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
 func waitForCompletedRepairContention(
 	ctx context.Context,
 	dbconn *sql.DB,
@@ -333,9 +696,7 @@ func waitForCompletedRepairContention(
 	if contention == nil || contention.chunkID <= 0 {
 		return fmt.Errorf("invalid completed repair contention identity")
 	}
-	if budget.deadline.IsZero() {
-		budget.deadline = time.Now().Add(maxClaimWaitDuration)
-	}
+	ensureCompletedRepairContentionDeadline(budget)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -375,6 +376,55 @@ func TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication(t *te
 		t.Fatalf("competitor-first retry accounting logical=%d->%d chunk=%d->%d", logicalBefore, logicalAfter, chunkBefore, chunkAfter)
 	}
 	ckV11316015AssertNoLiveRepairState(t, repo.DB, fixture.fileID)
+}
+
+func TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies(t *testing.T) {
+	repo := newCKV11316015PostgresRepository(t)
+	fixture := newCKV11316015FixtureWithRepository(t, false, blocks.CodecPlain, repo)
+	chunkID := ckV11316015FirstRecipeChunkID(t, repo.DB, fixture.fileID)
+	var logicalBefore, chunkBefore int64
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalBefore); err != nil {
+		t.Fatalf("query PostgreSQL healing logical retry: %v", err)
+	}
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&chunkBefore); err != nil {
+		t.Fatalf("query PostgreSQL healing chunk retry: %v", err)
+	}
+	if _, err := repo.DB.Exec(`UPDATE chunk SET status = $1, retry_count = retry_count + 1 WHERE id = $2`, filestate.ChunkProcessing, chunkID); err != nil {
+		t.Fatalf("claim PostgreSQL healing chunk: %v", err)
+	}
+
+	var validationOnce sync.Once
+	restoreHooks := InstallTestStoreInterleavingHooks(&repo.Storage, func(_ context.Context, event TestStoreInterleavingHookEvent) error {
+		if event.Event != TestStoreInterleavingEventAfterCompletedRepairValidationRejected {
+			return nil
+		}
+		var transitionErr error
+		validationOnce.Do(func() {
+			_, transitionErr = repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, chunkID)
+		})
+		return transitionErr
+	})
+	defer restoreHooks()
+
+	result, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("PostgreSQL healed loser did not reclassify: %v", err)
+	}
+	if result.FileID != fixture.fileID || !result.AlreadyStored {
+		t.Fatalf("PostgreSQL healed loser result=%+v, want healthy reuse", result)
+	}
+	var logicalAfter, chunkAfter int64
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalAfter); err != nil {
+		t.Fatalf("query PostgreSQL healing logical retry after convergence: %v", err)
+	}
+	if err := repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&chunkAfter); err != nil {
+		t.Fatalf("query PostgreSQL healing chunk retry after convergence: %v", err)
+	}
+	if logicalAfter != logicalBefore || chunkAfter != chunkBefore+1 {
+		t.Fatalf("PostgreSQL healing retry accounting logical=%d->%d chunk=%d->%d", logicalBefore, logicalAfter, chunkBefore, chunkAfter)
+	}
+	ckV11316015AssertNoLiveRepairState(t, repo.DB, fixture.fileID)
+	assertCKV11316015Restore(t, fixture, fixture.duplicatePath, "postgres-convergence-loser.bin")
 }
 
 func newCKV11316015PostgresRepository(t *testing.T) *TestRepository {

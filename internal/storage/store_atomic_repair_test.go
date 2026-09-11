@@ -561,6 +561,110 @@ func TestCKV11316015SharedChunkHealingBetweenValidationAndPlanReclassifies(t *te
 	assertCKV11316015Restore(t, fixture, fixture.duplicatePath, "convergence-loser.bin")
 }
 
+func TestCKV11316015ZeroEntityReclassifiesFreshAbortedState(t *testing.T) {
+	fixture := newCKV11316015ConcurrentFixture(t)
+	chunkID := ckV11316015FirstRecipeChunkID(t, fixture.repo.DB, fixture.fileID)
+	var logicalBefore, chunkBefore int64
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalBefore); err != nil {
+		t.Fatalf("query logical retry before zero-to-aborted: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&chunkBefore); err != nil {
+		t.Fatalf("query chunk retry before zero-to-aborted: %v", err)
+	}
+	if _, err := fixture.repo.DB.Exec(`UPDATE chunk SET status = $1, retry_count = retry_count + 1 WHERE id = $2`, filestate.ChunkProcessing, chunkID); err != nil {
+		t.Fatalf("claim zero-to-aborted chunk: %v", err)
+	}
+	storageContext := ckV11316015ConcurrentStorageContext(fixture)
+	var validationOnce, zeroOnce sync.Once
+	restoreHooks := InstallTestStoreInterleavingHooks(&storageContext, func(_ context.Context, event TestStoreInterleavingHookEvent) error {
+		var hookErr error
+		switch event.Event {
+		case TestStoreInterleavingEventAfterCompletedRepairValidationRejected:
+			validationOnce.Do(func() {
+				_, hookErr = fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, chunkID)
+			})
+		case TestStoreInterleavingEventAfterCompletedRepairZeroEntity:
+			zeroOnce.Do(func() {
+				_, hookErr = fixture.repo.DB.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID)
+			})
+		}
+		return hookErr
+	})
+	defer restoreHooks()
+
+	result, err := StoreFileWithStorageContextAndCodecResult(storageContext, fixture.duplicatePath, blocks.CodecPlain)
+	if err != nil || result.FileID != fixture.fileID || result.AlreadyStored {
+		t.Fatalf("zero-to-aborted did not build a fresh repair: result=%+v err=%v", result, err)
+	}
+	var logicalAfter, chunkAfter int64
+	var status string
+	if err := fixture.repo.DB.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, fixture.fileID).Scan(&logicalAfter); err != nil {
+		t.Fatalf("query logical retry after zero-to-aborted: %v", err)
+	}
+	if err := fixture.repo.DB.QueryRow(`SELECT status, retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&status, &chunkAfter); err != nil {
+		t.Fatalf("query chunk after zero-to-aborted: %v", err)
+	}
+	if status != filestate.ChunkCompleted || logicalAfter != logicalBefore+1 || chunkAfter != chunkBefore+2 {
+		t.Fatalf("zero-to-aborted state=%s logical=%d->%d chunk=%d->%d", status, logicalBefore, logicalAfter, chunkBefore, chunkAfter)
+	}
+	ckV11316015AssertNoLiveRepairState(t, fixture.repo.DB, fixture.fileID)
+	assertCKV11316015Restore(t, fixture, fixture.duplicatePath, "zero-to-aborted.bin")
+}
+
+func TestCKV11316015OperationalValidationErrorDoesNotEnterConvergence(t *testing.T) {
+	fixture := newCKV11316015ConcurrentFixture(t)
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "invalid-zero-signature-mode")
+	storageContext := ckV11316015ConcurrentStorageContext(fixture)
+	zeroCount := 0
+	restoreHooks := InstallTestStoreInterleavingHooks(&storageContext, func(_ context.Context, event TestStoreInterleavingHookEvent) error {
+		if event.Event == TestStoreInterleavingEventAfterCompletedRepairZeroEntity {
+			zeroCount++
+		}
+		return nil
+	})
+	defer restoreHooks()
+	before := ckV11316015AuthoritativeSnapshot(t, fixture.repo.DB, fixture.fileID)
+	_, err := StoreFileWithStorageContextAndCodecResult(storageContext, fixture.duplicatePath, blocks.CodecPlain)
+	if err == nil || !strings.Contains(err.Error(), "invalid-zero-signature-mode") {
+		t.Fatalf("operational validation error=%v, want configuration cause", err)
+	}
+	if zeroCount != 0 {
+		t.Fatalf("operational validation entered zero convergence %d times", zeroCount)
+	}
+	after := ckV11316015AuthoritativeSnapshot(t, fixture.repo.DB, fixture.fileID)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("operational validation failure mutated authority\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+func TestCKV11316015StableZeroStateMachineRequiresBackoffAndThirdClassification(t *testing.T) {
+	var stability completedRepairZeroStability
+	displaced := &completedRepairZeroDecisionError{signature: "canonical-a", freshCause: errors.New("fresh-a")}
+	if got := advanceCompletedRepairZeroStability(&stability, displaced); got != completedRepairZeroRestartImmediate {
+		t.Fatalf("first zero action=%d, want immediate restart", got)
+	}
+	if got := advanceCompletedRepairZeroStability(&stability, displaced); got != completedRepairZeroRestartAfterBackoff {
+		t.Fatalf("second zero action=%d, want bounded backoff", got)
+	}
+	stability.backoffUsed = true
+	if got := advanceCompletedRepairZeroStability(&stability, displaced); got != completedRepairZeroStableFailClosed {
+		t.Fatalf("third stable zero action=%d, want fail closed", got)
+	}
+
+	changed := &completedRepairZeroDecisionError{signature: "canonical-b", freshCause: errors.New("fresh-b")}
+	if got := advanceCompletedRepairZeroStability(&stability, changed); got != completedRepairZeroRestartAfterBackoff {
+		t.Fatalf("changed current state action=%d, want bounded reclassification", got)
+	}
+	if stability.count != 1 || stability.backoffUsed {
+		t.Fatalf("changed current state stability=%+v, want reset signature count", stability)
+	}
+
+	changed.concurrentEvidence = true
+	if got := advanceCompletedRepairZeroStability(&stability, changed); got != completedRepairZeroRestartAfterBackoff {
+		t.Fatalf("concurrent evidence action=%d, want bounded reclassification", got)
+	}
+}
+
 func TestCKV11316015SharedProcessingChunkWaitersConvergeWithoutDeadlock(t *testing.T) {
 	fixture := newCKV11316015ConcurrentFixture(t)
 	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "suspicious")
