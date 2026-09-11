@@ -213,6 +213,16 @@ handled only after rollback, attempt cleanup, and release of all locks. No new
 finding, schema change, push, hosted certification, or Phase 13 work is
 authorized.
 
+[Phase 12R1R17](v1.13.16-phase12r1r17-concurrent-repair-pre-plan-convergence-recovery.md)
+classifies the clean-environment shared-chunk stress failure as a CK-015
+remediation regression. Validation may observe a non-reusable chunk before a
+competing Store heals it, while later planning sees zero work. R1R17 discards
+that entire stale decision and reclassifies current state under repair
+serialization as healthy, `PROCESSING`, repairable, or fail-closed. Canonical
+stability observation is mutation-free and bounded by the existing deadline.
+No new finding, schema change, push, hosted certification, or Phase 13 work is
+authorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
