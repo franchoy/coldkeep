@@ -223,6 +223,13 @@ stability observation is mutation-free and bounded by the existing deadline.
 No new finding, schema change, push, hosted certification, or Phase 13 work is
 authorized.
 
+R1R17 authority `78864f0e...`, RED/seams `af492726...`, and implementation
+`5e7fb399...` preserve that contract. Complete attached and restarted fresh-
+detached certification passed with Go 1.26.7, golangci-lint 2.9.0, PostgreSQL
+16.15, full ordinary/race suites, and exact scope/identity/clean-tree proof.
+The mandatory fresh Profile A restart against the evidence commit remains
+pending; push, hosted certification, and Phase 13 remain unauthorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
