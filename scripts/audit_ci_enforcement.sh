@@ -915,6 +915,8 @@ check_local_workflow() {
 	  else
 	    require_content_pattern "$correctness_integration_block" 'COLDKEEP_TEST_DB:\s*1' 'integration correctness execution proof enables DB gate' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'go test -race -count=1 -short -json \./tests/integration/\.\.\.' 'integration correctness execution proof uses JSON evidence' || check_status=1
+	    # The regex must match literal workflow variables, not expand audit variables.
+	    # shellcheck disable=SC2016
 	    require_content_pattern "$correctness_integration_block" '2>"\$stderr_file" \| tee "\$json_file"' 'integration correctness keeps stderr separate from JSON evidence' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'refusing to reuse correctness-matrix evidence paths' 'integration correctness refuses stale evidence paths' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 'integration correctness snapshots complete pipeline status' || check_status=1
@@ -923,8 +925,14 @@ check_local_workflow() {
 	    require_content_pattern "$correctness_integration_block" 'scripts/check_required_test_events\.py' 'integration correctness invokes required-event checker' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'integration-correctness-\$\{\{ matrix\.codec \}\}' 'integration correctness selects codec-specific profile' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'checker_status=\$\?' 'integration correctness preserves checker status' || check_status=1
+	    # The regex must match the literal workflow status variable.
+	    # shellcheck disable=SC2016
 	    require_content_pattern "$correctness_integration_block" 'if \[ "\$go_status" -ne 0 \]' 'integration correctness gives Go failure first precedence' || check_status=1
+	    # The regex must match the literal workflow status variable.
+	    # shellcheck disable=SC2016
 	    require_content_pattern "$correctness_integration_block" 'elif \[ "\$capture_status" -ne 0 \]' 'integration correctness propagates evidence-capture failure' || check_status=1
+	    # The regex must match the literal workflow status assignment.
+	    # shellcheck disable=SC2016
 	    require_content_pattern "$correctness_integration_block" 'status=\$checker_status' 'integration correctness propagates checker status after pipeline success' || check_status=1
 	    # shellcheck disable=SC2016 # The audit pattern must match the literal $status.
 	    require_content_pattern "$correctness_integration_block" 'exit "\$status"' 'integration correctness execution proof remains blocking' || check_status=1
@@ -950,7 +958,11 @@ check_local_workflow() {
 	    require_content_pattern "$ck014_internal_block" 'refusing to reuse CK-014 internal evidence paths' 'CK-014 internal proofs refuse stale evidence paths' || check_status=1
 	    require_content_pattern "$ck014_internal_block" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 'CK-014 internal proofs snapshot complete pipeline status' || check_status=1
 	    require_content_pattern "$ck014_internal_block" 'capture_status=\$\{pipeline_status\[1\]\}' 'CK-014 internal proofs preserve evidence-capture status' || check_status=1
+	    # The regex must match the literal workflow status variable.
+	    # shellcheck disable=SC2016
 	    require_content_pattern "$ck014_internal_block" 'elif \[ "\$capture_status" -ne 0 \]' 'CK-014 internal proofs propagate evidence-capture failure' || check_status=1
+	    # The regex must match the literal workflow exit variable.
+	    # shellcheck disable=SC2016
 	    require_content_pattern "$ck014_internal_block" 'exit "\$status"' 'CK-014 internal proof step remains blocking' || check_status=1
 	  fi
 	  postgres_internal_contracts_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run required PostgreSQL internal package contracts")"
@@ -1158,7 +1170,11 @@ check_local_workflow() {
   require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'go_status=\$\{pipeline_status\[0\]\}' 2 'local Profile A preserves Go status in both required-event wrappers' || check_status=1
   require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'capture_status=\$\{pipeline_status\[1\]\}' 2 'local Profile A preserves evidence-capture status in both required-event wrappers' || check_status=1
   require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'checker_status=\$\?' 2 'local Profile A preserves checker status in both required-event wrappers' || check_status=1
+  # The regex must count literal checklist status variables, not expand them here.
+  # shellcheck disable=SC2016
   require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'if \[ "\$go_status" -ne 0 \]' 2 'local Profile A gives Go failure first precedence in both required-event wrappers' || check_status=1
+  # The regex must count literal checklist status variables, not expand them here.
+  # shellcheck disable=SC2016
   require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'elif \[ "\$capture_status" -ne 0 \]' 2 'local Profile A propagates evidence-capture failure in both required-event wrappers' || check_status=1
   require_pattern "$PRE_RELEASE_CHECKLIST_FILE" 'refusing to reuse integration-correctness evidence paths' 'local Profile A refuses stale integration evidence paths' || check_status=1
   require_pattern "$PRE_RELEASE_CHECKLIST_FILE" 'refusing to reuse CK-014 internal evidence paths' 'local Profile A refuses stale internal evidence paths' || check_status=1
