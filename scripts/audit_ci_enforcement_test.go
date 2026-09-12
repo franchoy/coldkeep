@@ -1813,6 +1813,93 @@ func TestAuditCIEnforcementLocalWorkflowRequiresDeterministicG6DBGate(t *testing
 	}
 }
 
+func TestAuditCIEnforcementRequiresExactFullAdversarialTimeoutParity(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+
+	const hostedWithoutTimeout = "go test -race -count=1 -json ./tests/adversarial/..."
+	const hostedWithTimeout = hostedWithoutTimeout + " -timeout 20m"
+	const localWithoutTimeout = "COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/..."
+	const localWithTimeout = localWithoutTimeout + " -timeout 20m"
+
+	validWorkflow := strings.Replace(workflow, hostedWithoutTimeout, hostedWithTimeout, 1)
+	if validWorkflow == workflow {
+		t.Fatalf("workflow fixture did not contain %q", hostedWithoutTimeout)
+	}
+	validChecklist := strings.Replace(checklist, localWithoutTimeout, localWithTimeout, 1)
+	if validChecklist == checklist {
+		t.Fatalf("checklist fixture did not contain %q", localWithoutTimeout)
+	}
+
+	runAuditLocalOnlyWithChecklistFixture(
+		t,
+		validWorkflow,
+		codeqlWorkflow,
+		validChecklist,
+		false,
+	)
+
+	tests := []struct {
+		name        string
+		workflow    string
+		checklist   string
+		wantMessage string
+	}{
+		{
+			name:        "hosted timeout omitted",
+			workflow:    strings.Replace(validWorkflow, hostedWithTimeout, hostedWithoutTimeout, 1),
+			checklist:   validChecklist,
+			wantMessage: "hosted full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "hosted timeout disabled",
+			workflow:    strings.Replace(validWorkflow, "-timeout 20m", "-timeout 0", 1),
+			checklist:   validChecklist,
+			wantMessage: "hosted full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "hosted timeout wrong",
+			workflow:    strings.Replace(validWorkflow, "-timeout 20m", "-timeout 30m", 1),
+			checklist:   validChecklist,
+			wantMessage: "hosted full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "local timeout omitted",
+			workflow:    validWorkflow,
+			checklist:   strings.Replace(validChecklist, localWithTimeout, localWithoutTimeout, 1),
+			wantMessage: "local Profile A full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "local timeout disabled",
+			workflow:    validWorkflow,
+			checklist:   strings.Replace(validChecklist, "-timeout 20m", "-timeout 0", 1),
+			wantMessage: "local Profile A full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "local and hosted disagree",
+			workflow:    validWorkflow,
+			checklist:   strings.Replace(validChecklist, "-timeout 20m", "-timeout 15m", 1),
+			wantMessage: "local Profile A full long-run adversarial package uses exact 20-minute timeout",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stderr := runAuditLocalOnlyWithChecklistFixture(
+				t,
+				test.workflow,
+				codeqlWorkflow,
+				test.checklist,
+				true,
+			)
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
 func runAuditLocalOnlyWithSourceFixture(
 	t *testing.T,
 	workflow string,
@@ -1827,6 +1914,22 @@ func runAuditLocalOnlyWithSourceFixture(
 	}
 	t.Setenv(sourceEnv, sourcePath)
 	return runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+}
+
+func runAuditLocalOnlyWithChecklistFixture(
+	t *testing.T,
+	workflow string,
+	codeqlWorkflow string,
+	checklist string,
+	wantFailure bool,
+) string {
+	t.Helper()
+	checklistPath := filepath.Join(t.TempDir(), "PRE_RELEASE_CHECKLIST.md")
+	if err := os.WriteFile(checklistPath, []byte(checklist), 0o600); err != nil {
+		t.Fatalf("write pre-release checklist fixture: %v", err)
+	}
+	t.Setenv("COLDKEEP_PRE_RELEASE_CHECKLIST_FILE", checklistPath)
+	return runAuditLocalOnly(t, workflow, codeqlWorkflow, wantFailure)
 }
 
 func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wantFailure bool) string {
