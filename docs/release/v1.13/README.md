@@ -230,6 +230,16 @@ detached certification passed with Go 1.26.7, golangci-lint 2.9.0, PostgreSQL
 The mandatory fresh Profile A restart against the evidence commit remains
 pending; push, hosted certification, and Phase 13 remain unauthorized.
 
+[Phase 12R1R18](v1.13.16-phase12r1r18-profile-a-adversarial-timeout-recovery.md)
+preserves the first genuine evidence-head Profile A failure: the full long-run
+adversarial race package reached Go's implicit ten-minute package timeout
+during active zstd work. Historical timing and a controlled identical
+pre/post-R1R17 comparison establish a timeout-policy/harness problem rather
+than a CK-015 performance/liveness regression, product defect, or new finding.
+R1R18 authorizes an explicit finite 20-minute package ceiling only for that
+unchanged full gate, plus exact checklist/workflow enforcement. No product or
+adversarial workload change is authorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
