@@ -240,6 +240,14 @@ R1R18 authorizes an explicit finite 20-minute package ceiling only for that
 unchanged full gate, plus exact checklist/workflow enforcement. No product or
 adversarial workload change is authorized.
 
+R1R18 authority `77212554...`, RED enforcement `a9f9d2ab...`, and correction
+`9d736c0f...` preserve the unchanged workload. Complete attached and fresh-
+detached recovery certification passed the affected harness, full adversarial
+long-run race package in both codec profiles, scripts ordinary/race, exact
+tooling, governance, scope, byte-identity, and clean-tree gates. Fresh Profile
+A at the evidence commit remains mandatory; push, hosted certification, and
+Phase 13 remain unauthorized.
+
 ### Historical Phase 6 chronology
 
 The chronology below preserves the pre-closure recovery states and is
