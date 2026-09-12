@@ -74,7 +74,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 12 CK-V11316-015 certified state
+### Current Phase 12 CK-V11316-014 remediation state
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 8 implementation and certification are complete at executable/evidence
@@ -127,9 +127,9 @@ CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
 CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-013,
 plus CK-V11316-015, are closed certified; CK-V11316-007 remains open.
-CK-V11316-014 remains unresolved, external, and excluded from repository
-totals without being accepted or waived. Findings are 14 confirmed and 13/14
-closed. Phase 9, Phase 10, and Phase 11 are Complete. Phase 10R1
+CK-V11316-014 is now repository-confirmed and open under the prospective
+stage-scoped-after-successful-preflight aggregation policy. Findings are 15
+confirmed and 13/15 closed. Phase 9, Phase 10, and Phase 11 are Complete. Phase 10R1
 successfully corrected CK-V11316-012's refcount fixture and proved the final
 13/13 plain and AES concurrency selectors with zero skips, then the fresh
 complete matrix stopped because the required G1 unrelated-container proof
@@ -259,6 +259,18 @@ guarantee. Post-CodeQL repository and release-branch alert enumerations were
 zero, and Codacy was `NOT_EXPOSED`. CK-V11316-015 is therefore closed
 certified, while CK-V11316-007 remains open and CK-V11316-014 remains an
 unresolved external proposal excluded from repository counters.
+
+[Phase 12R1R22 CK-V11316-014 required-proof reliability remediation](v1.13.16-phase12r1r22-ck014-test-reliability-remediation.md)
+confirms CK-V11316-014 as open and authorizes exactly two local commits. Its
+private per-invocation downstream reader preserves real fail-fast full
+preflight, the normal production path, and existing unsafe-continuation
+boundaries. Required Go JSON evidence is bound to exact package/test identities
+and requires independent Go-process, evidence-capture, event-completeness, and
+proof success. This prospective policy does not rewrite the historically
+unspecified public aggregation boundary. CK-V11316-015 remains closed
+certified, CK-V11316-007 remains open, findings are 15 confirmed and 13/15
+closed, and push, hosted execution, CK-V11316-014 closure, Phase 12 completion,
+and Phase 13 remain unauthorized.
 
 Phase 12 remains the aggregate Next phase in PLAN mode. Earlier authorized
 Phase 12 audits and diagnostics remain executed historical evidence: R1R2
