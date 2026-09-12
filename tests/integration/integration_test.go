@@ -3887,10 +3887,6 @@ func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	simRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"simulate", "store-folder", "--codec", "plain", inputDir, "--output", "json")
 	if simRes.ExitCode != 0 {
-		lowerErr := strings.ToLower(simRes.Stderr)
-		if strings.Contains(lowerErr, "database is locked") || strings.Contains(lowerErr, "context deadline exceeded") {
-			t.Skipf("skipping flaky simulate backend contention: %s", strings.TrimSpace(simRes.Stderr))
-		}
 		t.Fatalf("command simulate failed with exit=%d\nstdout:\n%s\nstderr:\n%s", simRes.ExitCode, simRes.Stdout, simRes.Stderr)
 	}
 	sim := testutils.AssertCLIJSONOK(t, simRes, "simulate")
@@ -8784,7 +8780,7 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 	)
 }
 
-func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
+func TestVerifySystemFullRejectsNonContiguousPackedBlockOffsets(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
@@ -8804,46 +8800,184 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
-	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_full_non_contiguous.bin", 4*1024*1024)
-
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
 	sgctx := testutils.NewTestContext(dbconn)
-	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
-		t.Fatalf("store file: %v", err)
-	}
-
-	var secondBlockID int64
-	var secondBlockOffset int64
-	err = dbconn.QueryRow(`
-		SELECT sb.id, sb.container_offset
-		FROM storage_blocks sb
-		ORDER BY sb.container_id ASC, sb.container_offset ASC
-		OFFSET 1
-		LIMIT 1
-	`).Scan(&secondBlockID, &secondBlockOffset)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			t.Skip("not enough completed chunks to validate offset continuity")
+	for i, fill := range []byte{0x31, 0xA7} {
+		inPath := filepath.Join(inputDir, fmt.Sprintf("verify-gap-%d.bin", i))
+		if err := os.WriteFile(inPath, bytes.Repeat([]byte{fill}, 2*1024*1024), 0o644); err != nil {
+			t.Fatalf("write deterministic packed input %d: %v", i, err)
 		}
-		t.Fatalf("query second chunk: %v", err)
+		if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
+			t.Fatalf("store deterministic packed input %d: %v", i, err)
+		}
 	}
 
-	if _, err := dbconn.Exec(`UPDATE storage_blocks SET container_offset = $1 WHERE id = $2`, secondBlockOffset+1, secondBlockID); err != nil {
-		t.Fatalf("corrupt block offset continuity: %v", err)
+	type packedPlacement struct {
+		id           int64
+		containerID  int64
+		offset       int64
+		storedSize   int64
+		blockHash    []byte
+		physicalHash []byte
+	}
+	rows, err := dbconn.Query(`
+		SELECT id, container_id, container_offset, stored_size, block_hash, physical_hash
+		FROM storage_blocks
+		ORDER BY container_id, container_offset
+	`)
+	if err != nil {
+		t.Fatalf("query healthy packed placements: %v", err)
+	}
+	var placements []packedPlacement
+	for rows.Next() {
+		var placement packedPlacement
+		if err := rows.Scan(&placement.id, &placement.containerID, &placement.offset, &placement.storedSize, &placement.blockHash, &placement.physicalHash); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan healthy packed placement: %v", err)
+		}
+		placements = append(placements, placement)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate healthy packed placements: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close healthy packed placements: %v", err)
+	}
+	if len(placements) < 2 {
+		t.Fatalf("packed occupancy fixture requires at least two blocks, got %d", len(placements))
 	}
 
-	testutils.AssertErrorContainsAny(
-		t,
-		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
-		[]string{
-			"verifyStorageBlocks: storage_blocks rows with impossible container ranges",
-			"verifyChunkBlockRefs: chunk",
-		},
-		"system-full non-contiguous-offsets",
-	)
+	firstContainerID := placements[0].containerID
+	var target []packedPlacement
+	for _, placement := range placements {
+		if placement.containerID == firstContainerID {
+			target = append(target, placement)
+		}
+	}
+	if len(target) < 2 {
+		t.Fatalf("packed occupancy fixture requires two blocks in one container, got %d", len(target))
+	}
+	for i := 1; i < len(target); i++ {
+		want := target[i-1].offset + target[i-1].storedSize
+		if target[i].offset != want {
+			t.Fatalf("healthy packed fixture is not contiguous at block %d: got=%d want=%d", target[i].id, target[i].offset, want)
+		}
+	}
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("healthy packed occupancy fixture failed full verification: %v", err)
+	}
+
+	var filename string
+	var currentSize int64
+	var sealed bool
+	var containerHash sql.NullString
+	if err := dbconn.QueryRow(`SELECT filename, current_size, sealed, container_hash FROM container WHERE id = $1`, firstContainerID).Scan(&filename, &currentSize, &sealed, &containerHash); err != nil {
+		t.Fatalf("query target container state: %v", err)
+	}
+	if sealed || containerHash.Valid {
+		t.Fatalf("packed occupancy fixture must be active and unhashed: sealed=%t container_hash=%v", sealed, containerHash)
+	}
+	for table, query := range map[string]string{
+		"retired legacy": `SELECT COUNT(*) FROM retired_legacy_block_extent WHERE container_id = $1`,
+		"repair staging": `SELECT COUNT(*) FROM store_repair_block WHERE container_id = $1`,
+		"legacy-only":    `SELECT COUNT(*) FROM blocks b WHERE b.container_id = $1 AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id)`,
+	} {
+		var count int
+		if err := dbconn.QueryRow(query, firstContainerID).Scan(&count); err != nil {
+			t.Fatalf("query %s placement count: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("fresh packed occupancy fixture has %d unexpected %s placements", count, table)
+		}
+	}
+
+	containerPath := filepath.Join(container.ContainersDir, filename)
+	originalFile, err := os.ReadFile(containerPath)
+	if err != nil {
+		t.Fatalf("read target container: %v", err)
+	}
+	if int64(len(originalFile)) != currentSize {
+		t.Fatalf("healthy target container size mismatch: file=%d catalog=%d", len(originalFile), currentSize)
+	}
+	insertionOffset := target[1].offset
+	if insertionOffset <= 0 || insertionOffset >= int64(len(originalFile)) {
+		t.Fatalf("invalid physical gap insertion offset %d for file size %d", insertionOffset, len(originalFile))
+	}
+	beforePayloads := make(map[int64][]byte)
+	for _, placement := range target[1:] {
+		beforePayloads[placement.id] = append([]byte(nil), originalFile[placement.offset:placement.offset+placement.storedSize]...)
+	}
+	mutatedFile := make([]byte, 0, len(originalFile)+1)
+	mutatedFile = append(mutatedFile, originalFile[:insertionOffset]...)
+	mutatedFile = append(mutatedFile, 0x00)
+	mutatedFile = append(mutatedFile, originalFile[insertionOffset:]...)
+	info, err := os.Stat(containerPath)
+	if err != nil {
+		t.Fatalf("stat target container: %v", err)
+	}
+	if err := os.WriteFile(containerPath, mutatedFile, info.Mode().Perm()); err != nil {
+		t.Fatalf("insert isolated physical gap: %v", err)
+	}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin packed gap catalog update: %v", err)
+	}
+	for _, placement := range target[1:] {
+		if _, err := tx.Exec(`
+			UPDATE blocks
+			SET block_offset = block_offset + 1
+			WHERE container_id = $1
+			  AND chunk_id IN (SELECT chunk_id FROM chunk_block_refs WHERE block_id = $2)
+		`, firstContainerID, placement.id); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("shift migration companions for block %d: %v", placement.id, err)
+		}
+		if _, err := tx.Exec(`UPDATE storage_blocks SET container_offset = container_offset + 1 WHERE id = $1`, placement.id); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("shift packed block %d: %v", placement.id, err)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE container SET current_size = current_size + 1 WHERE id = $1`, firstContainerID); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("update target container size: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit packed gap catalog update: %v", err)
+	}
+
+	afterFile, err := os.ReadFile(containerPath)
+	if err != nil {
+		t.Fatalf("read target container after gap insertion: %v", err)
+	}
+	for _, placement := range target[1:] {
+		shifted := afterFile[placement.offset+1 : placement.offset+1+placement.storedSize]
+		if !bytes.Equal(shifted, beforePayloads[placement.id]) {
+			t.Fatalf("block %d payload bytes changed while inserting the gap", placement.id)
+		}
+		var blockHash, physicalHash []byte
+		if err := dbconn.QueryRow(`SELECT block_hash, physical_hash FROM storage_blocks WHERE id = $1`, placement.id).Scan(&blockHash, &physicalHash); err != nil {
+			t.Fatalf("query preserved hashes for block %d: %v", placement.id, err)
+		}
+		if !bytes.Equal(blockHash, placement.blockHash) || !bytes.Equal(physicalHash, placement.physicalHash) {
+			t.Fatalf("block %d hashes changed while inserting the gap", placement.id)
+		}
+	}
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("isolated occupancy gap failed an earlier standard prerequisite: %v", err)
+	}
+
+	err = maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull)
+	want := fmt.Sprintf("payload occupancy gap or overlap: expected_offset=%d actual_offset=%d kind=packed", insertionOffset, insertionOffset+1)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected exact packed occupancy gap %q, got: %v", want, err)
+	}
 }
 
-func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
+func TestVerifySystemDeepCLIRejectsTwoPreexistingPackedPhysicalCorruptionsAtPreflight(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
@@ -8872,7 +9006,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	}
 
 	rows, err := dbconn.Query(`
-		SELECT sb.container_offset, sb.stored_size, ctr.filename
+		SELECT sb.id, sb.container_offset, sb.stored_size, ctr.filename
 		FROM storage_blocks sb
 		JOIN container ctr ON ctr.id = sb.container_id
 		ORDER BY sb.container_id ASC, sb.container_offset ASC
@@ -8884,6 +9018,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	defer rows.Close()
 
 	type chunkToCorrupt struct {
+		BlockID     int64
 		BlockOffset int64
 		StoredSize  int64
 		filename    string
@@ -8891,7 +9026,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	var chunksToCorrupt []chunkToCorrupt
 	for rows.Next() {
 		var c chunkToCorrupt
-		if err := rows.Scan(&c.BlockOffset, &c.StoredSize, &c.filename); err != nil {
+		if err := rows.Scan(&c.BlockID, &c.BlockOffset, &c.StoredSize, &c.filename); err != nil {
 			t.Fatalf("scan chunk for corruption: %v", err)
 		}
 		chunksToCorrupt = append(chunksToCorrupt, c)
@@ -8900,7 +9035,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 		t.Fatalf("iterate chunks for corruption: %v", err)
 	}
 	if len(chunksToCorrupt) < 2 {
-		t.Skip("not enough completed chunks to validate deep aggregation")
+		t.Fatalf("packed CLI corruption fixture requires two blocks, got %d", len(chunksToCorrupt))
 	}
 
 	for _, c := range chunksToCorrupt {
@@ -8914,21 +9049,58 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 		if c.StoredSize > 1 {
 			corruptionOffset++
 		}
-		if _, err := f.WriteAt([]byte{0xEE}, corruptionOffset); err != nil {
+		original := []byte{0}
+		if _, err := f.ReadAt(original, corruptionOffset); err != nil {
 			_ = f.Close()
-			t.Fatalf("corrupt chunk byte: %v", err)
+			t.Fatalf("read block %d corruption target: %v", c.BlockID, err)
+		}
+		if _, err := f.WriteAt([]byte{original[0] ^ 0xFF}, corruptionOffset); err != nil {
+			_ = f.Close()
+			t.Fatalf("corrupt block %d byte: %v", c.BlockID, err)
 		}
 		if err := f.Close(); err != nil {
 			t.Fatalf("close container file: %v", err)
 		}
 	}
 
-	testutils.AssertErrorContains(
-		t,
-		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
-		"physical_hash_mismatch: stage=physical_payload",
-		"system-deep multiple corrupted chunks",
-	)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+	result := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify", "system", "--deep", "--output", "json")
+	if result.ExitCode != 3 {
+		t.Fatalf("deep CLI preflight corruption exit=%d want=3\nstdout:\n%s\nstderr:\n%s", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	payload, ok := testutils.FindCLIErrorPayload(result.Stderr)
+	if !ok {
+		payload, ok = testutils.FindCLIErrorPayload(result.Stdout + "\n" + result.Stderr)
+	}
+	if !ok {
+		t.Fatalf("deep CLI preflight corruption produced no error JSON\nstdout:\n%s\nstderr:\n%s", result.Stdout, result.Stderr)
+	}
+	if got, _ := payload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("deep CLI error_class=%q want=VERIFY payload=%v", got, payload)
+	}
+	message, _ := payload["message"].(string)
+	if !strings.Contains(message, "physical_hash_mismatch: stage=physical_payload") {
+		t.Fatalf("deep CLI did not report source-backed physical mismatch: payload=%v", payload)
+	}
+	reportedBlock, ok := payload["block"].(float64)
+	if !ok {
+		t.Fatalf("deep CLI physical mismatch omitted structured block identity: payload=%v", payload)
+	}
+	reportedTarget := false
+	for _, target := range chunksToCorrupt {
+		if int64(reportedBlock) == target.BlockID {
+			reportedTarget = true
+			break
+		}
+	}
+	if !reportedTarget {
+		t.Fatalf("deep CLI reported untargeted block %.0f; targets=%d,%d payload=%v", reportedBlock, chunksToCorrupt[0].BlockID, chunksToCorrupt[1].BlockID, payload)
+	}
+	if strings.Contains(message, "found 2 errors in deep verification") {
+		t.Fatalf("preflight-rejection proof was mislabeled as downstream aggregation: payload=%v", payload)
+	}
 }
 
 func TestZeroByteFile(t *testing.T) {

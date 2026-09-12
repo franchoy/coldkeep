@@ -178,70 +178,35 @@ jobs:
           diag_dir="${RUNNER_TEMP}/integration-diag"
           mkdir -p "$diag_dir"
           json_file="$diag_dir/correctness-matrix-${{ matrix.codec }}.json"
+          stderr_file="$diag_dir/correctness-matrix-${{ matrix.codec }}.stderr"
+          if [ -e "$json_file" ] || [ -e "$stderr_file" ]; then
+            echo "refusing to reuse correctness-matrix evidence paths" >&2
+            exit 1
+          fi
 
-          go test -race -count=1 -short -json ./tests/integration/... | tee "$json_file"
-          status=${PIPESTATUS[0]}
+          go test -race -count=1 -short -json ./tests/integration/... 2>"$stderr_file" | tee "$json_file"
+          pipeline_status=("${PIPESTATUS[@]}")
+          go_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
 
-          if [ "$status" -eq 0 ]; then
-          python3 - "$json_file" "${{ matrix.codec }}" <<'PY'
-          import json
-          import re
-          import sys
+          python3 scripts/check_required_test_events.py \
+            --profile "integration-correctness-${{ matrix.codec }}" \
+            --events "$json_file"
+          checker_status=$?
 
-          json_file, codec = sys.argv[1:]
-          package = "github.com/franchoy/coldkeep/tests/integration"
-          expected = [
-              r"^TestRoundTripStoreRestore$",
-          ]
-          if codec == "plain":
-              expected.extend([
-                  r"^TestRemoveWithSharedChunksRefCount$",
-                  r"^TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState$",
-              ])
-
-          events = []
-          malformed = []
-          try:
-              with open(json_file, encoding="utf-8") as handle:
-                  for line_number, raw_line in enumerate(handle, start=1):
-                      try:
-                          events.append(json.loads(raw_line))
-                      except json.JSONDecodeError as exc:
-                          malformed.append(f"line {line_number}: {exc}")
-          except OSError as exc:
-              print(f"required execution-proof failure: cannot read {json_file}: {exc}", file=sys.stderr)
-              sys.exit(1)
-
-          failures = []
-          if not events:
-              failures.append("JSON evidence file contained no events")
-          if malformed:
-              failures.append("malformed JSON evidence: " + "; ".join(malformed[:3]))
-
-          package_events = [event for event in events if event.get("Package") == package]
-          for pattern in expected:
-              matching = [
-                  event for event in package_events
-                  if re.search(pattern, event.get("Test", ""))
-              ]
-              skipped = [event.get("Test", "") for event in matching if event.get("Action") == "skip"]
-              passed = [event.get("Test", "") for event in matching if event.get("Action") == "pass"]
-              if skipped:
-                  failures.append(f"required test skipped: selector={pattern} tests={skipped}")
-              if not passed:
-                  failures.append(f"required pass missing: package={package} selector={pattern}")
-
-          if failures:
-              print("required execution-proof failure:", file=sys.stderr)
-              for failure in failures:
-                  print(f"- {failure}", file=sys.stderr)
-              sys.exit(1)
-          PY
-            status=$?
+          if [ "$go_status" -ne 0 ]; then
+            status=$go_status
+          elif [ "$capture_status" -ne 0 ]; then
+            status=$capture_status
+          else
+            status=$checker_status
           fi
 
           if [ "$status" -ne 0 ]; then
             echo "correctness-matrix failed for codec=${{ matrix.codec }}"
+            echo "go_status=$go_status capture_status=$capture_status checker_status=$checker_status"
+            echo "go stderr:"
+            cat "$stderr_file" || true
             first_test_fail=$(grep '"Action":"fail"' "$json_file" | grep '"Test":' | head -n 1 || true)
             first_package_fail=$(grep '"Action":"fail"' "$json_file" | head -n 1 || true)
 
@@ -264,6 +229,52 @@ jobs:
             echo "package-level failure markers (first 20):"
             grep -E '"Output":".*(WARNING: DATA RACE|race detected during execution of test|panic:|fatal error:|signal:|FAIL\\t|FAIL\\n)' "$json_file" | head -n 20 || true
 
+            echo "last 120 JSON lines:"
+            tail -n 120 "$json_file" || true
+          fi
+
+          exit "$status"
+
+      - name: Run CK-014 internal verification proofs
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_CODEC: plain
+        run: |
+          set +e
+          diag_dir="${RUNNER_TEMP}/integration-diag"
+          mkdir -p "$diag_dir"
+          json_file="$diag_dir/ck014-internal-verify.json"
+          stderr_file="$diag_dir/ck014-internal-verify.stderr"
+          if [ -e "$json_file" ] || [ -e "$stderr_file" ]; then
+            echo "refusing to reuse CK-014 internal evidence paths" >&2
+            exit 1
+          fi
+
+          go test -race -count=1 -json ./internal/verify \
+            -run '^(TestVerifySystemDeepPreflightFailureDoesNotInvokeDownstreamReader|TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults|TestVerifySystemDeepInjectedDownstreamReaderCleanPipelinePasses|TestVerifySystemDeepRejectsNilDownstreamReaderAfterPreflight)$' \
+            2>"$stderr_file" | tee "$json_file"
+          pipeline_status=("${PIPESTATUS[@]}")
+          go_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+
+          python3 scripts/check_required_test_events.py \
+            --profile ck014-internal-verify \
+            --events "$json_file"
+          checker_status=$?
+
+          if [ "$go_status" -ne 0 ]; then
+            status=$go_status
+          elif [ "$capture_status" -ne 0 ]; then
+            status=$capture_status
+          else
+            status=$checker_status
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "CK-014 internal verification proof failed"
+            echo "go_status=$go_status capture_status=$capture_status checker_status=$checker_status"
+            echo "go stderr:"
+            cat "$stderr_file" || true
             echo "last 120 JSON lines:"
             tail -n 120 "$json_file" || true
           fi

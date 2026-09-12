@@ -1393,6 +1393,10 @@ func cloneAuditRepositoryOnBranch(t *testing.T, branch string) string {
 	if output, err := checkout.CombinedOutput(); err != nil {
 		t.Fatalf("create audit fixture branch %s: %v\n%s", branch, err, output)
 	}
+	auditPath := filepath.Join(root, "scripts", "audit_ci_enforcement.sh")
+	if err := os.WriteFile(auditPath, []byte(readRepoFile(t, filepath.Join("scripts", "audit_ci_enforcement.sh"))), 0o755); err != nil {
+		t.Fatalf("install current CI audit in cloned repository fixture: %v", err)
+	}
 	return root
 }
 
@@ -1518,87 +1522,91 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 		},
 		{
 			name:        "storage round-trip marker",
-			anchor:      "      - name: Run integration tests (correctness tier)\n",
 			old:         "TestRoundTripStoreRestore",
 			replacement: "RemovedRoundTripMarker",
-			wantMessage: "required PostgreSQL storage round-trip execution proof",
+			wantMessage: "required-event profiles preserve storage round-trip proof",
+			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
+			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
 		},
 		{
 			name:        "storage remove marker",
-			anchor:      "      - name: Run integration tests (correctness tier)\n",
 			old:         "TestRemoveWithSharedChunksRefCount",
 			replacement: "RemovedSharedChunkMarker",
-			wantMessage: "required PostgreSQL storage remove execution proof",
+			wantMessage: "required-event profiles preserve remove proof",
+			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
+			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
 		},
 		{
 			name:        "startup recovery marker",
-			anchor:      "      - name: Run integration tests (correctness tier)\n",
 			old:         "TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState",
 			replacement: "TestStartupRecoveryMarkerRemoved",
-			wantMessage: "required PostgreSQL recovery execution proof",
+			wantMessage: "required-event profiles preserve recovery proof",
+			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
+			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
 		},
 		{
-			name:        "correctness plain codec scope",
+			name:        "correctness profile selection",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "if codec == \"plain\":",
-			replacement: "if codec == \"unused\":",
-			wantMessage: "integration correctness execution proof scopes recovery and remove markers to plain codec",
+			old:         "integration-correctness-${{ matrix.codec }}",
+			replacement: "integration-correctness-wrong",
+			wantMessage: "integration correctness selects codec-specific profile",
 		},
 		{
 			name:        "correctness package binding",
-			anchor:      "      - name: Run integration tests (correctness tier)\n",
 			old:         "github.com/franchoy/coldkeep/tests/integration",
 			replacement: "github.com/franchoy/coldkeep/tests/adversarial",
-			wantMessage: "integration correctness execution proof binds the integration package",
+			wantMessage: "required-event profiles bind integration package",
+			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
+			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
 		},
 		{
-			name:        "correctness malformed JSON rejection",
+			name:        "correctness stderr separation",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "json.loads(raw_line)",
-			replacement: "{}",
-			wantMessage: "integration correctness execution proof rejects malformed JSON",
+			old:         "2>\"$stderr_file\" | tee \"$json_file\"",
+			replacement: "| tee \"$json_file\"",
+			wantMessage: "integration correctness keeps stderr separate from JSON evidence",
 		},
 		{
-			name:        "correctness empty JSON rejection",
+			name:        "correctness pipeline status snapshot",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "if not events:",
-			replacement: "if False:",
-			wantMessage: "integration correctness execution proof rejects empty JSON",
+			old:         "pipeline_status=(\"${PIPESTATUS[@]}\")",
+			replacement: "pipeline_status=(0 0)",
+			wantMessage: "integration correctness snapshots complete pipeline status",
 		},
 		{
-			name:        "correctness skip rejection",
+			name:        "correctness Go status",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "event.get(\"Action\") == \"skip\"",
-			replacement: "False",
-			wantMessage: "integration correctness execution proof rejects required skips",
+			old:         "go_status=${pipeline_status[0]}",
+			replacement: "go_status=0",
+			wantMessage: "integration correctness preserves Go status",
 		},
 		{
-			name:        "correctness pass requirement",
+			name:        "correctness capture status",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "event.get(\"Action\") == \"pass\"",
-			replacement: "event.get(\"Action\") == \"output\"",
-			wantMessage: "integration correctness execution proof requires pass events",
+			old:         "capture_status=${pipeline_status[1]}",
+			replacement: "capture_status=0",
+			wantMessage: "integration correctness preserves evidence-capture status",
 		},
 		{
-			name:        "correctness parser diagnostic",
+			name:        "correctness checker invocation",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "print(\"required execution-proof failure:\", file=sys.stderr)",
-			replacement: "print(\"execution proof failed\", file=sys.stderr)",
-			wantMessage: "integration correctness execution-proof parser",
+			old:         "python3 scripts/check_required_test_events.py",
+			replacement: "python3 scripts/removed_required_test_events.py",
+			wantMessage: "integration correctness invokes required-event checker",
 		},
 		{
-			name:        "correctness test status",
+			name:        "correctness checker status",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "status=${PIPESTATUS[0]}",
-			replacement: "status=0",
-			wantMessage: "integration correctness execution proof preserves test status",
+			old:         "checker_status=$?",
+			replacement: "checker_status=0",
+			wantMessage: "integration correctness preserves checker status",
 		},
 		{
-			name:        "correctness parser status",
+			name:        "correctness capture failure propagation",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "status=$?",
-			replacement: "status=0",
-			wantMessage: "integration correctness execution proof propagates parser status",
+			old:         "elif [ \"$capture_status\" -ne 0 ]; then",
+			replacement: "elif false; then",
+			wantMessage: "integration correctness propagates evidence-capture failure",
 		},
 		{
 			name:        "correctness blocking exit",
@@ -1774,6 +1782,103 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 			targetIndex := anchorIndex + targetOffset
 			mutated := workflow[:targetIndex] + test.replacement + workflow[targetIndex+len(test.old):]
 			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK014RequiredProofWiring(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	tests := []struct {
+		name        string
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		{
+			name:        "missing internal checker step",
+			old:         "      - name: Run CK-014 internal verification proofs\n",
+			replacement: "      - name: Removed CK-014 internal verification proofs\n",
+			wantMessage: "missing CK-014 internal verification proof step",
+		},
+		{
+			name:        "internal proof wrong codec leg",
+			old:         "      - name: Run CK-014 internal verification proofs\n        if: ${{ matrix.codec == 'plain' }}\n",
+			replacement: "      - name: Run CK-014 internal verification proofs\n        if: ${{ matrix.codec == 'aes-gcm' }}\n",
+			wantMessage: "CK-014 internal proofs run only in plain correctness leg",
+		},
+		{
+			name:        "internal proof missing aggregation selector",
+			old:         "TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults",
+			replacement: "RemovedTwoFaultAggregationProof",
+			wantMessage: "CK-014 downstream aggregation proof selector",
+		},
+		{
+			name:        "internal capture failure suppressed",
+			old:         "elif [ \"$capture_status\" -ne 0 ]; then\n            status=$capture_status",
+			replacement: "elif false; then\n            status=0",
+			wantMessage: "CK-014 internal proofs propagate evidence-capture failure",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := strings.Replace(workflow, test.old, test.replacement, 1)
+			if mutated == workflow {
+				t.Fatalf("workflow fixture did not contain %q", test.old)
+			}
+			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK014ProfileAParity(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	tests := []struct {
+		name        string
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		{
+			name:        "missing codec profile",
+			old:         "--profile \"integration-correctness-${codec}\"",
+			replacement: "--profile \"integration-correctness-removed\"",
+			wantMessage: "local Profile A selects codec-specific required-event profile",
+		},
+		{
+			name:        "missing internal profile",
+			old:         "--profile ck014-internal-verify",
+			replacement: "--profile removed-internal-verify",
+			wantMessage: "local Profile A invokes CK-014 internal required-event profile",
+		},
+		{
+			name:        "pipeline status not snapshotted",
+			old:         "pipeline_status=(\"${PIPESTATUS[@]}\")",
+			replacement: "pipeline_status=(0 0)",
+			wantMessage: "local Profile A snapshots complete pipeline status",
+		},
+		{
+			name:        "capture failure suppressed",
+			old:         "elif [ \"$capture_status\" -ne 0 ]; then",
+			replacement: "elif false; then",
+			wantMessage: "local Profile A propagates evidence-capture failure",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := strings.Replace(checklist, test.old, test.replacement, 1)
+			if mutated == checklist {
+				t.Fatalf("checklist fixture did not contain %q", test.old)
+			}
+			stderr := runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
 			if !strings.Contains(stderr, test.wantMessage) {
 				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
 			}
@@ -2068,6 +2173,14 @@ func runAuditFixtureWithTimingValidator(
 	if configured := os.Getenv("COLDKEEP_AUDIT_TEST_REPO_ROOT"); configured != "" {
 		auditRoot = configured
 	}
+	preReleaseChecklistPath := os.Getenv("COLDKEEP_PRE_RELEASE_CHECKLIST_FILE")
+	if preReleaseChecklistPath == "" {
+		preReleaseChecklistPath = filepath.Join(repoRoot(t), "PRE_RELEASE_CHECKLIST.md")
+	}
+	requiredTestEventsPath := os.Getenv("COLDKEEP_REQUIRED_TEST_EVENTS_FILE")
+	if requiredTestEventsPath == "" {
+		requiredTestEventsPath = filepath.Join(repoRoot(t), "scripts", "check_required_test_events.py")
+	}
 	cmd := exec.Command("bash", "scripts/audit_ci_enforcement.sh", "--local-only")
 	cmd.Dir = auditRoot
 	cmd.Env = append(os.Environ(),
@@ -2076,6 +2189,8 @@ func runAuditFixtureWithTimingValidator(
 		"COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE="+baselineWorkflowPath,
 		"COLDKEEP_TIMING_VALIDATOR_FILE="+timingValidatorPath,
 		"COLDKEEP_VALIDATION_MATRIX_FILE="+matrixPath,
+		"COLDKEEP_PRE_RELEASE_CHECKLIST_FILE="+preReleaseChecklistPath,
+		"COLDKEEP_REQUIRED_TEST_EVENTS_FILE="+requiredTestEventsPath,
 		"COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE="+pairedReferencePath,
 		"COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE="+pairedThresholdPath,
 	)

@@ -338,13 +338,41 @@ Do not skip `unset` lines in step 3.
 
 ```bash
 unset COLDKEEP_STORAGE_DIR
+: "${COLDKEEP_PROFILE_A_EVIDENCE_DIR:?set COLDKEEP_PROFILE_A_EVIDENCE_DIR to a fresh external evidence directory}"
+mkdir -p "$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events"
 
 for codec in plain aes-gcm; do
   echo "=== Codec: ${codec} ==="
   export COLDKEEP_CODEC="$codec"
 
   # integration-correctness
-  go test -race -count=1 -short ./tests/integration/...
+  json_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/integration-correctness-${codec}.json"
+  stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/integration-correctness-${codec}.stderr"
+  if [ -e "$json_file" ] || [ -e "$stderr_file" ]; then
+    echo "refusing to reuse integration-correctness evidence paths" >&2
+    exit 1
+  fi
+  set +e
+  GOTOOLCHAIN=local go test -race -count=1 -short -json ./tests/integration/... \
+    2>"$stderr_file" | tee "$json_file"
+  pipeline_status=("${PIPESTATUS[@]}")
+  go_status=${pipeline_status[0]}
+  capture_status=${pipeline_status[1]}
+  python3 scripts/check_required_test_events.py \
+    --profile "integration-correctness-${codec}" \
+    --events "$json_file"
+  checker_status=$?
+  set -e
+  if [ "$go_status" -ne 0 ]; then
+    cat "$stderr_file" >&2 || true
+    exit "$go_status"
+  elif [ "$capture_status" -ne 0 ]; then
+    cat "$stderr_file" >&2 || true
+    exit "$capture_status"
+  elif [ "$checker_status" -ne 0 ]; then
+    cat "$stderr_file" >&2 || true
+    exit "$checker_status"
+  fi
 
   # integration-stress
   go test -race -count=1 ./tests/integration/...
@@ -370,6 +398,37 @@ for codec in plain aes-gcm; do
   PATH="$PWD:$PATH" \
   scripts/smoke.sh
 done
+
+# CK-V11316-014 internal production-pipeline proofs. Real full preflight runs
+# before the private per-invocation reader used by the downstream tests.
+json_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/ck014-internal-verify.json"
+stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/ck014-internal-verify.stderr"
+if [ -e "$json_file" ] || [ -e "$stderr_file" ]; then
+  echo "refusing to reuse CK-014 internal evidence paths" >&2
+  exit 1
+fi
+set +e
+GOTOOLCHAIN=local COLDKEEP_CODEC=plain go test -race -count=1 -json ./internal/verify \
+  -run '^(TestVerifySystemDeepPreflightFailureDoesNotInvokeDownstreamReader|TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults|TestVerifySystemDeepInjectedDownstreamReaderCleanPipelinePasses|TestVerifySystemDeepRejectsNilDownstreamReaderAfterPreflight)$' \
+  2>"$stderr_file" | tee "$json_file"
+pipeline_status=("${PIPESTATUS[@]}")
+go_status=${pipeline_status[0]}
+capture_status=${pipeline_status[1]}
+python3 scripts/check_required_test_events.py \
+  --profile ck014-internal-verify \
+  --events "$json_file"
+checker_status=$?
+set -e
+if [ "$go_status" -ne 0 ]; then
+  cat "$stderr_file" >&2 || true
+  exit "$go_status"
+elif [ "$capture_status" -ne 0 ]; then
+  cat "$stderr_file" >&2 || true
+  exit "$capture_status"
+elif [ "$checker_status" -ne 0 ]; then
+  cat "$stderr_file" >&2 || true
+  exit "$checker_status"
+fi
 
 # Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).
 # Reset it before the benchmark block and manual CLI checks in later steps.

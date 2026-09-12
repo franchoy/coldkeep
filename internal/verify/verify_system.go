@@ -389,6 +389,16 @@ func verifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string, led
 }
 
 func verifySystemDeepWithContainersDirContext(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger) error {
+	return verifySystemDeepWithContainersDirContextUsingReader(
+		ctx,
+		dbconn,
+		containersDir,
+		ledger,
+		FilesystemContainerReader{ContainersDir: containersDir},
+	)
+}
+
+func verifySystemDeepWithContainersDirContextUsingReader(ctx context.Context, dbconn *sql.DB, containersDir string, ledger *verificationExecutionLedger, downstreamReader ContainerReader) error {
 	// deep = full checks + byte-level physical integrity.
 	//
 	// For every container with packed block data: open the file and verify each
@@ -402,6 +412,9 @@ func verifySystemDeepWithContainersDirContext(ctx context.Context, dbconn *sql.D
 	//first verify full checks
 	if err = verifySystemFullWithContainersDirContext(ctx, dbconn, containersDir, ledger); err != nil {
 		return err
+	}
+	if downstreamReader == nil {
+		return fmt.Errorf("deep verification downstream container reader is nil")
 	}
 
 	//real deep verification
@@ -417,8 +430,6 @@ func verifySystemDeepWithContainersDirContext(ctx context.Context, dbconn *sql.D
 		errorCount++
 		errorList = utils_print.AppendToErrorList(errorList, err)
 	}
-	reader := FilesystemContainerReader{ContainersDir: containersDir}
-
 	ctx = withVerificationExecutionLedger(ctx, ledger)
 
 	containers, err := loadDeepVerifyContainers(ctx, dbconn)
@@ -551,7 +562,7 @@ func verifySystemDeepWithContainersDirContext(ctx context.Context, dbconn *sql.D
 					LogicalHash:      blockHash,
 					CompressedHash:   compressedHash,
 					PhysicalHash:     physicalHash,
-				}, reader)
+				}, downstreamReader)
 				if err != nil {
 					appendDeepError(fmt.Errorf("verify block payload for container %q at offset %d: %w", filename, blockOffset, err))
 					expectedOffset = nextExpectedOffset

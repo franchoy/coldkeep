@@ -87,6 +87,7 @@ SNAPSHOT_EVIDENCE_VALIDATOR_FILE="${COLDKEEP_SNAPSHOT_EVIDENCE_VALIDATOR_FILE:-$
 RELEASE_LINEARITY_VALIDATOR_FILE="${COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE:-$REPO_ROOT/scripts/validate_release_linearity.sh}"
 RELEASE_BENCHMARK_EVIDENCE_FILE="${COLDKEEP_RELEASE_BENCHMARK_EVIDENCE_FILE:-$REPO_ROOT/scripts/release_benchmark_evidence.sh}"
 RELEASE_BENCHMARK_RUNNER_FILE="${COLDKEEP_RELEASE_BENCHMARK_RUNNER_FILE:-$REPO_ROOT/scripts/run_release_benchmark_evidence.sh}"
+REQUIRED_TEST_EVENTS_FILE="${COLDKEEP_REQUIRED_TEST_EVENTS_FILE:-$REPO_ROOT/scripts/check_required_test_events.py}"
 
 require_pattern() {
   local file="$1"
@@ -97,6 +98,22 @@ require_pattern() {
     echo "[audit] ok: $description"
   else
     echo "[audit] ERROR: missing $description" >&2
+    return 1
+  fi
+}
+
+require_pattern_count() {
+  local file="$1"
+  local pattern="$2"
+  local expected="$3"
+  local description="$4"
+  local actual
+
+  actual=$(grep -Ec -- "$pattern" "$file" || true)
+  if [[ "$actual" -eq "$expected" ]]; then
+    echo "[audit] ok: $description ($actual/$expected)"
+  else
+    echo "[audit] ERROR: $description count is $actual, expected $expected" >&2
     return 1
   fi
 }
@@ -898,18 +915,17 @@ check_local_workflow() {
 	  else
 	    require_content_pattern "$correctness_integration_block" 'COLDKEEP_TEST_DB:\s*1' 'integration correctness execution proof enables DB gate' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'go test -race -count=1 -short -json \./tests/integration/\.\.\.' 'integration correctness execution proof uses JSON evidence' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'TestRoundTripStoreRestore' 'required PostgreSQL storage round-trip execution proof' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'TestRemoveWithSharedChunksRefCount' 'required PostgreSQL storage remove execution proof' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState' 'required PostgreSQL recovery execution proof' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'github.com/franchoy/coldkeep/tests/integration' 'integration correctness execution proof binds the integration package' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'if codec == "plain"' 'integration correctness execution proof scopes recovery and remove markers to plain codec' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'json\.loads\(raw_line\)' 'integration correctness execution proof rejects malformed JSON' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'if not events:' 'integration correctness execution proof rejects empty JSON' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'event\.get\("Action"\) == "skip"' 'integration correctness execution proof rejects required skips' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'event\.get\("Action"\) == "pass"' 'integration correctness execution proof requires pass events' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'print\("required execution-proof failure:", file=sys\.stderr\)' 'integration correctness execution-proof parser' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'status=\$\{PIPESTATUS\[0\]\}' 'integration correctness execution proof preserves test status' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'status=\$\?' 'integration correctness execution proof propagates parser status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" '2>"\$stderr_file" \| tee "\$json_file"' 'integration correctness keeps stderr separate from JSON evidence' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'refusing to reuse correctness-matrix evidence paths' 'integration correctness refuses stale evidence paths' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 'integration correctness snapshots complete pipeline status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'go_status=\$\{pipeline_status\[0\]\}' 'integration correctness preserves Go status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'capture_status=\$\{pipeline_status\[1\]\}' 'integration correctness preserves evidence-capture status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'scripts/check_required_test_events\.py' 'integration correctness invokes required-event checker' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'integration-correctness-\$\{\{ matrix\.codec \}\}' 'integration correctness selects codec-specific profile' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'checker_status=\$\?' 'integration correctness preserves checker status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'if \[ "\$go_status" -ne 0 \]' 'integration correctness gives Go failure first precedence' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'elif \[ "\$capture_status" -ne 0 \]' 'integration correctness propagates evidence-capture failure' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'status=\$checker_status' 'integration correctness propagates checker status after pipeline success' || check_status=1
 	    # shellcheck disable=SC2016 # The audit pattern must match the literal $status.
 	    require_content_pattern "$correctness_integration_block" 'exit "\$status"' 'integration correctness execution proof remains blocking' || check_status=1
 	    if grep -Eq 'continue-on-error|go test .*\|\| true' <<<"$correctness_integration_block"; then
@@ -918,6 +934,24 @@ check_local_workflow() {
 	    else
 	      echo "[audit] ok: integration correctness execution-proof step does not suppress broad failures"
 	    fi
+	  fi
+	  ck014_internal_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run CK-014 internal verification proofs")"
+	  if [[ -z "$ck014_internal_block" ]]; then
+	    echo "[audit] ERROR: missing CK-014 internal verification proof step" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$ck014_internal_block" "if: \\$\\{\\{ matrix\.codec == 'plain' \\}\\}" 'CK-014 internal proofs run only in plain correctness leg' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'go test -race -count=1 -json \./internal/verify' 'CK-014 internal proofs use JSON package evidence' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'TestVerifySystemDeepPreflightFailureDoesNotInvokeDownstreamReader' 'CK-014 preflight boundary proof selector' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults' 'CK-014 downstream aggregation proof selector' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'TestVerifySystemDeepInjectedDownstreamReaderCleanPipelinePasses' 'CK-014 clean pipeline proof selector' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'TestVerifySystemDeepRejectsNilDownstreamReaderAfterPreflight' 'CK-014 unsafe setup boundary proof selector' || check_status=1
+	    require_content_pattern "$ck014_internal_block" '--profile ck014-internal-verify' 'CK-014 internal proof profile' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'refusing to reuse CK-014 internal evidence paths' 'CK-014 internal proofs refuse stale evidence paths' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 'CK-014 internal proofs snapshot complete pipeline status' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'capture_status=\$\{pipeline_status\[1\]\}' 'CK-014 internal proofs preserve evidence-capture status' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'elif \[ "\$capture_status" -ne 0 \]' 'CK-014 internal proofs propagate evidence-capture failure' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'exit "\$status"' 'CK-014 internal proof step remains blocking' || check_status=1
 	  fi
 	  postgres_internal_contracts_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run required PostgreSQL internal package contracts")"
 	  if [[ -z "$postgres_internal_contracts_block" ]]; then
@@ -1118,6 +1152,25 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G17\)' 'adversarial workflow step names batch coverage through G17' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -json ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite with JSON evidence' || check_status=1
   require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '^[[:space:]]*COLDKEEP_LONG_RUN=1 go test -race -count=1 \./tests/adversarial/\.\.\. -timeout 20m$' 'local Profile A full long-run adversarial package uses exact 20-minute timeout' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '--profile "integration-correctness-\$\{codec\}"' 'local Profile A selects codec-specific required-event profile' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '--profile ck014-internal-verify' 'local Profile A invokes CK-014 internal required-event profile' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 2 'local Profile A snapshots complete pipeline status in both required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'go_status=\$\{pipeline_status\[0\]\}' 2 'local Profile A preserves Go status in both required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'capture_status=\$\{pipeline_status\[1\]\}' 2 'local Profile A preserves evidence-capture status in both required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'checker_status=\$\?' 2 'local Profile A preserves checker status in both required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'if \[ "\$go_status" -ne 0 \]' 2 'local Profile A gives Go failure first precedence in both required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'elif \[ "\$capture_status" -ne 0 \]' 2 'local Profile A propagates evidence-capture failure in both required-event wrappers' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" 'refusing to reuse integration-correctness evidence paths' 'local Profile A refuses stale integration evidence paths' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" 'refusing to reuse CK-014 internal evidence paths' 'local Profile A refuses stale internal evidence paths' || check_status=1
+
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/verify' 1 'required-event profiles bind the internal verify profile' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestRoundTripStoreRestore' 2 'required-event profiles preserve storage round-trip proof in both integration profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestRemoveWithSharedChunksRefCount' 1 'required-event profiles preserve remove proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState' 1 'required-event profiles preserve recovery proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestSimulationMatchesRealSizeMetrics' 1 'required-event profiles require simulation proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestVerifySystemFullRejectsNonContiguousPackedBlockOffsets' 1 'required-event profiles require packed occupancy proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestVerifySystemDeepCLIRejectsTwoPreexistingPackedPhysicalCorruptionsAtPreflight' 1 'required-event profiles require CLI preflight corruption proof' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14\\|TestAdversarialG15\\|TestAdversarialG16\\|TestAdversarialG17'" 'explicit G14-G17 adversarial gate command' || check_status=1
   adversarial_block="$(extract_job_block adversarial)"
   if [[ -z "$adversarial_block" ]]; then
