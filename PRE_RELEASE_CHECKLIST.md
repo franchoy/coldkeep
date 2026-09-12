@@ -360,7 +360,7 @@ for codec in plain aes-gcm; do
 
   # adversarial
   unset COLDKEEP_STORAGE_DIR
-  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
+  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/... -timeout 20m
   go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14|TestAdversarialG15|TestAdversarialG16|TestAdversarialG17'
 
   # smoke

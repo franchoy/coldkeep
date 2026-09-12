@@ -681,7 +681,7 @@ jobs:
           echo "diag_dir=$diag_dir" >> "$GITHUB_OUTPUT"
           echo "log_file=$log_file" >> "$GITHUB_OUTPUT"
 
-          go test -race -count=1 -json ./tests/adversarial/... 2>&1 | tee "$log_file"
+          go test -race -count=1 -json ./tests/adversarial/... -timeout 20m 2>&1 | tee "$log_file"
           status=${PIPESTATUS[0]}
 
           if [ "$status" -eq 0 ]; then

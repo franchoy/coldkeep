@@ -1823,13 +1823,19 @@ func TestAuditCIEnforcementRequiresExactFullAdversarialTimeoutParity(t *testing.
 	const localWithoutTimeout = "COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/..."
 	const localWithTimeout = localWithoutTimeout + " -timeout 20m"
 
-	validWorkflow := strings.Replace(workflow, hostedWithoutTimeout, hostedWithTimeout, 1)
-	if validWorkflow == workflow {
-		t.Fatalf("workflow fixture did not contain %q", hostedWithoutTimeout)
+	validWorkflow := workflow
+	if !strings.Contains(validWorkflow, hostedWithTimeout) {
+		validWorkflow = strings.Replace(validWorkflow, hostedWithoutTimeout, hostedWithTimeout, 1)
+		if validWorkflow == workflow {
+			t.Fatalf("workflow fixture did not contain %q", hostedWithoutTimeout)
+		}
 	}
-	validChecklist := strings.Replace(checklist, localWithoutTimeout, localWithTimeout, 1)
-	if validChecklist == checklist {
-		t.Fatalf("checklist fixture did not contain %q", localWithoutTimeout)
+	validChecklist := checklist
+	if !strings.Contains(validChecklist, localWithTimeout) {
+		validChecklist = strings.Replace(validChecklist, localWithoutTimeout, localWithTimeout, 1)
+		if validChecklist == checklist {
+			t.Fatalf("checklist fixture did not contain %q", localWithoutTimeout)
+		}
 	}
 
 	runAuditLocalOnlyWithChecklistFixture(
@@ -1854,13 +1860,13 @@ func TestAuditCIEnforcementRequiresExactFullAdversarialTimeoutParity(t *testing.
 		},
 		{
 			name:        "hosted timeout disabled",
-			workflow:    strings.Replace(validWorkflow, "-timeout 20m", "-timeout 0", 1),
+			workflow:    strings.Replace(validWorkflow, hostedWithTimeout, hostedWithoutTimeout+" -timeout 0", 1),
 			checklist:   validChecklist,
 			wantMessage: "hosted full long-run adversarial package uses exact 20-minute timeout",
 		},
 		{
 			name:        "hosted timeout wrong",
-			workflow:    strings.Replace(validWorkflow, "-timeout 20m", "-timeout 30m", 1),
+			workflow:    strings.Replace(validWorkflow, hostedWithTimeout, hostedWithoutTimeout+" -timeout 30m", 1),
 			checklist:   validChecklist,
 			wantMessage: "hosted full long-run adversarial package uses exact 20-minute timeout",
 		},
@@ -1873,13 +1879,13 @@ func TestAuditCIEnforcementRequiresExactFullAdversarialTimeoutParity(t *testing.
 		{
 			name:        "local timeout disabled",
 			workflow:    validWorkflow,
-			checklist:   strings.Replace(validChecklist, "-timeout 20m", "-timeout 0", 1),
+			checklist:   strings.Replace(validChecklist, localWithTimeout, localWithoutTimeout+" -timeout 0", 1),
 			wantMessage: "local Profile A full long-run adversarial package uses exact 20-minute timeout",
 		},
 		{
 			name:        "local and hosted disagree",
 			workflow:    validWorkflow,
-			checklist:   strings.Replace(validChecklist, "-timeout 20m", "-timeout 15m", 1),
+			checklist:   strings.Replace(validChecklist, localWithTimeout, localWithoutTimeout+" -timeout 15m", 1),
 			wantMessage: "local Profile A full long-run adversarial package uses exact 20-minute timeout",
 		},
 	}

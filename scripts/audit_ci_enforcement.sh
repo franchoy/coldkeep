@@ -77,6 +77,7 @@ BENCHMARK_GATE_FILE="${COLDKEEP_BENCHMARK_GATE_FILE:-$REPO_ROOT/scripts/benchmar
 TIMING_VALIDATOR_FILE="${COLDKEEP_TIMING_VALIDATOR_FILE:-$REPO_ROOT/scripts/validate_regression_thresholds.py}"
 CANDIDATE_LINT_GATE_FILE="${COLDKEEP_CANDIDATE_LINT_GATE_FILE:-$REPO_ROOT/scripts/run_candidate_lint_gate.sh}"
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
+PRE_RELEASE_CHECKLIST_FILE="${COLDKEEP_PRE_RELEASE_CHECKLIST_FILE:-$REPO_ROOT/PRE_RELEASE_CHECKLIST.md}"
 PAIRED_REFERENCE_MANIFEST_FILE="${COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE:-$REPO_ROOT/benchmarks/paired/reference-v1.13.json}"
 PAIRED_THRESHOLD_POLICY_FILE="${COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE:-$REPO_ROOT/benchmarks/paired/threshold-policy-v1.13.json}"
 NATIVE_UNIX_TEST_FILE="${COLDKEEP_NATIVE_UNIX_TEST_FILE:-$REPO_ROOT/internal/coordination/native_lock_unix_test.go}"
@@ -1116,6 +1117,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  adversarial:$' 'adversarial job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G17\)' 'adversarial workflow step names batch coverage through G17' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -json ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite with JSON evidence' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '^[[:space:]]*COLDKEEP_LONG_RUN=1 go test -race -count=1 \./tests/adversarial/\.\.\. -timeout 20m$' 'local Profile A full long-run adversarial package uses exact 20-minute timeout' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14\\|TestAdversarialG15\\|TestAdversarialG16\\|TestAdversarialG17'" 'explicit G14-G17 adversarial gate command' || check_status=1
   adversarial_block="$(extract_job_block adversarial)"
   if [[ -z "$adversarial_block" ]]; then
@@ -1147,6 +1149,7 @@ check_local_workflow() {
       require_content_pattern "$adversarial_validation_block" 'COLDKEEP_TEST_DB:\s*1' 'adversarial coordination proof enables DB gate' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'COLDKEEP_LONG_RUN:\s*1' 'adversarial coordination proof enables long-run gate' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'go test -race -count=1 -json \./tests/adversarial/\.\.\.' 'adversarial coordination proof uses JSON execution evidence' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'go test -race -count=1 -json \./tests/adversarial/\.\.\. -timeout 20m' 'hosted full long-run adversarial package uses exact 20-minute timeout' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6IndependentProcessRepositoryContention/plain' 'independent-process plain execution proof' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm' 'independent-process AES-GCM execution proof' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6KilledLeaseHolderReleasesRepository' 'killed-holder execution proof' || check_status=1
