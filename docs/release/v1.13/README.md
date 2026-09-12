@@ -74,7 +74,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 11 certified state
+### Current Phase 12 CK-V11316-015 certified state
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 8 implementation and certification are complete at executable/evidence
@@ -125,10 +125,11 @@ retry occurred.
 
 CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
-CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-013
-are closed certified; CK-V11316-007 and CK-V11316-015 remain open.
-CK-V11316-014 remains external and is excluded from repository totals.
-Findings are 14 confirmed and 12/14 closed. Phase 9, Phase 10, and Phase 11 are Complete. Phase 10R1
+CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-013,
+plus CK-V11316-015, are closed certified; CK-V11316-007 remains open.
+CK-V11316-014 remains unresolved, external, and excluded from repository
+totals without being accepted or waived. Findings are 14 confirmed and 13/14
+closed. Phase 9, Phase 10, and Phase 11 are Complete. Phase 10R1
 successfully corrected CK-V11316-012's refcount fixture and proved the final
 13/13 plain and AES concurrency selectors with zero skips, then the fresh
 complete matrix stopped because the required G1 unrelated-container proof
@@ -145,10 +146,9 @@ workflows remain unchanged. Phase 12 remains the Next lifecycle phase, and
 Phase 12R1R5 implemented CK-V11316-015's frozen schema-v17 atomic Store repair
 at exact local head `c080dbd912502683ec06066d02a9e8aa2e9370f4`. Complete attached
 and fresh-detached Go, race, PostgreSQL 16.15, exact golangci-lint 2.9.0,
-governance, and platform certification passed. CK-V11316-015 remains open
-pending exact-head hosted certification. Push and hosted execution remain
-unauthorized. v1.x technical correctness closure remains withheld because
-CK-V11316-007 and CK-V11316-015 remain open.
+governance, and platform certification passed. At that historical boundary,
+CK-V11316-015 remained open pending exact-head hosted certification and push
+and hosted execution remained unauthorized.
 
 [Phase 12R1R7](v1.13.16-phase12r1r7-schema-v17-backward-version-fence.md)
 records the completed four-commit local-only Build that implements
@@ -247,6 +247,26 @@ long-run race package in both codec profiles, scripts ordinary/race, exact
 tooling, governance, scope, byte-identity, and clean-tree gates. Fresh Profile
 A at the evidence commit remains mandatory; push, hosted certification, and
 Phase 13 remain unauthorized.
+
+[Phase 12R1R21 hosted-certification reconciliation](v1.13.16-phase12r1r21-hosted-certification-reconciliation.md)
+records the later exact-candidate evidence. Fresh Profile A passed at evidence
+head `8b9047e6b007cb5c5de1a4e3530c033df3519ec3`; the independent R1R19 audit
+approved that candidate for one push; and R1R20 pushed it exactly once. CI
+`34682397528` passed 36/36, CodeQL `34682397530` passed 4/4, and all 40
+exact-head checks passed. All four benchmark-integrity profiles passed; the 22
+hosted timing observations remain informational and establish no performance
+guarantee. Post-CodeQL repository and release-branch alert enumerations were
+zero, and Codacy was `NOT_EXPOSED`. CK-V11316-015 is therefore closed
+certified, while CK-V11316-007 remains open and CK-V11316-014 remains an
+unresolved external proposal excluded from repository counters.
+
+Phase 12 remains the aggregate Next phase in PLAN mode. Earlier authorized
+Phase 12 audits and diagnostics remain executed historical evidence: R1R2
+returned `FAIL_NEW_TECHNICAL_FINDING_ESTABLISHED` and proposed
+CK-V11316-014, and later work investigated and remediated CK-V11316-015. A
+successful final independent technical-closure audit has not been established.
+Further Phase 12 audit work and Phase 13 require separate authorization, and
+v1.x technical correctness closure remains withheld.
 
 ### Historical Phase 6 chronology
 
