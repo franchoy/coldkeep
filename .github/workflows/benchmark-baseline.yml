@@ -22,7 +22,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   GOTOOLCHAIN: local
   COLDKEEP_AES_GCM_FIXTURE_HEX: ${{ format('{0}{1}{0}{1}{0}{1}{0}{1}', '01234567', '89abcdef') }}
-  POSTGRES_IMAGE_DIGEST: sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
 
 jobs:
   authorize:
@@ -126,7 +125,17 @@ jobs:
             sample_count=5
           fi
           profile="${{ matrix.compression }}-w${{ matrix.workers }}-r${{ matrix.replicate }}"
-          postgres_version="$(docker exec '${{ job.services.postgres.id }}' postgres --version)"
+          provenance_root="${RUNNER_TEMP}/database-provenance-${profile}"
+          mkdir -p "${provenance_root}"
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${provenance_root}/database-provenance.before.json"
+          python3 scripts/benchmark_gate.py database-provenance validate \
+            --input "${provenance_root}/database-provenance.before.json" \
+            --require-effective-connection
+          set +e
           python3 scripts/benchmark_gate.py sample \
             --binary ./coldkeep \
             --output-dir "evidence/${profile}" \
@@ -137,8 +146,26 @@ jobs:
             --samples "${sample_count}" \
             --source-commit "${SOURCE_SHA}" \
             --go-version "$(go version)" \
-            --postgres-version "${postgres_version}" \
-            --database-image-digest "${POSTGRES_IMAGE_DIGEST}"
+            --database-provenance "${provenance_root}/database-provenance.before.json"
+          sample_status=$?
+          set -e
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${provenance_root}/database-provenance.after.json"
+          python3 scripts/benchmark_gate.py database-provenance compare \
+            --before "${provenance_root}/database-provenance.before.json" \
+            --after "${provenance_root}/database-provenance.after.json" \
+            --output "${provenance_root}/database-provenance-comparison.json"
+          cp "${provenance_root}"/*.json "evidence/${profile}/"
+          (
+            cd "evidence/${profile}"
+            find . -type f ! -name checksums.sha256 -printf '%P\n' | LC_ALL=C sort |
+              xargs sha256sum > checksums.sha256
+            sha256sum --check checksums.sha256
+          )
+          exit "${sample_status}"
 
       - name: Upload immutable sample evidence
         if: ${{ always() && (inputs.mode == 'calibration' || matrix.replicate == 1) }}

@@ -1002,6 +1002,15 @@ jobs:
           output_child="${output_parent}/integrity"
           mkdir -p "${output_parent}"
           test ! -e "${output_child}"
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${output_parent}/database-provenance.before.json"
+          python3 scripts/benchmark_gate.py database-provenance validate \
+            --input "${output_parent}/database-provenance.before.json" \
+            --require-effective-connection
+          set +e
           python3 scripts/benchmark_gate.py integrity \
             --binary ./coldkeep \
             --output-dir "${output_child}" \
@@ -1011,21 +1020,36 @@ jobs:
             --command-timeout-seconds 600 \
             --source-commit "${GITHUB_SHA}" \
             --go-version "$(go version)" \
-            --postgres-version "$(psql --version)" \
-            --database-image-digest "sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"
+            --database-provenance "${output_parent}/database-provenance.before.json"
+          integrity_exit=$?
+          set -e
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${output_parent}/database-provenance.after.json"
+          python3 scripts/benchmark_gate.py database-provenance compare \
+            --before "${output_parent}/database-provenance.before.json" \
+            --after "${output_parent}/database-provenance.after.json" \
+            --output "${output_parent}/database-provenance-comparison.json"
+          exit "${integrity_exit}"
 
       - name: Verify integrity artifact checksums
         if: ${{ always() }}
         run: |
           cd "benchmark-integrity-evidence/${{ matrix.profile }}/integrity"
           sha256sum --check checksums.sha256
+          cd ..
+          sha256sum database-provenance.before.json database-provenance.after.json \
+            database-provenance-comparison.json > database-provenance-checksums.sha256
+          sha256sum --check database-provenance-checksums.sha256
 
       - name: Upload benchmark integrity evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-integrity-${{ matrix.profile }}
-          path: benchmark-integrity-evidence/${{ matrix.profile }}/integrity
+          path: benchmark-integrity-evidence/${{ matrix.profile }}
           if-no-files-found: error
 
   benchmark-timing-advisory:
@@ -1103,13 +1127,38 @@ jobs:
           DB_NAME: coldkeep
           DB_SSLMODE: disable
         run: |
-          mkdir -p "benchmark-timing-evidence/${{ matrix.profile }}"
+          evidence_dir="benchmark-timing-evidence/${{ matrix.profile }}"
+          mkdir -p "${evidence_dir}"
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${evidence_dir}/database-provenance.before.json"
+          python3 scripts/benchmark_gate.py database-provenance validate \
+            --input "${evidence_dir}/database-provenance.before.json" \
+            --require-effective-connection
+          set +e
           ./coldkeep benchmark run \
             --dataset small \
             --workers "${{ matrix.workers }}" \
             --repeat 1 \
             --output json \
-            | tee "benchmark-timing-evidence/${{ matrix.profile }}/benchmark.json"
+            | tee "${evidence_dir}/benchmark.json"
+          pipeline_status=("${PIPESTATUS[@]}")
+          benchmark_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+          set -e
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${evidence_dir}/database-provenance.after.json"
+          python3 scripts/benchmark_gate.py database-provenance compare \
+            --before "${evidence_dir}/database-provenance.before.json" \
+            --after "${evidence_dir}/database-provenance.after.json" \
+            --output "${evidence_dir}/database-provenance-comparison.json"
+          [[ "${benchmark_status}" -eq 0 ]]
+          [[ "${capture_status}" -eq 0 ]]
 
       - name: Evaluate and verify timing advisory
         run: |
@@ -1139,8 +1188,10 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
           cd "${evidence_dir}"
           actual_inventory="$(find . -maxdepth 1 -type f ! -name checksums.sha256 -printf '%f\n' | sort)"
-          [[ "${actual_inventory}" == $'benchmark.json\ntiming-advisory.json' ]]
-          sha256sum benchmark.json timing-advisory.json > checksums.sha256
+          [[ "${actual_inventory}" == $'benchmark.json\ndatabase-provenance-comparison.json\ndatabase-provenance.after.json\ndatabase-provenance.before.json\ntiming-advisory.json' ]]
+          sha256sum benchmark.json database-provenance-comparison.json \
+            database-provenance.after.json database-provenance.before.json \
+            timing-advisory.json > checksums.sha256
           sha256sum --check checksums.sha256
           case "${comparator_exit}" in
             0|10|11|12)

@@ -286,9 +286,65 @@ def aggregate_provenance(source: str, runner_image: str) -> dict:
         "runner_arch": "X64",
         "cpu_count": 4,
         "go_version": "go version go1.25.12 linux/amd64",
-        "postgres_version": "PostgreSQL 16.14",
-        "database_image_digest": "sha256:" + "b" * 64,
+        **database_identity(),
         "binary_sha256": "c" * 64,
+    }
+
+
+def database_identity() -> dict:
+    _, fingerprint = gate._endpoint_identity("127.0.0.1", 5432)
+    return {
+        "postgres_version": "16.15",
+        "database_image_digest": "sha256:" + "a" * 64,
+        "database_image_digest_kind": "index",
+        "database_image_platform": "linux/amd64",
+        "database_image_platform_manifest_digest": "sha256:" + "b" * 64,
+        "database_image_config_digest": "sha256:" + "c" * 64,
+        "database_endpoint_fingerprint": fingerprint,
+        "database_container_id_sha256": "d" * 64,
+    }
+
+
+def database_provenance() -> dict:
+    connection, fingerprint = gate._endpoint_identity("127.0.0.1", 5432)
+    connection["fingerprint"] = fingerprint
+    identity = database_identity()
+    return {
+        "schema_version": 1,
+        "report_kind": gate.DATABASE_PROVENANCE_KIND,
+        "status": "verified",
+        "observed_at_utc": "2026-09-13T00:00:00Z",
+        "docker_context": {"name": "default", "daemon_transport": "unix", "local_daemon": True},
+        "connection": connection,
+        "container": {
+            "id_sha256": "d" * 64,
+            "state": "running",
+            "health": "healthy",
+            "configured_image": "postgres:16@sha256:" + "a" * 64,
+            "local_image_id": "sha256:" + "c" * 64,
+            "port_bindings": [deepcopy(connection)],
+        },
+        "image": {
+            "id": "sha256:" + "c" * 64,
+            "repo_digests": ["postgres@sha256:" + "a" * 64],
+            "os": "linux",
+            "architecture": "amd64",
+            "variant": "",
+        },
+        "registry": {
+            "pull_digest": "sha256:" + "a" * 64,
+            "pull_descriptor_media_type": "application/vnd.oci.image.index.v1+json",
+            "pull_digest_kind": "index",
+            "selected_platform": "linux/amd64",
+            "selected_manifest_digest": "sha256:" + "b" * 64,
+            "selected_manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
+            "selected_config_digest": "sha256:" + "c" * 64,
+        },
+        "postgres": {
+            "server_version": "16.15",
+            "container_binary_version": "postgres (PostgreSQL) 16.15",
+        },
+        "identity": identity,
     }
 
 
@@ -623,11 +679,75 @@ class OutcomeEPolicyTests(unittest.TestCase):
             )
 
 
+class DatabaseExecutionProvenanceTests(unittest.TestCase):
+    def test_distinct_identity_layers_and_matching_connection_pass(self) -> None:
+        report = database_provenance()
+        identity = gate.validate_database_provenance(report)["identity"]
+        self.assertEqual(identity["database_image_digest_kind"], "index")
+        self.assertNotEqual(
+            identity["database_image_digest"],
+            identity["database_image_platform_manifest_digest"],
+        )
+        self.assertNotEqual(
+            identity["database_image_platform_manifest_digest"],
+            identity["database_image_config_digest"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "database-provenance.json"
+            gate.write_json(path, report)
+            with mock.patch.dict(
+                gate.os.environ,
+                {"DB_HOST": "127.0.0.1", "DB_PORT": "5432"},
+                clear=False,
+            ):
+                self.assertEqual(gate._effective_database_identity(path), identity)
+
+    def test_service_a_document_with_service_b_connection_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "database-provenance.json"
+            gate.write_json(path, database_provenance())
+            with mock.patch.dict(
+                gate.os.environ,
+                {"DB_HOST": "127.0.0.1", "DB_PORT": "6432"},
+                clear=False,
+            ):
+                with self.assertRaisesRegex(gate.GateError, "effective benchmark connection"):
+                    gate._effective_database_identity(path)
+
+    def test_stale_container_and_layer_mismatches_are_rejected(self) -> None:
+        mutations = [
+            lambda report: report["container"].__setitem__("id_sha256", "e" * 64),
+            lambda report: report["registry"].__setitem__(
+                "selected_config_digest", "sha256:" + "e" * 64
+            ),
+            lambda report: report["registry"].__setitem__(
+                "selected_manifest_digest", "sha256:" + "e" * 64
+            ),
+        ]
+        for mutate in mutations:
+            report = database_provenance()
+            mutate(report)
+            with self.assertRaises(gate.GateError):
+                gate.validate_database_provenance(report)
+
+    def test_missing_or_unverifiable_identity_is_rejected(self) -> None:
+        report = database_provenance()
+        del report["identity"]["database_endpoint_fingerprint"]
+        with self.assertRaisesRegex(gate.GateError, "fields mismatch"):
+            gate.validate_database_provenance(report)
+        report = database_provenance()
+        report["image"]["repo_digests"] = []
+        with self.assertRaisesRegex(gate.GateError, "RepoDigests"):
+            gate.validate_database_provenance(report)
+
+
 class IntegrityCommandTests(unittest.TestCase):
     def args(self, root: pathlib.Path, *, dataset: str = "ci-paired-w1-v2") -> argparse.Namespace:
         root.mkdir(parents=True, exist_ok=True)
         binary = root / "coldkeep"
         binary.write_bytes(b"binary")
+        provenance = root / "database-provenance.json"
+        gate.write_json(provenance, database_provenance())
         return argparse.Namespace(
             binary=binary,
             output_dir=root / "owned" / "integrity",
@@ -638,8 +758,7 @@ class IntegrityCommandTests(unittest.TestCase):
             source_commit="a" * 40,
             source_tag=None,
             go_version="go version go1.25.12 linux/amd64",
-            postgres_version="postgres (PostgreSQL) 16",
-            database_image_digest="sha256:" + "b" * 64,
+            database_provenance=provenance,
         )
 
     def environment(self) -> dict[str, str]:

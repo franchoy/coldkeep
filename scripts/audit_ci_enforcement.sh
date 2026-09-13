@@ -673,6 +673,15 @@ check_local_workflow() {
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+sample_count=10$' 'benchmark calibration fixes ten measured samples' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+sample_count=5$' 'benchmark capture fixes five measured samples' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'python3 scripts/benchmark_gate\.py sample' 'benchmark calibration uses the strict sampler' || check_status=1
+  require_content_pattern "$benchmark_sample_block" 'database-provenance collect' 'benchmark calibration captures database provenance' || check_status=1
+  require_content_pattern "$benchmark_sample_block" 'database-provenance compare' 'benchmark calibration compares pre/post database provenance' || check_status=1
+  require_content_pattern "$benchmark_sample_block" '--database-provenance "\$\{provenance_root\}/database-provenance\.before\.json"' 'benchmark calibration binds sampling to retained database provenance' || check_status=1
+  if [[ "$(grep -c 'database-provenance collect' <<<"$benchmark_sample_block")" -ne 2 ]]; then
+    echo "[audit] ERROR: benchmark calibration must retain exactly two pre/post database observations" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark calibration retains exactly two pre/post database observations"
+  fi
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+--dataset ci-stable-v1 \\$' 'benchmark calibration fixes the fixture identity' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+--warmups 1 \\$' 'benchmark calibration fixes one excluded warmup' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'python3 scripts/benchmark_gate\.py calibrate' 'benchmark calibration evaluates the fixed matrix' || check_status=1
@@ -683,6 +692,15 @@ check_local_workflow() {
   require_content_pattern "$benchmark_integrity_block" 'ci-paired-w1-v2' 'integrity matrix selects the bounded workers=1 fixture' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'ci-paired-w4-v2' 'integrity matrix selects the bounded workers=4 fixture' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'python3 scripts/benchmark_gate\.py integrity' 'integrity matrix uses the hard candidate-only interface' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'database-provenance collect' 'integrity matrix captures database provenance' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'database-provenance compare' 'integrity matrix compares pre/post database provenance' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" '--database-provenance "\$\{output_parent\}/database-provenance\.before\.json"' 'integrity matrix binds execution to retained database provenance' || check_status=1
+  if [[ "$(grep -c 'database-provenance collect' <<<"$benchmark_integrity_block")" -ne 2 ]]; then
+    echo "[audit] ERROR: integrity matrix must retain exactly two pre/post database observations" >&2
+    check_status=1
+  else
+    echo "[audit] ok: integrity matrix retains exactly two pre/post database observations"
+  fi
   require_content_pattern "$benchmark_integrity_block" '--command-timeout-seconds 600' 'integrity matrix fixes the 600-second command timeout' || check_status=1
   require_content_pattern "$benchmark_integrity_block" "go-version: '1\.26\.7'" 'integrity matrix pins the certified Go patch version' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'integrity matrix pins PostgreSQL by digest' || check_status=1
@@ -690,6 +708,14 @@ check_local_workflow() {
   require_content_pattern "$benchmark_integrity_block" 'if: \$\{\{ always\(\) \}\}' 'integrity artifact finalization and upload always run' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'sha256sum --check checksums\.sha256' 'integrity artifact checksum inventory is verified' || check_status=1
   require_content_pattern "$benchmark_timing_block" '^\s+--dataset small \\$' 'timing advisory retains the historical small fixture' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'database-provenance collect' 'timing advisory captures database provenance' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'database-provenance compare' 'timing advisory compares pre/post database provenance' || check_status=1
+  if [[ "$(grep -c 'database-provenance collect' <<<"$benchmark_timing_block")" -ne 2 ]]; then
+    echo "[audit] ERROR: timing advisory must retain exactly two pre/post database observations" >&2
+    check_status=1
+  else
+    echo "[audit] ok: timing advisory retains exactly two pre/post database observations"
+  fi
   require_content_pattern "$benchmark_timing_block" 'scripts/validate_regression_thresholds\.py check' 'timing advisory retains the historical comparator' || check_status=1
   require_content_pattern "$benchmark_timing_block" '--policy hosted-advisory' 'timing comparator has informational authority' || check_status=1
   require_content_pattern "$benchmark_timing_block" '^\s+set \+e$' 'timing advisory disables errexit only for comparator evaluation' || check_status=1
@@ -716,8 +742,8 @@ check_local_workflow() {
   require_content_pattern "$benchmark_timing_block" 'if-no-files-found: error' 'timing artifact rejects missing evidence' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'if: \$\{\{ always\(\) \}\}' 'timing artifact upload always runs' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'actual_inventory=.*find .*checksums\.sha256' 'timing artifact inventory is enumerated exhaustively' || check_status=1
-  require_content_pattern "$benchmark_timing_block" 'benchmark\.json\\ntiming-advisory\.json' 'timing artifact inventory is restricted to the report and observation' || check_status=1
-  require_content_pattern "$benchmark_timing_block" 'sha256sum benchmark\.json timing-advisory\.json > checksums\.sha256' 'timing artifact creates exhaustive checksums' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'benchmark\.json\\ndatabase-provenance-comparison\.json\\ndatabase-provenance\.after\.json\\ndatabase-provenance\.before\.json\\ntiming-advisory\.json' 'timing artifact inventory is restricted to the observation, provenance, and report' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'sha256sum benchmark\.json database-provenance-comparison\.json \\$' 'timing artifact creates exhaustive checksums' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'sha256sum --check checksums\.sha256' 'timing artifact verifies checksums' || check_status=1
   checksum_line="$(grep -nEm1 'sha256sum --check checksums\.sha256' <<<"$benchmark_timing_block" | cut -d: -f1 || true)"
   evaluator_failure_line="$(grep -nEm1 '^\s+2\)$' <<<"$benchmark_timing_block" | cut -d: -f1 || true)"

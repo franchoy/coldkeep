@@ -440,6 +440,24 @@ func TestAuditCIEnforcementRejectsUnsafeBenchmarkCalibrationWorkflow(t *testing.
 			wantMessage: "benchmark sample harness runs from trusted checkout",
 		},
 		{
+			name: "database provenance binding removed",
+			mutate: func(value string) string {
+				return strings.Replace(value, "--database-provenance \"${provenance_root}/database-provenance.before.json\"", "--database-provenance removed.json", 1)
+			},
+			wantMessage: "benchmark calibration binds sampling to retained database provenance",
+		},
+		{
+			name: "post database observation removed",
+			mutate: func(value string) string {
+				index := strings.LastIndex(value, "database-provenance collect")
+				if index < 0 {
+					return value
+				}
+				return value[:index] + "database-provenance validate" + value[index+len("database-provenance collect"):]
+			},
+			wantMessage: "benchmark calibration must retain exactly two pre/post database observations",
+		},
+		{
 			name: "calibration harness redirected",
 			mutate: func(value string) string {
 				return strings.Replace(
@@ -557,6 +575,10 @@ func TestAuditCIEnforcementRejectsBenchmarkGovernanceMutations(t *testing.T) {
 		{
 			name: "integrity downgrade", old: "python3 scripts/benchmark_gate.py integrity",
 			replacement: "python3 scripts/validate_regression_thresholds.py check", message: "hard candidate-only interface",
+		},
+		{
+			name: "integrity provenance binding removed", old: "--database-provenance \"${output_parent}/database-provenance.before.json\"",
+			replacement: "--database-provenance removed.json", message: "integrity matrix binds execution to retained database provenance",
 		},
 		{
 			name: "advisory made legacy", old: "--policy hosted-advisory",

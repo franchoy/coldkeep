@@ -2,17 +2,18 @@
 set -Eeuo pipefail
 
 usage() {
-  echo "Usage: scripts/run_release_benchmark_evidence.sh [--repo-root PATH] [--candidate-sha SHA] [--binary PATH]" >&2
+  echo "Usage: scripts/run_release_benchmark_evidence.sh [--repo-root PATH] [--candidate-sha SHA] [--binary PATH] --database-container-id ID" >&2
 }
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 candidate_sha=""
 binary=""
+database_container_id=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo-root|--candidate-sha|--binary)
+    --repo-root|--candidate-sha|--binary|--database-container-id)
       [[ $# -ge 2 ]] || {
         echo "release benchmark runner: $1 requires a value" >&2
         exit 2
@@ -21,6 +22,7 @@ while [[ $# -gt 0 ]]; do
         --repo-root) repo_root="$2" ;;
         --candidate-sha) candidate_sha="$2" ;;
         --binary) binary="$2" ;;
+        --database-container-id) database_container_id="$2" ;;
       esac
       shift 2
       ;;
@@ -59,12 +61,21 @@ binary=$(cd -- "$(dirname -- "$binary")" && pwd -P)/$(basename -- "$binary")
   echo "release benchmark runner: binary is not executable: $binary" >&2
   exit 2
 }
+[[ -n "$database_container_id" ]] || {
+  echo "release benchmark runner: --database-container-id is required" >&2
+  exit 2
+}
+[[ -n "${DB_HOST:-}" && -n "${DB_PORT:-}" ]] || {
+  echo "release benchmark runner: DB_HOST and DB_PORT are required" >&2
+  exit 2
+}
 
 retained_root="$repo_root/.release-evidence/v1.13.14/$candidate_sha"
 if [[ -e "$retained_root" ]]; then
   "$repo_root/scripts/release_benchmark_evidence.sh" validate \
     --bundle-root "$retained_root" \
-    --candidate-sha "$candidate_sha"
+    --candidate-sha "$candidate_sha" \
+    --require-current-provenance
   "$repo_root/scripts/release_benchmark_evidence.sh" inventory \
     --repo-root "$repo_root"
   echo "release benchmark runner: reusing valid exact-SHA evidence at $retained_root"
@@ -79,11 +90,17 @@ case "$work_root/" in
     ;;
 esac
 cleanup() {
-  rm -rf -- "$work_root"
+  local status=$?
+  if [[ "$status" -eq 0 ]]; then
+    rm -rf -- "$work_root"
+  else
+    echo "release benchmark runner: incomplete diagnostic evidence retained at $work_root" >&2
+  fi
+  return "$status"
 }
 trap cleanup EXIT
-trap 'cleanup; exit 130' INT
-trap 'cleanup; exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 export COLDKEEP_CODEC=aes-gcm
 export COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS=12
@@ -91,8 +108,15 @@ export COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15
 export COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900
 
 go_version=$(go version)
-postgres_version=$(psql --version)
-readonly postgres_digest="sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"
+database_provenance_before="$work_root/database-provenance.before.json"
+database_provenance_after="$work_root/database-provenance.after.json"
+database_provenance_comparison="$work_root/database-provenance-comparison.json"
+
+python3 "$repo_root/scripts/benchmark_gate.py" database-provenance collect \
+  --container-id "$database_container_id" \
+  --endpoint-host "$DB_HOST" \
+  --endpoint-port "$DB_PORT" \
+  --output "$database_provenance_before"
 
 while read -r profile compression workers dataset; do
   output_dir="$work_root/profiles/${profile}/integrity"
@@ -107,8 +131,7 @@ while read -r profile compression workers dataset; do
       --command-timeout-seconds 600 \
       --source-commit "$candidate_sha" \
       --go-version "$go_version" \
-      --postgres-version "$postgres_version" \
-      --database-image-digest "$postgres_digest"
+      --database-provenance "$database_provenance_before"
   (cd -- "$output_dir" && sha256sum --check checksums.sha256)
 done <<'EOF'
 none-w1 none 1 ci-paired-w1-v2
@@ -120,6 +143,9 @@ EOF
 while read -r profile compression workers mode baseline; do
   evidence_dir="$work_root/profiles/${profile}/timing"
   mkdir -p -- "$evidence_dir"
+  python3 "$repo_root/scripts/benchmark_gate.py" database-provenance validate \
+    --input "$database_provenance_before" \
+    --require-effective-connection
   COLDKEEP_COMPRESSION="$compression" \
     "$binary" benchmark run \
       --dataset small \
@@ -158,6 +184,16 @@ zstd-w1 zstd 1 compressed benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r
 zstd-w4 zstd 4 compressed benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json
 EOF
 
+python3 "$repo_root/scripts/benchmark_gate.py" database-provenance collect \
+  --container-id "$database_container_id" \
+  --endpoint-host "$DB_HOST" \
+  --endpoint-port "$DB_PORT" \
+  --output "$database_provenance_after"
+python3 "$repo_root/scripts/benchmark_gate.py" database-provenance compare \
+  --before "$database_provenance_before" \
+  --after "$database_provenance_after" \
+  --output "$database_provenance_comparison"
+
 benchmark_tool_id=$(sha256sum "$repo_root/scripts/benchmark_gate.py")
 benchmark_tool_id=${benchmark_tool_id%% *}
 timing_tool_id=$(sha256sum "$repo_root/scripts/validate_regression_thresholds.py")
@@ -168,8 +204,6 @@ timing_tool_id=${timing_tool_id%% *}
   --candidate-sha "$candidate_sha" \
   --source-commit "$candidate_sha" \
   --go-version "$go_version" \
-  --postgres-version "$postgres_version" \
-  --database-image-digest "$postgres_digest" \
   --benchmark-tool-id "$benchmark_tool_id" \
   --timing-tool-id "$timing_tool_id"
 "$repo_root/scripts/release_benchmark_evidence.sh" promote \

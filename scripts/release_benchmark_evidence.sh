@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly release_version="v1.13.14"
 readonly expected_profiles="none-w1,none-w4,zstd-w1,zstd-w4"
 readonly profiles=(none-w1 none-w4 zstd-w1 zstd-w4)
@@ -8,8 +9,8 @@ readonly profiles=(none-w1 none-w4 zstd-w1 zstd-w4)
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  scripts/release_benchmark_evidence.sh prepare --bundle-root PATH --candidate-sha SHA --source-commit SHA --go-version TEXT --postgres-version TEXT --database-image-digest TEXT [--benchmark-tool-id TEXT] [--timing-tool-id TEXT]
-  scripts/release_benchmark_evidence.sh validate --bundle-root PATH --candidate-sha SHA
+  scripts/release_benchmark_evidence.sh prepare --bundle-root PATH --candidate-sha SHA --source-commit SHA --go-version TEXT [--benchmark-tool-id TEXT] [--timing-tool-id TEXT]
+  scripts/release_benchmark_evidence.sh validate --bundle-root PATH --candidate-sha SHA [--require-current-provenance]
   scripts/release_benchmark_evidence.sh promote --repo-root PATH --bundle-root PATH --candidate-sha SHA
   scripts/release_benchmark_evidence.sh inventory --repo-root PATH [--require-clean-worktree]
 EOF
@@ -96,6 +97,7 @@ validate_bundle() {
   local bundle_root
   bundle_root=$(canonical_dir "$1")
   local candidate_sha="$2"
+  local require_current="${3:-0}"
   require_sha "$candidate_sha"
 
   if find "$bundle_root" -type l -print -quit | grep -q .; then
@@ -104,30 +106,72 @@ validate_bundle() {
   if find "$bundle_root" -mindepth 1 \( -name '*.partial' -o -name '.staging-*' \) -print | grep -q .; then
     fail "bundle contains unexpected staging/incomplete content: $bundle_root"
   fi
-  require_exact_entries "$bundle_root" bundle-checksums.sha256 manifest.txt profiles
+  local manifest="$bundle_root/manifest.txt"
+  [[ -s "$manifest" ]] || fail "missing top manifest"
+  local format
+  format=$(manifest_value "$manifest" format)
+  case "$format" in
+    coldkeep-release-benchmark-evidence-v1)
+      require_exact_entries "$bundle_root" bundle-checksums.sha256 manifest.txt profiles
+      [[ "$require_current" -eq 0 ]] || fail "historical benchmark bundle does not establish current execution provenance"
+      ;;
+    coldkeep-release-benchmark-evidence-v2)
+      require_exact_entries "$bundle_root" \
+        bundle-checksums.sha256 database-provenance.before.json \
+        database-provenance.after.json database-provenance-comparison.json \
+        manifest.txt profiles
+      python3 "$script_dir/benchmark_gate.py" database-provenance validate \
+        --input "$bundle_root/database-provenance.before.json"
+      python3 "$script_dir/benchmark_gate.py" database-provenance validate \
+        --input "$bundle_root/database-provenance.after.json"
+      python3 "$script_dir/benchmark_gate.py" database-provenance validate-comparison \
+        --input "$bundle_root/database-provenance-comparison.json" \
+        --before "$bundle_root/database-provenance.before.json" \
+        --after "$bundle_root/database-provenance.after.json"
+      ;;
+    *) fail "top manifest format mismatch" ;;
+  esac
   require_exact_entries "$bundle_root/profiles" "${profiles[@]}"
 
-  local manifest="$bundle_root/manifest.txt"
-  [[ "$(manifest_value "$manifest" format)" == "coldkeep-release-benchmark-evidence-v1" ]] || fail "top manifest format mismatch"
   [[ "$(manifest_value "$manifest" release)" == "$release_version" ]] || fail "top manifest release mismatch"
   [[ "$(manifest_value "$manifest" candidate_sha)" == "$candidate_sha" ]] || fail "top manifest candidate SHA mismatch"
   [[ "$(manifest_value "$manifest" source_commit)" == "$candidate_sha" ]] || fail "top manifest source commit mismatch"
   [[ "$(manifest_value "$manifest" expected_profiles)" == "$expected_profiles" ]] || fail "top manifest profile set mismatch"
   [[ -n "$(manifest_value "$manifest" go_version)" ]] || fail "top manifest Go identity is empty"
-  [[ -n "$(manifest_value "$manifest" postgres_version)" ]] || fail "top manifest PostgreSQL identity is empty"
-  [[ -n "$(manifest_value "$manifest" database_image_digest)" ]] || fail "top manifest database image identity is empty"
+  if [[ "$format" == "coldkeep-release-benchmark-evidence-v1" ]]; then
+    [[ -n "$(manifest_value "$manifest" postgres_version)" ]] || fail "top manifest PostgreSQL identity is empty"
+    [[ -n "$(manifest_value "$manifest" database_image_digest)" ]] || fail "top manifest database image identity is empty"
+  else
+    local provenance_file provenance_hash
+    for provenance_file in database-provenance.before.json database-provenance.after.json database-provenance-comparison.json; do
+      provenance_hash=$(sha256sum "$bundle_root/$provenance_file")
+      provenance_hash=${provenance_hash%% *}
+      [[ "$(manifest_value "$manifest" "${provenance_file//[.-]/_}_sha256")" == "$provenance_hash" ]] \
+        || fail "top manifest provenance hash mismatch for $provenance_file"
+    done
+  fi
   [[ -n "$(manifest_value "$manifest" benchmark_tool_id)" ]] || fail "top manifest benchmark tool identity is empty"
   [[ -n "$(manifest_value "$manifest" timing_tool_id)" ]] || fail "top manifest timing tool identity is empty"
 
   local profile profile_checksum
   for profile in "${profiles[@]}"; do
     validate_profile "$bundle_root" "$profile"
+    if [[ "$format" == "coldkeep-release-benchmark-evidence-v2" ]]; then
+      python3 "$script_dir/benchmark_gate.py" database-provenance verify-aggregate \
+        --input "$bundle_root/database-provenance.before.json" \
+        --aggregate "$bundle_root/profiles/$profile/integrity/aggregate.json"
+    fi
     [[ "$(manifest_value "$manifest" "profile.${profile}.path")" == "profiles/$profile" ]] || fail "top manifest path mismatch for profile $profile"
     profile_checksum=$(sha256sum "$bundle_root/profiles/$profile/checksums.sha256")
     profile_checksum=${profile_checksum%% *}
     [[ "$(manifest_value "$manifest" "profile.${profile}.checksums_sha256")" == "$profile_checksum" ]] || fail "top manifest checksum identity mismatch for profile $profile"
   done
   verify_checksum_file "$bundle_root" bundle-checksums.sha256
+  if [[ "$format" == "coldkeep-release-benchmark-evidence-v1" ]]; then
+    echo "BENCHMARK_PROVENANCE_STATUS: HISTORICAL_EXECUTION_PROVENANCE_UNESTABLISHED"
+  else
+    echo "BENCHMARK_PROVENANCE_STATUS: CURRENT_VERIFIED"
+  fi
 }
 
 write_profile_checksums() {
@@ -148,19 +192,24 @@ prepare_bundle() {
   local candidate_sha="$2"
   local source_commit="$3"
   local go_version="$4"
-  local postgres_version="$5"
-  local database_image_digest="$6"
-  local benchmark_tool_id="$7"
-  local timing_tool_id="$8"
+  local benchmark_tool_id="$5"
+  local timing_tool_id="$6"
 
   require_sha "$candidate_sha"
   require_sha "$source_commit"
   [[ "$source_commit" == "$candidate_sha" ]] || fail "source commit must equal candidate SHA"
-  [[ -n "$go_version" && -n "$postgres_version" && -n "$database_image_digest" ]] || fail "tool and database identities must be non-empty"
+  [[ -n "$go_version" ]] || fail "Go identity must be non-empty"
   [[ ! -e "$bundle_root/manifest.txt" && ! -e "$bundle_root/bundle-checksums.sha256" ]] || fail "bundle is already prepared"
   [[ -d "$bundle_root/profiles" ]] || fail "missing profiles directory"
+  [[ -s "$bundle_root/database-provenance.before.json" ]] || fail "missing pre-run database provenance"
+  [[ -s "$bundle_root/database-provenance.after.json" ]] || fail "missing post-run database provenance"
+  [[ -s "$bundle_root/database-provenance-comparison.json" ]] || fail "missing database provenance comparison"
+  python3 "$script_dir/benchmark_gate.py" database-provenance validate-comparison \
+    --input "$bundle_root/database-provenance-comparison.json" \
+    --before "$bundle_root/database-provenance.before.json" \
+    --after "$bundle_root/database-provenance.after.json"
 
-  local profile profile_checksum manifest_tmp bundle_checksum_tmp
+  local profile profile_checksum manifest_tmp bundle_checksum_tmp provenance_file provenance_hash
   for profile in "${profiles[@]}"; do
     [[ -d "$bundle_root/profiles/$profile" ]] || fail "missing profile $profile"
     [[ -s "$bundle_root/profiles/$profile/integrity/benchmark-integrity.json" ]] || fail "missing benchmark-integrity.json for profile $profile"
@@ -172,14 +221,17 @@ prepare_bundle() {
 
   manifest_tmp="$bundle_root/.manifest.txt.tmp"
   {
-    echo "format=coldkeep-release-benchmark-evidence-v1"
+    echo "format=coldkeep-release-benchmark-evidence-v2"
     echo "release=$release_version"
     echo "candidate_sha=$candidate_sha"
     echo "source_commit=$source_commit"
     echo "expected_profiles=$expected_profiles"
     echo "go_version=$go_version"
-    echo "postgres_version=$postgres_version"
-    echo "database_image_digest=$database_image_digest"
+    for provenance_file in database-provenance.before.json database-provenance.after.json database-provenance-comparison.json; do
+      provenance_hash=$(sha256sum "$bundle_root/$provenance_file")
+      provenance_hash=${provenance_hash%% *}
+      echo "${provenance_file//[.-]/_}_sha256=$provenance_hash"
+    done
     echo "benchmark_tool_id=$benchmark_tool_id"
     echo "timing_tool_id=$timing_tool_id"
     for profile in "${profiles[@]}"; do
@@ -195,12 +247,13 @@ prepare_bundle() {
   (
     cd -- "$bundle_root"
     sha256sum manifest.txt
+    sha256sum database-provenance.before.json database-provenance.after.json database-provenance-comparison.json
     for profile in "${profiles[@]}"; do
       sha256sum "profiles/$profile/checksums.sha256"
     done
   ) > "$bundle_checksum_tmp"
   mv -- "$bundle_checksum_tmp" "$bundle_root/bundle-checksums.sha256"
-  validate_bundle "$bundle_root" "$candidate_sha"
+  validate_bundle "$bundle_root" "$candidate_sha" 1
   echo "release benchmark evidence prepared: $bundle_root"
 }
 
@@ -221,7 +274,7 @@ promote_bundle() {
   bundle_root=$(canonical_dir "$2")
   local candidate_sha="$3"
   require_sha "$candidate_sha"
-  validate_bundle "$bundle_root" "$candidate_sha"
+  validate_bundle "$bundle_root" "$candidate_sha" 1
 
   case "$bundle_root/" in
     "$repo_root"/*) fail "transient bundle root must be external to the repository: $bundle_root" ;;
@@ -231,7 +284,7 @@ promote_bundle() {
   local final_root="$evidence_parent/$candidate_sha"
   mkdir -p -- "$evidence_parent"
   if [[ -e "$final_root" ]]; then
-    if ! (validate_bundle "$final_root" "$candidate_sha"); then
+    if ! (validate_bundle "$final_root" "$candidate_sha" 1); then
       fail "existing exact-SHA evidence is invalid; refusing overwrite: $final_root"
     fi
     if ! cmp -s -- "$bundle_root/bundle-checksums.sha256" "$final_root/bundle-checksums.sha256"; then
@@ -243,7 +296,7 @@ promote_bundle() {
 
   staging_dir=$(mktemp -d "$evidence_parent/.staging-${candidate_sha}.XXXXXXXX")
   cp -a -- "$bundle_root/." "$staging_dir/"
-  validate_bundle "$staging_dir" "$candidate_sha"
+  validate_bundle "$staging_dir" "$candidate_sha" 1
 
   if [[ -n "${COLDKEEP_EVIDENCE_TEST_STAGE_READY_FIFO:-}" ]]; then
     printf '%s\n' "$staging_dir" > "$COLDKEEP_EVIDENCE_TEST_STAGE_READY_FIFO"
@@ -255,7 +308,7 @@ promote_bundle() {
   [[ ! -e "$final_root" ]] || fail "exact-SHA evidence appeared during promotion: $final_root"
   mv -- "$staging_dir" "$final_root"
   staging_dir=""
-  validate_bundle "$final_root" "$candidate_sha"
+  validate_bundle "$final_root" "$candidate_sha" 1
   echo "release benchmark evidence promoted: $final_root"
 }
 
@@ -300,15 +353,14 @@ bundle_root=""
 candidate_sha=""
 source_commit=""
 go_version=""
-postgres_version=""
-database_image_digest=""
 benchmark_tool_id="unspecified"
 timing_tool_id="unspecified"
 require_clean_worktree=0
+require_current_provenance=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo-root|--bundle-root|--candidate-sha|--source-commit|--go-version|--postgres-version|--database-image-digest|--benchmark-tool-id|--timing-tool-id)
+    --repo-root|--bundle-root|--candidate-sha|--source-commit|--go-version|--benchmark-tool-id|--timing-tool-id)
       [[ $# -ge 2 ]] || fail "$1 requires a value"
       option="$1"
       value="$2"
@@ -318,8 +370,6 @@ while [[ $# -gt 0 ]]; do
         --candidate-sha) candidate_sha="$value" ;;
         --source-commit) source_commit="$value" ;;
         --go-version) go_version="$value" ;;
-        --postgres-version) postgres_version="$value" ;;
-        --database-image-digest) database_image_digest="$value" ;;
         --benchmark-tool-id) benchmark_tool_id="$value" ;;
         --timing-tool-id) timing_tool_id="$value" ;;
       esac
@@ -327,6 +377,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --require-clean-worktree)
       require_clean_worktree=1
+      shift
+      ;;
+    --require-current-provenance)
+      require_current_provenance=1
       shift
       ;;
     -h|--help)
@@ -343,14 +397,12 @@ case "$mode" in
     require_value --candidate-sha "$candidate_sha"
     require_value --source-commit "$source_commit"
     require_value --go-version "$go_version"
-    require_value --postgres-version "$postgres_version"
-    require_value --database-image-digest "$database_image_digest"
-    prepare_bundle "$bundle_root" "$candidate_sha" "$source_commit" "$go_version" "$postgres_version" "$database_image_digest" "$benchmark_tool_id" "$timing_tool_id"
+    prepare_bundle "$bundle_root" "$candidate_sha" "$source_commit" "$go_version" "$benchmark_tool_id" "$timing_tool_id"
     ;;
   validate)
     require_value --bundle-root "$bundle_root"
     require_value --candidate-sha "$candidate_sha"
-    validate_bundle "$bundle_root" "$candidate_sha"
+    validate_bundle "$bundle_root" "$candidate_sha" "$require_current_provenance"
     echo "release benchmark evidence validation: PASS"
     ;;
   promote)

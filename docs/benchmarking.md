@@ -177,11 +177,27 @@ ten-pair A/A run is diagnostic evidence only.
 The legacy `ci-stable-v1` material below remains historical diagnostic
 compatibility and has no paired performance authority.
 
+Current unpaired evidence uses policy v3. Before sampling, collect a
+credential-free database execution record from the local Docker service and
+validate it against the `DB_HOST`/`DB_PORT` that the benchmark subprocess will
+inherit. Re-observe and compare the service after the final benchmark command.
+The retained records distinguish the configured pull digest, selected
+platform-manifest digest, and local image-config digest; all registry
+inspection occurs outside the measured workload interval.
+
 The superseded `ci-stable-v1` proposal used fixed larger fixtures and one
 isolated PostgreSQL database per case. It still requires `--repeat 1` and can
 be captured for historical diagnostics by:
 
 ```bash
+python3 scripts/benchmark_gate.py database-provenance collect \
+  --container-id "$COLDKEEP_BENCHMARK_POSTGRES_CONTAINER_ID" \
+  --endpoint-host "$DB_HOST" \
+  --endpoint-port "$DB_PORT" \
+  --output /tmp/database-provenance.before.json
+python3 scripts/benchmark_gate.py database-provenance validate \
+  --input /tmp/database-provenance.before.json \
+  --require-effective-connection
 python3 scripts/benchmark_gate.py sample \
   --binary ./coldkeep \
   --output-dir /tmp/coldkeep-gate-none-w4 \
@@ -189,8 +205,16 @@ python3 scripts/benchmark_gate.py sample \
   --workers 4 \
   --warmups 1 \
   --samples 5 \
-  --postgres-version "PostgreSQL 16.14" \
-  --database-image-digest "sha256:<reviewed-digest>"
+  --database-provenance /tmp/database-provenance.before.json
+python3 scripts/benchmark_gate.py database-provenance collect \
+  --container-id "$COLDKEEP_BENCHMARK_POSTGRES_CONTAINER_ID" \
+  --endpoint-host "$DB_HOST" \
+  --endpoint-port "$DB_PORT" \
+  --output /tmp/database-provenance.after.json
+python3 scripts/benchmark_gate.py database-provenance compare \
+  --before /tmp/database-provenance.before.json \
+  --after /tmp/database-provenance.after.json \
+  --output /tmp/database-provenance-comparison.json
 ```
 
 The legacy sampler rejects malformed, repeated, trailing, incomplete,

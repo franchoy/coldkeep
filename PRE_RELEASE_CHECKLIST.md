@@ -381,7 +381,7 @@ for codec in plain aes-gcm; do
   COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun'
 
   # integration-refcount-containment (v1.8 Option A hold gate: 25-iteration matrix by default)
-  go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
+  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
 
   # For v1.8 release hold: 1000-iteration stress matrix (validates chunk refcount repair under extreme load)
   # COLDKEEP_REFCOUNT_STRESS_ITERS=1000 go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
@@ -444,7 +444,7 @@ for codec in plain aes-gcm; do
     -run '^TestRoundTripStoreRestore$'
 done
 
-COLDKEEP_CODEC=plain go test -v -race -count=1 ./tests/integration/... \
+COLDKEEP_CODEC=plain COLDKEEP_LONG_RUN=1 go test -v -race -count=1 ./tests/integration/... \
   -run '^(TestRemoveWithSharedChunksRefCount|TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState)$'
 
 for codec in plain aes-gcm; do
@@ -467,14 +467,17 @@ export COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15
 export COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900
 
 candidate_sha=$(git rev-parse HEAD)
+: "${COLDKEEP_BENCHMARK_POSTGRES_CONTAINER_ID:?set to the local PostgreSQL container ID}"
 scripts/run_release_benchmark_evidence.sh \
   --repo-root "$PWD" \
   --candidate-sha "$candidate_sha" \
-  --binary "$PWD/coldkeep"
+  --binary "$PWD/coldkeep" \
+  --database-container-id "$COLDKEEP_BENCHMARK_POSTGRES_CONTAINER_ID"
 
 scripts/release_benchmark_evidence.sh validate \
   --bundle-root "$PWD/.release-evidence/v1.13.14/$candidate_sha" \
-  --candidate-sha "$candidate_sha"
+  --candidate-sha "$candidate_sha" \
+  --require-current-provenance
 scripts/release_benchmark_evidence.sh inventory --repo-root "$PWD"
 git status --ignored --short
 git check-ignore -v .release-evidence

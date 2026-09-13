@@ -12,6 +12,7 @@ import os
 import pathlib
 import re
 import shutil
+import socket
 import statistics
 import subprocess
 import sys
@@ -21,6 +22,8 @@ from typing import Any, Iterable
 
 SCHEMA_VERSION = 2
 REPORT_KIND = "benchmark_gate_aggregate"
+DATABASE_PROVENANCE_KIND = "database_execution_provenance"
+DATABASE_PROVENANCE_COMPARISON_KIND = "database_execution_provenance_comparison"
 REVALIDATION_KIND = "benchmark_evidence_contract_revalidation"
 INTEGRITY_KIND = "benchmark_integrity"
 MANIFEST_KIND = "benchmark_gate_manifest"
@@ -83,6 +86,12 @@ HARD_ENV_FIELDS = (
     "go_version",
     "postgres_version",
     "database_image_digest",
+    "database_image_digest_kind",
+    "database_image_platform",
+    "database_image_platform_manifest_digest",
+    "database_image_config_digest",
+    "database_endpoint_fingerprint",
+    "database_container_id_sha256",
 )
 CALIBRATION_IDENTITY_FIELDS = ("source_commit", "binary_sha256", *HARD_ENV_FIELDS)
 REQUIRED_PROVENANCE_FIELDS = (
@@ -98,6 +107,12 @@ REQUIRED_PROVENANCE_FIELDS = (
     "go_version",
     "postgres_version",
     "database_image_digest",
+    "database_image_digest_kind",
+    "database_image_platform",
+    "database_image_platform_manifest_digest",
+    "database_image_config_digest",
+    "database_endpoint_fingerprint",
+    "database_container_id_sha256",
     "binary_sha256",
 )
 MANIFEST_PROFILES = {
@@ -107,7 +122,7 @@ MANIFEST_PROFILES = {
     "zstd-w4": ("zstd", 4),
 }
 DIAGNOSTIC_SCHEMA_VERSION = 2
-EVIDENCE_POLICY_VERSION = 2
+EVIDENCE_POLICY_VERSION = 3
 INT64_MAX = (1 << 63) - 1
 INTEGRITY_SAMPLE_COUNT = 2
 INTEGRITY_COMMAND_TIMEOUT_SECONDS = 600
@@ -134,6 +149,12 @@ FIELD_POLICY = {
         "aggregate.provenance.go_version",
         "aggregate.provenance.postgres_version",
         "aggregate.provenance.database_image_digest",
+        "aggregate.provenance.database_image_digest_kind",
+        "aggregate.provenance.database_image_platform",
+        "aggregate.provenance.database_image_platform_manifest_digest",
+        "aggregate.provenance.database_image_config_digest",
+        "aggregate.provenance.database_endpoint_fingerprint",
+        "aggregate.provenance.database_container_id_sha256",
         "profile.codec",
         "profile.compression",
         "profile.dataset",
@@ -750,6 +771,16 @@ def validate_provenance(value: Any) -> dict[str, Any]:
         raise GateError("aggregate binary_sha256 must be lowercase SHA-256")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(value["database_image_digest"])):
         raise GateError("aggregate database_image_digest must be a sha256 digest")
+    if value["database_image_digest_kind"] not in {"index", "manifest"}:
+        raise GateError("aggregate database_image_digest_kind is invalid")
+    if not re.fullmatch(r"[a-z0-9._-]+/[a-z0-9._-]+(?:/[a-z0-9._-]+)?", str(value["database_image_platform"])):
+        raise GateError("aggregate database_image_platform is invalid")
+    for field in ("database_image_platform_manifest_digest", "database_image_config_digest"):
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(value[field])):
+            raise GateError(f"aggregate {field} must be a sha256 digest")
+    for field in ("database_endpoint_fingerprint", "database_container_id_sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(value[field])):
+            raise GateError(f"aggregate {field} must be lowercase SHA-256")
     if (
         isinstance(value["cpu_count"], bool)
         or not isinstance(value["cpu_count"], int)
@@ -829,9 +860,516 @@ def validate_raw_report(
     return data, rows
 
 
-def command_output(command: list[str]) -> str:
-    completed = subprocess.run(command, check=True, text=True, capture_output=True)
+def command_output(command: list[str], *, env: dict[str, str] | None = None) -> str:
+    completed = subprocess.run(command, check=True, text=True, capture_output=True, env=env)
     return completed.stdout.strip()
+
+
+def _command_bytes(command: list[str]) -> bytes:
+    completed = subprocess.run(command, check=True, capture_output=True)
+    return completed.stdout
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _sha256_payload(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _require_digest(value: Any, label: str) -> str:
+    value = str(value)
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        raise GateError(f"{label} must be a sha256 digest")
+    return value
+
+
+def _canonical_loopback_host(host: str) -> str:
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        }
+    except socket.gaierror as exc:
+        raise GateError(f"database endpoint host cannot be resolved: {host!r}") from exc
+    if not addresses:
+        raise GateError("database endpoint host resolved to no addresses")
+    import ipaddress
+
+    if any(not ipaddress.ip_address(address).is_loopback for address in addresses):
+        raise GateError("database provenance supports only a local loopback endpoint")
+    return sorted(addresses)[0]
+
+
+def _endpoint_identity(host: str, port: str | int) -> tuple[dict[str, Any], str]:
+    canonical_host = _canonical_loopback_host(host)
+    try:
+        parsed_port = int(port)
+    except (TypeError, ValueError) as exc:
+        raise GateError("database endpoint port must be an integer") from exc
+    if parsed_port <= 0 or parsed_port > 65535:
+        raise GateError("database endpoint port is outside the TCP range")
+    evidence = {
+        "transport": "tcp",
+        "host_class": "loopback",
+        "canonical_host": canonical_host,
+        "host_port": parsed_port,
+        "container_port": 5432,
+    }
+    fingerprint = _sha256_text(
+        f"tcp\n{canonical_host}\n{parsed_port}\n5432\n"
+    )
+    return evidence, fingerprint
+
+
+def _load_json_bytes(payload: bytes, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GateError(f"{label} is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise GateError(f"{label} must be a JSON object")
+    return value
+
+
+def _descriptor_payload(command: list[str], expected_digest: str, label: str) -> dict[str, Any]:
+    payload = _command_bytes(command)
+    candidates = (payload, payload[:-1] if payload.endswith(b"\n") else payload)
+    if all("sha256:" + _sha256_payload(candidate) != expected_digest for candidate in candidates):
+        raise GateError(f"{label} payload does not match its declared digest")
+    return _load_json_bytes(payload, label)
+
+
+def _docker_inspect_one(command: list[str], label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(_command_bytes(command))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GateError(f"{label} is not valid JSON") from exc
+    if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
+        raise GateError(f"{label} must contain exactly one object")
+    return value[0]
+
+
+DATABASE_IDENTITY_FIELDS = {
+    "postgres_version",
+    "database_image_digest",
+    "database_image_digest_kind",
+    "database_image_platform",
+    "database_image_platform_manifest_digest",
+    "database_image_config_digest",
+    "database_endpoint_fingerprint",
+    "database_container_id_sha256",
+}
+
+
+def validate_database_provenance(value: Any) -> dict[str, Any]:
+    value = require_exact_fields(
+        value,
+        {
+            "schema_version",
+            "report_kind",
+            "status",
+            "observed_at_utc",
+            "docker_context",
+            "connection",
+            "container",
+            "image",
+            "registry",
+            "postgres",
+            "identity",
+        },
+        "database provenance",
+    )
+    if (
+        value["schema_version"] != 1
+        or value["report_kind"] != DATABASE_PROVENANCE_KIND
+        or value["status"] != "verified"
+    ):
+        raise GateError("database provenance identity/status mismatch")
+    docker_context = require_exact_fields(
+        value["docker_context"], {"name", "daemon_transport", "local_daemon"}, "docker context"
+    )
+    if docker_context["daemon_transport"] != "unix" or docker_context["local_daemon"] is not True:
+        raise GateError("database provenance did not use a local Docker daemon")
+    connection = require_exact_fields(
+        value["connection"],
+        {"transport", "host_class", "canonical_host", "host_port", "container_port", "fingerprint"},
+        "database connection",
+    )
+    expected_connection, expected_fingerprint = _endpoint_identity(
+        str(connection["canonical_host"]), connection["host_port"]
+    )
+    if {key: connection[key] for key in expected_connection} != expected_connection:
+        raise GateError("database connection identity is not canonical")
+    if connection["fingerprint"] != expected_fingerprint:
+        raise GateError("database connection fingerprint mismatch")
+    container = require_exact_fields(
+        value["container"],
+        {"id_sha256", "state", "health", "configured_image", "local_image_id", "port_bindings"},
+        "database container",
+    )
+    image = require_exact_fields(
+        value["image"], {"id", "repo_digests", "os", "architecture", "variant"}, "database image"
+    )
+    registry = require_exact_fields(
+        value["registry"],
+        {
+            "pull_digest",
+            "pull_descriptor_media_type",
+            "pull_digest_kind",
+            "selected_platform",
+            "selected_manifest_digest",
+            "selected_manifest_media_type",
+            "selected_config_digest",
+        },
+        "database registry evidence",
+    )
+    postgres = require_exact_fields(
+        value["postgres"], {"server_version", "container_binary_version"}, "database server"
+    )
+    identity = require_exact_fields(value["identity"], DATABASE_IDENTITY_FIELDS, "database identity")
+    for field in (
+        "database_image_digest",
+        "database_image_platform_manifest_digest",
+        "database_image_config_digest",
+    ):
+        _require_digest(identity[field], field)
+    if not re.fullmatch(r"[0-9a-f]{64}", str(identity["database_endpoint_fingerprint"])):
+        raise GateError("database endpoint fingerprint is invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(identity["database_container_id_sha256"])):
+        raise GateError("database container identity hash is invalid")
+    if container["state"] != "running" or container["health"] not in {"healthy", "not-configured"}:
+        raise GateError("database container was not running and healthy")
+    if container["id_sha256"] != identity["database_container_id_sha256"]:
+        raise GateError("database container identity disagreement")
+    if image["id"] != container["local_image_id"] or image["id"] != identity["database_image_config_digest"]:
+        raise GateError("database local image/config identity disagreement")
+    pull_digest = _require_digest(registry["pull_digest"], "registry pull digest")
+    if pull_digest != identity["database_image_digest"]:
+        raise GateError("database pull digest disagreement")
+    if registry["pull_digest_kind"] != identity["database_image_digest_kind"]:
+        raise GateError("database pull digest kind disagreement")
+    if registry["selected_platform"] != identity["database_image_platform"]:
+        raise GateError("database platform disagreement")
+    if registry["selected_manifest_digest"] != identity["database_image_platform_manifest_digest"]:
+        raise GateError("database platform manifest disagreement")
+    if registry["selected_config_digest"] != identity["database_image_config_digest"]:
+        raise GateError("database image config disagreement")
+    if postgres["server_version"] != identity["postgres_version"]:
+        raise GateError("database server version disagreement")
+    if connection["fingerprint"] != identity["database_endpoint_fingerprint"]:
+        raise GateError("database endpoint identity disagreement")
+    configured_match = re.search(r"@(sha256:[0-9a-f]{64})$", str(container["configured_image"]))
+    if configured_match is None or configured_match.group(1) != pull_digest:
+        raise GateError("configured image does not carry the observed pull digest")
+    if not isinstance(image["repo_digests"], list) or not any(
+        str(item).endswith("@" + pull_digest) for item in image["repo_digests"]
+    ):
+        raise GateError("local RepoDigests do not contain the configured pull digest")
+    bindings = container["port_bindings"]
+    if not isinstance(bindings, list) or connection not in [
+        {
+            "transport": "tcp",
+            "host_class": "loopback",
+            "canonical_host": item.get("canonical_host"),
+            "host_port": item.get("host_port"),
+            "container_port": item.get("container_port"),
+            "fingerprint": item.get("fingerprint"),
+        }
+        for item in bindings if isinstance(item, dict)
+    ]:
+        raise GateError("retained endpoint is not present in the container port mapping")
+    platform = f"{image['os']}/{image['architecture']}"
+    if image["variant"]:
+        platform += f"/{image['variant']}"
+    if platform != registry["selected_platform"]:
+        raise GateError("selected registry platform does not match the local image")
+    if registry["pull_digest_kind"] == "manifest" and pull_digest != registry["selected_manifest_digest"]:
+        raise GateError("direct-manifest pull digest differs from the selected manifest")
+    if registry["pull_digest_kind"] not in {"index", "manifest"}:
+        raise GateError("database pull digest kind is invalid")
+    if str(postgres["container_binary_version"]) != "postgres (PostgreSQL) " + str(postgres["server_version"]):
+        raise GateError("endpoint and container PostgreSQL versions disagree")
+    validate_no_sensitive_evidence(value, "database provenance")
+    return value
+
+
+def _effective_database_identity(path: pathlib.Path) -> dict[str, Any]:
+    value = validate_database_provenance(load_json_strict(path))
+    host = os.environ.get("DB_HOST", "")
+    port = os.environ.get("DB_PORT", "")
+    if not host or not port:
+        raise GateError("database provenance consumption requires DB_HOST and DB_PORT")
+    _, fingerprint = _endpoint_identity(host, port)
+    if fingerprint != value["identity"]["database_endpoint_fingerprint"]:
+        raise GateError("effective benchmark connection does not match database provenance")
+    return value["identity"]
+
+
+def collect_database_provenance(args: argparse.Namespace) -> dict[str, Any]:
+    docker_host = os.environ.get("DOCKER_HOST", "")
+    if docker_host and not docker_host.startswith("unix://"):
+        raise GateError("remote Docker context cannot prove a local loopback mapping")
+    context_name = command_output(["docker", "context", "show"])
+    context_host = command_output(
+        ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}", context_name]
+    )
+    if not context_host.startswith("unix://"):
+        raise GateError("database provenance requires a local Unix Docker daemon")
+
+    connection, endpoint_fingerprint = _endpoint_identity(args.endpoint_host, args.endpoint_port)
+    connection["fingerprint"] = endpoint_fingerprint
+    container = _docker_inspect_one(["docker", "inspect", args.container_id], "container inspect")
+    container_id = str(container.get("Id", ""))
+    if not re.fullmatch(r"[0-9a-f]{64}", container_id):
+        raise GateError("container inspect returned an invalid container ID")
+    state = container.get("State")
+    config = container.get("Config")
+    network = container.get("NetworkSettings")
+    if not isinstance(state, dict) or not isinstance(config, dict) or not isinstance(network, dict):
+        raise GateError("container inspect omitted required state/config/network fields")
+    health_value = state.get("Health")
+    health = health_value.get("Status") if isinstance(health_value, dict) else "not-configured"
+    configured_image = str(config.get("Image", ""))
+    digest_match = re.search(r"@(sha256:[0-9a-f]{64})$", configured_image)
+    if digest_match is None:
+        raise GateError("database container image reference is not digest-pinned")
+    pull_digest = digest_match.group(1)
+    local_image_id = _require_digest(container.get("Image"), "container local image ID")
+    image = _docker_inspect_one(["docker", "image", "inspect", local_image_id], "image inspect")
+    repo_digests = image.get("RepoDigests")
+    if not isinstance(repo_digests, list) or not any(
+        str(item).endswith("@" + pull_digest) for item in repo_digests
+    ):
+        raise GateError("local image RepoDigests do not contain the configured pull digest")
+    os_name = str(image.get("Os", ""))
+    architecture = str(image.get("Architecture", ""))
+    variant = str(image.get("Variant", "") or "")
+    if not os_name or not architecture:
+        raise GateError("local image platform is incomplete")
+    platform = f"{os_name}/{architecture}" + (f"/{variant}" if variant else "")
+
+    port_values = network.get("Ports", {}).get("5432/tcp") if isinstance(network.get("Ports"), dict) else None
+    if not isinstance(port_values, list):
+        raise GateError("container has no published PostgreSQL TCP endpoint")
+    retained_bindings: list[dict[str, Any]] = []
+    matched_binding = False
+    for item in port_values:
+        if not isinstance(item, dict):
+            continue
+        host_ip = str(item.get("HostIp", ""))
+        host_port = str(item.get("HostPort", ""))
+        if host_port != str(connection["host_port"]):
+            continue
+        if host_ip not in {"0.0.0.0", "::", connection["canonical_host"], args.endpoint_host}:
+            continue
+        retained_bindings.append(dict(connection))
+        matched_binding = True
+    if not matched_binding:
+        raise GateError("effective database endpoint is not mapped to the inspected container")
+
+    pull = _descriptor_payload(
+        ["docker", "buildx", "imagetools", "inspect", "--raw", configured_image],
+        pull_digest,
+        "registry pull descriptor",
+    )
+    media_type = str(pull.get("mediaType", ""))
+    manifests = pull.get("manifests")
+    if isinstance(manifests, list):
+        digest_kind = "index"
+        selected = []
+        for descriptor in manifests:
+            if not isinstance(descriptor, dict) or not isinstance(descriptor.get("platform"), dict):
+                continue
+            descriptor_platform = descriptor["platform"]
+            if (
+                descriptor_platform.get("os") == os_name
+                and descriptor_platform.get("architecture") == architecture
+                and str(descriptor_platform.get("variant", "") or "") == variant
+            ):
+                selected.append(descriptor)
+        if len(selected) != 1:
+            raise GateError("registry index does not contain one exact local platform descriptor")
+        selected_manifest_digest = _require_digest(selected[0].get("digest"), "platform manifest digest")
+        manifest_ref = configured_image.rsplit("@", 1)[0] + "@" + selected_manifest_digest
+        selected_manifest = _descriptor_payload(
+            ["docker", "buildx", "imagetools", "inspect", "--raw", manifest_ref],
+            selected_manifest_digest,
+            "selected platform manifest",
+        )
+    else:
+        digest_kind = "manifest"
+        selected_manifest_digest = pull_digest
+        selected_manifest = pull
+    selected_media_type = str(selected_manifest.get("mediaType", ""))
+    manifest_config = selected_manifest.get("config")
+    if not isinstance(manifest_config, dict):
+        raise GateError("selected platform manifest has no config descriptor")
+    selected_config_digest = _require_digest(manifest_config.get("digest"), "manifest config digest")
+    if selected_config_digest != local_image_id:
+        raise GateError("selected platform manifest config does not match the running container image")
+
+    database_user = os.environ.get("DB_USER", "")
+    database_name = os.environ.get("DB_NAME", "")
+    if not database_user or not database_name:
+        raise GateError("database provenance collection requires DB_USER and DB_NAME")
+    psql_env = os.environ.copy()
+    psql_env["PGPASSWORD"] = os.environ.get("DB_PASSWORD", "")
+    psql_env["PGSSLMODE"] = os.environ.get("DB_SSLMODE", "prefer")
+    sql_version = command_output(
+        [
+            "psql",
+            "--no-psqlrc",
+            "--host", str(connection["canonical_host"]),
+            "--port", str(connection["host_port"]),
+            "--username", database_user,
+            "--dbname", database_name,
+            "--tuples-only",
+            "--no-align",
+            "--command", "SHOW server_version",
+        ],
+        env=psql_env,
+    )
+    binary_version = command_output(["docker", "exec", container_id, "postgres", "--version"])
+    if not sql_version or binary_version != "postgres (PostgreSQL) " + sql_version:
+        raise GateError("effective endpoint and container PostgreSQL versions disagree")
+
+    identity = {
+        "postgres_version": sql_version,
+        "database_image_digest": pull_digest,
+        "database_image_digest_kind": digest_kind,
+        "database_image_platform": platform,
+        "database_image_platform_manifest_digest": selected_manifest_digest,
+        "database_image_config_digest": local_image_id,
+        "database_endpoint_fingerprint": endpoint_fingerprint,
+        "database_container_id_sha256": _sha256_text(container_id),
+    }
+    report = {
+        "schema_version": 1,
+        "report_kind": DATABASE_PROVENANCE_KIND,
+        "status": "verified",
+        "observed_at_utc": utc_now(),
+        "docker_context": {"name": context_name, "daemon_transport": "unix", "local_daemon": True},
+        "connection": connection,
+        "container": {
+            "id_sha256": _sha256_text(container_id),
+            "state": str(state.get("Status", "")),
+            "health": str(health),
+            "configured_image": configured_image,
+            "local_image_id": local_image_id,
+            "port_bindings": retained_bindings,
+        },
+        "image": {
+            "id": _require_digest(image.get("Id"), "image ID"),
+            "repo_digests": sorted(str(item) for item in repo_digests),
+            "os": os_name,
+            "architecture": architecture,
+            "variant": variant,
+        },
+        "registry": {
+            "pull_digest": pull_digest,
+            "pull_descriptor_media_type": media_type,
+            "pull_digest_kind": digest_kind,
+            "selected_platform": platform,
+            "selected_manifest_digest": selected_manifest_digest,
+            "selected_manifest_media_type": selected_media_type,
+            "selected_config_digest": selected_config_digest,
+        },
+        "postgres": {"server_version": sql_version, "container_binary_version": binary_version},
+        "identity": identity,
+    }
+    return validate_database_provenance(report)
+
+
+def database_provenance_command(args: argparse.Namespace) -> int:
+    if args.action == "collect":
+        if args.output is None or not args.container_id or not args.endpoint_host or args.endpoint_port is None:
+            raise GateError("database provenance collection requires container, endpoint, and output")
+        if args.output.exists():
+            raise GateError("database provenance output must not exist")
+        report = collect_database_provenance(args)
+        write_json(args.output, report)
+        print(args.output)
+        return 0
+    if args.action == "validate":
+        if args.input is None:
+            raise GateError("database provenance validation requires --input")
+        validate_database_provenance(load_json_strict(args.input))
+        if args.require_effective_connection:
+            _effective_database_identity(args.input)
+        print("DATABASE_PROVENANCE_VALIDATION: PASS")
+        return 0
+    if args.action == "compare":
+        if args.before is None or args.after is None or args.output is None:
+            raise GateError("database provenance comparison requires before, after, and output")
+        if args.output.exists():
+            raise GateError("database provenance comparison output must not exist")
+        before = validate_database_provenance(load_json_strict(args.before))
+        after = validate_database_provenance(load_json_strict(args.after))
+        if before["identity"] != after["identity"]:
+            raise GateError("database provenance changed between pre/post observations")
+        report = {
+            "schema_version": 1,
+            "report_kind": DATABASE_PROVENANCE_COMPARISON_KIND,
+            "status": "verified",
+            "compared_at_utc": utc_now(),
+            "before_sha256": sha256_file(args.before),
+            "after_sha256": sha256_file(args.after),
+            "identity": before["identity"],
+        }
+        validate_no_sensitive_evidence(report, "database provenance comparison")
+        write_json(args.output, report)
+        print(args.output)
+        return 0
+    if args.action == "validate-comparison":
+        if args.input is None or args.before is None or args.after is None:
+            raise GateError("comparison validation requires input, before, and after")
+        before = validate_database_provenance(load_json_strict(args.before))
+        after = validate_database_provenance(load_json_strict(args.after))
+        report = require_exact_fields(
+            load_json_strict(args.input),
+            {
+                "schema_version",
+                "report_kind",
+                "status",
+                "compared_at_utc",
+                "before_sha256",
+                "after_sha256",
+                "identity",
+            },
+            "database provenance comparison",
+        )
+        if (
+            report["schema_version"] != 1
+            or report["report_kind"] != DATABASE_PROVENANCE_COMPARISON_KIND
+            or report["status"] != "verified"
+            or report["before_sha256"] != sha256_file(args.before)
+            or report["after_sha256"] != sha256_file(args.after)
+            or before["identity"] != after["identity"]
+            or report["identity"] != before["identity"]
+        ):
+            raise GateError("database provenance comparison does not verify its observations")
+        validate_no_sensitive_evidence(report, "database provenance comparison")
+        print("DATABASE_PROVENANCE_COMPARISON_VALIDATION: PASS")
+        return 0
+    if args.action == "verify-aggregate":
+        if args.input is None or args.aggregate is None:
+            raise GateError("aggregate provenance verification requires provenance and aggregate")
+        identity = validate_database_provenance(load_json_strict(args.input))["identity"]
+        aggregate = load_json_strict(args.aggregate)
+        if aggregate.get("evidence_policy_version") != EVIDENCE_POLICY_VERSION:
+            raise GateError("aggregate does not use current evidence policy")
+        if not isinstance(aggregate.get("provenance"), dict):
+            raise GateError("aggregate provenance is missing")
+        if not DATABASE_IDENTITY_FIELDS.issubset(aggregate["provenance"]):
+            raise GateError("aggregate database provenance fields are incomplete")
+        actual = {field: aggregate["provenance"][field] for field in DATABASE_IDENTITY_FIELDS}
+        if actual != identity:
+            raise GateError("aggregate database identity does not match retained provenance")
+        print("DATABASE_PROVENANCE_AGGREGATE_VALIDATION: PASS")
+        return 0
+    raise GateError(f"unknown database provenance action {args.action!r}")
 
 
 def git_value(args: list[str], default: str = "unknown") -> str:
@@ -853,6 +1391,7 @@ def host_load() -> dict[str, Any]:
 
 
 def provenance(args: argparse.Namespace, binary_hash: str) -> dict[str, Any]:
+    database_identity = args.database_identity
     return {
         "source_commit": args.source_commit or os.environ.get("GITHUB_SHA") or git_value(["rev-parse", "HEAD"]),
         "source_tag": args.source_tag or None,
@@ -865,8 +1404,7 @@ def provenance(args: argparse.Namespace, binary_hash: str) -> dict[str, Any]:
         "runner_arch": os.environ.get("RUNNER_ARCH", os.uname().machine if hasattr(os, "uname") else "unknown"),
         "cpu_count": os.cpu_count() or 0,
         "go_version": args.go_version or command_output(["go", "version"]),
-        "postgres_version": args.postgres_version,
-        "database_image_digest": args.database_image_digest,
+        **database_identity,
         "binary_sha256": binary_hash,
     }
 
@@ -1068,6 +1606,7 @@ def sample_command(args: argparse.Namespace) -> int:
     for name in ("DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SSLMODE"):
         if not os.environ.get(name):
             raise GateError(f"gate sampling requires {name}")
+    args.database_identity = _effective_database_identity(args.database_provenance)
     args.output_dir.parent.mkdir(parents=True, exist_ok=True)
     if shutil.disk_usage(args.output_dir.parent).free < args.minimum_free_disk_bytes:
         raise GateError("insufficient free disk for benchmark sampling")
@@ -1229,6 +1768,7 @@ def integrity_command(args: argparse.Namespace) -> int:
     for name in ("DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SSLMODE"):
         if not os.environ.get(name):
             raise GateError(f"integrity sampling requires {name}")
+    args.database_identity = _effective_database_identity(args.database_provenance)
 
     args.binary = args.binary.resolve()
     args.output_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1919,8 +2459,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--source-commit")
     sample.add_argument("--source-tag")
     sample.add_argument("--go-version")
-    sample.add_argument("--postgres-version", required=True)
-    sample.add_argument("--database-image-digest", required=True)
+    sample.add_argument("--database-provenance", type=pathlib.Path, required=True)
     sample.set_defaults(handler=sample_command)
 
     integrity = subparsers.add_parser(
@@ -1940,8 +2479,7 @@ def build_parser() -> argparse.ArgumentParser:
     integrity.add_argument("--source-commit")
     integrity.add_argument("--source-tag")
     integrity.add_argument("--go-version")
-    integrity.add_argument("--postgres-version", required=True)
-    integrity.add_argument("--database-image-digest", required=True)
+    integrity.add_argument("--database-provenance", type=pathlib.Path, required=True)
     integrity.set_defaults(handler=integrity_command)
 
     revalidate = subparsers.add_parser(
@@ -1980,6 +2518,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate_manifest_parser.add_argument("--manifest", type=pathlib.Path, required=True)
     validate_manifest_parser.set_defaults(handler=validate_manifest_command)
+
+    database_provenance = subparsers.add_parser(
+        "database-provenance", help="collect or validate database execution provenance"
+    )
+    database_provenance.add_argument(
+        "action", choices=("collect", "validate", "compare", "validate-comparison", "verify-aggregate")
+    )
+    database_provenance.add_argument("--container-id")
+    database_provenance.add_argument("--endpoint-host")
+    database_provenance.add_argument("--endpoint-port", type=int)
+    database_provenance.add_argument("--input", type=pathlib.Path)
+    database_provenance.add_argument("--before", type=pathlib.Path)
+    database_provenance.add_argument("--after", type=pathlib.Path)
+    database_provenance.add_argument("--output", type=pathlib.Path)
+    database_provenance.add_argument("--aggregate", type=pathlib.Path)
+    database_provenance.add_argument("--require-effective-connection", action="store_true")
+    database_provenance.set_defaults(handler=database_provenance_command)
     return parser
 
 

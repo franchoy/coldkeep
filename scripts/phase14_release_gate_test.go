@@ -3,6 +3,7 @@ package scripts_test
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -160,9 +161,74 @@ func TestBenchmarkEvidenceLifecycleLeavesCleanWorktree(t *testing.T) {
 		if err := os.RemoveAll(filepath.Join(bundle, "profiles", "zstd-w4")); err != nil {
 			t.Fatalf("remove profile fixture: %v", err)
 		}
-		output := runPhase14Command(t, bundle, false, "bash", script, "prepare", "--bundle-root", bundle, "--candidate-sha", sha, "--source-commit", sha, "--go-version", "go test", "--postgres-version", "postgres test", "--database-image-digest", "sha256:test")
+		output := runPhase14Command(t, bundle, false, "bash", script, "prepare", "--bundle-root", bundle, "--candidate-sha", sha, "--source-commit", sha, "--go-version", "go test")
 		if !strings.Contains(output, "missing profile zstd-w4") {
 			t.Fatalf("missing-profile diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("missing provenance comparison fails current preparation", func(t *testing.T) {
+		_, sha := newPhase14EvidenceRepo(t)
+		bundle := newPhase14EvidenceBundle(t)
+		if err := os.Remove(filepath.Join(bundle, "database-provenance-comparison.json")); err != nil {
+			t.Fatalf("remove comparison fixture: %v", err)
+		}
+		output := runPhase14Command(t, bundle, false, "bash", script, "prepare", "--bundle-root", bundle, "--candidate-sha", sha, "--source-commit", sha, "--go-version", "go test")
+		if !strings.Contains(output, "missing database provenance comparison") {
+			t.Fatalf("missing-comparison diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("cross-profile aggregate disagreement fails", func(t *testing.T) {
+		_, sha := newPhase14EvidenceRepo(t)
+		bundle := newPhase14EvidenceBundle(t)
+		aggregatePath := filepath.Join(bundle, "profiles", "zstd-w4", "integrity", "aggregate.json")
+		aggregate := strings.Replace(mustReadPhase14File(t, aggregatePath), strings.Repeat("d", 64), strings.Repeat("e", 64), 1)
+		writePhase14File(t, aggregatePath, aggregate, 0o600)
+		writePhase14Checksums(t, filepath.Dir(aggregatePath), []string{"aggregate.json", "benchmark-integrity.json"})
+		output := runPhase14Command(t, bundle, false, "bash", script, "prepare", "--bundle-root", bundle, "--candidate-sha", sha, "--source-commit", sha, "--go-version", "go test")
+		if !strings.Contains(output, "does not match retained provenance") {
+			t.Fatalf("cross-profile disagreement diagnostic omitted:\n%s", output)
+		}
+	})
+
+	t.Run("historical format remains audit-only and cannot satisfy current acceptance", func(t *testing.T) {
+		_, sha := newPhase14EvidenceRepo(t)
+		bundle := newPhase14EvidenceBundle(t)
+		preparePhase14Bundle(t, script, bundle, sha)
+		manifestPath := filepath.Join(bundle, "manifest.txt")
+		var historical strings.Builder
+		for _, line := range strings.Split(strings.TrimSpace(mustReadPhase14File(t, manifestPath)), "\n") {
+			if strings.Contains(line, "database_provenance_") {
+				continue
+			}
+			if line == "format=coldkeep-release-benchmark-evidence-v2" {
+				line = "format=coldkeep-release-benchmark-evidence-v1"
+			}
+			historical.WriteString(line + "\n")
+			if strings.HasPrefix(line, "go_version=") {
+				historical.WriteString("postgres_version=historical-unverified\n")
+				historical.WriteString("database_image_digest=sha256:historical-unverified\n")
+			}
+		}
+		writePhase14File(t, manifestPath, historical.String(), 0o600)
+		for _, name := range []string{"database-provenance.before.json", "database-provenance.after.json", "database-provenance-comparison.json"} {
+			if err := os.Remove(filepath.Join(bundle, name)); err != nil {
+				t.Fatalf("remove %s: %v", name, err)
+			}
+		}
+		checksumNames := []string{"manifest.txt"}
+		for _, profile := range []string{"none-w1", "none-w4", "zstd-w1", "zstd-w4"} {
+			checksumNames = append(checksumNames, filepath.ToSlash(filepath.Join("profiles", profile, "checksums.sha256")))
+		}
+		writePhase14Checksums(t, bundle, checksumNames)
+		if err := os.Rename(filepath.Join(bundle, "checksums.sha256"), filepath.Join(bundle, "bundle-checksums.sha256")); err != nil {
+			t.Fatalf("rename historical bundle checksum manifest: %v", err)
+		}
+		runPhase14Command(t, bundle, true, "bash", script, "validate", "--bundle-root", bundle, "--candidate-sha", sha)
+		output := runPhase14Command(t, bundle, false, "bash", script, "validate", "--bundle-root", bundle, "--candidate-sha", sha, "--require-current-provenance")
+		if !strings.Contains(output, "does not establish current execution provenance") {
+			t.Fatalf("historical bundle bypassed current acceptance:\n%s", output)
 		}
 	})
 
@@ -244,7 +310,7 @@ func TestBenchmarkEvidenceLifecycleLeavesCleanWorktree(t *testing.T) {
 
 	t.Run("transient profile roots are external and disjoint", func(t *testing.T) {
 		runner := mustReadPhase14File(t, filepath.Join(repoRoot(t), "scripts", "run_release_benchmark_evidence.sh"))
-		for _, required := range []string{"mktemp -d", `profiles/${profile}/integrity`, `profiles/${profile}/timing`} {
+		for _, required := range []string{"mktemp -d", `profiles/${profile}/integrity`, `profiles/${profile}/timing`, "--database-container-id", "--require-current-provenance", "database-provenance.before.json", "database-provenance.after.json", "database-provenance compare"} {
 			if !strings.Contains(runner, required) {
 				t.Fatalf("runner does not prove %q", required)
 			}
@@ -492,11 +558,21 @@ func writePhase14EvidenceSource(t *testing.T, repo string, names []string, exact
 func newPhase14EvidenceBundle(t *testing.T) string {
 	t.Helper()
 	bundle := t.TempDir()
+	before := phase14DatabaseProvenance(t, "2026-09-13T00:00:00Z")
+	after := phase14DatabaseProvenance(t, "2026-09-13T00:01:00Z")
+	writePhase14File(t, filepath.Join(bundle, "database-provenance.before.json"), before, 0o600)
+	writePhase14File(t, filepath.Join(bundle, "database-provenance.after.json"), after, 0o600)
+	beforeSum := sha256.Sum256([]byte(before))
+	afterSum := sha256.Sum256([]byte(after))
+	comparison := fmt.Sprintf(`{"schema_version":1,"report_kind":"database_execution_provenance_comparison","status":"verified","compared_at_utc":"2026-09-13T00:02:00Z","before_sha256":"%x","after_sha256":"%x","identity":%s}`+"\n", beforeSum, afterSum, phase14DatabaseIdentity())
+	writePhase14File(t, filepath.Join(bundle, "database-provenance-comparison.json"), comparison, 0o600)
 	for _, profile := range []string{"none-w1", "none-w4", "zstd-w1", "zstd-w4"} {
 		integrity := filepath.Join(bundle, "profiles", profile, "integrity")
 		timing := filepath.Join(bundle, "profiles", profile, "timing")
 		writePhase14File(t, filepath.Join(integrity, "benchmark-integrity.json"), "{\"classification\":\"BENCHMARK_INTEGRITY_PASS\"}\n", 0o600)
-		writePhase14Checksums(t, integrity, []string{"benchmark-integrity.json"})
+		aggregate := fmt.Sprintf(`{"evidence_policy_version":3,"provenance":%s}`+"\n", phase14DatabaseIdentity())
+		writePhase14File(t, filepath.Join(integrity, "aggregate.json"), aggregate, 0o600)
+		writePhase14Checksums(t, integrity, []string{"aggregate.json", "benchmark-integrity.json"})
 		writePhase14File(t, filepath.Join(timing, "benchmark.json"), "{\"profile\":\""+profile+"\"}\n", 0o600)
 		writePhase14File(t, filepath.Join(timing, "timing-advisory.json"), "{\"classification\":\"PASS\"}\n", 0o600)
 		writePhase14Checksums(t, timing, []string{"benchmark.json", "timing-advisory.json"})
@@ -506,7 +582,35 @@ func newPhase14EvidenceBundle(t *testing.T) string {
 
 func preparePhase14Bundle(t *testing.T, script, bundle, sha string) {
 	t.Helper()
-	runPhase14Command(t, bundle, true, "bash", script, "prepare", "--bundle-root", bundle, "--candidate-sha", sha, "--source-commit", sha, "--go-version", "go version test", "--postgres-version", "postgres test", "--database-image-digest", "sha256:test")
+	runPhase14Command(t, bundle, true, "bash", script, "prepare", "--bundle-root", bundle, "--candidate-sha", sha, "--source-commit", sha, "--go-version", "go version test")
+}
+
+func phase14DatabaseIdentity() string {
+	return `{"postgres_version":"16.15","database_image_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","database_image_digest_kind":"index","database_image_platform":"linux/amd64","database_image_platform_manifest_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","database_image_config_digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","database_endpoint_fingerprint":"18a131de9ac6ef30f37953f71a9d84716b694095e8660c94cd6ae4afa02aeec7","database_container_id_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}`
+}
+
+func phase14DatabaseProvenance(t *testing.T, observedAt string) string {
+	t.Helper()
+	var identity map[string]any
+	if err := json.Unmarshal([]byte(phase14DatabaseIdentity()), &identity); err != nil {
+		t.Fatalf("decode database identity fixture: %v", err)
+	}
+	connection := map[string]any{"transport": "tcp", "host_class": "loopback", "canonical_host": "127.0.0.1", "host_port": 5432, "container_port": 5432, "fingerprint": identity["database_endpoint_fingerprint"]}
+	report := map[string]any{
+		"schema_version": 1, "report_kind": "database_execution_provenance", "status": "verified", "observed_at_utc": observedAt,
+		"docker_context": map[string]any{"name": "default", "daemon_transport": "unix", "local_daemon": true},
+		"connection":     connection,
+		"container":      map[string]any{"id_sha256": strings.Repeat("d", 64), "state": "running", "health": "healthy", "configured_image": "postgres:16@sha256:" + strings.Repeat("a", 64), "local_image_id": "sha256:" + strings.Repeat("c", 64), "port_bindings": []any{connection}},
+		"image":          map[string]any{"id": "sha256:" + strings.Repeat("c", 64), "repo_digests": []string{"postgres@sha256:" + strings.Repeat("a", 64)}, "os": "linux", "architecture": "amd64", "variant": ""},
+		"registry":       map[string]any{"pull_digest": "sha256:" + strings.Repeat("a", 64), "pull_descriptor_media_type": "application/vnd.oci.image.index.v1+json", "pull_digest_kind": "index", "selected_platform": "linux/amd64", "selected_manifest_digest": "sha256:" + strings.Repeat("b", 64), "selected_manifest_media_type": "application/vnd.oci.image.manifest.v1+json", "selected_config_digest": "sha256:" + strings.Repeat("c", 64)},
+		"postgres":       map[string]any{"server_version": "16.15", "container_binary_version": "postgres (PostgreSQL) 16.15"},
+		"identity":       identity,
+	}
+	payload, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("encode database provenance fixture: %v", err)
+	}
+	return string(payload) + "\n"
 }
 
 func writePhase14Checksums(t *testing.T, root string, names []string) {
