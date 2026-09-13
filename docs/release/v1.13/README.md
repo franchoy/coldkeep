@@ -804,3 +804,13 @@ The v1.13.13 publication authority is the
   v1.x baseline, explicit v2.0 inputs, and v2/v3 scope boundary.
 - v1.13.10's public release, tag, merge, tag-CI, and deleted-release-branch
   evidence is recorded separately from its historical pre-release gate narrative.
+
+Phase 12R1R27 authorizes a two-commit local recovery for four skipped refcount
+proofs and the benchmark producer's contradictory execution-image provenance.
+It requires observed container, endpoint, registry, platform-manifest, image-
+configuration, and server identity to match the effective benchmark connection,
+with retained pre/post observations and current-format fail-closed acceptance.
+Historical evidence remains immutable and requirement-specific; no push,
+finding mutation, full Profile A restart, or Phase 13 work is authorized.
+
+Authority: [Phase 12R1R27 refcount execution and benchmark provenance recovery](v1.13.16-phase12r1r27-refcount-execution-and-benchmark-provenance-recovery.md).
