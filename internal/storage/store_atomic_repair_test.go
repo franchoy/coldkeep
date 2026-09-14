@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +24,7 @@ import (
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	verifypkg "github.com/franchoy/coldkeep/internal/verify"
+	"github.com/mattn/go-sqlite3"
 )
 
 var errCKV11316015InjectedRepairFailure = errors.New("CK-V11316-015 injected repair failure before publication")
@@ -34,6 +38,309 @@ type ckV11316015Fixture struct {
 	holdingPath   string
 	payload       []byte
 	codec         blocks.Codec
+}
+
+const ckV11316015InitialLookupQuery = "SELECT id, status FROM logical_file WHERE file_hash = $1 AND total_size = $2"
+
+type ckV11316015LookupResponse uint8
+
+const (
+	ckV11316015LookupOperationalError ckV11316015LookupResponse = iota + 1
+	ckV11316015LookupPartialScanError
+	ckV11316015LookupNoRows
+)
+
+type ckV11316015LookupControl struct {
+	mu             sync.Mutex
+	armed          bool
+	response       ckV11316015LookupResponse
+	responseErr    error
+	partialID      int64
+	consumed       int
+	lookupMatches  int
+	fallbackClaims int
+	observing      bool
+}
+
+func (control *ckV11316015LookupControl) arm(response ckV11316015LookupResponse, responseErr error, partialID int64) {
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	control.armed = true
+	control.response = response
+	control.responseErr = responseErr
+	control.partialID = partialID
+	control.observing = true
+}
+
+func (control *ckV11316015LookupControl) counts() (consumed, lookupMatches, fallbackClaims int) {
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	return control.consumed, control.lookupMatches, control.fallbackClaims
+}
+
+func (control *ckV11316015LookupControl) queryResponse(query string) (driver.Rows, error, bool) {
+	normalized := strings.Join(strings.Fields(query), " ")
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.observing && strings.HasPrefix(normalized, "INSERT INTO logical_file") {
+		control.fallbackClaims++
+	}
+	if normalized != ckV11316015InitialLookupQuery {
+		return nil, nil, false
+	}
+	if control.observing || control.armed {
+		control.lookupMatches++
+	}
+	if !control.armed {
+		return nil, nil, false
+	}
+	control.armed = false
+	control.consumed++
+	switch control.response {
+	case ckV11316015LookupOperationalError:
+		return nil, control.responseErr, true
+	case ckV11316015LookupPartialScanError:
+		return &ckV11316015InjectedRows{
+			columns: []string{"id", "status"},
+			values:  [][]driver.Value{{control.partialID, nil}},
+		}, nil, true
+	case ckV11316015LookupNoRows:
+		return &ckV11316015InjectedRows{columns: []string{"id", "status"}}, nil, true
+	default:
+		return nil, fmt.Errorf("unknown CK-V11316-015 lookup response %d", control.response), true
+	}
+}
+
+func (control *ckV11316015LookupControl) observeExec(query string) {
+	normalized := strings.Join(strings.Fields(query), " ")
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.observing && strings.HasPrefix(normalized, "INSERT INTO logical_file") {
+		control.fallbackClaims++
+	}
+}
+
+type ckV11316015InjectedRows struct {
+	columns []string
+	values  [][]driver.Value
+	next    int
+}
+
+func (rows *ckV11316015InjectedRows) Columns() []string { return rows.columns }
+func (rows *ckV11316015InjectedRows) Close() error      { return nil }
+func (rows *ckV11316015InjectedRows) Next(dest []driver.Value) error {
+	if rows.next >= len(rows.values) {
+		return io.EOF
+	}
+	copy(dest, rows.values[rows.next])
+	rows.next++
+	return nil
+}
+
+type ckV11316015Connector struct {
+	underlying driver.Connector
+	control    *ckV11316015LookupControl
+}
+
+func (connector *ckV11316015Connector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := connector.underlying.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &ckV11316015Conn{Conn: conn, control: connector.control}, nil
+}
+
+func (connector *ckV11316015Connector) Driver() driver.Driver {
+	return connector.underlying.Driver()
+}
+
+type ckV11316015DriverConnector struct {
+	driver driver.Driver
+	dsn    string
+}
+
+func (connector *ckV11316015DriverConnector) Connect(context.Context) (driver.Conn, error) {
+	return connector.driver.Open(connector.dsn)
+}
+
+func (connector *ckV11316015DriverConnector) Driver() driver.Driver { return connector.driver }
+
+type ckV11316015Conn struct {
+	driver.Conn
+	control *ckV11316015LookupControl
+}
+
+func (conn *ckV11316015Conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if rows, err, intercepted := conn.control.queryResponse(query); intercepted {
+		return rows, err
+	}
+	if queryer, ok := conn.Conn.(driver.QueryerContext); ok {
+		return queryer.QueryContext(ctx, query, args)
+	}
+	stmt, err := conn.Conn.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stmt.Close() }()
+	return stmt.Query(ckV11316015NamedValues(args))
+}
+
+func (conn *ckV11316015Conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	conn.control.observeExec(query)
+	if execer, ok := conn.Conn.(driver.ExecerContext); ok {
+		return execer.ExecContext(ctx, query, args)
+	}
+	stmt, err := conn.Conn.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = stmt.Close() }()
+	return stmt.Exec(ckV11316015NamedValues(args))
+}
+
+func (conn *ckV11316015Conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	if preparer, ok := conn.Conn.(driver.ConnPrepareContext); ok {
+		return preparer.PrepareContext(ctx, query)
+	}
+	return conn.Conn.Prepare(query)
+}
+
+func (conn *ckV11316015Conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	if beginner, ok := conn.Conn.(driver.ConnBeginTx); ok {
+		return beginner.BeginTx(ctx, opts)
+	}
+	return conn.Conn.Begin()
+}
+
+func (conn *ckV11316015Conn) Ping(ctx context.Context) error {
+	if pinger, ok := conn.Conn.(driver.Pinger); ok {
+		return pinger.Ping(ctx)
+	}
+	return nil
+}
+
+func (conn *ckV11316015Conn) ResetSession(ctx context.Context) error {
+	if resetter, ok := conn.Conn.(driver.SessionResetter); ok {
+		return resetter.ResetSession(ctx)
+	}
+	return nil
+}
+
+func (conn *ckV11316015Conn) IsValid() bool {
+	if validator, ok := conn.Conn.(driver.Validator); ok {
+		return validator.IsValid()
+	}
+	return true
+}
+
+func (conn *ckV11316015Conn) CheckNamedValue(value *driver.NamedValue) error {
+	if checker, ok := conn.Conn.(driver.NamedValueChecker); ok {
+		return checker.CheckNamedValue(value)
+	}
+	return driver.ErrSkip
+}
+
+func ckV11316015NamedValues(values []driver.NamedValue) []driver.Value {
+	result := make([]driver.Value, len(values))
+	for index := range values {
+		result[index] = values[index].Value
+	}
+	return result
+}
+
+func TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite(t *testing.T) {
+	errLookup := errors.New("CK-V11316-015 injected initial SQLite lookup failure")
+	ckV11316015RunSQLiteLookupErrorTest(t, ckV11316015LookupOperationalError, errLookup)
+}
+
+func TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite(t *testing.T) {
+	ckV11316015RunSQLiteLookupErrorTest(t, ckV11316015LookupPartialScanError, nil)
+}
+
+func TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite(t *testing.T) {
+	repo, control, _ := newCKV11316015WrappedSQLiteRepository(t)
+	input := filepath.Join(t.TempDir(), "lookup-no-rows.bin")
+	payload := bytesForCKV11316015("lookup-no-rows", 64*1024)
+	if err := os.WriteFile(input, payload, 0o600); err != nil {
+		t.Fatalf("write no-row control source: %v", err)
+	}
+	control.arm(ckV11316015LookupNoRows, nil, 0)
+	result, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, input, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("exact no-row response must preserve new-object Store: %v", err)
+	}
+	if result.AlreadyStored || result.FileID <= 0 {
+		t.Fatalf("no-row control result=%+v, want one new logical object", result)
+	}
+	consumed, matches, fallback := control.counts()
+	if consumed != 1 || matches != 1 || fallback != 1 {
+		t.Fatalf("no-row routing counts consumed=%d matches=%d fallback=%d, want 1/1/1", consumed, matches, fallback)
+	}
+	var mappings int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path = $1 AND logical_file_id = $2`, input, result.FileID).Scan(&mappings); err != nil {
+		t.Fatalf("count no-row control mapping: %v", err)
+	}
+	if mappings != 1 {
+		t.Fatalf("no-row control mappings=%d, want exactly 1", mappings)
+	}
+}
+
+func TestCKV11316015InitialLookupSupportedStatusRoutingSQLite(t *testing.T) {
+	t.Run("completed", func(t *testing.T) {
+		repo, control, _ := newCKV11316015WrappedSQLiteRepository(t)
+		fixture := newCKV11316015FixtureWithRepository(t, false, blocks.CodecPlain, repo)
+		control.mu.Lock()
+		control.observing = true
+		control.mu.Unlock()
+		result, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+		if err != nil || result.FileID != fixture.fileID || !result.AlreadyStored {
+			t.Fatalf("COMPLETED routing result=%+v err=%v", result, err)
+		}
+		_, matches, fallback := control.counts()
+		if matches != 1 || fallback != 0 {
+			t.Fatalf("COMPLETED routing matches=%d fallback=%d, want 1/0", matches, fallback)
+		}
+	})
+
+	t.Run("aborted", func(t *testing.T) {
+		repo, control, _ := newCKV11316015WrappedSQLiteRepository(t)
+		fixture := newCKV11316015FixtureWithRepository(t, false, blocks.CodecPlain, repo)
+		if _, err := repo.DB.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fixture.fileID); err != nil {
+			t.Fatalf("prepare ABORTED routing control: %v", err)
+		}
+		control.mu.Lock()
+		control.observing = true
+		control.mu.Unlock()
+		result, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+		if err != nil || result.FileID != fixture.fileID || result.AlreadyStored {
+			t.Fatalf("ABORTED routing result=%+v err=%v", result, err)
+		}
+		_, matches, fallback := control.counts()
+		if matches != 1 || fallback == 0 {
+			t.Fatalf("ABORTED routing matches=%d fallback=%d, want successful lookup and delegated claim", matches, fallback)
+		}
+	})
+
+	t.Run("processing", func(t *testing.T) {
+		repo, control, _ := newCKV11316015WrappedSQLiteRepository(t)
+		fixture := newCKV11316015FixtureWithRepository(t, false, blocks.CodecPlain, repo)
+		if _, err := repo.DB.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileProcessing, fixture.fileID); err != nil {
+			t.Fatalf("prepare PROCESSING routing control: %v", err)
+		}
+		control.mu.Lock()
+		control.observing = true
+		control.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		result, err := StoreFileWithStorageContextAndCodecResultContext(ctx, repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+		if !errors.Is(err, context.DeadlineExceeded) || result.AlreadyStored {
+			t.Fatalf("PROCESSING routing result=%+v err=%v, want bounded established wait", result, err)
+		}
+		_, matches, fallback := control.counts()
+		if matches != 1 || fallback == 0 {
+			t.Fatalf("PROCESSING routing matches=%d fallback=%d, want successful lookup and delegated claim", matches, fallback)
+		}
+	})
 }
 
 func TestCKV11316015FailedPackedRepairPreservesAuthoritativeGraph(t *testing.T) {
@@ -1089,6 +1396,189 @@ func TestCKV11316015SchemaV17ProvidesDurableCopyOnWriteRepairState(t *testing.T)
 	}
 }
 
+func newCKV11316015WrappedSQLiteRepository(t *testing.T) (*TestRepository, *ckV11316015LookupControl, string) {
+	t.Helper()
+	databasePath := filepath.Join(t.TempDir(), "ck015-initial-lookup.sqlite")
+	control := &ckV11316015LookupControl{}
+	base := &ckV11316015DriverConnector{
+		driver: &sqlite3.SQLiteDriver{},
+		dsn:    "file:" + databasePath + "?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on",
+	}
+	dbconn := sql.OpenDB(&ckV11316015Connector{underlying: base, control: control})
+	dbconn.SetMaxOpenConns(8)
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("migrate wrapped SQLite lookup database: %v", err)
+	}
+	tx, err := dbconn.Begin()
+	if err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("begin wrapped SQLite repository configuration: %v", err)
+	}
+	if err := SetDefaultCompression(tx, "none"); err != nil {
+		_ = tx.Rollback()
+		_ = dbconn.Close()
+		t.Fatalf("set wrapped SQLite compression: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("commit wrapped SQLite repository configuration: %v", err)
+	}
+	containersDir := t.TempDir()
+	storageContext := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: containersDir,
+	}
+	repo := &TestRepository{DB: dbconn, Storage: storageContext, ContainersDir: containersDir}
+	t.Cleanup(func() { _ = repo.Storage.Close() })
+	return repo, control, databasePath
+}
+
+func ckV11316015RunSQLiteLookupErrorTest(t *testing.T, response ckV11316015LookupResponse, sentinel error) {
+	t.Helper()
+	repo, control, databasePath := newCKV11316015WrappedSQLiteRepository(t)
+	fixture := newCKV11316015FixtureWithRepository(t, false, blocks.CodecPlain, repo)
+	ckV11316015PrepareLookupErrorAuthority(t, repo.DB, fixture.fileID)
+	before := ckV11316015LookupAuthoritySnapshot(t, repo.DB, fixture.fileID)
+	originalContainer, err := os.ReadFile(fixture.containerPath)
+	if err != nil {
+		t.Fatalf("read required container before lookup fault: %v", err)
+	}
+	originalHash := sha256.Sum256(originalContainer)
+	fixture.moveRequiredContainer(t)
+	beforeFiles := ckV11316015FilesystemSnapshot(t, repo.ContainersDir)
+	control.arm(response, sentinel, fixture.fileID)
+
+	result, storeErr := StoreFileWithStorageContextAndCodecResult(repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+	if response == ckV11316015LookupOperationalError {
+		if !errors.Is(storeErr, sentinel) {
+			t.Fatalf("initial lookup cause not propagated: result=%+v err=%v", result, storeErr)
+		}
+	} else {
+		if storeErr == nil || errors.Is(storeErr, sentinel) || !strings.Contains(storeErr.Error(), "converting NULL to string") {
+			t.Fatalf("partial Scan did not return the real destination conversion error: result=%+v err=%v", result, storeErr)
+		}
+	}
+	if result.AlreadyStored {
+		t.Fatalf("failed initial lookup reported AlreadyStored=true: %+v", result)
+	}
+	consumed, matches, fallback := control.counts()
+	if consumed != 1 || matches != 1 || fallback != 0 {
+		t.Fatalf("lookup fault counts consumed=%d matches=%d fallback=%d, want 1/1/0", consumed, matches, fallback)
+	}
+	after := ckV11316015LookupAuthoritySnapshot(t, repo.DB, fixture.fileID)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("lookup fault mutated authoritative state\nbefore=%v\nafter=%v", before, after)
+	}
+	afterFiles := ckV11316015FilesystemSnapshot(t, repo.ContainersDir)
+	if !reflect.DeepEqual(beforeFiles, afterFiles) {
+		t.Fatalf("lookup fault created or changed payload artifacts\nbefore=%v\nafter=%v", beforeFiles, afterFiles)
+	}
+	held, err := os.ReadFile(fixture.holdingPath)
+	if err != nil {
+		t.Fatalf("read exact held container after lookup fault: %v", err)
+	}
+	if len(held) != len(originalContainer) || sha256.Sum256(held) != originalHash {
+		t.Fatal("held required container changed during failed lookup")
+	}
+	fixture.restoreRequiredContainer(t)
+	restored, err := os.ReadFile(fixture.containerPath)
+	if err != nil || len(restored) != len(originalContainer) || sha256.Sum256(restored) != originalHash {
+		t.Fatalf("restored required container is not byte-exact: err=%v", err)
+	}
+	assertCKV11316015Restore(t, fixture, fixture.originalPath, "lookup-fault-immediate.bin")
+
+	if err := repo.Storage.Close(); err != nil {
+		t.Fatalf("close wrapped SQLite repository before reopen: %v", err)
+	}
+	reopened, err := sql.Open("sqlite3", "file:"+databasePath+"?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on")
+	if err != nil {
+		t.Fatalf("reopen SQLite lookup database: %v", err)
+	}
+	reopened.SetMaxOpenConns(8)
+	repo.DB = reopened
+	repo.Storage = StorageContext{
+		DB:           reopened,
+		Writer:       container.NewLocalWriterWithDirAndDB(repo.ContainersDir, container.GetContainerMaxSize(), reopened),
+		ContainerDir: repo.ContainersDir,
+	}
+	assertCKV11316015Restore(t, fixture, fixture.originalPath, "lookup-fault-after-reopen.bin")
+}
+
+func ckV11316015PrepareLookupErrorAuthority(t *testing.T, dbconn *sql.DB, fileID int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(`UPDATE logical_file SET retry_count = 17 WHERE id = $1`, fileID); err != nil {
+		t.Fatalf("set recognizable logical retry: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE chunk SET retry_count = 23 WHERE id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1)`, fileID); err != nil {
+		t.Fatalf("set recognizable chunk retries: %v", err)
+	}
+	snapshotID := fmt.Sprintf("ck015-lookup-%d", fileID)
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, CURRENT_TIMESTAMP, 'full', 'CK-015 lookup fault')`, snapshotID); err != nil {
+		t.Fatalf("insert lookup-fault snapshot: %v", err)
+	}
+	var pathID int64
+	if err := dbconn.QueryRow(`INSERT INTO snapshot_path (path) VALUES ($1) RETURNING id`, "snapshot/"+snapshotID).Scan(&pathID); err != nil {
+		t.Fatalf("insert lookup-fault snapshot path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) SELECT $1, $2, id, total_size FROM logical_file WHERE id = $3`, snapshotID, pathID, fileID); err != nil {
+		t.Fatalf("insert lookup-fault snapshot membership: %v", err)
+	}
+}
+
+func ckV11316015LookupAuthoritySnapshot(t *testing.T, dbconn *sql.DB, fileID int64) []string {
+	t.Helper()
+	snapshot := append([]string(nil), ckV11316015AuthoritativeSnapshot(t, dbconn, fileID)...)
+	queries := []string{
+		`SELECT CAST(sf.id AS TEXT) || '|' || sf.snapshot_id || '|' || CAST(sf.path_id AS TEXT) || '|' || CAST(sf.logical_file_id AS TEXT) || '|' || COALESCE(CAST(sf.size AS TEXT), '') || '|' || sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.logical_file_id = $1 ORDER BY sf.id`,
+		`SELECT s.id || '|' || s.type || '|' || COALESCE(s.label, '') || '|' || COALESCE(s.parent_id, '') FROM snapshot s JOIN snapshot_file sf ON sf.snapshot_id = s.id WHERE sf.logical_file_id = $1 ORDER BY s.id`,
+		`SELECT CAST(c.id AS TEXT) || '|' || c.filename || '|' || CAST(c.sealed AS TEXT) || '|' || CAST(c.sealing AS TEXT) || '|' || CAST(c.quarantine AS TEXT) || '|' || CAST(c.current_size AS TEXT) FROM container c WHERE c.id IN (SELECT sb.container_id FROM storage_blocks sb JOIN chunk_block_refs r ON r.block_id = sb.id JOIN file_chunk fc ON fc.chunk_id = r.chunk_id WHERE fc.logical_file_id = $1 UNION SELECT b.container_id FROM blocks b JOIN file_chunk fc ON fc.chunk_id = b.chunk_id WHERE fc.logical_file_id = $1) ORDER BY c.id`,
+		`SELECT CAST(id AS TEXT) || '|' || status || '|' || source_file_hash || '|' || CAST(source_total_size AS TEXT) FROM store_repair_attempt WHERE logical_file_id = $1 ORDER BY id`,
+		`SELECT CAST(rc.attempt_id AS TEXT) || '|' || CAST(rc.container_id AS TEXT) || '|' || rc.status FROM store_repair_container rc JOIN store_repair_attempt a ON a.id = rc.attempt_id WHERE a.logical_file_id = $1 ORDER BY rc.attempt_id, rc.container_id`,
+		`SELECT CAST(rb.attempt_id AS TEXT) || '|' || CAST(rb.block_ordinal AS TEXT) || '|' || CAST(rb.container_id AS TEXT) FROM store_repair_block rb JOIN store_repair_attempt a ON a.id = rb.attempt_id WHERE a.logical_file_id = $1 ORDER BY rb.attempt_id, rb.block_ordinal`,
+		`SELECT CAST(rc.attempt_id AS TEXT) || '|' || CAST(rc.chunk_id AS TEXT) || '|' || CAST(rc.chunk_order AS TEXT) FROM store_repair_chunk rc JOIN store_repair_attempt a ON a.id = rc.attempt_id WHERE a.logical_file_id = $1 ORDER BY rc.attempt_id, rc.chunk_order`,
+	}
+	for _, query := range queries {
+		snapshot = append(snapshot, ckV11316015QueryStrings(t, dbconn, query, fileID)...)
+		snapshot = append(snapshot, "--lookup-boundary--")
+	}
+	return snapshot
+}
+
+func ckV11316015FilesystemSnapshot(t *testing.T, root string) []string {
+	t.Helper()
+	var snapshot []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(payload)
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		snapshot = append(snapshot, fmt.Sprintf("%s|%o|%d|%x", filepath.ToSlash(relative), info.Mode().Perm(), len(payload), digest))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot container filesystem: %v", err)
+	}
+	sort.Strings(snapshot)
+	return snapshot
+}
+
 func newCKV11316015Fixture(t *testing.T, legacyOnly bool) *ckV11316015Fixture {
 	return newCKV11316015FixtureWithCodec(t, legacyOnly, blocks.CodecPlain)
 }
@@ -1317,13 +1807,13 @@ func assertCKV11316015Restore(t *testing.T, fixture *ckV11316015Fixture, storedP
 func ckV11316015AuthoritativeSnapshot(t *testing.T, dbconn *sql.DB, fileID int64) []string {
 	t.Helper()
 	queries := []string{
-		`SELECT id || '|' || status || '|' || retry_count || '|' || ref_count FROM logical_file WHERE id = $1`,
-		`SELECT logical_file_id || '|' || chunk_id || '|' || chunk_order FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`,
-		`SELECT id || '|' || status || '|' || retry_count || '|' || live_ref_count || '|' || pin_count FROM chunk WHERE id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1) ORDER BY id`,
-		`SELECT id || '|' || chunk_id || '|' || container_id || '|' || block_offset FROM blocks WHERE chunk_id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1) ORDER BY id`,
-		`SELECT r.chunk_id || '|' || r.block_id || '|' || r.offset_in_block || '|' || r.size_in_block FROM chunk_block_refs r WHERE r.chunk_id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1) ORDER BY r.chunk_id, r.block_id`,
-		`SELECT sb.id || '|' || sb.container_id || '|' || sb.container_offset || '|' || sb.stored_size FROM storage_blocks sb WHERE sb.id IN (SELECT block_id FROM chunk_block_refs WHERE chunk_id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1)) ORDER BY sb.id`,
-		`SELECT path || '|' || logical_file_id FROM physical_file WHERE logical_file_id = $1 ORDER BY path`,
+		`SELECT CAST(id AS TEXT) || '|' || status || '|' || CAST(retry_count AS TEXT) || '|' || CAST(ref_count AS TEXT) FROM logical_file WHERE id = $1`,
+		`SELECT CAST(logical_file_id AS TEXT) || '|' || CAST(chunk_id AS TEXT) || '|' || CAST(chunk_order AS TEXT) FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`,
+		`SELECT CAST(id AS TEXT) || '|' || status || '|' || CAST(retry_count AS TEXT) || '|' || CAST(live_ref_count AS TEXT) || '|' || CAST(pin_count AS TEXT) FROM chunk WHERE id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1) ORDER BY id`,
+		`SELECT CAST(id AS TEXT) || '|' || CAST(chunk_id AS TEXT) || '|' || CAST(container_id AS TEXT) || '|' || CAST(block_offset AS TEXT) FROM blocks WHERE chunk_id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1) ORDER BY id`,
+		`SELECT CAST(r.chunk_id AS TEXT) || '|' || CAST(r.block_id AS TEXT) || '|' || CAST(r.offset_in_block AS TEXT) || '|' || CAST(r.size_in_block AS TEXT) FROM chunk_block_refs r WHERE r.chunk_id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1) ORDER BY r.chunk_id, r.block_id`,
+		`SELECT CAST(sb.id AS TEXT) || '|' || CAST(sb.container_id AS TEXT) || '|' || CAST(sb.container_offset AS TEXT) || '|' || CAST(sb.stored_size AS TEXT) FROM storage_blocks sb WHERE sb.id IN (SELECT block_id FROM chunk_block_refs WHERE chunk_id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1)) ORDER BY sb.id`,
+		`SELECT path || '|' || CAST(logical_file_id AS TEXT) FROM physical_file WHERE logical_file_id = $1 ORDER BY path`,
 	}
 	var snapshot []string
 	for _, query := range queries {

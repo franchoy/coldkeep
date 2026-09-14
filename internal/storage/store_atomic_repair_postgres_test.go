@@ -16,6 +16,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	verifypkg "github.com/franchoy/coldkeep/internal/verify"
@@ -23,6 +24,62 @@ import (
 )
 
 var errCKV11316015PublicationChunkLockMissing = errors.New("repair publication did not hold the affected chunk row lock")
+
+func TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback(t *testing.T) {
+	repo, control := newCKV11316015PostgresLookupFaultRepository(t)
+	fixture := newCKV11316015FixtureWithRepository(t, false, blocks.CodecPlain, repo)
+	ckV11316015PrepareLookupErrorAuthority(t, repo.DB, fixture.fileID)
+	before := ckV11316015LookupAuthoritySnapshot(t, repo.DB, fixture.fileID)
+	originalContainer, err := os.ReadFile(fixture.containerPath)
+	if err != nil {
+		t.Fatalf("read PostgreSQL required container before lookup fault: %v", err)
+	}
+	originalHash := sha256.Sum256(originalContainer)
+	fixture.moveRequiredContainer(t)
+	beforeFiles := ckV11316015FilesystemSnapshot(t, repo.ContainersDir)
+	errLookup := errors.New("CK-V11316-015 injected initial PostgreSQL lookup failure")
+	control.arm(ckV11316015LookupOperationalError, errLookup, fixture.fileID)
+
+	result, storeErr := StoreFileWithStorageContextAndCodecResult(repo.Storage, fixture.duplicatePath, blocks.CodecPlain)
+	if !errors.Is(storeErr, errLookup) {
+		t.Fatalf("PostgreSQL initial lookup cause not propagated: result=%+v err=%v", result, storeErr)
+	}
+	if result.AlreadyStored {
+		t.Fatalf("failed PostgreSQL initial lookup reported AlreadyStored=true: %+v", result)
+	}
+	consumed, matches, fallback := control.counts()
+	if consumed != 1 || matches != 1 || fallback != 0 {
+		t.Fatalf("PostgreSQL lookup fault counts consumed=%d matches=%d fallback=%d, want 1/1/0", consumed, matches, fallback)
+	}
+	after := ckV11316015LookupAuthoritySnapshot(t, repo.DB, fixture.fileID)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("PostgreSQL lookup fault mutated authoritative state\nbefore=%v\nafter=%v", before, after)
+	}
+	afterFiles := ckV11316015FilesystemSnapshot(t, repo.ContainersDir)
+	if !reflect.DeepEqual(beforeFiles, afterFiles) {
+		t.Fatalf("PostgreSQL lookup fault created or changed payload artifacts\nbefore=%v\nafter=%v", beforeFiles, afterFiles)
+	}
+	held, err := os.ReadFile(fixture.holdingPath)
+	if err != nil {
+		t.Fatalf("read PostgreSQL held container after lookup fault: %v", err)
+	}
+	if len(held) != len(originalContainer) || sha256.Sum256(held) != originalHash {
+		t.Fatal("PostgreSQL held required container changed during failed lookup")
+	}
+	fixture.restoreRequiredContainer(t)
+	assertCKV11316015Restore(t, fixture, fixture.originalPath, "postgres-lookup-fault-immediate.bin")
+
+	if err := repo.Storage.Close(); err != nil {
+		t.Fatalf("close wrapped PostgreSQL repository before reopen: %v", err)
+	}
+	reopened, err := OpenLocalStorage(repo.ContainersDir)
+	if err != nil {
+		t.Fatalf("reopen PostgreSQL lookup repository through supported opener: %v", err)
+	}
+	repo.DB = reopened.DB
+	repo.Storage = reopened
+	assertCKV11316015Restore(t, fixture, fixture.originalPath, "postgres-lookup-fault-after-reopen.bin")
+}
 
 func TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB")) == "" {
@@ -473,6 +530,81 @@ func newCKV11316015PostgresRepository(t *testing.T) *TestRepository {
 	return &TestRepository{
 		DB: storageContext.DB, Storage: storageContext, ContainersDir: containersDir,
 	}
+}
+
+func newCKV11316015PostgresLookupFaultRepository(t *testing.T) (*TestRepository, *ckV11316015LookupControl) {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB")) == "" {
+		t.Skip("set COLDKEEP_TEST_DB=1 with DB_* settings to run PostgreSQL lookup-fault coverage")
+	}
+	adminDatabase := strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB_MAINTENANCE"))
+	if adminDatabase == "" {
+		adminDatabase = "postgres"
+	}
+	adminConnection, err := db.BuildPostgresConnStringFromEnv(adminDatabase)
+	if err != nil {
+		t.Fatalf("build PostgreSQL lookup-fault maintenance connection: %v", err)
+	}
+	admin, err := sql.Open("postgres", adminConnection)
+	if err != nil {
+		t.Fatalf("open PostgreSQL lookup-fault maintenance connection: %v", err)
+	}
+	if err := admin.Ping(); err != nil {
+		_ = admin.Close()
+		t.Fatalf("ping PostgreSQL lookup-fault maintenance database: %v", err)
+	}
+	databaseName := fmt.Sprintf("coldkeep_ck015_lookup_%d_%d", os.Getpid(), time.Now().UnixNano())
+	if _, err := admin.Exec("CREATE DATABASE " + databaseName); err != nil {
+		_ = admin.Close()
+		t.Fatalf("create PostgreSQL lookup-fault database %s: %v", databaseName, err)
+	}
+	t.Setenv("DB_NAME", databaseName)
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "always")
+	t.Setenv("COLDKEEP_COMPRESSION", "none")
+	connectionString, err := db.BuildPostgresConnStringFromEnv(databaseName)
+	if err != nil {
+		t.Fatalf("build PostgreSQL lookup-fault connection: %v", err)
+	}
+	base, err := pq.NewConnector(connectionString)
+	if err != nil {
+		t.Fatalf("create PostgreSQL lookup-fault connector: %v", err)
+	}
+	control := &ckV11316015LookupControl{}
+	dbconn := sql.OpenDB(&ckV11316015Connector{underlying: base, control: control})
+	dbconn.SetMaxOpenConns(8)
+	if err := db.EnsureSchema(dbconn); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("migrate PostgreSQL lookup-fault database: %v", err)
+	}
+	tx, err := dbconn.Begin()
+	if err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("begin PostgreSQL lookup-fault repository configuration: %v", err)
+	}
+	if err := SetDefaultCompression(tx, "none"); err != nil {
+		_ = tx.Rollback()
+		_ = dbconn.Close()
+		t.Fatalf("set PostgreSQL lookup-fault compression: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("commit PostgreSQL lookup-fault repository configuration: %v", err)
+	}
+	containersDir := t.TempDir()
+	storageContext := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: containersDir,
+	}
+	repo := &TestRepository{DB: dbconn, Storage: storageContext, ContainersDir: containersDir}
+	t.Cleanup(func() {
+		_ = repo.Storage.Close()
+		_, _ = admin.Exec(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, databaseName)
+		_, _ = admin.Exec("DROP DATABASE IF EXISTS " + databaseName)
+		_ = admin.Close()
+	})
+	return repo, control
 }
 
 func ckV11316015WaitForPostgresLockWaiter(ctx context.Context, dbconn *sql.DB, excludedPID int) error {
