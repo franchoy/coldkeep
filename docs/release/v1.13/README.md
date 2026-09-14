@@ -842,12 +842,16 @@ Authority: [Phase 12R1R32 CK-V11316-014 hosted-evidence reconciliation](v1.13.16
 preserves R1R33's failed independent technical-audit verdict and classifies a
 newly confirmed initial completed-object lookup error path as an original
 CK-V11316-015 interception-boundary omission. A transient non-`ErrNoRows`
-lookup or `Scan` error can currently be mistaken for an inapplicable repair
-interceptor and reach the destructive legacy fallback after database recovery.
+lookup or `Scan` error could be mistaken for an inapplicable repair interceptor
+and reach the destructive legacy fallback after database recovery.
 
 CK-V11316-015 is reopened; CK-V11316-014 remains closed certified,
 CK-V11316-007 remains open, and findings remain 15 confirmed with 13/15
-closed. R1R34 authorizes only the frozen two-test-file RED harness, the
-one-file decision reorder, local attached/fresh-detached certification, and
-the eight-document evidence commit. Push, hosted certification, closure,
+closed. The one-file decision reorder is retained unchanged at
+`c7e2675ffac65a30b7a34700feb1c9343af7c87a`. R1R35 corrected only the private
+fault-driver wrapper and locally certified implementation-and-test head
+`d5ab1864d31ac2fa6b762a0d3f7f2e6a7ca80946` in clean attached and fresh
+detached trees. Exact Go 1.26.7, golangci-lint 2.9.0, PostgreSQL 16.15, named
+no-skip proofs, complete ordinary/race suites, governance, and the applicable
+snapshot gate passed. Push, hosted certification, CK-V11316-015 closure,
 Phase 12 completion, and Phase 13 remain unauthorized.
