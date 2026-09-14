@@ -855,3 +855,20 @@ detached trees. Exact Go 1.26.7, golangci-lint 2.9.0, PostgreSQL 16.15, named
 no-skip proofs, complete ordinary/race suites, governance, and the applicable
 snapshot gate passed. Push, hosted certification, CK-V11316-015 closure,
 Phase 12 completion, and Phase 13 remain unauthorized.
+
+## Phase 12R1R38 CK-015 hosted named-proof wiring recovery
+
+R1R37 stopped before push because the locally certified CK-015 correction had
+no committed hosted route for its named SQLite and PostgreSQL obligations.
+R1R38 accepts that proof-wiring gap without treating it as a product or test
+failure. It authorizes one nine-document authority commit followed by one
+six-path workflow/checker/audit/checklist commit, then scoped clean attached
+and fresh-detached validation.
+
+The new profiles require seven SQLite and five PostgreSQL event identities in
+the existing `correctness-matrix` plain leg, preserve CK-014 and Required Gate
+wiring, and retain complete invocation-specific evidence. CK-V11316-015 stays
+open, findings remain 15 confirmed and 13/15 closed, and no push or hosted run
+is authorized.
+
+Authority: [Phase 12R1R38 CK-015 hosted named-proof wiring recovery](v1.13.16-phase12r1r38-ck015-hosted-named-proof-wiring-recovery.md).
