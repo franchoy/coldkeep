@@ -430,6 +430,198 @@ elif [ "$checker_status" -ne 0 ]; then
   exit "$checker_status"
 fi
 
+# CK-V11316-015 SQLite initial-lookup named proof.
+unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN
+prefix=ck015-initial-lookup-sqlite-local
+json_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.json"
+go_stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.go.stderr"
+checker_stdout_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.checker.stdout"
+checker_stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.checker.stderr"
+status_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.status"
+metadata_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.metadata"
+selector='^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$'
+profile=ck015-initial-lookup-sqlite
+package=github.com/franchoy/coldkeep/internal/storage
+for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+  if [ -e "$target" ]; then
+    echo "refusing to reuse CK-015 SQLite evidence path: $target" >&2
+    exit 1
+  fi
+done
+candidate_sha=$(git rev-parse HEAD)
+go_version=$(GOTOOLCHAIN=local go version)
+if ! printf '%s\n' \
+  "candidate_sha=$candidate_sha" \
+  'context=profile-a-local' \
+  'matrix_codec=plain' \
+  "package=$package" \
+  "selector=$selector" \
+  "checker_profile=$profile" \
+  "go_version=$go_version" \
+  'gotoolchain=local' >"$metadata_file"; then
+  echo "unable to write CK-015 SQLite metadata" >&2
+  exit 1
+fi
+set +e
+GOTOOLCHAIN=local COLDKEEP_CODEC=plain go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \
+  -run "$selector" 2>"$go_stderr_file" | tee "$json_file"
+pipeline_status=("${PIPESTATUS[@]}")
+go_status=${pipeline_status[0]}
+capture_status=${pipeline_status[1]}
+python3 scripts/check_required_test_events.py \
+  --profile "$profile" \
+  --events "$json_file" \
+  >"$checker_stdout_file" 2>"$checker_stderr_file"
+checker_status=$?
+printf '%s\n' \
+  "go_status=$go_status" \
+  "capture_status=$capture_status" \
+  "checker_status=$checker_status" \
+  'status_record_write_status=0' >"$status_file"
+status_record_write_status=$?
+evidence_status=0
+for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+  if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+    echo "missing or unreadable CK-015 SQLite evidence record: $target" >&2
+    evidence_status=1
+  fi
+done
+if [ "$status_record_write_status" -eq 0 ]; then
+  for expected in "go_status=$go_status" "capture_status=$capture_status" "checker_status=$checker_status" 'status_record_write_status=0'; do
+    if ! grep -Fqx "$expected" "$status_file"; then
+      echo "CK-015 SQLite status record mismatch: $expected" >&2
+      evidence_status=1
+    fi
+  done
+fi
+for expected in "candidate_sha=$candidate_sha" 'context=profile-a-local' 'matrix_codec=plain' "package=$package" "selector=$selector" "checker_profile=$profile" 'gotoolchain=local'; do
+  if ! grep -Fqx "$expected" "$metadata_file"; then
+    echo "CK-015 SQLite metadata mismatch: $expected" >&2
+    evidence_status=1
+  fi
+done
+cat "$checker_stdout_file"
+cat "$checker_stderr_file" >&2
+if [ "$go_status" -ne 0 ]; then
+  status=$go_status
+elif [ "$capture_status" -ne 0 ]; then
+  status=$capture_status
+elif [ "$checker_status" -ne 0 ]; then
+  status=$checker_status
+elif [ "$status_record_write_status" -ne 0 ]; then
+  status=$status_record_write_status
+else
+  status=$evidence_status
+fi
+set -e
+if [ "$status" -ne 0 ]; then
+  cat "$go_stderr_file" >&2 || true
+  tail -n 120 "$json_file" >&2 || true
+  exit "$status"
+fi
+
+# CK-V11316-015 PostgreSQL lookup and preservation named proof.
+unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN
+prefix=ck015-initial-lookup-postgres-local
+json_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.json"
+go_stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.go.stderr"
+checker_stdout_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.checker.stdout"
+checker_stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.checker.stderr"
+status_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.status"
+metadata_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.metadata"
+selector='^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$'
+profile=ck015-initial-lookup-postgres
+package=github.com/franchoy/coldkeep/internal/storage
+for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+  if [ -e "$target" ]; then
+    echo "refusing to reuse CK-015 PostgreSQL evidence path: $target" >&2
+    exit 1
+  fi
+done
+candidate_sha=$(git rev-parse HEAD)
+go_version=$(GOTOOLCHAIN=local go version)
+if ! printf '%s\n' \
+  "candidate_sha=$candidate_sha" \
+  'context=profile-a-local' \
+  'matrix_codec=plain' \
+  "package=$package" \
+  "selector=$selector" \
+  "checker_profile=$profile" \
+  "go_version=$go_version" \
+  'gotoolchain=local' \
+  'postgres_image=postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825' >"$metadata_file"; then
+  echo "unable to write CK-015 PostgreSQL metadata" >&2
+  exit 1
+fi
+set +e
+GOTOOLCHAIN=local \
+COLDKEEP_CODEC=plain \
+COLDKEEP_TEST_DB=1 \
+COLDKEEP_TEST_DB_MAINTENANCE=postgres \
+COLDKEEP_DB_AUTO_BOOTSTRAP=true \
+DB_HOST="$DB_HOST" \
+DB_PORT="$DB_PORT" \
+DB_USER="$DB_USER" \
+DB_PASSWORD="$DB_PASSWORD" \
+DB_NAME="$DB_NAME" \
+DB_SSLMODE="$DB_SSLMODE" \
+go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \
+  -run "$selector" 2>"$go_stderr_file" | tee "$json_file"
+pipeline_status=("${PIPESTATUS[@]}")
+go_status=${pipeline_status[0]}
+capture_status=${pipeline_status[1]}
+python3 scripts/check_required_test_events.py \
+  --profile "$profile" \
+  --events "$json_file" \
+  >"$checker_stdout_file" 2>"$checker_stderr_file"
+checker_status=$?
+printf '%s\n' \
+  "go_status=$go_status" \
+  "capture_status=$capture_status" \
+  "checker_status=$checker_status" \
+  'status_record_write_status=0' >"$status_file"
+status_record_write_status=$?
+evidence_status=0
+for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+  if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+    echo "missing or unreadable CK-015 PostgreSQL evidence record: $target" >&2
+    evidence_status=1
+  fi
+done
+if [ "$status_record_write_status" -eq 0 ]; then
+  for expected in "go_status=$go_status" "capture_status=$capture_status" "checker_status=$checker_status" 'status_record_write_status=0'; do
+    if ! grep -Fqx "$expected" "$status_file"; then
+      echo "CK-015 PostgreSQL status record mismatch: $expected" >&2
+      evidence_status=1
+    fi
+  done
+fi
+for expected in "candidate_sha=$candidate_sha" 'context=profile-a-local' 'matrix_codec=plain' "package=$package" "selector=$selector" "checker_profile=$profile" 'gotoolchain=local'; do
+  if ! grep -Fqx "$expected" "$metadata_file"; then
+    echo "CK-015 PostgreSQL metadata mismatch: $expected" >&2
+    evidence_status=1
+  fi
+done
+cat "$checker_stdout_file"
+cat "$checker_stderr_file" >&2
+if [ "$go_status" -ne 0 ]; then
+  status=$go_status
+elif [ "$capture_status" -ne 0 ]; then
+  status=$capture_status
+elif [ "$checker_status" -ne 0 ]; then
+  status=$checker_status
+elif [ "$status_record_write_status" -ne 0 ]; then
+  status=$status_record_write_status
+else
+  status=$evidence_status
+fi
+set -e
+if [ "$status" -ne 0 ]; then
+  cat "$go_stderr_file" >&2 || true
+  tail -n 120 "$json_file" >&2 || true
+  exit "$status"
+fi
+
 # Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).
 # Reset it before the benchmark block and manual CLI checks in later steps.
 unset COLDKEEP_CODEC

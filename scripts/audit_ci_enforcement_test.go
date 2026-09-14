@@ -1859,6 +1859,387 @@ func TestAuditCIEnforcementRequiresCK014RequiredProofWiring(t *testing.T) {
 	}
 }
 
+func TestAuditCIEnforcementRequiresCK015NamedProofWiring(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	checker := readRepoFile(t, filepath.Join("scripts", "check_required_test_events.py"))
+
+	runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, checklist, false)
+
+	tests := []struct {
+		name        string
+		source      string
+		anchor      string
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		{
+			name: "hosted SQLite step removed", source: "workflow",
+			old:         "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			replacement: "      - name: Removed CK-015 SQLite initial-lookup proofs\n",
+			wantMessage: "missing CK-015 SQLite named-proof step",
+		},
+		{
+			name: "hosted PostgreSQL step removed", source: "workflow",
+			old:         "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			replacement: "      - name: Removed CK-015 PostgreSQL lookup and preservation proofs\n",
+			wantMessage: "missing CK-015 PostgreSQL named-proof step",
+		},
+		{
+			name: "hosted SQLite wrong leg", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "if: ${{ matrix.codec == 'plain' }}", replacement: "if: ${{ matrix.codec == 'aes-gcm' }}",
+			wantMessage: "CK-015 SQLite proof runs only in plain correctness leg",
+		},
+		{
+			name: "hosted PostgreSQL wrong package", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "./internal/storage", replacement: "./internal/verify",
+			wantMessage: "CK-015 PostgreSQL hosted wrapper uses exact race/count/serialization/package flags",
+		},
+		{
+			name: "hosted SQLite selector removed", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite", replacement: "",
+			wantMessage: "CK-015 SQLite partial-Scan selector",
+		},
+		{
+			name: "hosted PostgreSQL selector removed", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication", replacement: "",
+			wantMessage: "CK-015 PostgreSQL competitor-lock selector",
+		},
+		{
+			name: "hosted SQLite wrong profile", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "profile=ck015-initial-lookup-sqlite", replacement: "profile=ck015-initial-lookup-postgres",
+			wantMessage: "CK-015 SQLite proof freezes checker profile",
+		},
+		{
+			name: "hosted PostgreSQL maintenance missing", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "          COLDKEEP_TEST_DB_MAINTENANCE: postgres\n", replacement: "",
+			wantMessage: "CK-015 PostgreSQL proof uses maintenance database",
+		},
+		{
+			name: "hosted PostgreSQL bootstrap missing", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "          COLDKEEP_DB_AUTO_BOOTSTRAP: true\n", replacement: "",
+			wantMessage: "CK-015 PostgreSQL proof enables bootstrap",
+		},
+		{
+			name: "hosted PostgreSQL connection missing", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "          DB_SSLMODE: disable\n", replacement: "",
+			wantMessage: "CK-015 PostgreSQL proof sets DB SSL mode",
+		},
+		{
+			name: "hosted SQLite stale protection removed", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "refusing to reuse CK-015 SQLite evidence path", replacement: "allowing stale CK-015 SQLite evidence path",
+			wantMessage: "CK-015 SQLite hosted wrapper refuses stale invocation evidence",
+		},
+		{
+			name: "hosted PostgreSQL stderr merged", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "2>\"$go_stderr_file\" | tee \"$json_file\"", replacement: "2>&1 | tee \"$json_file\"",
+			wantMessage: "CK-015 PostgreSQL hosted wrapper keeps Go stderr separate from JSON",
+		},
+		{
+			name: "hosted SQLite pipeline forged", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "pipeline_status=(\"${PIPESTATUS[@]}\")", replacement: "pipeline_status=(0 0)",
+			wantMessage: "CK-015 SQLite hosted wrapper snapshots complete pipeline status immediately",
+		},
+		{
+			name: "hosted SQLite Go status forced", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "go_status=${pipeline_status[0]}", replacement: "go_status=0",
+			wantMessage: "CK-015 SQLite hosted wrapper preserves Go status",
+		},
+		{
+			name: "hosted PostgreSQL capture status forced", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "capture_status=${pipeline_status[1]}", replacement: "capture_status=0",
+			wantMessage: "CK-015 PostgreSQL hosted wrapper preserves capture status",
+		},
+		{
+			name: "hosted SQLite checker status forced", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "checker_status=$?", replacement: "checker_status=0",
+			wantMessage: "CK-015 SQLite hosted wrapper preserves checker status",
+		},
+		{
+			name: "hosted PostgreSQL status write suppressed", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "status_record_write_status=$?", replacement: "status_record_write_status=0",
+			wantMessage: "CK-015 PostgreSQL hosted wrapper preserves status-record write status",
+		},
+		{
+			name: "hosted partial CK015 evidence despite unrelated glob match", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
+			wantMessage: "CK-015 SQLite hosted wrapper requires every invocation record to be readable and regular",
+		},
+		{
+			name: "artifact not always retained", source: "workflow",
+			anchor: "      - name: Upload correctness-matrix execution evidence\n",
+			old:    "if: ${{ always() }}", replacement: "if: failure()",
+			wantMessage: "correctness-matrix evidence upload always runs",
+		},
+		{
+			name: "artifact path only JSON", source: "workflow",
+			anchor: "      - name: Upload correctness-matrix execution evidence\n",
+			old:    "integration-diag/*", replacement: "integration-diag/*.json",
+			wantMessage: "correctness-matrix evidence upload retains every integration diagnostic record",
+		},
+		{
+			name: "artifact missing files ignored", source: "workflow",
+			anchor: "      - name: Upload correctness-matrix execution evidence\n",
+			old:    "if-no-files-found: error", replacement: "if-no-files-found: ignore",
+			wantMessage: "correctness-matrix evidence upload fails when no records exist",
+		},
+		{
+			name: "required dependency removed", source: "workflow",
+			anchor: "  ci-required:\n",
+			old:    "needs: [quality, correctness-matrix,", replacement: "needs: [quality,",
+			wantMessage: "required gate depends on security and hosted reproducibility jobs",
+		},
+		{
+			name: "required result capture removed", source: "workflow",
+			anchor: "  ci-required:\n",
+			old:    "CORRECTNESS_MATRIX_RESULT: ${{ needs['correctness-matrix'].result }}", replacement: "CORRECTNESS_MATRIX_RESULT: missing",
+			wantMessage: "required gate captures correctness-matrix result",
+		},
+		{
+			name: "checker SQLite profile removed", source: "checker",
+			old: "\"ck015-initial-lookup-sqlite\"", replacement: "\"ck015-initial-lookup-sqlite-removed\"",
+			wantMessage: "required-event profiles contain exact CK-015 SQLite profile once",
+		},
+		{
+			name: "checker routing child removed", source: "checker",
+			old: "TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/processing", replacement: "RemovedRoutingChild",
+			wantMessage: "CK-015 SQLite profile requires processing routing child",
+		},
+		{
+			name: "local SQLite wrapper removed independently", source: "checklist",
+			old: "# CK-V11316-015 SQLite initial-lookup named proof.", replacement: "# Removed CK-V11316-015 SQLite initial-lookup named proof.",
+			wantMessage: "missing local Profile A CK-015 SQLite wrapper",
+		},
+		{
+			name: "local PostgreSQL wrapper removed independently", source: "checklist",
+			old: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.", replacement: "# Removed CK-V11316-015 PostgreSQL lookup and preservation named proof.",
+			wantMessage: "missing local Profile A CK-015 PostgreSQL wrapper",
+		},
+		{
+			name: "local SQLite wrong package", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "./internal/storage", replacement: "./internal/verify",
+			wantMessage: "local CK-015 SQLite wrapper uses exact package, environment, and flags",
+		},
+		{
+			name: "local SQLite unanchored selector", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "selector='^(", replacement: "selector='(",
+			wantMessage: "local CK-015 SQLite wrapper freezes anchored selector",
+		},
+		{
+			name: "local SQLite wrong profile", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "profile=ck015-initial-lookup-sqlite", replacement: "profile=ck015-initial-lookup-postgres",
+			wantMessage: "local CK-015 SQLite wrapper selects exact profile",
+		},
+		{
+			name: "local SQLite race removed", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "go test -race -count=1 -p=1", replacement: "go test -count=1 -p=1",
+			wantMessage: "local CK-015 SQLite wrapper uses exact package, environment, and flags",
+		},
+		{
+			name: "local SQLite stale protection removed", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "refusing to reuse CK-015 SQLite evidence path", replacement: "allowing CK-015 SQLite evidence reuse",
+			wantMessage: "local CK-015 SQLite wrapper refuses stale invocation evidence",
+		},
+		{
+			name: "local SQLite stderr merged", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "2>\"$go_stderr_file\" | tee \"$json_file\"", replacement: "2>&1 | tee \"$json_file\"",
+			wantMessage: "local CK-015 SQLite wrapper keeps Go stderr separate from JSON",
+		},
+		{
+			name: "local SQLite pipeline forged", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "pipeline_status=(\"${PIPESTATUS[@]}\")", replacement: "pipeline_status=(0 0)",
+			wantMessage: "local CK-015 SQLite wrapper snapshots complete pipeline status immediately",
+		},
+		{
+			name: "local SQLite Go status forced", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "go_status=${pipeline_status[0]}", replacement: "go_status=0",
+			wantMessage: "local CK-015 SQLite wrapper preserves Go status",
+		},
+		{
+			name: "local SQLite capture status forced", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "capture_status=${pipeline_status[1]}", replacement: "capture_status=0",
+			wantMessage: "local CK-015 SQLite wrapper preserves capture status",
+		},
+		{
+			name: "local SQLite checker status forced", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "checker_status=$?", replacement: "checker_status=0",
+			wantMessage: "local CK-015 SQLite wrapper preserves checker status",
+		},
+		{
+			name: "local SQLite status write forced", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "status_record_write_status=$?", replacement: "status_record_write_status=0",
+			wantMessage: "local CK-015 SQLite wrapper preserves status-record write status",
+		},
+		{
+			name: "local SQLite evidence completeness removed", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
+			wantMessage: "local CK-015 SQLite wrapper requires every invocation record to be readable and regular",
+		},
+		{
+			name: "local PostgreSQL wrong package", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "./internal/storage", replacement: "./internal/verify",
+			wantMessage: "local CK-015 PostgreSQL wrapper uses exact race/count/serialization/package flags",
+		},
+		{
+			name: "local PostgreSQL unanchored selector", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "selector='^(", replacement: "selector='(",
+			wantMessage: "local CK-015 PostgreSQL wrapper freezes anchored selector",
+		},
+		{
+			name: "local PostgreSQL wrong profile", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "profile=ck015-initial-lookup-postgres", replacement: "profile=ck015-initial-lookup-sqlite",
+			wantMessage: "local CK-015 PostgreSQL wrapper selects exact profile",
+		},
+		{
+			name: "local PostgreSQL race removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "go test -race -count=1 -p=1", replacement: "go test -count=1 -p=1",
+			wantMessage: "local CK-015 PostgreSQL wrapper uses exact race/count/serialization/package flags",
+		},
+		{
+			name: "local PostgreSQL maintenance removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "COLDKEEP_TEST_DB_MAINTENANCE=postgres \\\n", replacement: "",
+			wantMessage: "local CK-015 PostgreSQL wrapper uses maintenance database",
+		},
+		{
+			name: "local PostgreSQL bootstrap removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "COLDKEEP_DB_AUTO_BOOTSTRAP=true \\\n", replacement: "",
+			wantMessage: "local CK-015 PostgreSQL wrapper enables bootstrap",
+		},
+		{
+			name: "local PostgreSQL connection removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "DB_SSLMODE=\"$DB_SSLMODE\" \\\n", replacement: "",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves DB SSL mode",
+		},
+		{
+			name: "local PostgreSQL stale protection removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "refusing to reuse CK-015 PostgreSQL evidence path", replacement: "allowing CK-015 PostgreSQL evidence reuse",
+			wantMessage: "local CK-015 PostgreSQL wrapper refuses stale invocation evidence",
+		},
+		{
+			name: "local PostgreSQL stderr merged", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "2>\"$go_stderr_file\" | tee \"$json_file\"", replacement: "2>&1 | tee \"$json_file\"",
+			wantMessage: "local CK-015 PostgreSQL wrapper keeps Go stderr separate from JSON",
+		},
+		{
+			name: "local PostgreSQL pipeline forged", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "pipeline_status=(\"${PIPESTATUS[@]}\")", replacement: "pipeline_status=(0 0)",
+			wantMessage: "local CK-015 PostgreSQL wrapper snapshots complete pipeline status immediately",
+		},
+		{
+			name: "local PostgreSQL Go status forced", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "go_status=${pipeline_status[0]}", replacement: "go_status=0",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves Go status",
+		},
+		{
+			name: "local PostgreSQL capture status forced", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "capture_status=${pipeline_status[1]}", replacement: "capture_status=0",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves capture status",
+		},
+		{
+			name: "local PostgreSQL checker status forced", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "checker_status=$?", replacement: "checker_status=0",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves checker status",
+		},
+		{
+			name: "local PostgreSQL status write forced", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "status_record_write_status=$?", replacement: "status_record_write_status=0",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves status-record write status",
+		},
+		{
+			name: "local PostgreSQL evidence completeness removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
+			wantMessage: "local CK-015 PostgreSQL wrapper requires every invocation record to be readable and regular",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var source string
+			switch test.source {
+			case "workflow":
+				source = workflow
+			case "checklist":
+				source = checklist
+			case "checker":
+				source = checker
+			default:
+				t.Fatalf("unknown source %q", test.source)
+			}
+			anchorIndex := 0
+			if test.anchor != "" {
+				anchorIndex = strings.Index(source, test.anchor)
+				if anchorIndex < 0 {
+					t.Fatalf("source fixture did not contain anchor %q", test.anchor)
+				}
+			}
+			targetOffset := strings.Index(source[anchorIndex:], test.old)
+			if targetOffset < 0 {
+				t.Fatalf("source fixture did not contain %q after anchor %q", test.old, test.anchor)
+			}
+			targetIndex := anchorIndex + targetOffset
+			mutated := source[:targetIndex] + test.replacement + source[targetIndex+len(test.old):]
+
+			var stderr string
+			switch test.source {
+			case "workflow":
+				stderr = runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+			case "checklist":
+				stderr = runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
+			case "checker":
+				stderr = runAuditLocalOnlyWithSourceFixture(t, workflow, codeqlWorkflow, "COLDKEEP_REQUIRED_TEST_EVENTS_FILE", mutated)
+			}
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
 func TestAuditCIEnforcementRequiresCK014ProfileAParity(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))

@@ -281,6 +281,237 @@ jobs:
 
           exit "$status"
 
+      - name: Run CK-015 SQLite initial-lookup proofs
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_CODEC: plain
+        run: |
+          set +e
+          unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN
+          diag_dir="${RUNNER_TEMP}/integration-diag"
+          mkdir -p "$diag_dir"
+          prefix="ck015-sqlite-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-plain"
+          json_file="$diag_dir/$prefix.json"
+          go_stderr_file="$diag_dir/$prefix.go.stderr"
+          checker_stdout_file="$diag_dir/$prefix.checker.stdout"
+          checker_stderr_file="$diag_dir/$prefix.checker.stderr"
+          status_file="$diag_dir/$prefix.status"
+          metadata_file="$diag_dir/$prefix.metadata"
+          selector='^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$'
+          profile=ck015-initial-lookup-sqlite
+          package=github.com/franchoy/coldkeep/internal/storage
+
+          for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+            if [ -e "$target" ]; then
+              echo "refusing to reuse CK-015 SQLite evidence path: $target" >&2
+              exit 1
+            fi
+          done
+          if ! go_version=$(go version); then
+            echo "unable to record Go version for CK-015 SQLite proof" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' \
+            "candidate_sha=$GITHUB_SHA" \
+            "repository=$GITHUB_REPOSITORY" \
+            "ref=$GITHUB_REF" \
+            "run_id=$GITHUB_RUN_ID" \
+            "run_attempt=$GITHUB_RUN_ATTEMPT" \
+            "job=$GITHUB_JOB" \
+            "matrix_codec=plain" \
+            "package=$package" \
+            "selector=$selector" \
+            "checker_profile=$profile" \
+            "go_version=$go_version" \
+            "gotoolchain=$GOTOOLCHAIN" >"$metadata_file"; then
+            echo "unable to write CK-015 SQLite metadata" >&2
+            exit 1
+          fi
+
+          go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \
+            -run "$selector" 2>"$go_stderr_file" | tee "$json_file"
+          pipeline_status=("${PIPESTATUS[@]}")
+          go_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+
+          python3 scripts/check_required_test_events.py \
+            --profile "$profile" \
+            --events "$json_file" \
+            >"$checker_stdout_file" 2>"$checker_stderr_file"
+          checker_status=$?
+
+          printf '%s\n' \
+            "go_status=$go_status" \
+            "capture_status=$capture_status" \
+            "checker_status=$checker_status" \
+            'status_record_write_status=0' >"$status_file"
+          status_record_write_status=$?
+
+          evidence_status=0
+          for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+            if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+              echo "missing or unreadable CK-015 SQLite evidence record: $target" >&2
+              evidence_status=1
+            fi
+          done
+          if [ "$status_record_write_status" -eq 0 ]; then
+            for expected in "go_status=$go_status" "capture_status=$capture_status" "checker_status=$checker_status" 'status_record_write_status=0'; do
+              if ! grep -Fqx "$expected" "$status_file"; then
+                echo "CK-015 SQLite status record mismatch: $expected" >&2
+                evidence_status=1
+              fi
+            done
+          fi
+          for expected in "candidate_sha=$GITHUB_SHA" "repository=$GITHUB_REPOSITORY" "ref=$GITHUB_REF" "run_id=$GITHUB_RUN_ID" "run_attempt=$GITHUB_RUN_ATTEMPT" "job=$GITHUB_JOB" 'matrix_codec=plain' "package=$package" "selector=$selector" "checker_profile=$profile" "gotoolchain=$GOTOOLCHAIN"; do
+            if ! grep -Fqx "$expected" "$metadata_file"; then
+              echo "CK-015 SQLite metadata mismatch: $expected" >&2
+              evidence_status=1
+            fi
+          done
+
+          echo "go_status=$go_status capture_status=$capture_status checker_status=$checker_status status_record_write_status=$status_record_write_status evidence_status=$evidence_status"
+          cat "$checker_stdout_file"
+          cat "$checker_stderr_file" >&2
+
+          if [ "$go_status" -ne 0 ]; then
+            status=$go_status
+          elif [ "$capture_status" -ne 0 ]; then
+            status=$capture_status
+          elif [ "$checker_status" -ne 0 ]; then
+            status=$checker_status
+          elif [ "$status_record_write_status" -ne 0 ]; then
+            status=$status_record_write_status
+          else
+            status=$evidence_status
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "CK-015 SQLite initial-lookup proof failed" >&2
+            cat "$go_stderr_file" >&2 || true
+            tail -n 120 "$json_file" >&2 || true
+          fi
+          exit "$status"
+
+      - name: Run CK-015 PostgreSQL lookup and preservation proofs
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_TEST_DB: 1
+          COLDKEEP_TEST_DB_MAINTENANCE: postgres
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          set +e
+          unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN
+          diag_dir="${RUNNER_TEMP}/integration-diag"
+          mkdir -p "$diag_dir"
+          prefix="ck015-postgres-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-plain"
+          json_file="$diag_dir/$prefix.json"
+          go_stderr_file="$diag_dir/$prefix.go.stderr"
+          checker_stdout_file="$diag_dir/$prefix.checker.stdout"
+          checker_stderr_file="$diag_dir/$prefix.checker.stderr"
+          status_file="$diag_dir/$prefix.status"
+          metadata_file="$diag_dir/$prefix.metadata"
+          selector='^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$'
+          profile=ck015-initial-lookup-postgres
+          package=github.com/franchoy/coldkeep/internal/storage
+          postgres_image='postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825'
+
+          for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+            if [ -e "$target" ]; then
+              echo "refusing to reuse CK-015 PostgreSQL evidence path: $target" >&2
+              exit 1
+            fi
+          done
+          if ! go_version=$(go version); then
+            echo "unable to record Go version for CK-015 PostgreSQL proof" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' \
+            "candidate_sha=$GITHUB_SHA" \
+            "repository=$GITHUB_REPOSITORY" \
+            "ref=$GITHUB_REF" \
+            "run_id=$GITHUB_RUN_ID" \
+            "run_attempt=$GITHUB_RUN_ATTEMPT" \
+            "job=$GITHUB_JOB" \
+            "matrix_codec=plain" \
+            "package=$package" \
+            "selector=$selector" \
+            "checker_profile=$profile" \
+            "go_version=$go_version" \
+            "gotoolchain=$GOTOOLCHAIN" \
+            "postgres_image=$postgres_image" >"$metadata_file"; then
+            echo "unable to write CK-015 PostgreSQL metadata" >&2
+            exit 1
+          fi
+
+          go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \
+            -run "$selector" 2>"$go_stderr_file" | tee "$json_file"
+          pipeline_status=("${PIPESTATUS[@]}")
+          go_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+
+          python3 scripts/check_required_test_events.py \
+            --profile "$profile" \
+            --events "$json_file" \
+            >"$checker_stdout_file" 2>"$checker_stderr_file"
+          checker_status=$?
+
+          printf '%s\n' \
+            "go_status=$go_status" \
+            "capture_status=$capture_status" \
+            "checker_status=$checker_status" \
+            'status_record_write_status=0' >"$status_file"
+          status_record_write_status=$?
+
+          evidence_status=0
+          for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+            if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+              echo "missing or unreadable CK-015 PostgreSQL evidence record: $target" >&2
+              evidence_status=1
+            fi
+          done
+          if [ "$status_record_write_status" -eq 0 ]; then
+            for expected in "go_status=$go_status" "capture_status=$capture_status" "checker_status=$checker_status" 'status_record_write_status=0'; do
+              if ! grep -Fqx "$expected" "$status_file"; then
+                echo "CK-015 PostgreSQL status record mismatch: $expected" >&2
+                evidence_status=1
+              fi
+            done
+          fi
+          for expected in "candidate_sha=$GITHUB_SHA" "repository=$GITHUB_REPOSITORY" "ref=$GITHUB_REF" "run_id=$GITHUB_RUN_ID" "run_attempt=$GITHUB_RUN_ATTEMPT" "job=$GITHUB_JOB" 'matrix_codec=plain' "package=$package" "selector=$selector" "checker_profile=$profile" "gotoolchain=$GOTOOLCHAIN" "postgres_image=$postgres_image"; do
+            if ! grep -Fqx "$expected" "$metadata_file"; then
+              echo "CK-015 PostgreSQL metadata mismatch: $expected" >&2
+              evidence_status=1
+            fi
+          done
+
+          echo "go_status=$go_status capture_status=$capture_status checker_status=$checker_status status_record_write_status=$status_record_write_status evidence_status=$evidence_status"
+          cat "$checker_stdout_file"
+          cat "$checker_stderr_file" >&2
+
+          if [ "$go_status" -ne 0 ]; then
+            status=$go_status
+          elif [ "$capture_status" -ne 0 ]; then
+            status=$capture_status
+          elif [ "$checker_status" -ne 0 ]; then
+            status=$checker_status
+          elif [ "$status_record_write_status" -ne 0 ]; then
+            status=$status_record_write_status
+          else
+            status=$evidence_status
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "CK-015 PostgreSQL lookup and preservation proof failed" >&2
+            cat "$go_stderr_file" >&2 || true
+            tail -n 120 "$json_file" >&2 || true
+          fi
+          exit "$status"
+
       - name: Run required PostgreSQL internal package contracts
         if: ${{ matrix.codec == 'plain' }}
         env:
@@ -440,13 +671,14 @@ jobs:
               sys.exit(1)
           PY
 
-      - name: Upload correctness-matrix diagnostic JSON
-        if: failure()
+      - name: Upload correctness-matrix execution evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: correctness-matrix-diag-${{ matrix.codec }}
-          path: ${{ runner.temp }}/integration-diag/*.json
-          if-no-files-found: ignore
+          name: correctness-matrix-evidence-${{ matrix.codec }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/integration-diag/*
+          retention-days: 14
+          if-no-files-found: error
 
       - name: Run Phase 7 snapshot retention lifecycle gate
         env:

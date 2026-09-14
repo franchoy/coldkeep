@@ -74,6 +74,67 @@ class RequiredTestEventsTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_accepts_complete_ck015_sqlite_profile(self):
+        profile = "ck015-initial-lookup-sqlite"
+        result = self.run_checker(profile, self.complete_events(profile))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_accepts_complete_ck015_postgres_profile(self):
+        profile = "ck015-initial-lookup-postgres"
+        result = self.run_checker(profile, self.complete_events(profile))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_ck015_rejects_skipped_routing_child_when_parent_passes(self):
+        profile = "ck015-initial-lookup-sqlite"
+        events = self.complete_events(profile)
+        child = "TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/processing"
+        for event in events:
+            if event.get("Test") == child and event.get("Action") == "pass":
+                event["Action"] = "skip"
+        self.assert_rejected(profile, events, message=child)
+
+    def test_ck015_rejects_missing_postgres_obligation(self):
+        profile = "ck015-initial-lookup-postgres"
+        missing = "TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies"
+        events = [
+            event
+            for event in self.complete_events(profile)
+            if event.get("Test") != missing
+        ]
+        self.assert_rejected(profile, events, message=missing)
+
+    def test_ck015_rejects_required_event_under_wrong_package(self):
+        profile = "ck015-initial-lookup-postgres"
+        test_name = checker.PROFILES[profile]["tests"][0]
+        events = self.complete_events(profile)
+        for event in events:
+            if event.get("Test") == test_name:
+                event["Package"] = "github.com/franchoy/coldkeep/internal/verify"
+        self.assert_rejected(profile, events, message="required run count mismatch")
+
+    def test_ck015_rejects_contradictory_terminal_event(self):
+        profile = "ck015-initial-lookup-sqlite"
+        test_name = checker.PROFILES[profile]["tests"][0]
+        events = self.complete_events(profile)
+        events.insert(
+            -1,
+            {
+                "Action": "fail",
+                "Package": checker.PROFILES[profile]["package"],
+                "Test": test_name,
+            },
+        )
+        self.assert_rejected(profile, events, message="contradictory")
+
+    def test_ck015_allows_unrelated_optional_skip(self):
+        profile = "ck015-initial-lookup-postgres"
+        events = self.complete_events(profile)
+        package = checker.PROFILES[profile]["package"]
+        events.insert(-1, {"Action": "run", "Package": package, "Test": "TestOptional"})
+        events.insert(-1, {"Action": "skip", "Package": package, "Test": "TestOptional"})
+        result = self.run_checker(profile, events)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_rejects_wrong_package_for_required_test(self):
         profile = "integration-correctness-aes-gcm"
         events = self.complete_events(profile)

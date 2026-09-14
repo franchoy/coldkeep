@@ -222,6 +222,59 @@ extract_step_block_from_content() {
   ' <<<"$content"
 }
 
+check_ck015_proof_wrapper() {
+  local content="$1"
+  local label="$2"
+  local profile="$3"
+  local stale_message="$4"
+
+  require_content_pattern "$content" 'go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage' "$label uses exact race/count/serialization/package flags" || check_status=1
+  require_content_pattern "$content" "--profile (\"?\\\$profile\"?|$profile)" "$label selects exact checker profile" || check_status=1
+  require_content_pattern "$content" "$stale_message" "$label refuses stale invocation evidence" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.json" "$label retains JSON evidence" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.go\\.stderr" "$label retains separate Go stderr" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.checker\\.stdout" "$label retains checker stdout" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.checker\\.stderr" "$label retains checker stderr" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.status" "$label retains status record" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.metadata" "$label retains metadata record" || check_status=1
+  require_content_pattern "$content" 'if ! printf '\''%s\\n'\''' "$label fails closed when metadata cannot be written" || check_status=1
+  require_content_pattern "$content" 'candidate_sha=\$' "$label metadata binds candidate SHA" || check_status=1
+  require_content_pattern "$content" 'matrix_codec=plain' "$label metadata binds plain leg" || check_status=1
+  require_content_pattern "$content" "package=\\\$package" "$label metadata binds package" || check_status=1
+  require_content_pattern "$content" "selector=\\\$selector" "$label metadata binds selector" || check_status=1
+  require_content_pattern "$content" "checker_profile=\\\$profile" "$label metadata binds checker profile" || check_status=1
+  require_content_pattern "$content" "go_version=\\\$go_version" "$label metadata binds Go version" || check_status=1
+  require_content_pattern "$content" "gotoolchain=(\\\$GOTOOLCHAIN|local)" "$label metadata binds toolchain policy" || check_status=1
+  # shellcheck disable=SC2016 # These patterns intentionally match literal wrapper variables.
+  require_content_pattern "$content" '2>"\$go_stderr_file" \| tee "\$json_file"' "$label keeps Go stderr separate from JSON" || check_status=1
+  require_content_pattern "$content" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' "$label snapshots complete pipeline status immediately" || check_status=1
+  require_content_pattern "$content" 'go_status=\$\{pipeline_status\[0\]\}' "$label preserves Go status" || check_status=1
+  require_content_pattern "$content" 'capture_status=\$\{pipeline_status\[1\]\}' "$label preserves capture status" || check_status=1
+  require_content_pattern "$content" 'checker_status=\$\?' "$label preserves checker status" || check_status=1
+  require_content_pattern "$content" 'status_record_write_status=\$\?' "$label preserves status-record write status" || check_status=1
+  require_content_pattern "$content" 'status_record_write_status=0' "$label records successful status-record write" || check_status=1
+  require_content_pattern "$content" 'evidence_status=0' "$label initializes evidence completeness status" || check_status=1
+  # shellcheck disable=SC2016 # This pattern intentionally matches literal wrapper variables.
+  require_content_pattern "$content" '\[ ! -f "\$target" \] \|\| \[ ! -r "\$target" \]' "$label requires every invocation record to be readable and regular" || check_status=1
+  # shellcheck disable=SC2016 # This pattern intentionally matches literal wrapper variables.
+  require_content_pattern "$content" 'grep -Fqx "\$expected" "\$status_file"' "$label verifies status-record contents" || check_status=1
+  # shellcheck disable=SC2016 # This pattern intentionally matches literal wrapper variables.
+  require_content_pattern "$content" 'grep -Fqx "\$expected" "\$metadata_file"' "$label verifies metadata contents" || check_status=1
+  # shellcheck disable=SC2016 # These patterns intentionally match literal wrapper variables.
+  require_content_pattern "$content" 'if \[ "\$go_status" -ne 0 \]' "$label gives Go failure first precedence" || check_status=1
+  require_content_pattern "$content" "elif \\[ \"\\\$capture_status\" -ne 0 \\]" "$label propagates capture failure" || check_status=1
+  require_content_pattern "$content" "elif \\[ \"\\\$checker_status\" -ne 0 \\]" "$label propagates checker failure" || check_status=1
+  require_content_pattern "$content" "elif \\[ \"\\\$status_record_write_status\" -ne 0 \\]" "$label propagates status-record failure" || check_status=1
+  require_content_pattern "$content" "status=\\\$evidence_status" "$label propagates evidence completeness failure" || check_status=1
+  require_content_pattern "$content" "exit \"\\\$status\"" "$label remains blocking" || check_status=1
+  if grep -Eq 'continue-on-error|go test .*\|\| true|go_status=0|capture_status=0|checker_status=0' <<<"$content"; then
+    echo "[audit] ERROR: $label must not suppress or forge required execution status" >&2
+    check_status=1
+  else
+    echo "[audit] ok: $label does not suppress or forge required execution status"
+  fi
+}
+
 check_paired_launcher_output_ownership() {
   local file="$1"
 
@@ -991,6 +1044,83 @@ check_local_workflow() {
 	    # shellcheck disable=SC2016
 	    require_content_pattern "$ck014_internal_block" 'exit "\$status"' 'CK-014 internal proof step remains blocking' || check_status=1
 	  fi
+	  ck015_sqlite_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run CK-015 SQLite initial-lookup proofs")"
+	  ck015_postgres_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run CK-015 PostgreSQL lookup and preservation proofs")"
+	  if [[ -z "$ck015_sqlite_block" ]]; then
+	    echo "[audit] ERROR: missing CK-015 SQLite named-proof step" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$ck015_sqlite_block" "^      - name: Run CK-015 SQLite initial-lookup proofs$" 'CK-015 SQLite exact step name' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "if: \\$\\{\\{ matrix\.codec == 'plain' \\}\\}" 'CK-015 SQLite proof runs only in plain correctness leg' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" '^          COLDKEEP_CODEC: plain$' 'CK-015 SQLite proof freezes plain codec' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'CK-015 SQLite proof clears inherited compression and long-run settings' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'profile=ck015-initial-lookup-sqlite' 'CK-015 SQLite proof freezes checker profile' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'package=github\.com/franchoy/coldkeep/internal/storage' 'CK-015 SQLite proof binds storage package' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'prefix="ck015-sqlite-\$\{GITHUB_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{GITHUB_JOB\}-plain"' 'CK-015 SQLite evidence prefix binds candidate/run/attempt/job/leg' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "selector='\\^\\(.*TestCKV11316015InitialLookupSupportedStatusRoutingSQLite.*\\)\\$'" 'CK-015 SQLite selector is top-level anchored' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite' 'CK-015 SQLite operational-error selector' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite' 'CK-015 SQLite partial-Scan selector' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite' 'CK-015 SQLite no-row selector' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite' 'CK-015 SQLite status-routing selector' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "candidate_sha=\\\$GITHUB_SHA" 'CK-015 SQLite metadata binds candidate SHA' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "repository=\\\$GITHUB_REPOSITORY" 'CK-015 SQLite metadata binds repository' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "ref=\\\$GITHUB_REF" 'CK-015 SQLite metadata binds ref' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "run_id=\\\$GITHUB_RUN_ID" 'CK-015 SQLite metadata binds run ID' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "run_attempt=\\\$GITHUB_RUN_ATTEMPT" 'CK-015 SQLite metadata binds run attempt' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "job=\\\$GITHUB_JOB" 'CK-015 SQLite metadata binds job' || check_status=1
+	    check_ck015_proof_wrapper "$ck015_sqlite_block" 'CK-015 SQLite hosted wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path'
+	  fi
+	  if [[ -z "$ck015_postgres_block" ]]; then
+	    echo "[audit] ERROR: missing CK-015 PostgreSQL named-proof step" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$ck015_postgres_block" "^      - name: Run CK-015 PostgreSQL lookup and preservation proofs$" 'CK-015 PostgreSQL exact step name' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "if: \\$\\{\\{ matrix\.codec == 'plain' \\}\\}" 'CK-015 PostgreSQL proof runs only in plain correctness leg' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'COLDKEEP_TEST_DB:\s*1' 'CK-015 PostgreSQL proof enables DB gate' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'COLDKEEP_TEST_DB_MAINTENANCE:\s*postgres' 'CK-015 PostgreSQL proof uses maintenance database' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'COLDKEEP_DB_AUTO_BOOTSTRAP:\s*true' 'CK-015 PostgreSQL proof enables bootstrap' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'COLDKEEP_CODEC:\s*plain' 'CK-015 PostgreSQL proof freezes plain codec' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_HOST:\s*127\.0\.0\.1' 'CK-015 PostgreSQL proof sets DB host' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_PORT:\s*5432' 'CK-015 PostgreSQL proof sets DB port' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_USER:\s*coldkeep' 'CK-015 PostgreSQL proof sets DB user' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_PASSWORD:\s*coldkeep' 'CK-015 PostgreSQL proof sets DB password' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_NAME:\s*coldkeep' 'CK-015 PostgreSQL proof sets DB name' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_SSLMODE:\s*disable' 'CK-015 PostgreSQL proof sets DB SSL mode' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'CK-015 PostgreSQL proof clears schema/compression/long-run inheritance' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'profile=ck015-initial-lookup-postgres' 'CK-015 PostgreSQL proof freezes checker profile' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'package=github\.com/franchoy/coldkeep/internal/storage' 'CK-015 PostgreSQL proof binds storage package' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'prefix="ck015-postgres-\$\{GITHUB_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{GITHUB_JOB\}-plain"' 'CK-015 PostgreSQL evidence prefix binds candidate/run/attempt/job/leg' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "selector='\\^\\(.*TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies.*\\)\\$'" 'CK-015 PostgreSQL selector is top-level anchored' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback' 'CK-015 PostgreSQL operational-error selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery' 'CK-015 PostgreSQL preservation selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation' 'CK-015 PostgreSQL publisher-lock selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication' 'CK-015 PostgreSQL competitor-lock selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies' 'CK-015 PostgreSQL healing selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'postgres:16\.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825' 'CK-015 PostgreSQL metadata binds pinned service image' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "candidate_sha=\\\$GITHUB_SHA" 'CK-015 PostgreSQL metadata binds candidate SHA' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "repository=\\\$GITHUB_REPOSITORY" 'CK-015 PostgreSQL metadata binds repository' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "ref=\\\$GITHUB_REF" 'CK-015 PostgreSQL metadata binds ref' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "run_id=\\\$GITHUB_RUN_ID" 'CK-015 PostgreSQL metadata binds run ID' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "run_attempt=\\\$GITHUB_RUN_ATTEMPT" 'CK-015 PostgreSQL metadata binds run attempt' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "job=\\\$GITHUB_JOB" 'CK-015 PostgreSQL metadata binds job' || check_status=1
+	    if grep -Eq 'COLDKEEP_KEY' <<<"$ck015_postgres_block"; then
+	      echo "[audit] ERROR: CK-015 PostgreSQL proof must not claim AES-key coverage" >&2
+	      check_status=1
+	    else
+	      echo "[audit] ok: CK-015 PostgreSQL proof makes no AES-key claim"
+	    fi
+	    check_ck015_proof_wrapper "$ck015_postgres_block" 'CK-015 PostgreSQL hosted wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path'
+	  fi
+	  ck014_position="$(grep -nF '      - name: Run CK-014 internal verification proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
+	  ck015_sqlite_position="$(grep -nF '      - name: Run CK-015 SQLite initial-lookup proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
+	  ck015_postgres_position="$(grep -nF '      - name: Run CK-015 PostgreSQL lookup and preservation proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
+	  postgres_internal_position="$(grep -nF '      - name: Run required PostgreSQL internal package contracts' <<<"$correctness_matrix_block" | cut -d: -f1)"
+	  if [[ -z "$ck014_position" || -z "$ck015_sqlite_position" || -z "$ck015_postgres_position" || -z "$postgres_internal_position" || "$ck014_position" -ge "$ck015_sqlite_position" || "$ck015_sqlite_position" -ge "$ck015_postgres_position" || "$ck015_postgres_position" -ge "$postgres_internal_position" ]]; then
+	    echo "[audit] ERROR: CK-015 named proofs must follow CK-014 and precede PostgreSQL internal contracts" >&2
+	    check_status=1
+	  else
+	    echo "[audit] ok: CK-015 named proofs follow CK-014 and precede PostgreSQL internal contracts"
+	  fi
 	  postgres_internal_contracts_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run required PostgreSQL internal package contracts")"
 	  if [[ -z "$postgres_internal_contracts_block" ]]; then
 	    echo "[audit] ERROR: missing required PostgreSQL internal package contracts step block" >&2
@@ -1060,6 +1190,20 @@ check_local_workflow() {
 	      echo "[audit] ok: PostgreSQL internal package contracts step is blocking"
 	    fi
 	  fi
+	  correctness_upload_block="$(extract_step_block_from_content "$correctness_matrix_block" "Upload correctness-matrix execution evidence")"
+	  if [[ -z "$correctness_upload_block" ]]; then
+	    echo "[audit] ERROR: missing durable correctness-matrix execution evidence upload" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$correctness_upload_block" '^      - name: Upload correctness-matrix execution evidence$' 'correctness-matrix evidence upload exact name' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'if: \$\{\{ always\(\) \}\}' 'correctness-matrix evidence upload always runs' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'uses: actions/upload-artifact@v7' 'correctness-matrix evidence upload uses v7' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'name: correctness-matrix-evidence-\$\{\{ matrix\.codec \}\}-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}' 'correctness-matrix artifact name binds codec/SHA/run/attempt' || check_status=1
+	    require_content_pattern "$correctness_upload_block" '^          path: \$\{\{ runner\.temp \}\}/integration-diag/\*$' 'correctness-matrix evidence upload retains every integration diagnostic record' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'retention-days: 14' 'correctness-matrix evidence upload retains 14 days' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'if-no-files-found: error' 'correctness-matrix evidence upload fails when no records exist' || check_status=1
+	  fi
+	  require_content_pattern "$correctness_matrix_block" 'image: postgres:16\.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825' 'correctness-matrix preserves pinned PostgreSQL 16.15 service' || check_status=1
 	fi
   require_pattern "$WORKFLOW_FILE" '^  cross-platform:$' 'cross-platform job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
@@ -1166,6 +1310,7 @@ check_local_workflow() {
   require_content_pattern "$devcontainer_block" 'validate_phase3_contracts\.py' 'development container runs the static safety contract' || check_status=1
   require_content_pattern "$devcontainer_block" 'post-create\.sh' 'development container runs its bootstrap' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer\]' 'required gate depends on security and hosted reproducibility jobs' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'CORRECTNESS_MATRIX_RESULT:\s*\$\{\{ needs\['\''correctness-matrix'\''\]\.result \}\}' 'required gate captures correctness-matrix result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT:\s*\$\{\{ needs\.vulnerability\.result \}\}' 'required gate captures vulnerability result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SOURCE_INSTALL_RESULT:\s*\$\{\{ needs\['\''source-install'\''\]\.result \}\}' 'required gate captures source-install result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'REMOTE_CANDIDATE_INSTALL_RESULT:\s*\$\{\{ needs\['\''remote-candidate-install'\''\]\.result \}\}' 'required gate captures remote-candidate-install result' || check_status=1
@@ -1192,21 +1337,76 @@ check_local_workflow() {
   require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '^[[:space:]]*COLDKEEP_LONG_RUN=1 go test -race -count=1 \./tests/adversarial/\.\.\. -timeout 20m$' 'local Profile A full long-run adversarial package uses exact 20-minute timeout' || check_status=1
   require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '--profile "integration-correctness-\$\{codec\}"' 'local Profile A selects codec-specific required-event profile' || check_status=1
   require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '--profile ck014-internal-verify' 'local Profile A invokes CK-014 internal required-event profile' || check_status=1
-  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 2 'local Profile A snapshots complete pipeline status in both required-event wrappers' || check_status=1
-  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'go_status=\$\{pipeline_status\[0\]\}' 2 'local Profile A preserves Go status in both required-event wrappers' || check_status=1
-  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'capture_status=\$\{pipeline_status\[1\]\}' 2 'local Profile A preserves evidence-capture status in both required-event wrappers' || check_status=1
-  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'checker_status=\$\?' 2 'local Profile A preserves checker status in both required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 4 'local Profile A snapshots complete pipeline status in all required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'go_status=\$\{pipeline_status\[0\]\}' 4 'local Profile A preserves Go status in all required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'capture_status=\$\{pipeline_status\[1\]\}' 4 'local Profile A preserves evidence-capture status in all required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'checker_status=\$\?' 4 'local Profile A preserves checker status in all required-event wrappers' || check_status=1
   # The regex must count literal checklist status variables, not expand them here.
   # shellcheck disable=SC2016
-  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'if \[ "\$go_status" -ne 0 \]' 2 'local Profile A gives Go failure first precedence in both required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'if \[ "\$go_status" -ne 0 \]' 4 'local Profile A gives Go failure first precedence in all required-event wrappers' || check_status=1
   # The regex must count literal checklist status variables, not expand them here.
   # shellcheck disable=SC2016
-  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'elif \[ "\$capture_status" -ne 0 \]' 2 'local Profile A propagates evidence-capture failure in both required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'elif \[ "\$capture_status" -ne 0 \]' 4 'local Profile A propagates evidence-capture failure in all required-event wrappers' || check_status=1
   require_pattern "$PRE_RELEASE_CHECKLIST_FILE" 'refusing to reuse integration-correctness evidence paths' 'local Profile A refuses stale integration evidence paths' || check_status=1
   require_pattern "$PRE_RELEASE_CHECKLIST_FILE" 'refusing to reuse CK-014 internal evidence paths' 'local Profile A refuses stale internal evidence paths' || check_status=1
 
+  ck015_sqlite_local_block="$(awk '/^# CK-V11316-015 SQLite initial-lookup named proof\.$/ { in_block = 1 } /^# CK-V11316-015 PostgreSQL lookup and preservation named proof\.$/ { if (in_block) exit } in_block { print }' "$PRE_RELEASE_CHECKLIST_FILE")"
+  ck015_postgres_local_block="$(awk '/^# CK-V11316-015 PostgreSQL lookup and preservation named proof\.$/ { in_block = 1 } /^# Step 3 loop leaves COLDKEEP_CODEC/ { if (in_block) exit } in_block { print }' "$PRE_RELEASE_CHECKLIST_FILE")"
+  if [[ -z "$ck015_sqlite_local_block" ]]; then
+    echo "[audit] ERROR: missing local Profile A CK-015 SQLite wrapper" >&2
+    check_status=1
+  else
+    require_content_pattern "$ck015_sqlite_local_block" 'prefix=ck015-initial-lookup-sqlite-local' 'local CK-015 SQLite wrapper uses distinct fixed prefix' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'GOTOOLCHAIN=local COLDKEEP_CODEC=plain go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage' 'local CK-015 SQLite wrapper uses exact package, environment, and flags' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'profile=ck015-initial-lookup-sqlite' 'local CK-015 SQLite wrapper selects exact profile' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" "selector='\\^\\(.*TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite.*TestCKV11316015InitialLookupSupportedStatusRoutingSQLite.*\\)\\$'" 'local CK-015 SQLite wrapper freezes anchored selector' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite' 'local CK-015 SQLite wrapper retains partial-Scan selector' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite' 'local CK-015 SQLite wrapper retains no-row selector' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'local CK-015 SQLite wrapper clears inherited settings' || check_status=1
+    check_ck015_proof_wrapper "$ck015_sqlite_local_block" 'local CK-015 SQLite wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path'
+  fi
+  if [[ -z "$ck015_postgres_local_block" ]]; then
+    echo "[audit] ERROR: missing local Profile A CK-015 PostgreSQL wrapper" >&2
+    check_status=1
+  else
+    require_content_pattern "$ck015_postgres_local_block" 'prefix=ck015-initial-lookup-postgres-local' 'local CK-015 PostgreSQL wrapper uses distinct fixed prefix' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'profile=ck015-initial-lookup-postgres' 'local CK-015 PostgreSQL wrapper selects exact profile' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "selector='\\^\\(.*TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback.*TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies.*\\)\\$'" 'local CK-015 PostgreSQL wrapper freezes anchored selector' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery' 'local CK-015 PostgreSQL wrapper retains preservation selector' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation' 'local CK-015 PostgreSQL wrapper retains publisher-lock selector' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication' 'local CK-015 PostgreSQL wrapper retains competitor-lock selector' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'local CK-015 PostgreSQL wrapper clears inherited settings' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^GOTOOLCHAIN=local' 'local CK-015 PostgreSQL wrapper pins local toolchain' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^COLDKEEP_CODEC=plain' 'local CK-015 PostgreSQL wrapper freezes plain codec' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^COLDKEEP_TEST_DB=1' 'local CK-015 PostgreSQL wrapper enables DB gate' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^COLDKEEP_TEST_DB_MAINTENANCE=postgres' 'local CK-015 PostgreSQL wrapper uses maintenance database' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^COLDKEEP_DB_AUTO_BOOTSTRAP=true' 'local CK-015 PostgreSQL wrapper enables bootstrap' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_HOST=\"\\\$DB_HOST\"" 'local CK-015 PostgreSQL wrapper preserves isolated DB host' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_PORT=\"\\\$DB_PORT\"" 'local CK-015 PostgreSQL wrapper preserves isolated DB port' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_USER=\"\\\$DB_USER\"" 'local CK-015 PostgreSQL wrapper preserves DB user' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_PASSWORD=\"\\\$DB_PASSWORD\"" 'local CK-015 PostgreSQL wrapper preserves DB password input' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_NAME=\"\\\$DB_NAME\"" 'local CK-015 PostgreSQL wrapper preserves DB name' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_SSLMODE=\"\\\$DB_SSLMODE\"" 'local CK-015 PostgreSQL wrapper preserves DB SSL mode' || check_status=1
+    check_ck015_proof_wrapper "$ck015_postgres_local_block" 'local CK-015 PostgreSQL wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path'
+  fi
+
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/verify' 1 'required-event profiles bind the internal verify profile' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/storage' 2 'required-event profiles bind storage package for both CK-015 profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" '"ck015-initial-lookup-sqlite"' 1 'required-event profiles contain exact CK-015 SQLite profile once' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" '"ck015-initial-lookup-postgres"' 1 'required-event profiles contain exact CK-015 PostgreSQL profile once' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite' 1 'CK-015 SQLite profile requires operational-error proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite' 1 'CK-015 SQLite profile requires partial-Scan proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite' 1 'CK-015 SQLite profile requires no-row proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite"' 1 'CK-015 SQLite profile requires routing parent' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/completed' 1 'CK-015 SQLite profile requires completed routing child' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/aborted' 1 'CK-015 SQLite profile requires aborted routing child' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/processing' 1 'CK-015 SQLite profile requires processing routing child' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback' 1 'CK-015 PostgreSQL profile requires operational-error proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery' 1 'CK-015 PostgreSQL profile requires preservation proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation' 1 'CK-015 PostgreSQL profile requires publisher-lock proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication' 1 'CK-015 PostgreSQL profile requires competitor-lock proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies' 1 'CK-015 PostgreSQL profile requires healing proof' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestRoundTripStoreRestore' 2 'required-event profiles preserve storage round-trip proof in both integration profiles' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestRemoveWithSharedChunksRefCount' 1 'required-event profiles preserve remove proof' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState' 1 'required-event profiles preserve recovery proof' || check_status=1

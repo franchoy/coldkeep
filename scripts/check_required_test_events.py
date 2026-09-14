@@ -34,6 +34,28 @@ PROFILES = {
             "TestVerifySystemDeepRejectsNilDownstreamReaderAfterPreflight",
         ),
     },
+    "ck015-initial-lookup-sqlite": {
+        "package": "github.com/franchoy/coldkeep/internal/storage",
+        "tests": (
+            "TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite",
+            "TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite",
+            "TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite",
+            "TestCKV11316015InitialLookupSupportedStatusRoutingSQLite",
+            "TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/completed",
+            "TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/aborted",
+            "TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/processing",
+        ),
+    },
+    "ck015-initial-lookup-postgres": {
+        "package": "github.com/franchoy/coldkeep/internal/storage",
+        "tests": (
+            "TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback",
+            "TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery",
+            "TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation",
+            "TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication",
+            "TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies",
+        ),
+    },
 }
 
 
