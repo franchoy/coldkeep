@@ -74,7 +74,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 12 CK-V11316-014 remediation state
+### Current Phase 12 CK-V11316-014 closure state
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 8 implementation and certification are complete at executable/evidence
@@ -126,10 +126,9 @@ retry occurred.
 CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
 CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-013,
-plus CK-V11316-015, are closed certified; CK-V11316-007 remains open.
-CK-V11316-014 is now repository-confirmed and open under the prospective
-stage-scoped-after-successful-preflight aggregation policy. Findings are 15
-confirmed and 13/15 closed. Phase 9, Phase 10, and Phase 11 are Complete. Phase 10R1
+plus CK-V11316-014 and CK-V11316-015, are closed certified; CK-V11316-007
+remains open. Findings are 15 confirmed and 14/15 closed. Phase 9, Phase 10,
+and Phase 11 are Complete. Phase 10R1
 successfully corrected CK-V11316-012's refcount fixture and proved the final
 13/13 plain and AES concurrency selectors with zero skips, then the fresh
 complete matrix stopped because the required G1 unrelated-container proof
@@ -261,16 +260,17 @@ certified, while CK-V11316-007 remains open and CK-V11316-014 remains an
 unresolved external proposal excluded from repository counters.
 
 [Phase 12R1R22 CK-V11316-014 required-proof reliability remediation](v1.13.16-phase12r1r22-ck014-test-reliability-remediation.md)
-confirms CK-V11316-014 as open and authorizes exactly two local commits. Its
+confirmed CK-V11316-014 as open and authorized its bounded local remediation. Its
 private per-invocation downstream reader preserves real fail-fast full
 preflight, the normal production path, and existing unsafe-continuation
 boundaries. Required Go JSON evidence is bound to exact package/test identities
 and requires independent Go-process, evidence-capture, event-completeness, and
 proof success. This prospective policy does not rewrite the historically
-unspecified public aggregation boundary. CK-V11316-015 remains closed
-certified, CK-V11316-007 remains open, findings are 15 confirmed and 13/15
-closed, and push, hosted execution, CK-V11316-014 closure, Phase 12 completion,
-and Phase 13 remain unauthorized.
+unspecified public aggregation boundary. The later R1R32 reconciliation closes
+CK-V11316-014 from its completed local and exact-candidate hosted proof.
+CK-V11316-015 remains closed certified, CK-V11316-007 remains open, findings
+are 15 confirmed and 14/15 closed, and Phase 12 completion and Phase 13 remain
+unauthorized.
 
 Phase 12 remains the aggregate Next phase in PLAN mode. Earlier authorized
 Phase 12 audits and diagnostics remain executed historical evidence: R1R2
@@ -814,3 +814,24 @@ Historical evidence remains immutable and requirement-specific; no push,
 finding mutation, full Profile A restart, or Phase 13 work is authorized.
 
 Authority: [Phase 12R1R27 refcount execution and benchmark provenance recovery](v1.13.16-phase12r1r27-refcount-execution-and-benchmark-provenance-recovery.md).
+
+Phase 12R1R32 reconciles CK-V11316-014's completed remediation against exact
+candidate `f275a0fb0ee8f7e66022afd80275be5ade76a3ee`. Candidate CI
+`34765041894` passed 36/36, CodeQL `34765042034` passed 4/4, all 40 exact-head
+checks passed, and the three package-bound required-proof profiles passed all
+6/1/4 obligations with successful Go, capture, checker, and package outcomes.
+All four hosted benchmark-integrity profiles passed with execution provenance
+bound to observed PostgreSQL 16.14; the 36 timing observations remain
+informational. The failed laptop effective-connection comparison and later
+successful offline artifact validation retain their distinct meanings.
+
+CK-V11316-014 is closed certified, making 14/15 findings closed. CK-V11316-015
+remains closed and CK-V11316-007 remains open. The distinct, unnumbered R1R27
+benchmark-provenance root retains separate ownership. Phase 12 remains
+Next/PLAN, a successful final independent technical-closure audit has not been
+established, v1.x technical correctness closure remains withheld, and Phase 13
+is unauthorized. The documentation-only closure head requires fresh hosted
+certification; its run identities are reported externally without another
+repository commit.
+
+Authority: [Phase 12R1R32 CK-V11316-014 hosted-evidence reconciliation](v1.13.16-phase12r1r32-ck014-hosted-evidence-reconciliation.md).
