@@ -74,7 +74,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 12 CK-V11316-014 closure state
+### Current Phase 12 CK-V11316-015 lookup-error remediation state
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 8 implementation and certification are complete at executable/evidence
@@ -126,8 +126,8 @@ retry occurred.
 CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
 CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-013,
-plus CK-V11316-014 and CK-V11316-015, are closed certified; CK-V11316-007
-remains open. Findings are 15 confirmed and 14/15 closed. Phase 9, Phase 10,
+plus CK-V11316-014, are closed certified; CK-V11316-007 and CK-V11316-015
+are open. Findings are 15 confirmed and 13/15 closed. Phase 9, Phase 10,
 and Phase 11 are Complete. Phase 10R1
 successfully corrected CK-V11316-012's refcount fixture and proved the final
 13/13 plain and AES concurrency selectors with zero skips, then the fresh
@@ -835,3 +835,19 @@ certification; its run identities are reported externally without another
 repository commit.
 
 Authority: [Phase 12R1R32 CK-V11316-014 hosted-evidence reconciliation](v1.13.16-phase12r1r32-ck014-hosted-evidence-reconciliation.md).
+
+## Phase 12R1R34 CK-V11316-015 lookup-error remediation
+
+[Phase 12R1R34](v1.13.16-phase12r1r34-ck015-initial-lookup-error-propagation.md)
+preserves R1R33's failed independent technical-audit verdict and classifies a
+newly confirmed initial completed-object lookup error path as an original
+CK-V11316-015 interception-boundary omission. A transient non-`ErrNoRows`
+lookup or `Scan` error can currently be mistaken for an inapplicable repair
+interceptor and reach the destructive legacy fallback after database recovery.
+
+CK-V11316-015 is reopened; CK-V11316-014 remains closed certified,
+CK-V11316-007 remains open, and findings remain 15 confirmed with 13/15
+closed. R1R34 authorizes only the frozen two-test-file RED harness, the
+one-file decision reorder, local attached/fresh-detached certification, and
+the eight-document evidence commit. Push, hosted certification, closure,
+Phase 12 completion, and Phase 13 remain unauthorized.
