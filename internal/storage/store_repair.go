@@ -203,11 +203,14 @@ func tryRepairCompletedLogicalFile(
 		`SELECT id, status FROM logical_file WHERE file_hash = $1 AND total_size = $2`,
 		prepared.LogicalHash, prepared.SizeBytes,
 	).Scan(&fileID, &status)
-	if errors.Is(err, sql.ErrNoRows) || status != filestate.LogicalFileCompleted {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, StoreFileResult{}, nil
 	}
 	if err != nil {
 		return true, StoreFileResult{}, err
+	}
+	if status != filestate.LogicalFileCompleted {
+		return false, StoreFileResult{}, nil
 	}
 
 	lock := completedRepairLock(fileID)
