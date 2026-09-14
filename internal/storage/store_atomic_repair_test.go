@@ -177,12 +177,7 @@ func (conn *ckV11316015Conn) QueryContext(ctx context.Context, query string, arg
 	if queryer, ok := conn.Conn.(driver.QueryerContext); ok {
 		return queryer.QueryContext(ctx, query, args)
 	}
-	stmt, err := conn.Conn.Prepare(query)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = stmt.Close() }()
-	return stmt.Query(ckV11316015NamedValues(args))
+	return nil, driver.ErrSkip
 }
 
 func (conn *ckV11316015Conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
@@ -190,26 +185,21 @@ func (conn *ckV11316015Conn) ExecContext(ctx context.Context, query string, args
 	if execer, ok := conn.Conn.(driver.ExecerContext); ok {
 		return execer.ExecContext(ctx, query, args)
 	}
-	stmt, err := conn.Conn.Prepare(query)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = stmt.Close() }()
-	return stmt.Exec(ckV11316015NamedValues(args))
+	return nil, driver.ErrSkip
 }
 
 func (conn *ckV11316015Conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	if preparer, ok := conn.Conn.(driver.ConnPrepareContext); ok {
 		return preparer.PrepareContext(ctx, query)
 	}
-	return conn.Conn.Prepare(query)
+	return conn.Prepare(query)
 }
 
 func (conn *ckV11316015Conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	if beginner, ok := conn.Conn.(driver.ConnBeginTx); ok {
 		return beginner.BeginTx(ctx, opts)
 	}
-	return conn.Conn.Begin()
+	return nil, fmt.Errorf("CK-V11316-015 lookup wrapper requires driver.ConnBeginTx")
 }
 
 func (conn *ckV11316015Conn) Ping(ctx context.Context) error {
@@ -238,14 +228,6 @@ func (conn *ckV11316015Conn) CheckNamedValue(value *driver.NamedValue) error {
 		return checker.CheckNamedValue(value)
 	}
 	return driver.ErrSkip
-}
-
-func ckV11316015NamedValues(values []driver.NamedValue) []driver.Value {
-	result := make([]driver.Value, len(values))
-	for index := range values {
-		result[index] = values[index].Value
-	}
-	return result
 }
 
 func TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite(t *testing.T) {
