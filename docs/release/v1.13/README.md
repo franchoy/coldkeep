@@ -872,3 +872,21 @@ open, findings remain 15 confirmed and 13/15 closed, and no push or hosted run
 is authorized.
 
 Authority: [Phase 12R1R38 CK-015 hosted named-proof wiring recovery](v1.13.16-phase12r1r38-ck015-hosted-named-proof-wiring-recovery.md).
+
+## Phase 12R1R39 CK-015 proof-enforcement gap correction
+
+Repository-native review of candidate `236a6198...` confirmed that the current
+audit accepts sixteen isolated mutations disabling CK-015 stale refusal,
+evidence completeness, immediate pipeline-status capture, or Go-failure
+propagation. R1R39 authorizes one nine-document authority commit followed by
+one two-file audit/test correction commit. The runtime workflow, Profile A
+checklist, event checker/profiles, product source, and storage tests remain
+byte-frozen.
+
+The Build adds active bounded wrapper-grammar enforcement, exact negative
+mutations, and paired synthetic success/missing-record behavior for all four
+wrapper forms. It does not add a finding or authorize a storage/database proof
+cycle, push, hosted run, finding closure, Phase 12 completion, or Phase 13.
+CK-V11316-015 remains open; findings remain 15 confirmed and 13/15 closed.
+
+Authority: [Phase 12R1R39 CK-015 proof-enforcement gap correction](v1.13.16-phase12r1r39-ck015-proof-enforcement-gap-correction.md).
