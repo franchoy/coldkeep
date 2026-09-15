@@ -1978,7 +1978,7 @@ func TestAuditCIEnforcementRequiresCK015NamedProofWiring(t *testing.T) {
 			wantMessage: "CK-015 PostgreSQL hosted wrapper preserves status-record write status",
 		},
 		{
-			name: "hosted partial CK015 evidence despite unrelated glob match", source: "workflow",
+			name: "hosted SQLite readability predicate weakened", source: "workflow",
 			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
 			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
 			wantMessage: "CK-015 SQLite hosted wrapper requires every invocation record to be readable and regular",
@@ -2100,7 +2100,7 @@ func TestAuditCIEnforcementRequiresCK015NamedProofWiring(t *testing.T) {
 			wantMessage: "local CK-015 SQLite wrapper preserves status-record write status",
 		},
 		{
-			name: "local SQLite evidence completeness removed", source: "checklist",
+			name: "local SQLite readability predicate weakened", source: "checklist",
 			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
 			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
 			wantMessage: "local CK-015 SQLite wrapper requires every invocation record to be readable and regular",
@@ -2190,7 +2190,7 @@ func TestAuditCIEnforcementRequiresCK015NamedProofWiring(t *testing.T) {
 			wantMessage: "local CK-015 PostgreSQL wrapper preserves status-record write status",
 		},
 		{
-			name: "local PostgreSQL evidence completeness removed", source: "checklist",
+			name: "local PostgreSQL readability predicate weakened", source: "checklist",
 			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
 			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
 			wantMessage: "local CK-015 PostgreSQL wrapper requires every invocation record to be readable and regular",
@@ -2237,6 +2237,578 @@ func TestAuditCIEnforcementRequiresCK015NamedProofWiring(t *testing.T) {
 				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
 			}
 		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015ABCDMutationMatrix(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	type wrapperFixture struct {
+		name, source, anchor, indent string
+	}
+	wrappers := []wrapperFixture{
+		{"hosted SQLite", "workflow", "      - name: Run CK-015 SQLite initial-lookup proofs\n", "          "},
+		{"hosted PostgreSQL", "workflow", "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n", "          "},
+		{"local SQLite", "checklist", "# CK-V11316-015 SQLite initial-lookup named proof.\n", ""},
+		{"local PostgreSQL", "checklist", "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n", ""},
+	}
+
+	for _, wrapper := range wrappers {
+		wrapper := wrapper
+		mutations := []struct {
+			name, old, replacement, wantMessage string
+		}{
+			{
+				"A completeness omits Go stderr",
+				"evidence_status=0\n" + wrapper.indent + "for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do",
+				"evidence_status=0\n" + wrapper.indent + "for target in \"$json_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do",
+				"active completeness gate must enumerate exactly six invocation records",
+			},
+			{
+				"B Go failure returns zero",
+				"if [ \"$go_status\" -ne 0 ]; then\n" + wrapper.indent + "  status=$go_status",
+				"if [ \"$go_status\" -ne 0 ]; then\n" + wrapper.indent + "  status=0",
+				"failure precedence must propagate Go, capture, checker, status-write, and evidence statuses",
+			},
+			{
+				"C delayed PIPESTATUS snapshot",
+				"pipeline_status=(\"${PIPESTATUS[@]}\")",
+				"printf 'fixture diagnostic\\n' | cat\n" + wrapper.indent + "pipeline_status=(\"${PIPESTATUS[@]}\")",
+				"PIPESTATUS snapshot must immediately follow the Go/tee pipeline",
+			},
+			{
+				"D stale check disabled",
+				"if [ -e \"$target\" ]; then",
+				"if false; then",
+				"active stale-target gate must enumerate six records and reject existing targets",
+			},
+		}
+		for _, mutation := range mutations {
+			mutation := mutation
+			t.Run(wrapper.name+"/"+mutation.name, func(t *testing.T) {
+				source := workflow
+				if wrapper.source == "checklist" {
+					source = checklist
+				}
+				anchorIndex := strings.Index(source, wrapper.anchor)
+				if anchorIndex < 0 {
+					t.Fatalf("source fixture did not contain anchor %q", wrapper.anchor)
+				}
+				targetOffset := strings.Index(source[anchorIndex:], mutation.old)
+				if targetOffset < 0 {
+					t.Fatalf("source fixture did not contain mutation target %q", mutation.old)
+				}
+				targetIndex := anchorIndex + targetOffset
+				mutated := source[:targetIndex] + mutation.replacement + source[targetIndex+len(mutation.old):]
+				var stderr string
+				if wrapper.source == "workflow" {
+					stderr = runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+				} else {
+					stderr = runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
+				}
+				if !strings.Contains(stderr, mutation.wantMessage) {
+					t.Fatalf("expected %q, got:\n%s", mutation.wantMessage, stderr)
+				}
+			})
+		}
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015ActiveBoundedGrammar(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+
+	tests := []struct {
+		name        string
+		source      string
+		anchor      string
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		{
+			name: "hosted SQLite critical region in inactive branch", source: "workflow",
+			anchor:      "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:         "          go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \\\n            -run \"$selector\" 2>\"$go_stderr_file\" | tee \"$json_file\"\n          pipeline_status=(\"${PIPESTATUS[@]}\")\n          go_status=${pipeline_status[0]}\n          capture_status=${pipeline_status[1]}",
+			replacement: "          if false; then\n            go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \\\n              -run \"$selector\" 2>\"$go_stderr_file\" | tee \"$json_file\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n            go_status=${pipeline_status[0]}\n            capture_status=${pipeline_status[1]}\n          fi",
+			wantMessage: "critical proof regions must not be hidden in an inactive branch",
+		},
+		{
+			name: "hosted PostgreSQL stale gate in quoted decoy", source: "workflow",
+			anchor:      "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:         "          for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do\n            if [ -e \"$target\" ]; then\n              echo \"refusing to reuse CK-015 PostgreSQL evidence path: $target\" >&2\n              exit 1\n            fi\n          done",
+			replacement: "          : '\n          for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do\n            if [ -e \"$target\" ]; then\n              echo \"refusing to reuse CK-015 PostgreSQL evidence path: $target\" >&2\n              exit 1\n            fi\n          done\n          '",
+			wantMessage: "active completeness gate must enumerate exactly six invocation records",
+		},
+		{
+			name: "hosted SQLite duplicate checker decoy", source: "workflow",
+			anchor:      "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:         "          python3 scripts/check_required_test_events.py \\\n            --profile \"$profile\" \\\n            --events \"$json_file\" \\\n            >\"$checker_stdout_file\" 2>\"$checker_stderr_file\"",
+			replacement: "          python3 scripts/check_required_test_events.py \\\n            --profile \"$profile\" \\\n            --events \"$json_file\" \\\n            >\"$checker_stdout_file\" 2>\"$checker_stderr_file\"\n          python3 scripts/check_required_test_events.py \\\n            --profile \"$profile\" \\\n            --events \"$json_file\" \\\n            >\"$checker_stdout_file\" 2>\"$checker_stderr_file\"",
+			wantMessage: "required-event checker invocation must occur exactly once at active top level",
+		},
+		{
+			name: "hosted PostgreSQL critical regions reordered", source: "workflow",
+			anchor:      "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:         "          printf '%s\\n' \\\n            \"go_status=$go_status\" \\\n            \"capture_status=$capture_status\" \\\n            \"checker_status=$checker_status\" \\\n            'status_record_write_status=0' >\"$status_file\"\n          status_record_write_status=$?\n\n          evidence_status=0",
+			replacement: "          evidence_status=0\n          printf '%s\\n' \\\n            \"go_status=$go_status\" \\\n            \"capture_status=$capture_status\" \\\n            \"checker_status=$checker_status\" \\\n            'status_record_write_status=0' >\"$status_file\"\n          status_record_write_status=$?",
+			wantMessage: "critical proof regions must remain unique and in execution order",
+		},
+		{
+			name: "local SQLite stale gate in never-called function", source: "checklist",
+			anchor:      "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:         "for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do\n  if [ -e \"$target\" ]; then\n    echo \"refusing to reuse CK-015 SQLite evidence path: $target\" >&2\n    exit 1\n  fi\ndone",
+			replacement: "ck015_decoy() {\n  for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do\n    if [ -e \"$target\" ]; then\n      echo \"refusing to reuse CK-015 SQLite evidence path: $target\" >&2\n      exit 1\n    fi\n  done\n}",
+			wantMessage: "critical proof regions must not be hidden in a function",
+		},
+		{
+			name: "local PostgreSQL duplicate evidence initialization", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "evidence_status=0", replacement: "evidence_status=0\nevidence_status=0",
+			wantMessage: "evidence status initialization must occur exactly once at active top level",
+		},
+		{
+			name: "local SQLite status reset after precedence", source: "checklist",
+			anchor:      "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:         "fi\nset -e\nif [ \"$status\" -ne 0 ]; then",
+			replacement: "fi\nstatus=0\nset -e\nif [ \"$status\" -ne 0 ]; then",
+			wantMessage: "computed failure status must not be reset after the precedence chain",
+		},
+		{
+			name: "local PostgreSQL failure return weakened", source: "checklist",
+			anchor:      "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:         "  exit \"$status\"\nfi",
+			replacement: "  return 0\nfi",
+			wantMessage: "local wrapper must restore errexit, exit on failure, and fall through on success",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var source string
+			switch test.source {
+			case "workflow":
+				source = workflow
+			case "checklist":
+				source = checklist
+			default:
+				t.Fatalf("unknown source %q", test.source)
+			}
+			anchorIndex := strings.Index(source, test.anchor)
+			if anchorIndex < 0 {
+				t.Fatalf("source fixture did not contain anchor %q", test.anchor)
+			}
+			targetOffset := strings.Index(source[anchorIndex:], test.old)
+			if targetOffset < 0 {
+				t.Fatalf("source fixture did not contain mutation target after anchor: %q", test.old)
+			}
+			targetIndex := anchorIndex + targetOffset
+			mutated := source[:targetIndex] + test.replacement + source[targetIndex+len(test.old):]
+
+			var stderr string
+			if test.source == "workflow" {
+				stderr = runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+			} else {
+				stderr = runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
+			}
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015SyntheticWrapperBehavior(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	wrapperCases := []struct {
+		name    string
+		kind    string
+		profile string
+		body    string
+	}{
+		{
+			name:    "hosted-sqlite",
+			kind:    "hosted",
+			profile: "ck015-initial-lookup-sqlite",
+			body:    extractCK015HostedRunBody(t, workflow, "Run CK-015 SQLite initial-lookup proofs", "Run CK-015 PostgreSQL lookup and preservation proofs"),
+		},
+		{
+			name:    "hosted-postgres",
+			kind:    "hosted",
+			profile: "ck015-initial-lookup-postgres",
+			body:    extractCK015HostedRunBody(t, workflow, "Run CK-015 PostgreSQL lookup and preservation proofs", "Run required PostgreSQL internal package contracts"),
+		},
+		{
+			name:    "local-sqlite",
+			kind:    "local",
+			profile: "ck015-initial-lookup-sqlite",
+			body:    extractCK015LocalBody(t, checklist, "# CK-V11316-015 SQLite initial-lookup named proof.", "# CK-V11316-015 PostgreSQL lookup and preservation named proof."),
+		},
+		{
+			name:    "local-postgres",
+			kind:    "local",
+			profile: "ck015-initial-lookup-postgres",
+			body:    extractCK015LocalBody(t, checklist, "# CK-V11316-015 PostgreSQL lookup and preservation named proof.", "# Step 3 loop leaves COLDKEEP_CODEC"),
+		},
+	}
+
+	for _, wrapperCase := range wrapperCases {
+		wrapperCase := wrapperCase
+		for _, fault := range []bool{false, true} {
+			fault := fault
+			caseName := "success"
+			if fault {
+				caseName = "missing-go-stderr"
+			}
+			t.Run(wrapperCase.name+"/"+caseName, func(t *testing.T) {
+				runCK015SyntheticWrapperCase(t, wrapperCase.name, wrapperCase.kind, wrapperCase.profile, wrapperCase.body, fault)
+			})
+		}
+	}
+}
+
+func extractCK015HostedRunBody(t *testing.T, workflow, stepName, nextStepName string) string {
+	t.Helper()
+	startMarker := "      - name: " + stepName + "\n"
+	start := strings.Index(workflow, startMarker)
+	if start < 0 {
+		t.Fatalf("missing hosted wrapper step %q", stepName)
+	}
+	endMarker := "      - name: " + nextStepName + "\n"
+	endOffset := strings.Index(workflow[start+len(startMarker):], endMarker)
+	if endOffset < 0 {
+		t.Fatalf("missing hosted wrapper terminator %q", nextStepName)
+	}
+	step := workflow[start : start+len(startMarker)+endOffset]
+	runMarker := "        run: |\n"
+	runOffset := strings.Index(step, runMarker)
+	if runOffset < 0 {
+		t.Fatalf("hosted wrapper %q has no run body", stepName)
+	}
+	lines := strings.Split(step[runOffset+len(runMarker):], "\n")
+	for index, line := range lines {
+		if strings.HasPrefix(line, "          ") {
+			lines[index] = strings.TrimPrefix(line, "          ")
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
+}
+
+func extractCK015LocalBody(t *testing.T, checklist, startMarker, endMarker string) string {
+	t.Helper()
+	start := strings.Index(checklist, startMarker)
+	if start < 0 {
+		t.Fatalf("missing local wrapper marker %q", startMarker)
+	}
+	endOffset := strings.Index(checklist[start+len(startMarker):], endMarker)
+	if endOffset < 0 {
+		t.Fatalf("missing local wrapper terminator %q", endMarker)
+	}
+	return strings.TrimSpace(checklist[start:start+len(startMarker)+endOffset]) + "\n"
+}
+
+func runCK015SyntheticWrapperCase(t *testing.T, name, kind, profile, body string, fault bool) {
+	t.Helper()
+	caseRoot := t.TempDir()
+	stubDir := filepath.Join(caseRoot, "stubs")
+	if err := os.Mkdir(stubDir, 0o700); err != nil {
+		t.Fatalf("create stub directory: %v", err)
+	}
+	writeExecutableFixture(t, filepath.Join(stubDir, "go"), `#!/usr/bin/env bash
+set -eu
+if [ "$#" -eq 1 ] && [ "$1" = version ]; then
+  printf '%s\n' 'go version go1.26.7 linux/amd64'
+  exit 0
+fi
+if [ "$#" -ne 9 ] || [ "$1" != test ] || [ "$2" != -race ] || [ "$3" != -count=1 ] || [ "$4" != -p=1 ] || [ "$5" != -parallel=1 ] || [ "$6" != -json ] || [ "$7" != ./internal/storage ] || [ "$8" != -run ]; then
+  printf 'unexpected synthetic go invocation:' >&2
+  printf ' <%s>' "$@" >&2
+  printf '\n' >&2
+  exit 97
+fi
+if [ "$9" != "$CK015_EXPECTED_SELECTOR" ]; then
+  printf 'unexpected CK-015 selector: %s\n' "$9" >&2
+  exit 98
+fi
+package=github.com/franchoy/coldkeep/internal/storage
+printf '{"Action":"start","Package":"%s"}\n' "$package"
+case "$CK015_EXPECTED_PROFILE" in
+  ck015-initial-lookup-sqlite)
+    test_names='TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite
+TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite
+TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite
+TestCKV11316015InitialLookupSupportedStatusRoutingSQLite
+TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/completed
+TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/aborted
+TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/processing'
+    ;;
+  ck015-initial-lookup-postgres)
+    test_names='TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback
+TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery
+TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation
+TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication
+TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies'
+    ;;
+  *) printf 'unexpected CK-015 profile: %s\n' "$CK015_EXPECTED_PROFILE" >&2; exit 99 ;;
+esac
+for test_name in $test_names
+do
+  printf '{"Action":"run","Package":"%s","Test":"%s"}\n' "$package" "$test_name"
+  printf '{"Action":"pass","Package":"%s","Test":"%s"}\n' "$package" "$test_name"
+done
+printf '{"Action":"pass","Package":"%s"}\n' "$package"
+`)
+	writeExecutableFixture(t, filepath.Join(stubDir, "python3"), `#!/usr/bin/env bash
+set +e
+if [ "$#" -lt 1 ] || [ "$1" != scripts/check_required_test_events.py ]; then
+  printf 'unexpected synthetic python3 invocation\n' >&2
+  exit 96
+fi
+/usr/bin/python3 "$@"
+checker_status=$?
+if [ "$checker_status" -eq 0 ] && [ "${CK015_DELETE_GO_STDERR:-0}" -eq 1 ]; then
+  events_file=
+  previous=
+  for argument in "$@"; do
+    if [ "$previous" = --events ]; then
+      events_file=$argument
+      break
+    fi
+    previous=$argument
+  done
+  if [ -z "$events_file" ]; then
+    printf 'synthetic python3 stub did not receive --events\n' >&2
+    exit 95
+  fi
+  /bin/rm -f -- "${events_file%.json}.go.stderr"
+fi
+exit "$checker_status"
+`)
+	writeExecutableFixture(t, filepath.Join(stubDir, "git"), `#!/usr/bin/env bash
+set -eu
+if [ "$#" -eq 2 ] && [ "$1" = rev-parse ] && [ "$2" = HEAD ]; then
+  printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+  exit 0
+fi
+printf 'unexpected synthetic git invocation\n' >&2
+exit 94
+`)
+
+	diagDir := filepath.Join(caseRoot, "integration-diag")
+	profileRoot := filepath.Join(caseRoot, "profile-a")
+	if kind == "local" {
+		diagDir = filepath.Join(profileRoot, "required-test-events")
+	}
+	if err := os.MkdirAll(diagDir, 0o700); err != nil {
+		t.Fatalf("create diagnostic directory: %v", err)
+	}
+	unrelatedPath := filepath.Join(diagDir, "unrelated-diagnostic.txt")
+	if err := os.WriteFile(unrelatedPath, []byte("must remain\n"), 0o600); err != nil {
+		t.Fatalf("write unrelated evidence: %v", err)
+	}
+	continuationPath := filepath.Join(caseRoot, "continued")
+	script := "#!/usr/bin/env bash\nset -euo pipefail\n" + body
+	if kind == "local" {
+		script += "printf 'continued\\n' >\"$CK015_CONTINUATION_FILE\"\n"
+	}
+	scriptPath := filepath.Join(caseRoot, "wrapper.sh")
+	writeExecutableFixture(t, scriptPath, script)
+
+	cmd := exec.Command("/bin/bash", scriptPath)
+	cmd.Dir = repoRoot(t)
+	deleteValue := "0"
+	if fault {
+		deleteValue = "1"
+	}
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir+":"+os.Getenv("PATH"),
+		"GOTOOLCHAIN=local",
+		"RUNNER_TEMP="+caseRoot,
+		"GITHUB_SHA=0123456789abcdef0123456789abcdef01234567",
+		"GITHUB_RUN_ID=39001",
+		"GITHUB_RUN_ATTEMPT=1",
+		"GITHUB_JOB=synthetic-"+name,
+		"GITHUB_REPOSITORY=franchoy/coldkeep",
+		"GITHUB_REF=refs/heads/release/v1.13.16",
+		"COLDKEEP_PROFILE_A_EVIDENCE_DIR="+profileRoot,
+		"CK015_CONTINUATION_FILE="+continuationPath,
+		"CK015_DELETE_GO_STDERR="+deleteValue,
+		"CK015_EXPECTED_PROFILE="+profile,
+		"CK015_EXPECTED_SELECTOR="+ck015SyntheticSelector(t, profile),
+		"DB_HOST=127.0.0.1",
+		"DB_PORT=5432",
+		"DB_USER=coldkeep",
+		"DB_PASSWORD=coldkeep",
+		"DB_NAME=coldkeep",
+		"DB_SSLMODE=disable",
+	)
+	outputPath := filepath.Join(caseRoot, "combined-output.txt")
+	outputFile, openErr := os.OpenFile(outputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if openErr != nil {
+		t.Fatalf("create streaming output record: %v", openErr)
+	}
+	cmd.Stdout = outputFile
+	cmd.Stderr = outputFile
+	err := cmd.Run()
+	if syncErr := outputFile.Sync(); syncErr != nil {
+		t.Fatalf("sync streaming output record: %v", syncErr)
+	}
+	if closeErr := outputFile.Close(); closeErr != nil {
+		t.Fatalf("close streaming output record: %v", closeErr)
+	}
+	outputBytes, readErr := os.ReadFile(outputPath)
+	if readErr != nil {
+		t.Fatalf("read streaming output record: %v", readErr)
+	}
+	output := string(outputBytes)
+	if fault && err == nil {
+		t.Fatalf("missing-record wrapper unexpectedly succeeded:\n%s", output)
+	}
+	if !fault && err != nil {
+		t.Fatalf("success wrapper failed: %v\n%s", err, output)
+	}
+
+	statusMatches, globErr := filepath.Glob(filepath.Join(diagDir, "*.status"))
+	if globErr != nil || len(statusMatches) != 1 {
+		t.Fatalf("expected one status record, matches=%v err=%v output=%s", statusMatches, globErr, output)
+	}
+	prefix := strings.TrimSuffix(statusMatches[0], ".status")
+	records := []string{
+		prefix + ".json",
+		prefix + ".go.stderr",
+		prefix + ".checker.stdout",
+		prefix + ".checker.stderr",
+		prefix + ".status",
+		prefix + ".metadata",
+	}
+	for index, record := range records {
+		_, statErr := os.Stat(record)
+		if fault && index == 1 {
+			if !os.IsNotExist(statErr) {
+				t.Fatalf("fault case retained deleted Go stderr record %q: %v", record, statErr)
+			}
+			continue
+		}
+		if statErr != nil {
+			t.Fatalf("required synthetic record missing %q: %v", record, statErr)
+		}
+	}
+	statusRecord := readFixturePath(t, prefix+".status")
+	for _, expected := range []string{"go_status=0", "capture_status=0", "checker_status=0", "status_record_write_status=0"} {
+		if !strings.Contains(statusRecord, expected+"\n") {
+			t.Fatalf("status record lacks %q:\n%s", expected, statusRecord)
+		}
+	}
+	if !strings.Contains(readFixturePath(t, prefix+".checker.stdout"), "required execution-proof pass: profile="+profile) {
+		t.Fatalf("genuine checker success was not retained")
+	}
+	if _, statErr := os.Stat(unrelatedPath); statErr != nil {
+		t.Fatalf("unrelated diagnostic evidence was not retained: %v", statErr)
+	}
+	if fault && !strings.Contains(output, "missing or unreadable CK-015") {
+		t.Fatalf("fault did not identify missing invocation record:\n%s", output)
+	}
+	if kind == "local" {
+		_, continuationErr := os.Stat(continuationPath)
+		if fault && !os.IsNotExist(continuationErr) {
+			t.Fatalf("local fault reached continuation sentinel: %v", continuationErr)
+		}
+		if !fault && continuationErr != nil {
+			t.Fatalf("local success did not reach continuation sentinel: %v", continuationErr)
+		}
+	}
+
+	outcome := "success"
+	if fault {
+		outcome = "missing-go-stderr-rejected"
+	}
+	injectionAction := "none"
+	if fault {
+		injectionAction = "deleted-after-genuine-checker-success:" + prefix + ".go.stderr"
+	}
+	if writeErr := os.WriteFile(filepath.Join(caseRoot, "injection-trace.txt"), []byte(injectionAction+"\n"), 0o600); writeErr != nil {
+		t.Fatalf("retain injection trace: %v", writeErr)
+	}
+	var inventory strings.Builder
+	for _, record := range records {
+		state := "present"
+		if _, statErr := os.Stat(record); os.IsNotExist(statErr) {
+			state = "missing"
+		}
+		fmt.Fprintf(&inventory, "%s\t%s\n", state, filepath.Base(record))
+	}
+	if writeErr := os.WriteFile(filepath.Join(caseRoot, "record-inventory.txt"), []byte(inventory.String()), 0o600); writeErr != nil {
+		t.Fatalf("retain record inventory: %v", writeErr)
+	}
+	result := fmt.Sprintf("wrapper=%s\nkind=%s\nprofile=%s\nfault=%t\noutcome=%s\nother_records=5\nstatus_values=0,0,0,0\nunrelated_evidence=retained\n", name, kind, profile, fault, outcome)
+	if writeErr := os.WriteFile(filepath.Join(caseRoot, "result.txt"), []byte(result), 0o600); writeErr != nil {
+		t.Fatalf("retain synthetic result: %v", writeErr)
+	}
+	if exportRoot := os.Getenv("COLDKEEP_CK015_BEHAVIOR_EVIDENCE_DIR"); exportRoot != "" {
+		exportName := name + "-success"
+		if fault {
+			exportName = name + "-missing-go-stderr"
+		}
+		copyFixtureTree(t, caseRoot, filepath.Join(exportRoot, exportName))
+	}
+}
+
+func ck015SyntheticSelector(t *testing.T, profile string) string {
+	t.Helper()
+	switch profile {
+	case "ck015-initial-lookup-sqlite":
+		return "^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$"
+	case "ck015-initial-lookup-postgres":
+		return "^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$"
+	default:
+		t.Fatalf("unknown synthetic CK-015 profile %q", profile)
+		return ""
+	}
+}
+
+func writeExecutableFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+		t.Fatalf("write executable fixture %q: %v", path, err)
+	}
+}
+
+func readFixturePath(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture path %q: %v", path, err)
+	}
+	return string(content)
+}
+
+func copyFixtureTree(t *testing.T, sourceRoot, destinationRoot string) {
+	t.Helper()
+	if _, err := os.Stat(destinationRoot); !os.IsNotExist(err) {
+		t.Fatalf("refusing to replace synthetic evidence destination %q", destinationRoot)
+	}
+	if err := filepath.WalkDir(sourceRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(sourceRoot, path)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(destinationRoot, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o700)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destination, content, 0o600)
+	}); err != nil {
+		t.Fatalf("export synthetic evidence: %v", err)
 	}
 }
 

@@ -222,11 +222,311 @@ extract_step_block_from_content() {
   ' <<<"$content"
 }
 
+check_ck015_proof_wrapper_structure() {
+  local content="$1"
+  local label="$2"
+  local stale_message="$3"
+  local wrapper_kind="$4"
+
+  CK015_WRAPPER_CONTENT="$content" \
+  CK015_WRAPPER_LABEL="$label" \
+  CK015_STALE_MESSAGE="$stale_message" \
+  CK015_WRAPPER_KIND="$wrapper_kind" \
+    python3 - <<'PY'
+import os
+import re
+import sys
+
+content = os.environ["CK015_WRAPPER_CONTENT"]
+label = os.environ["CK015_WRAPPER_LABEL"]
+stale_message = os.environ["CK015_STALE_MESSAGE"]
+kind = os.environ["CK015_WRAPPER_KIND"]
+errors: list[str] = []
+
+
+def error(message: str) -> None:
+    if message not in errors:
+        errors.append(message)
+
+
+if kind == "hosted":
+    marker = "        run: |\n"
+    if marker not in content:
+        error("missing hosted run body")
+        body = content
+    else:
+        body = content.split(marker, 1)[1]
+        body = "\n".join(
+            line[10:] if line.startswith("          ") else line
+            for line in body.splitlines()
+        )
+elif kind == "local":
+    body = content
+else:
+    error(f"unknown wrapper kind {kind!r}")
+    body = content
+
+six_records = (
+    '"$json_file" "$go_stderr_file" "$checker_stdout_file" '
+    '"$checker_stderr_file" "$status_file" "$metadata_file"'
+)
+
+# This is intentionally a bounded recognizer for these four frozen wrappers,
+# not a general shell parser. Reject constructs that could hide a matching
+# token stream in an inactive or separately scoped body.
+if re.search(r"(?m)^\s*(?:function\s+\w+|\w+\s*\(\)\s*\{)", body):
+    error("critical proof regions must not be hidden in a function")
+if re.search(r"(?m)^\s*(?:case|while|until)\b", body):
+    error("critical proof regions use unsupported conditional control flow")
+if re.search(r"<<[-]?\s*['\"]?[A-Za-z_]", body):
+    error("critical proof regions must not be hidden in a here-document")
+if re.search(r"(?m)^\s*(?:exit\s+0|return(?:\s+0)?)\s*$", body):
+    error("critical proof wrapper contains an early successful exit or return")
+if re.search(r"(?m)^\s*(?:if|elif)\s+(?:!\s+)?(?:false|\[\s+0\s+-eq\s+1\s+\]|\[\s+1\s+-eq\s+0\s+\])(?:\s*;)?\s*then\s*$", body):
+    error("critical proof regions must not be hidden in an inactive branch")
+
+lines = body.splitlines()
+depth = 0
+depths: list[int] = []
+quoted: list[bool] = []
+quote: str | None = None
+for line in lines:
+    stripped = line.strip()
+    quoted.append(quote is not None)
+    if re.match(r"^(?:fi|done|esac|})\b", stripped):
+        depth = max(0, depth - 1)
+    depths.append(depth)
+    if (
+        re.search(r"(?:;\s*)?then\s*$", stripped)
+        or re.search(r"(?:;\s*)?do\s*$", stripped)
+        or re.match(r"^case\b.*\bin\s*$", stripped)
+        or re.match(r"^(?:function\s+\w+|\w+\s*\(\)\s*\{)", stripped)
+    ):
+        depth += 1
+    escaped = False
+    for char in line:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            continue
+        if char == "'" and quote != '"':
+            quote = None if quote == "'" else "'"
+        elif char == '"' and quote != "'":
+            quote = None if quote == '"' else '"'
+
+
+def top_level_index(pattern: str, description: str) -> int:
+    matches = [
+        index
+        for index, line in enumerate(lines)
+        if re.search(pattern, line) and depths[index] == 0 and not quoted[index]
+    ]
+    if len(matches) != 1:
+        error(f"{description} must occur exactly once at active top level")
+        return len(lines) + 100
+    return matches[0]
+
+
+target_loop_matches = [
+    index
+    for index, line in enumerate(lines)
+    if line == f"for target in {six_records}; do" and depths[index] == 0 and not quoted[index]
+]
+if len(target_loop_matches) != 2:
+    error("active completeness gate must enumerate exactly six invocation records")
+    stale_index = len(lines) + 100
+    completeness_index = len(lines) + 101
+else:
+    stale_index, completeness_index = target_loop_matches
+
+metadata_index = top_level_index(r"^if ! printf '%s\\n' \\$", "metadata fail-closed gate")
+go_index = top_level_index(
+    r"^(?:GOTOOLCHAIN=local COLDKEEP_CODEC=plain )?go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage \\$",
+    "Go proof invocation",
+)
+pipe_index = top_level_index(
+    r'^pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)$',
+    "PIPESTATUS snapshot",
+)
+go_status_index = top_level_index(
+    r'^go_status=\$\{pipeline_status\[0\]\}$',
+    "Go status assignment",
+)
+capture_status_index = top_level_index(
+    r'^capture_status=\$\{pipeline_status\[1\]\}$',
+    "capture status assignment",
+)
+checker_index = top_level_index(
+    r"^python3 scripts/check_required_test_events\.py \\$",
+    "required-event checker invocation",
+)
+checker_status_index = top_level_index(r"^checker_status=\$\?$", "checker status assignment")
+status_record_index = top_level_index(r"^printf '%s\\n' \\$", "status-record write")
+status_write_index = top_level_index(
+    r"^status_record_write_status=\$\?$",
+    "status-record write status assignment",
+)
+evidence_index = top_level_index(r"^evidence_status=0$", "evidence status initialization")
+
+if len(target_loop_matches) == 2:
+    completeness_body = "\n".join(lines[completeness_index : completeness_index + 7])
+    if not re.search(
+        r'if \[ ! -f "\$target" \] \|\| \[ ! -r "\$target" \]; then\n'
+        r'.*missing or unreadable CK-015 .* evidence record: \$target.*\n'
+        r'\s*evidence_status=1\n\s*fi\n\s*done',
+        completeness_body,
+    ):
+        error("active completeness gate must enumerate exactly six invocation records")
+
+status_integrity_index = top_level_index(
+    r'^if \[ "\$status_record_write_status" -eq 0 \]; then$',
+    "status-record consistency gate",
+)
+metadata_integrity_index = top_level_index(
+    r'^for expected in "candidate_sha=',
+    "metadata consistency gate",
+)
+precedence_index = top_level_index(r'^if \[ "\$go_status" -ne 0 \]; then$', "failure precedence")
+
+
+def active_region_line(start: int, end: int, pattern: str, expected_depth: int) -> bool:
+    return any(
+        re.search(pattern, lines[index])
+        and depths[index] == expected_depth
+        and not quoted[index]
+        for index in range(start, min(end, len(lines)))
+    )
+
+
+if not (
+    active_region_line(metadata_index, go_index, r'>"\$metadata_file"; then$', 0)
+    and active_region_line(metadata_index, go_index, r'^\s*echo "unable to write CK-015 .* metadata" >&2$', 1)
+    and active_region_line(metadata_index, go_index, r'^\s*exit 1$', 1)
+):
+    error("metadata write must fail closed in its active branch")
+
+if not (
+    active_region_line(status_integrity_index, metadata_integrity_index, r'^\s*for expected in "go_status=', 1)
+    and active_region_line(status_integrity_index, metadata_integrity_index, r'^\s*if ! grep -Fqx "\$expected" "\$status_file"; then$', 2)
+    and active_region_line(status_integrity_index, metadata_integrity_index, r'^\s*evidence_status=1$', 3)
+):
+    error("status-record consistency gate must be active and fail closed")
+
+if not (
+    active_region_line(metadata_integrity_index, precedence_index, r'^\s*if ! grep -Fqx "\$expected" "\$metadata_file"; then$', 1)
+    and active_region_line(metadata_integrity_index, precedence_index, r'^\s*evidence_status=1$', 2)
+):
+    error("metadata consistency gate must be active and fail closed")
+
+pipeline_region = "\n".join(lines[go_index : capture_status_index + 1])
+if not re.search(
+    r'go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage \\\n'
+    r'(?:.*\\\n)*\s*-run "\$selector" 2>"\$go_stderr_file" \| tee "\$json_file"\n'
+    r'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)\n'
+    r'go_status=\$\{pipeline_status\[0\]\}\n'
+    r'capture_status=\$\{pipeline_status\[1\]\}',
+    pipeline_region,
+):
+    error("PIPESTATUS snapshot must immediately follow the Go/tee pipeline")
+
+checker_region = "\n".join(lines[checker_index : checker_status_index + 1])
+if not re.search(
+    r'python3 scripts/check_required_test_events\.py \\\n'
+    r'\s*--profile "\$profile" \\\n'
+    r'\s*--events "\$json_file" \\\n'
+    r'\s*>"\$checker_stdout_file" 2>"\$checker_stderr_file"\n'
+    r'checker_status=\$\?',
+    checker_region,
+):
+    error("checker status snapshot must immediately follow the genuine checker")
+
+status_region = "\n".join(lines[status_record_index : status_write_index + 1])
+if not re.search(
+    r"printf '%s\\n' \\\n"
+    r'(?:\s*"(?:go_status|capture_status|checker_status)=\$[^\n]+" \\\n){3}'
+    r"\s*'status_record_write_status=0' >\"\$status_file\"\n"
+    r'status_record_write_status=\$\?',
+    status_region,
+):
+    error("status-record write status must immediately follow the genuine status write")
+
+precedence_region = "\n".join(lines[precedence_index : precedence_index + 12])
+if not re.search(
+    r'if \[ "\$go_status" -ne 0 \]; then\n\s*status=\$go_status\n'
+    r'elif \[ "\$capture_status" -ne 0 \]; then\n\s*status=\$capture_status\n'
+    r'elif \[ "\$checker_status" -ne 0 \]; then\n\s*status=\$checker_status\n'
+    r'elif \[ "\$status_record_write_status" -ne 0 \]; then\n'
+    r'\s*status=\$status_record_write_status\nelse\n\s*status=\$evidence_status\nfi',
+    precedence_region,
+):
+    error("failure precedence must propagate Go, capture, checker, status-write, and evidence statuses")
+elif any(
+    re.match(r"^status=", line.strip())
+    for line in lines[precedence_index + 10 :]
+):
+    error("computed failure status must not be reset after the precedence chain")
+
+ordered = [
+    stale_index,
+    metadata_index,
+    go_index,
+    pipe_index,
+    go_status_index,
+    capture_status_index,
+    checker_index,
+    checker_status_index,
+    status_record_index,
+    status_write_index,
+    evidence_index,
+    completeness_index,
+    status_integrity_index,
+    metadata_integrity_index,
+    precedence_index,
+]
+if ordered != sorted(ordered) or len(set(ordered)) != len(ordered):
+    error("critical proof regions must remain unique and in execution order")
+
+stale_region = "\n".join(lines[stale_index : stale_index + 6])
+if not re.search(
+    rf'^for target in {re.escape(six_records)}; do\n'
+    rf'\s*if \[ -e "\$target" \]; then\n'
+    rf'\s*echo "{re.escape(stale_message)}: \$target" >&2\n'
+    r'\s*exit 1\n\s*fi\n\s*done$',
+    stale_region,
+):
+    error("active stale-target gate must enumerate six records and reject existing targets")
+
+nonblank = [line.strip() for line in lines if line.strip()]
+if kind == "hosted":
+    if not nonblank or nonblank[-1] != 'exit "$status"':
+        error("hosted wrapper must end with an unconditional propagated exit")
+elif kind == "local":
+    local_tail = "\n".join(lines[precedence_index:])
+    if not re.search(
+        r'fi\nset -e\nif \[ "\$status" -ne 0 \]; then\n'
+        r'(?:\s+.*\n)*?\s*exit "\$status"\nfi\s*$',
+        local_tail,
+    ):
+        error("local wrapper must restore errexit, exit on failure, and fall through on success")
+
+if errors:
+    for message in errors:
+        print(f"[audit] ERROR: {label} {message}", file=sys.stderr)
+    sys.exit(1)
+print(f"[audit] ok: {label} has active, unique, ordered fail-closed proof regions")
+PY
+}
+
 check_ck015_proof_wrapper() {
   local content="$1"
   local label="$2"
   local profile="$3"
   local stale_message="$4"
+  local wrapper_kind="$5"
+
+  check_ck015_proof_wrapper_structure "$content" "$label" "$stale_message" "$wrapper_kind" || check_status=1
 
   require_content_pattern "$content" 'go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage' "$label uses exact race/count/serialization/package flags" || check_status=1
   require_content_pattern "$content" "--profile (\"?\\\$profile\"?|$profile)" "$label selects exact checker profile" || check_status=1
@@ -1068,7 +1368,7 @@ check_local_workflow() {
 	    require_content_pattern "$ck015_sqlite_block" "run_id=\\\$GITHUB_RUN_ID" 'CK-015 SQLite metadata binds run ID' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" "run_attempt=\\\$GITHUB_RUN_ATTEMPT" 'CK-015 SQLite metadata binds run attempt' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" "job=\\\$GITHUB_JOB" 'CK-015 SQLite metadata binds job' || check_status=1
-	    check_ck015_proof_wrapper "$ck015_sqlite_block" 'CK-015 SQLite hosted wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path'
+	    check_ck015_proof_wrapper "$ck015_sqlite_block" 'CK-015 SQLite hosted wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path' hosted
 	  fi
 	  if [[ -z "$ck015_postgres_block" ]]; then
 	    echo "[audit] ERROR: missing CK-015 PostgreSQL named-proof step" >&2
@@ -1109,7 +1409,7 @@ check_local_workflow() {
 	    else
 	      echo "[audit] ok: CK-015 PostgreSQL proof makes no AES-key claim"
 	    fi
-	    check_ck015_proof_wrapper "$ck015_postgres_block" 'CK-015 PostgreSQL hosted wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path'
+	    check_ck015_proof_wrapper "$ck015_postgres_block" 'CK-015 PostgreSQL hosted wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' hosted
 	  fi
 	  ck014_position="$(grep -nF '      - name: Run CK-014 internal verification proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
 	  ck015_sqlite_position="$(grep -nF '      - name: Run CK-015 SQLite initial-lookup proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
@@ -1363,7 +1663,7 @@ check_local_workflow() {
     require_content_pattern "$ck015_sqlite_local_block" 'TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite' 'local CK-015 SQLite wrapper retains partial-Scan selector' || check_status=1
     require_content_pattern "$ck015_sqlite_local_block" 'TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite' 'local CK-015 SQLite wrapper retains no-row selector' || check_status=1
     require_content_pattern "$ck015_sqlite_local_block" 'unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'local CK-015 SQLite wrapper clears inherited settings' || check_status=1
-    check_ck015_proof_wrapper "$ck015_sqlite_local_block" 'local CK-015 SQLite wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path'
+    check_ck015_proof_wrapper "$ck015_sqlite_local_block" 'local CK-015 SQLite wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path' local
   fi
   if [[ -z "$ck015_postgres_local_block" ]]; then
     echo "[audit] ERROR: missing local Profile A CK-015 PostgreSQL wrapper" >&2
@@ -1387,7 +1687,7 @@ check_local_workflow() {
     require_content_pattern "$ck015_postgres_local_block" "^DB_PASSWORD=\"\\\$DB_PASSWORD\"" 'local CK-015 PostgreSQL wrapper preserves DB password input' || check_status=1
     require_content_pattern "$ck015_postgres_local_block" "^DB_NAME=\"\\\$DB_NAME\"" 'local CK-015 PostgreSQL wrapper preserves DB name' || check_status=1
     require_content_pattern "$ck015_postgres_local_block" "^DB_SSLMODE=\"\\\$DB_SSLMODE\"" 'local CK-015 PostgreSQL wrapper preserves DB SSL mode' || check_status=1
-    check_ck015_proof_wrapper "$ck015_postgres_local_block" 'local CK-015 PostgreSQL wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path'
+    check_ck015_proof_wrapper "$ck015_postgres_local_block" 'local CK-015 PostgreSQL wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' local
   fi
 
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
