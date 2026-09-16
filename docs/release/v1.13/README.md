@@ -890,3 +890,20 @@ cycle, push, hosted run, finding closure, Phase 12 completion, or Phase 13.
 CK-V11316-015 remains open; findings remain 15 confirmed and 13/15 closed.
 
 Authority: [Phase 12R1R39 CK-015 proof-enforcement gap correction](v1.13.16-phase12r1r39-ck015-proof-enforcement-gap-correction.md).
+
+## Phase 12R1R40 CK-015 status-lifetime enforcement correction
+
+Native confirmation at R1R39 candidate `f1a4bc0e...` proved that one unchanged
+control passes while eight isolated evidence/Go status-reset mutations still
+escape the audit. R1R40 authorizes one nine-document authority commit and one
+two-file audit/test commit. It freezes literal identities for the four complete
+hosted/local SQLite/PostgreSQL sections, preserves existing property
+diagnostics, and requires direct focused-suite exports for one positive plus 32
+correct rejections in each certification context.
+
+Runtime wrappers, workflow, checklist, checker/profiles, product and storage
+code/tests remain byte-frozen. No storage/database proof, push, hosted run,
+finding closure, Phase 12 completion, or Phase 13 follows. CK-V11316-015 stays
+open; findings remain 15 confirmed and 13/15 closed.
+
+Authority: [Phase 12R1R40 CK-015 status-lifetime enforcement correction](v1.13.16-phase12r1r40-ck015-status-lifetime-enforcement-correction.md).
