@@ -24,6 +24,9 @@ REPO=""
 LOCAL_ONLY=0
 REMOTE_ONLY=0
 PAIRED_LAUNCHER_FILE=""
+CK015_IDENTITY_PROBE_SLOT=""
+CK015_IDENTITY_PROBE_FILE=""
+CK015_IDENTITY_PROBE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,6 +53,16 @@ while [[ $# -gt 0 ]]; do
       fi
       PAIRED_LAUNCHER_FILE="$2"
       shift 2
+      ;;
+    --ck015-identity-probe)
+      if [[ $# -lt 3 ]]; then
+        echo "[audit] ERROR: --ck015-identity-probe requires a slot and body path" >&2
+        exit 2
+      fi
+      CK015_IDENTITY_PROBE_SLOT="$2"
+      CK015_IDENTITY_PROBE_FILE="$3"
+      CK015_IDENTITY_PROBE=1
+      shift 3
       ;;
     -h|--help)
       usage
@@ -141,6 +154,96 @@ require_executable_file() {
     echo "[audit] ERROR: $description must be an executable regular non-symlink file" >&2
     return 1
   fi
+}
+
+ck015_expected_wrapper_sha256() {
+  case "$1" in
+    hosted-sqlite) printf '%s\n' '3865079f0a221bc1ed0fe3ef6b6617214e6054944a849b09d2874cc705662aa8' ;;
+    hosted-postgres) printf '%s\n' '6a0567977980e428115791a843cc2a515bb8880429af309ac5f9f4d1f63a329f' ;;
+    local-sqlite) printf '%s\n' '4caf6517976adcd50eee7c416c679b4653086ac0a61fc1a10e48df74f7799357' ;;
+    local-postgres) printf '%s\n' '8d84858ae08bab569980bdc5e1b466168c9a4441507834770b3e6907eda31f89' ;;
+    *)
+      echo "[audit] ERROR: unknown CK-015 approved wrapper slot: $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+check_ck015_approved_wrapper_identity() {
+  local content="$1"
+  local label="$2"
+  local slot="$3"
+  local expected_sha256
+  local actual_sha256
+
+  if ! expected_sha256="$(ck015_expected_wrapper_sha256 "$slot")"; then
+    return 1
+  fi
+  if [[ ! "$expected_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[audit] ERROR: $label has invalid frozen approved wrapper identity" >&2
+    return 1
+  fi
+  actual_sha256="$(printf '%s' "$content" | sha256sum | awk '{print $1}')"
+  if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+    echo "[audit] ERROR: $label does not match frozen approved wrapper body (slot=$slot expected=$expected_sha256 actual=$actual_sha256)" >&2
+    return 1
+  fi
+  echo "[audit] ok: $label matches frozen approved wrapper body ($slot)"
+}
+
+extract_ck015_approved_interval() {
+  local file="$1"
+  local start_anchor="$2"
+  local end_anchor="$3"
+  local label="$4"
+
+  python3 - "$file" "$start_anchor" "$end_anchor" "$label" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+start = sys.argv[2].encode("utf-8") + b"\n"
+end = sys.argv[3].encode("utf-8") + b"\n"
+label = sys.argv[4]
+data = path.read_bytes()
+
+def fail(message: str) -> None:
+    print(f"[audit] ERROR: {label} {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+if b"\x00" in data:
+    fail("source contains a NUL byte")
+if b"\r" in data:
+    fail("source contains a CR byte")
+try:
+    data.decode("utf-8")
+except UnicodeDecodeError:
+    fail("source is not valid UTF-8")
+if data.count(start) != 1:
+    fail("start boundary must occur exactly once")
+if data.count(end) != 1:
+    fail("end boundary must occur exactly once")
+left = data.index(start)
+right = data.index(end)
+if left >= right:
+    fail("boundaries must be correctly ordered")
+interval = data[left:right]
+if not interval.strip():
+    fail("approved interval must not be empty")
+sys.stdout.buffer.write(interval)
+PY
+}
+
+require_ck015_extractor_agreement() {
+  local extracted="$1"
+  local authoritative="$2"
+  local label="$3"
+
+  if [[ "$extracted" != "$authoritative" ]]; then
+    echo "[audit] ERROR: $label extractor does not match the complete approved source interval" >&2
+    return 1
+  fi
+  echo "[audit] ok: $label extractor matches the complete approved source interval"
 }
 
 extract_job_block() {
@@ -525,7 +628,9 @@ check_ck015_proof_wrapper() {
   local profile="$3"
   local stale_message="$4"
   local wrapper_kind="$5"
+  local approved_slot="$6"
 
+  check_ck015_approved_wrapper_identity "$content" "$label" "$approved_slot" || check_status=1
   check_ck015_proof_wrapper_structure "$content" "$label" "$stale_message" "$wrapper_kind" || check_status=1
 
   require_content_pattern "$content" 'go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage' "$label uses exact race/count/serialization/package flags" || check_status=1
@@ -1346,6 +1451,18 @@ check_local_workflow() {
 	  fi
 	  ck015_sqlite_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run CK-015 SQLite initial-lookup proofs")"
 	  ck015_postgres_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run CK-015 PostgreSQL lookup and preservation proofs")"
+	  ck015_sqlite_interval=""
+	  ck015_postgres_interval=""
+	  if ! ck015_sqlite_interval="$(extract_ck015_approved_interval "$WORKFLOW_FILE" '      - name: Run CK-015 SQLite initial-lookup proofs' '      - name: Run CK-015 PostgreSQL lookup and preservation proofs' 'CK-015 SQLite hosted wrapper')"; then
+	    check_status=1
+	  else
+	    require_ck015_extractor_agreement "$ck015_sqlite_block" "$ck015_sqlite_interval" 'CK-015 SQLite hosted wrapper' || check_status=1
+	  fi
+	  if ! ck015_postgres_interval="$(extract_ck015_approved_interval "$WORKFLOW_FILE" '      - name: Run CK-015 PostgreSQL lookup and preservation proofs' '      - name: Run required PostgreSQL internal package contracts' 'CK-015 PostgreSQL hosted wrapper')"; then
+	    check_status=1
+	  else
+	    require_ck015_extractor_agreement "$ck015_postgres_block" "$ck015_postgres_interval" 'CK-015 PostgreSQL hosted wrapper' || check_status=1
+	  fi
 	  if [[ -z "$ck015_sqlite_block" ]]; then
 	    echo "[audit] ERROR: missing CK-015 SQLite named-proof step" >&2
 	    check_status=1
@@ -1368,7 +1485,7 @@ check_local_workflow() {
 	    require_content_pattern "$ck015_sqlite_block" "run_id=\\\$GITHUB_RUN_ID" 'CK-015 SQLite metadata binds run ID' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" "run_attempt=\\\$GITHUB_RUN_ATTEMPT" 'CK-015 SQLite metadata binds run attempt' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" "job=\\\$GITHUB_JOB" 'CK-015 SQLite metadata binds job' || check_status=1
-	    check_ck015_proof_wrapper "$ck015_sqlite_block" 'CK-015 SQLite hosted wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path' hosted
+	    check_ck015_proof_wrapper "$ck015_sqlite_block" 'CK-015 SQLite hosted wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path' hosted hosted-sqlite
 	  fi
 	  if [[ -z "$ck015_postgres_block" ]]; then
 	    echo "[audit] ERROR: missing CK-015 PostgreSQL named-proof step" >&2
@@ -1409,7 +1526,7 @@ check_local_workflow() {
 	    else
 	      echo "[audit] ok: CK-015 PostgreSQL proof makes no AES-key claim"
 	    fi
-	    check_ck015_proof_wrapper "$ck015_postgres_block" 'CK-015 PostgreSQL hosted wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' hosted
+	    check_ck015_proof_wrapper "$ck015_postgres_block" 'CK-015 PostgreSQL hosted wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' hosted hosted-postgres
 	  fi
 	  ck014_position="$(grep -nF '      - name: Run CK-014 internal verification proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
 	  ck015_sqlite_position="$(grep -nF '      - name: Run CK-015 SQLite initial-lookup proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
@@ -1652,6 +1769,18 @@ check_local_workflow() {
 
   ck015_sqlite_local_block="$(awk '/^# CK-V11316-015 SQLite initial-lookup named proof\.$/ { in_block = 1 } /^# CK-V11316-015 PostgreSQL lookup and preservation named proof\.$/ { if (in_block) exit } in_block { print }' "$PRE_RELEASE_CHECKLIST_FILE")"
   ck015_postgres_local_block="$(awk '/^# CK-V11316-015 PostgreSQL lookup and preservation named proof\.$/ { in_block = 1 } /^# Step 3 loop leaves COLDKEEP_CODEC/ { if (in_block) exit } in_block { print }' "$PRE_RELEASE_CHECKLIST_FILE")"
+  ck015_sqlite_local_interval=""
+  ck015_postgres_local_interval=""
+  if ! ck015_sqlite_local_interval="$(extract_ck015_approved_interval "$PRE_RELEASE_CHECKLIST_FILE" '# CK-V11316-015 SQLite initial-lookup named proof.' '# CK-V11316-015 PostgreSQL lookup and preservation named proof.' 'local CK-015 SQLite wrapper')"; then
+    check_status=1
+  else
+    require_ck015_extractor_agreement "$ck015_sqlite_local_block" "$ck015_sqlite_local_interval" 'local CK-015 SQLite wrapper' || check_status=1
+  fi
+  if ! ck015_postgres_local_interval="$(extract_ck015_approved_interval "$PRE_RELEASE_CHECKLIST_FILE" '# CK-V11316-015 PostgreSQL lookup and preservation named proof.' '# Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).' 'local CK-015 PostgreSQL wrapper')"; then
+    check_status=1
+  else
+    require_ck015_extractor_agreement "$ck015_postgres_local_block" "$ck015_postgres_local_interval" 'local CK-015 PostgreSQL wrapper' || check_status=1
+  fi
   if [[ -z "$ck015_sqlite_local_block" ]]; then
     echo "[audit] ERROR: missing local Profile A CK-015 SQLite wrapper" >&2
     check_status=1
@@ -1663,7 +1792,7 @@ check_local_workflow() {
     require_content_pattern "$ck015_sqlite_local_block" 'TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite' 'local CK-015 SQLite wrapper retains partial-Scan selector' || check_status=1
     require_content_pattern "$ck015_sqlite_local_block" 'TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite' 'local CK-015 SQLite wrapper retains no-row selector' || check_status=1
     require_content_pattern "$ck015_sqlite_local_block" 'unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'local CK-015 SQLite wrapper clears inherited settings' || check_status=1
-    check_ck015_proof_wrapper "$ck015_sqlite_local_block" 'local CK-015 SQLite wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path' local
+    check_ck015_proof_wrapper "$ck015_sqlite_local_block" 'local CK-015 SQLite wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path' local local-sqlite
   fi
   if [[ -z "$ck015_postgres_local_block" ]]; then
     echo "[audit] ERROR: missing local Profile A CK-015 PostgreSQL wrapper" >&2
@@ -1687,7 +1816,7 @@ check_local_workflow() {
     require_content_pattern "$ck015_postgres_local_block" "^DB_PASSWORD=\"\\\$DB_PASSWORD\"" 'local CK-015 PostgreSQL wrapper preserves DB password input' || check_status=1
     require_content_pattern "$ck015_postgres_local_block" "^DB_NAME=\"\\\$DB_NAME\"" 'local CK-015 PostgreSQL wrapper preserves DB name' || check_status=1
     require_content_pattern "$ck015_postgres_local_block" "^DB_SSLMODE=\"\\\$DB_SSLMODE\"" 'local CK-015 PostgreSQL wrapper preserves DB SSL mode' || check_status=1
-    check_ck015_proof_wrapper "$ck015_postgres_local_block" 'local CK-015 PostgreSQL wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' local
+    check_ck015_proof_wrapper "$ck015_postgres_local_block" 'local CK-015 PostgreSQL wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' local local-postgres
   fi
 
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
@@ -2096,6 +2225,16 @@ check_remote_policy() {
     fi
   fi
 }
+
+if [[ "$CK015_IDENTITY_PROBE" -eq 1 ]]; then
+  if [[ ! -f "$CK015_IDENTITY_PROBE_FILE" || -L "$CK015_IDENTITY_PROBE_FILE" ]]; then
+    echo "[audit] ERROR: CK-015 identity probe requires a regular non-symlink body file" >&2
+    exit 1
+  fi
+  ck015_identity_probe_content="$(<"$CK015_IDENTITY_PROBE_FILE")"
+  check_ck015_approved_wrapper_identity "$ck015_identity_probe_content" 'CK-015 identity probe' "$CK015_IDENTITY_PROBE_SLOT"
+  exit $?
+fi
 
 status=0
 
