@@ -2,6 +2,19 @@
 
 ## Status
 
+<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: NEXT
+CK-V11316-007: OPEN
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 14/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->
+
 coldkeep v1 is a correctness-first storage engine focused on
 data integrity, deterministic restore, explicit operator-visible
 failure handling, and read-only observability/simulation tooling
@@ -14,10 +27,12 @@ coordination. v1.13.15 is the published stable final planned v1.x release.
 Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
 attestation are immutable. v1.13.16 is the active exceptional
-critical-maintenance source train with seven confirmed findings and none
-closed. Planned v1 feature and architecture work remains closed and frozen;
-technical correctness closure is withheld pending the 20-phase maintenance
-plan. Existing security and crash-consistency limitations below are unchanged.
+critical-maintenance source train. Phase 12 technical correctness is
+established with 15 findings confirmed and 14/15 closed. CK-V11316-007 remains
+open for the Phase 13 documentation/process lifecycle, and v1.x full closure
+is not established. Planned v1 feature and architecture work remains closed
+and frozen. Existing security and crash-consistency limitations below are
+unchanged.
 
 v1.13.14 and v1.13.15 remain immutable historical release state. V2 planning
 review is authorized. V2 implementation has not started and requires a

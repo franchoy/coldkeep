@@ -1122,6 +1122,11 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 	return outputModeText
 }
 
+var startupRecoveryCommands = []string{
+	"store", "store-folder", "restore", "remove", "repair", "gc", "stats",
+	"inspect", "list", "search", "verify", "snapshot",
+}
+
 func shouldRunStartupRecovery(args []string) bool {
 	if len(args) == 0 {
 		return false
@@ -1131,14 +1136,14 @@ func shouldRunStartupRecovery(args []string) bool {
 			return false
 		}
 	}
-	switch args[0] {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot":
-		return true
-	default:
-		return false
+	for _, command := range startupRecoveryCommands {
+		if args[0] == command {
+			return true
+		}
 	}
+	return false
 }
 
 func exitErrorClassLabel(code int) string {
@@ -6583,7 +6588,7 @@ func printHelp() {
 	fmt.Println("  COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY (default: off)")
 	fmt.Println("    true/1/yes/on: suppress healthy startup recovery logs in text mode")
 	fmt.Println("    recovery logs still replay automatically when corrective actions/errors occur")
-	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, repair, gc, stats, list, search, verify, snapshot")
+	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: " + strings.Join(startupRecoveryCommands, ", ") + ", simulate gc")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
 	fmt.Println("  Doctor runs its own corrective recovery pass even if startup recovery already ran")
 	fmt.Println("  Batch JSON contract (restore/remove --output json): status=ok|partial_failure|error")

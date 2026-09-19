@@ -90,6 +90,9 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ### Current Phase 12 completion and Phase 13 boundary
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
+Phase 13A is complete with eight findings frozen externally. Phase 13R1 is the
+authorized local prerequisite Build; Phase 13B remains documentation-only and
+withheld pending owner acceptance and separately authorized hosted evidence.
 Phase 8 implementation and certification are complete at executable/evidence
 head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
 `1967df264919a908680db4bc2a3dbf1fa5f673da`,

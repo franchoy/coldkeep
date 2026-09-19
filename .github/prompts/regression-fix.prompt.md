@@ -1,5 +1,18 @@
 # Coldkeep Regression Fix Prompt
 
+<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: NEXT
+CK-V11316-007: OPEN
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 14/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->
+
 You are fixing a Coldkeep regression or correctness bug.
 
 Coldkeep is a correctness-first cold storage engine. The primary invariant is: never lose user data.
@@ -34,8 +47,10 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
-- v1.13.16 is the active exceptional critical-maintenance train with seven
-  Open findings and none fixed; follow its 20-phase plan and exact phase mode.
+- v1.13.16 is the active exceptional critical-maintenance train. Phase 12
+  technical correctness is established; CK-V11316-007 remains open for the
+  Phase 13 documentation/process lifecycle. Follow its 20-phase plan and exact
+  phase mode.
 - v1.13.15 remains published stable and immutable; planned v1 feature and
   architecture work remains closed and frozen.
 - Do not implement v2 or SQLite-first product-default behavior without a

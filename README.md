@@ -29,12 +29,25 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 ## Current release state
 
+<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: NEXT
+CK-V11316-007: OPEN
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 14/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->
+
 v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
-Closure is the active exceptional critical-maintenance source train. It has
-seven confirmed findings, zero closed findings, and Phase 2 Next. No product
-fix or release-readiness claim exists at Phase 1. Planned v1 feature and
-architecture work remains closed and frozen; technical correctness closure is
-withheld pending this maintenance train.
+Closure is the active exceptional critical-maintenance source train. Phase 12
+technical correctness is established with 15 findings confirmed and 14/15
+closed. CK-V11316-007 remains open for the Phase 13 documentation/process
+lifecycle, and v1.x full closure is not established. Planned v1 feature and
+architecture work remains closed and frozen.
 
 The latest published stable release remains v1.13.15. Its annotated tag object
 `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
@@ -48,12 +61,13 @@ requires a separate plan.
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_16: ACTIVE_EXCEPTIONAL_CRITICAL_MAINTENANCE
     RELEASE_STATE: DEVELOPMENT
-    PHASE_0: COMPLETE
-    PHASE_1: COMPLETE
-    PHASE_2: NEXT
-    FINDINGS_CONFIRMED: 7
-    FINDINGS_CLOSED: 0/7
-    V1_X_TECHNICAL_CORRECTNESS_CLOSURE: WITHHELD
+    PHASE_12: COMPLETE
+    PHASE_13: NEXT
+    FINDINGS_CONFIRMED: 15
+    FINDINGS_CLOSED: 14/15
+    CK_V11316_007: OPEN
+    V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+    V1_X_FULL_CLOSURE: NOT_ESTABLISHED
     V2_IMPLEMENTATION: NOT_STARTED
 
 ## Historical release-state narrative through v1.13.14
