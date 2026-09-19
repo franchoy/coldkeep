@@ -90,9 +90,11 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ### Current Phase 12 completion and Phase 13 boundary
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
-Phase 13A is complete with eight findings frozen externally. Phase 13R1 is the
-authorized local prerequisite Build; Phase 13B remains documentation-only and
-withheld pending owner acceptance and separately authorized hosted evidence.
+Phase 13A is complete with eight sub-findings frozen externally. Phase 13R1
+and its R1R1 test-harness recovery are complete and hosted-certified at exact
+head `49ce732d2742956e0f8a256458090cb7c2691c34`. Phase 13B is now the
+authorized documentation-only local Build; Phase 13C has not started and
+CK-V11316-007 remains open.
 Phase 8 implementation and certification are complete at executable/evidence
 head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
 `1967df264919a908680db4bc2a3dbf1fa5f673da`,
@@ -1018,3 +1020,21 @@ failures. Both contexts passed storage and complete hosted-quality race sweeps,
 issues, module verification, and the full 30-minute Go sweep. Production
 runtime delta remains none. No push, hosted execution, Phase 13B, or
 CK-V11316-007 closure is authorized.
+
+## Phase 13B documentation remediation authority
+
+[Phase 13B](v1.13.16-phase13a-audit-reconciliation-and-phase13b-remediation.md)
+accepts the retained Phase 13A eight-sub-finding register and the fresh
+Phase 13R1R1 hosted boundary. CI `35442074207` passed 36/36 with Required Gate
+job `105897391981`; CodeQL `35442074196` passed 4/4; all 40 exact-head checks
+passed and the release ref has zero open CodeQL alerts. The original failed
+Phase 13R1 CI `35436261398` remains preserved and was not rerun.
+
+The local Build is exactly three append-only commits with path counts 8/14/8.
+Commit 2 is limited to the fourteen documentation paths frozen by the Phase
+13A audit after DOC-005 and DOC-006's generated-help prerequisite were
+resolved by Phase 13R1. It may remediate all eight documentation sub-findings
+as candidates, but CK-V11316-007 remains open pending fresh hosted
+certification and the independent Phase 13C re-audit. No push, hosted run,
+Phase 13C execution, Phase 14 work, merge, tag, or release is authorized by
+this local Build.
