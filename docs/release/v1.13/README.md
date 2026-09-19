@@ -843,7 +843,8 @@ bound to observed PostgreSQL 16.14; the 36 timing observations remain
 informational. The failed laptop effective-connection comparison and later
 successful offline artifact validation retain their distinct meanings.
 
-CK-V11316-014 is closed certified, making 14/15 findings closed. CK-V11316-015
+At the historical R1R32 boundary, CK-V11316-014 was closed certified, making
+14/15 findings closed. CK-V11316-015
 remains closed and CK-V11316-007 remains open. The distinct, unnumbered R1R27
 benchmark-provenance root retains separate ownership. Phase 12 remains
 Next/PLAN, a successful final independent technical-closure audit has not been
@@ -854,9 +855,11 @@ repository commit.
 
 Authority: [Phase 12R1R32 CK-V11316-014 hosted-evidence reconciliation](v1.13.16-phase12r1r32-ck014-hosted-evidence-reconciliation.md).
 
-R1R42 now supersedes the earlier aggregate pointer: Phase 12 is Complete
+The historical R1R42 commit then superseded that aggregate pointer: Phase 12
+was Complete
 after the accepted final independent technical-closure audit, and Phase 13 is
-Next in PLAN mode. Phase 13A has not started, CK-V11316-007 remains open, and
+Next in PLAN mode. At that commit boundary Phase 13A had not started,
+CK-V11316-007 remained open, and
 v1.x full closure is not established.
 
 ## Phase 12R1R34 CK-V11316-015 lookup-error remediation
@@ -931,7 +934,7 @@ open; findings remain 15 confirmed and 13/15 closed.
 
 Authority: [Phase 12R1R40 CK-015 status-lifetime enforcement correction](v1.13.16-phase12r1r40-ck015-status-lifetime-enforcement-correction.md).
 
-## Phase 12R1R41 CK-015 hosted-certification closure reconciliation
+## Phase 12R1R41 CK-015 hosted-certification closure reconciliation (historical boundary)
 
 [Phase 12R1R41](v1.13.16-phase12r1r41-ck015-hosted-certification-reconciliation.md)
 reconciles the completed R1R40 exact-candidate hosted evidence at
@@ -948,15 +951,16 @@ created attempt 2, where benchmark job `105841024592` and downstream
 exact-head checks therefore passed; the CK-015 proofs and CodeQL were not
 rerun.
 
-CK-V11316-015 is closed certified, findings are 15 confirmed and 14/15
-closed, and CK-V11316-007 remains open. Phase 12 remains Next/PLAN because a
+At the R1R41 boundary, CK-V11316-015 was closed certified, findings were 15
+confirmed and 14/15 closed, and CK-V11316-007 remained open. Phase 12 then
+remained Next/PLAN because a
 successful final independent technical-closure audit has not been
 established. Phase 13 remains unauthorized and v1.x technical correctness
 closure remains withheld. This documentation-only authority head requires
 fresh hosted certification after one non-force push; its run identities are
 reported externally without another repository commit.
 
-## Phase 12R1R42 final technical-closure reconciliation
+## Phase 12R1R42 final technical-closure reconciliation (historical boundary)
 
 [Phase 12R1R42](v1.13.16-phase12r1r42-final-technical-closure-reconciliation.md)
 accepts the final independent read-only audit at closure head
@@ -966,10 +970,11 @@ creating a new technical finding. All ten technical domains passed, all 15
 finding rows were reviewed, and all 54 changed technical paths retain an
 authority owner with no module or dependency delta.
 
-Phase 12 is Complete and v1.x technical correctness is established. Findings
+At the R1R42 commit boundary, Phase 12 became Complete and v1.x technical
+correctness was established. Findings
 remain 15 confirmed and 14/15 closed; CK-V11316-007 remains open for the
-Phase 13A/13B/13C and Phase 19 documentation/process lifecycle. Phase 13 is
-Next in PLAN mode, but Phase 13A has not started and requires successful fresh
+Phase 13A/13B/13C and Phase 19 documentation/process lifecycle. Phase 13 was
+Next in PLAN mode, but Phase 13A had not started and required successful fresh
 hosted certification of the exact R1R42 documentation head plus separate owner
 authorization. V1.x full closure is not established.
 
@@ -985,11 +990,12 @@ completed exactly four append-only local commits. Implementation/test candidate
 `ffa27e0554088bef24d0a8db07f62c3642f62d8d` corrects DOC-005's governance
 false PASS and DOC-006's generated-help prerequisite. Attached and one fresh
 detached exact-toolchain certification passed, while direct source comparison
-proves runtime startup-recovery behavior unchanged. Phase 13B stays
-documentation-only and withheld pending owner acceptance and separately
-authorized hosted certification. At that retained local boundary no push or
-hosted execution had occurred. A later single push produced the preserved
-failure described below.
+proves runtime startup-recovery behavior unchanged. At that retained local
+boundary Phase 13B stayed documentation-only and withheld pending owner
+acceptance and separately authorized hosted certification. No push or hosted
+execution had occurred. A later single push produced the preserved failure
+described below; the succeeding R1R1 fresh candidate is certified in the next
+section.
 
 ## Phase 13R1R1 CK-015 SQLite test-harness recovery
 
@@ -1021,6 +1027,13 @@ issues, module verification, and the full 30-minute Go sweep. Production
 runtime delta remains none. No push, hosted execution, Phase 13B, or
 CK-V11316-007 closure is authorized.
 
+That no-push statement describes only the R1R1 local Build boundary. The later
+candidate `49ce732d2742956e0f8a256458090cb7c2691c34` was pushed once and passed
+fresh CI `35442074207` at 36/36, Required Gate job `105897391981`, CodeQL
+`35442074196` at 4/4, and all 40 exact-head checks without retry. DOC-005 and
+DOC-006's help prerequisite are hosted-certified; the original R1 failure
+remains preserved.
+
 ## Phase 13B documentation remediation authority
 
 [Phase 13B](v1.13.16-phase13a-audit-reconciliation-and-phase13b-remediation.md)
@@ -1038,3 +1051,10 @@ as candidates, but CK-V11316-007 remains open pending fresh hosted
 certification and the independent Phase 13C re-audit. No push, hosted run,
 Phase 13C execution, Phase 14 work, merge, tag, or release is authorized by
 this local Build.
+
+Commit 2 applies candidate remediations for DOC-001 through DOC-008 in the
+frozen fourteen documentation paths. DOC-005 remains satisfied by the frozen
+hosted-certified validator correction, and DOC-006 combines that frozen help
+prerequisite with the README/architecture clarification. These are local
+candidate dispositions only until Commit 3 records validation; hosted
+certification and Phase 13C remain separate.

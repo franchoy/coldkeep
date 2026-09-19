@@ -20,7 +20,7 @@ Avoid generic summaries such as “fixed bugs” or “updated tests.”
 
 Use this structure:
 
-```markdown
+````markdown
 ## Summary
 
 <One short paragraph explaining the purpose of the PR.>
@@ -115,3 +115,4 @@ Before returning the summary, check:
 - Does it avoid claiming broader validation than was performed?
 - Does it identify behavior and compatibility impact?
 - Does it make remaining risk visible?
+````

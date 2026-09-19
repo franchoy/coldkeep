@@ -827,7 +827,9 @@ This improves operator guidance while keeping doctor detect-only for physical-la
 
 ### Phase 8 — Observability and simulation tooling contract
 
-Phase 8 formalizes the operator/tooling command contract for read-only observability.
+Phase 8 formalizes the operator/tooling contract for observational phases and
+exact GC simulation. Complete CLI invocations may first run corrective startup
+recovery, which can mutate repository metadata before these phases begin.
 
 Command surfaces in scope:
 
@@ -846,9 +848,12 @@ Inspect entity support currently includes `file` (alias `logical-file`), `chunk`
 
 Phase 8 guarantees:
 
-- observability commands are read-only (`stats`, `inspect`, `simulate gc`)
+- the `stats` and `inspect` observation phases are read-only, and the
+  `simulate gc` planning phase is non-mutating; their complete invocations can
+  first perform corrective startup recovery
 - GC simulation is exact relative to GC reclaimability decisions under the same integrity gates
-- simulation does not mutate repository state (no DB writes, no filesystem writes)
+- the simulation phase does not mutate repository state (no DB writes, no
+  filesystem writes); any startup-recovery mutation is a distinct earlier step
 - JSON output is intended for tooling/automation pipelines
 - deep inspect traversals can be large and should be bounded with `--limit N`
 - trace diagnostics are emitted on stderr (`--trace`, `--trace-json`) so stdout payloads remain stable for piping and automation

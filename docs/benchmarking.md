@@ -658,7 +658,7 @@ Step 6.7 validates that the same file produces byte-identical restores regardles
 - ✓ **Repeated restores identical:** Multiple restores of the same file produce identical hashes
 - ✓ **Restore after GC identical:** Restores after garbage collection produce identical output
 - ✓ **Restore after snapshots identical:** Restores after snapshot creation/deletion produce identical output
-- ✓ **Same input → same logical output independent of compression/encryption:** Compression is metadata-only; it never affects restored bytes
+- ✓ **Same input → same logical output independent of compression/encryption:** Compression can change physical stored bytes and size, but never the restored logical bytes
 
 ### Implementation
 
@@ -675,10 +675,16 @@ COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep67" -v
 
 ### Guarantees for operators
 
-1. **Compression is metadata-only:** Choosing `COLDKEEP_COMPRESSION=zstd` does not affect restored file content; it only affects storage efficiency.
+1. **Compression changes physical representation, not logical content:** Choosing `COLDKEEP_COMPRESSION=zstd` can change persisted bytes and storage efficiency, but does not change restored file content.
 2. **Repository config changes don't affect existing files:** Changing the repository-level compression setting does not re-compress or alter existing stored files.
-3. **Read-only operations are always safe:** Snapshots, GC, and other maintenance never modify file content during restore.
-4. **Deterministic output is cryptographically validated:** Each restore operation verifies content hashes and encryption state; silent corruption is not possible.
+3. **Mutation boundaries are explicit:** Snapshot creation/deletion and live GC
+   are state-changing. Only their documented preview/dry-run paths are
+   non-mutating, and restore determinism is checked independently.
+4. **Integrity checks are threat-model bounded:** Restore validates applicable
+   hashes and encryption/authentication state and fails closed on detected
+   inconsistency. This does not guarantee detection of coordinated external
+   database-and-storage tampering or other conditions excluded by
+   `SECURITY.md`; benchmark timing is not integrity evidence.
 
 ## Step 6.8 — Revalidate Dedup Semantics (v1.9)
 
@@ -1682,7 +1688,9 @@ Sections:
 - Statistics computation uses per-block fields (not config defaults)
 
 ✔ **Repository behavior fully documented:**
-- Creation: Default compression=none, codec derived from COLDKEEP_KEY environment
+- Creation: Default compression is `none`; storage codec is selected by
+  `COLDKEEP_CODEC` and defaults to `aes-gcm`. `COLDKEEP_KEY` supplies key
+  material and does not select the codec.
 - Write: Config read at write time; block metadata set and immutable
 - Read: Block metadata trusted; configuration ignored
 - Migration: Per-block state preserved; new blocks use current config

@@ -25,7 +25,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
-> Migration note (v1.9): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v16 schema at startup.
+> Migration note (current): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing valid legacy metadata is normalized transactionally to the required singleton schema 17 representation, `schema_version(catalog_version=17)`. Pre-v17 binaries are intentionally fenced from schema-17 repositories before correctness-relevant work.
 
 ## Current release state
 
@@ -546,7 +546,7 @@ coldkeep simulate store-folder ./data
 coldkeep simulate store file.txt --output json
 ```
 
-Observability and GC simulation (read-only):
+Observability and GC simulation (read-only after startup recovery):
 
 ```bash
 coldkeep stats
@@ -571,10 +571,14 @@ Supported inspect entities currently include: `file` (alias: `logical-file`), `c
 
 Observability command guarantees (v1.6):
 
-- `stats`, `inspect`, and `simulate gc` are read-only command surfaces.
+- The `stats` and `inspect` observation phases and the `simulate gc` planning
+  phase are read-only/non-mutating. Their complete CLI invocations may first
+  run corrective startup recovery, which can mutate repository metadata.
 - `simulate gc` is an exact simulation of GC reclaimability under the same integrity gates.
 - `simulate gc` previews exact GC reclaimability using the shared GC planning layer (`gc.BuildPlan`), including fully-dead active containers; it is not legacy `gc --dry-run` behavior.
-- GC simulation does not mutate repository state (no database writes and no filesystem writes).
+- The GC simulation phase does not mutate repository state (no database writes
+  and no filesystem writes); any earlier corrective startup-recovery mutation
+  is a distinct command-lifecycle step.
 - JSON output is intended for tooling/automation contracts.
 - `meta.version` is the CLI JSON contract version. It remains `v1.7` for additive, backward-compatible fields (including v1.8/v1.9 `stats.block_layout` additions) and only bumps on breaking JSON contract changes.
 - Deep inspect output can be large; use `--limit N` to bound traversal output for operators and CI.

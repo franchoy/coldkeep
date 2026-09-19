@@ -155,7 +155,10 @@ export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 
 Missing PostgreSQL schema requires manual schema application or
 `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
-the required v16 schema at startup.
+the required schema 17 singleton representation,
+`schema_version(catalog_version=17)`, at startup. Valid legacy metadata is
+normalized transactionally; pre-v17 binaries are intentionally fenced before
+correctness-relevant work on a schema-17 repository.
 
 Build:
 
@@ -317,7 +320,10 @@ simulation loop sets it per run (`plain` then `aes-gcm`).
 
 Missing PostgreSQL schema requires manual schema application or
 `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
-the required v16 schema at startup.
+the required schema 17 singleton representation,
+`schema_version(catalog_version=17)`, at startup. Valid legacy metadata is
+normalized transactionally; pre-v17 binaries are intentionally fenced before
+correctness-relevant work on a schema-17 repository.
 
 1. Run the quality job equivalent (same intent as CI `quality`):
 
