@@ -985,4 +985,30 @@ false PASS and DOC-006's generated-help prerequisite. Attached and one fresh
 detached exact-toolchain certification passed, while direct source comparison
 proves runtime startup-recovery behavior unchanged. Phase 13B stays
 documentation-only and withheld pending owner acceptance and separately
-authorized hosted certification; no push or hosted execution occurred.
+authorized hosted certification. At that retained local boundary no push or
+hosted execution had occurred. A later single push produced the preserved
+failure described below.
+
+## Phase 13R1R1 CK-015 SQLite test-harness recovery
+
+Phase 13R1 exact-head CI attempt 1 failed in
+`TestCKV11316015SharedProcessingChunkWaitersConvergeWithoutDeadlock` with
+SQLite `database is locked`; Required Gate correctly failed, while the scoped
+governance/help proofs and CodeQL passed. The failed attempt is preserved and
+no hosted retry is authorized.
+
+Read-only diagnosis established no Phase 13R1 runtime-byte delta and reproduced
+the pre-existing failure locally (599 passes and one failure in 600 AES-labelled
+focused executions). The fixture used eight SQLite connections although the
+supported simulated SQLite path uses one shared connection. This is a CK-015
+test-harness reliability defect, not a product regression; CK-V11316-015 remains
+closed certified and Phase 12 technical correctness remains established.
+
+[Phase 13R1R1](v1.13.16-phase13r1r1-ck015-sqlite-test-harness-recovery.md)
+authorizes exactly three append-only local commits. Its sole test change is
+`internal/storage/store_atomic_repair_test.go`, setting the affected fixture to
+one maximum open and idle connection while preserving both Store goroutines,
+the contention/convergence orchestration, and every assertion. Production,
+runtime, workflow, schema, module, and dependency bytes remain frozen. The
+Build stops after local attached and detached certification: no push, hosted
+execution, Phase 13B, or CK-V11316-007 closure is authorized.
