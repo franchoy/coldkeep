@@ -74,7 +74,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 12 CK-V11316-015 lookup-error remediation state
+### Current Phase 12 CK-V11316-015 closure state
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 8 implementation and certification are complete at executable/evidence
@@ -125,9 +125,9 @@ retry occurred.
 
 CK-V11316-005 and CK-V11316-006 are closed certified under the
 [Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
-CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-013,
-plus CK-V11316-014, are closed certified; CK-V11316-007 and CK-V11316-015
-are open. Findings are 15 confirmed and 13/15 closed. Phase 9, Phase 10,
+CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-015
+are closed certified; CK-V11316-007 remains open. Findings are 15 confirmed
+and 14/15 closed. Phase 9, Phase 10,
 and Phase 11 are Complete. Phase 10R1
 successfully corrected CK-V11316-012's refcount fixture and proved the final
 13/13 plain and AES concurrency selectors with zero skips, then the fresh
@@ -907,3 +907,28 @@ finding closure, Phase 12 completion, or Phase 13 follows. CK-V11316-015 stays
 open; findings remain 15 confirmed and 13/15 closed.
 
 Authority: [Phase 12R1R40 CK-015 status-lifetime enforcement correction](v1.13.16-phase12r1r40-ck015-status-lifetime-enforcement-correction.md).
+
+## Phase 12R1R41 CK-015 hosted-certification closure reconciliation
+
+[Phase 12R1R41](v1.13.16-phase12r1r41-ck015-hosted-certification-reconciliation.md)
+reconciles the completed R1R40 exact-candidate hosted evidence at
+`8773efc19a0317aa2d99e6387c3caa3a967689cd`. The release branch was pushed
+once to that candidate. Its attempt-1 plain correctness job passed all seven
+SQLite and five PostgreSQL CK-015 named proofs with no FAIL or SKIP, and
+CodeQL `35269430570` passed on attempt 1.
+
+CI `35269430953` attempt 1 remains preserved as failed after an isolated
+`Benchmark integrity (none-w4)` registry/Buildx failure. Read-only diagnosis
+classified it as external transient. Exactly one bounded specific-job retry
+created attempt 2, where benchmark job `105841024592` and downstream
+`CI Required Gate` job `105841548250` passed. CI attempt 2 and all 40 latest
+exact-head checks therefore passed; the CK-015 proofs and CodeQL were not
+rerun.
+
+CK-V11316-015 is closed certified, findings are 15 confirmed and 14/15
+closed, and CK-V11316-007 remains open. Phase 12 remains Next/PLAN because a
+successful final independent technical-closure audit has not been
+established. Phase 13 remains unauthorized and v1.x technical correctness
+closure remains withheld. This documentation-only authority head requires
+fresh hosted certification after one non-force push; its run identities are
+reported externally without another repository commit.
