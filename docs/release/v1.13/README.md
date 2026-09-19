@@ -979,7 +979,10 @@ sub-findings externally. Its archive SHA-256
 and all 288 manifest entries reverified before Phase 13R1 authority.
 
 [Phase 13R1](v1.13.16-phase13r1-governance-help-truthfulness-recovery.md)
-authorizes exactly four append-only local commits to correct DOC-005's
-governance false PASS and DOC-006's generated-help prerequisite. Runtime
-startup-recovery behavior remains unchanged. Phase 13B stays documentation-only
-and withheld; no push or hosted execution is authorized by the local Build.
+completed exactly four append-only local commits. Implementation/test candidate
+`ffa27e0554088bef24d0a8db07f62c3642f62d8d` corrects DOC-005's governance
+false PASS and DOC-006's generated-help prerequisite. Attached and one fresh
+detached exact-toolchain certification passed, while direct source comparison
+proves runtime startup-recovery behavior unchanged. Phase 13B stays
+documentation-only and withheld pending owner acceptance and separately
+authorized hosted certification; no push or hosted execution occurred.
