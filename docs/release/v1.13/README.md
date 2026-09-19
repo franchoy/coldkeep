@@ -92,9 +92,13 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 13A is complete with eight sub-findings frozen externally. Phase 13R1
 and its R1R1 test-harness recovery are complete and hosted-certified at exact
-head `49ce732d2742956e0f8a256458090cb7c2691c34`. Phase 13B is now the
-authorized documentation-only local Build; Phase 13C has not started and
-CK-V11316-007 remains open.
+head `49ce732d2742956e0f8a256458090cb7c2691c34`. Phase 13B is hosted-certified
+externally at exact head `568289d974032255e8c6af55a59c784a303f179c`. The
+first independent Phase 13C re-audit completed read-only and passed DOC-003
+through DOC-008 but retained DOC-001 and DOC-002 as residuals; it established
+no new CK-007 sub-finding. CK-V11316-007 remains open, another independent
+Phase 13C re-audit is required before closure, and Phase 14 is not authorized
+while CK-V11316-007 remains open.
 Phase 8 implementation and certification are complete at executable/evidence
 head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
 `1967df264919a908680db4bc2a3dbf1fa5f673da`,
@@ -1034,7 +1038,7 @@ fresh CI `35442074207` at 36/36, Required Gate job `105897391981`, CodeQL
 DOC-006's help prerequisite are hosted-certified; the original R1 failure
 remains preserved.
 
-## Phase 13B documentation remediation authority
+## Phase 13B documentation remediation authority and external result
 
 [Phase 13B](v1.13.16-phase13a-audit-reconciliation-and-phase13b-remediation.md)
 accepts the retained Phase 13A eight-sub-finding register and the fresh
@@ -1043,14 +1047,15 @@ job `105897391981`; CodeQL `35442074196` passed 4/4; all 40 exact-head checks
 passed and the release ref has zero open CodeQL alerts. The original failed
 Phase 13R1 CI `35436261398` remains preserved and was not rerun.
 
-The local Build is exactly three append-only commits with path counts 8/14/8.
+Historical `AT_COMMIT` Phase 13B local-evidence boundary: the local Build is
+exactly three append-only commits with path counts 8/14/8.
 Commit 2 is limited to the fourteen documentation paths frozen by the Phase
 13A audit after DOC-005 and DOC-006's generated-help prerequisite were
 resolved by Phase 13R1. It may remediate all eight documentation sub-findings
-as candidates, but CK-V11316-007 remains open pending fresh hosted
-certification and the independent Phase 13C re-audit. No push, hosted run,
-Phase 13C execution, Phase 14 work, merge, tag, or release is authorized by
-this local Build.
+as candidates. At that commit boundary, CK-V11316-007 remained open pending
+fresh hosted certification and the independent Phase 13C re-audit; the local
+Build itself authorized no push, hosted run, Phase 13C execution, Phase 14
+work, merge, tag, or release.
 
 Commit 2 applies candidate remediations for DOC-001 through DOC-008 in the
 frozen fourteen documentation paths. DOC-005 remains satisfied by the frozen
@@ -1066,4 +1071,17 @@ sole-parent topology, Markdown links/fences, release-state, governance,
 smart-quote, allowlist, linearity, evidence-name, validation-matrix, local-CI,
 semantic contradiction checks, and all 253 Python tests passed. All
 non-documentation bytes remain parent-identical. The Build is complete locally
-pending owner review; no push or hosted execution occurred.
+pending owner review; no push or hosted execution occurred at that historical
+commit boundary.
+
+The later external Phase 13B certification passed at exact head
+`568289d974032255e8c6af55a59c784a303f179c`: CI `35445325315` attempt 1 passed
+36/36, Required Gate job `105906206611` passed, CodeQL `35445325237` attempt 1
+passed 4/4, all 40 exact-head checks passed, and open CodeQL alerts were zero.
+The first independent Phase 13C re-audit then completed read-only with
+`PASS_6_OF_8_FAIL_2_OF_8`: DOC-001 and DOC-002 retained current-authority and
+external-state residuals, DOC-003 through DOC-008 passed, and no new CK-007
+sub-finding was established. This correction addresses only those two
+residuals. CK-V11316-007 cannot close until a later independent Phase 13C
+re-audit passes and a separate owner-authorized closure reconciliation records
+that result.
