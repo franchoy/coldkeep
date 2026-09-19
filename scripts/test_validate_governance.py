@@ -162,12 +162,13 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             destination = self.root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(governance.ROOT / relative, destination)
+        fixture_mirror = governance_test_mirror_from_canonical(self.root)
         for relative in GOVERNANCE_TEST_MIRROR_FILES:
             path = self.root / relative
             text = path.read_text(encoding="utf-8")
             if "<!-- coldkeep-current-state:start -->" in text:
                 text = governance_test_remove_mirror(text)
-            path.write_text(GOVERNANCE_TEST_MIRROR + "\n\n" + text, encoding="utf-8")
+            path.write_text(fixture_mirror + "\n\n" + text, encoding="utf-8")
 
     def replace_once(self, relative: Path, old: str, new: str) -> None:
         path = self.root / relative
@@ -177,6 +178,26 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
 
     def assert_governance_fails(self) -> None:
         self.assertNotEqual(governance.validate(self.root), [])
+
+    def canonical_state(self) -> dict[str, str]:
+        path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        state, violations = governance.canonical_current_state(
+            path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(violations, [])
+        return state
+
+    def replace_canonical_value(self, key: str, replacement: str) -> None:
+        path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        text = path.read_text(encoding="utf-8")
+        preamble, separator, remainder = text.partition("\n## ")
+        self.assertEqual(separator, "\n## ")
+        current = f"{key}: {self.canonical_state()[key]}"
+        self.assertEqual(preamble.count(current), 1)
+        path.write_text(
+            preamble.replace(current, replacement, 1) + separator + remainder,
+            encoding="utf-8",
+        )
 
     def test_current_repository_authority_passes(self) -> None:
         self.assertEqual(governance.validate(self.root), [])
@@ -201,42 +222,32 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         self.assertEqual(governance.validate(self.root), [])
 
     def test_future_canonical_state_requires_mirror_updates(self) -> None:
-        self.replace_once(
-            Path("docs/release/v1.13/v1.13.16-release-state.md"),
-            "PHASE_13: NEXT",
-            "PHASE_13: FUTURE",
-        )
+        self.replace_canonical_value("PHASE_13", "PHASE_13: FUTURE")
         self.assert_governance_fails()
 
     def test_missing_required_canonical_field_fails(self) -> None:
-        self.replace_once(
-            Path("docs/release/v1.13/v1.13.16-release-state.md"),
-            "SOURCE_VERSION: 1.13.16\n",
-            "",
-        )
+        self.replace_canonical_value("SOURCE_VERSION", "")
         self.assert_governance_fails()
 
     def test_duplicate_required_canonical_field_fails(self) -> None:
-        self.replace_once(
-            Path("docs/release/v1.13/v1.13.16-release-state.md"),
-            "SOURCE_VERSION: 1.13.16\n",
-            "SOURCE_VERSION: 1.13.16\nSOURCE_VERSION: 1.13.16\n",
+        source_version = self.canonical_state()["SOURCE_VERSION"]
+        self.replace_canonical_value(
+            "SOURCE_VERSION",
+            f"SOURCE_VERSION: {source_version}\nSOURCE_VERSION: {source_version}",
         )
         self.assert_governance_fails()
 
     def test_malformed_confirmed_count_fails(self) -> None:
-        self.replace_once(
-            Path("docs/release/v1.13/v1.13.16-release-state.md"),
-            "FINDINGS_CONFIRMED: 15",
-            "FINDINGS_CONFIRMED: fifteen",
+        self.replace_canonical_value(
+            "FINDINGS_CONFIRMED", "FINDINGS_CONFIRMED: malformed"
         )
         self.assert_governance_fails()
 
     def test_findings_denominator_mismatch_fails(self) -> None:
-        self.replace_once(
-            Path("docs/release/v1.13/v1.13.16-release-state.md"),
-            "FINDINGS_CLOSED: 14/15",
-            "FINDINGS_CLOSED: 14/16",
+        closed, total = self.canonical_state()["FINDINGS_CLOSED"].split("/")
+        self.replace_canonical_value(
+            "FINDINGS_CLOSED",
+            f"FINDINGS_CLOSED: {closed}/{int(total) + 1}",
         )
         self.assert_governance_fails()
 
@@ -263,10 +274,11 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         self.assert_governance_fails()
 
     def test_stale_live_mirror_fails(self) -> None:
+        phase_13 = self.canonical_state()["PHASE_13"]
         self.replace_once(
             Path("AGENTS.md"),
-            "PHASE_13: NEXT",
-            "PHASE_13: NOT_STARTED",
+            f"PHASE_13: {phase_13}",
+            "PHASE_13: STALE_TEST_VALUE",
         )
         self.assert_governance_fails()
 
@@ -283,6 +295,23 @@ def governance_test_remove_mirror(text: str) -> str:
     return text.replace(governance_test_extract_mirror(text), "", 1)
 
 
+def governance_test_mirror_from_canonical(root: Path) -> str:
+    canonical = root / governance.CANONICAL_CURRENT_STATE_FILE
+    state, violations = governance.canonical_current_state(
+        canonical.read_text(encoding="utf-8")
+    )
+    if violations:
+        raise AssertionError("; ".join(violations))
+    payload = "\n".join(
+        f"{key}: {state[key]}" for key in governance.CURRENT_STATE_KEYS
+    )
+    return (
+        f"{governance.CURRENT_STATE_MIRROR_START}\n"
+        f"```text\n{payload}\n```\n"
+        f"{governance.CURRENT_STATE_MIRROR_END}"
+    )
+
+
 GOVERNANCE_TEST_MIRROR_FILES = (
     Path("AGENTS.md"),
     Path(".github/copilot-instructions.md"),
@@ -293,20 +322,6 @@ GOVERNANCE_TEST_MIRROR_FILES = (
     Path("SECURITY.md"),
     Path("docs/release/v1.13/README.md"),
 )
-
-GOVERNANCE_TEST_MIRROR = """<!-- coldkeep-current-state:start -->
-```text
-SOURCE_VERSION: 1.13.16
-PHASE_12: COMPLETE
-PHASE_13: NEXT
-CK-V11316-007: OPEN
-FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 14/15
-V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: NOT_ESTABLISHED
-```
-<!-- coldkeep-current-state:end -->"""
-
 
 if __name__ == "__main__":
     unittest.main()

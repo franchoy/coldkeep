@@ -78,27 +78,27 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 ```text
 SOURCE_VERSION: 1.13.16
 PHASE_12: COMPLETE
-PHASE_13: NEXT
-CK-V11316-007: OPEN
+PHASE_13: COMPLETE
+CK-V11316-007: CLOSED
 FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 14/15
+FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
-### Current Phase 12 completion and Phase 13 boundary
+### Current Phase 13 completion candidate and Phase 14 boundary
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
-Phase 13A is complete with eight sub-findings frozen externally. Phase 13R1
-and its R1R1 test-harness recovery are complete and hosted-certified at exact
-head `49ce732d2742956e0f8a256458090cb7c2691c34`. Phase 13B is hosted-certified
-externally at exact head `568289d974032255e8c6af55a59c784a303f179c`. The
-first independent Phase 13C re-audit completed read-only and passed DOC-003
-through DOC-008 but retained DOC-001 and DOC-002 as residuals; it established
-no new CK-007 sub-finding. CK-V11316-007 remains open, another independent
-Phase 13C re-audit is required before closure, and Phase 14 is not authorized
-while CK-V11316-007 remains open.
+Phase 13A froze eight sub-findings, Phase 13R1/R1R1 prerequisites and Phase
+13B were hosted-certified, and R2 reconciled the first Phase 13C residuals.
+The second independent Phase 13C re-audit at parent `0b9f48d...` passed all
+8/8 sub-findings with no new CK-007 finding. This tracked candidate closes
+CK-V11316-007, records all 15 findings closed, completes Phase 13, and
+materializes the canonical v1.13.16 release body and checksum. Phase 14 is Next
+but remains non-executable until this exact closure head receives fresh
+hosted certification and final read-only Phase 13C recertification. V1.x full
+closure is not established.
 Phase 8 implementation and certification are complete at executable/evidence
 head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
 `1967df264919a908680db4bc2a3dbf1fa5f673da`,

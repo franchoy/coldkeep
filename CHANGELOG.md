@@ -32,8 +32,16 @@ project, do not start here; start with [README.md](README.md).
 - Phase 1 activates source version 1.13.16, isolated sibling-worktree
   authority, the 20-phase release controls, and backward-compatible ordered
   lifecycle boundaries 16/18/19.
-- Seven findings are confirmed and zero are closed. Phase 2 is Next. No
-  product fix or release-readiness claim exists yet.
+- Phase 12 established technical correctness. Phase 13 completed its full
+  documentation/process audit, bounded remediation, hosted certification,
+  residual-authority reconciliation, and independent 8/8 re-audit. This
+  closure candidate records all 15 confirmed findings closed, including
+  CK-V11316-007, and materializes the canonical source-only v1.13.16 release
+  body and checksum.
+- Phase 14 is Next but is not executable until this exact closure head passes
+  fresh hosted certification and a final read-only Phase 13C recertification.
+  No v1.13.16 tag or GitHub release exists yet, and final v1.x closure remains
+  reserved for Phase 19T.
 
 ## v1.13.15 - 2026-08-28 — Final v1.x Security, Reproducibility, and Operational Closure
 

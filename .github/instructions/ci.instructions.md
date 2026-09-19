@@ -4,10 +4,10 @@
 ```text
 SOURCE_VERSION: 1.13.16
 PHASE_12: COMPLETE
-PHASE_13: NEXT
-CK-V11316-007: OPEN
+PHASE_13: COMPLETE
+CK-V11316-007: CLOSED
 FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 14/15
+FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
@@ -101,10 +101,13 @@ Do not add global coverage gates unless explicitly approved.
 ## v1.13.16 Maintenance Boundary
 
 v1.13.16 is the active exceptional critical-maintenance train. Phase 12
-technical correctness is established; CK-V11316-007 remains open for the
-Phase 13 documentation/process lifecycle. v1.13.15 remains published stable
-and immutable. Use development-state validation on `release/v1.13.16`, follow
-the 20-phase plan and exact phase mode, and do not use CI work to introduce:
+technical correctness is established, Phase 13 is complete, CK-V11316-007 is
+closed, and all 15 findings are closed in the tracked candidate. Phase 14 is
+Next but remains non-executable pending fresh hosted certification and final
+read-only Phase 13C recertification of this exact head. v1.13.15 remains
+published stable and immutable. Use development-state validation on
+`release/v1.13.16`, follow the 20-phase plan and exact phase mode, and do not
+use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;

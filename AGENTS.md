@@ -8,18 +8,20 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 ```text
 SOURCE_VERSION: 1.13.16
 PHASE_12: COMPLETE
-PHASE_13: NEXT
-CK-V11316-007: OPEN
+PHASE_13: COMPLETE
+CK-V11316-007: CLOSED
 FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 14/15
+FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
 - `v1.13.16` is the active exceptional critical-maintenance train. Phase 12
-  technical correctness is established; CK-V11316-007 remains open for the
-  Phase 13 documentation/process lifecycle.
+  technical correctness is established; Phase 13 is complete and
+  CK-V11316-007 is closed in the tracked candidate. Phase 14 is Next but is
+  not executable until this exact head passes fresh hosted certification and
+  final read-only Phase 13C recertification.
 - `v1.13.15` remains published stable, immutable, and the final planned v1.x
   release. Planned v1 feature and architecture work stays closed and frozen.
 - `v1.13.14` is immutable historical release state. Do not edit its release
@@ -66,10 +68,10 @@ The frozen v1 release-critical execution contract uses Go 1.26.7 with
     V1_13_16: ACTIVE_EXCEPTIONAL_CRITICAL_MAINTENANCE
     RELEASE_STATE: DEVELOPMENT
     PHASE_12: COMPLETE
-    PHASE_13: NEXT
+    PHASE_13: COMPLETE
     FINDINGS_CONFIRMED: 15
-    FINDINGS_CLOSED: 14/15
-    CK_V11316_007: OPEN
+    FINDINGS_CLOSED: 15/15
+    CK_V11316_007: CLOSED
     V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
     V1_X_FULL_CLOSURE: NOT_ESTABLISHED
     V2_PLANNING_REVIEW: AUTHORIZED

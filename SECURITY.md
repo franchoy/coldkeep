@@ -6,10 +6,10 @@
 ```text
 SOURCE_VERSION: 1.13.16
 PHASE_12: COMPLETE
-PHASE_13: NEXT
-CK-V11316-007: OPEN
+PHASE_13: COMPLETE
+CK-V11316-007: CLOSED
 FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 14/15
+FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
@@ -28,11 +28,12 @@ Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
 attestation are immutable. v1.13.16 is the active exceptional
 critical-maintenance source train. Phase 12 technical correctness is
-established with 15 findings confirmed and 14/15 closed. CK-V11316-007 remains
-open for the Phase 13 documentation/process lifecycle, and v1.x full closure
-is not established. Planned v1 feature and architecture work remains closed
-and frozen. Existing security and crash-consistency limitations below are
-unchanged.
+established, Phase 13 is complete, CK-V11316-007 is closed, and all 15
+findings are closed in this tracked candidate. Phase 14 is Next but remains
+non-executable until fresh hosted certification and final read-only Phase 13C
+recertification pass on this exact head. V1.x full closure is not established.
+Planned v1 feature and architecture work remains closed and frozen. Existing
+security and crash-consistency limitations below are unchanged.
 
 v1.13.14 and v1.13.15 remain immutable historical release state. V2 planning
 review is authorized. V2 implementation has not started and requires a
