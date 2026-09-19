@@ -74,6 +74,19 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
+<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: NEXT
+CK-V11316-007: OPEN
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 14/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->
+
 ### Current Phase 12 completion and Phase 13 boundary
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
@@ -954,3 +967,16 @@ Phase 13A/13B/13C and Phase 19 documentation/process lifecycle. Phase 13 is
 Next in PLAN mode, but Phase 13A has not started and requires successful fresh
 hosted certification of the exact R1R42 documentation head plus separate owner
 authorization. V1.x full closure is not established.
+
+## Phase 13R1 governance/help truthfulness recovery
+
+Phase 13A completed read-only at exact R1R42 head and froze eight CK-007
+sub-findings externally. Its archive SHA-256
+`d7cdb10c2a8179e19f93cfdb423578b71ed46a9f14cd75345b74abaf1d04530e`
+and all 288 manifest entries reverified before Phase 13R1 authority.
+
+[Phase 13R1](v1.13.16-phase13r1-governance-help-truthfulness-recovery.md)
+authorizes exactly four append-only local commits to correct DOC-005's
+governance false PASS and DOC-006's generated-help prerequisite. Runtime
+startup-recovery behavior remains unchanged. Phase 13B stays documentation-only
+and withheld; no push or hosted execution is authorized by the local Build.
