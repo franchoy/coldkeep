@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -141,6 +142,170 @@ class GovernanceValidatorTests(unittest.TestCase):
             "The active v1.13.15 final v1.x closure train is authoritative.",
         )
         self.assertEqual(len(violations), 1)
+
+
+class CurrentStateGovernanceContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        inputs = (
+            governance.ACTIVE_PROVIDER_FILES
+            + governance.CURRENT_AUTHORITY_FILES
+            + (
+                governance.HISTORICAL_PROVIDER_FILE,
+                governance.CANONICAL_RELEASE_BODY,
+                governance.CANONICAL_RELEASE_BODY_CHECKSUM,
+            )
+        )
+        for relative in inputs:
+            destination = self.root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(governance.ROOT / relative, destination)
+        for relative in GOVERNANCE_TEST_MIRROR_FILES:
+            path = self.root / relative
+            text = path.read_text(encoding="utf-8")
+            if "<!-- coldkeep-current-state:start -->" in text:
+                text = governance_test_remove_mirror(text)
+            path.write_text(GOVERNANCE_TEST_MIRROR + "\n\n" + text, encoding="utf-8")
+
+    def replace_once(self, relative: Path, old: str, new: str) -> None:
+        path = self.root / relative
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(old, text)
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def assert_governance_fails(self) -> None:
+        self.assertNotEqual(governance.validate(self.root), [])
+
+    def test_current_repository_authority_passes(self) -> None:
+        self.assertEqual(governance.validate(self.root), [])
+
+    def test_stale_current_readme_prose_fails(self) -> None:
+        self.replace_once(
+            Path("README.md"),
+            "## Current release state\n",
+            "## Current release state\n\n"
+            "The active train has seven confirmed findings and none closed. "
+            "Phase 2 is Next.\n",
+        )
+        self.assert_governance_fails()
+
+    def test_historical_stale_prose_remains_accepted(self) -> None:
+        historical = self.root / governance.HISTORICAL_PROVIDER_FILE
+        historical.write_text(
+            historical.read_text(encoding="utf-8")
+            + "\nHistorical quote: FINDINGS_CLOSED: 0/7; Phase 2 is Next.\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(governance.validate(self.root), [])
+
+    def test_future_canonical_state_requires_mirror_updates(self) -> None:
+        self.replace_once(
+            Path("docs/release/v1.13/v1.13.16-release-state.md"),
+            "PHASE_13: NEXT",
+            "PHASE_13: FUTURE",
+        )
+        self.assert_governance_fails()
+
+    def test_missing_required_canonical_field_fails(self) -> None:
+        self.replace_once(
+            Path("docs/release/v1.13/v1.13.16-release-state.md"),
+            "SOURCE_VERSION: 1.13.16\n",
+            "",
+        )
+        self.assert_governance_fails()
+
+    def test_duplicate_required_canonical_field_fails(self) -> None:
+        self.replace_once(
+            Path("docs/release/v1.13/v1.13.16-release-state.md"),
+            "SOURCE_VERSION: 1.13.16\n",
+            "SOURCE_VERSION: 1.13.16\nSOURCE_VERSION: 1.13.16\n",
+        )
+        self.assert_governance_fails()
+
+    def test_malformed_confirmed_count_fails(self) -> None:
+        self.replace_once(
+            Path("docs/release/v1.13/v1.13.16-release-state.md"),
+            "FINDINGS_CONFIRMED: 15",
+            "FINDINGS_CONFIRMED: fifteen",
+        )
+        self.assert_governance_fails()
+
+    def test_findings_denominator_mismatch_fails(self) -> None:
+        self.replace_once(
+            Path("docs/release/v1.13/v1.13.16-release-state.md"),
+            "FINDINGS_CLOSED: 14/15",
+            "FINDINGS_CLOSED: 14/16",
+        )
+        self.assert_governance_fails()
+
+    def test_ck_row_aggregate_mismatch_fails(self) -> None:
+        self.replace_once(
+            Path("docs/release/v1.13/v1.13.16-release-state.md"),
+            "CK-V11316-015: CLOSED_CERTIFIED\n",
+            "",
+        )
+        self.assert_governance_fails()
+
+    def test_missing_live_mirror_fails(self) -> None:
+        path = self.root / Path("AGENTS.md")
+        text = path.read_text(encoding="utf-8")
+        text = governance_test_remove_mirror(text)
+        path.write_text(text, encoding="utf-8")
+        self.assert_governance_fails()
+
+    def test_duplicate_live_mirror_fails(self) -> None:
+        path = self.root / Path("AGENTS.md")
+        text = path.read_text(encoding="utf-8")
+        mirror = governance_test_extract_mirror(text)
+        path.write_text(text + "\n" + mirror, encoding="utf-8")
+        self.assert_governance_fails()
+
+    def test_stale_live_mirror_fails(self) -> None:
+        self.replace_once(
+            Path("AGENTS.md"),
+            "PHASE_13: NEXT",
+            "PHASE_13: NOT_STARTED",
+        )
+        self.assert_governance_fails()
+
+
+def governance_test_extract_mirror(text: str) -> str:
+    start_marker = "<!-- coldkeep-current-state:start -->"
+    end_marker = "<!-- coldkeep-current-state:end -->"
+    start = text.index(start_marker)
+    end = text.index(end_marker, start) + len(end_marker)
+    return text[start:end]
+
+
+def governance_test_remove_mirror(text: str) -> str:
+    return text.replace(governance_test_extract_mirror(text), "", 1)
+
+
+GOVERNANCE_TEST_MIRROR_FILES = (
+    Path("AGENTS.md"),
+    Path(".github/copilot-instructions.md"),
+    Path(".github/instructions/ci.instructions.md"),
+    Path(".github/prompts/critical-path-coverage.prompt.md"),
+    Path(".github/prompts/regression-fix.prompt.md"),
+    Path("README.md"),
+    Path("SECURITY.md"),
+    Path("docs/release/v1.13/README.md"),
+)
+
+GOVERNANCE_TEST_MIRROR = """<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: NEXT
+CK-V11316-007: OPEN
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 14/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->"""
 
 
 if __name__ == "__main__":
