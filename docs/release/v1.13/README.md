@@ -74,7 +74,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-### Current Phase 12 CK-V11316-015 closure state
+### Current Phase 12 completion and Phase 13 boundary
 
 v1.13.16 remains the active exceptional critical-maintenance source train.
 Phase 8 implementation and certification are complete at executable/evidence
@@ -272,13 +272,13 @@ CK-V11316-015 remains closed certified, CK-V11316-007 remains open, findings
 are 15 confirmed and 14/15 closed, and Phase 12 completion and Phase 13 remain
 unauthorized.
 
-Phase 12 remains the aggregate Next phase in PLAN mode. Earlier authorized
-Phase 12 audits and diagnostics remain executed historical evidence: R1R2
-returned `FAIL_NEW_TECHNICAL_FINDING_ESTABLISHED` and proposed
-CK-V11316-014, and later work investigated and remediated CK-V11316-015. A
-successful final independent technical-closure audit has not been established.
-Further Phase 12 audit work and Phase 13 require separate authorization, and
-v1.x technical correctness closure remains withheld.
+R1R42 supersedes that aggregate pointer after the successful final independent
+technical-closure audit. Phase 12 is Complete, v1.x technical correctness is
+established, and Phase 13 is Next in PLAN mode. Earlier failed audits and
+diagnostics remain historical evidence rather than being rewritten. Phase 13A
+has not started, requires successful exact-head R1R42 hosted certification and
+separate owner authorization, and retains CK-V11316-007 as open. V1.x full
+closure is not established.
 
 ### Historical Phase 6 chronology
 
@@ -836,6 +836,11 @@ repository commit.
 
 Authority: [Phase 12R1R32 CK-V11316-014 hosted-evidence reconciliation](v1.13.16-phase12r1r32-ck014-hosted-evidence-reconciliation.md).
 
+R1R42 now supersedes the earlier aggregate pointer: Phase 12 is Complete
+after the accepted final independent technical-closure audit, and Phase 13 is
+Next in PLAN mode. Phase 13A has not started, CK-V11316-007 remains open, and
+v1.x full closure is not established.
+
 ## Phase 12R1R34 CK-V11316-015 lookup-error remediation
 
 [Phase 12R1R34](v1.13.16-phase12r1r34-ck015-initial-lookup-error-propagation.md)
@@ -932,3 +937,20 @@ established. Phase 13 remains unauthorized and v1.x technical correctness
 closure remains withheld. This documentation-only authority head requires
 fresh hosted certification after one non-force push; its run identities are
 reported externally without another repository commit.
+
+## Phase 12R1R42 final technical-closure reconciliation
+
+[Phase 12R1R42](v1.13.16-phase12r1r42-final-technical-closure-reconciliation.md)
+accepts the final independent read-only audit at closure head
+`4a983569a19d9735109851e4348b55c45853f78e`. Its verified evidence establishes
+the Phase 12 technical-audit predicate without reopening a closed finding or
+creating a new technical finding. All ten technical domains passed, all 15
+finding rows were reviewed, and all 54 changed technical paths retain an
+authority owner with no module or dependency delta.
+
+Phase 12 is Complete and v1.x technical correctness is established. Findings
+remain 15 confirmed and 14/15 closed; CK-V11316-007 remains open for the
+Phase 13A/13B/13C and Phase 19 documentation/process lifecycle. Phase 13 is
+Next in PLAN mode, but Phase 13A has not started and requires successful fresh
+hosted certification of the exact R1R42 documentation head plus separate owner
+authorization. V1.x full closure is not established.
