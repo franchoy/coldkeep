@@ -956,6 +956,8 @@ func TestCKV11316015StableZeroStateMachineRequiresBackoffAndThirdClassification(
 
 func TestCKV11316015SharedProcessingChunkWaitersConvergeWithoutDeadlock(t *testing.T) {
 	fixture := newCKV11316015ConcurrentFixture(t)
+	fixture.repo.DB.SetMaxOpenConns(1)
+	fixture.repo.DB.SetMaxIdleConns(1)
 	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "suspicious")
 	unrelatedPath, unrelatedPayload := seedCKV11316015UnrelatedSharedLogical(t, fixture)
 	if err := os.WriteFile(unrelatedPath, unrelatedPayload, 0o600); err != nil {
