@@ -303,35 +303,38 @@ class Fixture:
         self,
         base_sha: str,
         head_sha: str,
-        merge_sha: str,
+        merge_sha: object,
         *,
         repository: str = "fixture/coldkeep",
         base_repository: str | None = None,
         head_repository: str | None = None,
+        include_merge_sha: bool = True,
     ) -> Path:
         path = self.root / "strict-pr-event.json"
+        pull_request: dict[str, object] = {
+            "base": {
+                "ref": "main",
+                "sha": base_sha,
+                "repo": {
+                    "full_name": base_repository or repository,
+                },
+            },
+            "head": {
+                "ref": "release/v1.13.10",
+                "sha": head_sha,
+                "repo": {
+                    "full_name": head_repository or repository,
+                },
+            },
+        }
+        if include_merge_sha:
+            pull_request["merge_commit_sha"] = merge_sha
         path.write_text(
             json.dumps(
                 {
                     "repository": {"full_name": repository},
                     "number": 7,
-                    "pull_request": {
-                        "base": {
-                            "ref": "main",
-                            "sha": base_sha,
-                            "repo": {
-                                "full_name": base_repository or repository,
-                            },
-                        },
-                        "head": {
-                            "ref": "release/v1.13.10",
-                            "sha": head_sha,
-                            "repo": {
-                                "full_name": head_repository or repository,
-                            },
-                        },
-                        "merge_commit_sha": merge_sha,
-                    },
+                    "pull_request": pull_request,
                 },
             ),
             encoding="utf-8",
@@ -1433,7 +1436,11 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
 
     def assert_fails_rule(self, process: ProcessResult, rule: str) -> None:
         self.assertEqual(process.returncode, 1, process.stdout + process.stderr)
-        self.assertIn(f"[{rule}]", process.stdout)
+        if process.stdout.startswith("{"):
+            payload = json.loads(process.stdout)
+            self.assertIn(rule, [item["rule"] for item in payload["violations"]])
+        else:
+            self.assertIn(f"[{rule}]", process.stdout)
 
     def test_v1_pre_release_json_contract(self) -> None:
         fixture = self.fixture()
@@ -1675,6 +1682,309 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
             payload["evidence_scope"], "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY"
         )
         self.assertNotEqual(synthetic, candidate)
+
+    def test_synthetic_pr_merge_identity_value_matrix(self) -> None:
+        cases: tuple[tuple[str, object, bool, bool], ...] = (
+            ("matching-string", "synthetic", True, True),
+            ("present-null", None, True, True),
+            ("missing-key", None, False, False),
+            ("conflicting-head-sha", "candidate", True, False),
+            ("empty-string", "", True, False),
+            ("literal-null-string", "null", True, False),
+            ("truncated-sha", "truncated", True, False),
+            ("zero-sha", "0" * 40, True, False),
+            ("case-variant", "uppercase", True, False),
+            ("whitespace-variant", "whitespace", True, False),
+            ("boolean", True, True, False),
+            ("number", 7, True, False),
+            ("array", ["synthetic"], True, False),
+            ("object", {"sha": "synthetic"}, True, False),
+        )
+        for name, value, include, accepted in cases:
+            with self.subTest(case=name):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                git(fixture.root, "checkout", "--detach", synthetic)
+                actual_value = (
+                    {
+                        "synthetic": synthetic,
+                        "candidate": candidate,
+                        "truncated": synthetic[:-1],
+                        "uppercase": synthetic.upper(),
+                        "whitespace": f" {synthetic}",
+                    }.get(value, value)
+                    if isinstance(value, str)
+                    else value
+                )
+                event = fixture.write_strict_pr_event(
+                    base,
+                    candidate,
+                    actual_value,
+                    include_merge_sha=include,
+                )
+                for mode in ("auto", "pre-release"):
+                    with self.subTest(mode=mode):
+                        process = fixture.run(
+                            "--state",
+                            mode,
+                            "--json",
+                            env=fixture.strict_pr_env(event, synthetic),
+                        )
+                        if accepted:
+                            payload = self.json_result(process)
+                            self.assertEqual(payload["artifact_state"], "pre-release")
+                            self.assertEqual(
+                                payload["evidence_scope"],
+                                "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY",
+                            )
+                            self.assertEqual(
+                                payload["authorization_status"],
+                                "NOT_EVALUATED_BY_VALIDATOR",
+                            )
+                            self.assertEqual(
+                                payload["certification_status"],
+                                "PENDING_EXTERNAL_EVIDENCE",
+                            )
+                        else:
+                            self.assert_fails_rule(process, "CKRS016")
+
+    def test_direct_pr_head_does_not_require_merge_identity(self) -> None:
+        fixture = self.fixture()
+        candidate = fixture.prepare_immutable_pre_release()
+        base = fixture.rev_parse(f"{candidate}^")
+        git(fixture.root, "checkout", "--detach", candidate)
+        event = fixture.write_strict_pr_event(
+            base,
+            candidate,
+            None,
+            include_merge_sha=False,
+        )
+        for mode in ("auto", "pre-release"):
+            with self.subTest(mode=mode):
+                payload = self.json_result(
+                    fixture.run(
+                        "--state",
+                        mode,
+                        "--json",
+                        env=fixture.strict_pr_env(event, candidate),
+                    )
+                )
+                self.assertEqual(
+                    payload["evidence_scope"],
+                    "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY",
+                )
+
+    def test_nullable_synthetic_pr_identity_controls_fail_closed(self) -> None:
+        cases = (
+            "environment-repository-wrong",
+            "environment-repository-missing",
+            "payload-repository-wrong",
+            "payload-repository-missing",
+            "base-repository-fork",
+            "head-repository-fork",
+            "pr-number-ref-mismatch",
+            "pr-number-wrong-type",
+            "full-ref-wrong",
+            "short-ref-wrong",
+            "head-branch-wrong",
+            "base-branch-wrong",
+            "runtime-sha-wrong",
+            "payload-head-ref-wrong",
+            "payload-base-ref-wrong",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                git(fixture.root, "checkout", "--detach", synthetic)
+                event = fixture.write_strict_pr_event(base, candidate, None)
+                env = fixture.strict_pr_env(event, synthetic)
+                payload = json.loads(event.read_text(encoding="utf-8"))
+                if case == "environment-repository-wrong":
+                    env["GITHUB_REPOSITORY"] = "fork/coldkeep"
+                elif case == "environment-repository-missing":
+                    env["GITHUB_REPOSITORY"] = ""
+                elif case == "payload-repository-wrong":
+                    payload["repository"] = {"full_name": "fork/coldkeep"}
+                elif case == "payload-repository-missing":
+                    del payload["repository"]
+                elif case == "base-repository-fork":
+                    payload["pull_request"]["base"]["repo"]["full_name"] = "fork/coldkeep"
+                elif case == "head-repository-fork":
+                    payload["pull_request"]["head"]["repo"]["full_name"] = "fork/coldkeep"
+                elif case == "pr-number-ref-mismatch":
+                    payload["number"] = 8
+                elif case == "pr-number-wrong-type":
+                    payload["number"] = "7"
+                elif case == "full-ref-wrong":
+                    env["GITHUB_REF"] = "refs/pull/8/merge"
+                elif case == "short-ref-wrong":
+                    env["GITHUB_REF_NAME"] = "8/merge"
+                elif case == "head-branch-wrong":
+                    env["GITHUB_HEAD_REF"] = "release/v1.13.9"
+                elif case == "base-branch-wrong":
+                    env["GITHUB_BASE_REF"] = "develop"
+                elif case == "runtime-sha-wrong":
+                    env["GITHUB_SHA"] = candidate
+                elif case == "payload-head-ref-wrong":
+                    payload["pull_request"]["head"]["ref"] = "release/v1.13.9"
+                else:
+                    payload["pull_request"]["base"]["ref"] = "develop"
+                event.write_text(json.dumps(payload), encoding="utf-8")
+                for mode in ("auto", "pre-release"):
+                    with self.subTest(mode=mode):
+                        process = fixture.run("--state", mode, env=env)
+                        if case == "head-branch-wrong" and mode == "auto":
+                            self.assertEqual(process.returncode, 2)
+                            self.assertIn(
+                                "unable to infer release lifecycle",
+                                process.stderr,
+                            )
+                        else:
+                            self.assert_fails_rule(process, "CKRS016")
+
+    def test_nullable_synthetic_pr_event_shape_controls_fail_closed(self) -> None:
+        cases = (
+            "missing-event-path",
+            "unreadable-event-path",
+            "invalid-utf8",
+            "malformed-json",
+            "non-object-event",
+            "missing-pull-request",
+            "wrong-type-pull-request",
+            "missing-base-object",
+            "wrong-type-base-object",
+            "missing-head-object",
+            "wrong-type-head-object",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                git(fixture.root, "checkout", "--detach", synthetic)
+                event = fixture.write_strict_pr_event(base, candidate, None)
+                env = fixture.strict_pr_env(event, synthetic)
+                payload = json.loads(event.read_text(encoding="utf-8"))
+                if case == "missing-event-path":
+                    env["GITHUB_EVENT_PATH"] = ""
+                elif case == "unreadable-event-path":
+                    env["GITHUB_EVENT_PATH"] = str(fixture.root / "absent-event.json")
+                elif case == "invalid-utf8":
+                    event.write_bytes(b"\xff")
+                elif case == "malformed-json":
+                    event.write_text("{", encoding="utf-8")
+                elif case == "non-object-event":
+                    event.write_text("[]", encoding="utf-8")
+                elif case == "missing-pull-request":
+                    del payload["pull_request"]
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "wrong-type-pull-request":
+                    payload["pull_request"] = []
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "missing-base-object":
+                    del payload["pull_request"]["base"]
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "wrong-type-base-object":
+                    payload["pull_request"]["base"] = []
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "missing-head-object":
+                    del payload["pull_request"]["head"]
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                else:
+                    payload["pull_request"]["head"] = []
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                for mode in ("auto", "pre-release"):
+                    with self.subTest(mode=mode):
+                        self.assert_fails_rule(
+                            fixture.run("--state", mode, env=env),
+                            "CKRS016",
+                        )
+
+    def test_nullable_synthetic_pr_object_and_topology_controls_fail_closed(self) -> None:
+        cases = (
+            "absent-head-object",
+            "absent-base-object",
+            "existing-wrong-head-object",
+            "existing-wrong-base-object",
+            "wrong-parent-count",
+            "reversed-parent-order",
+            "wrong-tree",
+            "checkout-runtime-conflict",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                checked_out = synthetic
+                event = fixture.write_strict_pr_event(base, candidate, None)
+                payload = json.loads(event.read_text(encoding="utf-8"))
+                if case == "absent-head-object":
+                    payload["pull_request"]["head"]["sha"] = "f" * 40
+                elif case == "absent-base-object":
+                    payload["pull_request"]["base"]["sha"] = "e" * 40
+                elif case == "existing-wrong-head-object":
+                    payload["pull_request"]["head"]["sha"] = base
+                elif case == "existing-wrong-base-object":
+                    payload["pull_request"]["base"]["sha"] = candidate
+                elif case in ("wrong-parent-count", "reversed-parent-order", "wrong-tree"):
+                    tree = fixture.rev_parse(f"{candidate}^{{tree}}")
+                    parents = ["-p", base]
+                    if case == "reversed-parent-order":
+                        parents = ["-p", candidate, "-p", base]
+                    elif case == "wrong-tree":
+                        write(fixture.root, "TEST_FIXTURE_ONLY.txt", "wrong tree\n")
+                        git(fixture.root, "add", "TEST_FIXTURE_ONLY.txt")
+                        tree = run_process(
+                            [resolved_executable("git"), "-C", str(fixture.root), "write-tree"],
+                            check=True,
+                        ).stdout.strip()
+                        parents = ["-p", base, "-p", candidate]
+                    checked_out = run_process(
+                        [
+                            resolved_executable("git"),
+                            "-C",
+                            str(fixture.root),
+                            "commit-tree",
+                            tree,
+                            *parents,
+                            "-m",
+                            f"TEST_FIXTURE_ONLY {case}",
+                        ],
+                        check=True,
+                    ).stdout.strip()
+                else:
+                    checked_out = candidate
+                event.write_text(json.dumps(payload), encoding="utf-8")
+                git(fixture.root, "checkout", "--detach", checked_out)
+                env = fixture.strict_pr_env(event, synthetic if case == "checkout-runtime-conflict" else checked_out)
+                for mode in ("auto", "pre-release"):
+                    with self.subTest(mode=mode):
+                        self.assert_fails_rule(
+                            fixture.run("--state", mode, env=env),
+                            "CKRS016",
+                        )
+
+    def test_nullable_synthetic_pr_context_impersonation_is_rejected(self) -> None:
+        fixture = self.fixture()
+        base, candidate, synthetic = fixture.create_immutable_merge()
+        git(fixture.root, "checkout", "--detach", synthetic)
+        event = fixture.write_strict_pr_event(base, candidate, None)
+        env = fixture.strict_pr_env(event, synthetic)
+        env.update(
+            {
+                "GITHUB_EVENT_NAME": "push",
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_REF_NAME": "main",
+                "GITHUB_HEAD_REF": "",
+                "GITHUB_BASE_REF": "",
+            }
+        )
+        for mode in ("auto", "merged-pending-final-main-certification"):
+            with self.subTest(mode=mode):
+                self.assert_fails_rule(
+                    fixture.run("--state", mode, env=env),
+                    "CKRS016",
+                )
 
     def test_synthetic_pr_fork_and_wrong_head_fail(self) -> None:
         for forked, wrong_head in ((True, False), (False, True)):

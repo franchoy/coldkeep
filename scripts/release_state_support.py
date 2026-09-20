@@ -757,10 +757,15 @@ def strict_release_pr_context(
         return False
     if head == head_sha:
         return True
-    merge_sha = pull_request.get("merge_commit_sha")
+    if "merge_commit_sha" not in pull_request:
+        return False
+    merge_sha = pull_request["merge_commit_sha"]
+    merge_field_valid = merge_sha is None or (
+        isinstance(merge_sha, str) and merge_sha == head
+    )
     parents = commit_parents(root, head)
     return bool(
-        merge_sha == head
+        merge_field_valid
         and parents == [base_sha, head_sha]
         and commit_tree(root, head) == commit_tree(root, head_sha)
     )
