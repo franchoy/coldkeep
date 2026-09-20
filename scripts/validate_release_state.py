@@ -15,6 +15,7 @@ from release_state_support import (
     Document,
     InternalError,
     LifecycleBoundaries,
+    LifecycleDeclaration,
     ValidationResult,
     accepted_post_release_pr,
     accepted_recovery_pr,
@@ -37,6 +38,7 @@ from release_state_support import (
     main_context,
     metadata_named,
     parse_lifecycle_boundaries,
+    parse_lifecycle_declaration,
     parse_phase_states,
     parse_source_version,
     passed_gate,
@@ -55,6 +57,7 @@ from release_state_support import (
     tracker_values_disagree,
     unlabeled_historical_definitions,
     validate_root,
+    v1_context_scope,
     version_from_release,
 )
 
@@ -63,12 +66,44 @@ VALIDATOR = "coldkeep-release-state"
 STATES = (
     "development",
     "pre-release",
+    "merged-pending-final-main-certification",
     "merged-not-tagged",
+    "tagged-pending-tag-certification",
     "tagged",
     "released",
     "post-release-pending-closure",
+    "post-release-closure-candidate",
     "post-release-closed",
 )
+
+OBLIGATION_ORDER = (
+    "phase15-protected-merge-authorization",
+    "protected-main-merge",
+    "final-main-certification",
+    "phase17-tag-authorization",
+    "tag-certification",
+    "publication-authorization",
+    "publication-verification",
+    "protected-closure-certification",
+    "phase19t-terminal-audit",
+)
+
+
+def outstanding_obligations(state: str) -> list[str]:
+    """Return deterministic external obligations not evaluated here."""
+    starts = {
+        "development": 0,
+        "pre-release": 0,
+        "merged-pending-final-main-certification": 2,
+        "merged-not-tagged": 2,
+        "tagged-pending-tag-certification": 3,
+        "tagged": 4,
+        "released": 6,
+        "post-release-pending-closure": 6,
+        "post-release-closure-candidate": 7,
+        "post-release-closed": 9,
+    }
+    return list(OBLIGATION_ORDER[starts.get(state, 0) :])
 
 
 def read_document(
@@ -197,7 +232,11 @@ def check_ckrs006(version: str, doc: Optional[Document], state: Optional[str], r
         "active"
         if state == "development"
         else "published"
-        if state in ("post-release-pending-closure", "post-release-closed")
+        if state in (
+            "post-release-pending-closure",
+            "post-release-closure-candidate",
+            "post-release-closed",
+        )
         else "ready"
     )
     if f"v{version}" not in text or expected_word not in text.lower():
@@ -238,7 +277,10 @@ def check_ckrs007(
         "Active"
         if state == "development"
         else "Published; post-publication closure pending"
-        if state == "post-release-pending-closure"
+        if state in (
+            "post-release-pending-closure",
+            "post-release-closure-candidate",
+        )
         else "Released and operationally closed"
         if state == "post-release-closed"
         else "Ready for release"
@@ -333,6 +375,7 @@ def check_ckrs013(
     phase_states: dict[int, tuple[str, int]],
     state: Optional[str],
     boundaries: Optional[LifecycleBoundaries],
+    declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
 ) -> None:
     invalid_phase = first_invalid_phase(phase_numbers, phase_states)
@@ -342,8 +385,10 @@ def check_ckrs013(
         message = f"invalid phase status progression at Phase {invalid_phase}: invalid status"
         result.add("CKRS013", phase_doc.path, line, message)
         return
-    if state and not lifecycle_progression_valid(state, ordered, boundaries):
-        model = "boundary-aware" if boundaries else "legacy"
+    if state and not lifecycle_progression_valid(
+        state, ordered, boundaries, declaration
+    ):
+        model = "immutable-transition-v1" if declaration else "boundary-aware" if boundaries else "legacy"
         message = (
             "invalid phase status progression at Phase 0: "
             f"{state} does not satisfy the {model} lifecycle contract"
@@ -397,6 +442,7 @@ def check_ckrs012_014(
     docs: dict[str, Optional[Document]],
     state: Optional[str],
     boundaries: Optional[LifecycleBoundaries],
+    declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
 ) -> list[tuple[int, int, list[str]]]:
     phase_doc, checklist_doc = docs["phase_list"], docs["phase_checklist"]
@@ -406,7 +452,13 @@ def check_ckrs012_014(
     checklist_numbers, checklist_states = parse_phase_states(checklist_doc, "Phase status")
     check_ckrs012(phase_numbers, checklist_numbers, result)
     check_ckrs013(
-        phase_doc, phase_numbers, phase_states, state, boundaries, result
+        phase_doc,
+        phase_numbers,
+        phase_states,
+        state,
+        boundaries,
+        declaration,
+        result,
     )
     check_phase_status_parity(
         phase_numbers,
@@ -454,12 +506,38 @@ def infer_state(
     version: str,
     phase_doc: Optional[Document],
     boundaries: Optional[LifecycleBoundaries],
-) -> tuple[str, tuple[str, str, bool, bool, Optional[str]]]:
+    declaration: Optional[LifecycleDeclaration],
+) -> tuple[
+    str,
+    tuple[str, str, bool, bool, Optional[str]],
+    str,
+]:
     context = git_context(root, version)
     head, branch, exists, annotated, target = context
     env = github_context()
+    ordered: list[str] = []
+    if phase_doc:
+        numbers, phase_states = parse_phase_states(phase_doc, "Status")
+        ordered = [
+            phase_states.get(number, ("missing", 0))[0]
+            for number in numbers
+        ]
     if exact_tag_matches_head(head, exists, annotated, target):
-        return ("tagged" if boundaries else "released"), context
+        if declaration and lifecycle_progression_valid(
+            "tagged-pending-tag-certification",
+            ordered,
+            boundaries,
+            declaration,
+        ):
+            state = "tagged-pending-tag-certification"
+        else:
+            state = "tagged" if boundaries else "released"
+        scope = (
+            v1_context_scope(root, version, state, context, env, declaration)
+            if declaration
+            else "LEGACY_STRUCTURAL_CONTEXT"
+        )
+        return state, context, scope or "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
     release_branch = f"release/v{version}"
     closure_branch = f"release/v{version}-post-publication-closure"
     post_release_context = (
@@ -475,44 +553,78 @@ def infer_state(
         and post_release_context
     ):
         state = (
-            "post-release-closed"
+            "post-release-closure-candidate"
+            if declaration and phases_complete(phase_doc)
+            else "post-release-closed"
             if phases_complete(phase_doc)
             else "post-release-pending-closure"
         )
-        return state, context
+        scope = (
+            v1_context_scope(root, version, state, context, env, declaration)
+            if declaration
+            else "LEGACY_STRUCTURAL_CONTEXT"
+        )
+        return state, context, scope or "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
     recovery_context = (
         branch.startswith(f"recovery/v{version}-")
         or accepted_recovery_pr(version, env)
     )
     if main_context(branch, env) or recovery_context:
-        return "merged-not-tagged", context
+        state = (
+            "merged-pending-final-main-certification"
+            if declaration
+            and lifecycle_progression_valid(
+                "merged-pending-final-main-certification",
+                ordered,
+                boundaries,
+                declaration,
+            )
+            else "merged-not-tagged"
+        )
+        scope = (
+            v1_context_scope(root, version, state, context, env, declaration)
+            if declaration
+            else "LEGACY_STRUCTURAL_CONTEXT"
+        )
+        return state, context, scope or "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
     if branch == release_branch or accepted_release_pr(version, env):
         if boundaries and phase_doc:
-            numbers, states = parse_phase_states(phase_doc, "Status")
-            ordered = [
-                states.get(number, ("missing", 0))[0] for number in numbers
-            ]
             state = (
                 "pre-release"
                 if lifecycle_progression_valid(
-                    "pre-release", ordered, boundaries
+                    "pre-release", ordered, boundaries, declaration
                 )
                 else "development"
             )
         else:
             state = "pre-release" if phases_complete(phase_doc) else "development"
-        return state, context
+        scope = (
+            v1_context_scope(root, version, state, context, env, declaration)
+            if declaration
+            else "LEGACY_STRUCTURAL_CONTEXT"
+        )
+        return state, context, scope or "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
     raise InternalError("git-context", "unable to infer release lifecycle from the current Git context")
 
 
 def check_ckrs016(
+    root: Path,
     version: str,
     state: str,
     context: tuple[str, str, bool, bool, Optional[str]],
+    declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
 ) -> None:
     _, branch, _, _, _ = context
-    if not git_context_matches(version, state, branch, github_context()):
+    if not git_context_matches(
+        version,
+        state,
+        branch,
+        github_context(),
+        root=root,
+        context=context,
+        declaration=declaration,
+    ):
         result.add("CKRS016", ".git", 0, f"Git context branch={branch or 'detached'} is incompatible with {state} for {version}")
 
 
@@ -559,9 +671,13 @@ def check_ckrs017(
     result: ValidationResult,
 ) -> None:
     head, _, exists, annotated, target = context
-    if state in ("tagged", "released"):
+    if state in ("tagged-pending-tag-certification", "tagged", "released"):
         detail = released_tag_detail(head, exists, annotated, target)
-    elif state in ("post-release-pending-closure", "post-release-closed"):
+    elif state in (
+        "post-release-pending-closure",
+        "post-release-closure-candidate",
+        "post-release-closed",
+    ):
         detail = post_release_closed_tag_detail(root, head, exists, annotated, target)
     else:
         detail = "exact tag already exists" if exists else None
@@ -575,6 +691,7 @@ def check_ckrs018(
     state: str,
     phase_doc: Optional[Document],
     boundaries: Optional[LifecycleBoundaries],
+    declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
 ) -> None:
     directory, stem = release_paths(version)
@@ -589,7 +706,7 @@ def check_ckrs018(
             for number in phase_numbers
         ]
     progression_valid = lifecycle_progression_valid(
-        state, ordered, boundaries
+        state, ordered, boundaries, declaration
     )
     if state == "development":
         if gate is not None and passed_gate(gate):
@@ -621,7 +738,10 @@ def check_ckrs018(
                 f"{suffix}",
             )
         return
-    if state == "post-release-pending-closure":
+    if state in (
+        "post-release-pending-closure",
+        "post-release-closure-candidate",
+    ):
         valid = (
             progression_valid
             and gate_status_exact(
@@ -635,11 +755,11 @@ def check_ckrs018(
                 path,
                 0,
                 "current release gate is invalid for "
-                "post-release-pending-closure",
+                f"{state}",
             )
         return
     if not candidate_gate_valid(
-        gate, state, progression_valid, boundaries
+        gate, state, progression_valid, boundaries, declaration
     ):
         result.add(
             "CKRS018",
@@ -658,6 +778,9 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
         return result
     docs = active_docs(root, version, result)
     boundaries, boundary_detail = parse_lifecycle_boundaries(docs["contract"])
+    declaration, declaration_detail = parse_lifecycle_declaration(
+        docs["contract"]
+    )
     phase_numbers: list[int] = []
     if docs["phase_list"]:
         phase_numbers, _ = parse_phase_states(docs["phase_list"], "Status")
@@ -678,13 +801,67 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
             "lifecycle boundary metadata must name ordered merge, publication, "
             "and final closure phases present in the contiguous phase topology",
         )
+    if declaration_detail:
+        result.add(
+            "CKRS019",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            f"lifecycle declaration metadata is invalid: {declaration_detail}",
+        )
+    elif declaration and boundaries is None:
+        result.add(
+            "CKRS019",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            "immutable-transition-v1 requires valid lifecycle boundary metadata",
+        )
     if requested_state == "auto":
-        state, context = infer_state(
-            root, version, docs["phase_list"], boundaries
+        state, context, evidence_scope = infer_state(
+            root,
+            version,
+            docs["phase_list"],
+            boundaries,
+            declaration,
         )
     else:
         state, context = requested_state, git_context(root, version)
+        evidence_scope = (
+            v1_context_scope(
+                root,
+                version,
+                state,
+                context,
+                github_context(),
+                declaration,
+            )
+            if declaration
+            else "LEGACY_STRUCTURAL_CONTEXT"
+        )
+        evidence_scope = evidence_scope or "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
     result.state = state
+    result.artifact_state = state
+    result.outstanding_obligations = outstanding_obligations(state)
+    result.evidence_scope = evidence_scope
+    immutable_only_states = {
+        "merged-pending-final-main-certification",
+        "tagged-pending-tag-certification",
+        "post-release-closure-candidate",
+    }
+    if state in immutable_only_states and declaration is None:
+        result.add(
+            "CKRS019",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            f"{state} requires immutable-transition-v1",
+        )
+    if state == "post-release-closed" and declaration is not None:
+        result.add(
+            "CKRS019",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            "post-release-closed is not representable by immutable-transition-v1; "
+            "Phase 19T owns terminal closure",
+        )
     check_ckrs002(version, docs["version_test"], result)
     check_ckrs003(version, docs["checklist"], result)
     previous_from_changelog = check_ckrs004(version, docs["changelog"], state, result)
@@ -696,12 +873,18 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
     previous = check_ckrs009(version, docs["changelog"], result) or previous_from_changelog
     check_ckrs010(root, previous, result)
     check_ckrs011(previous, docs["readme"], docs["release_readme"], docs["train"], result)
-    check_ckrs012_014(docs, state, boundaries, result)
+    check_ckrs012_014(docs, state, boundaries, declaration, result)
     check_ckrs015(root, docs["phase_list"], result)
-    check_ckrs016(version, state, context, result)
+    check_ckrs016(root, version, state, context, declaration, result)
     check_ckrs017(root, version, state, context, result)
     check_ckrs018(
-        root, version, state, docs["phase_list"], boundaries, result
+        root,
+        version,
+        state,
+        docs["phase_list"],
+        boundaries,
+        declaration,
+        result,
     )
     return result
 
@@ -713,7 +896,12 @@ def emit(result: ValidationResult, as_json: bool) -> int:
             "status": "ok" if not violations else "error",
             "validator": VALIDATOR,
             "state": result.state,
+            "artifact_state": result.artifact_state,
             "active_version": result.active_version,
+            "authorization_status": result.authorization_status,
+            "certification_status": result.certification_status,
+            "outstanding_obligations": result.outstanding_obligations,
+            "evidence_scope": result.evidence_scope,
             "violations": [item.__dict__ for item in violations],
             "error": None,
         }
@@ -734,7 +922,12 @@ def emit_error(error: InternalError, as_json: bool) -> int:
             "status": "error",
             "validator": VALIDATOR,
             "state": None,
+            "artifact_state": None,
             "active_version": None,
+            "authorization_status": "NOT_EVALUATED_BY_VALIDATOR",
+            "certification_status": "PENDING_EXTERNAL_EVIDENCE",
+            "outstanding_obligations": [],
+            "evidence_scope": "UNAVAILABLE",
             "violations": [],
             "error": {"kind": error.kind, "message": error.message},
         }

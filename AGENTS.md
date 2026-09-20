@@ -37,6 +37,10 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
   `docs/release/v1.13/` are binding current authority.
 - Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
   boundary.
+- Phase 15R2 locally versions the validator as `immutable-transition-v1` so
+  later artifacts can be described without self-certifying their operations.
+  Its pending-main, pending-tag, and closure-candidate states are structural
+  only; they do not authorize Phase 16-19 actions or establish full closure.
 
 ## Correctness rules
 

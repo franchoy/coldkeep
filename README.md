@@ -53,6 +53,12 @@ is Next but cannot execute before that authorization. V1.x full closure is not
 established. Planned v1 feature and architecture work remains closed and
 frozen.
 
+The [Phase 15R2 immutable lifecycle contract recovery](docs/release/v1.13/v1.13.16-phase15r2-immutable-lifecycle-contract-recovery.md)
+adds fail-closed structural states for a future normal merge, exact annotated
+tag, and conditional closure while explicitly leaving authorization and
+certification to their external phase owners. It records no live merge, tag,
+publication, or closure.
+
 The latest published stable release remains v1.13.15. Its annotated tag object
 `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
 baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`; release `378768097`, canonical

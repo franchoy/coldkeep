@@ -45,6 +45,10 @@ project, do not start here; start with [README.md](README.md).
   Phase 16 execution remain unauthorized until that audit succeeds. No
   v1.13.16 tag or GitHub release exists, and final v1.x closure remains
   reserved for Phase 19T.
+- Added the Phase 15R2 `immutable-transition-v1` validator contract. It
+  distinguishes normal-merge, annotated-tag, and conditional-closure artifacts
+  without treating local or event-structure checks as authorization,
+  certification, publication, or terminal closure evidence.
 
 ## v1.13.15 - 2026-08-28 — Final v1.x Security, Reproducibility, and Operational Closure
 

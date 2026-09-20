@@ -99,6 +99,12 @@ contract. Protected-merge authority becomes externally effective only if a
 separate owner-authorized Phase 15 audit approves this exact PR head and base.
 Phase 16 is Next but merge and Phase 16 execution are not authorized until
 then. V1.x full closure is not established.
+
+The [Phase 15R2 immutable lifecycle recovery](v1.13.16-phase15r2-immutable-lifecycle-contract-recovery.md)
+adds fail-closed, non-authorizing structural states for the same candidate
+after a normal merge, exact annotated tag, and conditional closure. This is a
+local contract candidate only: live refs, PR state, workflows, tag/release
+absence, Phase 16 Next, and the external authorization boundary are unchanged.
 Phase 8 implementation and certification are complete at executable/evidence
 head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
 `1967df264919a908680db4bc2a3dbf1fa5f673da`,

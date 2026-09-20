@@ -32,8 +32,12 @@ GITHUB_KEYS = (
     "GITHUB_REF",
     "GITHUB_REF_NAME",
     "GITHUB_HEAD_REF",
+    "GITHUB_BASE_REF",
     "GITHUB_EVENT_PATH",
     "GITHUB_REPOSITORY",
+    "GITHUB_SHA",
+    "GITHUB_ACTIONS",
+    "GITHUB_REF_TYPE",
 )
 
 
@@ -200,6 +204,152 @@ class Fixture:
             f"**Tag/publication phase:** {publication}\n"
             f"**Post-publication closure phase:** {closure}\n",
         )
+
+    def enable_immutable_transition(
+        self,
+        model: str = "immutable-transition-v1",
+        repository: str = "fixture/coldkeep",
+    ) -> None:
+        path = (
+            self.root
+            / "docs/release/v1.13/v1.13.10-release-state-validator-contract.md"
+        )
+        content = path.read_text(encoding="utf-8")
+        path.write_text(
+            content
+            + f"**Lifecycle declaration model:** {model}\n"
+            + f"**Canonical repository:** {repository}\n",
+            encoding="utf-8",
+        )
+
+    def rev_parse(self, value: str) -> str:
+        return run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", value],
+            check=True,
+        ).stdout.strip()
+
+    def prepare_immutable_pre_release(self) -> str:
+        self.prepare_boundary_pre_release()
+        self.enable_immutable_transition()
+        self.commit()
+        return self.rev_parse("HEAD")
+
+    def create_immutable_merge(self) -> tuple[str, str, str]:
+        candidate = self.prepare_immutable_pre_release()
+        base = self.rev_parse(f"{candidate}^")
+        git(self.root, "branch", "-f", "main", base)
+        git(self.root, "checkout", "main")
+        git(
+            self.root,
+            "merge",
+            "--no-ff",
+            "release/v1.13.10",
+            "-m",
+            "TEST_FIXTURE_ONLY immutable merge",
+        )
+        return base, candidate, self.rev_parse("HEAD")
+
+    def write_push_event(
+        self,
+        ref: str,
+        before: str,
+        after: str,
+        *,
+        repository: str = "fixture/coldkeep",
+        created: bool = False,
+        deleted: bool = False,
+        forced: bool = False,
+    ) -> Path:
+        path = self.root / "push-event.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "ref": ref,
+                    "before": before,
+                    "after": after,
+                    "created": created,
+                    "deleted": deleted,
+                    "forced": forced,
+                    "repository": {"full_name": repository},
+                },
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def push_env(
+        self,
+        ref: str,
+        head: str,
+        event: Path,
+        *,
+        repository: str = "fixture/coldkeep",
+        ref_type: str = "branch",
+    ) -> dict[str, str]:
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": ref,
+            "GITHUB_REF_NAME": ref.removeprefix("refs/heads/").removeprefix(
+                "refs/tags/"
+            ),
+            "GITHUB_REF_TYPE": ref_type,
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": repository,
+            "GITHUB_SHA": head,
+        }
+
+    def write_strict_pr_event(
+        self,
+        base_sha: str,
+        head_sha: str,
+        merge_sha: str,
+        *,
+        repository: str = "fixture/coldkeep",
+        base_repository: str | None = None,
+        head_repository: str | None = None,
+    ) -> Path:
+        path = self.root / "strict-pr-event.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "repository": {"full_name": repository},
+                    "number": 7,
+                    "pull_request": {
+                        "base": {
+                            "ref": "main",
+                            "sha": base_sha,
+                            "repo": {
+                                "full_name": base_repository or repository,
+                            },
+                        },
+                        "head": {
+                            "ref": "release/v1.13.10",
+                            "sha": head_sha,
+                            "repo": {
+                                "full_name": head_repository or repository,
+                            },
+                        },
+                        "merge_commit_sha": merge_sha,
+                    },
+                },
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def strict_pr_env(self, event: Path, checked_out: str) -> dict[str, str]:
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/pull/7/merge",
+            "GITHUB_REF_NAME": "7/merge",
+            "GITHUB_HEAD_REF": "release/v1.13.10",
+            "GITHUB_BASE_REF": "main",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "fixture/coldkeep",
+            "GITHUB_SHA": checked_out,
+        }
 
     def set_phase_states(self, statuses: list[str]) -> None:
         for relative, field in (
@@ -1264,6 +1414,456 @@ class ReleaseStateValidatorTests(unittest.TestCase):
                 env=fixture.post_release_pr_env(event, closure),
             ).returncode,
             0,
+        )
+
+
+class ImmutableLifecycleTransitionTests(unittest.TestCase):
+    def fixture(self) -> Fixture:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        return fixture
+
+    def assert_ok(self, process: ProcessResult) -> None:
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertEqual(process.stderr, "")
+
+    def json_result(self, process: ProcessResult) -> dict[str, object]:
+        self.assert_ok(process)
+        return json.loads(process.stdout)
+
+    def assert_fails_rule(self, process: ProcessResult, rule: str) -> None:
+        self.assertEqual(process.returncode, 1, process.stdout + process.stderr)
+        self.assertIn(f"[{rule}]", process.stdout)
+
+    def test_v1_pre_release_json_contract(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_immutable_pre_release()
+        payload = self.json_result(fixture.run("--state", "auto", "--json"))
+        self.assertEqual(payload["state"], "pre-release")
+        self.assertEqual(payload["artifact_state"], "pre-release")
+        self.assertEqual(
+            payload["authorization_status"], "NOT_EVALUATED_BY_VALIDATOR"
+        )
+        self.assertEqual(
+            payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
+        )
+        self.assertEqual(payload["evidence_scope"], "LOCAL_RELEASE_BRANCH")
+        self.assertEqual(
+            payload["outstanding_obligations"],
+            list(validate_release_state.OBLIGATION_ORDER),
+        )
+
+    def test_v1_release_push_context_is_distinct(self) -> None:
+        fixture = self.fixture()
+        candidate = fixture.prepare_immutable_pre_release()
+        base = fixture.rev_parse(f"{candidate}^")
+        event = fixture.write_push_event(
+            "refs/heads/release/v1.13.10", base, candidate
+        )
+        payload = self.json_result(
+            fixture.run(
+                "--json",
+                env=fixture.push_env(
+                    "refs/heads/release/v1.13.10", candidate, event
+                ),
+            )
+        )
+        self.assertEqual(payload["artifact_state"], "pre-release")
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+        )
+
+    def test_declaration_forms_fail_closed(self) -> None:
+        mutations = (
+            (
+                "**Canonical repository:** fixture/coldkeep\n",
+                "",
+            ),
+            (
+                "**Canonical repository:** fixture/coldkeep\n",
+                "**Canonical repository:** fixture/coldkeep\n"
+                "**Canonical repository:** fixture/coldkeep\n",
+            ),
+            (
+                "immutable-transition-v1",
+                "immutable-transition-v2",
+            ),
+            (
+                "fixture/coldkeep",
+                "not-a-repository",
+            ),
+            (
+                "**Lifecycle declaration model:** immutable-transition-v1",
+                "**Lifecycle declaration model:** ",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(new=new):
+                fixture = self.fixture()
+                fixture.prepare_boundary_pre_release()
+                fixture.enable_immutable_transition()
+                replace(
+                    fixture.root,
+                    "docs/release/v1.13/v1.13.10-release-state-validator-contract.md",
+                    old,
+                    new,
+                )
+                self.assert_fails_rule(fixture.run("--state", "pre-release"), "CKRS019")
+
+    def test_immutable_state_requires_declaration(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_boundary_pre_release()
+        fixture.commit()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_fails_rule(
+            fixture.run(
+                "--state", "merged-pending-final-main-certification"
+            ),
+            "CKRS019",
+        )
+
+    def test_local_normal_merge_auto_and_explicit_agree(self) -> None:
+        fixture = self.fixture()
+        _, candidate, merge = fixture.create_immutable_merge()
+        auto = self.json_result(fixture.run("--json"))
+        explicit = self.json_result(
+            fixture.run(
+                "--state",
+                "merged-pending-final-main-certification",
+                "--json",
+            )
+        )
+        self.assertEqual(fixture.rev_parse("HEAD"), merge)
+        self.assertEqual(
+            auto["artifact_state"],
+            "merged-pending-final-main-certification",
+        )
+        self.assertEqual(auto["artifact_state"], explicit["artifact_state"])
+        self.assertEqual(auto["evidence_scope"], "LOCAL_ARTIFACT_ONLY")
+        self.assertIn(
+            "final-main-certification", auto["outstanding_obligations"]
+        )
+        unchanged = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(fixture.root),
+                "diff",
+                "--exit-code",
+                candidate,
+                merge,
+                "--",
+                "docs/release/v1.13/v1.13.10-phase-list.md",
+                "docs/release/v1.13/v1.13.10-release-gate.md",
+            ],
+            check=False,
+        )
+        self.assertEqual(unchanged.returncode, 0, unchanged.stdout + unchanged.stderr)
+
+    def test_hosted_main_push_validates_event_and_topology(self) -> None:
+        fixture = self.fixture()
+        base, _, merge = fixture.create_immutable_merge()
+        event = fixture.write_push_event("refs/heads/main", base, merge)
+        payload = self.json_result(
+            fixture.run(
+                "--json",
+                env=fixture.push_env("refs/heads/main", merge, event),
+            )
+        )
+        self.assertEqual(
+            payload["artifact_state"],
+            "merged-pending-final-main-certification",
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_MAIN_PUSH_CONTEXT_CONSISTENCY",
+        )
+
+    def test_main_push_impersonation_matrix_fails(self) -> None:
+        cases = (
+            {"repository": "fork/coldkeep"},
+            {"created": True},
+            {"deleted": True},
+            {"forced": True},
+            {"before": "0" * 40},
+            {"after": "f" * 40},
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                base, _, merge = fixture.create_immutable_merge()
+                event = fixture.write_push_event(
+                    "refs/heads/main",
+                    str(case.get("before", base)),
+                    str(case.get("after", merge)),
+                    repository=str(case.get("repository", "fixture/coldkeep")),
+                    created=bool(case.get("created", False)),
+                    deleted=bool(case.get("deleted", False)),
+                    forced=bool(case.get("forced", False)),
+                )
+                env = fixture.push_env("refs/heads/main", merge, event)
+                self.assert_fails_rule(fixture.run(env=env), "CKRS016")
+
+    def test_main_push_environment_and_payload_conflicts_fail(self) -> None:
+        cases = ("wrong-ref", "wrong-event", "wrong-sha", "missing", "unreadable")
+        for case in cases:
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                base, _, merge = fixture.create_immutable_merge()
+                event = fixture.write_push_event("refs/heads/main", base, merge)
+                env = fixture.push_env("refs/heads/main", merge, event)
+                if case == "wrong-ref":
+                    env["GITHUB_REF"] = "refs/heads/release/v1.13.10"
+                elif case == "wrong-event":
+                    env["GITHUB_EVENT_NAME"] = "pull_request"
+                elif case == "wrong-sha":
+                    env["GITHUB_SHA"] = base
+                elif case == "missing":
+                    env["GITHUB_EVENT_PATH"] = ""
+                else:
+                    event.write_text("{", encoding="utf-8")
+                self.assert_fails_rule(fixture.run(env=env), "CKRS016")
+
+    def test_main_topology_rejects_wrong_tree_and_parent_order(self) -> None:
+        fixture = self.fixture()
+        _, candidate, _ = fixture.create_immutable_merge()
+        write(fixture.root, "TEST_FIXTURE_ONLY.txt", "wrong merge tree\n")
+        git(fixture.root, "add", "TEST_FIXTURE_ONLY.txt")
+        git(fixture.root, "commit", "--amend", "--no-edit")
+        self.assert_fails_rule(fixture.run(), "CKRS016")
+
+        fixture = self.fixture()
+        _, candidate, _ = fixture.create_immutable_merge()
+        base = fixture.rev_parse(f"{candidate}^")
+        tree = fixture.rev_parse(f"{candidate}^{{tree}}")
+        bad = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(fixture.root),
+                "commit-tree",
+                tree,
+                "-p",
+                candidate,
+                "-p",
+                base,
+                "-m",
+                "TEST_FIXTURE_ONLY reversed parents",
+            ],
+            check=True,
+        ).stdout.strip()
+        git(fixture.root, "reset", "--hard", bad)
+        self.assert_fails_rule(fixture.run(), "CKRS016")
+
+    def test_nonmerge_main_commit_cannot_self_certify(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_immutable_pre_release()
+        git(fixture.root, "branch", "-M", "main")
+        self.assert_fails_rule(fixture.run(), "CKRS016")
+
+    def test_synthetic_pr_checkout_uses_payload_head_and_base(self) -> None:
+        fixture = self.fixture()
+        base, candidate, synthetic = fixture.create_immutable_merge()
+        git(fixture.root, "checkout", "--detach", synthetic)
+        event = fixture.write_strict_pr_event(base, candidate, synthetic)
+        payload = self.json_result(
+            fixture.run("--json", env=fixture.strict_pr_env(event, synthetic))
+        )
+        self.assertEqual(payload["artifact_state"], "pre-release")
+        self.assertEqual(
+            payload["evidence_scope"], "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY"
+        )
+        self.assertNotEqual(synthetic, candidate)
+
+    def test_synthetic_pr_fork_and_wrong_head_fail(self) -> None:
+        for forked, wrong_head in ((True, False), (False, True)):
+            with self.subTest(forked=forked, wrong_head=wrong_head):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                git(fixture.root, "checkout", "--detach", synthetic)
+                event = fixture.write_strict_pr_event(
+                    base,
+                    "f" * 40 if wrong_head else candidate,
+                    synthetic,
+                    head_repository="fork/coldkeep" if forked else None,
+                )
+                self.assert_fails_rule(
+                    fixture.run(env=fixture.strict_pr_env(event, synthetic)),
+                    "CKRS016",
+                )
+
+    def test_annotated_tag_is_pending_not_published(self) -> None:
+        fixture = self.fixture()
+        _, _, merge = fixture.create_immutable_merge()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "TEST_FIXTURE_ONLY")
+        payload = self.json_result(fixture.run("--json"))
+        self.assertEqual(
+            payload["artifact_state"], "tagged-pending-tag-certification"
+        )
+        self.assertEqual(payload["evidence_scope"], "LOCAL_TAG_ARTIFACT_ONLY")
+        self.assertEqual(fixture.rev_parse("v1.13.10^{}"), merge)
+        self.assertIn("tag-certification", payload["outstanding_obligations"])
+
+    def test_tag_creation_event_distinguishes_object_and_commit(self) -> None:
+        fixture = self.fixture()
+        _, _, merge = fixture.create_immutable_merge()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "TEST_FIXTURE_ONLY")
+        tag_object = fixture.rev_parse("refs/tags/v1.13.10")
+        self.assertNotEqual(tag_object, merge)
+        event = fixture.write_push_event(
+            "refs/tags/v1.13.10",
+            "0" * 40,
+            merge,
+            created=True,
+        )
+        payload = self.json_result(
+            fixture.run(
+                "--json",
+                env=fixture.push_env(
+                    "refs/tags/v1.13.10",
+                    merge,
+                    event,
+                    ref_type="tag",
+                ),
+            )
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "GITHUB_TAG_EVENT_CONTEXT_CONSISTENCY"
+        )
+        wrong = fixture.write_push_event(
+            "refs/tags/v1.13.10",
+            "0" * 40,
+            tag_object,
+            created=True,
+        )
+        self.assert_fails_rule(
+            fixture.run(
+                env=fixture.push_env(
+                    "refs/tags/v1.13.10",
+                    merge,
+                    wrong,
+                    ref_type="tag",
+                )
+            ),
+            "CKRS016",
+        )
+
+    def test_lightweight_tag_rejected_for_pending_state(self) -> None:
+        fixture = self.fixture()
+        fixture.create_immutable_merge()
+        git(fixture.root, "tag", "v1.13.10")
+        self.assert_fails_rule(
+            fixture.run(
+                "--state", "tagged-pending-tag-certification"
+            ),
+            "CKRS017",
+        )
+
+    def test_closure_pending_and_candidate_are_conditional(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_boundary_pending()
+        fixture.enable_immutable_transition()
+        fixture.commit()
+        pending = self.json_result(fixture.run("--json"))
+        self.assertEqual(
+            pending["artifact_state"], "post-release-pending-closure"
+        )
+        fixture.set_phase_states(["Complete", "Complete", "Complete"])
+        fixture.commit()
+        candidate = self.json_result(fixture.run("--json"))
+        self.assertEqual(
+            candidate["artifact_state"], "post-release-closure-candidate"
+        )
+        self.assertEqual(
+            candidate["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
+        )
+        self.assertEqual(
+            candidate["outstanding_obligations"],
+            ["protected-closure-certification", "phase19t-terminal-audit"],
+        )
+
+    def test_first_closure_main_projection_needs_no_future_receipt(self) -> None:
+        fixture = self.fixture()
+        published = fixture.publish_boundary_pending()
+        fixture.enable_immutable_transition()
+        fixture.commit()
+        git(fixture.root, "branch", "-f", "main", published)
+        git(fixture.root, "checkout", "main")
+        git(
+            fixture.root,
+            "merge",
+            "--no-ff",
+            "release/v1.13.10",
+            "-m",
+            "TEST_FIXTURE_ONLY closure merge",
+        )
+        merge = fixture.rev_parse("HEAD")
+        event = fixture.write_push_event("refs/heads/main", published, merge)
+        payload = self.json_result(
+            fixture.run(
+                "--json",
+                env=fixture.push_env("refs/heads/main", merge, event),
+            )
+        )
+        self.assertEqual(
+            payload["artifact_state"], "post-release-pending-closure"
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_CLOSURE_MAIN_CONTEXT_CONSISTENCY",
+        )
+        self.assertEqual(
+            payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
+        )
+
+    def test_v1_terminal_closure_bypass_is_rejected(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_boundary_pending()
+        fixture.enable_immutable_transition()
+        fixture.set_phase_states(["Complete", "Complete", "Complete"])
+        self.assert_fails_rule(
+            fixture.run("--state", "post-release-closed"),
+            "CKRS019",
+        )
+
+    def test_candidate_gate_literal_cannot_project_closure(self) -> None:
+        fixture = self.fixture()
+        fixture.publish_boundary_pending()
+        fixture.enable_immutable_transition()
+        fixture.set_phase_states(["Complete", "Complete", "Complete"])
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-release-gate.md",
+            "Passed and released — closure pending",
+            "Passed — pre-merge prerequisites complete",
+        )
+        self.assert_fails_rule(
+            fixture.run("--state", "post-release-closure-candidate"),
+            "CKRS018",
+        )
+
+    def test_failure_json_keeps_non_authorizing_vocabulary(self) -> None:
+        fixture = self.fixture()
+        fixture.prepare_immutable_pre_release()
+        replace(
+            fixture.root,
+            "docs/release/v1.13/v1.13.10-release-state-validator-contract.md",
+            "fixture/coldkeep",
+            "malformed",
+        )
+        process = fixture.run("--state", "pre-release", "--json")
+        self.assertEqual(process.returncode, 1)
+        payload = json.loads(process.stdout)
+        self.assertEqual(payload["artifact_state"], "pre-release")
+        self.assertEqual(
+            payload["authorization_status"], "NOT_EVALUATED_BY_VALIDATOR"
+        )
+        self.assertEqual(
+            payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "LEGACY_STRUCTURAL_CONTEXT"
         )
 
 

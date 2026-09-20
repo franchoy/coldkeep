@@ -19,6 +19,11 @@ METADATA = re.compile(r"^\*\*(Release|Status|Branch|Phase status):\*\*\s*(.*)$")
 LIFECYCLE_BOUNDARY = re.compile(
     r"^\*\*(Merge-complete phase|Tag/publication phase|Post-publication closure phase):\*\*\s*(.*)$",
 )
+LIFECYCLE_DECLARATION = re.compile(
+    r"^\*\*(Lifecycle declaration model|Canonical repository):\*\*\s*(.*)$",
+)
+SUPPORTED_LIFECYCLE_DECLARATION = "immutable-transition-v1"
+GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 ProcessResult = subprocess.CompletedProcess[str]
 
 
@@ -35,6 +40,11 @@ class ValidationResult:
     state: Optional[str]
     active_version: Optional[str]
     violations: list[Violation] = field(default_factory=list)
+    artifact_state: Optional[str] = None
+    authorization_status: str = "NOT_EVALUATED_BY_VALIDATOR"
+    certification_status: str = "PENDING_EXTERNAL_EVIDENCE"
+    outstanding_obligations: list[str] = field(default_factory=list)
+    evidence_scope: str = "UNAVAILABLE"
 
     def add(self, rule: str, path: str, line: int, message: str) -> None:
         self.violations.append(Violation(rule, path, line, message))
@@ -101,6 +111,14 @@ class LifecycleBoundaries:
     merge: int
     publication: int
     closure: int
+
+
+@dataclass(frozen=True)
+class LifecycleDeclaration:
+    """Versioned immutable-transition opt-in and canonical repository."""
+
+    model: str
+    canonical_repository: str
 
 
 def heading_closes_section(line: str, level: int) -> bool:
@@ -323,6 +341,32 @@ def parse_lifecycle_boundaries(
     ), None
 
 
+def parse_lifecycle_declaration(
+    doc: Optional[Document],
+) -> tuple[Optional[LifecycleDeclaration], Optional[str]]:
+    """Parse an optional declaration without falling back on partial opt-in."""
+    if doc is None:
+        return None, None
+    expected = ("Lifecycle declaration model", "Canonical repository")
+    values: dict[str, list[str]] = {name: [] for name in expected}
+    for line in doc.lines:
+        match = LIFECYCLE_DECLARATION.match(line)
+        if match:
+            values[match.group(1)].append(match.group(2).strip())
+    if not any(values.values()):
+        return None, None
+    if any(len(values[name]) != 1 for name in expected):
+        return None, "lifecycle declaration is partial, empty, or ambiguous"
+    model = values["Lifecycle declaration model"][0]
+    repository = values["Canonical repository"][0]
+    if model != SUPPORTED_LIFECYCLE_DECLARATION:
+        return None, "lifecycle declaration model is unsupported"
+    repository_pattern = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    if re.fullmatch(repository_pattern, repository) is None:
+        return None, "canonical repository is malformed"
+    return LifecycleDeclaration(model, repository), None
+
+
 def lifecycle_boundaries_match_topology(
     boundaries: LifecycleBoundaries,
     phase_numbers: list[int],
@@ -376,10 +420,13 @@ def changelog_entry_valid(
     """Return whether the active changelog entry matches its lifecycle."""
     expected_dated = state in (
         "pre-release",
+        "merged-pending-final-main-certification",
         "merged-not-tagged",
+        "tagged-pending-tag-certification",
         "tagged",
         "released",
         "post-release-pending-closure",
+        "post-release-closure-candidate",
         "post-release-closed",
     )
     dated = bool(re.search(r"-\s+\d{4}-\d{2}-\d{2}\b", suffix))
@@ -401,7 +448,11 @@ def readme_current_state_valid(
         "active"
         if state == "development"
         else "published"
-        if state in ("post-release-pending-closure", "post-release-closed")
+        if state in (
+            "post-release-pending-closure",
+            "post-release-closure-candidate",
+            "post-release-closed",
+        )
         else "ready"
     )
     return (
@@ -554,6 +605,7 @@ def lifecycle_progression_valid(
     state: str,
     ordered: list[str],
     boundaries: Optional[LifecycleBoundaries],
+    declaration: Optional[LifecycleDeclaration] = None,
 ) -> bool:
     """Validate legacy or boundary-aware phase progression for one state."""
     complete = bool(ordered) and all(value == "Complete" for value in ordered)
@@ -572,6 +624,14 @@ def lifecycle_progression_valid(
         return ordered.index("Next") < boundaries.merge
     if state == "pre-release":
         return progression_at_phase(ordered, boundaries.merge)
+    if state in (
+        "merged-pending-final-main-certification",
+        "tagged-pending-tag-certification",
+    ):
+        return bool(
+            declaration
+            and progression_at_phase(ordered, boundaries.merge)
+        )
     if state in ("merged-not-tagged", "tagged"):
         next_positions = [
             index for index, value in enumerate(ordered) if value == "Next"
@@ -585,8 +645,10 @@ def lifecycle_progression_valid(
         )
     if state == "post-release-pending-closure":
         return progression_at_phase(ordered, boundaries.closure)
+    if state == "post-release-closure-candidate":
+        return bool(declaration and complete)
     if state == "post-release-closed":
-        return complete
+        return declaration is None and complete
     return False
 
 
@@ -597,8 +659,12 @@ def github_context() -> dict[str, str]:
         "GITHUB_REF",
         "GITHUB_REF_NAME",
         "GITHUB_HEAD_REF",
+        "GITHUB_BASE_REF",
         "GITHUB_EVENT_PATH",
         "GITHUB_REPOSITORY",
+        "GITHUB_SHA",
+        "GITHUB_ACTIONS",
+        "GITHUB_REF_TYPE",
     )
     return {key: os.environ.get(key, "") for key in keys}
 
@@ -609,6 +675,295 @@ def accepted_release_pr(version: str, env: dict[str, str]) -> bool:
         env["GITHUB_EVENT_NAME"] == "pull_request"
         and env["GITHUB_REF"].startswith("refs/pull/")
         and env["GITHUB_HEAD_REF"] == f"release/v{version}"
+    )
+
+
+def _load_event(path: str) -> Optional[dict[str, object]]:
+    """Load one bounded GitHub event object, returning none on invalid input."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def github_context_present(env: dict[str, str]) -> bool:
+    """Return whether any reviewed GitHub context field is populated."""
+    return any(env.values())
+
+
+def _repository_name(value: object) -> Optional[str]:
+    return value.get("full_name") if isinstance(value, dict) else None
+
+
+def _pr_ref_identity(value: object) -> Optional[tuple[object, object, object]]:
+    if not isinstance(value, dict):
+        return None
+    return value.get("ref"), value.get("sha"), _repository_name(value.get("repo"))
+
+
+def strict_release_pr_context(
+    root: Path,
+    version: str,
+    head: str,
+    env: dict[str, str],
+    canonical_repository: str,
+) -> bool:
+    """Validate a same-repository PR head or synthetic merge checkout."""
+    if not (
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "pull_request"
+        and re.fullmatch(r"refs/pull/\d+/merge", env["GITHUB_REF"])
+        and env["GITHUB_REF_NAME"]
+        == env["GITHUB_REF"].removeprefix("refs/pull/")
+        and env["GITHUB_HEAD_REF"] == f"release/v{version}"
+        and env["GITHUB_BASE_REF"] == "main"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and env["GITHUB_SHA"] == head
+        and env["GITHUB_EVENT_PATH"]
+    ):
+        return False
+    payload = _load_event(env["GITHUB_EVENT_PATH"])
+    pull_request = payload.get("pull_request") if payload else None
+    if not isinstance(pull_request, dict):
+        return False
+    number = payload.get("number") if payload else None
+    if not (
+        isinstance(number, int)
+        and number > 0
+        and env["GITHUB_REF"] == f"refs/pull/{number}/merge"
+    ):
+        return False
+    if _repository_name(payload.get("repository")) != canonical_repository:
+        return False
+    base = _pr_ref_identity(pull_request.get("base"))
+    pr_head = _pr_ref_identity(pull_request.get("head"))
+    if not base or not pr_head:
+        return False
+    base_ref, base_sha, base_repo = base
+    head_ref, head_sha, head_repo = pr_head
+    if not (
+        base_ref == "main"
+        and head_ref == f"release/v{version}"
+        and base_repo == canonical_repository
+        and head_repo == canonical_repository
+        and isinstance(base_sha, str)
+        and GIT_SHA.fullmatch(base_sha)
+        and isinstance(head_sha, str)
+        and GIT_SHA.fullmatch(head_sha)
+        and commit_tree(root, base_sha) is not None
+        and commit_tree(root, head_sha) is not None
+    ):
+        return False
+    if head == head_sha:
+        return True
+    merge_sha = pull_request.get("merge_commit_sha")
+    parents = commit_parents(root, head)
+    return bool(
+        merge_sha == head
+        and parents == [base_sha, head_sha]
+        and commit_tree(root, head) == commit_tree(root, head_sha)
+    )
+
+
+def strict_post_release_pr_context(
+    root: Path,
+    version: str,
+    head: str,
+    env: dict[str, str],
+    canonical_repository: str,
+) -> bool:
+    """Validate a same-repository recovery or closure PR checkout."""
+    if not (
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "pull_request"
+        and re.fullmatch(r"refs/pull/\d+/merge", env["GITHUB_REF"])
+        and env["GITHUB_REF_NAME"]
+        == env["GITHUB_REF"].removeprefix("refs/pull/")
+        and env["GITHUB_BASE_REF"] == "main"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and env["GITHUB_SHA"] == head
+        and env["GITHUB_EVENT_PATH"]
+    ):
+        return False
+    payload = _load_event(env["GITHUB_EVENT_PATH"])
+    pull_request = payload.get("pull_request") if payload else None
+    if not isinstance(pull_request, dict):
+        return False
+    number = payload.get("number") if payload else None
+    if not (
+        isinstance(number, int)
+        and number > 0
+        and env["GITHUB_REF"] == f"refs/pull/{number}/merge"
+    ):
+        return False
+    if _repository_name(payload.get("repository")) != canonical_repository:
+        return False
+    base = _pr_ref_identity(pull_request.get("base"))
+    pr_head = _pr_ref_identity(pull_request.get("head"))
+    if not base or not pr_head:
+        return False
+    base_ref, base_sha, base_repo = base
+    head_ref, head_sha, head_repo = pr_head
+    allowed_heads = {
+        f"release/v{version}",
+        f"release/v{version}-post-publication-closure",
+    }
+    if not (
+        base_ref == "main"
+        and head_ref in allowed_heads
+        and env["GITHUB_HEAD_REF"] == head_ref
+        and base_repo == canonical_repository
+        and head_repo == canonical_repository
+        and isinstance(base_sha, str)
+        and GIT_SHA.fullmatch(base_sha)
+        and isinstance(head_sha, str)
+        and GIT_SHA.fullmatch(head_sha)
+        and commit_tree(root, base_sha) is not None
+        and commit_tree(root, head_sha) is not None
+    ):
+        return False
+    if head == head_sha:
+        return True
+    parents = commit_parents(root, head)
+    return bool(
+        pull_request.get("merge_commit_sha") == head
+        and parents == [base_sha, head_sha]
+        and commit_tree(root, head) == commit_tree(root, head_sha)
+    )
+
+
+def strict_release_push_context(
+    version: str,
+    head: str,
+    env: dict[str, str],
+    canonical_repository: str,
+) -> bool:
+    """Validate a release-branch push event without treating it as a merge."""
+    expected_ref = f"refs/heads/release/v{version}"
+    payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
+    before = payload.get("before") if payload else None
+    return bool(
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "push"
+        and env["GITHUB_REF"] == expected_ref
+        and env["GITHUB_REF_NAME"] == f"release/v{version}"
+        and env["GITHUB_REF_TYPE"] == "branch"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and env["GITHUB_SHA"] == head
+        and payload
+        and payload.get("ref") == expected_ref
+        and payload.get("after") == head
+        and isinstance(before, str)
+        and GIT_SHA.fullmatch(before)
+        and before != "0" * 40
+        and payload.get("created") is False
+        and payload.get("deleted") is False
+        and payload.get("forced") is False
+        and _repository_name(payload.get("repository")) == canonical_repository
+    )
+
+
+def commit_parents(root: Path, commit: str) -> list[str]:
+    """Return ordered commit parents, or an empty list for an invalid object."""
+    completed = run_git(
+        root, ["rev-list", "--parents", "-n", "1", commit], allow_failure=True
+    )
+    if completed.returncode:
+        return []
+    parts = completed.stdout.strip().split()
+    return parts[1:] if parts and parts[0] == commit else []
+
+
+def commit_tree(root: Path, commit: str) -> Optional[str]:
+    """Return one commit tree, or none for an invalid object."""
+    completed = run_git(
+        root, ["rev-parse", f"{commit}^{{tree}}"], allow_failure=True
+    )
+    value = completed.stdout.strip()
+    return value if completed.returncode == 0 and GIT_SHA.fullmatch(value) else None
+
+
+def normal_merge_artifact(
+    root: Path,
+    head: str,
+    expected_first_parent: Optional[str] = None,
+) -> bool:
+    """Validate a normal two-parent merge preserving the second-parent tree."""
+    parents = commit_parents(root, head)
+    if len(parents) != 2:
+        return False
+    first, second = parents
+    return bool(
+        (expected_first_parent is None or first == expected_first_parent)
+        and strict_git_ancestor(root, first, second)
+        and commit_tree(root, head) == commit_tree(root, second)
+    )
+
+
+def strict_main_push_context(
+    root: Path,
+    head: str,
+    env: dict[str, str],
+    canonical_repository: str,
+) -> bool:
+    """Validate event/Git consistency for one normal main push merge."""
+    payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
+    before = payload.get("before") if payload else None
+    return bool(
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "push"
+        and env["GITHUB_REF"] == "refs/heads/main"
+        and env["GITHUB_REF_NAME"] == "main"
+        and env["GITHUB_REF_TYPE"] == "branch"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and env["GITHUB_SHA"] == head
+        and payload
+        and payload.get("ref") == "refs/heads/main"
+        and payload.get("after") == head
+        and isinstance(before, str)
+        and GIT_SHA.fullmatch(before)
+        and before != "0" * 40
+        and payload.get("created") is False
+        and payload.get("deleted") is False
+        and payload.get("forced") is False
+        and _repository_name(payload.get("repository")) == canonical_repository
+        and normal_merge_artifact(root, head, before)
+    )
+
+
+def strict_tag_push_context(
+    root: Path,
+    version: str,
+    head: str,
+    env: dict[str, str],
+    canonical_repository: str,
+) -> bool:
+    """Validate ordinary tag-creation event context separately from main."""
+    expected_ref = f"refs/tags/v{version}"
+    payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
+    tag_object_result = run_git(
+        root, ["rev-parse", expected_ref], allow_failure=True
+    )
+    tag_object = tag_object_result.stdout.strip()
+    return bool(
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "push"
+        and env["GITHUB_REF"] == expected_ref
+        and env["GITHUB_REF_NAME"] == f"v{version}"
+        and env["GITHUB_REF_TYPE"] == "tag"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and env["GITHUB_SHA"] == head
+        and payload
+        and payload.get("ref") == expected_ref
+        and payload.get("before") == "0" * 40
+        and tag_object_result.returncode == 0
+        and GIT_SHA.fullmatch(tag_object)
+        and payload.get("after") == head
+        and payload.get("created") is True
+        and payload.get("deleted") is False
+        and payload.get("forced") is False
+        and _repository_name(payload.get("repository")) == canonical_repository
     )
 
 
@@ -685,13 +1040,104 @@ def phases_complete(phase_doc: Optional[Document]) -> bool:
     )
 
 
+def v1_context_scope(
+    root: Path,
+    version: str,
+    state: str,
+    context: tuple[str, str, bool, bool, Optional[str]],
+    env: dict[str, str],
+    declaration: LifecycleDeclaration,
+) -> Optional[str]:
+    """Return bounded structural evidence scope for one v1 state."""
+    head, branch, _, _, _ = context
+    release_branch = f"release/v{version}"
+    closure_branch = f"release/v{version}-post-publication-closure"
+    any_github = github_context_present(env)
+    if state in ("development", "pre-release"):
+        if not any_github and branch == release_branch:
+            return "LOCAL_RELEASE_BRANCH"
+        if strict_release_push_context(
+            version, head, env, declaration.canonical_repository
+        ):
+            return "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY"
+        if strict_release_pr_context(
+            root, version, head, env, declaration.canonical_repository
+        ):
+            return "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY"
+        return None
+    if state == "merged-pending-final-main-certification":
+        if not any_github and branch == "main" and normal_merge_artifact(root, head):
+            return "LOCAL_ARTIFACT_ONLY"
+        if strict_main_push_context(
+            root, head, env, declaration.canonical_repository
+        ):
+            return "GITHUB_MAIN_PUSH_CONTEXT_CONSISTENCY"
+        return None
+    if state == "merged-not-tagged":
+        if not any_github and (
+            branch == "main" or branch.startswith(f"recovery/v{version}-")
+        ):
+            return "LOCAL_RECONCILED_ARTIFACT"
+        if strict_main_push_context(
+            root, head, env, declaration.canonical_repository
+        ):
+            return "GITHUB_MAIN_PUSH_CONTEXT_CONSISTENCY"
+        if accepted_recovery_pr(version, env):
+            return "GITHUB_RECOVERY_PR_CONTEXT_CONSISTENCY"
+        return None
+    if state in ("tagged-pending-tag-certification", "tagged"):
+        if not any_github:
+            if state == "tagged-pending-tag-certification" and not normal_merge_artifact(
+                root, head
+            ):
+                return None
+            return "LOCAL_TAG_ARTIFACT_ONLY"
+        if strict_tag_push_context(
+            root, version, head, env, declaration.canonical_repository
+        ):
+            if state == "tagged-pending-tag-certification" and not normal_merge_artifact(
+                root, head
+            ):
+                return None
+            return "GITHUB_TAG_EVENT_CONTEXT_CONSISTENCY"
+        return None
+    if state in (
+        "post-release-pending-closure",
+        "post-release-closure-candidate",
+    ):
+        if not any_github and branch in ("main", release_branch, closure_branch):
+            return "LOCAL_CLOSURE_ARTIFACT_ONLY"
+        if strict_main_push_context(
+            root, head, env, declaration.canonical_repository
+        ):
+            return "GITHUB_CLOSURE_MAIN_CONTEXT_CONSISTENCY"
+        if strict_post_release_pr_context(
+            root, version, head, env, declaration.canonical_repository
+        ):
+            return "GITHUB_CLOSURE_PR_CONTEXT_CONSISTENCY"
+        return None
+    return None
+
+
 def git_context_matches(
     version: str,
     state: str,
     branch: str,
     env: dict[str, str],
+    *,
+    root: Optional[Path] = None,
+    context: Optional[tuple[str, str, bool, bool, Optional[str]]] = None,
+    declaration: Optional[LifecycleDeclaration] = None,
 ) -> bool:
     """Return whether branch and GitHub refs are compatible with lifecycle."""
+    if declaration is not None:
+        return bool(
+            root
+            and context
+            and v1_context_scope(
+                root, version, state, context, env, declaration
+            )
+        )
     release_branch = f"release/v{version}"
     if state in ("development", "pre-release"):
         return branch == release_branch or accepted_release_pr(version, env)
@@ -825,6 +1271,7 @@ def candidate_gate_valid(
     state: str,
     progression_valid: bool,
     boundaries: Optional[LifecycleBoundaries],
+    declaration: Optional[LifecycleDeclaration] = None,
 ) -> bool:
     """Return whether a candidate gate matches its exact lifecycle state."""
     if not progression_valid:
@@ -835,6 +1282,14 @@ def candidate_gate_valid(
             len(statuses) == 1 and statuses[0].startswith("Passed")
         )
         return legacy_passed and gate_verdict_present(gate)
+    if declaration and state in (
+        "pre-release",
+        "merged-pending-final-main-certification",
+        "tagged-pending-tag-certification",
+    ):
+        return gate_status_exact(
+            gate, "Passed — pre-merge prerequisites complete"
+        ) and gate_verdict_present(gate)
     expected = {
         "pre-release": "Passed — pre-merge prerequisites complete",
         "merged-not-tagged": "Passed — pre-publication prerequisites complete",
