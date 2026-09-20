@@ -18,10 +18,12 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 <!-- coldkeep-current-state:end -->
 
 - `v1.13.16` is the active exceptional critical-maintenance train. Phase 12
-  technical correctness is established; Phase 13 is complete and
-  CK-V11316-007 is closed in the tracked candidate. Phase 14 is Next but is
-  not executable until this exact head passes fresh hosted certification and
-  final read-only Phase 13C recertification.
+  technical correctness is established; Phase 13 and the external Phase 14
+  execution are complete, CK-V11316-007 is closed, and all 15 findings are
+  closed. This is the ready-for-release candidate: Phase 15 tracked completion
+  is conditional on a separate exact-head protected-merge authorization,
+  Phase 16 is Next, and neither merge nor Phase 16 execution is authorized by
+  the tracked candidate alone.
 - `v1.13.15` remains published stable, immutable, and the final planned v1.x
   release. Planned v1 feature and architecture work stays closed and frozen.
 - `v1.13.14` is immutable historical release state. Do not edit its release
@@ -66,9 +68,12 @@ The frozen v1 release-critical execution contract uses Go 1.26.7 with
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
     V1_13_16: ACTIVE_EXCEPTIONAL_CRITICAL_MAINTENANCE
-    RELEASE_STATE: DEVELOPMENT
+    RELEASE_STATE: PRE_RELEASE
     PHASE_12: COMPLETE
     PHASE_13: COMPLETE
+    PHASE_14: COMPLETE
+    PHASE_15: COMPLETE_CONDITIONAL_CANDIDATE
+    PHASE_16: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

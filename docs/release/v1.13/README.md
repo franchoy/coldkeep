@@ -87,18 +87,18 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
-### Current Phase 13 completion candidate and Phase 14 boundary
+### Current pre-release candidate and protected-merge boundary
 
-v1.13.16 remains the active exceptional critical-maintenance source train.
-Phase 13A froze eight sub-findings, Phase 13R1/R1R1 prerequisites and Phase
-13B were hosted-certified, and R2 reconciled the first Phase 13C residuals.
-The second independent Phase 13C re-audit at parent `0b9f48d...` passed all
-8/8 sub-findings with no new CK-007 finding. This tracked candidate closes
-CK-V11316-007, records all 15 findings closed, completes Phase 13, and
-materializes the canonical v1.13.16 release body and checksum. Phase 14 is Next
-but remains non-executable until this exact closure head receives fresh
-hosted certification and final read-only Phase 13C recertification. V1.x full
-closure is not established.
+v1.13.16 remains the active exceptional critical-maintenance source train and
+is ready for release. Phase 13 completed with CK-V11316-007 closed and all 15
+findings closed. The closure head passed fresh hosted certification and final
+exact-head Phase 13C recertification; external Phase 14 execution then
+completed at the development boundary. Phase 15 tracked completion is a
+pre-release conditional candidate assertion required by the lifecycle
+contract. Protected-merge authority becomes externally effective only if a
+separate owner-authorized Phase 15 audit approves this exact PR head and base.
+Phase 16 is Next but merge and Phase 16 execution are not authorized until
+then. V1.x full closure is not established.
 Phase 8 implementation and certification are complete at executable/evidence
 head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
 `1967df264919a908680db4bc2a3dbf1fa5f673da`,

@@ -20,7 +20,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.16 — Unreleased — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
+## v1.13.16 - 2026-09-20 — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
 
 - Activates the separately authorized exceptional v1.x critical-maintenance
   train from immutable v1.13.15 product baseline
@@ -38,9 +38,12 @@ project, do not start here; start with [README.md](README.md).
   closure candidate records all 15 confirmed findings closed, including
   CK-V11316-007, and materializes the canonical source-only v1.13.16 release
   body and checksum.
-- Phase 14 is Next but is not executable until this exact closure head passes
-  fresh hosted certification and a final read-only Phase 13C recertification.
-  No v1.13.16 tag or GitHub release exists yet, and final v1.x closure remains
+- The source candidate is ready for release. External Phase 14 execution is
+  complete. Phase 15 tracked completion is a conditional candidate assertion
+  required by the lifecycle contract; protected-merge authority requires a
+  separate audit of the exact PR head and base. Phase 16 is Next but merge and
+  Phase 16 execution remain unauthorized until that audit succeeds. No
+  v1.13.16 tag or GitHub release exists, and final v1.x closure remains
   reserved for Phase 19T.
 
 ## v1.13.15 - 2026-08-28 — Final v1.x Security, Reproducibility, and Operational Closure

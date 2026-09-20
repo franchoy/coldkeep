@@ -106,9 +106,10 @@ When proposing coverage, provide:
 
 v1.13.16 is the active exceptional critical-maintenance train. Phase 12
 technical correctness is established, Phase 13 is complete, CK-V11316-007 is
-closed, and all 15 findings are closed in the tracked candidate. Phase 14 is
-Next but remains non-executable pending fresh hosted certification and final
-read-only Phase 13C recertification of this exact head. v1.13.15 remains
+closed, and all 15 findings are closed. The source candidate is ready for
+release and external Phase 14 execution is complete. Phase 15 tracked
+completion is conditional on separate exact-head protected-merge authority;
+Phase 16 is Next but cannot execute before that authorization. v1.13.15 remains
 published stable and immutable. Follow the 20-phase plan, exact phase mode,
 and phase allowlist:
 

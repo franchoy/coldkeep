@@ -29,9 +29,10 @@ Annotated tag `v1.13.15` peels to immutable product baseline
 attestation are immutable. v1.13.16 is the active exceptional
 critical-maintenance source train. Phase 12 technical correctness is
 established, Phase 13 is complete, CK-V11316-007 is closed, and all 15
-findings are closed in this tracked candidate. Phase 14 is Next but remains
-non-executable until fresh hosted certification and final read-only Phase 13C
-recertification pass on this exact head. V1.x full closure is not established.
+findings are closed. The source candidate is ready for release and external
+Phase 14 execution is complete. Phase 15 tracked completion is conditional on
+separate exact-head protected-merge authority; Phase 16 is Next but cannot
+execute before it. V1.x full closure is not established.
 Planned v1 feature and architecture work remains closed and frozen. Existing
 security and crash-consistency limitations below are unchanged.
 

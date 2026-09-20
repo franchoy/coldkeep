@@ -19,9 +19,11 @@ Correctness, determinism, crash safety, GC safety, restore safety, verification 
 
 v1.13.16 is the active exceptional critical-maintenance train. Phase 12
 technical correctness is established, Phase 13 is complete, CK-V11316-007 is
-closed, and all 15 findings are closed in the tracked candidate. Phase 14 is
-Next but remains non-executable pending fresh hosted certification and final
-read-only Phase 13C recertification of this exact head. v1.13.15 remains
+closed, and all 15 findings are closed. The source candidate is ready for
+release and external Phase 14 execution is complete. Phase 15 tracked
+completion is a conditional candidate assertion: protected-merge authority
+requires a separate audit of the exact PR head and base. Phase 16 is Next but
+cannot execute before that authorization. v1.13.15 remains
 published stable and immutable as the final planned v1.x release; planned v1
 feature and architecture work remains closed and frozen.
 
