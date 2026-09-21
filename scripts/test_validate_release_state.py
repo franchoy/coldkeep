@@ -7,6 +7,8 @@ import io
 import json
 import os
 import re
+import shutil
+import stat
 import sys
 import tempfile
 import unittest
@@ -38,6 +40,11 @@ GITHUB_KEYS = (
     "GITHUB_SHA",
     "GITHUB_ACTIONS",
     "GITHUB_REF_TYPE",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+    "GITHUB_JOB",
+    "GITHUB_WORKFLOW",
+    "GITHUB_TOKEN",
 )
 
 
@@ -69,6 +76,26 @@ def run_validator(
     return run_process(
         [sys.executable, str(SCRIPT), "--repo-root", str(root), *args],
         cwd=cwd or (root if root.is_dir() else SCRIPT.parent),
+        env=actual_env,
+        check=False,
+    )
+
+
+def run_validator_script(
+    script: Path,
+    root: Path,
+    *args: str,
+    env: dict[str, str] | None = None,
+) -> ProcessResult:
+    """Run an isolated repository's own copied validator implementation."""
+    actual_env = os.environ.copy()
+    for key in GITHUB_KEYS:
+        actual_env.pop(key, None)
+    if env:
+        actual_env.update(env)
+    return run_process(
+        [sys.executable, str(script), "--repo-root", str(root), *args],
+        cwd=root,
         env=actual_env,
         check=False,
     )
@@ -2175,6 +2202,750 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
         self.assertEqual(
             payload["evidence_scope"], "LEGACY_STRUCTURAL_CONTEXT"
         )
+
+
+class DiagnosticCaptureTests(unittest.TestCase):
+    """Prove opt-in diagnostics observe without changing acceptance."""
+
+    def fixture(self) -> Fixture:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        return fixture
+
+    def output_path(self, name: str = "diagnostic.json") -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name) / name
+
+    @staticmethod
+    def load_diagnostic(path: Path) -> dict[str, object]:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def predicate(evaluation: dict[str, object], predicate_id: str) -> dict[str, object]:
+        return next(
+            item
+            for item in evaluation["predicates"]
+            if item["id"] == predicate_id
+        )
+
+    def run_active(
+        self,
+        fixture: Fixture,
+        event: Path,
+        checkout: str,
+        *,
+        mode: str = "auto",
+        output: Path | None = None,
+        env_updates: dict[str, str] | None = None,
+    ) -> tuple[ProcessResult, Path, dict[str, object]]:
+        destination = output or self.output_path()
+        env = fixture.strict_pr_env(event, checkout)
+        env.update({
+            "GITHUB_RUN_ID": "7001",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_JOB": "quality",
+            "GITHUB_WORKFLOW": "CI",
+        })
+        if env_updates:
+            env.update(env_updates)
+        process = fixture.run(
+            "--state",
+            mode,
+            "--diagnostic-json",
+            str(destination),
+            env=env,
+        )
+        return process, destination, self.load_diagnostic(destination)
+
+    def test_diagnostic_pass_equivalence_for_matching_and_null_synthetic_values(self) -> None:
+        for case in ("matching", "null"):
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                git(fixture.root, "checkout", "--detach", synthetic)
+                event = fixture.write_strict_pr_event(
+                    base,
+                    candidate,
+                    synthetic if case == "matching" else None,
+                )
+                environment = fixture.strict_pr_env(event, synthetic)
+                inactive = fixture.run("--state", "auto", env=environment)
+                active, path, diagnostic = self.run_active(
+                    fixture, event, synthetic
+                )
+                self.assertEqual(active.returncode, inactive.returncode)
+                self.assertEqual(active.stdout, inactive.stdout)
+                self.assertEqual(active.stderr, inactive.stderr)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                self.assertEqual(diagnostic["validator"]["result"], "pass")
+                self.assertEqual(diagnostic["validator"]["exit_code"], 0)
+                self.assertEqual(len(diagnostic["evaluations"]), 4)
+                self.assertEqual(len(diagnostic["event_snapshots"]), 4)
+                self.assertEqual(
+                    [item["event_snapshot_id"] for item in diagnostic["evaluations"]],
+                    [1, 2, 3, 4],
+                )
+                self.assertTrue(
+                    all(
+                        item["result"] == "PASS"
+                        for item in diagnostic["evaluations"]
+                        if not item["site"].endswith("release-push")
+                    )
+                )
+
+    def test_different_canonical_merge_values_still_reject_at_equality(self) -> None:
+        alternates = (
+            "569fa4e31d031cbd1f6fdffbd44bbbb2e4813b96",
+            "403cba62924dd85de7ab07c758b4348bd2f97155",
+        )
+        for alternate in alternates:
+            with self.subTest(alternate=alternate):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                git(fixture.root, "checkout", "--detach", synthetic)
+                event = fixture.write_strict_pr_event(base, candidate, alternate)
+                environment = fixture.strict_pr_env(event, synthetic)
+                inactive = fixture.run("--state", "pre-release", env=environment)
+                active, _, diagnostic = self.run_active(
+                    fixture,
+                    event,
+                    synthetic,
+                    mode="pre-release",
+                )
+                self.assertEqual(active.returncode, 1)
+                self.assertEqual(active.returncode, inactive.returncode)
+                self.assertEqual(active.stdout, inactive.stdout)
+                self.assertEqual(active.stderr, inactive.stderr)
+                for evaluation in diagnostic["evaluations"]:
+                    if evaluation["site"].endswith("release-push"):
+                        continue
+                    self.assertEqual(
+                        evaluation["first_rejecting_predicate"],
+                        "pr.payload.merge_value",
+                    )
+                    self.assertEqual(
+                        self.predicate(evaluation, "pr.payload.merge_value")["result"],
+                        "FAIL",
+                    )
+                    self.assertEqual(
+                        self.predicate(evaluation, "pr.git.parents")["result"],
+                        "NOT_EVALUATED",
+                    )
+                self.assertEqual(diagnostic["validator"]["rule_codes"], ["CKRS016"])
+
+    def test_first_rejectors_distinguish_shape_identity_and_topology(self) -> None:
+        cases = (
+            ("missing-merge", "pr.payload.merge_member"),
+            ("wrong-type-merge", "pr.payload.merge_value"),
+            ("wrong-repository", "pr.env.repository"),
+            ("malformed-json", "pr.event.json"),
+        )
+        for case, expected in cases:
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                git(fixture.root, "checkout", "--detach", synthetic)
+                event = fixture.write_strict_pr_event(base, candidate, synthetic)
+                env_updates: dict[str, str] = {}
+                if case == "missing-merge":
+                    payload = json.loads(event.read_text(encoding="utf-8"))
+                    del payload["pull_request"]["merge_commit_sha"]
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "wrong-type-merge":
+                    payload = json.loads(event.read_text(encoding="utf-8"))
+                    payload["pull_request"]["merge_commit_sha"] = {"not": "a-sha"}
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "wrong-repository":
+                    env_updates["GITHUB_REPOSITORY"] = "fork/coldkeep"
+                else:
+                    event.write_text("{", encoding="utf-8")
+                process, _, diagnostic = self.run_active(
+                    fixture,
+                    event,
+                    synthetic,
+                    mode="pre-release",
+                    env_updates=env_updates,
+                )
+                self.assertEqual(process.returncode, 1)
+                for evaluation in diagnostic["evaluations"]:
+                    if evaluation["site"].endswith("release-push"):
+                        continue
+                    self.assertEqual(evaluation["first_rejecting_predicate"], expected)
+                    predicates = evaluation["predicates"]
+                    reject_index = next(
+                        index for index, item in enumerate(predicates)
+                        if item["id"] == expected
+                    )
+                    self.assertTrue(
+                        all(item["result"] == "PASS" for item in predicates[:reject_index])
+                    )
+                    self.assertEqual(predicates[reject_index]["result"], "FAIL")
+                    self.assertTrue(
+                        all(
+                            item["result"] == "NOT_EVALUATED"
+                            for item in predicates[reject_index + 1 :]
+                        )
+                    )
+
+    def test_diagnostic_identity_loader_and_topology_matrix_preserves_rejection(self) -> None:
+        cases = (
+            ("missing-event-path", "pr.env.event_path"),
+            ("unreadable-event", "pr.event.read"),
+            ("invalid-utf8", "pr.event.utf8"),
+            ("wrong-full-ref", "pr.env.full_ref"),
+            ("number-ref-mismatch", "pr.payload.number_ref"),
+            ("wrong-base-ref", "pr.payload.base_ref"),
+            ("runtime-sha-conflict", "pr.env.runtime_sha"),
+            ("absent-head-object", "pr.git.head_object"),
+            ("reversed-parents", "pr.git.parents"),
+            ("wrong-tree", "pr.git.tree"),
+        )
+        for case, expected in cases:
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                base, candidate, synthetic = fixture.create_immutable_merge()
+                checked_out = synthetic
+                event = fixture.write_strict_pr_event(base, candidate, synthetic)
+                payload = json.loads(event.read_text(encoding="utf-8"))
+                env_updates: dict[str, str] = {}
+                if case == "missing-event-path":
+                    env_updates["GITHUB_EVENT_PATH"] = ""
+                elif case == "unreadable-event":
+                    env_updates["GITHUB_EVENT_PATH"] = str(
+                        fixture.root / "TEST_FIXTURE_ONLY-absent-event.json"
+                    )
+                elif case == "invalid-utf8":
+                    event.write_bytes(b"\xff")
+                elif case == "wrong-full-ref":
+                    env_updates["GITHUB_REF"] = "refs/heads/main"
+                elif case == "number-ref-mismatch":
+                    payload["number"] = 8
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "wrong-base-ref":
+                    payload["pull_request"]["base"]["ref"] = "develop"
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                elif case == "runtime-sha-conflict":
+                    env_updates["GITHUB_SHA"] = candidate
+                elif case == "absent-head-object":
+                    payload["pull_request"]["head"]["sha"] = "f" * 40
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                else:
+                    tree = fixture.rev_parse(f"{candidate}^{{tree}}")
+                    parents = ["-p", candidate, "-p", base]
+                    if case == "wrong-tree":
+                        write(fixture.root, "TEST_FIXTURE_ONLY.txt", "wrong tree\n")
+                        git(fixture.root, "add", "TEST_FIXTURE_ONLY.txt")
+                        tree = run_process(
+                            [resolved_executable("git"), "-C", str(fixture.root), "write-tree"],
+                            check=True,
+                        ).stdout.strip()
+                        parents = ["-p", base, "-p", candidate]
+                    checked_out = run_process(
+                        [
+                            resolved_executable("git"),
+                            "-C",
+                            str(fixture.root),
+                            "commit-tree",
+                            tree,
+                            *parents,
+                            "-m",
+                            f"TEST_FIXTURE_ONLY {case}",
+                        ],
+                        check=True,
+                    ).stdout.strip()
+                    payload["pull_request"]["merge_commit_sha"] = checked_out
+                    event.write_text(json.dumps(payload), encoding="utf-8")
+                git(fixture.root, "checkout", "--detach", checked_out)
+                environment = fixture.strict_pr_env(event, checked_out)
+                environment.update(env_updates)
+                inactive = fixture.run(
+                    "--state", "pre-release", env=environment
+                )
+                active, _, diagnostic = self.run_active(
+                    fixture,
+                    event,
+                    checked_out,
+                    mode="pre-release",
+                    env_updates=env_updates,
+                )
+                self.assertEqual(active.returncode, inactive.returncode)
+                self.assertEqual(active.stdout, inactive.stdout)
+                self.assertEqual(active.stderr, inactive.stderr)
+                self.assertEqual(active.returncode, 1)
+                pr_evaluations = [
+                    item
+                    for item in diagnostic["evaluations"]
+                    if not item["site"].endswith("release-push")
+                ]
+                self.assertTrue(pr_evaluations)
+                self.assertTrue(
+                    all(
+                        item["first_rejecting_predicate"] == expected
+                        for item in pr_evaluations
+                    )
+                )
+
+    def test_direct_head_acceptance_skips_synthetic_predicates(self) -> None:
+        fixture = self.fixture()
+        candidate = fixture.prepare_immutable_pre_release()
+        base = fixture.rev_parse(f"{candidate}^")
+        git(fixture.root, "checkout", "--detach", candidate)
+        event = fixture.write_strict_pr_event(
+            base,
+            candidate,
+            None,
+            include_merge_sha=False,
+        )
+        process, _, diagnostic = self.run_active(fixture, event, candidate)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        for evaluation in diagnostic["evaluations"]:
+            if evaluation["site"].endswith("release-push"):
+                continue
+            self.assertEqual(self.predicate(evaluation, "pr.route")["result"], "PASS")
+            for predicate_id in (
+                "pr.payload.merge_member",
+                "pr.payload.merge_value",
+                "pr.git.parents",
+                "pr.git.tree",
+            ):
+                self.assertEqual(
+                    self.predicate(evaluation, predicate_id)["result"],
+                    "NOT_EVALUATED",
+                )
+
+    def test_event_snapshots_bind_the_bytes_consumed_by_each_evaluation(self) -> None:
+        fixture = self.fixture()
+        base, candidate, synthetic = fixture.create_immutable_merge()
+        git(fixture.root, "checkout", "--detach", synthetic)
+        event = fixture.write_strict_pr_event(base, candidate, synthetic)
+        destination = self.output_path()
+        environment = os.environ.copy()
+        for key in GITHUB_KEYS:
+            environment.pop(key, None)
+        environment.update(fixture.strict_pr_env(event, synthetic))
+        original_loader = release_state_support._load_event
+        calls = 0
+
+        def changing_loader(*args: object, **kwargs: object) -> object:
+            nonlocal calls
+            value = original_loader(*args, **kwargs)
+            calls += 1
+            if calls == 2:
+                payload = json.loads(event.read_text(encoding="utf-8"))
+                payload["TEST_FIXTURE_ONLY_EXCLUDED_FIELD"] = "changed-between-evaluations"
+                event.write_text(json.dumps(payload), encoding="utf-8")
+            return value
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
+            release_state_support,
+            "_load_event",
+            side_effect=changing_loader,
+        ), redirect_stderr(stderr), mock.patch("sys.stdout", stdout):
+            status = validate_release_state.main(
+                [
+                    "--repo-root",
+                    str(fixture.root),
+                    "--state",
+                    "auto",
+                    "--diagnostic-json",
+                    str(destination),
+                ]
+            )
+        self.assertEqual(status, 0, stdout.getvalue() + stderr.getvalue())
+        diagnostic = self.load_diagnostic(destination)
+        snapshots = diagnostic["event_snapshots"]
+        self.assertEqual(len(snapshots), 4)
+        evaluation_snapshots = {
+            item["site"]: snapshots[item["event_snapshot_id"] - 1]
+            for item in diagnostic["evaluations"]
+        }
+        self.assertNotEqual(
+            evaluation_snapshots["inference"]["content_sha256"],
+            evaluation_snapshots["ckrs016"]["content_sha256"],
+        )
+        self.assertEqual(
+            [item["event_snapshot_id"] for item in diagnostic["evaluations"]],
+            [1, 2, 3, 4],
+        )
+
+    def test_closed_schema_privacy_and_no_network_capture(self) -> None:
+        # These values are artificial privacy canaries, never real credentials.
+        markers = (
+            "ARTIFICIAL_EVENT_SECRET_6f91",
+            "ARTIFICIAL_ENV_SECRET_702a",
+            "ARTIFICIAL_PATH_SECRET_d301",
+            "ARTIFICIAL_NESTED_SECRET_49bc",
+            "ARTIFICIAL_LABEL_SECRET_20dd",
+        )
+        fixture = self.fixture()
+        base, candidate, synthetic = fixture.create_immutable_merge()
+        git(fixture.root, "checkout", "--detach", synthetic)
+        event = fixture.root / f"{markers[2]}.json"
+        source = fixture.write_strict_pr_event(base, candidate, synthetic)
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload["pull_request"]["body"] = markers[0]
+        payload["sender"] = {markers[3]: markers[3]}
+        payload[markers[3]] = {"nested": markers[3]}
+        event.write_text(json.dumps(payload), encoding="utf-8")
+        process, path, diagnostic = self.run_active(
+            fixture,
+            event,
+            synthetic,
+            env_updates={
+                "GITHUB_TOKEN": markers[1],
+                "GITHUB_JOB": markers[4],
+                "GITHUB_WORKFLOW": markers[4],
+            },
+        )
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        encoded = path.read_text(encoding="utf-8")
+        for marker in markers:
+            self.assertNotIn(marker, encoded)
+            self.assertNotIn(marker, process.stderr)
+        self.assertEqual(
+            set(diagnostic),
+            {"schema", "created_at_utc", "validator", "attribution", "event_snapshots", "evaluations", "capture"},
+        )
+        self.assertEqual(
+            set(diagnostic["capture"]),
+            {"complete", "incomplete_reasons", "same_process", "network_lookups", "whole_event_included", "whole_environment_included", "non_authorizing"},
+        )
+        self.assertEqual(
+            set(diagnostic["validator"]),
+            {"requested_state", "resolved_state", "result", "exit_code", "rule_codes", "authorization_status", "certification_status", "checkout_commit", "checkout_tree", "sources"},
+        )
+        self.assertEqual(
+            set(diagnostic["validator"]["sources"][0]),
+            {"path", "loaded_path_match", "git_blob", "measured_git_blob", "measured_sha256", "matches_git_blob", "bytes"},
+        )
+        self.assertEqual(
+            set(diagnostic["attribution"]),
+            {"repository", "run_id", "run_attempt", "job", "workflow", "event_name"},
+        )
+        snapshot = diagnostic["event_snapshots"][0]
+        self.assertEqual(
+            set(snapshot),
+            {"id", "selector", "path_basename", "path_sha256", "present", "readable", "size_bytes", "content_sha256", "configured_size_limit_bytes", "size_limit_status", "utf8_status", "json_status", "top_level_shape", "projection"},
+        )
+        self.assertEqual(
+            set(snapshot["projection"]),
+            {"repository", "number", "pull_request_shape", "base_shape", "head_shape", "base_ref", "base_sha", "base_repository", "head_ref", "head_sha", "head_repository", "merge_member", "merge_type", "merge_value"},
+        )
+        evaluation = diagnostic["evaluations"][0]
+        self.assertEqual(
+            set(evaluation),
+            {"id", "site", "sequence", "event_snapshot_id", "runtime_context", "result", "first_rejecting_predicate", "predicates"},
+        )
+        self.assertEqual(
+            set(evaluation["runtime_context"]),
+            {"github_actions", "event_name", "full_ref", "short_ref", "head_ref", "base_ref", "repository", "runtime_sha", "actual_checkout_commit", "actual_branch", "checkout_parents", "checkout_tree", "payload_head_tree", "object_availability"},
+        )
+        predicate = evaluation["predicates"][0]
+        self.assertEqual(
+            set(predicate),
+            {"id", "source_path", "source_sha256", "source_line", "input_source", "required_relation", "result", "observed"},
+        )
+        self.assertEqual(
+            set(predicate["observed"]),
+            {"category", "type", "length", "sha256", "value"},
+        )
+        helper_source = next(
+            source
+            for source in diagnostic["validator"]["sources"]
+            if source["path"] == "scripts/release_state_support.py"
+        )
+        self.assertEqual(predicate["source_sha256"], helper_source["measured_sha256"])
+        self.assertIsInstance(predicate["source_line"], int)
+        self.assertEqual(diagnostic["capture"]["network_lookups"], 0)
+        self.assertFalse(diagnostic["capture"]["whole_event_included"])
+        self.assertFalse(diagnostic["capture"]["whole_environment_included"])
+
+    def test_writer_and_serialization_failures_preserve_original_status(self) -> None:
+        fixture = self.fixture()
+        ordinary = fixture.run("--state", "auto")
+
+        constructor_destination = self.output_path("constructor.json")
+        constructor_stdout = io.StringIO()
+        constructor_stderr = io.StringIO()
+        clean_environment = os.environ.copy()
+        for key in GITHUB_KEYS:
+            clean_environment.pop(key, None)
+        with mock.patch.dict(os.environ, clean_environment, clear=True), mock.patch.object(
+            validate_release_state,
+            "DiagnosticRecorder",
+            side_effect=RuntimeError("ARTIFICIAL_CONSTRUCTOR_SECRET_4c82"),
+        ), redirect_stderr(constructor_stderr), mock.patch(
+            "sys.stdout", constructor_stdout
+        ):
+            constructor_status = validate_release_state.main(
+                [
+                    "--repo-root",
+                    str(fixture.root),
+                    "--state",
+                    "auto",
+                    "--diagnostic-json",
+                    str(constructor_destination),
+                ]
+            )
+        self.assertEqual(constructor_status, ordinary.returncode)
+        self.assertEqual(constructor_stdout.getvalue(), ordinary.stdout)
+        self.assertEqual(
+            constructor_stderr.getvalue(),
+            "[release-state] WARNING diagnostic capture failed: output unavailable\n",
+        )
+        self.assertFalse(constructor_destination.exists())
+
+        existing = self.output_path()
+        existing.write_text("owned-before-test\n", encoding="utf-8")
+        failed_writer = fixture.run(
+            "--state",
+            "auto",
+            "--diagnostic-json",
+            str(existing),
+        )
+        self.assertEqual(failed_writer.returncode, ordinary.returncode)
+        self.assertEqual(failed_writer.stdout, ordinary.stdout)
+        self.assertEqual(
+            failed_writer.stderr,
+            "[release-state] WARNING diagnostic capture failed: output unavailable\n",
+        )
+        self.assertEqual(existing.read_text(encoding="utf-8"), "owned-before-test\n")
+
+        marker = "ARTIFICIAL_EXCEPTION_SECRET_31ef"
+        destination = self.output_path("serialization.json")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch.dict(os.environ, clean_environment, clear=True), mock.patch.object(
+            release_state_support.DiagnosticRecorder,
+            "document",
+            side_effect=RuntimeError(marker),
+        ), redirect_stderr(stderr), mock.patch("sys.stdout", stdout):
+            status = validate_release_state.main(
+                [
+                    "--repo-root",
+                    str(fixture.root),
+                    "--state",
+                    "auto",
+                    "--diagnostic-json",
+                    str(destination),
+                ]
+            )
+        self.assertEqual(status, ordinary.returncode)
+        self.assertEqual(stdout.getvalue(), ordinary.stdout)
+        self.assertNotIn(marker, stderr.getvalue())
+        self.assertEqual(
+            stderr.getvalue(),
+            "[release-state] WARNING diagnostic capture failed: output unavailable\n",
+        )
+
+    def test_handled_error_writes_exit_two_diagnostic(self) -> None:
+        destination = self.output_path()
+        missing_root = destination.parent / "missing-repository"
+        process = run_validator(
+            missing_root,
+            "--state",
+            "auto",
+            "--diagnostic-json",
+            str(destination),
+        )
+        self.assertEqual(process.returncode, 2)
+        diagnostic = self.load_diagnostic(destination)
+        self.assertEqual(diagnostic["validator"]["result"], "error")
+        self.assertEqual(diagnostic["validator"]["exit_code"], 2)
+        self.assertIsNone(diagnostic["validator"]["resolved_state"])
+        self.assertFalse(diagnostic["capture"]["complete"])
+
+    def test_source_attribution_distinguishes_committed_dirty_and_synthetic(self) -> None:
+        fixture = self.fixture()
+        scripts = fixture.root / "scripts"
+        scripts.mkdir()
+        for name in ("release_state_support.py", "validate_release_state.py"):
+            shutil.copy2(SCRIPT.with_name(name), scripts / name)
+        git(fixture.root, "add", "scripts")
+        git(fixture.root, "commit", "-m", "TEST_FIXTURE_ONLY validator sources")
+        committed_head = fixture.rev_parse("HEAD")
+        destination = self.output_path("committed.json")
+        process = run_validator_script(
+            scripts / "validate_release_state.py",
+            fixture.root,
+            "--state",
+            "auto",
+            "--diagnostic-json",
+            str(destination),
+        )
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        committed = self.load_diagnostic(destination)
+        self.assertEqual(committed["validator"]["checkout_commit"], committed_head)
+        self.assertTrue(committed["capture"]["complete"])
+        self.assertTrue(
+            all(source["matches_git_blob"] is True for source in committed["validator"]["sources"])
+        )
+
+        with (scripts / "release_state_support.py").open("a", encoding="utf-8") as handle:
+            handle.write("\n# TEST_FIXTURE_ONLY dirty source attribution\n")
+        dirty_destination = self.output_path("dirty.json")
+        dirty_process = run_validator_script(
+            scripts / "validate_release_state.py",
+            fixture.root,
+            "--state",
+            "auto",
+            "--diagnostic-json",
+            str(dirty_destination),
+        )
+        self.assertEqual(dirty_process.returncode, 0, dirty_process.stdout + dirty_process.stderr)
+        dirty = self.load_diagnostic(dirty_destination)
+        helper = next(
+            source for source in dirty["validator"]["sources"]
+            if source["path"] == "scripts/release_state_support.py"
+        )
+        self.assertFalse(helper["matches_git_blob"])
+        self.assertFalse(dirty["capture"]["complete"])
+
+        fixture = self.fixture()
+        scripts = fixture.root / "scripts"
+        scripts.mkdir()
+        for name in ("release_state_support.py", "validate_release_state.py"):
+            shutil.copy2(SCRIPT.with_name(name), scripts / name)
+        git(fixture.root, "add", "scripts")
+        git(fixture.root, "commit", "-m", "TEST_FIXTURE_ONLY validator sources")
+        base, candidate, synthetic = fixture.create_immutable_merge()
+        git(fixture.root, "checkout", "--detach", synthetic)
+        event = fixture.write_strict_pr_event(base, candidate, synthetic)
+        synthetic_destination = self.output_path("synthetic.json")
+        synthetic_process = run_validator_script(
+            scripts / "validate_release_state.py",
+            fixture.root,
+            "--state",
+            "auto",
+            "--diagnostic-json",
+            str(synthetic_destination),
+            env=fixture.strict_pr_env(event, synthetic),
+        )
+        self.assertEqual(synthetic_process.returncode, 0, synthetic_process.stdout + synthetic_process.stderr)
+        synthetic_record = self.load_diagnostic(synthetic_destination)
+        self.assertEqual(synthetic_record["validator"]["checkout_commit"], synthetic)
+        self.assertNotEqual(synthetic_record["validator"]["checkout_commit"], candidate)
+        self.assertTrue(
+            all(source["matches_git_blob"] is True for source in synthetic_record["validator"]["sources"])
+        )
+
+    def test_workflow_diagnostic_enforcement_positive_and_negative_controls(self) -> None:
+        workflow_path = SCRIPT.parents[1] / ".github/workflows/ci.yml"
+        audit_path = SCRIPT.with_name("audit_ci_enforcement.sh")
+        workflow = workflow_path.read_text(encoding="utf-8")
+
+        def probe(value: str) -> ProcessResult:
+            directory = tempfile.TemporaryDirectory()
+            self.addCleanup(directory.cleanup)
+            path = Path(directory.name) / "ci.yml"
+            path.write_text(value, encoding="utf-8")
+            return run_process(
+                ["bash", str(audit_path), "--diagnostic-workflow-probe", str(path)],
+                cwd=SCRIPT.parents[1],
+                check=False,
+            )
+
+        positive = probe(workflow)
+        self.assertEqual(positive.returncode, 0, positive.stdout + positive.stderr)
+        upload_pattern = re.compile(
+            r"\n      - name: Upload release-state diagnostic\n.*?(?=\n      - name:)",
+            re.S,
+        )
+        cases = (
+            (
+                "missing-argument",
+                workflow.replace('              --diagnostic-json "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"\n', "", 1),
+                "applicable release PR passes the diagnostic argument",
+            ),
+            (
+                "omitted-upload",
+                upload_pattern.sub("", workflow, count=1),
+                "missing release-state diagnostic upload",
+            ),
+            (
+                "wrong-order",
+                workflow.replace(
+                    "      - name: Upload release-state diagnostic\n",
+                    "      - name: TEST_FIXTURE_ONLY interposed step\n        run: 'true'\n\n      - name: Upload release-state diagnostic\n",
+                    1,
+                ),
+                "upload must immediately follow validation",
+            ),
+            (
+                "success-only-upload",
+                workflow.replace("always() && github.event_name", "success() && github.event_name", 1),
+                "diagnostic upload uses always and the release-PR scope",
+            ),
+            (
+                "missing-release-scope",
+                workflow.replace(
+                    "if: ${{ always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/') }}",
+                    "if: ${{ always() }}",
+                    1,
+                ),
+                "diagnostic upload uses always and the release-PR scope",
+            ),
+            (
+                "wrong-path",
+                workflow.replace(
+                    "          path: ${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json",
+                    "          path: ${{ runner.temp }}/wrong-diagnostic.json",
+                    1,
+                ),
+                "diagnostic upload uses the exact single-file path",
+            ),
+            (
+                "wrong-name",
+                workflow.replace("          name: release-state-diagnostic-", "          name: wrong-diagnostic-", 1),
+                "diagnostic artifact name is run/job/checkout attributed",
+            ),
+            (
+                "wrong-retention",
+                workflow.replace("          retention-days: 14", "          retention-days: 7", 1),
+                "diagnostic artifact retention is fourteen days",
+            ),
+            (
+                "missing-file-warn",
+                workflow.replace("          if-no-files-found: error", "          if-no-files-found: warn", 1),
+                "diagnostic upload fails on missing current capture",
+            ),
+            (
+                "wildcard-upload",
+                workflow.replace(
+                    "          path: ${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json",
+                    "          path: ${{ runner.temp }}/*.json",
+                    1,
+                ),
+                "single-file enforcement",
+            ),
+            (
+                "masked-status",
+                workflow.replace(
+                    "            python3 scripts/validate_release_state.py --state auto\n          fi",
+                    "            python3 scripts/validate_release_state.py --state auto || true\n          fi",
+                    1,
+                ),
+                "validator status must remain blocking and unmasked",
+            ),
+            (
+                "continue-on-error",
+                workflow.replace(
+                    "      - name: Validate repository release state\n",
+                    "      - name: Validate repository release state\n        continue-on-error: true\n",
+                    1,
+                ),
+                "validator status must remain blocking and unmasked",
+            ),
+        )
+        for name, mutated, expected in cases:
+            with self.subTest(name=name):
+                self.assertNotEqual(mutated, workflow)
+                result = probe(mutated)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(expected, result.stderr)
 
 
 class LifecycleBoundaryCompatibilityTests(unittest.TestCase):

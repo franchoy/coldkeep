@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Optional
 
 from release_state_support import (
     CHANGELOG_HEADING,
+    DiagnosticRecorder,
     Document,
     InternalError,
     LifecycleBoundaries,
@@ -507,6 +509,7 @@ def infer_state(
     phase_doc: Optional[Document],
     boundaries: Optional[LifecycleBoundaries],
     declaration: Optional[LifecycleDeclaration],
+    diagnostic: Optional[DiagnosticRecorder] = None,
 ) -> tuple[
     str,
     tuple[str, str, bool, bool, Optional[str]],
@@ -533,7 +536,16 @@ def infer_state(
         else:
             state = "tagged" if boundaries else "released"
         scope = (
-            v1_context_scope(root, version, state, context, env, declaration)
+            v1_context_scope(
+                root,
+                version,
+                state,
+                context,
+                env,
+                declaration,
+                diagnostic,
+                "inference",
+            )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
         )
@@ -560,7 +572,16 @@ def infer_state(
             else "post-release-pending-closure"
         )
         scope = (
-            v1_context_scope(root, version, state, context, env, declaration)
+            v1_context_scope(
+                root,
+                version,
+                state,
+                context,
+                env,
+                declaration,
+                diagnostic,
+                "inference",
+            )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
         )
@@ -582,7 +603,16 @@ def infer_state(
             else "merged-not-tagged"
         )
         scope = (
-            v1_context_scope(root, version, state, context, env, declaration)
+            v1_context_scope(
+                root,
+                version,
+                state,
+                context,
+                env,
+                declaration,
+                diagnostic,
+                "inference",
+            )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
         )
@@ -599,7 +629,16 @@ def infer_state(
         else:
             state = "pre-release" if phases_complete(phase_doc) else "development"
         scope = (
-            v1_context_scope(root, version, state, context, env, declaration)
+            v1_context_scope(
+                root,
+                version,
+                state,
+                context,
+                env,
+                declaration,
+                diagnostic,
+                "inference",
+            )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
         )
@@ -614,6 +653,7 @@ def check_ckrs016(
     context: tuple[str, str, bool, bool, Optional[str]],
     declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
+    diagnostic: Optional[DiagnosticRecorder] = None,
 ) -> None:
     _, branch, _, _, _ = context
     if not git_context_matches(
@@ -624,6 +664,8 @@ def check_ckrs016(
         root=root,
         context=context,
         declaration=declaration,
+        diagnostic=diagnostic,
+        diagnostic_site="ckrs016",
     ):
         result.add("CKRS016", ".git", 0, f"Git context branch={branch or 'detached'} is incompatible with {state} for {version}")
 
@@ -770,7 +812,11 @@ def check_ckrs018(
         )
 
 
-def validate(root: Path, requested_state: str) -> ValidationResult:
+def validate(
+    root: Path,
+    requested_state: str,
+    diagnostic: Optional[DiagnosticRecorder] = None,
+) -> ValidationResult:
     result = ValidationResult(None, None)
     version = parse_source_version(root, result)
     result.active_version = version
@@ -822,6 +868,7 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
             docs["phase_list"],
             boundaries,
             declaration,
+            diagnostic,
         )
     else:
         state, context = requested_state, git_context(root, version)
@@ -833,6 +880,8 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
                 context,
                 github_context(),
                 declaration,
+                diagnostic,
+                "explicit-state",
             )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
@@ -875,7 +924,15 @@ def validate(root: Path, requested_state: str) -> ValidationResult:
     check_ckrs011(previous, docs["readme"], docs["release_readme"], docs["train"], result)
     check_ckrs012_014(docs, state, boundaries, declaration, result)
     check_ckrs015(root, docs["phase_list"], result)
-    check_ckrs016(root, version, state, context, declaration, result)
+    check_ckrs016(
+        root,
+        version,
+        state,
+        context,
+        declaration,
+        result,
+        diagnostic,
+    )
     check_ckrs017(root, version, state, context, result)
     check_ckrs018(
         root,
@@ -942,18 +999,84 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="emit one JSON result object")
     parser.add_argument("--repo-root", help="repository root to validate")
     parser.add_argument("--state", choices=("auto", *STATES), default="auto", help="lifecycle state (default: auto)")
+    parser.add_argument(
+        "--diagnostic-json",
+        metavar="PATH",
+        help="write a bounded, non-authorizing diagnostic JSON record",
+    )
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    diagnostic: Optional[DiagnosticRecorder] = None
+    diagnostic_initialization_failed = False
+    if args.diagnostic_json:
+        try:
+            diagnostic = DiagnosticRecorder(args.state, dict(os.environ))
+        except Exception:
+            diagnostic_initialization_failed = True
+
+    def write_diagnostic(
+        *,
+        resolved_state: Optional[str],
+        result_status: str,
+        exit_code: int,
+        rule_codes: list[str],
+    ) -> None:
+        if diagnostic_initialization_failed:
+            print(
+                "[release-state] WARNING diagnostic capture failed: output unavailable",
+                file=sys.stderr,
+            )
+            return
+        if diagnostic is None:
+            return
+        try:
+            document = diagnostic.document(
+                resolved_state=resolved_state,
+                result_status=result_status,
+                exit_code=exit_code,
+                rule_codes=rule_codes,
+            )
+            diagnostic.write(args.diagnostic_json, document)
+        except Exception:
+            print(
+                "[release-state] WARNING diagnostic capture failed: output unavailable",
+                file=sys.stderr,
+            )
+
     try:
         root = validate_root(args.repo_root)
-        return emit(validate(root, args.state), args.json)
+        if diagnostic is not None:
+            diagnostic.bind_sources(root, Path(__file__).resolve())
+        result = validate(root, args.state, diagnostic)
+        status = emit(result, args.json)
+        write_diagnostic(
+            resolved_state=result.state,
+            result_status="pass" if status == 0 else "failed",
+            exit_code=status,
+            rule_codes=[item.rule for item in result.ordered()],
+        )
+        return status
     except InternalError as error:
-        return emit_error(error, args.json)
+        status = emit_error(error, args.json)
+        write_diagnostic(
+            resolved_state=None,
+            result_status="error",
+            exit_code=status,
+            rule_codes=[],
+        )
+        return status
     except Exception as error:  # defensive boundary; no traceback for callers
-        return emit_error(InternalError("internal", str(error)), args.json)
+        status = emit_error(InternalError("internal", str(error)), args.json)
+        write_diagnostic(
+            resolved_state=None,
+            result_status="error",
+            exit_code=status,
+            rule_codes=[],
+        )
+        return status
 
 
 if __name__ == "__main__":

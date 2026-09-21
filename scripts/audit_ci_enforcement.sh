@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/audit_ci_enforcement.sh [--repo owner/repo] [--local-only] [--remote-only] [--paired-launcher FILE]
+Usage: scripts/audit_ci_enforcement.sh [--repo owner/repo] [--local-only] [--remote-only] [--paired-launcher FILE] [--diagnostic-workflow-probe FILE]
 
 Verifies the repo-side CI gate invariants and, when GitHub API access is
 available, audits the repository protection settings needed to make CI
@@ -27,6 +27,7 @@ PAIRED_LAUNCHER_FILE=""
 CK015_IDENTITY_PROBE_SLOT=""
 CK015_IDENTITY_PROBE_FILE=""
 CK015_IDENTITY_PROBE=0
+DIAGNOSTIC_WORKFLOW_PROBE_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -63,6 +64,14 @@ while [[ $# -gt 0 ]]; do
       CK015_IDENTITY_PROBE_FILE="$3"
       CK015_IDENTITY_PROBE=1
       shift 3
+      ;;
+    --diagnostic-workflow-probe)
+      if [[ $# -lt 2 ]]; then
+        echo "[audit] ERROR: --diagnostic-workflow-probe requires a workflow path" >&2
+        exit 2
+      fi
+      DIAGNOSTIC_WORKFLOW_PROBE_FILE="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -137,6 +146,19 @@ require_content_pattern() {
   local description="$3"
 
   if grep -Eq -- "$pattern" <<<"$content"; then
+    echo "[audit] ok: $description"
+  else
+    echo "[audit] ERROR: missing $description" >&2
+    return 1
+  fi
+}
+
+require_content_literal() {
+  local content="$1"
+  local literal="$2"
+  local description="$3"
+
+  if grep -Fq -- "$literal" <<<"$content"; then
     echo "[audit] ok: $description"
   else
     echo "[audit] ERROR: missing $description" >&2
@@ -948,6 +970,92 @@ check_paired_launcher() {
   return "$check_status"
 }
 
+check_release_diagnostic_workflow() {
+  local file="$1"
+  local check_status=0
+  local quality_content=""
+  local validator_block=""
+  local upload_block=""
+  local validator_line=""
+  local upload_line=""
+  local next_step=""
+  local enablement="github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')"
+  # shellcheck disable=SC2016 # Match literal GitHub expression syntax.
+  local path='${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json'
+  # shellcheck disable=SC2016 # Match literal GitHub expression syntax.
+  local artifact='release-state-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ github.sha }}'
+
+  if [[ ! -f "$file" || -L "$file" ]]; then
+    echo "[audit] ERROR: diagnostic workflow probe requires a regular non-symlink workflow" >&2
+    return 1
+  fi
+  quality_content="$(awk '
+    /^  quality:$/ { in_job=1 }
+    in_job && /^  [A-Za-z0-9_-]+:$/ && $0 != "  quality:" { exit }
+    in_job { print }
+  ' "$file")"
+  validator_block="$(extract_step_block_from_content "$quality_content" "Validate repository release state")"
+  upload_block="$(extract_step_block_from_content "$quality_content" "Upload release-state diagnostic")"
+  if [[ -z "$validator_block" ]]; then
+    echo "[audit] ERROR: missing diagnostic-enabled release-state validator step" >&2
+    check_status=1
+  fi
+  if [[ -z "$upload_block" ]]; then
+    echo "[audit] ERROR: missing release-state diagnostic upload" >&2
+    check_status=1
+  fi
+  if [[ -n "$validator_block" && -n "$upload_block" ]]; then
+    validator_line="$(grep -nF -- '      - name: Validate repository release state' "$file" | head -n1 | cut -d: -f1)"
+    upload_line="$(grep -nF -- '      - name: Upload release-state diagnostic' "$file" | head -n1 | cut -d: -f1)"
+    next_step="$(awk -v start="$validator_line" 'NR > start && /^      - name:/ { print; exit }' "$file")"
+    if [[ "$upload_line" -le "$validator_line" || "$next_step" != "      - name: Upload release-state diagnostic" ]]; then
+      echo "[audit] ERROR: release-state diagnostic upload must immediately follow validation" >&2
+      check_status=1
+    else
+      echo "[audit] ok: release-state diagnostic upload immediately follows validation"
+    fi
+  fi
+
+  require_content_literal "$validator_block" "COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED: \${{ $enablement }}" 'diagnostic argument uses the release-PR scope' || check_status=1
+  require_content_literal "$validator_block" "COLDKEEP_RELEASE_DIAGNOSTIC_PATH: $path" 'diagnostic validator path is fixed and run-attributed' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_content_literal "$validator_block" 'if [ "$COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED" = "true" ]; then' 'diagnostic argument selection uses the scoped Boolean' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_content_literal "$validator_block" 'rm -f -- "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"' 'diagnostic validation removes only its exact stale output' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_content_literal "$validator_block" 'test ! -e "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"' 'diagnostic validation proves output freshness' || check_status=1
+  require_content_pattern "$validator_block" 'python3 scripts/validate_release_state\.py --state auto[[:space:]]+\\$' 'diagnostic validator command remains the one real auto invocation' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_content_literal "$validator_block" '--diagnostic-json "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"' 'applicable release PR passes the diagnostic argument' || check_status=1
+  require_content_literal "$validator_block" 'python3 scripts/validate_release_state.py --state auto' 'non-applicable context retains the ordinary validator invocation' || check_status=1
+  if grep -Eq 'continue-on-error|\|\| true|(^|[[:space:]])exit 0($|[[:space:]])|(^|[[:space:]])status=0($|[[:space:]])|python3 scripts/validate_release_state[^\n]*\|' <<<"$validator_block"; then
+    echo "[audit] ERROR: diagnostic validator status must remain blocking and unmasked" >&2
+    check_status=1
+  else
+    echo "[audit] ok: diagnostic validator status remains blocking and unmasked"
+  fi
+
+  require_content_literal "$upload_block" "if: \${{ always() && $enablement }}" 'diagnostic upload uses always and the release-PR scope' || check_status=1
+  require_content_literal "$upload_block" 'uses: actions/upload-artifact@v4' 'diagnostic upload uses the authorized v4 action' || check_status=1
+  require_content_literal "$upload_block" "name: $artifact" 'diagnostic artifact name is run/job/checkout attributed' || check_status=1
+  require_content_literal "$upload_block" "path: $path" 'diagnostic upload uses the exact single-file path' || check_status=1
+  require_content_literal "$upload_block" 'if-no-files-found: error' 'diagnostic upload fails on missing current capture' || check_status=1
+  require_content_literal "$upload_block" 'retention-days: 14' 'diagnostic artifact retention is fourteen days' || check_status=1
+  if grep -Eq 'continue-on-error|if-no-files-found:[[:space:]]*(warn|ignore)|path:[[:space:]].*[\*?]|path:[[:space:]].*/$' <<<"$upload_block"; then
+    echo "[audit] ERROR: diagnostic upload must not weaken missing-file or single-file enforcement" >&2
+    check_status=1
+  else
+    echo "[audit] ok: diagnostic upload keeps strict single-file enforcement"
+  fi
+  if [[ "$(grep -c 'actions/upload-artifact@v4' "$file" || true)" -ne 1 ]]; then
+    echo "[audit] ERROR: required CI expects exactly one diagnostic upload-artifact@v4 use" >&2
+    check_status=1
+  else
+    echo "[audit] ok: required CI has exactly one diagnostic upload-artifact@v4 use"
+  fi
+  return "$check_status"
+}
+
 check_local_workflow() {
   local check_status=0
   local adversarial_block=""
@@ -979,6 +1087,7 @@ check_local_workflow() {
   local upload_v7_count=0
 
   echo "[audit] checking local workflow invariants"
+  check_release_diagnostic_workflow "$WORKFLOW_FILE" || check_status=1
   require_executable_file "$SNAPSHOT_EVIDENCE_VALIDATOR_FILE" 'tracked-source snapshot evidence validator' || check_status=1
   require_executable_file "$RELEASE_LINEARITY_VALIDATOR_FILE" 'branch-relative release-linearity validator' || check_status=1
   require_executable_file "$RELEASE_BENCHMARK_EVIDENCE_FILE" 'release benchmark evidence lifecycle validator' || check_status=1
@@ -1369,7 +1478,7 @@ check_local_workflow() {
     require_content_pattern "$python_suite_block" '^      - name: Run complete Python validation suite$' 'complete Python validation suite step' || check_status=1
     require_content_pattern "$python_suite_block" "^        run: python3 -m unittest discover -s scripts -p 'test_\\*\\.py' -v$" 'canonical complete Python validation command' || check_status=1
     require_content_pattern "$validator_real_block" '^      - name: Validate repository release state$' 'release-state validator real-state step' || check_status=1
-    require_content_pattern "$validator_real_block" '^        run: python3 scripts/validate_release_state\.py --state auto$' 'release-state validator real-state command' || check_status=1
+    require_content_pattern "$validator_real_block" 'python3 scripts/validate_release_state\.py --state auto' 'release-state validator real-state command' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/heads/release/' 'release-state validator release branch condition' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/heads/main' 'release-state validator main condition' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/tags/v' 'release-state validator tag condition' || check_status=1
@@ -2233,6 +2342,11 @@ if [[ "$CK015_IDENTITY_PROBE" -eq 1 ]]; then
   fi
   ck015_identity_probe_content="$(<"$CK015_IDENTITY_PROBE_FILE")"
   check_ck015_approved_wrapper_identity "$ck015_identity_probe_content" 'CK-015 identity probe' "$CK015_IDENTITY_PROBE_SLOT"
+  exit $?
+fi
+
+if [[ -n "$DIAGNOSTIC_WORKFLOW_PROBE_FILE" ]]; then
+  check_release_diagnostic_workflow "$DIAGNOSTIC_WORKFLOW_PROBE_FILE"
   exit $?
 fi
 

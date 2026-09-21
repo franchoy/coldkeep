@@ -44,7 +44,27 @@ jobs:
 
       - name: Validate repository release state
         if: ${{ startsWith(github.ref, 'refs/heads/release/') || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')) }}
-        run: python3 scripts/validate_release_state.py --state auto
+        env:
+          COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/') }}
+          COLDKEEP_RELEASE_DIAGNOSTIC_PATH: ${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json
+        run: |
+          if [ "$COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED" = "true" ]; then
+            rm -f -- "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"
+            test ! -e "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"
+            python3 scripts/validate_release_state.py --state auto \
+              --diagnostic-json "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"
+          else
+            python3 scripts/validate_release_state.py --state auto
+          fi
+
+      - name: Upload release-state diagnostic
+        if: ${{ always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-state-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ github.sha }}
+          path: ${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Clean test storage
         run: bash scripts/clean_test_storage.sh
