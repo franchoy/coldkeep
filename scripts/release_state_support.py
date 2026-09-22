@@ -27,6 +27,7 @@ LIFECYCLE_DECLARATION = re.compile(
 )
 SUPPORTED_LIFECYCLE_DECLARATION = "immutable-transition-v1"
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+NONZERO_GIT_SHA = re.compile(r"^(?!0{40}$)[0-9a-f]{40}$")
 ProcessResult = subprocess.CompletedProcess[str]
 
 
@@ -99,7 +100,7 @@ PR_PREDICATES = (
     ("pr.git.head_object", "git-object", "the payload head commit object is available"),
     ("pr.route", "runtime-and-payload", "the checkout is classified as direct-head or synthetic"),
     ("pr.payload.merge_member", "event-payload", "synthetic checkout has a merge_commit_sha member"),
-    ("pr.payload.merge_value", "event-payload", "merge_commit_sha is null or exactly the checkout SHA"),
+    ("pr.payload.merge_value", "event-payload", "merge_commit_sha is null or a canonical nonzero full lowercase SHA and is advisory"),
     ("pr.git.parents", "git-object", "synthetic checkout parents equal ordered base then head"),
     ("pr.git.tree", "git-object", "synthetic checkout tree equals the payload-head tree"),
 )
@@ -1202,7 +1203,7 @@ def _event_projection(
         "merge_value": _bounded_identity(
             merge_value,
             category="unexpected-merge-value",
-            allow=GIT_SHA,
+            allow=NONZERO_GIT_SHA,
             allow_null=merge_present,
         ) if merge_present else _unavailable_identity("absent"),
     }
@@ -1463,14 +1464,18 @@ def strict_release_pr_context(
     if not check("pr.payload.merge_member", merge_present, observed("present" if merge_present else "missing", "unexpected-member-state", expected="present")):
         return finish(False)
     merge_sha = pull_request["merge_commit_sha"]
-    merge_field_valid = merge_sha is None or (isinstance(merge_sha, str) and merge_sha == head)
+    merge_field_valid = merge_sha is None or (
+        isinstance(merge_sha, str)
+        and GIT_SHA.fullmatch(merge_sha) is not None
+        and merge_sha != "0" * 40
+    )
     # Preserve the pre-instrumentation probe order: parents are read before the
     # merge-field Boolean participates in the final short-circuit expression.
     parents = commit_parents(root, head)
     if diagnostic is not None and evaluation_id is not None:
         diagnostic.context_update(evaluation_id, checkout_parents=parents or [])
     # diagnostic-predicate: pr.payload.merge_value
-    if not check("pr.payload.merge_value", merge_field_valid, observed(merge_sha, "unexpected-merge-value", allow=GIT_SHA, allow_null=True)):
+    if not check("pr.payload.merge_value", merge_field_valid, observed(merge_sha, "unexpected-merge-value", allow=NONZERO_GIT_SHA, allow_null=True)):
         return finish(False)
     parents_match = parents == [base_sha, head_sha]
     # diagnostic-predicate: pr.git.parents

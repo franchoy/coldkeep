@@ -1710,18 +1710,69 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
         )
         self.assertNotEqual(synthetic, candidate)
 
+    def test_synthetic_pr_accepts_captured_advisory_merge_metadata_form(self) -> None:
+        fixture = self.fixture()
+        base, candidate, synthetic = fixture.create_immutable_merge()
+        git(fixture.root, "checkout", "--detach", synthetic)
+        captured_metadata_literal = "403cba62924dd85de7ab07c758b4348bd2f97155"
+        self.assertNotEqual(captured_metadata_literal, synthetic)
+        event = fixture.write_strict_pr_event(
+            base,
+            candidate,
+            captured_metadata_literal,
+        )
+        for mode in ("auto", "pre-release"):
+            with self.subTest(mode=mode):
+                destination = fixture.root / f"diagnostic-{mode}.json"
+                environment = fixture.strict_pr_env(event, synthetic)
+                inactive = fixture.run("--state", mode, "--json", env=environment)
+                active = fixture.run(
+                    "--state",
+                    mode,
+                    "--json",
+                    "--diagnostic-json",
+                    str(destination),
+                    env=environment,
+                )
+                diagnostic = json.loads(destination.read_text(encoding="utf-8"))
+                strict_rejectors = [
+                    item["first_rejecting_predicate"]
+                    for item in diagnostic["evaluations"]
+                    if not item["site"].endswith("release-push")
+                ]
+                self.assertEqual(
+                    active.returncode,
+                    0,
+                    f"strict rejectors={strict_rejectors}\n{active.stdout}{active.stderr}",
+                )
+                self.assertEqual(active.returncode, inactive.returncode)
+                self.assertEqual(active.stdout, inactive.stdout)
+                self.assertEqual(active.stderr, inactive.stderr)
+                payload = json.loads(active.stdout)
+                self.assertEqual(payload["artifact_state"], "pre-release")
+                self.assertEqual(
+                    payload["evidence_scope"],
+                    "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY",
+                )
+                self.assertEqual(strict_rejectors, [None, None])
+
     def test_synthetic_pr_merge_identity_value_matrix(self) -> None:
         cases: tuple[tuple[str, object, bool, bool], ...] = (
             ("matching-string", "synthetic", True, True),
             ("present-null", None, True, True),
             ("missing-key", None, False, False),
-            ("conflicting-head-sha", "candidate", True, False),
+            ("payload-head-advisory", "candidate", True, True),
+            ("payload-base-advisory", "base", True, True),
+            ("absent-object-advisory", "d" * 40, True, True),
             ("empty-string", "", True, False),
             ("literal-null-string", "null", True, False),
             ("truncated-sha", "truncated", True, False),
+            ("overlong-sha", "overlong", True, False),
+            ("nonhex-sha", "g" * 40, True, False),
             ("zero-sha", "0" * 40, True, False),
             ("case-variant", "uppercase", True, False),
             ("whitespace-variant", "whitespace", True, False),
+            ("newline-variant", "newline", True, False),
             ("boolean", True, True, False),
             ("number", 7, True, False),
             ("array", ["synthetic"], True, False),
@@ -1736,13 +1787,24 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
                     {
                         "synthetic": synthetic,
                         "candidate": candidate,
+                        "base": base,
                         "truncated": synthetic[:-1],
+                        "overlong": f"{synthetic}0",
                         "uppercase": synthetic.upper(),
                         "whitespace": f" {synthetic}",
+                        "newline": f"{synthetic}\n",
                     }.get(value, value)
                     if isinstance(value, str)
                     else value
                 )
+                if name == "absent-object-advisory":
+                    self.assertNotEqual(
+                        run_process(
+                            [resolved_executable("git"), "-C", str(fixture.root), "cat-file", "-e", f"{actual_value}^{{commit}}"],
+                            check=False,
+                        ).returncode,
+                        0,
+                    )
                 event = fixture.write_strict_pr_event(
                     base,
                     candidate,
@@ -1774,6 +1836,104 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
                             )
                         else:
                             self.assert_fails_rule(process, "CKRS016")
+
+    def test_synthetic_pr_advisory_merge_objects_do_not_define_checkout(self) -> None:
+        fixture = self.fixture()
+        self.assertEqual(
+            run_process(
+                [resolved_executable("git"), "-C", str(fixture.root), "remote"],
+                check=True,
+            ).stdout,
+            "",
+        )
+        self.assertFalse((fixture.root / ".git/objects/info/alternates").exists())
+        base, candidate, synthetic = fixture.create_immutable_merge()
+        candidate_tree = fixture.rev_parse(f"{candidate}^{{tree}}")
+        base_tree = fixture.rev_parse(f"{base}^{{tree}}")
+        prior_head = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(fixture.root),
+                "commit-tree",
+                base_tree,
+                "-p",
+                base,
+                "-m",
+                "TEST_FIXTURE_ONLY prior release head",
+            ],
+            check=True,
+        ).stdout.strip()
+        prior_merge = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(fixture.root),
+                "commit-tree",
+                base_tree,
+                "-p",
+                base,
+                "-p",
+                prior_head,
+                "-m",
+                "TEST_FIXTURE_ONLY prior-head merge",
+            ],
+            check=True,
+        ).stdout.strip()
+        regenerated_equivalent = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(fixture.root),
+                "commit-tree",
+                candidate_tree,
+                "-p",
+                base,
+                "-p",
+                candidate,
+                "-m",
+                "TEST_FIXTURE_ONLY regenerated equivalent merge",
+            ],
+            check=True,
+        ).stdout.strip()
+        self.assertNotEqual(prior_merge, synthetic)
+        self.assertNotEqual(
+            run_process(
+                [resolved_executable("git"), "-C", str(fixture.root), "show", "-s", "--format=%P", prior_merge],
+                check=True,
+            ).stdout.strip().split(),
+            [base, candidate],
+        )
+        self.assertNotEqual(regenerated_equivalent, synthetic)
+        self.assertEqual(
+            run_process(
+                [resolved_executable("git"), "-C", str(fixture.root), "show", "-s", "--format=%P", regenerated_equivalent],
+                check=True,
+            ).stdout.strip().split(),
+            [base, candidate],
+        )
+        self.assertEqual(
+            fixture.rev_parse(f"{regenerated_equivalent}^{{tree}}"),
+            candidate_tree,
+        )
+        git(fixture.root, "checkout", "--detach", synthetic)
+        for name, advisory_sha in (
+            ("prior-head-merge", prior_merge),
+            ("regenerated-equivalent-merge", regenerated_equivalent),
+        ):
+            with self.subTest(case=name):
+                event = fixture.write_strict_pr_event(base, candidate, advisory_sha)
+                for mode in ("auto", "pre-release"):
+                    with self.subTest(mode=mode):
+                        payload = self.json_result(
+                            fixture.run(
+                                "--state",
+                                mode,
+                                "--json",
+                                env=fixture.strict_pr_env(event, synthetic),
+                            )
+                        )
+                        self.assertEqual(payload["artifact_state"], "pre-release")
 
     def test_direct_pr_head_does_not_require_merge_identity(self) -> None:
         fixture = self.fixture()
@@ -1934,6 +2094,7 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
             "existing-wrong-head-object",
             "existing-wrong-base-object",
             "wrong-parent-count",
+            "three-parent-count",
             "reversed-parent-order",
             "wrong-tree",
             "checkout-runtime-conflict",
@@ -1943,7 +2104,11 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
                 fixture = self.fixture()
                 base, candidate, synthetic = fixture.create_immutable_merge()
                 checked_out = synthetic
-                event = fixture.write_strict_pr_event(base, candidate, None)
+                event = fixture.write_strict_pr_event(
+                    base,
+                    candidate,
+                    "403cba62924dd85de7ab07c758b4348bd2f97155",
+                )
                 payload = json.loads(event.read_text(encoding="utf-8"))
                 if case == "absent-head-object":
                     payload["pull_request"]["head"]["sha"] = "f" * 40
@@ -1953,10 +2118,12 @@ class ImmutableLifecycleTransitionTests(unittest.TestCase):
                     payload["pull_request"]["head"]["sha"] = base
                 elif case == "existing-wrong-base-object":
                     payload["pull_request"]["base"]["sha"] = candidate
-                elif case in ("wrong-parent-count", "reversed-parent-order", "wrong-tree"):
+                elif case in ("wrong-parent-count", "three-parent-count", "reversed-parent-order", "wrong-tree"):
                     tree = fixture.rev_parse(f"{candidate}^{{tree}}")
                     parents = ["-p", base]
-                    if case == "reversed-parent-order":
+                    if case == "three-parent-count":
+                        parents = ["-p", base, "-p", candidate, "-p", synthetic]
+                    elif case == "reversed-parent-order":
                         parents = ["-p", candidate, "-p", base]
                     elif case == "wrong-tree":
                         write(fixture.root, "TEST_FIXTURE_ONLY.txt", "wrong tree\n")
@@ -2294,7 +2461,7 @@ class DiagnosticCaptureTests(unittest.TestCase):
                     )
                 )
 
-    def test_different_canonical_merge_values_still_reject_at_equality(self) -> None:
+    def test_different_canonical_merge_values_are_advisory_and_reach_topology(self) -> None:
         alternates = (
             "569fa4e31d031cbd1f6fdffbd44bbbb2e4813b96",
             "403cba62924dd85de7ab07c758b4348bd2f97155",
@@ -2313,26 +2480,25 @@ class DiagnosticCaptureTests(unittest.TestCase):
                     synthetic,
                     mode="pre-release",
                 )
-                self.assertEqual(active.returncode, 1)
+                self.assertEqual(active.returncode, 0, active.stdout + active.stderr)
                 self.assertEqual(active.returncode, inactive.returncode)
                 self.assertEqual(active.stdout, inactive.stdout)
                 self.assertEqual(active.stderr, inactive.stderr)
                 for evaluation in diagnostic["evaluations"]:
                     if evaluation["site"].endswith("release-push"):
                         continue
-                    self.assertEqual(
-                        evaluation["first_rejecting_predicate"],
+                    self.assertIsNone(evaluation["first_rejecting_predicate"])
+                    for predicate_id in (
+                        "pr.payload.merge_member",
                         "pr.payload.merge_value",
-                    )
-                    self.assertEqual(
-                        self.predicate(evaluation, "pr.payload.merge_value")["result"],
-                        "FAIL",
-                    )
-                    self.assertEqual(
-                        self.predicate(evaluation, "pr.git.parents")["result"],
-                        "NOT_EVALUATED",
-                    )
-                self.assertEqual(diagnostic["validator"]["rule_codes"], ["CKRS016"])
+                        "pr.git.parents",
+                        "pr.git.tree",
+                    ):
+                        self.assertEqual(
+                            self.predicate(evaluation, predicate_id)["result"],
+                            "PASS",
+                        )
+                self.assertEqual(diagnostic["validator"]["rule_codes"], [])
 
     def test_first_rejectors_distinguish_shape_identity_and_topology(self) -> None:
         cases = (
