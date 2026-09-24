@@ -21,60 +21,67 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.15%20closed%20and%20frozen-blue)
+![Status](https://img.shields.io/badge/status-v1.13.16%20ready%20for%20release-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
-> Migration note (v1.9): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v16 schema at startup.
+> Migration note (current): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing valid legacy metadata is normalized transactionally to the required singleton schema 17 representation, `schema_version(catalog_version=17)`. Pre-v17 binaries are intentionally fenced from schema-17 repositories before correctness-relevant work.
 
 ## Current release state
 
-v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure is
-published as the stable immutable source-only release. Annotated tag object
+<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: COMPLETE
+CK-V11316-007: CLOSED
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 15/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->
+
+v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
+Closure is the active exceptional critical-maintenance source train and is
+ready for release. Phase 12 technical correctness is established, Phase 13
+and external Phase 14 execution are complete, CK-V11316-007 is closed, and all
+15 findings are closed. Phase 15 tracked completion is a conditional candidate
+assertion: protected-merge authority becomes effective only if a separate
+owner-authorized Phase 15 audit approves the exact PR head and base. Phase 16
+is Next but cannot execute before that authorization. V1.x full closure is not
+established. Planned v1 feature and architecture work remains closed and
+frozen.
+
+The [Phase 15R2 immutable lifecycle contract recovery](docs/release/v1.13/v1.13.16-phase15r2-immutable-lifecycle-contract-recovery.md)
+adds fail-closed structural states for a future normal merge, exact annotated
+tag, and conditional closure while explicitly leaving authorization and
+certification to their external phase owners. It records no live merge, tag,
+publication, or closure.
+
+The latest published stable release remains v1.13.15. Its annotated tag object
 `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
-baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`. Release `378768097` was
-published at `2026-08-28T21:17:21Z`; its canonical 1,815-byte body remains at
-SHA-256
-`477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`,
-with zero custom assets and a verified immutable-release attestation.
+baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`; release `378768097`, canonical
+body, checksum, and attestation remain immutable. Published installation and
+source-install instructions therefore continue to target v1.13.15.
 
-Tag CI `33210164827` passed all 36 jobs and Required Gate. Tag-native public
-installation passed on Linux, macOS, and Windows with resolved version
-`v1.13.15` and Origin.Hash equal to the product baseline. Tag-triggered CodeQL
-`33210164772` passed Actions, Go, Python, and Aggregate with zero open alerts.
+V2 planning review is authorized. V2 implementation has not started and
+requires a separate plan.
 
-Phases 0–10 are Complete and tracked authority is `post-release-closed`.
-The terminal closure candidate freezes planned v1 work and distinguishes the
-immutable product baseline from the protected repository-closure commit. Full
-external effectiveness remains conditional on normal protected merge,
-exact-final-main recertification, authorized temporary-branch cleanup, and the
-read-only Phase 10T audit.
-
-v1.13.15 is the final planned v1.x release. Planned v1 feature work is frozen;
-future v1 maintenance remains possible only for a newly discovered critical
-correctness or security defect under a separate plan and explicit
-authorization. V2 planning review is authorized. V2 implementation has not
-started and requires a separate plan.
-
-v1.13.14 remains published, operationally closed historical state. Its tag,
-release, identity, and historical evidence are immutable.
-
-    V1_13_15_STATE: PUBLISHED_STABLE
-    V1_13_15_BRANCH: release/v1.13.15-post-publication-closure
-    V1_PRODUCT_BASELINE_SHA: 6a2417e8189631b018779c2fd24fc559ed761f3f
-    V1_13_15_FINDINGS_CLOSED: 15/15
-    PHASE_0_TO_10: COMPLETE
-    PHASE_8R: COMPLETE
-    PHASE_9: COMPLETE
-    PHASE_10: COMPLETE
-    RELEASE_STATE: POST_RELEASE_CLOSED
-    V1_13_14_HISTORY: IMMUTABLE_PROJECT_BASELINE
-    V1_X: CLOSED_AND_FROZEN
-    V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
-    V1_PLANNED_FEATURE_WORK: NONE
-    V2_PLANNING_REVIEW: AUTHORIZED
+    V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
+    V1_13_16: ACTIVE_EXCEPTIONAL_CRITICAL_MAINTENANCE
+    RELEASE_STATE: PRE_RELEASE
+    PHASE_12: COMPLETE
+    PHASE_13: COMPLETE
+    PHASE_14: COMPLETE
+    PHASE_15: COMPLETE_CONDITIONAL_CANDIDATE
+    PHASE_16: NEXT
+    FINDINGS_CONFIRMED: 15
+    FINDINGS_CLOSED: 15/15
+    CK_V11316_007: CLOSED
+    V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+    V1_X_FULL_CLOSURE: NOT_ESTABLISHED
     V2_IMPLEMENTATION: NOT_STARTED
-    V2_IMPLEMENTATION_AUTHORIZATION: REQUIRES_SEPARATE_PLAN
 
 ## Historical release-state narrative through v1.13.14
 
@@ -552,7 +559,7 @@ coldkeep simulate store-folder ./data
 coldkeep simulate store file.txt --output json
 ```
 
-Observability and GC simulation (read-only):
+Observability and GC simulation (read-only after startup recovery):
 
 ```bash
 coldkeep stats
@@ -577,10 +584,14 @@ Supported inspect entities currently include: `file` (alias: `logical-file`), `c
 
 Observability command guarantees (v1.6):
 
-- `stats`, `inspect`, and `simulate gc` are read-only command surfaces.
+- The `stats` and `inspect` observation phases and the `simulate gc` planning
+  phase are read-only/non-mutating. Their complete CLI invocations may first
+  run corrective startup recovery, which can mutate repository metadata.
 - `simulate gc` is an exact simulation of GC reclaimability under the same integrity gates.
 - `simulate gc` previews exact GC reclaimability using the shared GC planning layer (`gc.BuildPlan`), including fully-dead active containers; it is not legacy `gc --dry-run` behavior.
-- GC simulation does not mutate repository state (no database writes and no filesystem writes).
+- The GC simulation phase does not mutate repository state (no database writes
+  and no filesystem writes); any earlier corrective startup-recovery mutation
+  is a distinct command-lifecycle step.
 - JSON output is intended for tooling/automation contracts.
 - `meta.version` is the CLI JSON contract version. It remains `v1.7` for additive, backward-compatible fields (including v1.8/v1.9 `stats.block_layout` additions) and only bumps on breaking JSON contract changes.
 - Deep inspect output can be large; use `--limit N` to bound traversal output for operators and CI.

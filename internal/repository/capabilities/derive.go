@@ -110,11 +110,11 @@ func Derive(ctx context.Context, dbconn *sql.DB) (RepositoryCapabilities, error)
 }
 
 func readSchemaVersion(ctx context.Context, dbconn *sql.DB) int {
-	var v int
-	if err := dbconn.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_version`).Scan(&v); err != nil {
+	v, err := db.CurrentSchemaVersionContext(ctx, dbconn)
+	if err != nil {
 		return 0
 	}
-	return v
+	return int(v)
 }
 
 func readRepositoryDefaults(ctx context.Context, dbconn *sql.DB) (string, int, error) {

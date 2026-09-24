@@ -11,10 +11,12 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 type physicalFileRecord struct {
@@ -153,29 +155,71 @@ func updatePhysicalFile(ctx context.Context, ex execer, path string, logicalFile
 	return db.RequireExactlyOneRow(result, "update physical file metadata")
 }
 
+type recipeLivenessMode int
+
+const (
+	recipeLivenessAlreadyAccounted recipeLivenessMode = iota
+	recipeLivenessActivateOnFirstMapping
+)
+
+type recipeChunkOccurrence struct {
+	chunkID     int64
+	occurrences int64
+}
+
 func incrementLogicalFileRefCount(ctx context.Context, ex execer, logicalFileID int64) error {
-	result, err := ex.ExecContext(ctx, `UPDATE logical_file SET ref_count = ref_count + 1 WHERE id = $1`, logicalFileID)
-	if err != nil {
-		return err
+	_, err := incrementLogicalFileRefCountReturning(ctx, ex, logicalFileID)
+	return err
+}
+
+func incrementLogicalFileRefCountReturning(ctx context.Context, ex execer, logicalFileID int64) (int64, error) {
+	var refCount int64
+	err := ex.QueryRowContext(
+		ctx,
+		`UPDATE logical_file
+		 SET ref_count = ref_count + 1
+		 WHERE id = $1
+		 RETURNING ref_count`,
+		logicalFileID,
+	).Scan(&refCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w: increment logical file refcount affected 0 rows; expected 1", db.ErrMutationCardinality)
 	}
-	return db.RequireExactlyOneRow(result, "increment logical file refcount")
+	if err != nil {
+		return 0, err
+	}
+	return refCount, nil
 }
 
 func decrementLogicalFileRefCount(ctx context.Context, ex execer, logicalFileID int64) error {
-	result, err := ex.ExecContext(
+	_, err := decrementLogicalFileRefCountReturning(ctx, ex, logicalFileID)
+	return err
+}
+
+func decrementLogicalFileRefCountReturning(ctx context.Context, ex execer, logicalFileID int64) (int64, error) {
+	var refCount int64
+	err := ex.QueryRowContext(
 		ctx,
 		`UPDATE logical_file
 		 SET ref_count = ref_count - 1
-		 WHERE id = $1 AND ref_count > 0`,
+		 WHERE id = $1 AND ref_count > 0
+		 RETURNING ref_count`,
 		logicalFileID,
-	)
-	if err != nil {
-		return err
+	).Scan(&refCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w: decrement logical file refcount affected 0 rows; expected 1", db.ErrMutationCardinality)
 	}
-	return db.RequireExactlyOneRow(result, "decrement logical file refcount")
+	if err != nil {
+		return 0, err
+	}
+	return refCount, nil
 }
 
 func ensurePhysicalFileForPathDefaultPolicyWithTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, logicalFileID int64, meta physicalFileMetadata) (bool, error) {
+	return ensurePhysicalFileForPathDefaultPolicyWithModeTx(ctx, dbconn, tx, path, logicalFileID, meta, recipeLivenessActivateOnFirstMapping)
+}
+
+func ensurePhysicalFileForPathDefaultPolicyWithModeTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, logicalFileID int64, meta physicalFileMetadata, livenessMode recipeLivenessMode) (bool, error) {
 	selectQuery := db.QueryWithOptionalForUpdate(dbconn, `
 		SELECT path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete
 		FROM physical_file
@@ -199,8 +243,14 @@ func ensurePhysicalFileForPathDefaultPolicyWithTx(ctx context.Context, dbconn *s
 				return false, fmt.Errorf("insert physical_file %q: %w", path, err)
 			}
 			if inserted {
-				if err := incrementLogicalFileRefCount(ctx, tx, logicalFileID); err != nil {
+				refCount, err := incrementLogicalFileRefCountReturning(ctx, tx, logicalFileID)
+				if err != nil {
 					return false, fmt.Errorf("increment logical_file.ref_count id=%d: %w", logicalFileID, err)
+				}
+				if refCount == 1 && livenessMode == recipeLivenessActivateOnFirstMapping {
+					if err := adjustCompletedLogicalRecipeLiveness(ctx, tx, logicalFileID, 1); err != nil {
+						return false, fmt.Errorf("activate logical_file recipe id=%d: %w", logicalFileID, err)
+					}
 				}
 				return false, nil
 			}
@@ -241,8 +291,8 @@ func ensurePhysicalFileForPathDefaultPolicyWithTx(ctx context.Context, dbconn *s
 	return true, nil
 }
 
-func ensurePhysicalFileForPathWithPolicyWithTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, logicalFileID int64, meta physicalFileMetadata, replace bool) (bool, error) {
-	alreadyMapped, err := ensurePhysicalFileForPathDefaultPolicyWithTx(ctx, dbconn, tx, path, logicalFileID, meta)
+func ensurePhysicalFileForPathWithPolicyWithTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, logicalFileID int64, meta physicalFileMetadata, replace bool, livenessMode recipeLivenessMode) (bool, error) {
+	alreadyMapped, err := ensurePhysicalFileForPathDefaultPolicyWithModeTx(ctx, dbconn, tx, path, logicalFileID, meta, livenessMode)
 	if err == nil {
 		return alreadyMapped, nil
 	}
@@ -256,7 +306,7 @@ func ensurePhysicalFileForPathWithPolicyWithTx(ctx context.Context, dbconn *sql.
 		return false, err
 	}
 
-	if err := replacePhysicalFileLogicalTargetTx(ctx, dbconn, tx, path, logicalFileID, meta); err != nil {
+	if err := replacePhysicalFileLogicalTargetWithModeTx(ctx, dbconn, tx, path, logicalFileID, meta, livenessMode); err != nil {
 		return false, err
 	}
 
@@ -264,6 +314,10 @@ func ensurePhysicalFileForPathWithPolicyWithTx(ctx context.Context, dbconn *sql.
 }
 
 func replacePhysicalFileLogicalTargetTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, newLogicalFileID int64, meta physicalFileMetadata) error {
+	return replacePhysicalFileLogicalTargetWithModeTx(ctx, dbconn, tx, path, newLogicalFileID, meta, recipeLivenessActivateOnFirstMapping)
+}
+
+func replacePhysicalFileLogicalTargetWithModeTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, newLogicalFileID int64, meta physicalFileMetadata, livenessMode recipeLivenessMode) error {
 	selectQuery := db.QueryWithOptionalForUpdate(dbconn, `SELECT logical_file_id FROM physical_file WHERE path = $1`)
 
 	var oldLogicalFileID int64
@@ -298,11 +352,96 @@ func replacePhysicalFileLogicalTargetTx(ctx context.Context, dbconn *sql.DB, tx 
 		return fmt.Errorf("insert replacement physical_file row for %q: raced with concurrent insert", path)
 	}
 
-	if err := decrementLogicalFileRefCount(ctx, tx, oldLogicalFileID); err != nil {
+	oldRefCount, err := decrementLogicalFileRefCountReturning(ctx, tx, oldLogicalFileID)
+	if err != nil {
 		return fmt.Errorf("decrement old logical_file.ref_count id=%d: %w", oldLogicalFileID, err)
 	}
-	if err := incrementLogicalFileRefCount(ctx, tx, newLogicalFileID); err != nil {
+	if oldRefCount == 0 {
+		if err := adjustCompletedLogicalRecipeLiveness(ctx, tx, oldLogicalFileID, -1); err != nil {
+			return fmt.Errorf("deactivate old logical_file recipe id=%d: %w", oldLogicalFileID, err)
+		}
+	}
+	newRefCount, err := incrementLogicalFileRefCountReturning(ctx, tx, newLogicalFileID)
+	if err != nil {
 		return fmt.Errorf("increment new logical_file.ref_count id=%d: %w", newLogicalFileID, err)
+	}
+	if newRefCount == 1 && livenessMode == recipeLivenessActivateOnFirstMapping {
+		if err := adjustCompletedLogicalRecipeLiveness(ctx, tx, newLogicalFileID, 1); err != nil {
+			return fmt.Errorf("activate new logical_file recipe id=%d: %w", newLogicalFileID, err)
+		}
+	}
+
+	return nil
+}
+
+func adjustCompletedLogicalRecipeLiveness(ctx context.Context, tx *sql.Tx, logicalFileID int64, direction int64) error {
+	if direction != 1 && direction != -1 {
+		return fmt.Errorf("invalid recipe liveness direction %d for logical file %d", direction, logicalFileID)
+	}
+
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM logical_file WHERE id = $1`, logicalFileID).Scan(&status); err != nil {
+		return fmt.Errorf("read logical_file status id=%d: %w", logicalFileID, err)
+	}
+	if status != filestate.LogicalFileCompleted {
+		return fmt.Errorf("logical_file id=%d status=%s cannot transition durable recipe liveness", logicalFileID, status)
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT chunk_id, COUNT(*)
+		FROM file_chunk
+		WHERE logical_file_id = $1
+		GROUP BY chunk_id
+		ORDER BY chunk_id`, logicalFileID)
+	if err != nil {
+		return fmt.Errorf("query recipe occurrences for logical_file id=%d: %w", logicalFileID, err)
+	}
+	occurrences := make([]recipeChunkOccurrence, 0)
+	for rows.Next() {
+		var occurrence recipeChunkOccurrence
+		if err := rows.Scan(&occurrence.chunkID, &occurrence.occurrences); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan recipe occurrences for logical_file id=%d: %w", logicalFileID, err)
+		}
+		occurrences = append(occurrences, occurrence)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate recipe occurrences for logical_file id=%d: %w", logicalFileID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close recipe occurrences for logical_file id=%d: %w", logicalFileID, err)
+	}
+
+	for _, occurrence := range occurrences {
+		if direction > 0 {
+			result, err := tx.ExecContext(ctx, `
+				UPDATE chunk
+				SET live_ref_count = live_ref_count + $1
+				WHERE id = $2`, occurrence.occurrences, occurrence.chunkID)
+			if err != nil {
+				return fmt.Errorf("activate chunk %d by %d occurrences: %w", occurrence.chunkID, occurrence.occurrences, err)
+			}
+			if err := db.RequireExactlyOneRow(result, "activate recipe chunk live refcount"); err != nil {
+				return fmt.Errorf("activate chunk %d by %d occurrences: %w", occurrence.chunkID, occurrence.occurrences, err)
+			}
+			continue
+		}
+
+		result, err := tx.ExecContext(ctx, `
+			UPDATE chunk
+			SET live_ref_count = live_ref_count - $1
+			WHERE id = $2 AND live_ref_count >= $1`, occurrence.occurrences, occurrence.chunkID)
+		if err != nil {
+			return fmt.Errorf("deactivate chunk %d by %d occurrences: %w", occurrence.chunkID, occurrence.occurrences, err)
+		}
+		if err := db.RequireExactlyOneRow(result, "deactivate recipe chunk live refcount"); err != nil {
+			var current int64
+			if readErr := tx.QueryRowContext(ctx, `SELECT live_ref_count FROM chunk WHERE id = $1`, occurrence.chunkID).Scan(&current); readErr != nil {
+				return fmt.Errorf("invalid live_ref_count transition for chunk %d (logical_file=%d occurrences=%d; read current count: %v): %w", occurrence.chunkID, logicalFileID, occurrence.occurrences, readErr, err)
+			}
+			return fmt.Errorf("invalid live_ref_count transition for chunk %d (logical_file=%d occurrences=%d current=%d): %w", occurrence.chunkID, logicalFileID, occurrence.occurrences, current, err)
+		}
 	}
 
 	return nil

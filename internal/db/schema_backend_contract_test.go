@@ -9,7 +9,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
 )
 
-const phase5SchemaVersion = 16
+const phase5SchemaVersion = 17
 
 func TestSCH001AndSCH002BootstrapVersionAndIdempotency(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{Schema: backendtest.EmptySchema}, func(t *testing.T, backend backendtest.Backend) {
@@ -32,7 +32,7 @@ func TestSCH001AndSCH002BootstrapVersionAndIdempotency(t *testing.T) {
 			t.Fatalf("preserved logical-file name = %q, want contract", name)
 		}
 		var currentVersionRows int
-		if err := backend.DB.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE version = $1`, phase5SchemaVersion).Scan(&currentVersionRows); err != nil {
+		if err := backend.DB.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE catalog_version = $1`, phase5SchemaVersion).Scan(&currentVersionRows); err != nil {
 			t.Fatalf("count current schema-version rows: %v", err)
 		}
 		if currentVersionRows != 1 {
@@ -74,7 +74,7 @@ func TestSCH003CurrentSchemaMetadata(t *testing.T) {
 	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
 		assertCurrentSchemaVersion(t, backend.DB)
 		var rows int
-		if err := backend.DB.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE version = $1`, phase5SchemaVersion).Scan(&rows); err != nil {
+		if err := backend.DB.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE catalog_version = $1`, phase5SchemaVersion).Scan(&rows); err != nil {
 			t.Fatalf("read current schema metadata: %v", err)
 		}
 		if rows != 1 {
@@ -157,6 +157,30 @@ func TestSCH007NullableAndDefaultSemantics(t *testing.T) {
 		if mtime.Valid || complete {
 			t.Fatalf("physical metadata defaults = mtime valid:%t complete:%t", mtime.Valid, complete)
 		}
+	})
+}
+
+func TestCKV11316015SchemaV17RepairStateContract(t *testing.T) {
+	backendtest.ForEach(t, backendtest.Options{}, func(t *testing.T, backend backendtest.Backend) {
+		conn := backend.DB
+		mustExec(t, conn, `INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status) VALUES ($1,$2,$3,$4,$5,$6)`, 1701, "repair", 8, "repair-hash", 1, "COMPLETED")
+		mustExec(t, conn, `INSERT INTO chunk (id, chunk_hash, size, status, live_ref_count) VALUES ($1,$2,$3,$4,$5)`, 1702, "repair-chunk", 8, "COMPLETED", 1)
+		mustExec(t, conn, `INSERT INTO container (id, filename, current_size, max_size, sealed, quarantine) VALUES ($1,$2,$3,$4,$5,$6)`, 1703, "repair-stage.bin", 72, 1024, true, true)
+		mustExec(t, conn, `INSERT INTO store_repair_attempt (id, logical_file_id, source_file_hash, source_total_size, recipe_fingerprint, status) VALUES ($1,$2,$3,$4,$5,$6)`, 1704, 1701, "repair-hash", 8, "fingerprint", "PREPARING")
+
+		mustFail(t, conn, `INSERT INTO store_repair_attempt (id, logical_file_id, source_file_hash, source_total_size, recipe_fingerprint, status) VALUES ($1,$2,$3,$4,$5,$6)`, 1705, 1701, "repair-hash", 8, "fingerprint-2", "READY")
+		mustExec(t, conn, `INSERT INTO store_repair_container (attempt_id, container_id, physical_size, physical_hash, status) VALUES ($1,$2,$3,$4,$5)`, 1704, 1703, 72, "physical-hash", "DURABLE")
+		mustExec(t, conn, `INSERT INTO store_repair_block (attempt_id, block_ordinal, format_version, codec, plaintext_size, compression_codec, compressed_size, stored_size, container_id, container_offset, block_hash, compression_ratio, payload_hash, compressed_hash, physical_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, 1704, 0, 1, "none", 8, "none", 8, 8, 1703, 64, []byte{1}, 1.0, "01", []byte{1}, []byte{1})
+		mustExec(t, conn, `INSERT INTO store_repair_chunk (attempt_id, chunk_id, chunk_order, block_ordinal, offset_in_block, size_in_block) VALUES ($1,$2,$3,$4,$5,$6)`, 1704, 1702, 0, 0, 0, 8)
+
+		mustExec(t, conn, `UPDATE store_repair_attempt SET status = 'ABORTED' WHERE id = $1`, 1704)
+		mustExec(t, conn, `INSERT INTO store_repair_attempt (id, logical_file_id, source_file_hash, source_total_size, recipe_fingerprint, status) VALUES ($1,$2,$3,$4,$5,$6)`, 1705, 1701, "repair-hash", 8, "fingerprint-2", "PUBLISHED")
+		mustExec(t, conn, `INSERT INTO storage_blocks (id, format_version, codec, plaintext_size, compression_codec, compressed_size, stored_size, container_id, container_offset, block_hash, compression_ratio, payload_hash, compressed_hash, physical_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, 1706, 1, "none", 8, "none", 8, 8, 1703, 64, []byte{2}, 1.0, "02", []byte{2}, []byte{2})
+		mustExec(t, conn, `INSERT INTO retired_chunk_block_ref (block_id, embedded_chunk_id, offset_in_block, size_in_block, repair_attempt_id) VALUES ($1,$2,$3,$4,$5)`, 1706, 999999, 0, 8, 1705)
+
+		mustExec(t, conn, `INSERT INTO retired_legacy_block_extent (container_id, block_offset, stored_size, plaintext_size, codec, format_version, historical_block_id, historical_chunk_id, repair_attempt_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, 1703, 80, 8, 8, "plain", 1, 77, 88, 1705)
+		mustExec(t, conn, `INSERT INTO retired_legacy_block_extent (container_id, block_offset, stored_size, plaintext_size, codec, format_version, historical_block_id, historical_chunk_id, repair_attempt_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, 1703, 88, 8, 8, "plain", 1, 77, 88, 1705)
+		mustFail(t, conn, `INSERT INTO retired_legacy_block_extent (container_id, block_offset, stored_size, plaintext_size, codec, format_version, historical_block_id, historical_chunk_id, repair_attempt_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, 1703, 80, 8, 8, "plain", 1, 78, 89, 1705)
 	})
 }
 

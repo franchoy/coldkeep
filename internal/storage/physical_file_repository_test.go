@@ -35,6 +35,137 @@ func insertLogicalForPhysicalTest(t *testing.T, dbconn *sql.DB, name, hash strin
 	return id
 }
 
+func insertChunkForRecipeLivenessTest(t *testing.T, dbconn *sql.DB, hash string, liveRefCount int64) int64 {
+	t.Helper()
+	var id int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ($1, 8, $2, $3, 0, 'v1-simple-rolling') RETURNING id
+	`, hash, filestate.ChunkCompleted, liveRefCount).Scan(&id); err != nil {
+		t.Fatalf("insert liveness-test chunk: %v", err)
+	}
+	return id
+}
+
+func linkRecipeOccurrenceForLivenessTest(t *testing.T, dbconn *sql.DB, logicalID, chunkID, order int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)`, logicalID, chunkID, order); err != nil {
+		t.Fatalf("insert liveness-test recipe occurrence: %v", err)
+	}
+}
+
+func recipeLivenessTestCount(t *testing.T, dbconn *sql.DB, chunkID int64) int64 {
+	t.Helper()
+	var count int64
+	if err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&count); err != nil {
+		t.Fatalf("read liveness-test chunk: %v", err)
+	}
+	return count
+}
+
+func TestPhysicalMappingTransitionsAdjustRecipeOccurrencesExactlyOnce(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	logicalID := insertLogicalForPhysicalTest(t, dbconn, "repeat.bin", "repeat-recipe-hash", 0)
+	repeatedChunkID := insertChunkForRecipeLivenessTest(t, dbconn, "repeat-recipe-chunk", 0)
+	singleChunkID := insertChunkForRecipeLivenessTest(t, dbconn, "single-recipe-chunk", 0)
+	linkRecipeOccurrenceForLivenessTest(t, dbconn, logicalID, repeatedChunkID, 0)
+	linkRecipeOccurrenceForLivenessTest(t, dbconn, logicalID, repeatedChunkID, 1)
+	linkRecipeOccurrenceForLivenessTest(t, dbconn, logicalID, singleChunkID, 2)
+
+	ctx := context.Background()
+	for i, path := range []string{"/liveness/first.bin", "/liveness/second.bin"} {
+		tx, err := dbconn.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin mapping %d: %v", i, err)
+		}
+		if _, err := ensurePhysicalFileForPathDefaultPolicyWithTx(ctx, dbconn, tx, path, logicalID, physicalFileMetadata{}); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("ensure mapping %d: %v", i, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit mapping %d: %v", i, err)
+		}
+		if got := recipeLivenessTestCount(t, dbconn, repeatedChunkID); got != 2 {
+			t.Fatalf("mapping %d repeated-chunk liveness=%d, want 2", i, got)
+		}
+		if got := recipeLivenessTestCount(t, dbconn, singleChunkID); got != 1 {
+			t.Fatalf("mapping %d single-chunk liveness=%d, want 1", i, got)
+		}
+	}
+
+	storageContext := StorageContext{DB: dbconn}
+	if _, err := RemoveFileByStoredPathWithStorageContextResult(storageContext, "/liveness/first.bin"); err != nil {
+		t.Fatalf("remove first mapping: %v", err)
+	}
+	if got := recipeLivenessTestCount(t, dbconn, repeatedChunkID); got != 2 {
+		t.Fatalf("2->1 mapping transition changed repeated-chunk liveness: %d", got)
+	}
+	if _, err := RemoveFileByStoredPathWithStorageContextResult(storageContext, "/liveness/second.bin"); err != nil {
+		t.Fatalf("remove final mapping: %v", err)
+	}
+	if got := recipeLivenessTestCount(t, dbconn, repeatedChunkID); got != 0 {
+		t.Fatalf("final unlink repeated-chunk liveness=%d, want 0", got)
+	}
+	if got := recipeLivenessTestCount(t, dbconn, singleChunkID); got != 0 {
+		t.Fatalf("final unlink single-chunk liveness=%d, want 0", got)
+	}
+}
+
+func TestReplacePhysicalMappingTransitionsSharedChunkNetLiveness(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	oldID := insertLogicalForPhysicalTest(t, dbconn, "old.bin", "replace-old-recipe", 1)
+	newID := insertLogicalForPhysicalTest(t, dbconn, "new.bin", "replace-new-recipe", 0)
+	sharedID := insertChunkForRecipeLivenessTest(t, dbconn, "replace-shared-chunk", 1)
+	oldOnlyID := insertChunkForRecipeLivenessTest(t, dbconn, "replace-old-only", 1)
+	newOnlyID := insertChunkForRecipeLivenessTest(t, dbconn, "replace-new-only", 0)
+	linkRecipeOccurrenceForLivenessTest(t, dbconn, oldID, sharedID, 0)
+	linkRecipeOccurrenceForLivenessTest(t, dbconn, oldID, oldOnlyID, 1)
+	linkRecipeOccurrenceForLivenessTest(t, dbconn, newID, sharedID, 0)
+	linkRecipeOccurrenceForLivenessTest(t, dbconn, newID, sharedID, 1)
+	linkRecipeOccurrenceForLivenessTest(t, dbconn, newID, newOnlyID, 2)
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES ('/liveness/replace.bin', $1)`, oldID); err != nil {
+		t.Fatalf("insert old physical mapping: %v", err)
+	}
+
+	tx, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin replacement: %v", err)
+	}
+	if err := replacePhysicalFileLogicalTargetTx(context.Background(), dbconn, tx, "/liveness/replace.bin", newID, physicalFileMetadata{}); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("replace physical mapping: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit replacement: %v", err)
+	}
+
+	if got := recipeLivenessTestCount(t, dbconn, sharedID); got != 2 {
+		t.Fatalf("shared-chunk net liveness=%d, want 2", got)
+	}
+	if got := recipeLivenessTestCount(t, dbconn, oldOnlyID); got != 0 {
+		t.Fatalf("old-only chunk liveness=%d, want 0", got)
+	}
+	if got := recipeLivenessTestCount(t, dbconn, newOnlyID); got != 1 {
+		t.Fatalf("new-only chunk liveness=%d, want 1", got)
+	}
+}
+
 func TestEnsurePhysicalFileForPathDefaultPolicyWithTx(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

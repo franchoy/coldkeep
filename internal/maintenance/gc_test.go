@@ -81,6 +81,87 @@ func resetDB(t *testing.T, dbconn *sql.DB) {
 	}
 }
 
+func seedRootlessRecipeCleanupFixture(t *testing.T, dbconn *sql.DB, suffix string, pinCount int64) (int64, int64) {
+	t.Helper()
+	var logicalID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, 8, $2, 'COMPLETED', 0, 'v1-simple-rolling') RETURNING id
+	`, "rootless-"+suffix+".bin", "rootless-logical-"+suffix).Scan(&logicalID); err != nil {
+		t.Fatalf("insert rootless logical recipe: %v", err)
+	}
+	var chunkID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ($1, 8, 'COMPLETED', 0, $2, 'v1-simple-rolling') RETURNING id
+	`, "rootless-chunk-"+suffix, pinCount).Scan(&chunkID); err != nil {
+		t.Fatalf("insert rootless recipe chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`, logicalID, chunkID); err != nil {
+		t.Fatalf("insert rootless recipe occurrence: %v", err)
+	}
+	return logicalID, chunkID
+}
+
+func TestCleanupRootlessLogicalRecipesRemovesRecipeBeforeChunkSweep(t *testing.T) {
+	dbconn := openMaintenanceSQLiteDB(t)
+	defer func() { _ = dbconn.Close() }()
+	logicalID, chunkID := seedRootlessRecipeCleanupFixture(t, dbconn, "eligible", 0)
+
+	deleted, err := cleanupRootlessLogicalRecipes(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("cleanup rootless recipe: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted rootless recipes=%d, want 1", deleted)
+	}
+	var logicalRows, recipeRows, chunkRows int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = $1`, logicalID).Scan(&logicalRows); err != nil {
+		t.Fatalf("count logical rows: %v", err)
+	}
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, logicalID).Scan(&recipeRows); err != nil {
+		t.Fatalf("count recipe rows: %v", err)
+	}
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE id = $1`, chunkID).Scan(&chunkRows); err != nil {
+		t.Fatalf("count chunk rows: %v", err)
+	}
+	if logicalRows != 0 || recipeRows != 0 || chunkRows != 1 {
+		t.Fatalf("cleanup order mismatch: logical=%d recipe=%d chunk=%d", logicalRows, recipeRows, chunkRows)
+	}
+}
+
+func TestCleanupRootlessLogicalRecipesHonorsPinUntilRelease(t *testing.T) {
+	dbconn := openMaintenanceSQLiteDB(t)
+	defer func() { _ = dbconn.Close() }()
+	logicalID, chunkID := seedRootlessRecipeCleanupFixture(t, dbconn, "pinned", 1)
+
+	deleted, err := cleanupRootlessLogicalRecipes(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("cleanup pinned rootless recipe: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("pinned pass deleted %d recipes, want 0", deleted)
+	}
+	var logicalRows int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = $1`, logicalID).Scan(&logicalRows); err != nil {
+		t.Fatalf("count pinned logical recipe: %v", err)
+	}
+	if logicalRows != 1 {
+		t.Fatalf("pinned logical recipe did not survive: rows=%d", logicalRows)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET pin_count = 0 WHERE id = $1`, chunkID); err != nil {
+		t.Fatalf("release recipe pin: %v", err)
+	}
+	deleted, err = cleanupRootlessLogicalRecipes(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("cleanup after pin release: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("post-release pass deleted %d recipes, want 1", deleted)
+	}
+}
+
 func setupAdvisoryLockHeldGCFixture(t *testing.T) (*sql.DB, *sql.DB, string, string, string) {
 	t.Helper()
 

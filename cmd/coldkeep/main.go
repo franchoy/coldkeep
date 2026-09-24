@@ -55,6 +55,14 @@ const (
 	exitUsage    = 2
 	exitVerify   = 3
 	exitRecovery = 4
+
+	restoreByIDUsage = "Usage: coldkeep restore <fileID> [<fileID> ...] <outputDir>\n" +
+		"  [--input <file>] [--dry-run] [--overwrite] [--fail-fast]\n" +
+		"  [--output <human|text|json>] [--json]"
+	restoreStoredPathUsage = "Usage: coldkeep restore --stored-path <path>\n" +
+		"  [--mode <original|prefix|override>] [--destination <path>]\n" +
+		"  [--overwrite] [--strict|--no-metadata]\n" +
+		"  [--output <human|text|json>] [--json]"
 )
 
 var stdoutRedirectMu sync.Mutex
@@ -1114,6 +1122,11 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 	return outputModeText
 }
 
+var startupRecoveryCommands = []string{
+	"store", "store-folder", "restore", "remove", "repair", "gc", "stats",
+	"inspect", "list", "search", "verify", "snapshot",
+}
+
 func shouldRunStartupRecovery(args []string) bool {
 	if len(args) == 0 {
 		return false
@@ -1123,14 +1136,14 @@ func shouldRunStartupRecovery(args []string) bool {
 			return false
 		}
 	}
-	switch args[0] {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot":
-		return true
-	default:
-		return false
+	for _, command := range startupRecoveryCommands {
+		if args[0] == command {
+			return true
+		}
 	}
+	return false
 }
 
 func exitErrorClassLabel(code int) string {
@@ -1340,10 +1353,14 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata", "help", "h"); err != nil {
 		return err
 	}
-	if err := rejectBlankFlagValues(parsed, "stored-path"); err != nil {
+	if parsed.hasFlag("help", "h") {
+		printRestoreHelp()
+		return nil
+	}
+	if err := rejectBlankFlagValues(parsed, "stored-path", "mode", "destination"); err != nil {
 		return err
 	}
 
@@ -1353,7 +1370,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 
 	if hasStoredPath {
 		if len(parsed.positionals) != 0 {
-			return usageErrorf("Usage: coldkeep restore --stored-path <path> [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata]")
+			return usageErrorf("%s", restoreStoredPathUsage)
 		}
 		if parsed.hasFlag("input") {
 			return usageErrorf("--input is not supported with --stored-path")
@@ -1429,6 +1446,9 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return nil
 	}
 
+	if parsed.hasFlag("mode", "destination") {
+		return usageErrorf("--mode and --destination are only supported with --stored-path")
+	}
 	if parsed.hasFlag("strict", "no-metadata") {
 		return usageErrorf("--strict and --no-metadata are only supported with --stored-path")
 	}
@@ -1436,10 +1456,10 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	inputFile, _ := parsed.lastFlagValue("input")
 	hasInput := strings.TrimSpace(inputFile) != ""
 	if len(parsed.positionals) < 1 {
-		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+		return usageErrorf("%s", restoreByIDUsage)
 	}
 	if !hasInput && len(parsed.positionals) < 2 {
-		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+		return usageErrorf("%s", restoreByIDUsage)
 	}
 	dryRun := parsed.hasFlag("dry-run", "dryRun")
 	failFast := parsed.hasFlag("fail-fast", "failFast")
@@ -1670,7 +1690,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 func ensureRestoreOutputDir(path string, createIfMissing bool) (string, error) {
 	if strings.TrimSpace(path) == "" {
-		return "", usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+		return "", usageErrorf("%s", restoreByIDUsage)
 	}
 
 	if createIfMissing {
@@ -6015,6 +6035,11 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		parentID = trimmed
 	}
 
+	selectionBase, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve snapshot selection base: %w", err)
+	}
+
 	session, err := openCommandSession("snapshot-create", true, "")
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
@@ -6027,10 +6052,11 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	defer cancel()
 
 	result, err := eng.SnapshotCreate(ctx, engine.SnapshotCreateRequest{
-		ID:       snapshotID,
-		Label:    label,
-		ParentID: parentID,
-		Paths:    append([]string(nil), paths...),
+		ID:            snapshotID,
+		Label:         label,
+		ParentID:      parentID,
+		SelectionBase: selectionBase,
+		Paths:         append([]string(nil), paths...),
 	})
 	if err != nil {
 		return err
@@ -6463,7 +6489,8 @@ func printHelp() {
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
-		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs byte-identically (chunker-version independent)"},
+		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <human|text|json>] [--json]", "Restore one or more logical file IDs byte-identically (chunker-version independent)"},
+		{"  restore --stored-path <path> [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict|--no-metadata] [--output <human|text|json>] [--json]", "Restore one current stored path using its persisted path metadata"},
 		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs (legacy mode)"},
 		{"  remove --stored-path <path> [--output <text|json>]", "Remove one current-state physical path mapping"},
 		{"  remove --stored-paths <path> [<path> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Batch remove physical path mappings in deterministic input order"},
@@ -6561,7 +6588,7 @@ func printHelp() {
 	fmt.Println("  COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY (default: off)")
 	fmt.Println("    true/1/yes/on: suppress healthy startup recovery logs in text mode")
 	fmt.Println("    recovery logs still replay automatically when corrective actions/errors occur")
-	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, repair, gc, stats, list, search, verify, snapshot")
+	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: " + strings.Join(startupRecoveryCommands, ", ") + ", simulate gc")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
 	fmt.Println("  Doctor runs its own corrective recovery pass even if startup recovery already ran")
 	fmt.Println("  Batch JSON contract (restore/remove --output json): status=ok|partial_failure|error")
@@ -6646,6 +6673,16 @@ func printStatsHelp() {
 	fmt.Println("  trace output never changes command stdout")
 	fmt.Println("Deterministic output guarantee:")
 	fmt.Println("  for identical repository state and flags, rendered output order is deterministic")
+}
+
+func printRestoreHelp() {
+	fmt.Println("Usage:")
+	fmt.Println(strings.TrimPrefix(restoreByIDUsage, "Usage: "))
+	fmt.Println()
+	fmt.Println(strings.TrimPrefix(restoreStoredPathUsage, "Usage: "))
+	fmt.Println()
+	fmt.Println("Restore logical file IDs or one current stored path byte-identically.")
+	fmt.Println("--json is shorthand for --output json.")
 }
 
 func printInspectHelp() {
@@ -6751,6 +6788,13 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 		if arg == "--" {
 			parsed.positionals = append(parsed.positionals, args[i+1:]...)
 			break
+		}
+		if arg == "-h" {
+			if err := rejectDuplicateSingletonFlag("h", seenSingletons, valueFlags); err != nil {
+				return parsedCommandLine{}, err
+			}
+			parsed.flags["h"] = append(parsed.flags["h"], "")
+			continue
 		}
 
 		if !strings.HasPrefix(arg, "--") {

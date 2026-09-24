@@ -61,6 +61,15 @@ Correctness has ten explicit layers:
 Migration philosophy:
 
 - coldkeep prefers non-destructive evolution over automatic optimization.
+- schema 17 is fenced from older binaries by retaining the `schema_version`
+  table while replacing its legacy `version` column with exactly one
+  `catalog_version INTEGER PRIMARY KEY` row containing 17;
+- v16-to-v17 migration, including legacy metadata inspection, all schema/data
+  migration work, column rename, singleton normalization, and final validation,
+  is one backend transaction, so failure restores the complete v16 metadata
+  representation and rows;
+- pre-v17 binaries fail on their mandatory legacy-column query before recovery
+  or correctness-relevant command work; schema-17 downgrade is unsupported.
 
 ## Deep Design View
 
@@ -154,6 +163,11 @@ Core entities:
 - storage_blocks: v1.8+ packed physical block (container placement, block hash, codec, sizes, transform metadata)
 - chunk_block_refs: v1.8+ per-chunk placement inside a packed storage block
 - container: physical append-only container file on disk
+- store_repair_attempt/store_repair_container/store_repair_block/store_repair_chunk:
+  schema-v17 attempt-owned physical preparation that remains quarantined and
+  non-authoritative until one publication transaction succeeds
+- retired_chunk_block_ref/retired_legacy_block_extent: schema-v17 accounting
+  for immutable old physical bytes retained after repair publication
 
 Storage pipeline:
 
@@ -216,7 +230,16 @@ Non-obvious safety gate (important for future maintenance):
 
 - completed-file/chunk reuse is never accepted on content hash alone;
 - store runs structural and (mode-dependent) semantic replay validation before returning `AlreadyStored=true`;
-- if a claimed completed candidate fails validation, store marks it aborted, cleans stale recipe links, and reclaims to rebuild a fresh canonical recipe;
+- if a claimed completed candidate fails validation but retains an intact,
+  trustworthy ordered recipe, store stages replacement physical data
+  copy-on-write and publishes it atomically without rewriting `file_chunk`;
+- failed completed-object repair preserves the old logical status, retry state,
+  mappings, recipe, liveness, pins, snapshots, and physical placements;
+- successful completed-object repair preserves logical identity and recipe
+  order, atomically switches physical placement authority, and reports
+  `AlreadyStored=false`;
+- a completed candidate whose recipe is not trustworthy fails closed without
+  attempting to invent replacement logical metadata;
 - semantic reuse mode is controlled by `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off`, `suspicious`, `always`; default `suspicious`).
 
 This avoids hidden "magic reuse" behavior: reuse is explicit, gated, and fail-closed when integrity signals disagree.
@@ -319,6 +342,15 @@ These invariants should hold across store, restore, GC, recovery, and verificati
 
 - every COMPLETED chunk has exactly one valid block record
 - every block record references a valid container (or an explicitly quarantined/missing container state)
+- repair staging performs no publication-time filesystem rename, copy, or
+  delete: staged container bytes are already durable at their final immutable
+  path, and the publication authority switch is database-transaction-only
+- every retained packed block's encoded directory equals the exact union of
+  active `chunk_block_refs` and opaque `retired_chunk_block_ref` membership,
+  with no duplicate, overlap, unexplained member, or invalid range
+- every non-quarantined container payload byte after the fixed header is owned
+  exactly once by an active legacy extent, retired legacy extent, or packed
+  storage-block extent
 - every COMPLETED logical file has a complete, contiguous, ordered file_chunk graph
 - live_ref_count > 0 protects a chunk from GC deletion
 - pin_count > 0 protects a chunk from concurrent deletion while restore-like operations are active
@@ -577,7 +609,7 @@ Guarantees hold within the documented operating assumptions:
 - container files are not manually altered
 - filesystem honors write + fsync semantics
 - PostgreSQL deployment provides expected transactional, locking, and advisory-lock behavior
-- Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v16 schema at startup.
+- Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v17 schema at startup.
 
 ## Interface Correctness Layer (v1.1)
 
@@ -656,8 +688,15 @@ reconstruction and must restore pin state on success and failure.
 Neither remove path directly deletes payload bytes, container files, or block
 files. GC alone owns physical payload reclamation.
 
-Both live remove forms refuse snapshot-retained logical files with
-`SNAPSHOT_RETAINED_DELETE_BLOCKED`.
+The two live remove forms have intentionally different retention semantics.
+By-ID `Engine.Remove` is logical deletion and refuses a target while any
+snapshot retains it, reporting `SNAPSHOT_RETAINED_DELETE_BLOCKED` on the exact
+failed batch item. Stored-path `Engine.RemoveStoredPaths` unlinks only a
+current mapping and is allowed while snapshot-retained. Unlinking the final
+current mapping deactivates current-root liveness but preserves the logical
+recipe and snapshot membership. That snapshot-only state remains GC-live until
+the final snapshot root disappears; a later GC pass owns cleanup of the
+unpinned rootless recipe and content.
 
 ### Invariant-Driven Concurrency Safety
 
@@ -748,6 +787,24 @@ physical_file rows (audited coherent)
 - `TestRunGCSucceedsAfterRepairLogicalRefCounts` — repair unblocks GC (unit)
 - `TestRepairThenVerifyThenGCSmoke` — full operator recovery loop (integration): store → corrupt → verify fails → doctor fails → repair succeeds → verify passes → gc dry-run passes → gc passes → restore matches
 
+#### v1.13.16 snapshot-only current-root correction
+
+Current recipe liveness is distinct from retained reachability. A completed
+logical recipe contributes each `file_chunk` occurrence to
+`chunk.live_ref_count` exactly once when it has at least one current
+`physical_file` mapping. Additional mappings do not multiply that contribution;
+the last unlink deactivates it, and the first reattachment reactivates it.
+Snapshot membership and restore pins do not alter `live_ref_count`.
+
+Snapshot-only recipes remain GC roots through `snapshot_file`. Live GC removes
+a rootless completed recipe before sweeping chunks only when it has no current
+mapping, no snapshot membership, and no pinned recipe chunk. Dry-run models the
+same eligibility without mutation. By-ID logical deletion remains blocked for
+snapshot-retained content, while stored-path unlink is permitted. The
+v1.13.16 Phase 6R2 certification proves byte-identical snapshot restore after
+GC, unreachable-control reclamation, current-live preservation, and pin-aware
+cleanup on SQLite and PostgreSQL plain/AES-GCM.
+
 ### Phase 7 — Operator ergonomics and observability hardening
 
 Phase 7 adds an internal invariant taxonomy layer to make failures easier to consume in text output, JSON output, tests, and logs without changing command boundaries.
@@ -770,7 +827,9 @@ This improves operator guidance while keeping doctor detect-only for physical-la
 
 ### Phase 8 — Observability and simulation tooling contract
 
-Phase 8 formalizes the operator/tooling command contract for read-only observability.
+Phase 8 formalizes the operator/tooling contract for observational phases and
+exact GC simulation. Complete CLI invocations may first run corrective startup
+recovery, which can mutate repository metadata before these phases begin.
 
 Command surfaces in scope:
 
@@ -789,9 +848,12 @@ Inspect entity support currently includes `file` (alias `logical-file`), `chunk`
 
 Phase 8 guarantees:
 
-- observability commands are read-only (`stats`, `inspect`, `simulate gc`)
+- the `stats` and `inspect` observation phases are read-only, and the
+  `simulate gc` planning phase is non-mutating; their complete invocations can
+  first perform corrective startup recovery
 - GC simulation is exact relative to GC reclaimability decisions under the same integrity gates
-- simulation does not mutate repository state (no DB writes, no filesystem writes)
+- the simulation phase does not mutate repository state (no DB writes, no
+  filesystem writes); any startup-recovery mutation is a distinct earlier step
 - JSON output is intended for tooling/automation pipelines
 - deep inspect traversals can be large and should be bounded with `--limit N`
 - trace diagnostics are emitted on stderr (`--trace`, `--trace-json`) so stdout payloads remain stable for piping and automation

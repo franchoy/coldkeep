@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/audit_ci_enforcement.sh [--repo owner/repo] [--local-only] [--remote-only] [--paired-launcher FILE]
+Usage: scripts/audit_ci_enforcement.sh [--repo owner/repo] [--local-only] [--remote-only] [--paired-launcher FILE] [--diagnostic-workflow-probe FILE]
 
 Verifies the repo-side CI gate invariants and, when GitHub API access is
 available, audits the repository protection settings needed to make CI
@@ -24,6 +24,10 @@ REPO=""
 LOCAL_ONLY=0
 REMOTE_ONLY=0
 PAIRED_LAUNCHER_FILE=""
+CK015_IDENTITY_PROBE_SLOT=""
+CK015_IDENTITY_PROBE_FILE=""
+CK015_IDENTITY_PROBE=0
+DIAGNOSTIC_WORKFLOW_PROBE_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +53,24 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       PAIRED_LAUNCHER_FILE="$2"
+      shift 2
+      ;;
+    --ck015-identity-probe)
+      if [[ $# -lt 3 ]]; then
+        echo "[audit] ERROR: --ck015-identity-probe requires a slot and body path" >&2
+        exit 2
+      fi
+      CK015_IDENTITY_PROBE_SLOT="$2"
+      CK015_IDENTITY_PROBE_FILE="$3"
+      CK015_IDENTITY_PROBE=1
+      shift 3
+      ;;
+    --diagnostic-workflow-probe)
+      if [[ $# -lt 2 ]]; then
+        echo "[audit] ERROR: --diagnostic-workflow-probe requires a workflow path" >&2
+        exit 2
+      fi
+      DIAGNOSTIC_WORKFLOW_PROBE_FILE="$2"
       shift 2
       ;;
     -h|--help)
@@ -77,6 +99,7 @@ BENCHMARK_GATE_FILE="${COLDKEEP_BENCHMARK_GATE_FILE:-$REPO_ROOT/scripts/benchmar
 TIMING_VALIDATOR_FILE="${COLDKEEP_TIMING_VALIDATOR_FILE:-$REPO_ROOT/scripts/validate_regression_thresholds.py}"
 CANDIDATE_LINT_GATE_FILE="${COLDKEEP_CANDIDATE_LINT_GATE_FILE:-$REPO_ROOT/scripts/run_candidate_lint_gate.sh}"
 VALIDATION_MATRIX_FILE="${COLDKEEP_VALIDATION_MATRIX_FILE:-$REPO_ROOT/VALIDATION_MATRIX.md}"
+PRE_RELEASE_CHECKLIST_FILE="${COLDKEEP_PRE_RELEASE_CHECKLIST_FILE:-$REPO_ROOT/PRE_RELEASE_CHECKLIST.md}"
 PAIRED_REFERENCE_MANIFEST_FILE="${COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE:-$REPO_ROOT/benchmarks/paired/reference-v1.13.json}"
 PAIRED_THRESHOLD_POLICY_FILE="${COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE:-$REPO_ROOT/benchmarks/paired/threshold-policy-v1.13.json}"
 NATIVE_UNIX_TEST_FILE="${COLDKEEP_NATIVE_UNIX_TEST_FILE:-$REPO_ROOT/internal/coordination/native_lock_unix_test.go}"
@@ -86,6 +109,7 @@ SNAPSHOT_EVIDENCE_VALIDATOR_FILE="${COLDKEEP_SNAPSHOT_EVIDENCE_VALIDATOR_FILE:-$
 RELEASE_LINEARITY_VALIDATOR_FILE="${COLDKEEP_RELEASE_LINEARITY_VALIDATOR_FILE:-$REPO_ROOT/scripts/validate_release_linearity.sh}"
 RELEASE_BENCHMARK_EVIDENCE_FILE="${COLDKEEP_RELEASE_BENCHMARK_EVIDENCE_FILE:-$REPO_ROOT/scripts/release_benchmark_evidence.sh}"
 RELEASE_BENCHMARK_RUNNER_FILE="${COLDKEEP_RELEASE_BENCHMARK_RUNNER_FILE:-$REPO_ROOT/scripts/run_release_benchmark_evidence.sh}"
+REQUIRED_TEST_EVENTS_FILE="${COLDKEEP_REQUIRED_TEST_EVENTS_FILE:-$REPO_ROOT/scripts/check_required_test_events.py}"
 
 require_pattern() {
   local file="$1"
@@ -96,6 +120,22 @@ require_pattern() {
     echo "[audit] ok: $description"
   else
     echo "[audit] ERROR: missing $description" >&2
+    return 1
+  fi
+}
+
+require_pattern_count() {
+  local file="$1"
+  local pattern="$2"
+  local expected="$3"
+  local description="$4"
+  local actual
+
+  actual=$(grep -Ec -- "$pattern" "$file" || true)
+  if [[ "$actual" -eq "$expected" ]]; then
+    echo "[audit] ok: $description ($actual/$expected)"
+  else
+    echo "[audit] ERROR: $description count is $actual, expected $expected" >&2
     return 1
   fi
 }
@@ -113,6 +153,19 @@ require_content_pattern() {
   fi
 }
 
+require_content_literal() {
+  local content="$1"
+  local literal="$2"
+  local description="$3"
+
+  if grep -Fq -- "$literal" <<<"$content"; then
+    echo "[audit] ok: $description"
+  else
+    echo "[audit] ERROR: missing $description" >&2
+    return 1
+  fi
+}
+
 require_executable_file() {
   local file="$1"
   local description="$2"
@@ -123,6 +176,96 @@ require_executable_file() {
     echo "[audit] ERROR: $description must be an executable regular non-symlink file" >&2
     return 1
   fi
+}
+
+ck015_expected_wrapper_sha256() {
+  case "$1" in
+    hosted-sqlite) printf '%s\n' '3865079f0a221bc1ed0fe3ef6b6617214e6054944a849b09d2874cc705662aa8' ;;
+    hosted-postgres) printf '%s\n' '6a0567977980e428115791a843cc2a515bb8880429af309ac5f9f4d1f63a329f' ;;
+    local-sqlite) printf '%s\n' '4caf6517976adcd50eee7c416c679b4653086ac0a61fc1a10e48df74f7799357' ;;
+    local-postgres) printf '%s\n' '8d84858ae08bab569980bdc5e1b466168c9a4441507834770b3e6907eda31f89' ;;
+    *)
+      echo "[audit] ERROR: unknown CK-015 approved wrapper slot: $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+check_ck015_approved_wrapper_identity() {
+  local content="$1"
+  local label="$2"
+  local slot="$3"
+  local expected_sha256
+  local actual_sha256
+
+  if ! expected_sha256="$(ck015_expected_wrapper_sha256 "$slot")"; then
+    return 1
+  fi
+  if [[ ! "$expected_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[audit] ERROR: $label has invalid frozen approved wrapper identity" >&2
+    return 1
+  fi
+  actual_sha256="$(printf '%s' "$content" | sha256sum | awk '{print $1}')"
+  if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+    echo "[audit] ERROR: $label does not match frozen approved wrapper body (slot=$slot expected=$expected_sha256 actual=$actual_sha256)" >&2
+    return 1
+  fi
+  echo "[audit] ok: $label matches frozen approved wrapper body ($slot)"
+}
+
+extract_ck015_approved_interval() {
+  local file="$1"
+  local start_anchor="$2"
+  local end_anchor="$3"
+  local label="$4"
+
+  python3 - "$file" "$start_anchor" "$end_anchor" "$label" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+start = sys.argv[2].encode("utf-8") + b"\n"
+end = sys.argv[3].encode("utf-8") + b"\n"
+label = sys.argv[4]
+data = path.read_bytes()
+
+def fail(message: str) -> None:
+    print(f"[audit] ERROR: {label} {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+if b"\x00" in data:
+    fail("source contains a NUL byte")
+if b"\r" in data:
+    fail("source contains a CR byte")
+try:
+    data.decode("utf-8")
+except UnicodeDecodeError:
+    fail("source is not valid UTF-8")
+if data.count(start) != 1:
+    fail("start boundary must occur exactly once")
+if data.count(end) != 1:
+    fail("end boundary must occur exactly once")
+left = data.index(start)
+right = data.index(end)
+if left >= right:
+    fail("boundaries must be correctly ordered")
+interval = data[left:right]
+if not interval.strip():
+    fail("approved interval must not be empty")
+sys.stdout.buffer.write(interval)
+PY
+}
+
+require_ck015_extractor_agreement() {
+  local extracted="$1"
+  local authoritative="$2"
+  local label="$3"
+
+  if [[ "$extracted" != "$authoritative" ]]; then
+    echo "[audit] ERROR: $label extractor does not match the complete approved source interval" >&2
+    return 1
+  fi
+  echo "[audit] ok: $label extractor matches the complete approved source interval"
 }
 
 extract_job_block() {
@@ -202,6 +345,361 @@ extract_step_block_from_content() {
       print
     }
   ' <<<"$content"
+}
+
+check_ck015_proof_wrapper_structure() {
+  local content="$1"
+  local label="$2"
+  local stale_message="$3"
+  local wrapper_kind="$4"
+
+  CK015_WRAPPER_CONTENT="$content" \
+  CK015_WRAPPER_LABEL="$label" \
+  CK015_STALE_MESSAGE="$stale_message" \
+  CK015_WRAPPER_KIND="$wrapper_kind" \
+    python3 - <<'PY'
+import os
+import re
+import sys
+
+content = os.environ["CK015_WRAPPER_CONTENT"]
+label = os.environ["CK015_WRAPPER_LABEL"]
+stale_message = os.environ["CK015_STALE_MESSAGE"]
+kind = os.environ["CK015_WRAPPER_KIND"]
+errors: list[str] = []
+
+
+def error(message: str) -> None:
+    if message not in errors:
+        errors.append(message)
+
+
+if kind == "hosted":
+    marker = "        run: |\n"
+    if marker not in content:
+        error("missing hosted run body")
+        body = content
+    else:
+        body = content.split(marker, 1)[1]
+        body = "\n".join(
+            line[10:] if line.startswith("          ") else line
+            for line in body.splitlines()
+        )
+elif kind == "local":
+    body = content
+else:
+    error(f"unknown wrapper kind {kind!r}")
+    body = content
+
+six_records = (
+    '"$json_file" "$go_stderr_file" "$checker_stdout_file" '
+    '"$checker_stderr_file" "$status_file" "$metadata_file"'
+)
+
+# This is intentionally a bounded recognizer for these four frozen wrappers,
+# not a general shell parser. Reject constructs that could hide a matching
+# token stream in an inactive or separately scoped body.
+if re.search(r"(?m)^\s*(?:function\s+\w+|\w+\s*\(\)\s*\{)", body):
+    error("critical proof regions must not be hidden in a function")
+if re.search(r"(?m)^\s*(?:case|while|until)\b", body):
+    error("critical proof regions use unsupported conditional control flow")
+if re.search(r"<<[-]?\s*['\"]?[A-Za-z_]", body):
+    error("critical proof regions must not be hidden in a here-document")
+if re.search(r"(?m)^\s*(?:exit\s+0|return(?:\s+0)?)\s*$", body):
+    error("critical proof wrapper contains an early successful exit or return")
+if re.search(r"(?m)^\s*(?:if|elif)\s+(?:!\s+)?(?:false|\[\s+0\s+-eq\s+1\s+\]|\[\s+1\s+-eq\s+0\s+\])(?:\s*;)?\s*then\s*$", body):
+    error("critical proof regions must not be hidden in an inactive branch")
+
+lines = body.splitlines()
+depth = 0
+depths: list[int] = []
+quoted: list[bool] = []
+quote: str | None = None
+for line in lines:
+    stripped = line.strip()
+    quoted.append(quote is not None)
+    if re.match(r"^(?:fi|done|esac|})\b", stripped):
+        depth = max(0, depth - 1)
+    depths.append(depth)
+    if (
+        re.search(r"(?:;\s*)?then\s*$", stripped)
+        or re.search(r"(?:;\s*)?do\s*$", stripped)
+        or re.match(r"^case\b.*\bin\s*$", stripped)
+        or re.match(r"^(?:function\s+\w+|\w+\s*\(\)\s*\{)", stripped)
+    ):
+        depth += 1
+    escaped = False
+    for char in line:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            continue
+        if char == "'" and quote != '"':
+            quote = None if quote == "'" else "'"
+        elif char == '"' and quote != "'":
+            quote = None if quote == '"' else '"'
+
+
+def top_level_index(pattern: str, description: str) -> int:
+    matches = [
+        index
+        for index, line in enumerate(lines)
+        if re.search(pattern, line) and depths[index] == 0 and not quoted[index]
+    ]
+    if len(matches) != 1:
+        error(f"{description} must occur exactly once at active top level")
+        return len(lines) + 100
+    return matches[0]
+
+
+target_loop_matches = [
+    index
+    for index, line in enumerate(lines)
+    if line == f"for target in {six_records}; do" and depths[index] == 0 and not quoted[index]
+]
+if len(target_loop_matches) != 2:
+    error("active completeness gate must enumerate exactly six invocation records")
+    stale_index = len(lines) + 100
+    completeness_index = len(lines) + 101
+else:
+    stale_index, completeness_index = target_loop_matches
+
+metadata_index = top_level_index(r"^if ! printf '%s\\n' \\$", "metadata fail-closed gate")
+go_index = top_level_index(
+    r"^(?:GOTOOLCHAIN=local COLDKEEP_CODEC=plain )?go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage \\$",
+    "Go proof invocation",
+)
+pipe_index = top_level_index(
+    r'^pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)$',
+    "PIPESTATUS snapshot",
+)
+go_status_index = top_level_index(
+    r'^go_status=\$\{pipeline_status\[0\]\}$',
+    "Go status assignment",
+)
+capture_status_index = top_level_index(
+    r'^capture_status=\$\{pipeline_status\[1\]\}$',
+    "capture status assignment",
+)
+checker_index = top_level_index(
+    r"^python3 scripts/check_required_test_events\.py \\$",
+    "required-event checker invocation",
+)
+checker_status_index = top_level_index(r"^checker_status=\$\?$", "checker status assignment")
+status_record_index = top_level_index(r"^printf '%s\\n' \\$", "status-record write")
+status_write_index = top_level_index(
+    r"^status_record_write_status=\$\?$",
+    "status-record write status assignment",
+)
+evidence_index = top_level_index(r"^evidence_status=0$", "evidence status initialization")
+
+if len(target_loop_matches) == 2:
+    completeness_body = "\n".join(lines[completeness_index : completeness_index + 7])
+    if not re.search(
+        r'if \[ ! -f "\$target" \] \|\| \[ ! -r "\$target" \]; then\n'
+        r'.*missing or unreadable CK-015 .* evidence record: \$target.*\n'
+        r'\s*evidence_status=1\n\s*fi\n\s*done',
+        completeness_body,
+    ):
+        error("active completeness gate must enumerate exactly six invocation records")
+
+status_integrity_index = top_level_index(
+    r'^if \[ "\$status_record_write_status" -eq 0 \]; then$',
+    "status-record consistency gate",
+)
+metadata_integrity_index = top_level_index(
+    r'^for expected in "candidate_sha=',
+    "metadata consistency gate",
+)
+precedence_index = top_level_index(r'^if \[ "\$go_status" -ne 0 \]; then$', "failure precedence")
+
+
+def active_region_line(start: int, end: int, pattern: str, expected_depth: int) -> bool:
+    return any(
+        re.search(pattern, lines[index])
+        and depths[index] == expected_depth
+        and not quoted[index]
+        for index in range(start, min(end, len(lines)))
+    )
+
+
+if not (
+    active_region_line(metadata_index, go_index, r'>"\$metadata_file"; then$', 0)
+    and active_region_line(metadata_index, go_index, r'^\s*echo "unable to write CK-015 .* metadata" >&2$', 1)
+    and active_region_line(metadata_index, go_index, r'^\s*exit 1$', 1)
+):
+    error("metadata write must fail closed in its active branch")
+
+if not (
+    active_region_line(status_integrity_index, metadata_integrity_index, r'^\s*for expected in "go_status=', 1)
+    and active_region_line(status_integrity_index, metadata_integrity_index, r'^\s*if ! grep -Fqx "\$expected" "\$status_file"; then$', 2)
+    and active_region_line(status_integrity_index, metadata_integrity_index, r'^\s*evidence_status=1$', 3)
+):
+    error("status-record consistency gate must be active and fail closed")
+
+if not (
+    active_region_line(metadata_integrity_index, precedence_index, r'^\s*if ! grep -Fqx "\$expected" "\$metadata_file"; then$', 1)
+    and active_region_line(metadata_integrity_index, precedence_index, r'^\s*evidence_status=1$', 2)
+):
+    error("metadata consistency gate must be active and fail closed")
+
+pipeline_region = "\n".join(lines[go_index : capture_status_index + 1])
+if not re.search(
+    r'go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage \\\n'
+    r'(?:.*\\\n)*\s*-run "\$selector" 2>"\$go_stderr_file" \| tee "\$json_file"\n'
+    r'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)\n'
+    r'go_status=\$\{pipeline_status\[0\]\}\n'
+    r'capture_status=\$\{pipeline_status\[1\]\}',
+    pipeline_region,
+):
+    error("PIPESTATUS snapshot must immediately follow the Go/tee pipeline")
+
+checker_region = "\n".join(lines[checker_index : checker_status_index + 1])
+if not re.search(
+    r'python3 scripts/check_required_test_events\.py \\\n'
+    r'\s*--profile "\$profile" \\\n'
+    r'\s*--events "\$json_file" \\\n'
+    r'\s*>"\$checker_stdout_file" 2>"\$checker_stderr_file"\n'
+    r'checker_status=\$\?',
+    checker_region,
+):
+    error("checker status snapshot must immediately follow the genuine checker")
+
+status_region = "\n".join(lines[status_record_index : status_write_index + 1])
+if not re.search(
+    r"printf '%s\\n' \\\n"
+    r'(?:\s*"(?:go_status|capture_status|checker_status)=\$[^\n]+" \\\n){3}'
+    r"\s*'status_record_write_status=0' >\"\$status_file\"\n"
+    r'status_record_write_status=\$\?',
+    status_region,
+):
+    error("status-record write status must immediately follow the genuine status write")
+
+precedence_region = "\n".join(lines[precedence_index : precedence_index + 12])
+if not re.search(
+    r'if \[ "\$go_status" -ne 0 \]; then\n\s*status=\$go_status\n'
+    r'elif \[ "\$capture_status" -ne 0 \]; then\n\s*status=\$capture_status\n'
+    r'elif \[ "\$checker_status" -ne 0 \]; then\n\s*status=\$checker_status\n'
+    r'elif \[ "\$status_record_write_status" -ne 0 \]; then\n'
+    r'\s*status=\$status_record_write_status\nelse\n\s*status=\$evidence_status\nfi',
+    precedence_region,
+):
+    error("failure precedence must propagate Go, capture, checker, status-write, and evidence statuses")
+elif any(
+    re.match(r"^status=", line.strip())
+    for line in lines[precedence_index + 10 :]
+):
+    error("computed failure status must not be reset after the precedence chain")
+
+ordered = [
+    stale_index,
+    metadata_index,
+    go_index,
+    pipe_index,
+    go_status_index,
+    capture_status_index,
+    checker_index,
+    checker_status_index,
+    status_record_index,
+    status_write_index,
+    evidence_index,
+    completeness_index,
+    status_integrity_index,
+    metadata_integrity_index,
+    precedence_index,
+]
+if ordered != sorted(ordered) or len(set(ordered)) != len(ordered):
+    error("critical proof regions must remain unique and in execution order")
+
+stale_region = "\n".join(lines[stale_index : stale_index + 6])
+if not re.search(
+    rf'^for target in {re.escape(six_records)}; do\n'
+    rf'\s*if \[ -e "\$target" \]; then\n'
+    rf'\s*echo "{re.escape(stale_message)}: \$target" >&2\n'
+    r'\s*exit 1\n\s*fi\n\s*done$',
+    stale_region,
+):
+    error("active stale-target gate must enumerate six records and reject existing targets")
+
+nonblank = [line.strip() for line in lines if line.strip()]
+if kind == "hosted":
+    if not nonblank or nonblank[-1] != 'exit "$status"':
+        error("hosted wrapper must end with an unconditional propagated exit")
+elif kind == "local":
+    local_tail = "\n".join(lines[precedence_index:])
+    if not re.search(
+        r'fi\nset -e\nif \[ "\$status" -ne 0 \]; then\n'
+        r'(?:\s+.*\n)*?\s*exit "\$status"\nfi\s*$',
+        local_tail,
+    ):
+        error("local wrapper must restore errexit, exit on failure, and fall through on success")
+
+if errors:
+    for message in errors:
+        print(f"[audit] ERROR: {label} {message}", file=sys.stderr)
+    sys.exit(1)
+print(f"[audit] ok: {label} has active, unique, ordered fail-closed proof regions")
+PY
+}
+
+check_ck015_proof_wrapper() {
+  local content="$1"
+  local label="$2"
+  local profile="$3"
+  local stale_message="$4"
+  local wrapper_kind="$5"
+  local approved_slot="$6"
+
+  check_ck015_approved_wrapper_identity "$content" "$label" "$approved_slot" || check_status=1
+  check_ck015_proof_wrapper_structure "$content" "$label" "$stale_message" "$wrapper_kind" || check_status=1
+
+  require_content_pattern "$content" 'go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage' "$label uses exact race/count/serialization/package flags" || check_status=1
+  require_content_pattern "$content" "--profile (\"?\\\$profile\"?|$profile)" "$label selects exact checker profile" || check_status=1
+  require_content_pattern "$content" "$stale_message" "$label refuses stale invocation evidence" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.json" "$label retains JSON evidence" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.go\\.stderr" "$label retains separate Go stderr" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.checker\\.stdout" "$label retains checker stdout" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.checker\\.stderr" "$label retains checker stderr" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.status" "$label retains status record" || check_status=1
+  require_content_pattern "$content" "\\\$prefix\\.metadata" "$label retains metadata record" || check_status=1
+  require_content_pattern "$content" 'if ! printf '\''%s\\n'\''' "$label fails closed when metadata cannot be written" || check_status=1
+  require_content_pattern "$content" 'candidate_sha=\$' "$label metadata binds candidate SHA" || check_status=1
+  require_content_pattern "$content" 'matrix_codec=plain' "$label metadata binds plain leg" || check_status=1
+  require_content_pattern "$content" "package=\\\$package" "$label metadata binds package" || check_status=1
+  require_content_pattern "$content" "selector=\\\$selector" "$label metadata binds selector" || check_status=1
+  require_content_pattern "$content" "checker_profile=\\\$profile" "$label metadata binds checker profile" || check_status=1
+  require_content_pattern "$content" "go_version=\\\$go_version" "$label metadata binds Go version" || check_status=1
+  require_content_pattern "$content" "gotoolchain=(\\\$GOTOOLCHAIN|local)" "$label metadata binds toolchain policy" || check_status=1
+  # shellcheck disable=SC2016 # These patterns intentionally match literal wrapper variables.
+  require_content_pattern "$content" '2>"\$go_stderr_file" \| tee "\$json_file"' "$label keeps Go stderr separate from JSON" || check_status=1
+  require_content_pattern "$content" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' "$label snapshots complete pipeline status immediately" || check_status=1
+  require_content_pattern "$content" 'go_status=\$\{pipeline_status\[0\]\}' "$label preserves Go status" || check_status=1
+  require_content_pattern "$content" 'capture_status=\$\{pipeline_status\[1\]\}' "$label preserves capture status" || check_status=1
+  require_content_pattern "$content" 'checker_status=\$\?' "$label preserves checker status" || check_status=1
+  require_content_pattern "$content" 'status_record_write_status=\$\?' "$label preserves status-record write status" || check_status=1
+  require_content_pattern "$content" 'status_record_write_status=0' "$label records successful status-record write" || check_status=1
+  require_content_pattern "$content" 'evidence_status=0' "$label initializes evidence completeness status" || check_status=1
+  # shellcheck disable=SC2016 # This pattern intentionally matches literal wrapper variables.
+  require_content_pattern "$content" '\[ ! -f "\$target" \] \|\| \[ ! -r "\$target" \]' "$label requires every invocation record to be readable and regular" || check_status=1
+  # shellcheck disable=SC2016 # This pattern intentionally matches literal wrapper variables.
+  require_content_pattern "$content" 'grep -Fqx "\$expected" "\$status_file"' "$label verifies status-record contents" || check_status=1
+  # shellcheck disable=SC2016 # This pattern intentionally matches literal wrapper variables.
+  require_content_pattern "$content" 'grep -Fqx "\$expected" "\$metadata_file"' "$label verifies metadata contents" || check_status=1
+  # shellcheck disable=SC2016 # These patterns intentionally match literal wrapper variables.
+  require_content_pattern "$content" 'if \[ "\$go_status" -ne 0 \]' "$label gives Go failure first precedence" || check_status=1
+  require_content_pattern "$content" "elif \\[ \"\\\$capture_status\" -ne 0 \\]" "$label propagates capture failure" || check_status=1
+  require_content_pattern "$content" "elif \\[ \"\\\$checker_status\" -ne 0 \\]" "$label propagates checker failure" || check_status=1
+  require_content_pattern "$content" "elif \\[ \"\\\$status_record_write_status\" -ne 0 \\]" "$label propagates status-record failure" || check_status=1
+  require_content_pattern "$content" "status=\\\$evidence_status" "$label propagates evidence completeness failure" || check_status=1
+  require_content_pattern "$content" "exit \"\\\$status\"" "$label remains blocking" || check_status=1
+  if grep -Eq 'continue-on-error|go test .*\|\| true|go_status=0|capture_status=0|checker_status=0' <<<"$content"; then
+    echo "[audit] ERROR: $label must not suppress or forge required execution status" >&2
+    check_status=1
+  else
+    echo "[audit] ok: $label does not suppress or forge required execution status"
+  fi
 }
 
 check_paired_launcher_output_ownership() {
@@ -472,6 +970,92 @@ check_paired_launcher() {
   return "$check_status"
 }
 
+check_release_diagnostic_workflow() {
+  local file="$1"
+  local check_status=0
+  local quality_content=""
+  local validator_block=""
+  local upload_block=""
+  local validator_line=""
+  local upload_line=""
+  local next_step=""
+  local enablement="github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')"
+  # shellcheck disable=SC2016 # Match literal GitHub expression syntax.
+  local path='${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json'
+  # shellcheck disable=SC2016 # Match literal GitHub expression syntax.
+  local artifact='release-state-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ github.sha }}'
+
+  if [[ ! -f "$file" || -L "$file" ]]; then
+    echo "[audit] ERROR: diagnostic workflow probe requires a regular non-symlink workflow" >&2
+    return 1
+  fi
+  quality_content="$(awk '
+    /^  quality:$/ { in_job=1 }
+    in_job && /^  [A-Za-z0-9_-]+:$/ && $0 != "  quality:" { exit }
+    in_job { print }
+  ' "$file")"
+  validator_block="$(extract_step_block_from_content "$quality_content" "Validate repository release state")"
+  upload_block="$(extract_step_block_from_content "$quality_content" "Upload release-state diagnostic")"
+  if [[ -z "$validator_block" ]]; then
+    echo "[audit] ERROR: missing diagnostic-enabled release-state validator step" >&2
+    check_status=1
+  fi
+  if [[ -z "$upload_block" ]]; then
+    echo "[audit] ERROR: missing release-state diagnostic upload" >&2
+    check_status=1
+  fi
+  if [[ -n "$validator_block" && -n "$upload_block" ]]; then
+    validator_line="$(grep -nF -- '      - name: Validate repository release state' "$file" | head -n1 | cut -d: -f1)"
+    upload_line="$(grep -nF -- '      - name: Upload release-state diagnostic' "$file" | head -n1 | cut -d: -f1)"
+    next_step="$(awk -v start="$validator_line" 'NR > start && /^      - name:/ { print; exit }' "$file")"
+    if [[ "$upload_line" -le "$validator_line" || "$next_step" != "      - name: Upload release-state diagnostic" ]]; then
+      echo "[audit] ERROR: release-state diagnostic upload must immediately follow validation" >&2
+      check_status=1
+    else
+      echo "[audit] ok: release-state diagnostic upload immediately follows validation"
+    fi
+  fi
+
+  require_content_literal "$validator_block" "COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED: \${{ $enablement }}" 'diagnostic argument uses the release-PR scope' || check_status=1
+  require_content_literal "$validator_block" "COLDKEEP_RELEASE_DIAGNOSTIC_PATH: $path" 'diagnostic validator path is fixed and run-attributed' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_content_literal "$validator_block" 'if [ "$COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED" = "true" ]; then' 'diagnostic argument selection uses the scoped Boolean' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_content_literal "$validator_block" 'rm -f -- "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"' 'diagnostic validation removes only its exact stale output' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_content_literal "$validator_block" 'test ! -e "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"' 'diagnostic validation proves output freshness' || check_status=1
+  require_content_pattern "$validator_block" 'python3 scripts/validate_release_state\.py --state auto[[:space:]]+\\$' 'diagnostic validator command remains the one real auto invocation' || check_status=1
+  # shellcheck disable=SC2016 # Match literal validator variables.
+  require_content_literal "$validator_block" '--diagnostic-json "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"' 'applicable release PR passes the diagnostic argument' || check_status=1
+  require_content_literal "$validator_block" 'python3 scripts/validate_release_state.py --state auto' 'non-applicable context retains the ordinary validator invocation' || check_status=1
+  if grep -Eq 'continue-on-error|\|\| true|(^|[[:space:]])exit 0($|[[:space:]])|(^|[[:space:]])status=0($|[[:space:]])|python3 scripts/validate_release_state[^\n]*\|' <<<"$validator_block"; then
+    echo "[audit] ERROR: diagnostic validator status must remain blocking and unmasked" >&2
+    check_status=1
+  else
+    echo "[audit] ok: diagnostic validator status remains blocking and unmasked"
+  fi
+
+  require_content_literal "$upload_block" "if: \${{ always() && $enablement }}" 'diagnostic upload uses always and the release-PR scope' || check_status=1
+  require_content_literal "$upload_block" 'uses: actions/upload-artifact@v4' 'diagnostic upload uses the authorized v4 action' || check_status=1
+  require_content_literal "$upload_block" "name: $artifact" 'diagnostic artifact name is run/job/checkout attributed' || check_status=1
+  require_content_literal "$upload_block" "path: $path" 'diagnostic upload uses the exact single-file path' || check_status=1
+  require_content_literal "$upload_block" 'if-no-files-found: error' 'diagnostic upload fails on missing current capture' || check_status=1
+  require_content_literal "$upload_block" 'retention-days: 14' 'diagnostic artifact retention is fourteen days' || check_status=1
+  if grep -Eq 'continue-on-error|if-no-files-found:[[:space:]]*(warn|ignore)|path:[[:space:]].*[\*?]|path:[[:space:]].*/$' <<<"$upload_block"; then
+    echo "[audit] ERROR: diagnostic upload must not weaken missing-file or single-file enforcement" >&2
+    check_status=1
+  else
+    echo "[audit] ok: diagnostic upload keeps strict single-file enforcement"
+  fi
+  if [[ "$(grep -c 'actions/upload-artifact@v4' "$file" || true)" -ne 1 ]]; then
+    echo "[audit] ERROR: required CI expects exactly one diagnostic upload-artifact@v4 use" >&2
+    check_status=1
+  else
+    echo "[audit] ok: required CI has exactly one diagnostic upload-artifact@v4 use"
+  fi
+  return "$check_status"
+}
+
 check_local_workflow() {
   local check_status=0
   local adversarial_block=""
@@ -503,6 +1087,7 @@ check_local_workflow() {
   local upload_v7_count=0
 
   echo "[audit] checking local workflow invariants"
+  check_release_diagnostic_workflow "$WORKFLOW_FILE" || check_status=1
   require_executable_file "$SNAPSHOT_EVIDENCE_VALIDATOR_FILE" 'tracked-source snapshot evidence validator' || check_status=1
   require_executable_file "$RELEASE_LINEARITY_VALIDATOR_FILE" 'branch-relative release-linearity validator' || check_status=1
   require_executable_file "$RELEASE_BENCHMARK_EVIDENCE_FILE" 'release benchmark evidence lifecycle validator' || check_status=1
@@ -655,6 +1240,15 @@ check_local_workflow() {
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+sample_count=10$' 'benchmark calibration fixes ten measured samples' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+sample_count=5$' 'benchmark capture fixes five measured samples' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'python3 scripts/benchmark_gate\.py sample' 'benchmark calibration uses the strict sampler' || check_status=1
+  require_content_pattern "$benchmark_sample_block" 'database-provenance collect' 'benchmark calibration captures database provenance' || check_status=1
+  require_content_pattern "$benchmark_sample_block" 'database-provenance compare' 'benchmark calibration compares pre/post database provenance' || check_status=1
+  require_content_pattern "$benchmark_sample_block" '--database-provenance "\$\{provenance_root\}/database-provenance\.before\.json"' 'benchmark calibration binds sampling to retained database provenance' || check_status=1
+  if [[ "$(grep -c 'database-provenance collect' <<<"$benchmark_sample_block")" -ne 2 ]]; then
+    echo "[audit] ERROR: benchmark calibration must retain exactly two pre/post database observations" >&2
+    check_status=1
+  else
+    echo "[audit] ok: benchmark calibration retains exactly two pre/post database observations"
+  fi
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+--dataset ci-stable-v1 \\$' 'benchmark calibration fixes the fixture identity' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+--warmups 1 \\$' 'benchmark calibration fixes one excluded warmup' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'python3 scripts/benchmark_gate\.py calibrate' 'benchmark calibration evaluates the fixed matrix' || check_status=1
@@ -665,6 +1259,15 @@ check_local_workflow() {
   require_content_pattern "$benchmark_integrity_block" 'ci-paired-w1-v2' 'integrity matrix selects the bounded workers=1 fixture' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'ci-paired-w4-v2' 'integrity matrix selects the bounded workers=4 fixture' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'python3 scripts/benchmark_gate\.py integrity' 'integrity matrix uses the hard candidate-only interface' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'database-provenance collect' 'integrity matrix captures database provenance' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" 'database-provenance compare' 'integrity matrix compares pre/post database provenance' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" '--database-provenance "\$\{output_parent\}/database-provenance\.before\.json"' 'integrity matrix binds execution to retained database provenance' || check_status=1
+  if [[ "$(grep -c 'database-provenance collect' <<<"$benchmark_integrity_block")" -ne 2 ]]; then
+    echo "[audit] ERROR: integrity matrix must retain exactly two pre/post database observations" >&2
+    check_status=1
+  else
+    echo "[audit] ok: integrity matrix retains exactly two pre/post database observations"
+  fi
   require_content_pattern "$benchmark_integrity_block" '--command-timeout-seconds 600' 'integrity matrix fixes the 600-second command timeout' || check_status=1
   require_content_pattern "$benchmark_integrity_block" "go-version: '1\.26\.7'" 'integrity matrix pins the certified Go patch version' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'integrity matrix pins PostgreSQL by digest' || check_status=1
@@ -672,6 +1275,14 @@ check_local_workflow() {
   require_content_pattern "$benchmark_integrity_block" 'if: \$\{\{ always\(\) \}\}' 'integrity artifact finalization and upload always run' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'sha256sum --check checksums\.sha256' 'integrity artifact checksum inventory is verified' || check_status=1
   require_content_pattern "$benchmark_timing_block" '^\s+--dataset small \\$' 'timing advisory retains the historical small fixture' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'database-provenance collect' 'timing advisory captures database provenance' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'database-provenance compare' 'timing advisory compares pre/post database provenance' || check_status=1
+  if [[ "$(grep -c 'database-provenance collect' <<<"$benchmark_timing_block")" -ne 2 ]]; then
+    echo "[audit] ERROR: timing advisory must retain exactly two pre/post database observations" >&2
+    check_status=1
+  else
+    echo "[audit] ok: timing advisory retains exactly two pre/post database observations"
+  fi
   require_content_pattern "$benchmark_timing_block" 'scripts/validate_regression_thresholds\.py check' 'timing advisory retains the historical comparator' || check_status=1
   require_content_pattern "$benchmark_timing_block" '--policy hosted-advisory' 'timing comparator has informational authority' || check_status=1
   require_content_pattern "$benchmark_timing_block" '^\s+set \+e$' 'timing advisory disables errexit only for comparator evaluation' || check_status=1
@@ -698,8 +1309,8 @@ check_local_workflow() {
   require_content_pattern "$benchmark_timing_block" 'if-no-files-found: error' 'timing artifact rejects missing evidence' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'if: \$\{\{ always\(\) \}\}' 'timing artifact upload always runs' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'actual_inventory=.*find .*checksums\.sha256' 'timing artifact inventory is enumerated exhaustively' || check_status=1
-  require_content_pattern "$benchmark_timing_block" 'benchmark\.json\\ntiming-advisory\.json' 'timing artifact inventory is restricted to the report and observation' || check_status=1
-  require_content_pattern "$benchmark_timing_block" 'sha256sum benchmark\.json timing-advisory\.json > checksums\.sha256' 'timing artifact creates exhaustive checksums' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'benchmark\.json\\ndatabase-provenance-comparison\.json\\ndatabase-provenance\.after\.json\\ndatabase-provenance\.before\.json\\ntiming-advisory\.json' 'timing artifact inventory is restricted to the observation, provenance, and report' || check_status=1
+  require_content_pattern "$benchmark_timing_block" 'sha256sum benchmark\.json database-provenance-comparison\.json \\$' 'timing artifact creates exhaustive checksums' || check_status=1
   require_content_pattern "$benchmark_timing_block" 'sha256sum --check checksums\.sha256' 'timing artifact verifies checksums' || check_status=1
   checksum_line="$(grep -nEm1 'sha256sum --check checksums\.sha256' <<<"$benchmark_timing_block" | cut -d: -f1 || true)"
   evaluator_failure_line="$(grep -nEm1 '^\s+2\)$' <<<"$benchmark_timing_block" | cut -d: -f1 || true)"
@@ -867,7 +1478,7 @@ check_local_workflow() {
     require_content_pattern "$python_suite_block" '^      - name: Run complete Python validation suite$' 'complete Python validation suite step' || check_status=1
     require_content_pattern "$python_suite_block" "^        run: python3 -m unittest discover -s scripts -p 'test_\\*\\.py' -v$" 'canonical complete Python validation command' || check_status=1
     require_content_pattern "$validator_real_block" '^      - name: Validate repository release state$' 'release-state validator real-state step' || check_status=1
-    require_content_pattern "$validator_real_block" '^        run: python3 scripts/validate_release_state\.py --state auto$' 'release-state validator real-state command' || check_status=1
+    require_content_pattern "$validator_real_block" 'python3 scripts/validate_release_state\.py --state auto' 'release-state validator real-state command' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/heads/release/' 'release-state validator release branch condition' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/heads/main' 'release-state validator main condition' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/tags/v' 'release-state validator tag condition' || check_status=1
@@ -897,18 +1508,25 @@ check_local_workflow() {
 	  else
 	    require_content_pattern "$correctness_integration_block" 'COLDKEEP_TEST_DB:\s*1' 'integration correctness execution proof enables DB gate' || check_status=1
 	    require_content_pattern "$correctness_integration_block" 'go test -race -count=1 -short -json \./tests/integration/\.\.\.' 'integration correctness execution proof uses JSON evidence' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'TestRoundTripStoreRestore' 'required PostgreSQL storage round-trip execution proof' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'TestRemoveWithSharedChunksRefCount' 'required PostgreSQL storage remove execution proof' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState' 'required PostgreSQL recovery execution proof' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'github.com/franchoy/coldkeep/tests/integration' 'integration correctness execution proof binds the integration package' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'if codec == "plain"' 'integration correctness execution proof scopes recovery and remove markers to plain codec' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'json\.loads\(raw_line\)' 'integration correctness execution proof rejects malformed JSON' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'if not events:' 'integration correctness execution proof rejects empty JSON' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'event\.get\("Action"\) == "skip"' 'integration correctness execution proof rejects required skips' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'event\.get\("Action"\) == "pass"' 'integration correctness execution proof requires pass events' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'print\("required execution-proof failure:", file=sys\.stderr\)' 'integration correctness execution-proof parser' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'status=\$\{PIPESTATUS\[0\]\}' 'integration correctness execution proof preserves test status' || check_status=1
-	    require_content_pattern "$correctness_integration_block" 'status=\$\?' 'integration correctness execution proof propagates parser status' || check_status=1
+	    # The regex must match literal workflow variables, not expand audit variables.
+	    # shellcheck disable=SC2016
+	    require_content_pattern "$correctness_integration_block" '2>"\$stderr_file" \| tee "\$json_file"' 'integration correctness keeps stderr separate from JSON evidence' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'refusing to reuse correctness-matrix evidence paths' 'integration correctness refuses stale evidence paths' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 'integration correctness snapshots complete pipeline status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'go_status=\$\{pipeline_status\[0\]\}' 'integration correctness preserves Go status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'capture_status=\$\{pipeline_status\[1\]\}' 'integration correctness preserves evidence-capture status' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'scripts/check_required_test_events\.py' 'integration correctness invokes required-event checker' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'integration-correctness-\$\{\{ matrix\.codec \}\}' 'integration correctness selects codec-specific profile' || check_status=1
+	    require_content_pattern "$correctness_integration_block" 'checker_status=\$\?' 'integration correctness preserves checker status' || check_status=1
+	    # The regex must match the literal workflow status variable.
+	    # shellcheck disable=SC2016
+	    require_content_pattern "$correctness_integration_block" 'if \[ "\$go_status" -ne 0 \]' 'integration correctness gives Go failure first precedence' || check_status=1
+	    # The regex must match the literal workflow status variable.
+	    # shellcheck disable=SC2016
+	    require_content_pattern "$correctness_integration_block" 'elif \[ "\$capture_status" -ne 0 \]' 'integration correctness propagates evidence-capture failure' || check_status=1
+	    # The regex must match the literal workflow status assignment.
+	    # shellcheck disable=SC2016
+	    require_content_pattern "$correctness_integration_block" 'status=\$checker_status' 'integration correctness propagates checker status after pipeline success' || check_status=1
 	    # shellcheck disable=SC2016 # The audit pattern must match the literal $status.
 	    require_content_pattern "$correctness_integration_block" 'exit "\$status"' 'integration correctness execution proof remains blocking' || check_status=1
 	    if grep -Eq 'continue-on-error|go test .*\|\| true' <<<"$correctness_integration_block"; then
@@ -917,6 +1535,117 @@ check_local_workflow() {
 	    else
 	      echo "[audit] ok: integration correctness execution-proof step does not suppress broad failures"
 	    fi
+	  fi
+	  ck014_internal_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run CK-014 internal verification proofs")"
+	  if [[ -z "$ck014_internal_block" ]]; then
+	    echo "[audit] ERROR: missing CK-014 internal verification proof step" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$ck014_internal_block" "if: \\$\\{\\{ matrix\.codec == 'plain' \\}\\}" 'CK-014 internal proofs run only in plain correctness leg' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'go test -race -count=1 -json \./internal/verify' 'CK-014 internal proofs use JSON package evidence' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'TestVerifySystemDeepPreflightFailureDoesNotInvokeDownstreamReader' 'CK-014 preflight boundary proof selector' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults' 'CK-014 downstream aggregation proof selector' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'TestVerifySystemDeepInjectedDownstreamReaderCleanPipelinePasses' 'CK-014 clean pipeline proof selector' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'TestVerifySystemDeepRejectsNilDownstreamReaderAfterPreflight' 'CK-014 unsafe setup boundary proof selector' || check_status=1
+	    require_content_pattern "$ck014_internal_block" '--profile ck014-internal-verify' 'CK-014 internal proof profile' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'refusing to reuse CK-014 internal evidence paths' 'CK-014 internal proofs refuse stale evidence paths' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 'CK-014 internal proofs snapshot complete pipeline status' || check_status=1
+	    require_content_pattern "$ck014_internal_block" 'capture_status=\$\{pipeline_status\[1\]\}' 'CK-014 internal proofs preserve evidence-capture status' || check_status=1
+	    # The regex must match the literal workflow status variable.
+	    # shellcheck disable=SC2016
+	    require_content_pattern "$ck014_internal_block" 'elif \[ "\$capture_status" -ne 0 \]' 'CK-014 internal proofs propagate evidence-capture failure' || check_status=1
+	    # The regex must match the literal workflow exit variable.
+	    # shellcheck disable=SC2016
+	    require_content_pattern "$ck014_internal_block" 'exit "\$status"' 'CK-014 internal proof step remains blocking' || check_status=1
+	  fi
+	  ck015_sqlite_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run CK-015 SQLite initial-lookup proofs")"
+	  ck015_postgres_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run CK-015 PostgreSQL lookup and preservation proofs")"
+	  ck015_sqlite_interval=""
+	  ck015_postgres_interval=""
+	  if ! ck015_sqlite_interval="$(extract_ck015_approved_interval "$WORKFLOW_FILE" '      - name: Run CK-015 SQLite initial-lookup proofs' '      - name: Run CK-015 PostgreSQL lookup and preservation proofs' 'CK-015 SQLite hosted wrapper')"; then
+	    check_status=1
+	  else
+	    require_ck015_extractor_agreement "$ck015_sqlite_block" "$ck015_sqlite_interval" 'CK-015 SQLite hosted wrapper' || check_status=1
+	  fi
+	  if ! ck015_postgres_interval="$(extract_ck015_approved_interval "$WORKFLOW_FILE" '      - name: Run CK-015 PostgreSQL lookup and preservation proofs' '      - name: Run required PostgreSQL internal package contracts' 'CK-015 PostgreSQL hosted wrapper')"; then
+	    check_status=1
+	  else
+	    require_ck015_extractor_agreement "$ck015_postgres_block" "$ck015_postgres_interval" 'CK-015 PostgreSQL hosted wrapper' || check_status=1
+	  fi
+	  if [[ -z "$ck015_sqlite_block" ]]; then
+	    echo "[audit] ERROR: missing CK-015 SQLite named-proof step" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$ck015_sqlite_block" "^      - name: Run CK-015 SQLite initial-lookup proofs$" 'CK-015 SQLite exact step name' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "if: \\$\\{\\{ matrix\.codec == 'plain' \\}\\}" 'CK-015 SQLite proof runs only in plain correctness leg' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" '^          COLDKEEP_CODEC: plain$' 'CK-015 SQLite proof freezes plain codec' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'CK-015 SQLite proof clears inherited compression and long-run settings' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'profile=ck015-initial-lookup-sqlite' 'CK-015 SQLite proof freezes checker profile' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'package=github\.com/franchoy/coldkeep/internal/storage' 'CK-015 SQLite proof binds storage package' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'prefix="ck015-sqlite-\$\{GITHUB_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{GITHUB_JOB\}-plain"' 'CK-015 SQLite evidence prefix binds candidate/run/attempt/job/leg' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "selector='\\^\\(.*TestCKV11316015InitialLookupSupportedStatusRoutingSQLite.*\\)\\$'" 'CK-015 SQLite selector is top-level anchored' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite' 'CK-015 SQLite operational-error selector' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite' 'CK-015 SQLite partial-Scan selector' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite' 'CK-015 SQLite no-row selector' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite' 'CK-015 SQLite status-routing selector' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "candidate_sha=\\\$GITHUB_SHA" 'CK-015 SQLite metadata binds candidate SHA' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "repository=\\\$GITHUB_REPOSITORY" 'CK-015 SQLite metadata binds repository' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "ref=\\\$GITHUB_REF" 'CK-015 SQLite metadata binds ref' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "run_id=\\\$GITHUB_RUN_ID" 'CK-015 SQLite metadata binds run ID' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "run_attempt=\\\$GITHUB_RUN_ATTEMPT" 'CK-015 SQLite metadata binds run attempt' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" "job=\\\$GITHUB_JOB" 'CK-015 SQLite metadata binds job' || check_status=1
+	    check_ck015_proof_wrapper "$ck015_sqlite_block" 'CK-015 SQLite hosted wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path' hosted hosted-sqlite
+	  fi
+	  if [[ -z "$ck015_postgres_block" ]]; then
+	    echo "[audit] ERROR: missing CK-015 PostgreSQL named-proof step" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$ck015_postgres_block" "^      - name: Run CK-015 PostgreSQL lookup and preservation proofs$" 'CK-015 PostgreSQL exact step name' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "if: \\$\\{\\{ matrix\.codec == 'plain' \\}\\}" 'CK-015 PostgreSQL proof runs only in plain correctness leg' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'COLDKEEP_TEST_DB:\s*1' 'CK-015 PostgreSQL proof enables DB gate' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'COLDKEEP_TEST_DB_MAINTENANCE:\s*postgres' 'CK-015 PostgreSQL proof uses maintenance database' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'COLDKEEP_DB_AUTO_BOOTSTRAP:\s*true' 'CK-015 PostgreSQL proof enables bootstrap' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'COLDKEEP_CODEC:\s*plain' 'CK-015 PostgreSQL proof freezes plain codec' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_HOST:\s*127\.0\.0\.1' 'CK-015 PostgreSQL proof sets DB host' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_PORT:\s*5432' 'CK-015 PostgreSQL proof sets DB port' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_USER:\s*coldkeep' 'CK-015 PostgreSQL proof sets DB user' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_PASSWORD:\s*coldkeep' 'CK-015 PostgreSQL proof sets DB password' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_NAME:\s*coldkeep' 'CK-015 PostgreSQL proof sets DB name' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'DB_SSLMODE:\s*disable' 'CK-015 PostgreSQL proof sets DB SSL mode' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'CK-015 PostgreSQL proof clears schema/compression/long-run inheritance' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'profile=ck015-initial-lookup-postgres' 'CK-015 PostgreSQL proof freezes checker profile' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'package=github\.com/franchoy/coldkeep/internal/storage' 'CK-015 PostgreSQL proof binds storage package' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'prefix="ck015-postgres-\$\{GITHUB_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{GITHUB_JOB\}-plain"' 'CK-015 PostgreSQL evidence prefix binds candidate/run/attempt/job/leg' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "selector='\\^\\(.*TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies.*\\)\\$'" 'CK-015 PostgreSQL selector is top-level anchored' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback' 'CK-015 PostgreSQL operational-error selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery' 'CK-015 PostgreSQL preservation selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation' 'CK-015 PostgreSQL publisher-lock selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication' 'CK-015 PostgreSQL competitor-lock selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies' 'CK-015 PostgreSQL healing selector' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'postgres:16\.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825' 'CK-015 PostgreSQL metadata binds pinned service image' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "candidate_sha=\\\$GITHUB_SHA" 'CK-015 PostgreSQL metadata binds candidate SHA' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "repository=\\\$GITHUB_REPOSITORY" 'CK-015 PostgreSQL metadata binds repository' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "ref=\\\$GITHUB_REF" 'CK-015 PostgreSQL metadata binds ref' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "run_id=\\\$GITHUB_RUN_ID" 'CK-015 PostgreSQL metadata binds run ID' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "run_attempt=\\\$GITHUB_RUN_ATTEMPT" 'CK-015 PostgreSQL metadata binds run attempt' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" "job=\\\$GITHUB_JOB" 'CK-015 PostgreSQL metadata binds job' || check_status=1
+	    if grep -Eq 'COLDKEEP_KEY' <<<"$ck015_postgres_block"; then
+	      echo "[audit] ERROR: CK-015 PostgreSQL proof must not claim AES-key coverage" >&2
+	      check_status=1
+	    else
+	      echo "[audit] ok: CK-015 PostgreSQL proof makes no AES-key claim"
+	    fi
+	    check_ck015_proof_wrapper "$ck015_postgres_block" 'CK-015 PostgreSQL hosted wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' hosted hosted-postgres
+	  fi
+	  ck014_position="$(grep -nF '      - name: Run CK-014 internal verification proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
+	  ck015_sqlite_position="$(grep -nF '      - name: Run CK-015 SQLite initial-lookup proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
+	  ck015_postgres_position="$(grep -nF '      - name: Run CK-015 PostgreSQL lookup and preservation proofs' <<<"$correctness_matrix_block" | cut -d: -f1)"
+	  postgres_internal_position="$(grep -nF '      - name: Run required PostgreSQL internal package contracts' <<<"$correctness_matrix_block" | cut -d: -f1)"
+	  if [[ -z "$ck014_position" || -z "$ck015_sqlite_position" || -z "$ck015_postgres_position" || -z "$postgres_internal_position" || "$ck014_position" -ge "$ck015_sqlite_position" || "$ck015_sqlite_position" -ge "$ck015_postgres_position" || "$ck015_postgres_position" -ge "$postgres_internal_position" ]]; then
+	    echo "[audit] ERROR: CK-015 named proofs must follow CK-014 and precede PostgreSQL internal contracts" >&2
+	    check_status=1
+	  else
+	    echo "[audit] ok: CK-015 named proofs follow CK-014 and precede PostgreSQL internal contracts"
 	  fi
 	  postgres_internal_contracts_block="$(extract_step_block_from_content "$correctness_matrix_block" "Run required PostgreSQL internal package contracts")"
 	  if [[ -z "$postgres_internal_contracts_block" ]]; then
@@ -987,6 +1716,20 @@ check_local_workflow() {
 	      echo "[audit] ok: PostgreSQL internal package contracts step is blocking"
 	    fi
 	  fi
+	  correctness_upload_block="$(extract_step_block_from_content "$correctness_matrix_block" "Upload correctness-matrix execution evidence")"
+	  if [[ -z "$correctness_upload_block" ]]; then
+	    echo "[audit] ERROR: missing durable correctness-matrix execution evidence upload" >&2
+	    check_status=1
+	  else
+	    require_content_pattern "$correctness_upload_block" '^      - name: Upload correctness-matrix execution evidence$' 'correctness-matrix evidence upload exact name' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'if: \$\{\{ always\(\) \}\}' 'correctness-matrix evidence upload always runs' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'uses: actions/upload-artifact@v7' 'correctness-matrix evidence upload uses v7' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'name: correctness-matrix-evidence-\$\{\{ matrix\.codec \}\}-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}' 'correctness-matrix artifact name binds codec/SHA/run/attempt' || check_status=1
+	    require_content_pattern "$correctness_upload_block" '^          path: \$\{\{ runner\.temp \}\}/integration-diag/\*$' 'correctness-matrix evidence upload retains every integration diagnostic record' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'retention-days: 14' 'correctness-matrix evidence upload retains 14 days' || check_status=1
+	    require_content_pattern "$correctness_upload_block" 'if-no-files-found: error' 'correctness-matrix evidence upload fails when no records exist' || check_status=1
+	  fi
+	  require_content_pattern "$correctness_matrix_block" 'image: postgres:16\.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825' 'correctness-matrix preserves pinned PostgreSQL 16.15 service' || check_status=1
 	fi
   require_pattern "$WORKFLOW_FILE" '^  cross-platform:$' 'cross-platform job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'cross-platform job runs native ubuntu, macOS, and Windows matrix' || check_status=1
@@ -1025,7 +1768,7 @@ check_local_workflow() {
   require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.7'" 'source installation pins Go 1.26.7' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
-  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.15" 'source installation proves binary identity' || check_status=1
+  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.16" 'source installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'remote candidate installation covers Linux, macOS, and Windows' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.7'" 'remote candidate installation pins Go 1.26.7' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'cache:\s*false' 'remote candidate installation does not require checkout-backed Go caching' || check_status=1
@@ -1077,7 +1820,7 @@ check_local_workflow() {
   require_content_pattern "$remote_candidate_install_block" 'go install "\$\{module\}/cmd/coldkeep@\$\{CANDIDATE_QUERY\}"' 'Unix public installation uses the selected candidate query' || check_status=1
   # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'go install "\$module/cmd/coldkeep@\$env:CANDIDATE_QUERY"' 'Windows public installation uses the selected candidate query' || check_status=1
-  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.15" 'remote candidate installation proves binary identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.16" 'remote candidate installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "go1\\\.26\\\.7" 'remote candidate installation proves binary compiler identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'grep -F .*resolved_version.*binary-build-info\.txt' 'Unix remote installation proves module build metadata' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'installed module build identity mismatch' 'Windows remote installation proves module build metadata' || check_status=1
@@ -1093,6 +1836,7 @@ check_local_workflow() {
   require_content_pattern "$devcontainer_block" 'validate_phase3_contracts\.py' 'development container runs the static safety contract' || check_status=1
   require_content_pattern "$devcontainer_block" 'post-create\.sh' 'development container runs its bootstrap' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer\]' 'required gate depends on security and hosted reproducibility jobs' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'CORRECTNESS_MATRIX_RESULT:\s*\$\{\{ needs\['\''correctness-matrix'\''\]\.result \}\}' 'required gate captures correctness-matrix result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT:\s*\$\{\{ needs\.vulnerability\.result \}\}' 'required gate captures vulnerability result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SOURCE_INSTALL_RESULT:\s*\$\{\{ needs\['\''source-install'\''\]\.result \}\}' 'required gate captures source-install result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'REMOTE_CANDIDATE_INSTALL_RESULT:\s*\$\{\{ needs\['\''remote-candidate-install'\''\]\.result \}\}' 'required gate captures remote-candidate-install result' || check_status=1
@@ -1116,6 +1860,97 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  adversarial:$' 'adversarial job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G17\)' 'adversarial workflow step names batch coverage through G17' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -json ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite with JSON evidence' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '^[[:space:]]*COLDKEEP_LONG_RUN=1 go test -race -count=1 \./tests/adversarial/\.\.\. -timeout 20m$' 'local Profile A full long-run adversarial package uses exact 20-minute timeout' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '--profile "integration-correctness-\$\{codec\}"' 'local Profile A selects codec-specific required-event profile' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" '--profile ck014-internal-verify' 'local Profile A invokes CK-014 internal required-event profile' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'pipeline_status=\("\$\{PIPESTATUS\[@\]\}"\)' 4 'local Profile A snapshots complete pipeline status in all required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'go_status=\$\{pipeline_status\[0\]\}' 4 'local Profile A preserves Go status in all required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'capture_status=\$\{pipeline_status\[1\]\}' 4 'local Profile A preserves evidence-capture status in all required-event wrappers' || check_status=1
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'checker_status=\$\?' 4 'local Profile A preserves checker status in all required-event wrappers' || check_status=1
+  # The regex must count literal checklist status variables, not expand them here.
+  # shellcheck disable=SC2016
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'if \[ "\$go_status" -ne 0 \]' 4 'local Profile A gives Go failure first precedence in all required-event wrappers' || check_status=1
+  # The regex must count literal checklist status variables, not expand them here.
+  # shellcheck disable=SC2016
+  require_pattern_count "$PRE_RELEASE_CHECKLIST_FILE" 'elif \[ "\$capture_status" -ne 0 \]' 4 'local Profile A propagates evidence-capture failure in all required-event wrappers' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" 'refusing to reuse integration-correctness evidence paths' 'local Profile A refuses stale integration evidence paths' || check_status=1
+  require_pattern "$PRE_RELEASE_CHECKLIST_FILE" 'refusing to reuse CK-014 internal evidence paths' 'local Profile A refuses stale internal evidence paths' || check_status=1
+
+  ck015_sqlite_local_block="$(awk '/^# CK-V11316-015 SQLite initial-lookup named proof\.$/ { in_block = 1 } /^# CK-V11316-015 PostgreSQL lookup and preservation named proof\.$/ { if (in_block) exit } in_block { print }' "$PRE_RELEASE_CHECKLIST_FILE")"
+  ck015_postgres_local_block="$(awk '/^# CK-V11316-015 PostgreSQL lookup and preservation named proof\.$/ { in_block = 1 } /^# Step 3 loop leaves COLDKEEP_CODEC/ { if (in_block) exit } in_block { print }' "$PRE_RELEASE_CHECKLIST_FILE")"
+  ck015_sqlite_local_interval=""
+  ck015_postgres_local_interval=""
+  if ! ck015_sqlite_local_interval="$(extract_ck015_approved_interval "$PRE_RELEASE_CHECKLIST_FILE" '# CK-V11316-015 SQLite initial-lookup named proof.' '# CK-V11316-015 PostgreSQL lookup and preservation named proof.' 'local CK-015 SQLite wrapper')"; then
+    check_status=1
+  else
+    require_ck015_extractor_agreement "$ck015_sqlite_local_block" "$ck015_sqlite_local_interval" 'local CK-015 SQLite wrapper' || check_status=1
+  fi
+  if ! ck015_postgres_local_interval="$(extract_ck015_approved_interval "$PRE_RELEASE_CHECKLIST_FILE" '# CK-V11316-015 PostgreSQL lookup and preservation named proof.' '# Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).' 'local CK-015 PostgreSQL wrapper')"; then
+    check_status=1
+  else
+    require_ck015_extractor_agreement "$ck015_postgres_local_block" "$ck015_postgres_local_interval" 'local CK-015 PostgreSQL wrapper' || check_status=1
+  fi
+  if [[ -z "$ck015_sqlite_local_block" ]]; then
+    echo "[audit] ERROR: missing local Profile A CK-015 SQLite wrapper" >&2
+    check_status=1
+  else
+    require_content_pattern "$ck015_sqlite_local_block" 'prefix=ck015-initial-lookup-sqlite-local' 'local CK-015 SQLite wrapper uses distinct fixed prefix' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'GOTOOLCHAIN=local COLDKEEP_CODEC=plain go test -race -count=1 -p=1 -parallel=1 -json \./internal/storage' 'local CK-015 SQLite wrapper uses exact package, environment, and flags' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'profile=ck015-initial-lookup-sqlite' 'local CK-015 SQLite wrapper selects exact profile' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" "selector='\\^\\(.*TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite.*TestCKV11316015InitialLookupSupportedStatusRoutingSQLite.*\\)\\$'" 'local CK-015 SQLite wrapper freezes anchored selector' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite' 'local CK-015 SQLite wrapper retains partial-Scan selector' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite' 'local CK-015 SQLite wrapper retains no-row selector' || check_status=1
+    require_content_pattern "$ck015_sqlite_local_block" 'unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'local CK-015 SQLite wrapper clears inherited settings' || check_status=1
+    check_ck015_proof_wrapper "$ck015_sqlite_local_block" 'local CK-015 SQLite wrapper' 'ck015-initial-lookup-sqlite' 'refusing to reuse CK-015 SQLite evidence path' local local-sqlite
+  fi
+  if [[ -z "$ck015_postgres_local_block" ]]; then
+    echo "[audit] ERROR: missing local Profile A CK-015 PostgreSQL wrapper" >&2
+    check_status=1
+  else
+    require_content_pattern "$ck015_postgres_local_block" 'prefix=ck015-initial-lookup-postgres-local' 'local CK-015 PostgreSQL wrapper uses distinct fixed prefix' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'profile=ck015-initial-lookup-postgres' 'local CK-015 PostgreSQL wrapper selects exact profile' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "selector='\\^\\(.*TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback.*TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies.*\\)\\$'" 'local CK-015 PostgreSQL wrapper freezes anchored selector' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery' 'local CK-015 PostgreSQL wrapper retains preservation selector' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation' 'local CK-015 PostgreSQL wrapper retains publisher-lock selector' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication' 'local CK-015 PostgreSQL wrapper retains competitor-lock selector' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" 'unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'local CK-015 PostgreSQL wrapper clears inherited settings' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^GOTOOLCHAIN=local' 'local CK-015 PostgreSQL wrapper pins local toolchain' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^COLDKEEP_CODEC=plain' 'local CK-015 PostgreSQL wrapper freezes plain codec' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^COLDKEEP_TEST_DB=1' 'local CK-015 PostgreSQL wrapper enables DB gate' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^COLDKEEP_TEST_DB_MAINTENANCE=postgres' 'local CK-015 PostgreSQL wrapper uses maintenance database' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" '^COLDKEEP_DB_AUTO_BOOTSTRAP=true' 'local CK-015 PostgreSQL wrapper enables bootstrap' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_HOST=\"\\\$DB_HOST\"" 'local CK-015 PostgreSQL wrapper preserves isolated DB host' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_PORT=\"\\\$DB_PORT\"" 'local CK-015 PostgreSQL wrapper preserves isolated DB port' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_USER=\"\\\$DB_USER\"" 'local CK-015 PostgreSQL wrapper preserves DB user' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_PASSWORD=\"\\\$DB_PASSWORD\"" 'local CK-015 PostgreSQL wrapper preserves DB password input' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_NAME=\"\\\$DB_NAME\"" 'local CK-015 PostgreSQL wrapper preserves DB name' || check_status=1
+    require_content_pattern "$ck015_postgres_local_block" "^DB_SSLMODE=\"\\\$DB_SSLMODE\"" 'local CK-015 PostgreSQL wrapper preserves DB SSL mode' || check_status=1
+    check_ck015_proof_wrapper "$ck015_postgres_local_block" 'local CK-015 PostgreSQL wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' local local-postgres
+  fi
+
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/verify' 1 'required-event profiles bind the internal verify profile' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/storage' 2 'required-event profiles bind storage package for both CK-015 profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" '"ck015-initial-lookup-sqlite"' 1 'required-event profiles contain exact CK-015 SQLite profile once' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" '"ck015-initial-lookup-postgres"' 1 'required-event profiles contain exact CK-015 PostgreSQL profile once' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite' 1 'CK-015 SQLite profile requires operational-error proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite' 1 'CK-015 SQLite profile requires partial-Scan proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite' 1 'CK-015 SQLite profile requires no-row proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite"' 1 'CK-015 SQLite profile requires routing parent' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/completed' 1 'CK-015 SQLite profile requires completed routing child' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/aborted' 1 'CK-015 SQLite profile requires aborted routing child' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/processing' 1 'CK-015 SQLite profile requires processing routing child' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback' 1 'CK-015 PostgreSQL profile requires operational-error proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery' 1 'CK-015 PostgreSQL profile requires preservation proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation' 1 'CK-015 PostgreSQL profile requires publisher-lock proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication' 1 'CK-015 PostgreSQL profile requires competitor-lock proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies' 1 'CK-015 PostgreSQL profile requires healing proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestRoundTripStoreRestore' 2 'required-event profiles preserve storage round-trip proof in both integration profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestRemoveWithSharedChunksRefCount' 1 'required-event profiles preserve remove proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState' 1 'required-event profiles preserve recovery proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestSimulationMatchesRealSizeMetrics' 1 'required-event profiles require simulation proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestVerifySystemFullRejectsNonContiguousPackedBlockOffsets' 1 'required-event profiles require packed occupancy proof' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestVerifySystemDeepCLIRejectsTwoPreexistingPackedPhysicalCorruptionsAtPreflight' 1 'required-event profiles require CLI preflight corruption proof' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14\\|TestAdversarialG15\\|TestAdversarialG16\\|TestAdversarialG17'" 'explicit G14-G17 adversarial gate command' || check_status=1
   adversarial_block="$(extract_job_block adversarial)"
   if [[ -z "$adversarial_block" ]]; then
@@ -1147,6 +1982,7 @@ check_local_workflow() {
       require_content_pattern "$adversarial_validation_block" 'COLDKEEP_TEST_DB:\s*1' 'adversarial coordination proof enables DB gate' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'COLDKEEP_LONG_RUN:\s*1' 'adversarial coordination proof enables long-run gate' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'go test -race -count=1 -json \./tests/adversarial/\.\.\.' 'adversarial coordination proof uses JSON execution evidence' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'go test -race -count=1 -json \./tests/adversarial/\.\.\. -timeout 20m' 'hosted full long-run adversarial package uses exact 20-minute timeout' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6IndependentProcessRepositoryContention/plain' 'independent-process plain execution proof' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm' 'independent-process AES-GCM execution proof' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6KilledLeaseHolderReleasesRepository' 'killed-holder execution proof' || check_status=1
@@ -1498,6 +2334,21 @@ check_remote_policy() {
     fi
   fi
 }
+
+if [[ "$CK015_IDENTITY_PROBE" -eq 1 ]]; then
+  if [[ ! -f "$CK015_IDENTITY_PROBE_FILE" || -L "$CK015_IDENTITY_PROBE_FILE" ]]; then
+    echo "[audit] ERROR: CK-015 identity probe requires a regular non-symlink body file" >&2
+    exit 1
+  fi
+  ck015_identity_probe_content="$(<"$CK015_IDENTITY_PROBE_FILE")"
+  check_ck015_approved_wrapper_identity "$ck015_identity_probe_content" 'CK-015 identity probe' "$CK015_IDENTITY_PROBE_SLOT"
+  exit $?
+fi
+
+if [[ -n "$DIAGNOSTIC_WORKFLOW_PROBE_FILE" ]]; then
+  check_release_diagnostic_workflow "$DIAGNOSTIC_WORKFLOW_PROBE_FILE"
+  exit $?
+fi
 
 status=0
 

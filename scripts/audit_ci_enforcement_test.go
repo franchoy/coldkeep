@@ -1,13 +1,19 @@
 package scripts_test
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/pathsafe"
 )
@@ -440,6 +446,24 @@ func TestAuditCIEnforcementRejectsUnsafeBenchmarkCalibrationWorkflow(t *testing.
 			wantMessage: "benchmark sample harness runs from trusted checkout",
 		},
 		{
+			name: "database provenance binding removed",
+			mutate: func(value string) string {
+				return strings.Replace(value, "--database-provenance \"${provenance_root}/database-provenance.before.json\"", "--database-provenance removed.json", 1)
+			},
+			wantMessage: "benchmark calibration binds sampling to retained database provenance",
+		},
+		{
+			name: "post database observation removed",
+			mutate: func(value string) string {
+				index := strings.LastIndex(value, "database-provenance collect")
+				if index < 0 {
+					return value
+				}
+				return value[:index] + "database-provenance validate" + value[index+len("database-provenance collect"):]
+			},
+			wantMessage: "benchmark calibration must retain exactly two pre/post database observations",
+		},
+		{
 			name: "calibration harness redirected",
 			mutate: func(value string) string {
 				return strings.Replace(
@@ -557,6 +581,10 @@ func TestAuditCIEnforcementRejectsBenchmarkGovernanceMutations(t *testing.T) {
 		{
 			name: "integrity downgrade", old: "python3 scripts/benchmark_gate.py integrity",
 			replacement: "python3 scripts/validate_regression_thresholds.py check", message: "hard candidate-only interface",
+		},
+		{
+			name: "integrity provenance binding removed", old: "--database-provenance \"${output_parent}/database-provenance.before.json\"",
+			replacement: "--database-provenance removed.json", message: "integrity matrix binds execution to retained database provenance",
 		},
 		{
 			name: "advisory made legacy", old: "--policy hosted-advisory",
@@ -1393,6 +1421,10 @@ func cloneAuditRepositoryOnBranch(t *testing.T, branch string) string {
 	if output, err := checkout.CombinedOutput(); err != nil {
 		t.Fatalf("create audit fixture branch %s: %v\n%s", branch, err, output)
 	}
+	auditPath := filepath.Join(root, "scripts", "audit_ci_enforcement.sh")
+	if err := os.WriteFile(auditPath, []byte(readRepoFile(t, filepath.Join("scripts", "audit_ci_enforcement.sh"))), 0o755); err != nil {
+		t.Fatalf("install current CI audit in cloned repository fixture: %v", err)
+	}
 	return root
 }
 
@@ -1518,87 +1550,91 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 		},
 		{
 			name:        "storage round-trip marker",
-			anchor:      "      - name: Run integration tests (correctness tier)\n",
 			old:         "TestRoundTripStoreRestore",
 			replacement: "RemovedRoundTripMarker",
-			wantMessage: "required PostgreSQL storage round-trip execution proof",
+			wantMessage: "required-event profiles preserve storage round-trip proof",
+			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
+			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
 		},
 		{
 			name:        "storage remove marker",
-			anchor:      "      - name: Run integration tests (correctness tier)\n",
 			old:         "TestRemoveWithSharedChunksRefCount",
 			replacement: "RemovedSharedChunkMarker",
-			wantMessage: "required PostgreSQL storage remove execution proof",
+			wantMessage: "required-event profiles preserve remove proof",
+			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
+			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
 		},
 		{
 			name:        "startup recovery marker",
-			anchor:      "      - name: Run integration tests (correctness tier)\n",
 			old:         "TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState",
 			replacement: "TestStartupRecoveryMarkerRemoved",
-			wantMessage: "required PostgreSQL recovery execution proof",
+			wantMessage: "required-event profiles preserve recovery proof",
+			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
+			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
 		},
 		{
-			name:        "correctness plain codec scope",
+			name:        "correctness profile selection",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "if codec == \"plain\":",
-			replacement: "if codec == \"unused\":",
-			wantMessage: "integration correctness execution proof scopes recovery and remove markers to plain codec",
+			old:         "integration-correctness-${{ matrix.codec }}",
+			replacement: "integration-correctness-wrong",
+			wantMessage: "integration correctness selects codec-specific profile",
 		},
 		{
 			name:        "correctness package binding",
-			anchor:      "      - name: Run integration tests (correctness tier)\n",
 			old:         "github.com/franchoy/coldkeep/tests/integration",
 			replacement: "github.com/franchoy/coldkeep/tests/adversarial",
-			wantMessage: "integration correctness execution proof binds the integration package",
+			wantMessage: "required-event profiles bind integration package",
+			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
+			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
 		},
 		{
-			name:        "correctness malformed JSON rejection",
+			name:        "correctness stderr separation",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "json.loads(raw_line)",
-			replacement: "{}",
-			wantMessage: "integration correctness execution proof rejects malformed JSON",
+			old:         "2>\"$stderr_file\" | tee \"$json_file\"",
+			replacement: "| tee \"$json_file\"",
+			wantMessage: "integration correctness keeps stderr separate from JSON evidence",
 		},
 		{
-			name:        "correctness empty JSON rejection",
+			name:        "correctness pipeline status snapshot",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "if not events:",
-			replacement: "if False:",
-			wantMessage: "integration correctness execution proof rejects empty JSON",
+			old:         "pipeline_status=(\"${PIPESTATUS[@]}\")",
+			replacement: "pipeline_status=(0 0)",
+			wantMessage: "integration correctness snapshots complete pipeline status",
 		},
 		{
-			name:        "correctness skip rejection",
+			name:        "correctness Go status",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "event.get(\"Action\") == \"skip\"",
-			replacement: "False",
-			wantMessage: "integration correctness execution proof rejects required skips",
+			old:         "go_status=${pipeline_status[0]}",
+			replacement: "go_status=0",
+			wantMessage: "integration correctness preserves Go status",
 		},
 		{
-			name:        "correctness pass requirement",
+			name:        "correctness capture status",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "event.get(\"Action\") == \"pass\"",
-			replacement: "event.get(\"Action\") == \"output\"",
-			wantMessage: "integration correctness execution proof requires pass events",
+			old:         "capture_status=${pipeline_status[1]}",
+			replacement: "capture_status=0",
+			wantMessage: "integration correctness preserves evidence-capture status",
 		},
 		{
-			name:        "correctness parser diagnostic",
+			name:        "correctness checker invocation",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "print(\"required execution-proof failure:\", file=sys.stderr)",
-			replacement: "print(\"execution proof failed\", file=sys.stderr)",
-			wantMessage: "integration correctness execution-proof parser",
+			old:         "python3 scripts/check_required_test_events.py",
+			replacement: "python3 scripts/removed_required_test_events.py",
+			wantMessage: "integration correctness invokes required-event checker",
 		},
 		{
-			name:        "correctness test status",
+			name:        "correctness checker status",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "status=${PIPESTATUS[0]}",
-			replacement: "status=0",
-			wantMessage: "integration correctness execution proof preserves test status",
+			old:         "checker_status=$?",
+			replacement: "checker_status=0",
+			wantMessage: "integration correctness preserves checker status",
 		},
 		{
-			name:        "correctness parser status",
+			name:        "correctness capture failure propagation",
 			anchor:      "      - name: Run integration tests (correctness tier)\n",
-			old:         "status=$?",
-			replacement: "status=0",
-			wantMessage: "integration correctness execution proof propagates parser status",
+			old:         "elif [ \"$capture_status\" -ne 0 ]; then",
+			replacement: "elif false; then",
+			wantMessage: "integration correctness propagates evidence-capture failure",
 		},
 		{
 			name:        "correctness blocking exit",
@@ -1781,6 +1817,1392 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 	}
 }
 
+func TestAuditCIEnforcementRequiresCK014RequiredProofWiring(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	tests := []struct {
+		name        string
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		{
+			name:        "missing internal checker step",
+			old:         "      - name: Run CK-014 internal verification proofs\n",
+			replacement: "      - name: Removed CK-014 internal verification proofs\n",
+			wantMessage: "missing CK-014 internal verification proof step",
+		},
+		{
+			name:        "internal proof wrong codec leg",
+			old:         "      - name: Run CK-014 internal verification proofs\n        if: ${{ matrix.codec == 'plain' }}\n",
+			replacement: "      - name: Run CK-014 internal verification proofs\n        if: ${{ matrix.codec == 'aes-gcm' }}\n",
+			wantMessage: "CK-014 internal proofs run only in plain correctness leg",
+		},
+		{
+			name:        "internal proof missing aggregation selector",
+			old:         "TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults",
+			replacement: "RemovedTwoFaultAggregationProof",
+			wantMessage: "CK-014 downstream aggregation proof selector",
+		},
+		{
+			name:        "internal capture failure suppressed",
+			old:         "elif [ \"$capture_status\" -ne 0 ]; then\n            status=$capture_status",
+			replacement: "elif false; then\n            status=0",
+			wantMessage: "CK-014 internal proofs propagate evidence-capture failure",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := strings.Replace(workflow, test.old, test.replacement, 1)
+			if mutated == workflow {
+				t.Fatalf("workflow fixture did not contain %q", test.old)
+			}
+			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015NamedProofWiring(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	checker := readRepoFile(t, filepath.Join("scripts", "check_required_test_events.py"))
+
+	controlOutput := withCK015CoreAuditCase(t, "00-control", func() string {
+		return runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, checklist, false)
+	})
+	for _, slot := range []string{"hosted-sqlite", "hosted-postgres", "local-sqlite", "local-postgres"} {
+		if !strings.Contains(controlOutput, "matches frozen approved wrapper body ("+slot+")") {
+			t.Fatalf("unchanged control did not prove %s identity:\n%s", slot, controlOutput)
+		}
+	}
+
+	tests := []struct {
+		name        string
+		source      string
+		anchor      string
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		{
+			name: "hosted SQLite step removed", source: "workflow",
+			old:         "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			replacement: "      - name: Removed CK-015 SQLite initial-lookup proofs\n",
+			wantMessage: "missing CK-015 SQLite named-proof step",
+		},
+		{
+			name: "hosted PostgreSQL step removed", source: "workflow",
+			old:         "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			replacement: "      - name: Removed CK-015 PostgreSQL lookup and preservation proofs\n",
+			wantMessage: "missing CK-015 PostgreSQL named-proof step",
+		},
+		{
+			name: "hosted SQLite wrong leg", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "if: ${{ matrix.codec == 'plain' }}", replacement: "if: ${{ matrix.codec == 'aes-gcm' }}",
+			wantMessage: "CK-015 SQLite proof runs only in plain correctness leg",
+		},
+		{
+			name: "hosted PostgreSQL wrong package", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "./internal/storage", replacement: "./internal/verify",
+			wantMessage: "CK-015 PostgreSQL hosted wrapper uses exact race/count/serialization/package flags",
+		},
+		{
+			name: "hosted SQLite selector removed", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite", replacement: "",
+			wantMessage: "CK-015 SQLite partial-Scan selector",
+		},
+		{
+			name: "hosted PostgreSQL selector removed", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication", replacement: "",
+			wantMessage: "CK-015 PostgreSQL competitor-lock selector",
+		},
+		{
+			name: "hosted SQLite wrong profile", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "profile=ck015-initial-lookup-sqlite", replacement: "profile=ck015-initial-lookup-postgres",
+			wantMessage: "CK-015 SQLite proof freezes checker profile",
+		},
+		{
+			name: "hosted PostgreSQL maintenance missing", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "          COLDKEEP_TEST_DB_MAINTENANCE: postgres\n", replacement: "",
+			wantMessage: "CK-015 PostgreSQL proof uses maintenance database",
+		},
+		{
+			name: "hosted PostgreSQL bootstrap missing", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "          COLDKEEP_DB_AUTO_BOOTSTRAP: true\n", replacement: "",
+			wantMessage: "CK-015 PostgreSQL proof enables bootstrap",
+		},
+		{
+			name: "hosted PostgreSQL connection missing", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "          DB_SSLMODE: disable\n", replacement: "",
+			wantMessage: "CK-015 PostgreSQL proof sets DB SSL mode",
+		},
+		{
+			name: "hosted SQLite stale protection removed", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "refusing to reuse CK-015 SQLite evidence path", replacement: "allowing stale CK-015 SQLite evidence path",
+			wantMessage: "CK-015 SQLite hosted wrapper refuses stale invocation evidence",
+		},
+		{
+			name: "hosted PostgreSQL stderr merged", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "2>\"$go_stderr_file\" | tee \"$json_file\"", replacement: "2>&1 | tee \"$json_file\"",
+			wantMessage: "CK-015 PostgreSQL hosted wrapper keeps Go stderr separate from JSON",
+		},
+		{
+			name: "hosted SQLite pipeline forged", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "pipeline_status=(\"${PIPESTATUS[@]}\")", replacement: "pipeline_status=(0 0)",
+			wantMessage: "CK-015 SQLite hosted wrapper snapshots complete pipeline status immediately",
+		},
+		{
+			name: "hosted SQLite Go status forced", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "go_status=${pipeline_status[0]}", replacement: "go_status=0",
+			wantMessage: "CK-015 SQLite hosted wrapper preserves Go status",
+		},
+		{
+			name: "hosted PostgreSQL capture status forced", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "capture_status=${pipeline_status[1]}", replacement: "capture_status=0",
+			wantMessage: "CK-015 PostgreSQL hosted wrapper preserves capture status",
+		},
+		{
+			name: "hosted SQLite checker status forced", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "checker_status=$?", replacement: "checker_status=0",
+			wantMessage: "CK-015 SQLite hosted wrapper preserves checker status",
+		},
+		{
+			name: "hosted PostgreSQL status write suppressed", source: "workflow",
+			anchor: "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:    "status_record_write_status=$?", replacement: "status_record_write_status=0",
+			wantMessage: "CK-015 PostgreSQL hosted wrapper preserves status-record write status",
+		},
+		{
+			name: "hosted SQLite readability predicate weakened", source: "workflow",
+			anchor: "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
+			wantMessage: "CK-015 SQLite hosted wrapper requires every invocation record to be readable and regular",
+		},
+		{
+			name: "artifact not always retained", source: "workflow",
+			anchor: "      - name: Upload correctness-matrix execution evidence\n",
+			old:    "if: ${{ always() }}", replacement: "if: failure()",
+			wantMessage: "correctness-matrix evidence upload always runs",
+		},
+		{
+			name: "artifact path only JSON", source: "workflow",
+			anchor: "      - name: Upload correctness-matrix execution evidence\n",
+			old:    "integration-diag/*", replacement: "integration-diag/*.json",
+			wantMessage: "correctness-matrix evidence upload retains every integration diagnostic record",
+		},
+		{
+			name: "artifact missing files ignored", source: "workflow",
+			anchor: "      - name: Upload correctness-matrix execution evidence\n",
+			old:    "if-no-files-found: error", replacement: "if-no-files-found: ignore",
+			wantMessage: "correctness-matrix evidence upload fails when no records exist",
+		},
+		{
+			name: "required dependency removed", source: "workflow",
+			anchor: "  ci-required:\n",
+			old:    "needs: [quality, correctness-matrix,", replacement: "needs: [quality,",
+			wantMessage: "required gate depends on security and hosted reproducibility jobs",
+		},
+		{
+			name: "required result capture removed", source: "workflow",
+			anchor: "  ci-required:\n",
+			old:    "CORRECTNESS_MATRIX_RESULT: ${{ needs['correctness-matrix'].result }}", replacement: "CORRECTNESS_MATRIX_RESULT: missing",
+			wantMessage: "required gate captures correctness-matrix result",
+		},
+		{
+			name: "checker SQLite profile removed", source: "checker",
+			old: "\"ck015-initial-lookup-sqlite\"", replacement: "\"ck015-initial-lookup-sqlite-removed\"",
+			wantMessage: "required-event profiles contain exact CK-015 SQLite profile once",
+		},
+		{
+			name: "checker routing child removed", source: "checker",
+			old: "TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/processing", replacement: "RemovedRoutingChild",
+			wantMessage: "CK-015 SQLite profile requires processing routing child",
+		},
+		{
+			name: "local SQLite wrapper removed independently", source: "checklist",
+			old: "# CK-V11316-015 SQLite initial-lookup named proof.", replacement: "# Removed CK-V11316-015 SQLite initial-lookup named proof.",
+			wantMessage: "missing local Profile A CK-015 SQLite wrapper",
+		},
+		{
+			name: "local PostgreSQL wrapper removed independently", source: "checklist",
+			old: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.", replacement: "# Removed CK-V11316-015 PostgreSQL lookup and preservation named proof.",
+			wantMessage: "missing local Profile A CK-015 PostgreSQL wrapper",
+		},
+		{
+			name: "local SQLite wrong package", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "./internal/storage", replacement: "./internal/verify",
+			wantMessage: "local CK-015 SQLite wrapper uses exact package, environment, and flags",
+		},
+		{
+			name: "local SQLite unanchored selector", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "selector='^(", replacement: "selector='(",
+			wantMessage: "local CK-015 SQLite wrapper freezes anchored selector",
+		},
+		{
+			name: "local SQLite wrong profile", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "profile=ck015-initial-lookup-sqlite", replacement: "profile=ck015-initial-lookup-postgres",
+			wantMessage: "local CK-015 SQLite wrapper selects exact profile",
+		},
+		{
+			name: "local SQLite race removed", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "go test -race -count=1 -p=1", replacement: "go test -count=1 -p=1",
+			wantMessage: "local CK-015 SQLite wrapper uses exact package, environment, and flags",
+		},
+		{
+			name: "local SQLite stale protection removed", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "refusing to reuse CK-015 SQLite evidence path", replacement: "allowing CK-015 SQLite evidence reuse",
+			wantMessage: "local CK-015 SQLite wrapper refuses stale invocation evidence",
+		},
+		{
+			name: "local SQLite stderr merged", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "2>\"$go_stderr_file\" | tee \"$json_file\"", replacement: "2>&1 | tee \"$json_file\"",
+			wantMessage: "local CK-015 SQLite wrapper keeps Go stderr separate from JSON",
+		},
+		{
+			name: "local SQLite pipeline forged", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "pipeline_status=(\"${PIPESTATUS[@]}\")", replacement: "pipeline_status=(0 0)",
+			wantMessage: "local CK-015 SQLite wrapper snapshots complete pipeline status immediately",
+		},
+		{
+			name: "local SQLite Go status forced", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "go_status=${pipeline_status[0]}", replacement: "go_status=0",
+			wantMessage: "local CK-015 SQLite wrapper preserves Go status",
+		},
+		{
+			name: "local SQLite capture status forced", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "capture_status=${pipeline_status[1]}", replacement: "capture_status=0",
+			wantMessage: "local CK-015 SQLite wrapper preserves capture status",
+		},
+		{
+			name: "local SQLite checker status forced", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "checker_status=$?", replacement: "checker_status=0",
+			wantMessage: "local CK-015 SQLite wrapper preserves checker status",
+		},
+		{
+			name: "local SQLite status write forced", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "status_record_write_status=$?", replacement: "status_record_write_status=0",
+			wantMessage: "local CK-015 SQLite wrapper preserves status-record write status",
+		},
+		{
+			name: "local SQLite readability predicate weakened", source: "checklist",
+			anchor: "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
+			wantMessage: "local CK-015 SQLite wrapper requires every invocation record to be readable and regular",
+		},
+		{
+			name: "local PostgreSQL wrong package", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "./internal/storage", replacement: "./internal/verify",
+			wantMessage: "local CK-015 PostgreSQL wrapper uses exact race/count/serialization/package flags",
+		},
+		{
+			name: "local PostgreSQL unanchored selector", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "selector='^(", replacement: "selector='(",
+			wantMessage: "local CK-015 PostgreSQL wrapper freezes anchored selector",
+		},
+		{
+			name: "local PostgreSQL wrong profile", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "profile=ck015-initial-lookup-postgres", replacement: "profile=ck015-initial-lookup-sqlite",
+			wantMessage: "local CK-015 PostgreSQL wrapper selects exact profile",
+		},
+		{
+			name: "local PostgreSQL race removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "go test -race -count=1 -p=1", replacement: "go test -count=1 -p=1",
+			wantMessage: "local CK-015 PostgreSQL wrapper uses exact race/count/serialization/package flags",
+		},
+		{
+			name: "local PostgreSQL maintenance removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "COLDKEEP_TEST_DB_MAINTENANCE=postgres \\\n", replacement: "",
+			wantMessage: "local CK-015 PostgreSQL wrapper uses maintenance database",
+		},
+		{
+			name: "local PostgreSQL bootstrap removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "COLDKEEP_DB_AUTO_BOOTSTRAP=true \\\n", replacement: "",
+			wantMessage: "local CK-015 PostgreSQL wrapper enables bootstrap",
+		},
+		{
+			name: "local PostgreSQL connection removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "DB_SSLMODE=\"$DB_SSLMODE\" \\\n", replacement: "",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves DB SSL mode",
+		},
+		{
+			name: "local PostgreSQL stale protection removed", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "refusing to reuse CK-015 PostgreSQL evidence path", replacement: "allowing CK-015 PostgreSQL evidence reuse",
+			wantMessage: "local CK-015 PostgreSQL wrapper refuses stale invocation evidence",
+		},
+		{
+			name: "local PostgreSQL stderr merged", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "2>\"$go_stderr_file\" | tee \"$json_file\"", replacement: "2>&1 | tee \"$json_file\"",
+			wantMessage: "local CK-015 PostgreSQL wrapper keeps Go stderr separate from JSON",
+		},
+		{
+			name: "local PostgreSQL pipeline forged", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "pipeline_status=(\"${PIPESTATUS[@]}\")", replacement: "pipeline_status=(0 0)",
+			wantMessage: "local CK-015 PostgreSQL wrapper snapshots complete pipeline status immediately",
+		},
+		{
+			name: "local PostgreSQL Go status forced", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "go_status=${pipeline_status[0]}", replacement: "go_status=0",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves Go status",
+		},
+		{
+			name: "local PostgreSQL capture status forced", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "capture_status=${pipeline_status[1]}", replacement: "capture_status=0",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves capture status",
+		},
+		{
+			name: "local PostgreSQL checker status forced", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "checker_status=$?", replacement: "checker_status=0",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves checker status",
+		},
+		{
+			name: "local PostgreSQL status write forced", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "status_record_write_status=$?", replacement: "status_record_write_status=0",
+			wantMessage: "local CK-015 PostgreSQL wrapper preserves status-record write status",
+		},
+		{
+			name: "local PostgreSQL readability predicate weakened", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "[ ! -f \"$target\" ] || [ ! -r \"$target\" ]", replacement: "[ ! -f \"$target\" ]",
+			wantMessage: "local CK-015 PostgreSQL wrapper requires every invocation record to be readable and regular",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var source string
+			switch test.source {
+			case "workflow":
+				source = workflow
+			case "checklist":
+				source = checklist
+			case "checker":
+				source = checker
+			default:
+				t.Fatalf("unknown source %q", test.source)
+			}
+			anchorIndex := 0
+			if test.anchor != "" {
+				anchorIndex = strings.Index(source, test.anchor)
+				if anchorIndex < 0 {
+					t.Fatalf("source fixture did not contain anchor %q", test.anchor)
+				}
+			}
+			targetOffset := strings.Index(source[anchorIndex:], test.old)
+			if targetOffset < 0 {
+				t.Fatalf("source fixture did not contain %q after anchor %q", test.old, test.anchor)
+			}
+			targetIndex := anchorIndex + targetOffset
+			mutated := source[:targetIndex] + test.replacement + source[targetIndex+len(test.old):]
+
+			var stderr string
+			switch test.source {
+			case "workflow":
+				stderr = runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+			case "checklist":
+				stderr = runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
+			case "checker":
+				stderr = runAuditLocalOnlyWithSourceFixture(t, workflow, codeqlWorkflow, "COLDKEEP_REQUIRED_TEST_EVENTS_FILE", mutated)
+			}
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015ABCDMutationMatrix(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	type wrapperFixture struct {
+		name, id, source, anchor, indent string
+	}
+	wrappers := []wrapperFixture{
+		{"hosted SQLite", "hosted-sqlite", "workflow", "      - name: Run CK-015 SQLite initial-lookup proofs\n", "          "},
+		{"hosted PostgreSQL", "hosted-postgres", "workflow", "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n", "          "},
+		{"local SQLite", "local-sqlite", "checklist", "# CK-V11316-015 SQLite initial-lookup named proof.\n", ""},
+		{"local PostgreSQL", "local-postgres", "checklist", "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n", ""},
+	}
+
+	for _, wrapper := range wrappers {
+		wrapper := wrapper
+		mutations := []struct {
+			name, id, old, replacement, wantMessage string
+		}{
+			{
+				"A completeness omits Go stderr",
+				"a",
+				"evidence_status=0\n" + wrapper.indent + "for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do",
+				"evidence_status=0\n" + wrapper.indent + "for target in \"$json_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do",
+				"active completeness gate must enumerate exactly six invocation records",
+			},
+			{
+				"B Go failure returns zero",
+				"b",
+				"if [ \"$go_status\" -ne 0 ]; then\n" + wrapper.indent + "  status=$go_status",
+				"if [ \"$go_status\" -ne 0 ]; then\n" + wrapper.indent + "  status=0",
+				"failure precedence must propagate Go, capture, checker, status-write, and evidence statuses",
+			},
+			{
+				"C delayed PIPESTATUS snapshot",
+				"c",
+				"pipeline_status=(\"${PIPESTATUS[@]}\")",
+				"printf 'fixture diagnostic\\n' | cat\n" + wrapper.indent + "pipeline_status=(\"${PIPESTATUS[@]}\")",
+				"PIPESTATUS snapshot must immediately follow the Go/tee pipeline",
+			},
+			{
+				"D stale check disabled",
+				"d",
+				"if [ -e \"$target\" ]; then",
+				"if false; then",
+				"active stale-target gate must enumerate six records and reject existing targets",
+			},
+		}
+		for _, mutation := range mutations {
+			mutation := mutation
+			t.Run(wrapper.name+"/"+mutation.name, func(t *testing.T) {
+				source := workflow
+				if wrapper.source == "checklist" {
+					source = checklist
+				}
+				anchorIndex := strings.Index(source, wrapper.anchor)
+				if anchorIndex < 0 {
+					t.Fatalf("source fixture did not contain anchor %q", wrapper.anchor)
+				}
+				targetOffset := strings.Index(source[anchorIndex:], mutation.old)
+				if targetOffset < 0 {
+					t.Fatalf("source fixture did not contain mutation target %q", mutation.old)
+				}
+				targetIndex := anchorIndex + targetOffset
+				mutated := source[:targetIndex] + mutation.replacement + source[targetIndex+len(mutation.old):]
+				stderr := withCK015CoreAuditCase(t, "ad-"+wrapper.id+"-"+mutation.id, func() string {
+					if wrapper.source == "workflow" {
+						return runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+					}
+					return runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
+				})
+				if !strings.Contains(stderr, mutation.wantMessage) {
+					t.Fatalf("expected %q, got:\n%s", mutation.wantMessage, stderr)
+				}
+				if !strings.Contains(stderr, "does not match frozen approved wrapper body") {
+					t.Fatalf("expected frozen wrapper identity diagnostic, got:\n%s", stderr)
+				}
+			})
+		}
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015ActiveBoundedGrammar(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+
+	tests := []struct {
+		name        string
+		source      string
+		anchor      string
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		{
+			name: "hosted SQLite critical region in inactive branch", source: "workflow",
+			anchor:      "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:         "          go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \\\n            -run \"$selector\" 2>\"$go_stderr_file\" | tee \"$json_file\"\n          pipeline_status=(\"${PIPESTATUS[@]}\")\n          go_status=${pipeline_status[0]}\n          capture_status=${pipeline_status[1]}",
+			replacement: "          if false; then\n            go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \\\n              -run \"$selector\" 2>\"$go_stderr_file\" | tee \"$json_file\"\n            pipeline_status=(\"${PIPESTATUS[@]}\")\n            go_status=${pipeline_status[0]}\n            capture_status=${pipeline_status[1]}\n          fi",
+			wantMessage: "critical proof regions must not be hidden in an inactive branch",
+		},
+		{
+			name: "hosted PostgreSQL stale gate in quoted decoy", source: "workflow",
+			anchor:      "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:         "          for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do\n            if [ -e \"$target\" ]; then\n              echo \"refusing to reuse CK-015 PostgreSQL evidence path: $target\" >&2\n              exit 1\n            fi\n          done",
+			replacement: "          : '\n          for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do\n            if [ -e \"$target\" ]; then\n              echo \"refusing to reuse CK-015 PostgreSQL evidence path: $target\" >&2\n              exit 1\n            fi\n          done\n          '",
+			wantMessage: "active completeness gate must enumerate exactly six invocation records",
+		},
+		{
+			name: "hosted SQLite duplicate checker decoy", source: "workflow",
+			anchor:      "      - name: Run CK-015 SQLite initial-lookup proofs\n",
+			old:         "          python3 scripts/check_required_test_events.py \\\n            --profile \"$profile\" \\\n            --events \"$json_file\" \\\n            >\"$checker_stdout_file\" 2>\"$checker_stderr_file\"",
+			replacement: "          python3 scripts/check_required_test_events.py \\\n            --profile \"$profile\" \\\n            --events \"$json_file\" \\\n            >\"$checker_stdout_file\" 2>\"$checker_stderr_file\"\n          python3 scripts/check_required_test_events.py \\\n            --profile \"$profile\" \\\n            --events \"$json_file\" \\\n            >\"$checker_stdout_file\" 2>\"$checker_stderr_file\"",
+			wantMessage: "required-event checker invocation must occur exactly once at active top level",
+		},
+		{
+			name: "hosted PostgreSQL critical regions reordered", source: "workflow",
+			anchor:      "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n",
+			old:         "          printf '%s\\n' \\\n            \"go_status=$go_status\" \\\n            \"capture_status=$capture_status\" \\\n            \"checker_status=$checker_status\" \\\n            'status_record_write_status=0' >\"$status_file\"\n          status_record_write_status=$?\n\n          evidence_status=0",
+			replacement: "          evidence_status=0\n          printf '%s\\n' \\\n            \"go_status=$go_status\" \\\n            \"capture_status=$capture_status\" \\\n            \"checker_status=$checker_status\" \\\n            'status_record_write_status=0' >\"$status_file\"\n          status_record_write_status=$?",
+			wantMessage: "critical proof regions must remain unique and in execution order",
+		},
+		{
+			name: "local SQLite stale gate in never-called function", source: "checklist",
+			anchor:      "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:         "for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do\n  if [ -e \"$target\" ]; then\n    echo \"refusing to reuse CK-015 SQLite evidence path: $target\" >&2\n    exit 1\n  fi\ndone",
+			replacement: "ck015_decoy() {\n  for target in \"$json_file\" \"$go_stderr_file\" \"$checker_stdout_file\" \"$checker_stderr_file\" \"$status_file\" \"$metadata_file\"; do\n    if [ -e \"$target\" ]; then\n      echo \"refusing to reuse CK-015 SQLite evidence path: $target\" >&2\n      exit 1\n    fi\n  done\n}",
+			wantMessage: "critical proof regions must not be hidden in a function",
+		},
+		{
+			name: "local PostgreSQL duplicate evidence initialization", source: "checklist",
+			anchor: "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:    "evidence_status=0", replacement: "evidence_status=0\nevidence_status=0",
+			wantMessage: "evidence status initialization must occur exactly once at active top level",
+		},
+		{
+			name: "local SQLite status reset after precedence", source: "checklist",
+			anchor:      "# CK-V11316-015 SQLite initial-lookup named proof.\n",
+			old:         "fi\nset -e\nif [ \"$status\" -ne 0 ]; then",
+			replacement: "fi\nstatus=0\nset -e\nif [ \"$status\" -ne 0 ]; then",
+			wantMessage: "computed failure status must not be reset after the precedence chain",
+		},
+		{
+			name: "local PostgreSQL failure return weakened", source: "checklist",
+			anchor:      "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n",
+			old:         "  exit \"$status\"\nfi",
+			replacement: "  return 0\nfi",
+			wantMessage: "local wrapper must restore errexit, exit on failure, and fall through on success",
+		},
+	}
+
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var source string
+			switch test.source {
+			case "workflow":
+				source = workflow
+			case "checklist":
+				source = checklist
+			default:
+				t.Fatalf("unknown source %q", test.source)
+			}
+			anchorIndex := strings.Index(source, test.anchor)
+			if anchorIndex < 0 {
+				t.Fatalf("source fixture did not contain anchor %q", test.anchor)
+			}
+			targetOffset := strings.Index(source[anchorIndex:], test.old)
+			if targetOffset < 0 {
+				t.Fatalf("source fixture did not contain mutation target after anchor: %q", test.old)
+			}
+			targetIndex := anchorIndex + targetOffset
+			mutated := source[:targetIndex] + test.replacement + source[targetIndex+len(test.old):]
+
+			stderr := withCK015CoreAuditCase(t, fmt.Sprintf("struct-%02d", index+1), func() string {
+				if test.source == "workflow" {
+					return runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+				}
+				return runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
+			})
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+			if !strings.Contains(stderr, "does not match frozen approved wrapper body") {
+				t.Fatalf("expected frozen wrapper identity diagnostic, got:\n%s", stderr)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015StatusLifetimeMutationMatrix(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	type wrapperFixture struct {
+		name, id, source, anchor, indent string
+	}
+	wrappers := []wrapperFixture{
+		{"hosted SQLite", "hosted-sqlite", "workflow", "      - name: Run CK-015 SQLite initial-lookup proofs\n", "          "},
+		{"hosted PostgreSQL", "hosted-postgres", "workflow", "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n", "          "},
+		{"local SQLite", "local-sqlite", "checklist", "# CK-V11316-015 SQLite initial-lookup named proof.\n", ""},
+		{"local PostgreSQL", "local-postgres", "checklist", "# CK-V11316-015 PostgreSQL lookup and preservation named proof.\n", ""},
+	}
+	mutations := []struct{ name, id, line string }{
+		{"E evidence status reset", "e", `evidence_status="0"`},
+		{"F Go status reset", "f", `go_status="0"`},
+	}
+	for _, wrapper := range wrappers {
+		wrapper := wrapper
+		for _, mutation := range mutations {
+			mutation := mutation
+			t.Run(wrapper.name+"/"+mutation.name, func(t *testing.T) {
+				source := workflow
+				if wrapper.source == "checklist" {
+					source = checklist
+				}
+				anchor := strings.Index(source, wrapper.anchor)
+				if anchor < 0 {
+					t.Fatalf("missing wrapper anchor %q", wrapper.anchor)
+				}
+				needle := wrapper.indent + "cat \"$checker_stderr_file\" >&2\n"
+				offset := strings.Index(source[anchor:], needle)
+				if offset < 0 {
+					t.Fatalf("missing insertion point after %q", wrapper.anchor)
+				}
+				position := anchor + offset + len(needle)
+				mutated := source[:position] + "\n" + wrapper.indent + mutation.line + "\n" + source[position:]
+				output := withCK015CoreAuditCase(t, "ef-"+wrapper.id+"-"+mutation.id, func() string {
+					if wrapper.source == "workflow" {
+						return runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+					}
+					return runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
+				})
+				if !strings.Contains(output, "does not match frozen approved wrapper body") {
+					t.Fatalf("status-lifetime mutation lacked identity diagnostic:\n%s", output)
+				}
+				if !strings.Contains(output, "[audit] FAILED:") {
+					t.Fatalf("status-lifetime mutation lacked terminal audit failure:\n%s", output)
+				}
+			})
+		}
+	}
+	if root := os.Getenv("COLDKEEP_CK015_NEGATIVE_EVIDENCE_DIR"); root != "" {
+		verifyCK015CoreEvidenceInventory(t, root)
+	}
+}
+
+func ck015CoreCaseIDs() []string {
+	ids := []string{"00-control"}
+	for _, wrapper := range []string{"hosted-sqlite", "hosted-postgres", "local-sqlite", "local-postgres"} {
+		for _, mutation := range []string{"a", "b", "c", "d"} {
+			ids = append(ids, "ad-"+wrapper+"-"+mutation)
+		}
+	}
+	for index := 1; index <= 8; index++ {
+		ids = append(ids, fmt.Sprintf("struct-%02d", index))
+	}
+	for _, wrapper := range []string{"hosted-sqlite", "hosted-postgres", "local-sqlite", "local-postgres"} {
+		for _, mutation := range []string{"e", "f"} {
+			ids = append(ids, "ef-"+wrapper+"-"+mutation)
+		}
+	}
+	return ids
+}
+
+func verifyCK015CoreEvidenceInventory(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read CK-015 core evidence root: %v", err)
+	}
+	expected := map[string]bool{}
+	for _, id := range ck015CoreCaseIDs() {
+		expected[id] = true
+	}
+	if len(expected) != 33 {
+		t.Fatalf("internal core inventory has %d IDs, want 33", len(expected))
+	}
+	if len(entries) != len(expected) {
+		t.Fatalf("core evidence contains %d cases, want %d", len(entries), len(expected))
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !expected[entry.Name()] {
+			t.Fatalf("unexpected core evidence entry %q", entry.Name())
+		}
+		caseRoot := filepath.Join(root, entry.Name())
+		for _, required := range []string{
+			"argv.json", "cwd", "metadata.json", "selected-environment.json", "fixture.diff",
+			"input-hashes-before.json", "input-hashes-after.json", "started-utc", "ended-utc",
+			"stdout", "stderr", "status.json", "terminal-observation.json",
+		} {
+			if info, statErr := os.Stat(filepath.Join(caseRoot, required)); statErr != nil || !info.Mode().IsRegular() {
+				t.Fatalf("case %q missing regular %s: %v", entry.Name(), required, statErr)
+			}
+		}
+		var status struct {
+			Started  bool `json:"started"`
+			Exited   bool `json:"exited"`
+			ExitCode int  `json:"exit_code"`
+		}
+		statusBytes, readErr := os.ReadFile(filepath.Join(caseRoot, "status.json"))
+		if readErr != nil || json.Unmarshal(statusBytes, &status) != nil {
+			t.Fatalf("read status for %q: %v", entry.Name(), readErr)
+		}
+		var terminal struct {
+			Pass  bool `json:"pass_marker"`
+			Fail  bool `json:"fail_marker"`
+			Error bool `json:"error_marker"`
+		}
+		terminalBytes, readErr := os.ReadFile(filepath.Join(caseRoot, "terminal-observation.json"))
+		if readErr != nil || json.Unmarshal(terminalBytes, &terminal) != nil {
+			t.Fatalf("read terminal for %q: %v", entry.Name(), readErr)
+		}
+		if !status.Started || !status.Exited {
+			t.Fatalf("case %q did not start and exit", entry.Name())
+		}
+		if entry.Name() == "00-control" {
+			if status.ExitCode != 0 || !terminal.Pass || terminal.Fail || terminal.Error {
+				t.Fatalf("positive control %q has invalid status/terminal", entry.Name())
+			}
+		} else if status.ExitCode == 0 || terminal.Pass || !terminal.Fail || !terminal.Error {
+			t.Fatalf("negative case %q has invalid status/terminal", entry.Name())
+		}
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015ApprovedWrapperIdentityHelper(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	fixtures := []struct{ slot, content string }{
+		{"hosted-sqlite", extractCK015ApprovedSection(t, workflow, "      - name: Run CK-015 SQLite initial-lookup proofs", "      - name: Run CK-015 PostgreSQL lookup and preservation proofs")},
+		{"hosted-postgres", extractCK015ApprovedSection(t, workflow, "      - name: Run CK-015 PostgreSQL lookup and preservation proofs", "      - name: Run required PostgreSQL internal package contracts")},
+		{"local-sqlite", extractCK015ApprovedSection(t, checklist, "# CK-V11316-015 SQLite initial-lookup named proof.", "# CK-V11316-015 PostgreSQL lookup and preservation named proof.")},
+		{"local-postgres", extractCK015ApprovedSection(t, checklist, "# CK-V11316-015 PostgreSQL lookup and preservation named proof.", "# Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).")},
+	}
+	for _, fixture := range fixtures {
+		fixture := fixture
+		t.Run(fixture.slot, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "approved-body")
+			if err := os.WriteFile(path, []byte(fixture.content), 0o600); err != nil {
+				t.Fatalf("write approved body: %v", err)
+			}
+			output, err := runCK015IdentityProbe(t, fixture.slot, path)
+			if err != nil || !strings.Contains(output, "matches frozen approved wrapper body ("+fixture.slot+")") {
+				t.Fatalf("approved %s identity failed: %v\n%s", fixture.slot, err, output)
+			}
+		})
+	}
+	for _, slot := range []string{"wrong-slot", ""} {
+		t.Run("reject-slot-"+slot, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "body")
+			if err := os.WriteFile(path, []byte(fixtures[0].content), 0o600); err != nil {
+				t.Fatalf("write probe body: %v", err)
+			}
+			output, err := runCK015IdentityProbe(t, slot, path)
+			if err == nil || !strings.Contains(output, "unknown CK-015 approved wrapper slot") {
+				t.Fatalf("invalid slot %q was not rejected: %v\n%s", slot, err, output)
+			}
+		})
+	}
+}
+
+func runCK015IdentityProbe(t *testing.T, slot, path string) (string, error) {
+	t.Helper()
+	cmd := exec.Command("bash", "scripts/audit_ci_enforcement.sh", "--ck015-identity-probe", slot, path)
+	cmd.Dir = repoRoot(t)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+func extractCK015ApprovedSection(t *testing.T, source, startAnchor, endAnchor string) string {
+	t.Helper()
+	startMarker := startAnchor + "\n"
+	endMarker := endAnchor + "\n"
+	if strings.Count(source, startMarker) != 1 || strings.Count(source, endMarker) != 1 {
+		t.Fatalf("approved boundaries are not unique: %q -> %q", startAnchor, endAnchor)
+	}
+	start := strings.Index(source, startMarker)
+	end := strings.Index(source, endMarker)
+	if start < 0 || end <= start {
+		t.Fatalf("approved boundaries are not ordered: %q -> %q", startAnchor, endAnchor)
+	}
+	return strings.TrimRight(source[start:end], "\n")
+}
+
+func TestAuditCIEnforcementRequiresCK015WholeBodyIdentityOnlyMutations(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	tests := []struct {
+		name, insertion string
+	}{
+		{"assignment", "          CK015_IDENTITY_ONLY=1\n"},
+		{"declaration", "          readonly CK015_IDENTITY_ONLY=1\n"},
+		{"compound", "          : && :\n"},
+		{"no-op", "          :\n"},
+		{"comment", "          # identity-only fixture\n"},
+		{"whitespace", "          \n"},
+	}
+	end := "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n"
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			mutated := strings.Replace(workflow, end, test.insertion+end, 1)
+			if mutated == workflow {
+				t.Fatal("identity-only mutation was not applied")
+			}
+			output := runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+			if !strings.Contains(output, "CK-015 SQLite hosted wrapper does not match frozen approved wrapper body") {
+				t.Fatalf("identity-only mutation was not rejected by frozen identity:\n%s", output)
+			}
+		})
+	}
+	t.Run("insertion near final return", func(t *testing.T) {
+		needle := "          exit \"$status\"\n\n" + end
+		replacement := "          : # identity-only insertion near final return\n          exit \"$status\"\n\n" + end
+		mutated := strings.Replace(workflow, needle, replacement, 1)
+		if mutated == workflow {
+			t.Fatal("final-return identity mutation was not applied")
+		}
+		output := runAuditLocalOnlyWithChecklistFixture(t, mutated, codeqlWorkflow, checklist, true)
+		if !strings.Contains(output, "does not match frozen approved wrapper body") {
+			t.Fatalf("final-return mutation was not rejected by frozen identity:\n%s", output)
+		}
+	})
+}
+
+func TestAuditCIEnforcementRequiresCK015ApprovedBoundaries(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	start := "      - name: Run CK-015 SQLite initial-lookup proofs\n"
+	end := "      - name: Run CK-015 PostgreSQL lookup and preservation proofs\n"
+	tests := []struct {
+		name, source, want string
+	}{
+		{"missing", strings.Replace(workflow, start, "      - name: Missing CK-015 SQLite initial-lookup proofs\n", 1), "start boundary must occur exactly once"},
+		{"duplicated", strings.Replace(workflow, end, start+end, 1), "start boundary must occur exactly once"},
+		{"reordered", strings.Replace(strings.Replace(workflow, end, "", 1), start, end+start, 1), "boundaries must be correctly ordered"},
+		{"carriage-return", strings.Replace(workflow, start, strings.TrimSuffix(start, "\n")+"\r\n", 1), "source contains a CR byte"},
+		{"nul", strings.Replace(workflow, start, start+"      # malformed\x00boundary\n", 1), "source contains a NUL byte"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			output := runAuditLocalOnlyWithChecklistFixture(t, test.source, codeqlWorkflow, checklist, true)
+			if !strings.Contains(output, test.want) {
+				t.Fatalf("expected boundary diagnostic %q:\n%s", test.want, output)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015EvidenceRootExclusivity(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("make evidence root private: %v", err)
+	}
+	caseID := "stale-case"
+	caseRoot, err := allocateCK015CoreEvidenceCase(root, caseID)
+	if err != nil {
+		t.Fatalf("first exclusive allocation failed: %v", err)
+	}
+	marker := filepath.Join(caseRoot, "must-remain")
+	if err := os.WriteFile(marker, []byte("preserved\n"), 0o600); err != nil {
+		t.Fatalf("write stale-root marker: %v", err)
+	}
+	if _, err := allocateCK015CoreEvidenceCase(root, caseID); err == nil {
+		t.Fatal("stale core evidence case root was silently reused")
+	}
+	if content, err := os.ReadFile(marker); err != nil || string(content) != "preserved\n" {
+		t.Fatalf("stale-root refusal altered prior evidence: %v %q", err, content)
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK015SyntheticWrapperBehavior(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	wrapperCases := []struct {
+		name    string
+		kind    string
+		profile string
+		body    string
+	}{
+		{
+			name:    "hosted-sqlite",
+			kind:    "hosted",
+			profile: "ck015-initial-lookup-sqlite",
+			body:    extractCK015HostedRunBody(t, workflow, "Run CK-015 SQLite initial-lookup proofs", "Run CK-015 PostgreSQL lookup and preservation proofs"),
+		},
+		{
+			name:    "hosted-postgres",
+			kind:    "hosted",
+			profile: "ck015-initial-lookup-postgres",
+			body:    extractCK015HostedRunBody(t, workflow, "Run CK-015 PostgreSQL lookup and preservation proofs", "Run required PostgreSQL internal package contracts"),
+		},
+		{
+			name:    "local-sqlite",
+			kind:    "local",
+			profile: "ck015-initial-lookup-sqlite",
+			body:    extractCK015LocalBody(t, checklist, "# CK-V11316-015 SQLite initial-lookup named proof.", "# CK-V11316-015 PostgreSQL lookup and preservation named proof."),
+		},
+		{
+			name:    "local-postgres",
+			kind:    "local",
+			profile: "ck015-initial-lookup-postgres",
+			body:    extractCK015LocalBody(t, checklist, "# CK-V11316-015 PostgreSQL lookup and preservation named proof.", "# Step 3 loop leaves COLDKEEP_CODEC"),
+		},
+	}
+
+	for _, wrapperCase := range wrapperCases {
+		wrapperCase := wrapperCase
+		for _, fault := range []bool{false, true} {
+			fault := fault
+			caseName := "success"
+			if fault {
+				caseName = "missing-go-stderr"
+			}
+			t.Run(wrapperCase.name+"/"+caseName, func(t *testing.T) {
+				runCK015SyntheticWrapperCase(t, wrapperCase.name, wrapperCase.kind, wrapperCase.profile, wrapperCase.body, fault)
+			})
+		}
+	}
+}
+
+func extractCK015HostedRunBody(t *testing.T, workflow, stepName, nextStepName string) string {
+	t.Helper()
+	startMarker := "      - name: " + stepName + "\n"
+	start := strings.Index(workflow, startMarker)
+	if start < 0 {
+		t.Fatalf("missing hosted wrapper step %q", stepName)
+	}
+	endMarker := "      - name: " + nextStepName + "\n"
+	endOffset := strings.Index(workflow[start+len(startMarker):], endMarker)
+	if endOffset < 0 {
+		t.Fatalf("missing hosted wrapper terminator %q", nextStepName)
+	}
+	step := workflow[start : start+len(startMarker)+endOffset]
+	runMarker := "        run: |\n"
+	runOffset := strings.Index(step, runMarker)
+	if runOffset < 0 {
+		t.Fatalf("hosted wrapper %q has no run body", stepName)
+	}
+	lines := strings.Split(step[runOffset+len(runMarker):], "\n")
+	for index, line := range lines {
+		if strings.HasPrefix(line, "          ") {
+			lines[index] = strings.TrimPrefix(line, "          ")
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
+}
+
+func extractCK015LocalBody(t *testing.T, checklist, startMarker, endMarker string) string {
+	t.Helper()
+	start := strings.Index(checklist, startMarker)
+	if start < 0 {
+		t.Fatalf("missing local wrapper marker %q", startMarker)
+	}
+	endOffset := strings.Index(checklist[start+len(startMarker):], endMarker)
+	if endOffset < 0 {
+		t.Fatalf("missing local wrapper terminator %q", endMarker)
+	}
+	return strings.TrimSpace(checklist[start:start+len(startMarker)+endOffset]) + "\n"
+}
+
+func runCK015SyntheticWrapperCase(t *testing.T, name, kind, profile, body string, fault bool) {
+	t.Helper()
+	caseRoot := t.TempDir()
+	stubDir := filepath.Join(caseRoot, "stubs")
+	if err := os.Mkdir(stubDir, 0o700); err != nil {
+		t.Fatalf("create stub directory: %v", err)
+	}
+	writeExecutableFixture(t, filepath.Join(stubDir, "go"), `#!/usr/bin/env bash
+set -eu
+if [ "$#" -eq 1 ] && [ "$1" = version ]; then
+  printf '%s\n' 'go version go1.26.7 linux/amd64'
+  exit 0
+fi
+if [ "$#" -ne 9 ] || [ "$1" != test ] || [ "$2" != -race ] || [ "$3" != -count=1 ] || [ "$4" != -p=1 ] || [ "$5" != -parallel=1 ] || [ "$6" != -json ] || [ "$7" != ./internal/storage ] || [ "$8" != -run ]; then
+  printf 'unexpected synthetic go invocation:' >&2
+  printf ' <%s>' "$@" >&2
+  printf '\n' >&2
+  exit 97
+fi
+if [ "$9" != "$CK015_EXPECTED_SELECTOR" ]; then
+  printf 'unexpected CK-015 selector: %s\n' "$9" >&2
+  exit 98
+fi
+package=github.com/franchoy/coldkeep/internal/storage
+printf '{"Action":"start","Package":"%s"}\n' "$package"
+case "$CK015_EXPECTED_PROFILE" in
+  ck015-initial-lookup-sqlite)
+    test_names='TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite
+TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite
+TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite
+TestCKV11316015InitialLookupSupportedStatusRoutingSQLite
+TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/completed
+TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/aborted
+TestCKV11316015InitialLookupSupportedStatusRoutingSQLite/processing'
+    ;;
+  ck015-initial-lookup-postgres)
+    test_names='TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback
+TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery
+TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation
+TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication
+TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies'
+    ;;
+  *) printf 'unexpected CK-015 profile: %s\n' "$CK015_EXPECTED_PROFILE" >&2; exit 99 ;;
+esac
+for test_name in $test_names
+do
+  printf '{"Action":"run","Package":"%s","Test":"%s"}\n' "$package" "$test_name"
+  printf '{"Action":"pass","Package":"%s","Test":"%s"}\n' "$package" "$test_name"
+done
+printf '{"Action":"pass","Package":"%s"}\n' "$package"
+`)
+	writeExecutableFixture(t, filepath.Join(stubDir, "python3"), `#!/usr/bin/env bash
+set +e
+if [ "$#" -lt 1 ] || [ "$1" != scripts/check_required_test_events.py ]; then
+  printf 'unexpected synthetic python3 invocation\n' >&2
+  exit 96
+fi
+/usr/bin/python3 "$@"
+checker_status=$?
+if [ "$checker_status" -eq 0 ] && [ "${CK015_DELETE_GO_STDERR:-0}" -eq 1 ]; then
+  events_file=
+  previous=
+  for argument in "$@"; do
+    if [ "$previous" = --events ]; then
+      events_file=$argument
+      break
+    fi
+    previous=$argument
+  done
+  if [ -z "$events_file" ]; then
+    printf 'synthetic python3 stub did not receive --events\n' >&2
+    exit 95
+  fi
+  /bin/rm -f -- "${events_file%.json}.go.stderr"
+fi
+exit "$checker_status"
+`)
+	writeExecutableFixture(t, filepath.Join(stubDir, "git"), `#!/usr/bin/env bash
+set -eu
+if [ "$#" -eq 2 ] && [ "$1" = rev-parse ] && [ "$2" = HEAD ]; then
+  printf '%s\n' '0123456789abcdef0123456789abcdef01234567'
+  exit 0
+fi
+printf 'unexpected synthetic git invocation\n' >&2
+exit 94
+`)
+
+	diagDir := filepath.Join(caseRoot, "integration-diag")
+	profileRoot := filepath.Join(caseRoot, "profile-a")
+	if kind == "local" {
+		diagDir = filepath.Join(profileRoot, "required-test-events")
+	}
+	if err := os.MkdirAll(diagDir, 0o700); err != nil {
+		t.Fatalf("create diagnostic directory: %v", err)
+	}
+	unrelatedPath := filepath.Join(diagDir, "unrelated-diagnostic.txt")
+	if err := os.WriteFile(unrelatedPath, []byte("must remain\n"), 0o600); err != nil {
+		t.Fatalf("write unrelated evidence: %v", err)
+	}
+	continuationPath := filepath.Join(caseRoot, "continued")
+	script := "#!/usr/bin/env bash\nset -euo pipefail\n" + body
+	if kind == "local" {
+		script += "printf 'continued\\n' >\"$CK015_CONTINUATION_FILE\"\n"
+	}
+	scriptPath := filepath.Join(caseRoot, "wrapper.sh")
+	writeExecutableFixture(t, scriptPath, script)
+
+	cmd := exec.Command("/bin/bash", scriptPath)
+	cmd.Dir = repoRoot(t)
+	deleteValue := "0"
+	if fault {
+		deleteValue = "1"
+	}
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir+":"+os.Getenv("PATH"),
+		"GOTOOLCHAIN=local",
+		"RUNNER_TEMP="+caseRoot,
+		"GITHUB_SHA=0123456789abcdef0123456789abcdef01234567",
+		"GITHUB_RUN_ID=39001",
+		"GITHUB_RUN_ATTEMPT=1",
+		"GITHUB_JOB=synthetic-"+name,
+		"GITHUB_REPOSITORY=franchoy/coldkeep",
+		"GITHUB_REF=refs/heads/release/v1.13.16",
+		"COLDKEEP_PROFILE_A_EVIDENCE_DIR="+profileRoot,
+		"CK015_CONTINUATION_FILE="+continuationPath,
+		"CK015_DELETE_GO_STDERR="+deleteValue,
+		"CK015_EXPECTED_PROFILE="+profile,
+		"CK015_EXPECTED_SELECTOR="+ck015SyntheticSelector(t, profile),
+		"DB_HOST=127.0.0.1",
+		"DB_PORT=5432",
+		"DB_USER=coldkeep",
+		"DB_PASSWORD=coldkeep",
+		"DB_NAME=coldkeep",
+		"DB_SSLMODE=disable",
+	)
+	stdoutPath := filepath.Join(caseRoot, "stdout")
+	stderrPath := filepath.Join(caseRoot, "stderr")
+	stdoutFile, openErr := os.OpenFile(stdoutPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if openErr != nil {
+		t.Fatalf("create streaming stdout record: %v", openErr)
+	}
+	stderrFile, openErr := os.OpenFile(stderrPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if openErr != nil {
+		_ = stdoutFile.Close()
+		t.Fatalf("create streaming stderr record: %v", openErr)
+	}
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
+	cmd.Stdin = strings.NewReader("")
+	started := time.Now().UTC()
+	err := cmd.Run()
+	ended := time.Now().UTC()
+	for name, file := range map[string]*os.File{"stdout": stdoutFile, "stderr": stderrFile} {
+		if syncErr := file.Sync(); syncErr != nil {
+			t.Fatalf("sync streaming %s record: %v", name, syncErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatalf("close streaming %s record: %v", name, closeErr)
+		}
+	}
+	stdoutBytes, readErr := os.ReadFile(stdoutPath)
+	if readErr != nil {
+		t.Fatalf("read streaming stdout record: %v", readErr)
+	}
+	stderrBytes, readErr := os.ReadFile(stderrPath)
+	if readErr != nil {
+		t.Fatalf("read streaming stderr record: %v", readErr)
+	}
+	output := string(stdoutBytes) + string(stderrBytes)
+	exitCode := 0
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			exitCode = exit.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+	if writeErr := writeCK015EvidenceJSON(filepath.Join(caseRoot, "child-observation.json"), map[string]any{
+		"started_utc":           started.Format(time.RFC3339Nano),
+		"ended_utc":             ended.Format(time.RFC3339Nano),
+		"started":               exitCode != -1,
+		"exited":                exitCode != -1,
+		"exit_code":             exitCode,
+		"pass_marker":           strings.Contains(output, "required execution-proof pass:"),
+		"missing_record_marker": strings.Contains(output, "missing or unreadable CK-015"),
+	}); writeErr != nil {
+		t.Fatalf("retain synthetic child observation: %v", writeErr)
+	}
+	if exportRoot := os.Getenv("COLDKEEP_CK015_BEHAVIOR_EVIDENCE_DIR"); exportRoot != "" {
+		exportName := name + "-success"
+		if fault {
+			exportName = name + "-missing-go-stderr"
+		}
+		copyFixtureTree(t, caseRoot, filepath.Join(exportRoot, exportName))
+	}
+	if fault && err == nil {
+		t.Fatalf("missing-record wrapper unexpectedly succeeded:\n%s", output)
+	}
+	if !fault && err != nil {
+		t.Fatalf("success wrapper failed: %v\n%s", err, output)
+	}
+
+	statusMatches, globErr := filepath.Glob(filepath.Join(diagDir, "*.status"))
+	if globErr != nil || len(statusMatches) != 1 {
+		t.Fatalf("expected one status record, matches=%v err=%v output=%s", statusMatches, globErr, output)
+	}
+	prefix := strings.TrimSuffix(statusMatches[0], ".status")
+	records := []string{
+		prefix + ".json",
+		prefix + ".go.stderr",
+		prefix + ".checker.stdout",
+		prefix + ".checker.stderr",
+		prefix + ".status",
+		prefix + ".metadata",
+	}
+	for index, record := range records {
+		_, statErr := os.Stat(record)
+		if fault && index == 1 {
+			if !os.IsNotExist(statErr) {
+				t.Fatalf("fault case retained deleted Go stderr record %q: %v", record, statErr)
+			}
+			continue
+		}
+		if statErr != nil {
+			t.Fatalf("required synthetic record missing %q: %v", record, statErr)
+		}
+	}
+	statusRecord := readFixturePath(t, prefix+".status")
+	for _, expected := range []string{"go_status=0", "capture_status=0", "checker_status=0", "status_record_write_status=0"} {
+		if !strings.Contains(statusRecord, expected+"\n") {
+			t.Fatalf("status record lacks %q:\n%s", expected, statusRecord)
+		}
+	}
+	if !strings.Contains(readFixturePath(t, prefix+".checker.stdout"), "required execution-proof pass: profile="+profile) {
+		t.Fatalf("genuine checker success was not retained")
+	}
+	if _, statErr := os.Stat(unrelatedPath); statErr != nil {
+		t.Fatalf("unrelated diagnostic evidence was not retained: %v", statErr)
+	}
+	if fault && !strings.Contains(output, "missing or unreadable CK-015") {
+		t.Fatalf("fault did not identify missing invocation record:\n%s", output)
+	}
+	if kind == "local" {
+		_, continuationErr := os.Stat(continuationPath)
+		if fault && !os.IsNotExist(continuationErr) {
+			t.Fatalf("local fault reached continuation sentinel: %v", continuationErr)
+		}
+		if !fault && continuationErr != nil {
+			t.Fatalf("local success did not reach continuation sentinel: %v", continuationErr)
+		}
+	}
+
+	outcome := "success"
+	if fault {
+		outcome = "missing-go-stderr-rejected"
+	}
+	injectionAction := "none"
+	if fault {
+		injectionAction = "deleted-after-genuine-checker-success:" + prefix + ".go.stderr"
+	}
+	if writeErr := os.WriteFile(filepath.Join(caseRoot, "injection-trace.txt"), []byte(injectionAction+"\n"), 0o600); writeErr != nil {
+		t.Fatalf("retain injection trace: %v", writeErr)
+	}
+	var inventory strings.Builder
+	for _, record := range records {
+		state := "present"
+		if _, statErr := os.Stat(record); os.IsNotExist(statErr) {
+			state = "missing"
+		}
+		fmt.Fprintf(&inventory, "%s\t%s\n", state, filepath.Base(record))
+	}
+	if writeErr := os.WriteFile(filepath.Join(caseRoot, "record-inventory.txt"), []byte(inventory.String()), 0o600); writeErr != nil {
+		t.Fatalf("retain record inventory: %v", writeErr)
+	}
+	result := fmt.Sprintf("wrapper=%s\nkind=%s\nprofile=%s\nfault=%t\noutcome=%s\nother_records=5\nstatus_values=0,0,0,0\nunrelated_evidence=retained\n", name, kind, profile, fault, outcome)
+	if writeErr := os.WriteFile(filepath.Join(caseRoot, "result.txt"), []byte(result), 0o600); writeErr != nil {
+		t.Fatalf("retain synthetic result: %v", writeErr)
+	}
+}
+
+func ck015SyntheticSelector(t *testing.T, profile string) string {
+	t.Helper()
+	switch profile {
+	case "ck015-initial-lookup-sqlite":
+		return "^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$"
+	case "ck015-initial-lookup-postgres":
+		return "^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$"
+	default:
+		t.Fatalf("unknown synthetic CK-015 profile %q", profile)
+		return ""
+	}
+}
+
+func writeExecutableFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+		t.Fatalf("write executable fixture %q: %v", path, err)
+	}
+}
+
+func readFixturePath(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture path %q: %v", path, err)
+	}
+	return string(content)
+}
+
+func copyFixtureTree(t *testing.T, sourceRoot, destinationRoot string) {
+	t.Helper()
+	if _, err := os.Stat(destinationRoot); !os.IsNotExist(err) {
+		t.Fatalf("refusing to replace synthetic evidence destination %q", destinationRoot)
+	}
+	if err := filepath.WalkDir(sourceRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(sourceRoot, path)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(destinationRoot, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o700)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destination, content, 0o600)
+	}); err != nil {
+		t.Fatalf("export synthetic evidence: %v", err)
+	}
+}
+
+func TestAuditCIEnforcementRequiresCK014ProfileAParity(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+	tests := []struct {
+		name        string
+		old         string
+		replacement string
+		wantMessage string
+	}{
+		{
+			name:        "missing codec profile",
+			old:         "--profile \"integration-correctness-${codec}\"",
+			replacement: "--profile \"integration-correctness-removed\"",
+			wantMessage: "local Profile A selects codec-specific required-event profile",
+		},
+		{
+			name:        "missing internal profile",
+			old:         "--profile ck014-internal-verify",
+			replacement: "--profile removed-internal-verify",
+			wantMessage: "local Profile A invokes CK-014 internal required-event profile",
+		},
+		{
+			name:        "pipeline status not snapshotted",
+			old:         "pipeline_status=(\"${PIPESTATUS[@]}\")",
+			replacement: "pipeline_status=(0 0)",
+			wantMessage: "local Profile A snapshots complete pipeline status",
+		},
+		{
+			name:        "capture failure suppressed",
+			old:         "elif [ \"$capture_status\" -ne 0 ]; then",
+			replacement: "elif false; then",
+			wantMessage: "local Profile A propagates evidence-capture failure",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := strings.Replace(checklist, test.old, test.replacement, 1)
+			if mutated == checklist {
+				t.Fatalf("checklist fixture did not contain %q", test.old)
+			}
+			stderr := runAuditLocalOnlyWithChecklistFixture(t, workflow, codeqlWorkflow, mutated, true)
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
 func TestAuditCIEnforcementLocalWorkflowRequiresDeterministicG6PostgresCommand(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
@@ -1813,6 +3235,363 @@ func TestAuditCIEnforcementLocalWorkflowRequiresDeterministicG6DBGate(t *testing
 	}
 }
 
+func TestAuditCIEnforcementRequiresExactFullAdversarialTimeoutParity(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	checklist := readRepoFile(t, "PRE_RELEASE_CHECKLIST.md")
+
+	const hostedWithoutTimeout = "go test -race -count=1 -json ./tests/adversarial/..."
+	const hostedWithTimeout = hostedWithoutTimeout + " -timeout 20m"
+	const localWithoutTimeout = "COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/..."
+	const localWithTimeout = localWithoutTimeout + " -timeout 20m"
+
+	validWorkflow := workflow
+	if !strings.Contains(validWorkflow, hostedWithTimeout) {
+		validWorkflow = strings.Replace(validWorkflow, hostedWithoutTimeout, hostedWithTimeout, 1)
+		if validWorkflow == workflow {
+			t.Fatalf("workflow fixture did not contain %q", hostedWithoutTimeout)
+		}
+	}
+	validChecklist := checklist
+	if !strings.Contains(validChecklist, localWithTimeout) {
+		validChecklist = strings.Replace(validChecklist, localWithoutTimeout, localWithTimeout, 1)
+		if validChecklist == checklist {
+			t.Fatalf("checklist fixture did not contain %q", localWithoutTimeout)
+		}
+	}
+
+	runAuditLocalOnlyWithChecklistFixture(
+		t,
+		validWorkflow,
+		codeqlWorkflow,
+		validChecklist,
+		false,
+	)
+
+	tests := []struct {
+		name        string
+		workflow    string
+		checklist   string
+		wantMessage string
+	}{
+		{
+			name:        "hosted timeout omitted",
+			workflow:    strings.Replace(validWorkflow, hostedWithTimeout, hostedWithoutTimeout, 1),
+			checklist:   validChecklist,
+			wantMessage: "hosted full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "hosted timeout disabled",
+			workflow:    strings.Replace(validWorkflow, hostedWithTimeout, hostedWithoutTimeout+" -timeout 0", 1),
+			checklist:   validChecklist,
+			wantMessage: "hosted full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "hosted timeout wrong",
+			workflow:    strings.Replace(validWorkflow, hostedWithTimeout, hostedWithoutTimeout+" -timeout 30m", 1),
+			checklist:   validChecklist,
+			wantMessage: "hosted full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "local timeout omitted",
+			workflow:    validWorkflow,
+			checklist:   strings.Replace(validChecklist, localWithTimeout, localWithoutTimeout, 1),
+			wantMessage: "local Profile A full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "local timeout disabled",
+			workflow:    validWorkflow,
+			checklist:   strings.Replace(validChecklist, localWithTimeout, localWithoutTimeout+" -timeout 0", 1),
+			wantMessage: "local Profile A full long-run adversarial package uses exact 20-minute timeout",
+		},
+		{
+			name:        "local and hosted disagree",
+			workflow:    validWorkflow,
+			checklist:   strings.Replace(validChecklist, localWithTimeout, localWithoutTimeout+" -timeout 15m", 1),
+			wantMessage: "local Profile A full long-run adversarial package uses exact 20-minute timeout",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stderr := runAuditLocalOnlyWithChecklistFixture(
+				t,
+				test.workflow,
+				codeqlWorkflow,
+				test.checklist,
+				true,
+			)
+			if !strings.Contains(stderr, test.wantMessage) {
+				t.Fatalf("expected %q, got:\n%s", test.wantMessage, stderr)
+			}
+		})
+	}
+}
+
+func withCK015CoreAuditCase(t *testing.T, caseID string, run func() string) string {
+	t.Helper()
+	if os.Getenv("COLDKEEP_CK015_NEGATIVE_EVIDENCE_DIR") == "" {
+		return run()
+	}
+	const name = "COLDKEEP_CK015_CORE_CASE_ID"
+	previous, existed := os.LookupEnv(name)
+	if err := os.Setenv(name, caseID); err != nil {
+		t.Fatalf("set core audit case ID: %v", err)
+	}
+	defer func() {
+		var err error
+		if existed {
+			err = os.Setenv(name, previous)
+		} else {
+			err = os.Unsetenv(name)
+		}
+		if err != nil {
+			t.Errorf("restore core audit case ID: %v", err)
+		}
+	}()
+	return run()
+}
+
+func allocateCK015CoreEvidenceCase(root, caseID string) (string, error) {
+	if root == "" || caseID == "" || filepath.Base(caseID) != caseID || caseID == "." || caseID == ".." {
+		return "", fmt.Errorf("invalid CK-015 core evidence root/case ID")
+	}
+	info, err := os.Lstat(root)
+	if err != nil {
+		return "", fmt.Errorf("inspect CK-015 core evidence root: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&0o077 != 0 {
+		return "", fmt.Errorf("CK-015 core evidence root must be a private directory")
+	}
+	caseRoot := filepath.Join(root, caseID)
+	if err := os.Mkdir(caseRoot, 0o700); err != nil {
+		return "", fmt.Errorf("create exclusive CK-015 core evidence case %q: %w", caseID, err)
+	}
+	return caseRoot, nil
+}
+
+func writeCK015EvidenceFile(path string, content []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = file.Write(content); err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+func writeCK015EvidenceJSON(path string, value any) error {
+	content, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	content = append(content, '\n')
+	return writeCK015EvidenceFile(path, content)
+}
+
+func ck015FileSHA256(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(content)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func runCK015AuditWithEvidence(
+	t *testing.T,
+	cmd *exec.Cmd,
+	caseID string,
+	wantFailure bool,
+	consumed map[string]string,
+) (string, error) {
+	t.Helper()
+	root := os.Getenv("COLDKEEP_CK015_NEGATIVE_EVIDENCE_DIR")
+	if root == "" {
+		t.Fatalf("core case %q requires COLDKEEP_CK015_NEGATIVE_EVIDENCE_DIR", caseID)
+	}
+	caseRoot, err := allocateCK015CoreEvidenceCase(root, caseID)
+	if err != nil {
+		t.Fatalf("allocate core audit evidence: %v", err)
+	}
+	inputsRoot := filepath.Join(caseRoot, "inputs")
+	baselineRoot := filepath.Join(caseRoot, "baseline")
+	if err := os.Mkdir(inputsRoot, 0o700); err != nil {
+		t.Fatalf("create core input evidence: %v", err)
+	}
+	if err := os.Mkdir(baselineRoot, 0o700); err != nil {
+		t.Fatalf("create core baseline evidence: %v", err)
+	}
+
+	inputHashes := make(map[string]string, len(consumed))
+	pathMap := make(map[string]string, len(consumed))
+	for name, sourcePath := range consumed {
+		content, readErr := os.ReadFile(sourcePath)
+		if readErr != nil {
+			t.Fatalf("read consumed %s: %v", name, readErr)
+		}
+		destination := filepath.Join(inputsRoot, name)
+		if writeErr := writeCK015EvidenceFile(destination, content); writeErr != nil {
+			t.Fatalf("retain consumed %s: %v", name, writeErr)
+		}
+		digest := sha256.Sum256(content)
+		inputHashes[name] = hex.EncodeToString(digest[:])
+		pathMap[sourcePath] = destination
+	}
+	for name, repoPath := range map[string]string{
+		"ci.yml":                   filepath.Join(repoRoot(t), ".github", "workflows", "ci.yml"),
+		"PRE_RELEASE_CHECKLIST.md": filepath.Join(repoRoot(t), "PRE_RELEASE_CHECKLIST.md"),
+	} {
+		content, readErr := os.ReadFile(repoPath)
+		if readErr != nil {
+			t.Fatalf("read baseline %s: %v", name, readErr)
+		}
+		if writeErr := writeCK015EvidenceFile(filepath.Join(baselineRoot, name), content); writeErr != nil {
+			t.Fatalf("retain baseline %s: %v", name, writeErr)
+		}
+	}
+	diff := exec.Command("git", "diff", "--no-index", "--", baselineRoot, inputsRoot)
+	diff.Dir = cmd.Dir
+	diffOutput, diffErr := diff.CombinedOutput()
+	if diffErr != nil {
+		if exit, ok := diffErr.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+			t.Fatalf("create exact fixture diff: %v\n%s", diffErr, diffOutput)
+		}
+	}
+	if writeErr := writeCK015EvidenceFile(filepath.Join(caseRoot, "fixture.diff"), diffOutput); writeErr != nil {
+		t.Fatalf("retain fixture diff: %v", writeErr)
+	}
+
+	head := strings.TrimSpace(runAuditTestCommand(t, "git", "rev-parse", "HEAD"))
+	sourceHashes := map[string]string{}
+	for _, relative := range []string{"scripts/audit_ci_enforcement.sh", "scripts/check_required_test_events.py"} {
+		digest, hashErr := ck015FileSHA256(filepath.Join(repoRoot(t), relative))
+		if hashErr != nil {
+			t.Fatalf("hash source %s: %v", relative, hashErr)
+		}
+		sourceHashes[relative] = digest
+	}
+	metadata := map[string]any{
+		"case_id": caseID, "test_name": t.Name(), "expected_failure": wantFailure,
+		"candidate_head": head, "candidate_state": "pre-commit-or-exact-commit-as-observed",
+		"source_hashes": sourceHashes, "consumed_input_hashes": inputHashes,
+		"consumed_path_to_copy":      pathMap,
+		"cleared_environment_policy": "external focused runner clears unrelated COLDKEEP/GITHUB/DB settings",
+	}
+	if writeErr := writeCK015EvidenceJSON(filepath.Join(caseRoot, "metadata.json"), metadata); writeErr != nil {
+		t.Fatalf("retain core metadata: %v", writeErr)
+	}
+	if writeErr := writeCK015EvidenceJSON(filepath.Join(caseRoot, "argv.json"), cmd.Args); writeErr != nil {
+		t.Fatalf("retain core argv: %v", writeErr)
+	}
+	if writeErr := writeCK015EvidenceFile(filepath.Join(caseRoot, "cwd"), []byte(cmd.Dir+"\n")); writeErr != nil {
+		t.Fatalf("retain core cwd: %v", writeErr)
+	}
+	selectedEnvironment := map[string]string{}
+	for _, binding := range cmd.Env {
+		if strings.HasPrefix(binding, "COLDKEEP_") || strings.HasPrefix(binding, "GITHUB_") || strings.HasPrefix(binding, "PYTHONDONTWRITEBYTECODE=") {
+			name, value, _ := strings.Cut(binding, "=")
+			selectedEnvironment[name] = value
+		}
+	}
+	if writeErr := writeCK015EvidenceJSON(filepath.Join(caseRoot, "selected-environment.json"), selectedEnvironment); writeErr != nil {
+		t.Fatalf("retain selected environment: %v", writeErr)
+	}
+	if writeErr := writeCK015EvidenceJSON(filepath.Join(caseRoot, "input-hashes-before.json"), inputHashes); writeErr != nil {
+		t.Fatalf("retain before hashes: %v", writeErr)
+	}
+
+	stdoutFile, err := os.OpenFile(filepath.Join(caseRoot, "stdout"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("open core stdout: %v", err)
+	}
+	stderrFile, err := os.OpenFile(filepath.Join(caseRoot, "stderr"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		_ = stdoutFile.Close()
+		t.Fatalf("open core stderr: %v", err)
+	}
+	var stdoutBuffer, stderrBuffer bytes.Buffer
+	cmd.Stdout = io.MultiWriter(stdoutFile, &stdoutBuffer)
+	cmd.Stderr = io.MultiWriter(stderrFile, &stderrBuffer)
+	cmd.Stdin = strings.NewReader("")
+	started := time.Now().UTC()
+	if writeErr := writeCK015EvidenceFile(filepath.Join(caseRoot, "started-utc"), []byte(started.Format(time.RFC3339Nano)+"\n")); writeErr != nil {
+		t.Fatalf("retain child start: %v", writeErr)
+	}
+	runErr := cmd.Run()
+	ended := time.Now().UTC()
+	for name, file := range map[string]*os.File{"stdout": stdoutFile, "stderr": stderrFile} {
+		if syncErr := file.Sync(); syncErr != nil {
+			t.Fatalf("sync core %s: %v", name, syncErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatalf("close core %s: %v", name, closeErr)
+		}
+	}
+	if writeErr := writeCK015EvidenceFile(filepath.Join(caseRoot, "ended-utc"), []byte(ended.Format(time.RFC3339Nano)+"\n")); writeErr != nil {
+		t.Fatalf("retain child end: %v", writeErr)
+	}
+	exitCode := 0
+	startedChild := true
+	exited := true
+	launchError := ""
+	if runErr != nil {
+		if exit, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exit.ExitCode()
+		} else {
+			startedChild = false
+			exited = false
+			exitCode = -1
+			launchError = runErr.Error()
+		}
+	}
+	status := map[string]any{"started": startedChild, "exited": exited, "exit_code": exitCode, "launch_error": launchError}
+	if writeErr := writeCK015EvidenceJSON(filepath.Join(caseRoot, "status.json"), status); writeErr != nil {
+		t.Fatalf("retain child status: %v", writeErr)
+	}
+	combined := stdoutBuffer.String() + stderrBuffer.String()
+	terminal := map[string]any{
+		"pass_marker":    strings.Contains(combined, "[audit] PASSED:"),
+		"fail_marker":    strings.Contains(combined, "[audit] FAILED:"),
+		"error_marker":   strings.Contains(combined, "[audit] ERROR:"),
+		"classification": map[bool]string{true: "intended-rejection", false: "positive-control"}[wantFailure],
+	}
+	if writeErr := writeCK015EvidenceJSON(filepath.Join(caseRoot, "terminal-observation.json"), terminal); writeErr != nil {
+		t.Fatalf("retain terminal observation: %v", writeErr)
+	}
+	afterHashes := make(map[string]string, len(consumed))
+	for name, sourcePath := range consumed {
+		digest, hashErr := ck015FileSHA256(sourcePath)
+		if hashErr != nil {
+			t.Fatalf("hash consumed input after child %s: %v", name, hashErr)
+		}
+		afterHashes[name] = digest
+	}
+	if writeErr := writeCK015EvidenceJSON(filepath.Join(caseRoot, "input-hashes-after.json"), afterHashes); writeErr != nil {
+		t.Fatalf("retain after hashes: %v", writeErr)
+	}
+	if !mapsEqualString(inputHashes, afterHashes) {
+		t.Fatalf("core audit child changed its consumed inputs")
+	}
+	return combined, runErr
+}
+
+func mapsEqualString(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
 func runAuditLocalOnlyWithSourceFixture(
 	t *testing.T,
 	workflow string,
@@ -1827,6 +3606,22 @@ func runAuditLocalOnlyWithSourceFixture(
 	}
 	t.Setenv(sourceEnv, sourcePath)
 	return runAuditLocalOnly(t, workflow, codeqlWorkflow, true)
+}
+
+func runAuditLocalOnlyWithChecklistFixture(
+	t *testing.T,
+	workflow string,
+	codeqlWorkflow string,
+	checklist string,
+	wantFailure bool,
+) string {
+	t.Helper()
+	checklistPath := filepath.Join(t.TempDir(), "PRE_RELEASE_CHECKLIST.md")
+	if err := os.WriteFile(checklistPath, []byte(checklist), 0o600); err != nil {
+		t.Fatalf("write pre-release checklist fixture: %v", err)
+	}
+	t.Setenv("COLDKEEP_PRE_RELEASE_CHECKLIST_FILE", checklistPath)
+	return runAuditLocalOnly(t, workflow, codeqlWorkflow, wantFailure)
 }
 
 func runAuditLocalOnly(t *testing.T, workflow string, codeqlWorkflow string, wantFailure bool) string {
@@ -1959,6 +3754,14 @@ func runAuditFixtureWithTimingValidator(
 	if configured := os.Getenv("COLDKEEP_AUDIT_TEST_REPO_ROOT"); configured != "" {
 		auditRoot = configured
 	}
+	preReleaseChecklistPath := os.Getenv("COLDKEEP_PRE_RELEASE_CHECKLIST_FILE")
+	if preReleaseChecklistPath == "" {
+		preReleaseChecklistPath = filepath.Join(repoRoot(t), "PRE_RELEASE_CHECKLIST.md")
+	}
+	requiredTestEventsPath := os.Getenv("COLDKEEP_REQUIRED_TEST_EVENTS_FILE")
+	if requiredTestEventsPath == "" {
+		requiredTestEventsPath = filepath.Join(repoRoot(t), "scripts", "check_required_test_events.py")
+	}
 	cmd := exec.Command("bash", "scripts/audit_ci_enforcement.sh", "--local-only")
 	cmd.Dir = auditRoot
 	cmd.Env = append(os.Environ(),
@@ -1967,10 +3770,28 @@ func runAuditFixtureWithTimingValidator(
 		"COLDKEEP_BENCHMARK_BASELINE_WORKFLOW_FILE="+baselineWorkflowPath,
 		"COLDKEEP_TIMING_VALIDATOR_FILE="+timingValidatorPath,
 		"COLDKEEP_VALIDATION_MATRIX_FILE="+matrixPath,
+		"COLDKEEP_PRE_RELEASE_CHECKLIST_FILE="+preReleaseChecklistPath,
+		"COLDKEEP_REQUIRED_TEST_EVENTS_FILE="+requiredTestEventsPath,
 		"COLDKEEP_PAIRED_REFERENCE_MANIFEST_FILE="+pairedReferencePath,
 		"COLDKEEP_PAIRED_THRESHOLD_POLICY_FILE="+pairedThresholdPath,
 	)
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	var err error
+	if caseID := os.Getenv("COLDKEEP_CK015_CORE_CASE_ID"); caseID != "" {
+		var recorded string
+		recorded, err = runCK015AuditWithEvidence(t, cmd, caseID, wantFailure, map[string]string{
+			"ci.yml":                            workflowPath,
+			"codeql.yml":                        codeqlWorkflowPath,
+			"benchmark-baseline.yml":            baselineWorkflowPath,
+			"validate_regression_thresholds.py": timingValidatorPath,
+			"VALIDATION_MATRIX.md":              matrixPath,
+			"PRE_RELEASE_CHECKLIST.md":          preReleaseChecklistPath,
+			"check_required_test_events.py":     requiredTestEventsPath,
+		})
+		output = []byte(recorded)
+	} else {
+		output, err = cmd.CombinedOutput()
+	}
 	if wantFailure {
 		if err == nil {
 			t.Fatalf("expected audit failure, got success:\n%s", string(output))

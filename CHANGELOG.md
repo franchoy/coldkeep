@@ -20,6 +20,36 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.16 - 2026-09-20 — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
+
+- Activates the separately authorized exceptional v1.x critical-maintenance
+  train from immutable v1.13.15 product baseline
+  `6a2417e8189631b018779c2fd24fc559ed761f3f` and repository-closure main
+  `1eea2ac63c4da3933143e13d32d41c1f9eb45671`.
+- Phase 0/0R reconciled the clean release-source boundary; earlier review
+  patches remain external reference material and ignored operator state stays
+  untouched.
+- Phase 1 activates source version 1.13.16, isolated sibling-worktree
+  authority, the 20-phase release controls, and backward-compatible ordered
+  lifecycle boundaries 16/18/19.
+- Phase 12 established technical correctness. Phase 13 completed its full
+  documentation/process audit, bounded remediation, hosted certification,
+  residual-authority reconciliation, and independent 8/8 re-audit. This
+  closure candidate records all 15 confirmed findings closed, including
+  CK-V11316-007, and materializes the canonical source-only v1.13.16 release
+  body and checksum.
+- The source candidate is ready for release. External Phase 14 execution is
+  complete. Phase 15 tracked completion is a conditional candidate assertion
+  required by the lifecycle contract; protected-merge authority requires a
+  separate audit of the exact PR head and base. Phase 16 is Next but merge and
+  Phase 16 execution remain unauthorized until that audit succeeds. No
+  v1.13.16 tag or GitHub release exists, and final v1.x closure remains
+  reserved for Phase 19T.
+- Added the Phase 15R2 `immutable-transition-v1` validator contract. It
+  distinguishes normal-merge, annotated-tag, and conditional-closure artifacts
+  without treating local or event-structure checks as authorization,
+  certification, publication, or terminal closure evidence.
+
 ## v1.13.15 - 2026-08-28 — Final v1.x Security, Reproducibility, and Operational Closure
 
 - PR #115 validly merged candidate

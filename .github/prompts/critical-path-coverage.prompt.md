@@ -1,5 +1,18 @@
 # Coldkeep Critical-Path Coverage Prompt
 
+<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: COMPLETE
+CK-V11316-007: CLOSED
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 15/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->
+
 You are helping improve Coldkeep test coverage.
 
 Coldkeep is a correctness-first cold storage engine. The primary invariant is: never lose user data.
@@ -89,10 +102,16 @@ When proposing coverage, provide:
 - whether it is release-blocking or advisory;
 - scope risks.
 
-## Frozen v1.x boundaries
+## Active v1.13.16 maintenance boundaries
 
-v1.13.15 is published stable and planned v1 coverage work is closed. For any
-separately authorized future maintenance:
+v1.13.16 is the active exceptional critical-maintenance train. Phase 12
+technical correctness is established, Phase 13 is complete, CK-V11316-007 is
+closed, and all 15 findings are closed. The source candidate is ready for
+release and external Phase 14 execution is complete. Phase 15 tracked
+completion is conditional on separate exact-head protected-merge authority;
+Phase 16 is Next but cannot execute before that authorization. v1.13.15 remains
+published stable and immutable. Follow the 20-phase plan, exact phase mode,
+and phase allowlist:
 
 - do not implement v2 or SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;

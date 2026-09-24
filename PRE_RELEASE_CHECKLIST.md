@@ -79,7 +79,7 @@ promotes a section into the active gate for a special release.
 
 Install these before claiming CI parity locally:
 
-- Go 1.26.7 exactly for v1.13.15 certification. The module language floor
+- Go 1.26.7 exactly for v1.13.16 maintenance certification. The module language floor
   remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
 - `docker compose`.
 - PostgreSQL client tools, including `psql`.
@@ -117,7 +117,7 @@ Current release-gate sections:
 Historical v1.9 note:
 
 - For historical v1.9 sign-off, sections 1-11 and 15-18 were the active
-  blockers. They are not the current v1.13.15 lifecycle authority.
+  blockers. They are not the current v1.13.16 lifecycle authority.
 - Historical template sections (12-14) are archived reference material only.
 - Unchecked boxes in sections 12-14 are intentional historical state and are
   not current blockers unless a release manager explicitly promotes one into
@@ -201,7 +201,7 @@ Review this before starting Step 1.
 
 Operator expectation surface for supported PostgreSQL deployments:
 
-- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v16 schema at startup.
+- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing valid legacy metadata is normalized transactionally to the required singleton schema 17 representation, `schema_version(catalog_version=17)`, at startup. Pre-v17 binaries are intentionally fenced before correctness-relevant work on schema-17 repositories.
 - Locking behavior: coldkeep expects normal PostgreSQL row/table lock semantics and transactional guarantees under default supported isolation behavior.
 - Advisory locks: maintenance and coordination flows rely on PostgreSQL advisory locking primitives being available and functioning correctly.
 
@@ -295,7 +295,7 @@ python3 scripts/validate_release_state.py --state auto
 
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.15"
+expected_version="1.13.16"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -323,7 +323,7 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.15 in both human and JSON modes.
+Expected: the built CLI reports exactly 1.13.16 in both human and JSON modes.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
@@ -338,13 +338,41 @@ Do not skip `unset` lines in step 3.
 
 ```bash
 unset COLDKEEP_STORAGE_DIR
+: "${COLDKEEP_PROFILE_A_EVIDENCE_DIR:?set COLDKEEP_PROFILE_A_EVIDENCE_DIR to a fresh external evidence directory}"
+mkdir -p "$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events"
 
 for codec in plain aes-gcm; do
   echo "=== Codec: ${codec} ==="
   export COLDKEEP_CODEC="$codec"
 
   # integration-correctness
-  go test -race -count=1 -short ./tests/integration/...
+  json_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/integration-correctness-${codec}.json"
+  stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/integration-correctness-${codec}.stderr"
+  if [ -e "$json_file" ] || [ -e "$stderr_file" ]; then
+    echo "refusing to reuse integration-correctness evidence paths" >&2
+    exit 1
+  fi
+  set +e
+  GOTOOLCHAIN=local go test -race -count=1 -short -json ./tests/integration/... \
+    2>"$stderr_file" | tee "$json_file"
+  pipeline_status=("${PIPESTATUS[@]}")
+  go_status=${pipeline_status[0]}
+  capture_status=${pipeline_status[1]}
+  python3 scripts/check_required_test_events.py \
+    --profile "integration-correctness-${codec}" \
+    --events "$json_file"
+  checker_status=$?
+  set -e
+  if [ "$go_status" -ne 0 ]; then
+    cat "$stderr_file" >&2 || true
+    exit "$go_status"
+  elif [ "$capture_status" -ne 0 ]; then
+    cat "$stderr_file" >&2 || true
+    exit "$capture_status"
+  elif [ "$checker_status" -ne 0 ]; then
+    cat "$stderr_file" >&2 || true
+    exit "$checker_status"
+  fi
 
   # integration-stress
   go test -race -count=1 ./tests/integration/...
@@ -353,14 +381,14 @@ for codec in plain aes-gcm; do
   COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun'
 
   # integration-refcount-containment (v1.8 Option A hold gate: 25-iteration matrix by default)
-  go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
+  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
 
   # For v1.8 release hold: 1000-iteration stress matrix (validates chunk refcount repair under extreme load)
   # COLDKEEP_REFCOUNT_STRESS_ITERS=1000 go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
 
   # adversarial
   unset COLDKEEP_STORAGE_DIR
-  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
+  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/... -timeout 20m
   go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14|TestAdversarialG15|TestAdversarialG16|TestAdversarialG17'
 
   # smoke
@@ -370,6 +398,229 @@ for codec in plain aes-gcm; do
   PATH="$PWD:$PATH" \
   scripts/smoke.sh
 done
+
+# CK-V11316-014 internal production-pipeline proofs. Real full preflight runs
+# before the private per-invocation reader used by the downstream tests.
+json_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/ck014-internal-verify.json"
+stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/ck014-internal-verify.stderr"
+if [ -e "$json_file" ] || [ -e "$stderr_file" ]; then
+  echo "refusing to reuse CK-014 internal evidence paths" >&2
+  exit 1
+fi
+set +e
+GOTOOLCHAIN=local COLDKEEP_CODEC=plain go test -race -count=1 -json ./internal/verify \
+  -run '^(TestVerifySystemDeepPreflightFailureDoesNotInvokeDownstreamReader|TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults|TestVerifySystemDeepInjectedDownstreamReaderCleanPipelinePasses|TestVerifySystemDeepRejectsNilDownstreamReaderAfterPreflight)$' \
+  2>"$stderr_file" | tee "$json_file"
+pipeline_status=("${PIPESTATUS[@]}")
+go_status=${pipeline_status[0]}
+capture_status=${pipeline_status[1]}
+python3 scripts/check_required_test_events.py \
+  --profile ck014-internal-verify \
+  --events "$json_file"
+checker_status=$?
+set -e
+if [ "$go_status" -ne 0 ]; then
+  cat "$stderr_file" >&2 || true
+  exit "$go_status"
+elif [ "$capture_status" -ne 0 ]; then
+  cat "$stderr_file" >&2 || true
+  exit "$capture_status"
+elif [ "$checker_status" -ne 0 ]; then
+  cat "$stderr_file" >&2 || true
+  exit "$checker_status"
+fi
+
+# CK-V11316-015 SQLite initial-lookup named proof.
+unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN
+prefix=ck015-initial-lookup-sqlite-local
+json_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.json"
+go_stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.go.stderr"
+checker_stdout_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.checker.stdout"
+checker_stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.checker.stderr"
+status_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.status"
+metadata_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.metadata"
+selector='^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$'
+profile=ck015-initial-lookup-sqlite
+package=github.com/franchoy/coldkeep/internal/storage
+for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+  if [ -e "$target" ]; then
+    echo "refusing to reuse CK-015 SQLite evidence path: $target" >&2
+    exit 1
+  fi
+done
+candidate_sha=$(git rev-parse HEAD)
+go_version=$(GOTOOLCHAIN=local go version)
+if ! printf '%s\n' \
+  "candidate_sha=$candidate_sha" \
+  'context=profile-a-local' \
+  'matrix_codec=plain' \
+  "package=$package" \
+  "selector=$selector" \
+  "checker_profile=$profile" \
+  "go_version=$go_version" \
+  'gotoolchain=local' >"$metadata_file"; then
+  echo "unable to write CK-015 SQLite metadata" >&2
+  exit 1
+fi
+set +e
+GOTOOLCHAIN=local COLDKEEP_CODEC=plain go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \
+  -run "$selector" 2>"$go_stderr_file" | tee "$json_file"
+pipeline_status=("${PIPESTATUS[@]}")
+go_status=${pipeline_status[0]}
+capture_status=${pipeline_status[1]}
+python3 scripts/check_required_test_events.py \
+  --profile "$profile" \
+  --events "$json_file" \
+  >"$checker_stdout_file" 2>"$checker_stderr_file"
+checker_status=$?
+printf '%s\n' \
+  "go_status=$go_status" \
+  "capture_status=$capture_status" \
+  "checker_status=$checker_status" \
+  'status_record_write_status=0' >"$status_file"
+status_record_write_status=$?
+evidence_status=0
+for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+  if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+    echo "missing or unreadable CK-015 SQLite evidence record: $target" >&2
+    evidence_status=1
+  fi
+done
+if [ "$status_record_write_status" -eq 0 ]; then
+  for expected in "go_status=$go_status" "capture_status=$capture_status" "checker_status=$checker_status" 'status_record_write_status=0'; do
+    if ! grep -Fqx "$expected" "$status_file"; then
+      echo "CK-015 SQLite status record mismatch: $expected" >&2
+      evidence_status=1
+    fi
+  done
+fi
+for expected in "candidate_sha=$candidate_sha" 'context=profile-a-local' 'matrix_codec=plain' "package=$package" "selector=$selector" "checker_profile=$profile" 'gotoolchain=local'; do
+  if ! grep -Fqx "$expected" "$metadata_file"; then
+    echo "CK-015 SQLite metadata mismatch: $expected" >&2
+    evidence_status=1
+  fi
+done
+cat "$checker_stdout_file"
+cat "$checker_stderr_file" >&2
+if [ "$go_status" -ne 0 ]; then
+  status=$go_status
+elif [ "$capture_status" -ne 0 ]; then
+  status=$capture_status
+elif [ "$checker_status" -ne 0 ]; then
+  status=$checker_status
+elif [ "$status_record_write_status" -ne 0 ]; then
+  status=$status_record_write_status
+else
+  status=$evidence_status
+fi
+set -e
+if [ "$status" -ne 0 ]; then
+  cat "$go_stderr_file" >&2 || true
+  tail -n 120 "$json_file" >&2 || true
+  exit "$status"
+fi
+
+# CK-V11316-015 PostgreSQL lookup and preservation named proof.
+unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN
+prefix=ck015-initial-lookup-postgres-local
+json_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.json"
+go_stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.go.stderr"
+checker_stdout_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.checker.stdout"
+checker_stderr_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.checker.stderr"
+status_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.status"
+metadata_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.metadata"
+selector='^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$'
+profile=ck015-initial-lookup-postgres
+package=github.com/franchoy/coldkeep/internal/storage
+for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+  if [ -e "$target" ]; then
+    echo "refusing to reuse CK-015 PostgreSQL evidence path: $target" >&2
+    exit 1
+  fi
+done
+candidate_sha=$(git rev-parse HEAD)
+go_version=$(GOTOOLCHAIN=local go version)
+if ! printf '%s\n' \
+  "candidate_sha=$candidate_sha" \
+  'context=profile-a-local' \
+  'matrix_codec=plain' \
+  "package=$package" \
+  "selector=$selector" \
+  "checker_profile=$profile" \
+  "go_version=$go_version" \
+  'gotoolchain=local' \
+  'postgres_image=postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825' >"$metadata_file"; then
+  echo "unable to write CK-015 PostgreSQL metadata" >&2
+  exit 1
+fi
+set +e
+GOTOOLCHAIN=local \
+COLDKEEP_CODEC=plain \
+COLDKEEP_TEST_DB=1 \
+COLDKEEP_TEST_DB_MAINTENANCE=postgres \
+COLDKEEP_DB_AUTO_BOOTSTRAP=true \
+DB_HOST="$DB_HOST" \
+DB_PORT="$DB_PORT" \
+DB_USER="$DB_USER" \
+DB_PASSWORD="$DB_PASSWORD" \
+DB_NAME="$DB_NAME" \
+DB_SSLMODE="$DB_SSLMODE" \
+go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \
+  -run "$selector" 2>"$go_stderr_file" | tee "$json_file"
+pipeline_status=("${PIPESTATUS[@]}")
+go_status=${pipeline_status[0]}
+capture_status=${pipeline_status[1]}
+python3 scripts/check_required_test_events.py \
+  --profile "$profile" \
+  --events "$json_file" \
+  >"$checker_stdout_file" 2>"$checker_stderr_file"
+checker_status=$?
+printf '%s\n' \
+  "go_status=$go_status" \
+  "capture_status=$capture_status" \
+  "checker_status=$checker_status" \
+  'status_record_write_status=0' >"$status_file"
+status_record_write_status=$?
+evidence_status=0
+for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+  if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+    echo "missing or unreadable CK-015 PostgreSQL evidence record: $target" >&2
+    evidence_status=1
+  fi
+done
+if [ "$status_record_write_status" -eq 0 ]; then
+  for expected in "go_status=$go_status" "capture_status=$capture_status" "checker_status=$checker_status" 'status_record_write_status=0'; do
+    if ! grep -Fqx "$expected" "$status_file"; then
+      echo "CK-015 PostgreSQL status record mismatch: $expected" >&2
+      evidence_status=1
+    fi
+  done
+fi
+for expected in "candidate_sha=$candidate_sha" 'context=profile-a-local' 'matrix_codec=plain' "package=$package" "selector=$selector" "checker_profile=$profile" 'gotoolchain=local'; do
+  if ! grep -Fqx "$expected" "$metadata_file"; then
+    echo "CK-015 PostgreSQL metadata mismatch: $expected" >&2
+    evidence_status=1
+  fi
+done
+cat "$checker_stdout_file"
+cat "$checker_stderr_file" >&2
+if [ "$go_status" -ne 0 ]; then
+  status=$go_status
+elif [ "$capture_status" -ne 0 ]; then
+  status=$capture_status
+elif [ "$checker_status" -ne 0 ]; then
+  status=$checker_status
+elif [ "$status_record_write_status" -ne 0 ]; then
+  status=$status_record_write_status
+else
+  status=$evidence_status
+fi
+set -e
+if [ "$status" -ne 0 ]; then
+  cat "$go_stderr_file" >&2 || true
+  tail -n 120 "$json_file" >&2 || true
+  exit "$status"
+fi
 
 # Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).
 # Reset it before the benchmark block and manual CLI checks in later steps.
@@ -385,7 +636,7 @@ for codec in plain aes-gcm; do
     -run '^TestRoundTripStoreRestore$'
 done
 
-COLDKEEP_CODEC=plain go test -v -race -count=1 ./tests/integration/... \
+COLDKEEP_CODEC=plain COLDKEEP_LONG_RUN=1 go test -v -race -count=1 ./tests/integration/... \
   -run '^(TestRemoveWithSharedChunksRefCount|TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState)$'
 
 for codec in plain aes-gcm; do
@@ -408,14 +659,17 @@ export COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15
 export COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900
 
 candidate_sha=$(git rev-parse HEAD)
+: "${COLDKEEP_BENCHMARK_POSTGRES_CONTAINER_ID:?set to the local PostgreSQL container ID}"
 scripts/run_release_benchmark_evidence.sh \
   --repo-root "$PWD" \
   --candidate-sha "$candidate_sha" \
-  --binary "$PWD/coldkeep"
+  --binary "$PWD/coldkeep" \
+  --database-container-id "$COLDKEEP_BENCHMARK_POSTGRES_CONTAINER_ID"
 
 scripts/release_benchmark_evidence.sh validate \
   --bundle-root "$PWD/.release-evidence/v1.13.14/$candidate_sha" \
-  --candidate-sha "$candidate_sha"
+  --candidate-sha "$candidate_sha" \
+  --require-current-provenance
 scripts/release_benchmark_evidence.sh inventory --repo-root "$PWD"
 git status --ignored --short
 git check-ignore -v .release-evidence
@@ -1077,40 +1331,40 @@ pre-PR Profile A validation unless the release manager promotes it.
 
 ### Phase 7 - snapshot-aware retention / GC
 
-- [ ] Retained logical roots are computed from `physical_file` union `snapshot_file`
-- [ ] Snapshot-only retained content is GC-safe
-- [ ] Deleting a snapshot changes only future GC eligibility; eligibility changes only when all retaining snapshots are removed
+- [x] Retained logical roots are computed from `physical_file` union `snapshot_file`
+- [x] Snapshot-only retained content is GC-safe
+- [x] Deleting a snapshot changes only future GC eligibility; eligibility changes only when all retaining snapshots are removed
 - [ ] Child snapshot remains restorable after deleting its lineage parent
 - [ ] Stats expose snapshot retention pressure
 - [ ] Verify audits persisted snapshot reachability anomalies
 - [ ] Doctor/reporting surfaces snapshot-retention integrity context
-- [ ] G14-G17 are reflected in `VALIDATION_MATRIX.md` as covered
+- [x] G14-G17 are reflected in `VALIDATION_MATRIX.md` as covered
 
 ### C. Test surface checklist
 
 Package tests:
 
 - [ ] `internal/snapshot` covers create / restore / diff / query behavior
-- [ ] `internal/retention` covers current-only / snapshot-only / shared retention
-- [ ] `internal/maintenance` covers snapshot-retained container protection
-- [ ] `internal/verify` covers snapshot reachability anomalies
+- [x] `internal/retention` covers current-only / snapshot-only / shared retention
+- [x] `internal/maintenance` covers snapshot-retained container protection
+- [x] `internal/verify` covers snapshot reachability anomalies
 - [ ] Stats/reporting tests include snapshot retention visibility
 
 Integration tests:
 
-- [ ] Snapshot lifecycle end-to-end works
+- [x] Snapshot lifecycle end-to-end works
 - [ ] Filtered snapshot show returns correct matched counts
 - [ ] Filtered snapshot diff summary matches returned entries
-- [ ] Snapshot-retained content blocks GC until all retaining snapshots are deleted
-- [ ] Long-run snapshot churn test remains green
+- [x] Snapshot-retained content blocks GC until all retaining snapshots are deleted
+- [x] Long-run snapshot churn test remains green
 
 Adversarial tests:
 
-- [ ] G14 snapshot-retained GC guard
-- [ ] G15 corrupted snapshot metadata detection with conservative GC
-- [ ] G16 snapshot query contract chaos
-- [ ] G17 retention root transition churn
-- [ ] Older G1-G13 adversarial tests still pass
+- [x] G14 snapshot-retained GC guard
+- [x] G15 corrupted snapshot metadata detection with conservative GC
+- [x] G16 snapshot query contract chaos
+- [x] G17 retention root transition churn
+- [x] Older G1-G13 adversarial tests still pass
 
 Smoke:
 
@@ -1198,8 +1452,11 @@ metadata only (never as a command target).
 # create snapshot
 ./coldkeep snapshot create --id pre-gc-gate --output json
 
-# confirm current-path removal is blocked while the logical file is retained by a snapshot
+# unlink the current mapping; snapshot membership preserves the logical recipe
 ./coldkeep remove --stored-path <stored-path-from-store-output> --output json
+
+# confirm by-ID logical deletion remains blocked while the snapshot retains it
+./coldkeep remove <logical-id-from-store-output> --output json
 
 # confirm GC dry-run reports snapshot-retained logical files
 ./coldkeep gc --dry-run --output json
@@ -1220,7 +1477,11 @@ metadata only (never as a command target).
 Confirm:
 
 - [ ] Snapshot create succeeds
-- [ ] Removing current mapping is refused while the logical file is snapshot-retained
+- [ ] Stored-path removal succeeds while snapshot-retained and reports
+  `remaining_ref_count: 0` for the final current mapping
+- [ ] By-ID logical removal exits `3` and its exact stdout item reports
+  `SNAPSHOT_RETAINED_DELETE_BLOCKED`
+- [ ] The stored-path unlink preserves the logical recipe and snapshot membership
 - [ ] GC dry-run reports snapshot-retained logical files before snapshot delete
 - [ ] Snapshot restore succeeds from retained snapshot data
 - [ ] Snapshot diff works and output is consistent with returned entries

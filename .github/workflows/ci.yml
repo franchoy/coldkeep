@@ -44,7 +44,27 @@ jobs:
 
       - name: Validate repository release state
         if: ${{ startsWith(github.ref, 'refs/heads/release/') || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')) }}
-        run: python3 scripts/validate_release_state.py --state auto
+        env:
+          COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/') }}
+          COLDKEEP_RELEASE_DIAGNOSTIC_PATH: ${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json
+        run: |
+          if [ "$COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED" = "true" ]; then
+            rm -f -- "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"
+            test ! -e "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"
+            python3 scripts/validate_release_state.py --state auto \
+              --diagnostic-json "$COLDKEEP_RELEASE_DIAGNOSTIC_PATH"
+          else
+            python3 scripts/validate_release_state.py --state auto
+          fi
+
+      - name: Upload release-state diagnostic
+        if: ${{ always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-state-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ github.sha }}
+          path: ${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Clean test storage
         run: bash scripts/clean_test_storage.sh
@@ -178,70 +198,35 @@ jobs:
           diag_dir="${RUNNER_TEMP}/integration-diag"
           mkdir -p "$diag_dir"
           json_file="$diag_dir/correctness-matrix-${{ matrix.codec }}.json"
+          stderr_file="$diag_dir/correctness-matrix-${{ matrix.codec }}.stderr"
+          if [ -e "$json_file" ] || [ -e "$stderr_file" ]; then
+            echo "refusing to reuse correctness-matrix evidence paths" >&2
+            exit 1
+          fi
 
-          go test -race -count=1 -short -json ./tests/integration/... | tee "$json_file"
-          status=${PIPESTATUS[0]}
+          go test -race -count=1 -short -json ./tests/integration/... 2>"$stderr_file" | tee "$json_file"
+          pipeline_status=("${PIPESTATUS[@]}")
+          go_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
 
-          if [ "$status" -eq 0 ]; then
-          python3 - "$json_file" "${{ matrix.codec }}" <<'PY'
-          import json
-          import re
-          import sys
+          python3 scripts/check_required_test_events.py \
+            --profile "integration-correctness-${{ matrix.codec }}" \
+            --events "$json_file"
+          checker_status=$?
 
-          json_file, codec = sys.argv[1:]
-          package = "github.com/franchoy/coldkeep/tests/integration"
-          expected = [
-              r"^TestRoundTripStoreRestore$",
-          ]
-          if codec == "plain":
-              expected.extend([
-                  r"^TestRemoveWithSharedChunksRefCount$",
-                  r"^TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState$",
-              ])
-
-          events = []
-          malformed = []
-          try:
-              with open(json_file, encoding="utf-8") as handle:
-                  for line_number, raw_line in enumerate(handle, start=1):
-                      try:
-                          events.append(json.loads(raw_line))
-                      except json.JSONDecodeError as exc:
-                          malformed.append(f"line {line_number}: {exc}")
-          except OSError as exc:
-              print(f"required execution-proof failure: cannot read {json_file}: {exc}", file=sys.stderr)
-              sys.exit(1)
-
-          failures = []
-          if not events:
-              failures.append("JSON evidence file contained no events")
-          if malformed:
-              failures.append("malformed JSON evidence: " + "; ".join(malformed[:3]))
-
-          package_events = [event for event in events if event.get("Package") == package]
-          for pattern in expected:
-              matching = [
-                  event for event in package_events
-                  if re.search(pattern, event.get("Test", ""))
-              ]
-              skipped = [event.get("Test", "") for event in matching if event.get("Action") == "skip"]
-              passed = [event.get("Test", "") for event in matching if event.get("Action") == "pass"]
-              if skipped:
-                  failures.append(f"required test skipped: selector={pattern} tests={skipped}")
-              if not passed:
-                  failures.append(f"required pass missing: package={package} selector={pattern}")
-
-          if failures:
-              print("required execution-proof failure:", file=sys.stderr)
-              for failure in failures:
-                  print(f"- {failure}", file=sys.stderr)
-              sys.exit(1)
-          PY
-            status=$?
+          if [ "$go_status" -ne 0 ]; then
+            status=$go_status
+          elif [ "$capture_status" -ne 0 ]; then
+            status=$capture_status
+          else
+            status=$checker_status
           fi
 
           if [ "$status" -ne 0 ]; then
             echo "correctness-matrix failed for codec=${{ matrix.codec }}"
+            echo "go_status=$go_status capture_status=$capture_status checker_status=$checker_status"
+            echo "go stderr:"
+            cat "$stderr_file" || true
             first_test_fail=$(grep '"Action":"fail"' "$json_file" | grep '"Test":' | head -n 1 || true)
             first_package_fail=$(grep '"Action":"fail"' "$json_file" | head -n 1 || true)
 
@@ -268,6 +253,283 @@ jobs:
             tail -n 120 "$json_file" || true
           fi
 
+          exit "$status"
+
+      - name: Run CK-014 internal verification proofs
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_CODEC: plain
+        run: |
+          set +e
+          diag_dir="${RUNNER_TEMP}/integration-diag"
+          mkdir -p "$diag_dir"
+          json_file="$diag_dir/ck014-internal-verify.json"
+          stderr_file="$diag_dir/ck014-internal-verify.stderr"
+          if [ -e "$json_file" ] || [ -e "$stderr_file" ]; then
+            echo "refusing to reuse CK-014 internal evidence paths" >&2
+            exit 1
+          fi
+
+          go test -race -count=1 -json ./internal/verify \
+            -run '^(TestVerifySystemDeepPreflightFailureDoesNotInvokeDownstreamReader|TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults|TestVerifySystemDeepInjectedDownstreamReaderCleanPipelinePasses|TestVerifySystemDeepRejectsNilDownstreamReaderAfterPreflight)$' \
+            2>"$stderr_file" | tee "$json_file"
+          pipeline_status=("${PIPESTATUS[@]}")
+          go_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+
+          python3 scripts/check_required_test_events.py \
+            --profile ck014-internal-verify \
+            --events "$json_file"
+          checker_status=$?
+
+          if [ "$go_status" -ne 0 ]; then
+            status=$go_status
+          elif [ "$capture_status" -ne 0 ]; then
+            status=$capture_status
+          else
+            status=$checker_status
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "CK-014 internal verification proof failed"
+            echo "go_status=$go_status capture_status=$capture_status checker_status=$checker_status"
+            echo "go stderr:"
+            cat "$stderr_file" || true
+            echo "last 120 JSON lines:"
+            tail -n 120 "$json_file" || true
+          fi
+
+          exit "$status"
+
+      - name: Run CK-015 SQLite initial-lookup proofs
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_CODEC: plain
+        run: |
+          set +e
+          unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN
+          diag_dir="${RUNNER_TEMP}/integration-diag"
+          mkdir -p "$diag_dir"
+          prefix="ck015-sqlite-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-plain"
+          json_file="$diag_dir/$prefix.json"
+          go_stderr_file="$diag_dir/$prefix.go.stderr"
+          checker_stdout_file="$diag_dir/$prefix.checker.stdout"
+          checker_stderr_file="$diag_dir/$prefix.checker.stderr"
+          status_file="$diag_dir/$prefix.status"
+          metadata_file="$diag_dir/$prefix.metadata"
+          selector='^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$'
+          profile=ck015-initial-lookup-sqlite
+          package=github.com/franchoy/coldkeep/internal/storage
+
+          for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+            if [ -e "$target" ]; then
+              echo "refusing to reuse CK-015 SQLite evidence path: $target" >&2
+              exit 1
+            fi
+          done
+          if ! go_version=$(go version); then
+            echo "unable to record Go version for CK-015 SQLite proof" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' \
+            "candidate_sha=$GITHUB_SHA" \
+            "repository=$GITHUB_REPOSITORY" \
+            "ref=$GITHUB_REF" \
+            "run_id=$GITHUB_RUN_ID" \
+            "run_attempt=$GITHUB_RUN_ATTEMPT" \
+            "job=$GITHUB_JOB" \
+            "matrix_codec=plain" \
+            "package=$package" \
+            "selector=$selector" \
+            "checker_profile=$profile" \
+            "go_version=$go_version" \
+            "gotoolchain=$GOTOOLCHAIN" >"$metadata_file"; then
+            echo "unable to write CK-015 SQLite metadata" >&2
+            exit 1
+          fi
+
+          go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \
+            -run "$selector" 2>"$go_stderr_file" | tee "$json_file"
+          pipeline_status=("${PIPESTATUS[@]}")
+          go_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+
+          python3 scripts/check_required_test_events.py \
+            --profile "$profile" \
+            --events "$json_file" \
+            >"$checker_stdout_file" 2>"$checker_stderr_file"
+          checker_status=$?
+
+          printf '%s\n' \
+            "go_status=$go_status" \
+            "capture_status=$capture_status" \
+            "checker_status=$checker_status" \
+            'status_record_write_status=0' >"$status_file"
+          status_record_write_status=$?
+
+          evidence_status=0
+          for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+            if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+              echo "missing or unreadable CK-015 SQLite evidence record: $target" >&2
+              evidence_status=1
+            fi
+          done
+          if [ "$status_record_write_status" -eq 0 ]; then
+            for expected in "go_status=$go_status" "capture_status=$capture_status" "checker_status=$checker_status" 'status_record_write_status=0'; do
+              if ! grep -Fqx "$expected" "$status_file"; then
+                echo "CK-015 SQLite status record mismatch: $expected" >&2
+                evidence_status=1
+              fi
+            done
+          fi
+          for expected in "candidate_sha=$GITHUB_SHA" "repository=$GITHUB_REPOSITORY" "ref=$GITHUB_REF" "run_id=$GITHUB_RUN_ID" "run_attempt=$GITHUB_RUN_ATTEMPT" "job=$GITHUB_JOB" 'matrix_codec=plain' "package=$package" "selector=$selector" "checker_profile=$profile" "gotoolchain=$GOTOOLCHAIN"; do
+            if ! grep -Fqx "$expected" "$metadata_file"; then
+              echo "CK-015 SQLite metadata mismatch: $expected" >&2
+              evidence_status=1
+            fi
+          done
+
+          echo "go_status=$go_status capture_status=$capture_status checker_status=$checker_status status_record_write_status=$status_record_write_status evidence_status=$evidence_status"
+          cat "$checker_stdout_file"
+          cat "$checker_stderr_file" >&2
+
+          if [ "$go_status" -ne 0 ]; then
+            status=$go_status
+          elif [ "$capture_status" -ne 0 ]; then
+            status=$capture_status
+          elif [ "$checker_status" -ne 0 ]; then
+            status=$checker_status
+          elif [ "$status_record_write_status" -ne 0 ]; then
+            status=$status_record_write_status
+          else
+            status=$evidence_status
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "CK-015 SQLite initial-lookup proof failed" >&2
+            cat "$go_stderr_file" >&2 || true
+            tail -n 120 "$json_file" >&2 || true
+          fi
+          exit "$status"
+
+      - name: Run CK-015 PostgreSQL lookup and preservation proofs
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_TEST_DB: 1
+          COLDKEEP_TEST_DB_MAINTENANCE: postgres
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          set +e
+          unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN
+          diag_dir="${RUNNER_TEMP}/integration-diag"
+          mkdir -p "$diag_dir"
+          prefix="ck015-postgres-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-plain"
+          json_file="$diag_dir/$prefix.json"
+          go_stderr_file="$diag_dir/$prefix.go.stderr"
+          checker_stdout_file="$diag_dir/$prefix.checker.stdout"
+          checker_stderr_file="$diag_dir/$prefix.checker.stderr"
+          status_file="$diag_dir/$prefix.status"
+          metadata_file="$diag_dir/$prefix.metadata"
+          selector='^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$'
+          profile=ck015-initial-lookup-postgres
+          package=github.com/franchoy/coldkeep/internal/storage
+          postgres_image='postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825'
+
+          for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+            if [ -e "$target" ]; then
+              echo "refusing to reuse CK-015 PostgreSQL evidence path: $target" >&2
+              exit 1
+            fi
+          done
+          if ! go_version=$(go version); then
+            echo "unable to record Go version for CK-015 PostgreSQL proof" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' \
+            "candidate_sha=$GITHUB_SHA" \
+            "repository=$GITHUB_REPOSITORY" \
+            "ref=$GITHUB_REF" \
+            "run_id=$GITHUB_RUN_ID" \
+            "run_attempt=$GITHUB_RUN_ATTEMPT" \
+            "job=$GITHUB_JOB" \
+            "matrix_codec=plain" \
+            "package=$package" \
+            "selector=$selector" \
+            "checker_profile=$profile" \
+            "go_version=$go_version" \
+            "gotoolchain=$GOTOOLCHAIN" \
+            "postgres_image=$postgres_image" >"$metadata_file"; then
+            echo "unable to write CK-015 PostgreSQL metadata" >&2
+            exit 1
+          fi
+
+          go test -race -count=1 -p=1 -parallel=1 -json ./internal/storage \
+            -run "$selector" 2>"$go_stderr_file" | tee "$json_file"
+          pipeline_status=("${PIPESTATUS[@]}")
+          go_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+
+          python3 scripts/check_required_test_events.py \
+            --profile "$profile" \
+            --events "$json_file" \
+            >"$checker_stdout_file" 2>"$checker_stderr_file"
+          checker_status=$?
+
+          printf '%s\n' \
+            "go_status=$go_status" \
+            "capture_status=$capture_status" \
+            "checker_status=$checker_status" \
+            'status_record_write_status=0' >"$status_file"
+          status_record_write_status=$?
+
+          evidence_status=0
+          for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
+            if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+              echo "missing or unreadable CK-015 PostgreSQL evidence record: $target" >&2
+              evidence_status=1
+            fi
+          done
+          if [ "$status_record_write_status" -eq 0 ]; then
+            for expected in "go_status=$go_status" "capture_status=$capture_status" "checker_status=$checker_status" 'status_record_write_status=0'; do
+              if ! grep -Fqx "$expected" "$status_file"; then
+                echo "CK-015 PostgreSQL status record mismatch: $expected" >&2
+                evidence_status=1
+              fi
+            done
+          fi
+          for expected in "candidate_sha=$GITHUB_SHA" "repository=$GITHUB_REPOSITORY" "ref=$GITHUB_REF" "run_id=$GITHUB_RUN_ID" "run_attempt=$GITHUB_RUN_ATTEMPT" "job=$GITHUB_JOB" 'matrix_codec=plain' "package=$package" "selector=$selector" "checker_profile=$profile" "gotoolchain=$GOTOOLCHAIN" "postgres_image=$postgres_image"; do
+            if ! grep -Fqx "$expected" "$metadata_file"; then
+              echo "CK-015 PostgreSQL metadata mismatch: $expected" >&2
+              evidence_status=1
+            fi
+          done
+
+          echo "go_status=$go_status capture_status=$capture_status checker_status=$checker_status status_record_write_status=$status_record_write_status evidence_status=$evidence_status"
+          cat "$checker_stdout_file"
+          cat "$checker_stderr_file" >&2
+
+          if [ "$go_status" -ne 0 ]; then
+            status=$go_status
+          elif [ "$capture_status" -ne 0 ]; then
+            status=$capture_status
+          elif [ "$checker_status" -ne 0 ]; then
+            status=$checker_status
+          elif [ "$status_record_write_status" -ne 0 ]; then
+            status=$status_record_write_status
+          else
+            status=$evidence_status
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "CK-015 PostgreSQL lookup and preservation proof failed" >&2
+            cat "$go_stderr_file" >&2 || true
+            tail -n 120 "$json_file" >&2 || true
+          fi
           exit "$status"
 
       - name: Run required PostgreSQL internal package contracts
@@ -429,13 +691,14 @@ jobs:
               sys.exit(1)
           PY
 
-      - name: Upload correctness-matrix diagnostic JSON
-        if: failure()
+      - name: Upload correctness-matrix execution evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: correctness-matrix-diag-${{ matrix.codec }}
-          path: ${{ runner.temp }}/integration-diag/*.json
-          if-no-files-found: ignore
+          name: correctness-matrix-evidence-${{ matrix.codec }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/integration-diag/*
+          retention-days: 14
+          if-no-files-found: error
 
       - name: Run Phase 7 snapshot retention lifecycle gate
         env:
@@ -681,7 +944,7 @@ jobs:
           echo "diag_dir=$diag_dir" >> "$GITHUB_OUTPUT"
           echo "log_file=$log_file" >> "$GITHUB_OUTPUT"
 
-          go test -race -count=1 -json ./tests/adversarial/... 2>&1 | tee "$log_file"
+          go test -race -count=1 -json ./tests/adversarial/... -timeout 20m 2>&1 | tee "$log_file"
           status=${PIPESTATUS[0]}
 
           if [ "$status" -eq 0 ]; then
@@ -991,6 +1254,15 @@ jobs:
           output_child="${output_parent}/integrity"
           mkdir -p "${output_parent}"
           test ! -e "${output_child}"
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${output_parent}/database-provenance.before.json"
+          python3 scripts/benchmark_gate.py database-provenance validate \
+            --input "${output_parent}/database-provenance.before.json" \
+            --require-effective-connection
+          set +e
           python3 scripts/benchmark_gate.py integrity \
             --binary ./coldkeep \
             --output-dir "${output_child}" \
@@ -1000,21 +1272,36 @@ jobs:
             --command-timeout-seconds 600 \
             --source-commit "${GITHUB_SHA}" \
             --go-version "$(go version)" \
-            --postgres-version "$(psql --version)" \
-            --database-image-digest "sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"
+            --database-provenance "${output_parent}/database-provenance.before.json"
+          integrity_exit=$?
+          set -e
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${output_parent}/database-provenance.after.json"
+          python3 scripts/benchmark_gate.py database-provenance compare \
+            --before "${output_parent}/database-provenance.before.json" \
+            --after "${output_parent}/database-provenance.after.json" \
+            --output "${output_parent}/database-provenance-comparison.json"
+          exit "${integrity_exit}"
 
       - name: Verify integrity artifact checksums
         if: ${{ always() }}
         run: |
           cd "benchmark-integrity-evidence/${{ matrix.profile }}/integrity"
           sha256sum --check checksums.sha256
+          cd ..
+          sha256sum database-provenance.before.json database-provenance.after.json \
+            database-provenance-comparison.json > database-provenance-checksums.sha256
+          sha256sum --check database-provenance-checksums.sha256
 
       - name: Upload benchmark integrity evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-integrity-${{ matrix.profile }}
-          path: benchmark-integrity-evidence/${{ matrix.profile }}/integrity
+          path: benchmark-integrity-evidence/${{ matrix.profile }}
           if-no-files-found: error
 
   benchmark-timing-advisory:
@@ -1092,13 +1379,38 @@ jobs:
           DB_NAME: coldkeep
           DB_SSLMODE: disable
         run: |
-          mkdir -p "benchmark-timing-evidence/${{ matrix.profile }}"
+          evidence_dir="benchmark-timing-evidence/${{ matrix.profile }}"
+          mkdir -p "${evidence_dir}"
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${evidence_dir}/database-provenance.before.json"
+          python3 scripts/benchmark_gate.py database-provenance validate \
+            --input "${evidence_dir}/database-provenance.before.json" \
+            --require-effective-connection
+          set +e
           ./coldkeep benchmark run \
             --dataset small \
             --workers "${{ matrix.workers }}" \
             --repeat 1 \
             --output json \
-            | tee "benchmark-timing-evidence/${{ matrix.profile }}/benchmark.json"
+            | tee "${evidence_dir}/benchmark.json"
+          pipeline_status=("${PIPESTATUS[@]}")
+          benchmark_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+          set -e
+          python3 scripts/benchmark_gate.py database-provenance collect \
+            --container-id '${{ job.services.postgres.id }}' \
+            --endpoint-host "${DB_HOST}" \
+            --endpoint-port "${DB_PORT}" \
+            --output "${evidence_dir}/database-provenance.after.json"
+          python3 scripts/benchmark_gate.py database-provenance compare \
+            --before "${evidence_dir}/database-provenance.before.json" \
+            --after "${evidence_dir}/database-provenance.after.json" \
+            --output "${evidence_dir}/database-provenance-comparison.json"
+          [[ "${benchmark_status}" -eq 0 ]]
+          [[ "${capture_status}" -eq 0 ]]
 
       - name: Evaluate and verify timing advisory
         run: |
@@ -1128,8 +1440,10 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
           cd "${evidence_dir}"
           actual_inventory="$(find . -maxdepth 1 -type f ! -name checksums.sha256 -printf '%f\n' | sort)"
-          [[ "${actual_inventory}" == $'benchmark.json\ntiming-advisory.json' ]]
-          sha256sum benchmark.json timing-advisory.json > checksums.sha256
+          [[ "${actual_inventory}" == $'benchmark.json\ndatabase-provenance-comparison.json\ndatabase-provenance.after.json\ndatabase-provenance.before.json\ntiming-advisory.json' ]]
+          sha256sum benchmark.json database-provenance-comparison.json \
+            database-provenance.after.json database-provenance.before.json \
+            timing-advisory.json > checksums.sha256
           sha256sum --check checksums.sha256
           case "${comparator_exit}" in
             0|10|11|12)
@@ -1279,7 +1593,7 @@ jobs:
           cc --version
           CGO_ENABLED=1 go build ./cmd/coldkeep
           CGO_ENABLED=1 go install ./cmd/coldkeep
-          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 1.13.15'
+          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 1.13.16'
           {
             echo "GO_VERSION=$(go version)"
             echo "GOTOOLCHAIN=$(go env GOTOOLCHAIN)"
@@ -1302,7 +1616,7 @@ jobs:
           go build ./cmd/coldkeep
           go install ./cmd/coldkeep
           $binary = Join-Path (go env GOPATH) 'bin/coldkeep.exe'
-          if ((& $binary version) -ne 'coldkeep version 1.13.15') { throw 'binary identity mismatch' }
+          if ((& $binary version) -ne 'coldkeep version 1.13.16') { throw 'binary identity mismatch' }
           "GO_VERSION=$(go version)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOTOOLCHAIN=$(go env GOTOOLCHAIN)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOOS=$(go env GOOS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
@@ -1387,7 +1701,7 @@ jobs:
           fi
 
           go install "${module}/cmd/coldkeep@${CANDIDATE_QUERY}"
-          "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.15'
+          "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.16'
           go version -m "${GOBIN}/coldkeep" > binary-build-info.txt
           head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'
           grep -F "$(printf 'mod\t%s\t%s' "${module}" "${resolved_version}")" binary-build-info.txt
@@ -1477,7 +1791,7 @@ jobs:
           go install "$module/cmd/coldkeep@$env:CANDIDATE_QUERY"
           if ($LASTEXITCODE -ne 0) { throw 'remote candidate installation failed' }
           $binary = Join-Path $env:GOBIN 'coldkeep.exe'
-          if ((& $binary version) -ne 'coldkeep version 1.13.15') { throw 'binary identity mismatch' }
+          if ((& $binary version) -ne 'coldkeep version 1.13.16') { throw 'binary identity mismatch' }
           $buildInfo = go version -m $binary
           $buildInfo | Out-File -FilePath binary-build-info.txt -Encoding utf8
           if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }

@@ -1781,7 +1781,7 @@ func diagStoreResultsG6(ctx *g6FailureDiagnosticContext) []g6StoreOperationResul
 
 func g6SchemaVersion(dbconn *sql.DB) (int64, error) {
 	var version int64
-	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&version); err != nil {
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(catalog_version), 0) FROM schema_version`).Scan(&version); err != nil {
 		return 0, err
 	}
 	return version, nil
@@ -2402,7 +2402,7 @@ func TestAdversarialG6ConcurrentSnapshotCreateAndGCPreserveRetainedData(t *testi
 					}
 				}()
 				args := []string{"snapshot", "create", "--id", snapshotID, "--output", "json"}
-				res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, args...)
+				res := testutils.RunColdkeepCommand(t, inputDir, binPath, env, args...)
 				if res.ExitCode != 0 {
 					snapErr = fmt.Errorf("snapshot create exited %d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 				}

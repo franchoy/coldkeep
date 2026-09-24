@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,10 +12,11 @@ func TestCreateSnapshotWithOptionsResultReportsCommittedCounts(t *testing.T) {
 	t.Run("full", func(t *testing.T) {
 		db := openTestDB(t)
 		ctx := context.Background()
-		insertPhysicalFile(t, db, "docs/a.txt", insertLogicalFileWithSize(t, db, "hash-result-full-a", 11), sqlNullInt64(), sqlNullTime())
-		insertPhysicalFile(t, db, "docs/b.txt", insertLogicalFileWithSize(t, db, "hash-result-full-b", 22), sqlNullInt64(), sqlNullTime())
+		selectionBase := t.TempDir()
+		insertPhysicalFile(t, db, filepath.Join(selectionBase, "docs", "a.txt"), insertLogicalFileWithSize(t, db, "hash-result-full-a", 11), sqlNullInt64(), sqlNullTime())
+		insertPhysicalFile(t, db, filepath.Join(selectionBase, "docs", "b.txt"), insertLogicalFileWithSize(t, db, "hash-result-full-b", 22), sqlNullInt64(), sqlNullTime())
 
-		result, err := CreateSnapshotWithOptionsResult(ctx, db, SnapshotCreateOptions{ID: "snap-result-full", Type: "full"})
+		result, err := CreateSnapshotWithOptionsResult(ctx, db, SnapshotCreateOptions{ID: "snap-result-full", Type: "full", SelectionBase: selectionBase})
 		if err != nil {
 			t.Fatalf("CreateSnapshotWithOptionsResult full: %v", err)
 		}
@@ -24,13 +26,15 @@ func TestCreateSnapshotWithOptionsResultReportsCommittedCounts(t *testing.T) {
 	t.Run("partial", func(t *testing.T) {
 		db := openTestDB(t)
 		ctx := context.Background()
-		insertPhysicalFile(t, db, "docs/a.txt", insertLogicalFileWithSize(t, db, "hash-result-partial-a", 11), sqlNullInt64(), sqlNullTime())
-		insertPhysicalFile(t, db, "img/x.png", insertLogicalFileWithSize(t, db, "hash-result-partial-b", 22), sqlNullInt64(), sqlNullTime())
+		selectionBase := t.TempDir()
+		insertPhysicalFile(t, db, filepath.Join(selectionBase, "docs", "a.txt"), insertLogicalFileWithSize(t, db, "hash-result-partial-a", 11), sqlNullInt64(), sqlNullTime())
+		insertPhysicalFile(t, db, filepath.Join(selectionBase, "img", "x.png"), insertLogicalFileWithSize(t, db, "hash-result-partial-b", 22), sqlNullInt64(), sqlNullTime())
 
 		result, err := CreateSnapshotWithOptionsResult(ctx, db, SnapshotCreateOptions{
-			ID:    "snap-result-partial",
-			Type:  "partial",
-			Paths: []string{"docs/a.txt", "docs/a.txt", "img/x.png"},
+			ID:            "snap-result-partial",
+			Type:          "partial",
+			SelectionBase: selectionBase,
+			Paths:         []string{"docs/a.txt", "docs/a.txt", "img/x.png"},
 		})
 		if err != nil {
 			t.Fatalf("CreateSnapshotWithOptionsResult partial: %v", err)
@@ -42,12 +46,14 @@ func TestCreateSnapshotWithOptionsResultReportsCommittedCounts(t *testing.T) {
 func TestCreateSnapshotWithOptionsResultSupportsEmptySnapshots(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
-	insertPhysicalFile(t, db, "docs/a.txt", insertLogicalFileWithSize(t, db, "hash-result-empty", 11), sqlNullInt64(), sqlNullTime())
+	selectionBase := t.TempDir()
+	insertPhysicalFile(t, db, filepath.Join(selectionBase, "docs", "a.txt"), insertLogicalFileWithSize(t, db, "hash-result-empty", 11), sqlNullInt64(), sqlNullTime())
 
 	result, err := CreateSnapshotWithOptionsResult(ctx, db, SnapshotCreateOptions{
-		ID:    "snap-result-empty",
-		Type:  "partial",
-		Paths: []string{"missing/"},
+		ID:            "snap-result-empty",
+		Type:          "partial",
+		SelectionBase: selectionBase,
+		Paths:         []string{"missing/"},
 	})
 	if err != nil {
 		t.Fatalf("CreateSnapshotWithOptionsResult empty partial: %v", err)
@@ -58,12 +64,14 @@ func TestCreateSnapshotWithOptionsResultSupportsEmptySnapshots(t *testing.T) {
 func TestCreateSnapshotWithOptionsResultRollsBackToZeroResult(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
-	insertPhysicalFile(t, db, "docs/a.txt", insertLogicalFileWithSize(t, db, "hash-result-rollback", 11), sqlNullInt64(), sqlNullTime())
+	selectionBase := t.TempDir()
+	insertPhysicalFile(t, db, filepath.Join(selectionBase, "docs", "a.txt"), insertLogicalFileWithSize(t, db, "hash-result-rollback", 11), sqlNullInt64(), sqlNullTime())
 
 	result, err := CreateSnapshotWithOptionsResult(ctx, db, SnapshotCreateOptions{
-		ID:    "snap-result-rollback",
-		Type:  "partial",
-		Paths: []string{"docs/a.txt", "missing.txt"},
+		ID:            "snap-result-rollback",
+		Type:          "partial",
+		SelectionBase: selectionBase,
+		Paths:         []string{"docs/a.txt", "missing.txt"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "path not found in current state") {
 		t.Fatalf("expected path-not-found rollback, got result=%+v err=%v", result, err)
@@ -76,9 +84,10 @@ func TestCreateSnapshotWithOptionsResultRollsBackToZeroResult(t *testing.T) {
 func TestCreateSnapshotWithOptionsWrapperRemainsCompatible(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
-	insertPhysicalFile(t, db, "docs/a.txt", insertLogicalFileWithSize(t, db, "hash-result-wrapper", 11), sqlNullInt64(), sqlNullTime())
+	selectionBase := t.TempDir()
+	insertPhysicalFile(t, db, filepath.Join(selectionBase, "docs", "a.txt"), insertLogicalFileWithSize(t, db, "hash-result-wrapper", 11), sqlNullInt64(), sqlNullTime())
 
-	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: "snap-result-wrapper", Type: "full"}); err != nil {
+	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: "snap-result-wrapper", Type: "full", SelectionBase: selectionBase}); err != nil {
 		t.Fatalf("CreateSnapshotWithOptions wrapper: %v", err)
 	}
 

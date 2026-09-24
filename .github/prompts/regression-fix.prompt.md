@@ -1,5 +1,18 @@
 # Coldkeep Regression Fix Prompt
 
+<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: COMPLETE
+CK-V11316-007: CLOSED
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 15/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->
+
 You are fixing a Coldkeep regression or correctness bug.
 
 Coldkeep is a correctness-first cold storage engine. The primary invariant is: never lose user data.
@@ -34,13 +47,20 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
-- v1.13.15 is published stable and planned v1 work is closed and frozen.
-- Future v1 maintenance requires a newly discovered critical correctness or
-  security defect plus a separate plan and explicit authorization.
+- v1.13.16 is the active exceptional critical-maintenance train. Phase 12
+  technical correctness is established, Phase 13 is complete,
+  CK-V11316-007 is closed, and all 15 findings are closed. The source candidate
+  is ready for release and external Phase 14 execution is complete. Phase 15
+  tracked completion is conditional on separate exact-head protected-merge
+  authority; Phase 16 is Next but cannot execute before that authorization.
+  Follow its 20-phase plan and exact phase mode.
+- v1.13.15 remains published stable and immutable; planned v1 feature and
+  architecture work remains closed and frozen.
 - Do not implement v2 or SQLite-first product-default behavior without a
   separate implementation plan.
 - Do not change public APIs, schemas, storage formats, or repository formats.
-- Keep changes within the separately authorized plan and allowlist.
+- Keep changes within the active phase's exact plan and allowlist; do not make
+  an out-of-phase repair.
 - Do not remove PostgreSQL compatibility.
 - Do not introduce SQLite-only assumptions into engine or catalog contracts.
 - Do not close issue-tracker or remediation-matrix rows unless explicitly asked.

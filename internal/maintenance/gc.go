@@ -18,6 +18,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/graph"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/retention"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -190,6 +191,11 @@ func runGCWithDBOptions(ctx context.Context, dbconn *sql.DB, dryRun bool, contai
 	if err := gcIntegrityPreFlight(dbconn); err != nil {
 		return GCResult{}, err
 	}
+	if !dryRun {
+		if _, err := cleanupRootlessLogicalRecipes(ctx, dbconn); err != nil {
+			return GCResult{}, fmt.Errorf("cleanup rootless logical recipes: %w", err)
+		}
+	}
 
 	state, err := buildGCPreFlightState(ctx, dbconn)
 	if err != nil {
@@ -218,27 +224,31 @@ func runGCWithDBOptions(ctx context.Context, dbconn *sql.DB, dryRun bool, contai
 		return result, sealedErr
 	}
 
+	activeCandidates, activeErr := queryFullyDeadActiveContainers(ctx, dbconn)
+	if activeErr != nil {
+		return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
+	}
+	activePlan := planActiveGCUnits(activeCandidates, len(sealedPlan))
+	activeResults := executeGCPlan(ctx, activePlan, opts, func(unit gcPlannedUnit) gcUnitResult {
+		outcome, physicalBytes, unitErr := sweepDeadActiveContainerResultMode(
+			ctx,
+			dbconn,
+			containersDir,
+			state.reachableChunks,
+			state.liveUnits,
+			fsys,
+			unit.dispatch.ContainerID,
+			unit.dispatch.Filename,
+			dryRun,
+		)
+		return gcUnitResult{plan: unit, outcome: outcome, physicalBytes: physicalBytes, err: unitErr}
+	})
+	if activeErr := aggregateGCUnitResults(activeResults, ctx.Err(), &result); activeErr != nil {
+		return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
+	}
 	if !dryRun {
-		activeCandidates, activeErr := queryFullyDeadActiveContainers(ctx, dbconn)
-		if activeErr != nil {
-			return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
-		}
-		activePlan := planActiveGCUnits(activeCandidates, len(sealedPlan))
-		activeResults := executeGCPlan(ctx, activePlan, opts, func(unit gcPlannedUnit) gcUnitResult {
-			outcome, physicalBytes, unitErr := sweepDeadActiveContainerResult(
-				ctx,
-				dbconn,
-				containersDir,
-				state.reachableChunks,
-				state.liveUnits,
-				fsys,
-				unit.dispatch.ContainerID,
-				unit.dispatch.Filename,
-			)
-			return gcUnitResult{plan: unit, outcome: outcome, physicalBytes: physicalBytes, err: unitErr}
-		})
-		if activeErr := aggregateGCUnitResults(activeResults, ctx.Err(), &result); activeErr != nil {
-			return result, fmt.Errorf("cleanup fully dead active containers: %w", activeErr)
+		if _, err := cleanupRootlessLogicalRecipes(ctx, dbconn); err != nil {
+			return result, fmt.Errorf("final cleanup rootless logical recipes: %w", err)
 		}
 	}
 
@@ -483,6 +493,158 @@ func gcIntegrityPreFlight(dbconn *sql.DB) error {
 		)
 	}
 	return nil
+}
+
+const gcRootlessRecipeCleanupLimit = 1000
+
+// cleanupRootlessLogicalRecipes removes a bounded batch of completed logical
+// recipes that have no current or snapshot root and no pinned recipe chunk.
+// It runs before chunk sweep so the file_chunk -> chunk RESTRICT edge cannot
+// obstruct physical reclamation. Snapshot deletion itself remains metadata-only.
+func cleanupRootlessLogicalRecipes(ctx context.Context, dbconn *sql.DB) (deleted int64, err error) {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT lf.id
+		FROM logical_file lf
+		WHERE lf.status = $1
+		AND NOT EXISTS (
+			SELECT 1 FROM physical_file pf WHERE pf.logical_file_id = lf.id
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = lf.id
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM store_repair_attempt a WHERE a.logical_file_id = lf.id
+		)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM file_chunk fc
+			JOIN chunk ch ON ch.id = fc.chunk_id
+			WHERE fc.logical_file_id = lf.id AND ch.pin_count > 0
+		)
+		ORDER BY lf.id
+		LIMIT $2`, filestate.LogicalFileCompleted, gcRootlessRecipeCleanupLimit)
+	if err != nil {
+		return 0, err
+	}
+	candidates := make([]int64, 0)
+	for rows.Next() {
+		var logicalFileID int64
+		if err := rows.Scan(&logicalFileID); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		candidates = append(candidates, logicalFileID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	for _, logicalFileID := range candidates {
+		lockLogicalQuery := db.QueryWithOptionalForUpdate(dbconn, `
+			SELECT lf.id
+			FROM logical_file lf
+			WHERE lf.id = $1
+			AND lf.status = $2
+			AND NOT EXISTS (
+				SELECT 1 FROM physical_file pf WHERE pf.logical_file_id = lf.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = lf.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM store_repair_attempt a WHERE a.logical_file_id = lf.id
+			)`)
+		var lockedLogicalFileID int64
+		if err := tx.QueryRowContext(ctx, lockLogicalQuery, logicalFileID, filestate.LogicalFileCompleted).Scan(&lockedLogicalFileID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return 0, err
+		}
+
+		lockChunksQuery := db.QueryWithOptionalForUpdate(dbconn, `
+			SELECT ch.id, ch.pin_count
+			FROM file_chunk fc
+			JOIN chunk ch ON ch.id = fc.chunk_id
+			WHERE fc.logical_file_id = $1
+			ORDER BY ch.id, fc.chunk_order`)
+		chunkRows, err := tx.QueryContext(ctx, lockChunksQuery, logicalFileID)
+		if err != nil {
+			return 0, err
+		}
+		pinned := false
+		for chunkRows.Next() {
+			var chunkID int64
+			var pinCount int64
+			if err := chunkRows.Scan(&chunkID, &pinCount); err != nil {
+				_ = chunkRows.Close()
+				return 0, err
+			}
+			if pinCount > 0 {
+				pinned = true
+			}
+		}
+		if err := chunkRows.Err(); err != nil {
+			_ = chunkRows.Close()
+			return 0, err
+		}
+		if err := chunkRows.Close(); err != nil {
+			return 0, err
+		}
+		if pinned {
+			continue
+		}
+
+		result, err := tx.ExecContext(ctx, `
+			DELETE FROM logical_file
+			WHERE id = $1
+			AND status = $2
+			AND NOT EXISTS (
+				SELECT 1 FROM physical_file pf WHERE pf.logical_file_id = logical_file.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM snapshot_file sf WHERE sf.logical_file_id = logical_file.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM store_repair_attempt a WHERE a.logical_file_id = logical_file.id
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM file_chunk fc
+				JOIN chunk ch ON ch.id = fc.chunk_id
+				WHERE fc.logical_file_id = logical_file.id AND ch.pin_count > 0
+			)`, logicalFileID, filestate.LogicalFileCompleted)
+		if err != nil {
+			return 0, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if rowsAffected > 1 {
+			return 0, fmt.Errorf("rootless logical recipe cleanup id=%d deleted %d rows", logicalFileID, rowsAffected)
+		}
+		deleted += rowsAffected
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 // buildGCPreFlightState computes the snapshot-reachability summary, the
@@ -990,8 +1152,44 @@ func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, container
 	if _, err := execer.ExecContext(ctx, `DELETE FROM blocks WHERE container_id = $1`, containerID); err != nil {
 		return err
 	}
+	if _, err := execer.ExecContext(ctx, `DELETE FROM retired_legacy_block_extent WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+	if err := deleteStoreRepairStagingAccountingForContainer(ctx, execer, containerID); err != nil {
+		return err
+	}
 
 	return deleteUnreachableChunkRows(ctx, execer, chunkIDsToDelete)
+}
+
+func deleteStoreRepairStagingAccountingForContainer(ctx context.Context, execer gcSweepExecer, containerID int64) error {
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM store_repair_chunk
+		WHERE EXISTS (
+			SELECT 1 FROM store_repair_block rb
+			WHERE rb.attempt_id = store_repair_chunk.attempt_id
+			AND rb.block_ordinal = store_repair_chunk.block_ordinal
+			AND rb.container_id = $1
+		)`, containerID); err != nil {
+		return err
+	}
+	if _, err := execer.ExecContext(ctx, `DELETE FROM store_repair_block WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+	if _, err := execer.ExecContext(ctx, `DELETE FROM store_repair_container WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM store_repair_attempt
+		WHERE status = 'PUBLISHED'
+		AND NOT EXISTS (SELECT 1 FROM store_repair_container rc WHERE rc.attempt_id = store_repair_attempt.id)
+		AND NOT EXISTS (SELECT 1 FROM store_repair_block rb WHERE rb.attempt_id = store_repair_attempt.id)
+		AND NOT EXISTS (SELECT 1 FROM store_repair_chunk rch WHERE rch.attempt_id = store_repair_attempt.id)
+		AND NOT EXISTS (SELECT 1 FROM retired_chunk_block_ref rr WHERE rr.repair_attempt_id = store_repair_attempt.id)
+		AND NOT EXISTS (SELECT 1 FROM retired_legacy_block_extent rl WHERE rl.repair_attempt_id = store_repair_attempt.id)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // collectLegacyChunkIDsForContainer returns the set of chunk IDs referenced by
@@ -1117,6 +1315,12 @@ func deletePackedBlockMetadata(ctx context.Context, execer gcSweepExecer, blockI
 	`, blockID); err != nil {
 		return err
 	}
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM retired_chunk_block_ref
+		WHERE block_id = $1
+	`, blockID); err != nil {
+		return err
+	}
 
 	result, err := execer.ExecContext(ctx, `
 		DELETE FROM storage_blocks
@@ -1196,6 +1400,8 @@ func queryFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB) ([]acti
 			SELECT 1 FROM blocks WHERE container_id = c.id
 			UNION ALL
 			SELECT 1 FROM storage_blocks WHERE container_id = c.id
+			UNION ALL
+			SELECT 1 FROM retired_legacy_block_extent WHERE container_id = c.id
 		)
 		ORDER BY c.id ASC, c.filename ASC
 	`)
@@ -1227,6 +1433,10 @@ func sweepDeadActiveContainer(ctx context.Context, dbconn *sql.DB, containersDir
 }
 
 func sweepDeadActiveContainerResult(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS, containerID int64, filename string) (sealedContainerGCResult, int64, error) {
+	return sweepDeadActiveContainerResultMode(ctx, dbconn, containersDir, reachableChunkIDs, liveUnits, fsys, containerID, filename, false)
+}
+
+func sweepDeadActiveContainerResultMode(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits, fsys fsx.FS, containerID int64, filename string, dryRun bool) (sealedContainerGCResult, int64, error) {
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return sealedContainerSkipped, 0, err
@@ -1266,6 +1476,10 @@ func sweepDeadActiveContainerResult(ctx context.Context, dbconn *sql.DB, contain
 	if err != nil {
 		_ = tx.Rollback()
 		return sealedContainerSkipped, 0, err
+	}
+	if dryRun {
+		_ = tx.Rollback()
+		return sealedContainerAffected, physicalBytes, nil
 	}
 	if err := commitGCContainerDeletionWithPath(ctx, tx, containerID, containerPath, fsys); err != nil {
 		return sealedContainerSkipped, 0, err

@@ -406,9 +406,10 @@ func setupSnapshotRestoreEngineCase(t *testing.T) (*sql.DB, string, storage.Stor
 	sgctx := storage.StorageContext{DB: dbconn, Writer: writer, ContainerDir: containerDir}
 	storeSnapshotCreateCurrentFile(t, dbconn, sgctx, root, "docs/a.txt", "snapshot-create-a")
 	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{
-		ID:    "snap-restore-engine",
-		Type:  "partial",
-		Paths: []string{"docs/a.txt"},
+		ID:            "snap-restore-engine",
+		Type:          "partial",
+		SelectionBase: root,
+		Paths:         []string{"docs/a.txt"},
 	})
 	return dbconn, "snap-restore-engine", sgctx
 }
@@ -434,7 +435,7 @@ func setupSnapshotSelectorParityEngineCase(t *testing.T) (*DefaultEngine, string
 	storeSnapshotCreateCurrentFile(t, dbconn, sgctx, root, "docs/a.txt", "docs-content")
 	storeSnapshotCreateCurrentFile(t, dbconn, sgctx, root, "docs-old/a.txt", "docs-old-content")
 	storeSnapshotCreateCurrentFile(t, dbconn, sgctx, root, "docs2/a.txt", "docs2-content")
-	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{ID: targetID, Type: "full"})
+	mustCreateSnapshotResult(t, dbconn, snapshot.SnapshotCreateOptions{ID: targetID, Type: "full", SelectionBase: root})
 
 	return newSnapshotRestoreEngine(t, dbconn, &sgctx), baseID, targetID
 }

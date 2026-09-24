@@ -9,9 +9,10 @@ import (
 )
 
 // RepairChunkLiveRefCountsResult captures the outcome of recomputing
-// chunk.live_ref_count from file_chunk rows.
+// chunk.live_ref_count from completed, current-rooted recipe occurrences.
 //
-// Source of truth: file_chunk rows.
+// Source of truth: file_chunk rows whose owning completed logical file has at
+// least one current physical mapping. Snapshot membership does not contribute.
 // This command is explicit and state-changing; verify/doctor remain detect-first.
 type RepairChunkLiveRefCountsResult struct {
 	ScannedChunks int64 `json:"scanned_chunks"`
@@ -55,7 +56,13 @@ func RepairChunkLiveRefCountsResultWithDBContext(ctx context.Context, dbconn *sq
 		WHERE c.live_ref_count <> (
 			SELECT COUNT(*)
 			FROM file_chunk fc
+			JOIN logical_file lf ON lf.id = fc.logical_file_id
 			WHERE fc.chunk_id = c.id
+			AND lf.status = 'COMPLETED'
+			AND EXISTS (
+				SELECT 1 FROM physical_file pf
+				WHERE pf.logical_file_id = lf.id
+			)
 		)
 	`).Scan(&result.UpdatedChunks); err != nil {
 		return RepairChunkLiveRefCountsResult{}, fmt.Errorf("count chunk rows needing live_ref_count repair: %w", err)
@@ -67,19 +74,31 @@ func RepairChunkLiveRefCountsResultWithDBContext(ctx context.Context, dbconn *sq
 			SET live_ref_count = (
 				SELECT COUNT(*)
 				FROM file_chunk fc
+				JOIN logical_file lf ON lf.id = fc.logical_file_id
 				WHERE fc.chunk_id = chunk.id
+				AND lf.status = 'COMPLETED'
+				AND EXISTS (
+					SELECT 1 FROM physical_file pf
+					WHERE pf.logical_file_id = lf.id
+				)
 			)
 			WHERE live_ref_count <> (
 				SELECT COUNT(*)
 				FROM file_chunk fc
+				JOIN logical_file lf ON lf.id = fc.logical_file_id
 				WHERE fc.chunk_id = chunk.id
+				AND lf.status = 'COMPLETED'
+				AND EXISTS (
+					SELECT 1 FROM physical_file pf
+					WHERE pf.logical_file_id = lf.id
+				)
 			)
 		`)
 		if err != nil {
-			return RepairChunkLiveRefCountsResult{}, fmt.Errorf("update chunk.live_ref_count from file_chunk rows: %w", err)
+			return RepairChunkLiveRefCountsResult{}, fmt.Errorf("update chunk.live_ref_count from current-rooted recipe rows: %w", err)
 		}
 		if err := db.RequireRowsAffected(mutationResult, "repair chunk live refcounts", result.UpdatedChunks); err != nil {
-			return RepairChunkLiveRefCountsResult{}, fmt.Errorf("update chunk.live_ref_count from file_chunk rows: %w", err)
+			return RepairChunkLiveRefCountsResult{}, fmt.Errorf("update chunk.live_ref_count from current-rooted recipe rows: %w", err)
 		}
 	}
 

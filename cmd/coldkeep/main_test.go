@@ -3568,6 +3568,24 @@ func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
 	}
 }
 
+func TestPrintHelpStartupRecoveryDisclosureMatchesPolicy(t *testing.T) {
+	expected := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot"}
+
+	for _, command := range expected {
+		if !shouldRunStartupRecovery([]string{command}) {
+			t.Fatalf("expected disclosed startup recovery command %q to be policy-enabled", command)
+		}
+	}
+
+	output := captureStdout(t, func() {
+		printHelp()
+	})
+	want := "  Startup recovery is corrective/state-changing and runs automatically before: " + strings.Join(expected, ", ") + ", simulate gc"
+	if count := strings.Count(output, want); count != 1 {
+		t.Fatalf("expected exactly one complete startup recovery disclosure %q, count=%d, got:\n%s", want, count, output)
+	}
+}
+
 func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
 	commands := []string{"help", "version", "init", "simulate", "benchmark", "doctor", "config", "-h", "--help", "-v", "--version", "unknown"}
 

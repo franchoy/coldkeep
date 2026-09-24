@@ -61,6 +61,84 @@ import (
 //
 //	COLDKEEP_TEST_DB=1 go test ./tests/... -short -v
 
+func snapshotMemberPathIntegration(t *testing.T, selectionBase, storedPath string) string {
+	t.Helper()
+	relative, err := filepath.Rel(selectionBase, storedPath)
+	if err != nil {
+		t.Fatalf("derive snapshot member from base %q and stored path %q: %v", selectionBase, storedPath, err)
+	}
+	return filepath.ToSlash(relative)
+}
+
+func r1r10CatalogSnapshot(t *testing.T, dbconn *sql.DB) []string {
+	t.Helper()
+	queries := []string{
+		`SELECT 'logical|' || id || '|' || status || '|' || retry_count || '|' || ref_count FROM logical_file ORDER BY id`,
+		`SELECT 'chunk|' || id || '|' || status || '|' || retry_count || '|' || live_ref_count || '|' || pin_count FROM chunk ORDER BY id`,
+		`SELECT 'recipe|' || logical_file_id || '|' || chunk_id || '|' || chunk_order FROM file_chunk ORDER BY logical_file_id, chunk_order`,
+		`SELECT 'path|' || path || '|' || logical_file_id FROM physical_file ORDER BY path`,
+		`SELECT 'legacy|' || id || '|' || chunk_id || '|' || container_id || '|' || block_offset || '|' || stored_size FROM blocks ORDER BY id`,
+		`SELECT 'packed-ref|' || chunk_id || '|' || block_id || '|' || offset_in_block || '|' || size_in_block FROM chunk_block_refs ORDER BY chunk_id`,
+		`SELECT 'packed|' || id || '|' || container_id || '|' || container_offset || '|' || stored_size FROM storage_blocks ORDER BY id`,
+		`SELECT 'container|' || id || '|' || filename || '|' || sealed || '|' || sealing || '|' || quarantine || '|' || current_size FROM container ORDER BY id`,
+		`SELECT 'attempt|' || id || '|' || logical_file_id || '|' || status FROM store_repair_attempt ORDER BY id`,
+		`SELECT 'retired-packed|' || block_id || '|' || embedded_chunk_id || '|' || repair_attempt_id FROM retired_chunk_block_ref ORDER BY block_id, embedded_chunk_id`,
+		`SELECT 'retired-legacy|' || container_id || '|' || block_offset || '|' || repair_attempt_id FROM retired_legacy_block_extent ORDER BY container_id, block_offset`,
+	}
+	var snapshot []string
+	for _, query := range queries {
+		rows, err := dbconn.Query(query)
+		if err != nil {
+			t.Fatalf("query R1R10 catalog snapshot: %v", err)
+		}
+		for rows.Next() {
+			var row string
+			if err := rows.Scan(&row); err != nil {
+				_ = rows.Close()
+				t.Fatalf("scan R1R10 catalog snapshot: %v", err)
+			}
+			snapshot = append(snapshot, row)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate R1R10 catalog snapshot: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close R1R10 catalog snapshot: %v", err)
+		}
+		snapshot = append(snapshot, "--")
+	}
+	return snapshot
+}
+
+func r1r10PhysicalSnapshot(t *testing.T, root string) []string {
+	t.Helper()
+	var snapshot []string
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(payload)
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		snapshot = append(snapshot, fmt.Sprintf("%s|%d|%x", filepath.ToSlash(relative), len(payload), digest))
+		return nil
+	}); err != nil {
+		t.Fatalf("snapshot R1R10 physical state: %v", err)
+	}
+	slices.Sort(snapshot)
+	return snapshot
+}
+
 func TestIntegrationHarnessSmoke(t *testing.T) {
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Log("COLDKEEP_TEST_DB is not set; DB-backed integration tests may be skipped")
@@ -945,7 +1023,7 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
 	}
 
-	snap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	snap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-it-1", "--output", "json"), "snapshot")
 	snap1Data := testutils.JSONMap(t, snap1, "data")
 	if got, _ := snap1Data["snapshot_id"].(string); got != "snap-it-1" {
@@ -971,8 +1049,8 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("snapshot row count mismatch: snapshot=%d physical=%d", snap1Count, physicalCount)
 	}
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
-	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
+	trimmedImg := snapshotMemberPathIntegration(t, inputDir, storedImgPath)
 
 	var snap1DocsRows int
 	if err := dbconn.QueryRow(`
@@ -1008,12 +1086,10 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("snapshot stats file count mismatch: got=%d want=%d payload=%v", got, snap1Count, statsPayload)
 	}
 
-	// Retention contract: remove --stored-path must be refused while a snapshot retains the file.
-	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedDocsPath, "--output", "json")
-	if removeBlocked.ExitCode == 0 {
-		t.Fatalf("expected remove --stored-path to be blocked while snapshot-retained, but it succeeded: stdout=%s", removeBlocked.Stdout)
-	}
+	// Retention contract: stored-path unlink removes only the current mapping;
+	// snapshot membership continues to retain the logical recipe and payload.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedDocsPath, "--output", "json"), "remove")
 
 	// Restore snap-it-1 while it still exists.
 	restoreRoot := filepath.Join(tmp, "restored")
@@ -1047,14 +1123,12 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("expected docs path not restored in partial exact restore, stat err=%v", err)
 	}
 
-	// Clear retention by deleting snap-it-1, then remove docs.
+	// Clear retention by deleting snap-it-1. The docs current mapping was
+	// already unlinked while the snapshot retained it.
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "snap-it-1", "--force", "--output", "json"), "snapshot")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedDocsPath, "--output", "json"), "remove")
-
-	snap2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	snap2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-it-2", "--output", "json"), "snapshot")
 	snap2Data := testutils.JSONMap(t, snap2, "data")
 	if got, _ := snap2Data["snapshot_id"].(string); got != "snap-it-2" {
@@ -1082,7 +1156,7 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("expected removed docs path to be absent from second snapshot, got count=%d", snap2DocsRows)
 	}
 
-	snapPartial := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	snapPartial := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedImg, "--id", "snap-it-partial", "--output", "json"), "snapshot")
 	partialData := testutils.JSONMap(t, snapPartial, "data")
 	if got, _ := partialData["type"].(string); got != "partial" {
@@ -1210,10 +1284,10 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
 	}
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
-	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
+	trimmedImg := snapshotMemberPathIntegration(t, inputDir, storedImgPath)
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase2-regression-v1", "--output", "json"), "snapshot")
 
 	dbconn, err = db.ConnectDB()
@@ -1316,9 +1390,9 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 	if !ok || strings.TrimSpace(storedNotesPath) == "" {
 		t.Fatalf("store notes JSON missing stored_path: payload=%v", storeNotes)
 	}
-	trimmedNotes := strings.TrimLeft(filepath.ToSlash(storedNotesPath), "/")
+	trimmedNotes := snapshotMemberPathIntegration(t, inputDir, storedNotesPath)
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase2-regression-v2", "--output", "json"), "snapshot")
 
 	var normalizedDocsRows int
@@ -1370,7 +1444,7 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 	}
 
 	docsDirPrefix := filepath.ToSlash(filepath.Dir(trimmedDocs)) + "/"
-	partialCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	partialCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, docsDirPrefix, "--id", "snap-phase2-regression-partial", "--output", "json"), "snapshot")
 	partialCreateData := testutils.JSONMap(t, partialCreate, "data")
 	if got, _ := partialCreateData["type"].(string); got != "partial" {
@@ -1464,8 +1538,8 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 		t.Fatalf("truncate fixtures: %v", err)
 	}
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := db.CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
 	if schemaVersion < 10 {
@@ -1492,7 +1566,7 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 	if !ok || strings.TrimSpace(storedPath) == "" {
 		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
 	}
-	trimmedStoredPath := strings.TrimLeft(filepath.ToSlash(storedPath), "/")
+	trimmedStoredPath := snapshotMemberPathIntegration(t, inputDir, storedPath)
 
 	dbconn, err = db.ConnectDB()
 	if err != nil {
@@ -1534,7 +1608,7 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 		t.Fatalf("direct restore hash mismatch: got=%s want=%s", got, wantHash)
 	}
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase2-post-migration", "--output", "json"), "snapshot")
 
 	snapshotRestoreRoot := filepath.Join(tmp, "snapshot-restore")
@@ -1621,18 +1695,18 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
 	}
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
-	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
+	trimmedImg := snapshotMemberPathIntegration(t, inputDir, storedImgPath)
 
 	// Baseline full snapshot without --from.
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-baseline", "--output", "json"), "snapshot")
 
 	// Full parent and child with --from.
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-parent-full", "--output", "json"), "snapshot")
 
-	childCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	childCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-child", "--from", "snap-phase3-parent-full", "--output", "json"), "snapshot")
 	childCreateData := testutils.JSONMap(t, childCreate, "data")
 	if got, _ := childCreateData["parent_id"].(string); got != "snap-phase3-parent-full" {
@@ -1640,7 +1714,7 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	}
 
 	// Scope validation (Strategy B): child partial with --from is rejected.
-	childPartialFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	childPartialFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, "--id", "snap-phase3-child-partial", "--from", "snap-phase3-parent-full", "--output", "json")
 	if childPartialFail.ExitCode == 0 {
 		t.Fatalf("expected filtered child with --from to fail\nstdout:\n%s\nstderr:\n%s", childPartialFail.Stdout, childPartialFail.Stderr)
@@ -1650,10 +1724,10 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	}
 
 	// Scope validation (Strategy B): parent partial with --from is rejected.
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, "--id", "snap-phase3-parent-partial", "--output", "json"), "snapshot")
 
-	parentPartialFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	parentPartialFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-child-from-partial", "--from", "snap-phase3-parent-partial", "--output", "json")
 	if parentPartialFail.ExitCode == 0 {
 		t.Fatalf("expected full child with partial parent to fail\nstdout:\n%s\nstderr:\n%s", parentPartialFail.Stdout, parentPartialFail.Stderr)
@@ -1663,7 +1737,7 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	}
 
 	// Missing parent and self-parent validation.
-	missingParentFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	missingParentFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-missing-parent", "--from", "snap-phase3-nope", "--output", "json")
 	if missingParentFail.ExitCode == 0 {
 		t.Fatalf("expected missing parent create to fail\nstdout:\n%s\nstderr:\n%s", missingParentFail.Stdout, missingParentFail.Stderr)
@@ -1676,7 +1750,7 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 		t.Fatalf("expected missing parent error message, got payload=%v", missingErrPayload)
 	}
 
-	selfParentFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	selfParentFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase3-self", "--from", "snap-phase3-self", "--output", "json")
 	if selfParentFail.ExitCode == 0 {
 		t.Fatalf("expected self-parent create to fail\nstdout:\n%s\nstderr:\n%s", selfParentFail.Stdout, selfParentFail.Stderr)
@@ -1878,15 +1952,15 @@ func TestSnapshotLineageSafetyMixedChainDeleteMiddleIntegration(t *testing.T) {
 		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
 	}
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
-	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
+	trimmedImg := snapshotMemberPathIntegration(t, inputDir, storedImgPath)
 
 	// day1 -> day2 -> day3 lineage
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "day1", "--output", "json"), "snapshot")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "day2", "--from", "day1", "--output", "json"), "snapshot")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "day3", "--from", "day2", "--output", "json"), "snapshot")
 
 	// Delete the middle snapshot.
@@ -2046,10 +2120,10 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", imgPath, "--output", "json"), "store")
 
-	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
+	trimmedDocs := snapshotMemberPathIntegration(t, inputDir, storedDocsPath)
 
 	// A) Create -> stats -> diff
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "cross-s1", "--output", "json"), "snapshot")
 
 	statsS1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2066,7 +2140,7 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", addedPath, "--output", "json"), "store")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "cross-s2", "--output", "json"), "snapshot")
 
 	diffS1S2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2077,7 +2151,7 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	}
 
 	// B) Create with --from -> delete -> diff
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "cross-s3", "--from", "cross-s2", "--output", "json"), "snapshot")
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "cross-s2", "--force", "--output", "json"), "snapshot")
@@ -2103,10 +2177,10 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	}
 
 	// C) Partial snapshots + lineage policy (Strategy B currently disallows partial+--from)
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, "--id", "cross-partial", "--output", "json"), "snapshot")
 
-	partialFromFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	partialFromFail := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", trimmedDocs, "--id", "cross-partial-from", "--from", "cross-s1", "--output", "json")
 	if partialFromFail.ExitCode == 0 {
 		t.Fatalf("expected partial snapshot with --from to fail under current policy\nstdout:\n%s\nstderr:\n%s", partialFromFail.Stdout, partialFromFail.Stderr)
@@ -2188,13 +2262,12 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 //
 //  1. store file A
 //  2. create snapshot S1 retaining A
-//  3. remove --stored-path is refused while snapshot-retained
+//  3. remove --stored-path creates a valid snapshot-only logical file
 //  4. restore by ID still works
 //  5. gc --dry-run reports snapshot protection
 //  6. verify system --standard passes
 //  7. delete snapshot S1
-//  8. remove --stored-path succeeds
-//  9. gc --dry-run shows snapshot-retained roots dropped (eligibility gate)
+//  8. gc --dry-run shows snapshot-retained roots dropped (eligibility gate)
 func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 	testgate.RequireDB(t)
 
@@ -2247,24 +2320,11 @@ func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
 	}
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-phase7-e2e", "--output", "json"), "snapshot")
 
-	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedPath, "--output", "json")
-	if removeBlocked.ExitCode == 0 {
-		t.Fatalf("remove --stored-path should be refused while snapshot-retained\nstdout:\n%s\nstderr:\n%s", removeBlocked.Stdout, removeBlocked.Stderr)
-	}
-	errPayload, ok := testutils.FindCLIErrorPayload(removeBlocked.Stderr)
-	if !ok {
-		errPayload, ok = testutils.FindCLIErrorPayload(removeBlocked.Stdout + "\n" + removeBlocked.Stderr)
-	}
-	if !ok {
-		t.Fatalf("remove blocked path produced no machine-readable error payload\nstdout:\n%s\nstderr:\n%s", removeBlocked.Stdout, removeBlocked.Stderr)
-	}
-	if got, _ := errPayload["invariant_code"].(string); got != "SNAPSHOT_RETAINED_DELETE_BLOCKED" {
-		t.Fatalf("expected invariant_code SNAPSHOT_RETAINED_DELETE_BLOCKED, got %q payload=%v", got, errPayload)
-	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedPath, "--output", "json"), "remove")
 
 	restoreDir := filepath.Join(tmp, "restored")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
@@ -2306,9 +2366,6 @@ func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "snap-phase7-e2e", "--force", "--output", "json"), "snapshot")
-
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"remove", "--stored-path", storedPath, "--output", "json"), "remove")
 
 	gcAfter := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"gc", "--dry-run", "--output", "json"), "gc")
@@ -2382,7 +2439,7 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 		"store-folder", storeDir, "--output", "json"), "store-folder")
 
 	snapID := "snapshot-filter-contract"
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", snapID, "--output", "json"), "snapshot")
 
 	// Test 1: snapshot show --prefix filtering
@@ -2401,9 +2458,9 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 	}
 
 	// Test 2: snapshot show --pattern filtering (non-empty result).
-	// Snapshot paths are normalized slash paths rooted at stored physical paths,
-	// so derive the glob from storeDir for backend-agnostic matching.
-	normalizedStoreDir := strings.TrimPrefix(filepath.ToSlash(storeDir), "/")
+	// Snapshot paths are normalized slash paths relative to the explicit input
+	// selection base, so derive the glob from storeDir for backend-agnostic matching.
+	normalizedStoreDir := snapshotMemberPathIntegration(t, inputDir, storeDir)
 	pattern := normalizedStoreDir + "/docs/*.txt"
 	showPattern := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "show", snapID, "--pattern", pattern, "--output", "json"), "snapshot")
@@ -2493,7 +2550,7 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store-folder", storeDir1, "--output", "json"), "store-folder")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-diff-v1", "--output", "json"), "snapshot")
 
 	// Create version 2 (add and modify files)
@@ -2510,13 +2567,13 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store-folder", storeDir2, "--output", "json"), "store-folder")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-diff-v2", "--output", "json"), "snapshot")
 
-	// Snapshot paths are normalized slash paths rooted at stored physical paths.
+	// Snapshot paths are normalized slash paths relative to the input selection base.
 	// Derive a prefix that intentionally excludes the v1 and v2/misc paths while
 	// matching the newly stored v2/docs path.
-	normalizedStoreDir2 := strings.TrimPrefix(filepath.ToSlash(storeDir2), "/")
+	normalizedStoreDir2 := snapshotMemberPathIntegration(t, inputDir, storeDir2)
 	docsPrefix := normalizedStoreDir2 + "/docs/"
 
 	// Test: snapshot diff with --prefix filter.
@@ -2629,7 +2686,7 @@ func TestSnapshotDiffSummaryJSONContractMatchesDetailedSummary(t *testing.T) {
 		"store", aPath, "--output", "json"), "store")
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", bPath, "--output", "json"), "store")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "sum-v1", "--output", "json"), "snapshot")
 
 	cPath := filepath.Join(inputDir, "docs", "c.txt")
@@ -2638,7 +2695,7 @@ func TestSnapshotDiffSummaryJSONContractMatchesDetailedSummary(t *testing.T) {
 	}
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", cPath, "--output", "json"), "store")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "sum-v2", "--output", "json"), "snapshot")
 
 	summaryOnly := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2717,11 +2774,11 @@ func TestSnapshotListTreeJSONContract(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", f1, "--output", "json"), "store")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "tree-day1", "--output", "json"), "snapshot")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "tree-day2", "--from", "tree-day1", "--output", "json"), "snapshot")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "tree-day3", "--from", "tree-day2", "--output", "json"), "snapshot")
 
 	treeJSON := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -2817,7 +2874,7 @@ func TestSnapshotStatsLineageEnhancedFieldsJSONContract(t *testing.T) {
 		"store", aPath, "--output", "json"), "store")
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", bPath, "--output", "json"), "store")
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "stats-v1", "--output", "json"), "snapshot")
 
 	// Keep a and b reused, add c as new.
@@ -2828,7 +2885,7 @@ func TestSnapshotStatsLineageEnhancedFieldsJSONContract(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", cPath, "--output", "json"), "store")
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "stats-v2", "--from", "stats-v1", "--output", "json"), "snapshot")
 
 	statsV2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -3830,10 +3887,6 @@ func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	simRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"simulate", "store-folder", "--codec", "plain", inputDir, "--output", "json")
 	if simRes.ExitCode != 0 {
-		lowerErr := strings.ToLower(simRes.Stderr)
-		if strings.Contains(lowerErr, "database is locked") || strings.Contains(lowerErr, "context deadline exceeded") {
-			t.Skipf("skipping flaky simulate backend contention: %s", strings.TrimSpace(simRes.Stderr))
-		}
 		t.Fatalf("command simulate failed with exit=%d\nstdout:\n%s\nstderr:\n%s", simRes.ExitCode, simRes.Stdout, simRes.Stderr)
 	}
 	sim := testutils.AssertCLIJSONOK(t, simRes, "simulate")
@@ -5441,36 +5494,22 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 	if fileChunkCount != 0 {
 		t.Fatalf("expected corrupted graph to have 0 file_chunk rows, got %d", fileChunkCount)
 	}
+	catalogBefore := r1r10CatalogSnapshot(t, dbconn)
+	physicalBefore := r1r10PhysicalSnapshot(t, container.ContainersDir)
 
 	restoreCtx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextResult(restoreCtx, inPath)
-	if err != nil {
-		t.Fatalf("re-store after graph corruption: %v", err)
+	if err == nil {
+		t.Fatalf("re-store with missing authoritative recipe unexpectedly succeeded: %+v", result)
 	}
-	if result.AlreadyStored {
-		t.Fatalf("expected rebuild path, got AlreadyStored=true")
+	if !strings.Contains(err.Error(), "not safely repairable without changing its recipe") {
+		t.Fatalf("missing-recipe failure did not preserve fail-closed classification: %v", err)
 	}
-	if result.FileID != fileID {
-		t.Fatalf("expected reclaim on existing logical_file row %d, got %d", fileID, result.FileID)
+	if catalogAfter := r1r10CatalogSnapshot(t, dbconn); !slices.Equal(catalogBefore, catalogAfter) {
+		t.Fatalf("missing-recipe Store mutated catalog\nbefore=%v\nafter=%v", catalogBefore, catalogAfter)
 	}
-
-	var status string
-	var retryCount int
-	if err := dbconn.QueryRow(`SELECT status, retry_count FROM logical_file WHERE id = $1`, fileID).Scan(&status, &retryCount); err != nil {
-		t.Fatalf("query rebuilt logical_file status: %v", err)
-	}
-	if status != filestate.LogicalFileCompleted {
-		t.Fatalf("expected rebuilt logical_file status COMPLETED, got %s", status)
-	}
-	if retryCount < 1 {
-		t.Fatalf("expected retry_count >= 1 after rebuild, got %d", retryCount)
-	}
-
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&fileChunkCount); err != nil {
-		t.Fatalf("count file_chunk rows after rebuild: %v", err)
-	}
-	if fileChunkCount == 0 {
-		t.Fatalf("expected rebuilt graph to recreate file_chunk rows")
+	if physicalAfter := r1r10PhysicalSnapshot(t, container.ContainersDir); !slices.Equal(physicalBefore, physicalAfter) {
+		t.Fatalf("missing-recipe Store mutated physical state\nbefore=%v\nafter=%v", physicalBefore, physicalAfter)
 	}
 
 	testutils.AssertNoProcessingRows(t, dbconn)
@@ -5787,10 +5826,14 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		// Connect raw; bypass EnsurePostgresSchema so we can manipulate schema_version.
 		mainDB := testutils.OpenRawPostgresDB(t, "")
 		defer func() { _ = mainDB.Close() }()
+		t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+		if err := db.EnsurePostgresSchema(mainDB); err != nil {
+			t.Fatalf("prepare current schema_version fixture: %v", err)
+		}
 
 		// Save the current live schema version.
-		var savedVersion int
-		if err := mainDB.QueryRow(`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&savedVersion); err != nil {
+		savedVersion, err := db.CurrentSchemaVersion(mainDB)
+		if err != nil {
 			t.Fatalf("read schema_version: %v", err)
 		}
 
@@ -5798,13 +5841,31 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		t.Cleanup(func() {
 			restoreDB := testutils.OpenRawPostgresDB(t, "")
 			defer func() { _ = restoreDB.Close() }()
-			if _, err := restoreDB.Exec(`UPDATE schema_version SET version = $1`, savedVersion); err != nil {
+			if _, err := restoreDB.Exec(`
+				DO $$
+				BEGIN
+				  IF EXISTS (
+				    SELECT 1 FROM information_schema.columns
+				    WHERE table_schema = 'public' AND table_name = 'schema_version' AND column_name = 'version'
+				  ) THEN
+				    ALTER TABLE schema_version RENAME COLUMN version TO catalog_version;
+				  END IF;
+				END $$
+			`); err != nil {
+				t.Errorf("CRITICAL: restore schema_version column failed: %v", err)
+				return
+			}
+			if _, err := restoreDB.Exec(`DELETE FROM schema_version`); err != nil {
+				t.Errorf("CRITICAL: clear schema_version during restoration failed: %v", err)
+				return
+			}
+			if _, err := restoreDB.Exec(`INSERT INTO schema_version(catalog_version) VALUES ($1)`, savedVersion); err != nil {
 				t.Errorf("CRITICAL: restore schema_version to %d failed: %v", savedVersion, err)
 			}
 		})
 
 		// Downgrade schema_version to 1 (auto-commits outside a transaction).
-		if _, err := mainDB.Exec(`UPDATE schema_version SET version = 1`); err != nil {
+		if _, err := mainDB.Exec(`ALTER TABLE schema_version RENAME COLUMN catalog_version TO version; UPDATE schema_version SET version = 1`); err != nil {
 			t.Fatalf("downgrade schema_version: %v", err)
 		}
 
@@ -5816,8 +5877,8 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 			t.Fatalf("EnsurePostgresSchema must auto-migrate old schema version: %v", err)
 		}
 
-		var migratedVersion int
-		if err := testDB.QueryRow(`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&migratedVersion); err != nil {
+		migratedVersion, err := db.CurrentSchemaVersion(testDB)
+		if err != nil {
 			t.Fatalf("read migrated schema_version: %v", err)
 		}
 		if migratedVersion <= 1 {
@@ -5966,7 +6027,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 		if _, err := testDB.Exec(dbschema.PostgresSchema); err != nil {
 			t.Fatalf("apply schema to temp DB: %v", err)
 		}
-		if _, err := testDB.Exec(`UPDATE schema_version SET version = 1`); err != nil {
+		if _, err := testDB.Exec(`ALTER TABLE schema_version RENAME COLUMN catalog_version TO version; UPDATE schema_version SET version = 1`); err != nil {
 			t.Fatalf("downgrade schema_version in temp DB: %v", err)
 		}
 
@@ -6353,19 +6414,40 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, ChunkID); err != nil {
 		t.Fatalf("set chunk status to ABORTED: %v", err)
 	}
+	var logicalID, logicalRetryBefore, chunkRetryBefore int64
+	if err := dbconn.QueryRow(`
+		SELECT lf.id, lf.retry_count, c.retry_count
+		FROM logical_file lf
+		JOIN file_chunk fc ON fc.logical_file_id = lf.id
+		JOIN chunk c ON c.id = fc.chunk_id
+		WHERE c.id = $1 LIMIT 1`, ChunkID).Scan(&logicalID, &logicalRetryBefore, &chunkRetryBefore); err != nil {
+		t.Fatalf("query retry counts before ABORTED repair: %v", err)
+	}
 
 	// Now try to store the same file again - it should retry the aborted chunk and succeed
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	result, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
 		t.Fatalf("retry store after chunk abort: %v", err)
+	}
+	if result.AlreadyStored || result.FileID != logicalID {
+		t.Fatalf("ABORTED repair result=%+v, want repaired logical %d", result, logicalID)
 	}
 
 	// Verify the chunk is now marked as COMPLETED
 	var status string
-	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, ChunkID).Scan(&status); err != nil {
+	var logicalRetryAfter, chunkRetryAfter int64
+	if err := dbconn.QueryRow(`SELECT status, retry_count FROM chunk WHERE id = $1`, ChunkID).Scan(&status, &chunkRetryAfter); err != nil {
 		t.Fatalf("check chunk status: %v", err)
+	}
+	if err := dbconn.QueryRow(`SELECT retry_count FROM logical_file WHERE id = $1`, logicalID).Scan(&logicalRetryAfter); err != nil {
+		t.Fatalf("check logical retry count: %v", err)
 	}
 	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED, got %s", status)
+	}
+	if logicalRetryAfter != logicalRetryBefore+1 || chunkRetryAfter != chunkRetryBefore+1 {
+		t.Fatalf("ABORTED repair retry counts logical=%d->%d chunk=%d->%d",
+			logicalRetryBefore, logicalRetryAfter, chunkRetryBefore, chunkRetryAfter)
 	}
 }
 
@@ -6468,6 +6550,15 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 	}
 	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED after concurrent retry, got %s", status)
+	}
+	var liveRepairAttempts int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*) FROM store_repair_attempt
+		WHERE status IN ('PREPARING', 'READY')`).Scan(&liveRepairAttempts); err != nil {
+		t.Fatalf("count live repair attempts after concurrent retry: %v", err)
+	}
+	if liveRepairAttempts != 0 {
+		t.Fatalf("concurrent retry left %d live repair attempts", liveRepairAttempts)
 	}
 	testutils.AssertNoProcessingRows(t, dbconn)
 	testutils.AssertUniqueFileChunkOrders(t, dbconn)
@@ -8689,7 +8780,7 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 	)
 }
 
-func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
+func TestVerifySystemFullRejectsNonContiguousPackedBlockOffsets(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
@@ -8709,46 +8800,184 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
-	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_full_non_contiguous.bin", 4*1024*1024)
-
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
 	sgctx := testutils.NewTestContext(dbconn)
-	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
-		t.Fatalf("store file: %v", err)
-	}
-
-	var secondBlockID int64
-	var secondBlockOffset int64
-	err = dbconn.QueryRow(`
-		SELECT sb.id, sb.container_offset
-		FROM storage_blocks sb
-		ORDER BY sb.container_id ASC, sb.container_offset ASC
-		OFFSET 1
-		LIMIT 1
-	`).Scan(&secondBlockID, &secondBlockOffset)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			t.Skip("not enough completed chunks to validate offset continuity")
+	for i, fill := range []byte{0x31, 0xA7} {
+		inPath := filepath.Join(inputDir, fmt.Sprintf("verify-gap-%d.bin", i))
+		if err := os.WriteFile(inPath, bytes.Repeat([]byte{fill}, 2*1024*1024), 0o644); err != nil {
+			t.Fatalf("write deterministic packed input %d: %v", i, err)
 		}
-		t.Fatalf("query second chunk: %v", err)
+		if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
+			t.Fatalf("store deterministic packed input %d: %v", i, err)
+		}
 	}
 
-	if _, err := dbconn.Exec(`UPDATE storage_blocks SET container_offset = $1 WHERE id = $2`, secondBlockOffset+1, secondBlockID); err != nil {
-		t.Fatalf("corrupt block offset continuity: %v", err)
+	type packedPlacement struct {
+		id           int64
+		containerID  int64
+		offset       int64
+		storedSize   int64
+		blockHash    []byte
+		physicalHash []byte
+	}
+	rows, err := dbconn.Query(`
+		SELECT id, container_id, container_offset, stored_size, block_hash, physical_hash
+		FROM storage_blocks
+		ORDER BY container_id, container_offset
+	`)
+	if err != nil {
+		t.Fatalf("query healthy packed placements: %v", err)
+	}
+	var placements []packedPlacement
+	for rows.Next() {
+		var placement packedPlacement
+		if err := rows.Scan(&placement.id, &placement.containerID, &placement.offset, &placement.storedSize, &placement.blockHash, &placement.physicalHash); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan healthy packed placement: %v", err)
+		}
+		placements = append(placements, placement)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate healthy packed placements: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close healthy packed placements: %v", err)
+	}
+	if len(placements) < 2 {
+		t.Fatalf("packed occupancy fixture requires at least two blocks, got %d", len(placements))
 	}
 
-	testutils.AssertErrorContainsAny(
-		t,
-		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
-		[]string{
-			"verifyStorageBlocks: storage_blocks rows with impossible container ranges",
-			"verifyChunkBlockRefs: chunk",
-		},
-		"system-full non-contiguous-offsets",
-	)
+	firstContainerID := placements[0].containerID
+	var target []packedPlacement
+	for _, placement := range placements {
+		if placement.containerID == firstContainerID {
+			target = append(target, placement)
+		}
+	}
+	if len(target) < 2 {
+		t.Fatalf("packed occupancy fixture requires two blocks in one container, got %d", len(target))
+	}
+	for i := 1; i < len(target); i++ {
+		want := target[i-1].offset + target[i-1].storedSize
+		if target[i].offset != want {
+			t.Fatalf("healthy packed fixture is not contiguous at block %d: got=%d want=%d", target[i].id, target[i].offset, want)
+		}
+	}
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("healthy packed occupancy fixture failed full verification: %v", err)
+	}
+
+	var filename string
+	var currentSize int64
+	var sealed bool
+	var containerHash sql.NullString
+	if err := dbconn.QueryRow(`SELECT filename, current_size, sealed, container_hash FROM container WHERE id = $1`, firstContainerID).Scan(&filename, &currentSize, &sealed, &containerHash); err != nil {
+		t.Fatalf("query target container state: %v", err)
+	}
+	if sealed || containerHash.Valid {
+		t.Fatalf("packed occupancy fixture must be active and unhashed: sealed=%t container_hash=%v", sealed, containerHash)
+	}
+	for table, query := range map[string]string{
+		"retired legacy": `SELECT COUNT(*) FROM retired_legacy_block_extent WHERE container_id = $1`,
+		"repair staging": `SELECT COUNT(*) FROM store_repair_block WHERE container_id = $1`,
+		"legacy-only":    `SELECT COUNT(*) FROM blocks b WHERE b.container_id = $1 AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id)`,
+	} {
+		var count int
+		if err := dbconn.QueryRow(query, firstContainerID).Scan(&count); err != nil {
+			t.Fatalf("query %s placement count: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("fresh packed occupancy fixture has %d unexpected %s placements", count, table)
+		}
+	}
+
+	containerPath := filepath.Join(container.ContainersDir, filename)
+	originalFile, err := os.ReadFile(containerPath)
+	if err != nil {
+		t.Fatalf("read target container: %v", err)
+	}
+	if int64(len(originalFile)) != currentSize {
+		t.Fatalf("healthy target container size mismatch: file=%d catalog=%d", len(originalFile), currentSize)
+	}
+	insertionOffset := target[1].offset
+	if insertionOffset <= 0 || insertionOffset >= int64(len(originalFile)) {
+		t.Fatalf("invalid physical gap insertion offset %d for file size %d", insertionOffset, len(originalFile))
+	}
+	beforePayloads := make(map[int64][]byte)
+	for _, placement := range target[1:] {
+		beforePayloads[placement.id] = append([]byte(nil), originalFile[placement.offset:placement.offset+placement.storedSize]...)
+	}
+	mutatedFile := make([]byte, 0, len(originalFile)+1)
+	mutatedFile = append(mutatedFile, originalFile[:insertionOffset]...)
+	mutatedFile = append(mutatedFile, 0x00)
+	mutatedFile = append(mutatedFile, originalFile[insertionOffset:]...)
+	info, err := os.Stat(containerPath)
+	if err != nil {
+		t.Fatalf("stat target container: %v", err)
+	}
+	if err := os.WriteFile(containerPath, mutatedFile, info.Mode().Perm()); err != nil {
+		t.Fatalf("insert isolated physical gap: %v", err)
+	}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin packed gap catalog update: %v", err)
+	}
+	for _, placement := range target[1:] {
+		if _, err := tx.Exec(`
+			UPDATE blocks
+			SET block_offset = block_offset + 1
+			WHERE container_id = $1
+			  AND chunk_id IN (SELECT chunk_id FROM chunk_block_refs WHERE block_id = $2)
+		`, firstContainerID, placement.id); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("shift migration companions for block %d: %v", placement.id, err)
+		}
+		if _, err := tx.Exec(`UPDATE storage_blocks SET container_offset = container_offset + 1 WHERE id = $1`, placement.id); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("shift packed block %d: %v", placement.id, err)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE container SET current_size = current_size + 1 WHERE id = $1`, firstContainerID); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("update target container size: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit packed gap catalog update: %v", err)
+	}
+
+	afterFile, err := os.ReadFile(containerPath)
+	if err != nil {
+		t.Fatalf("read target container after gap insertion: %v", err)
+	}
+	for _, placement := range target[1:] {
+		shifted := afterFile[placement.offset+1 : placement.offset+1+placement.storedSize]
+		if !bytes.Equal(shifted, beforePayloads[placement.id]) {
+			t.Fatalf("block %d payload bytes changed while inserting the gap", placement.id)
+		}
+		var blockHash, physicalHash []byte
+		if err := dbconn.QueryRow(`SELECT block_hash, physical_hash FROM storage_blocks WHERE id = $1`, placement.id).Scan(&blockHash, &physicalHash); err != nil {
+			t.Fatalf("query preserved hashes for block %d: %v", placement.id, err)
+		}
+		if !bytes.Equal(blockHash, placement.blockHash) || !bytes.Equal(physicalHash, placement.physicalHash) {
+			t.Fatalf("block %d hashes changed while inserting the gap", placement.id)
+		}
+	}
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("isolated occupancy gap failed an earlier standard prerequisite: %v", err)
+	}
+
+	err = maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull)
+	want := fmt.Sprintf("payload occupancy gap or overlap: expected_offset=%d actual_offset=%d kind=packed", insertionOffset, insertionOffset+1)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected exact packed occupancy gap %q, got: %v", want, err)
+	}
 }
 
-func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
+func TestVerifySystemDeepCLIRejectsTwoPreexistingPackedPhysicalCorruptionsAtPreflight(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
@@ -8777,7 +9006,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	}
 
 	rows, err := dbconn.Query(`
-		SELECT sb.container_offset, sb.stored_size, ctr.filename
+		SELECT sb.id, sb.container_offset, sb.stored_size, ctr.filename
 		FROM storage_blocks sb
 		JOIN container ctr ON ctr.id = sb.container_id
 		ORDER BY sb.container_id ASC, sb.container_offset ASC
@@ -8789,6 +9018,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	defer rows.Close()
 
 	type chunkToCorrupt struct {
+		BlockID     int64
 		BlockOffset int64
 		StoredSize  int64
 		filename    string
@@ -8796,7 +9026,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	var chunksToCorrupt []chunkToCorrupt
 	for rows.Next() {
 		var c chunkToCorrupt
-		if err := rows.Scan(&c.BlockOffset, &c.StoredSize, &c.filename); err != nil {
+		if err := rows.Scan(&c.BlockID, &c.BlockOffset, &c.StoredSize, &c.filename); err != nil {
 			t.Fatalf("scan chunk for corruption: %v", err)
 		}
 		chunksToCorrupt = append(chunksToCorrupt, c)
@@ -8805,7 +9035,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 		t.Fatalf("iterate chunks for corruption: %v", err)
 	}
 	if len(chunksToCorrupt) < 2 {
-		t.Skip("not enough completed chunks to validate deep aggregation")
+		t.Fatalf("packed CLI corruption fixture requires two blocks, got %d", len(chunksToCorrupt))
 	}
 
 	for _, c := range chunksToCorrupt {
@@ -8819,21 +9049,58 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 		if c.StoredSize > 1 {
 			corruptionOffset++
 		}
-		if _, err := f.WriteAt([]byte{0xEE}, corruptionOffset); err != nil {
+		original := []byte{0}
+		if _, err := f.ReadAt(original, corruptionOffset); err != nil {
 			_ = f.Close()
-			t.Fatalf("corrupt chunk byte: %v", err)
+			t.Fatalf("read block %d corruption target: %v", c.BlockID, err)
+		}
+		if _, err := f.WriteAt([]byte{original[0] ^ 0xFF}, corruptionOffset); err != nil {
+			_ = f.Close()
+			t.Fatalf("corrupt block %d byte: %v", c.BlockID, err)
 		}
 		if err := f.Close(); err != nil {
 			t.Fatalf("close container file: %v", err)
 		}
 	}
 
-	testutils.AssertErrorContains(
-		t,
-		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
-		"physical_hash_mismatch: stage=physical_payload",
-		"system-deep multiple corrupted chunks",
-	)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+	result := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify", "system", "--deep", "--output", "json")
+	if result.ExitCode != 3 {
+		t.Fatalf("deep CLI preflight corruption exit=%d want=3\nstdout:\n%s\nstderr:\n%s", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	payload, ok := testutils.FindCLIErrorPayload(result.Stderr)
+	if !ok {
+		payload, ok = testutils.FindCLIErrorPayload(result.Stdout + "\n" + result.Stderr)
+	}
+	if !ok {
+		t.Fatalf("deep CLI preflight corruption produced no error JSON\nstdout:\n%s\nstderr:\n%s", result.Stdout, result.Stderr)
+	}
+	if got, _ := payload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("deep CLI error_class=%q want=VERIFY payload=%v", got, payload)
+	}
+	message, _ := payload["message"].(string)
+	if !strings.Contains(message, "physical_hash_mismatch: stage=physical_payload") {
+		t.Fatalf("deep CLI did not report source-backed physical mismatch: payload=%v", payload)
+	}
+	reportedBlock, ok := payload["block"].(float64)
+	if !ok {
+		t.Fatalf("deep CLI physical mismatch omitted structured block identity: payload=%v", payload)
+	}
+	reportedTarget := false
+	for _, target := range chunksToCorrupt {
+		if int64(reportedBlock) == target.BlockID {
+			reportedTarget = true
+			break
+		}
+	}
+	if !reportedTarget {
+		t.Fatalf("deep CLI reported untargeted block %.0f; targets=%d,%d payload=%v", reportedBlock, chunksToCorrupt[0].BlockID, chunksToCorrupt[1].BlockID, payload)
+	}
+	if strings.Contains(message, "found 2 errors in deep verification") {
+		t.Fatalf("preflight-rejection proof was mislabeled as downstream aggregation: payload=%v", payload)
+	}
 }
 
 func TestZeroByteFile(t *testing.T) {
@@ -9842,8 +10109,9 @@ func TestRefCountContainmentStressMatrix(t *testing.T) {
 
 				snapshotID := fmt.Sprintf("stress-%s-%04d", tc.name, i)
 				if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
-					ID:   snapshotID,
-					Type: "full",
+					ID:            snapshotID,
+					Type:          "full",
+					SelectionBase: inputDir,
 				}); err != nil {
 					t.Fatalf("iter %d create snapshot: %v", i, err)
 				}
@@ -11029,14 +11297,14 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 		t.Fatalf("recovery: %v", err)
 	}
 
-	// After recovery, the sealing container should be either sealed or quarantined
-	err = dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, ContainerID).Scan(&isSealed, &isSealing)
+	// Its payload has no authoritative owner, so recovery must quarantine it.
+	var isQuarantined bool
+	err = dbconn.QueryRow(`SELECT sealed, sealing, quarantine FROM container WHERE id = $1`, ContainerID).Scan(&isSealed, &isSealing, &isQuarantined)
 	if err != nil {
 		t.Fatalf("query container state after recovery: %v", err)
 	}
-
-	if !isSealed && isSealing {
-		t.Fatalf("after recovery, container should be sealed or sealing cleared, got sealed=%v sealing=%v", isSealed, isSealing)
+	if isSealed || isSealing || !isQuarantined {
+		t.Fatalf("unowned sealing container state sealed=%v sealing=%v quarantine=%v, want quarantined and unsealed", isSealed, isSealing, isQuarantined)
 	}
 
 	// Verify system integrity
@@ -11121,7 +11389,7 @@ func TestSnapshotBatchInsertFailureRecoversAndPreservesVerifyRestoreGC(t *testin
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
-	snapCmd := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	snapCmd := testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", snapshotID, "--output", "json")
 	if snapCmd.ExitCode == 0 {
 		t.Fatalf("expected snapshot create to fail under injected batch failure, stdout=%s", snapCmd.Stdout)
@@ -11377,6 +11645,26 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 			}
 
 			fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
+			recipeBefore := r1r10CatalogSnapshot(t, dbconn)
+			chunkRetriesBefore := make(map[int64]int64)
+			rows, err := dbconn.Query(`
+				SELECT DISTINCT c.id, c.retry_count
+				FROM chunk c JOIN file_chunk fc ON fc.chunk_id = c.id
+				WHERE fc.logical_file_id = $1`, fileID)
+			if err != nil {
+				t.Fatalf("query semantic chunk retries before repair: %v", err)
+			}
+			for rows.Next() {
+				var chunkID, retryCount int64
+				if err := rows.Scan(&chunkID, &retryCount); err != nil {
+					_ = rows.Close()
+					t.Fatalf("scan semantic chunk retry before repair: %v", err)
+				}
+				chunkRetriesBefore[chunkID] = retryCount
+			}
+			if err := rows.Close(); err != nil {
+				t.Fatalf("close semantic chunk retries before repair: %v", err)
+			}
 			record := testutils.FetchFirstFileChunkRecord(t, dbconn, fileID)
 			if record.StoredSize <= 0 {
 				t.Fatalf("expected first stored block Size > 0, got %d", record.StoredSize)
@@ -11430,8 +11718,20 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 			if status != filestate.LogicalFileCompleted {
 				t.Fatalf("expected logical_file status COMPLETED after rebuild, got %s", status)
 			}
-			if retryCount < 1 {
-				t.Fatalf("expected retry_count >= 1 after semantic corruption rebuild, got %d", retryCount)
+			if retryCount != 1 {
+				t.Fatalf("expected logical retry_count exactly 1 after semantic corruption rebuild, got %d", retryCount)
+			}
+			for chunkID, before := range chunkRetriesBefore {
+				var after int64
+				if err := dbconn.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&after); err != nil {
+					t.Fatalf("query semantic chunk %d retry after repair: %v", chunkID, err)
+				}
+				if after != before+1 {
+					t.Fatalf("semantic repaired chunk %d retry=%d->%d, want exactly +1", chunkID, before, after)
+				}
+			}
+			if catalogAfter := r1r10CatalogSnapshot(t, dbconn); len(catalogAfter) == len(recipeBefore) && slices.Equal(catalogAfter, recipeBefore) {
+				t.Fatal("semantic repair did not publish a replacement catalog placement")
 			}
 		})
 	}
@@ -14958,7 +15258,7 @@ func TestSnapshotRetentionChurnLongRun(t *testing.T) {
 			snapshotIDCounter++
 			snapID := fmt.Sprintf("snapshot-churn-%03d", snapshotIDCounter)
 
-			result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "snapshot", "create", "--id", snapID, "--output", "json")
+			result := testutils.RunColdkeepCommand(t, inputDir, binPath, map[string]string{}, "snapshot", "create", "--id", snapID, "--output", "json")
 			if result.ExitCode != 0 {
 				t.Fatalf("iteration %d: snapshot create failed: %s", iteration, result.Stderr)
 			}

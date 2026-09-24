@@ -74,8 +74,361 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 ## Current Release State
 
-v1.13.15 — Final v1.x Security, Reproducibility, and Operational Closure is
-published as stable immutable release `378768097`. Annotated tag object
+<!-- coldkeep-current-state:start -->
+```text
+SOURCE_VERSION: 1.13.16
+PHASE_12: COMPLETE
+PHASE_13: COMPLETE
+CK-V11316-007: CLOSED
+FINDINGS_CONFIRMED: 15
+FINDINGS_CLOSED: 15/15
+V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
+V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+```
+<!-- coldkeep-current-state:end -->
+
+### Current pre-release candidate and protected-merge boundary
+
+v1.13.16 remains the active exceptional critical-maintenance source train and
+is ready for release. Phase 13 completed with CK-V11316-007 closed and all 15
+findings closed. The closure head passed fresh hosted certification and final
+exact-head Phase 13C recertification; external Phase 14 execution then
+completed at the development boundary. Phase 15 tracked completion is a
+pre-release conditional candidate assertion required by the lifecycle
+contract. Protected-merge authority becomes externally effective only if a
+separate owner-authorized Phase 15 audit approves this exact PR head and base.
+Phase 16 is Next but merge and Phase 16 execution are not authorized until
+then. V1.x full closure is not established.
+
+The [Phase 15R2 immutable lifecycle recovery](v1.13.16-phase15r2-immutable-lifecycle-contract-recovery.md)
+adds fail-closed, non-authorizing structural states for the same candidate
+after a normal merge, exact annotated tag, and conditional closure. This is a
+local contract candidate only: live refs, PR state, workflows, tag/release
+absence, Phase 16 Next, and the external authorization boundary are unchanged.
+Phase 8 implementation and certification are complete at executable/evidence
+head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
+`1967df264919a908680db4bc2a3dbf1fa5f673da`,
+`800cfc81ca453a9aa800da57819da0a58118b3e2`,
+`55d976177d0a9e25446726ad018d52a0b180293a`, and `f884ecba...`.
+The implementation retains the complete 8/8 red/control baseline, the exact
+five production and nine test paths, the external `graph_test` split, and an
+acyclic production graph.
+
+Branch PostgreSQL certification passed 12/12 and detached PostgreSQL
+certification passed 12/12. The detached R7 profiles were the original
+authorized serialized execution completing after a premature terminal report;
+they were not a retry, and the R8 replacement execution was not performed.
+After final evidence capture, the Phase 8-owned PostgreSQL, PyYAML, detached
+worktree, and covered cache/temp resources were removed. No post-hosted commit
+occurred before this separately authorized current-authority reconciliation.
+
+Fresh push-triggered CI `33802189644` attempt 1 passed 36/36 and CodeQL
+`33802189741` attempt 1 passed 4/4 at `f884ecba...`. All 40 exact-head checks
+completed successfully, the critical-coverage artifact was produced, direct
+repository and release-branch open CodeQL alert enumeration each returned
+zero, and direct Codacy truth was `NOT_EXPOSED`.
+
+Phase 9P externally froze the simulation duplicate-reuse and stored-path
+contract. Phase 9 retained authority
+`c31cbd45236c3ce5e569b3b34dd621ba5b6e0f3d`, simulation fix
+`ecede474f3df0027c198dff165addcf1065519cc`, and stored-path fix
+`99017d1ae84e1ac8bac51c4c7b1f06a7f92d93bc`. The initial Build passed the
+functional contract and stopped at exact golangci-lint 2.9.0 on only two
+obsolete private wrappers. Append-only Phase 9R1 recovery deleted only those
+proven-unused wrappers in `7b7f89afe43783b0e61ce10e240cd699d23252c8`;
+no history rewrite or product-behavior change occurred. Candidate evidence is
+`4e65ea22395c0839dc4ce6d95fd48b617a32ffe4`.
+
+Branch and detached certification passed under Go 1.26.7, including four
+simulation codec/compression profiles, SQLite/PostgreSQL graph parity,
+PostgreSQL real Store reuse in `off`, `suspicious`, and `always`, PostgreSQL
+stored-path preservation, affected ordinary/race and Phase 6/8/3 preservation,
+full Go/race/vet, exact lint with zero issues, three independent
+critical-coverage reports, and release/governance/Python/CI gates. Fresh
+push-triggered CI `33919209386` passed 36/36 and CodeQL `33919209398` passed
+4/4 at the candidate head. All 40 exact-head checks succeeded, direct
+repository and release-branch open alerts were zero, the critical-coverage
+artifact was present, direct Codacy truth was `NOT_EXPOSED`, and no automatic
+retry occurred.
+
+CK-V11316-005 and CK-V11316-006 are closed certified under the
+[Phase 9 contract](v1.13.16-phase9-simulation-reuse-and-stored-path-contract.md).
+CK-V11316-001 through CK-V11316-006 and CK-V11316-008 through CK-V11316-015
+are closed certified; CK-V11316-007 remains open. Findings are 15 confirmed
+and 14/15 closed. Phase 9, Phase 10,
+and Phase 11 are Complete. Phase 10R1
+successfully corrected CK-V11316-012's refcount fixture and proved the final
+13/13 plain and AES concurrency selectors with zero skips, then the fresh
+complete matrix stopped because the required G1 unrelated-container proof
+self-skipped. [Phase 10R2 local certification](v1.13.16-phase10-integrated-local-validation.md)
+created CK-V11316-013, committed the exact G1 CLI environment/non-skippable
+fixture correction at `6f0d7693e4621c0f2eb528354c46d523ea94ec02`, and passed
+the complete fresh local matrix. [Phase 11 exact-head hosted certification](v1.13.16-phase11-exact-head-hosted-certification.md)
+then pushed candidate `a4c59448c44dd537a4df47ef259392a711919f14`
+exactly once. CI `33963259615` passed 36/36, CodeQL `33963259529` passed 4/4,
+all 40 exact-head checks passed, direct repository and release-branch alerts
+were zero, and Codacy was `NOT_EXPOSED`. CK-V11316-012 and CK-V11316-013 are
+closed certified. Product packing, container, storage, restore, scripts, and
+workflows remain unchanged. Phase 12 remains the Next lifecycle phase, and
+Phase 12R1R5 implemented CK-V11316-015's frozen schema-v17 atomic Store repair
+at exact local head `c080dbd912502683ec06066d02a9e8aa2e9370f4`. Complete attached
+and fresh-detached Go, race, PostgreSQL 16.15, exact golangci-lint 2.9.0,
+governance, and platform certification passed. At that historical boundary,
+CK-V11316-015 remained open pending exact-head hosted certification and push
+and hosted execution remained unauthorized.
+
+[Phase 12R1R7](v1.13.16-phase12r1r7-schema-v17-backward-version-fence.md)
+records the completed four-commit local-only Build that implements
+CK-V11316-015's backward-version compatibility requirement at exact executable
+head `e2c2b922e2a4a3f72aef621ea8ff8ab8ccc5fa29`. Schema 17 is exactly one
+`schema_version(catalog_version)` row containing 17; valid legacy metadata is
+normalized transactionally and pre-v17 binaries must fail on their mandatory
+old-column query before semantic repository mutation. The tracked-source
+consumer audit is complete, including the direct SQL in `scripts/smoke.sh`.
+Complete attached and fresh-detached Go/race, PostgreSQL 16.15, historical
+binary, lint, vet, governance/Python/local-CI, platform, and manifest proof
+passed. CK-V11316-015 remains implemented pending exact-head hosted
+certification. Push, hosted certification, Phase 13, and finding closure remain
+unauthorized.
+
+[Phase 12R1R8](v1.13.16-phase12r1r8-versioned-row-writer-guard-precision-recovery.md)
+records the accepted mandatory-gate stop after that evidence commit. The
+schema-v17 product implementation and its substantive certification remain
+unchanged, but the R1R7 local-certification record is not final because the
+versioned-row-writer guard prefix-matches the authorized
+`chunk_block_refs` insert in `internal/storage/store_repair.go`. R1R8
+authorizes only a complete-identifier boundary correction, one dedicated
+scripts-package regression, and append-only authority/evidence reconciliation.
+This is not a new finding or CK-V11316-015 defect. Push, hosted certification,
+Phase 13, and finding closure remain unauthorized.
+
+The R1R8 correction is complete at
+`c6f27359a5d8e37ce5e5a38be9fe700994f0cc93`. Dedicated RED/GREEN proof,
+both matcher implementations, the real-repository gate, attached and fresh-
+detached scripts/tooling certification, all 215 Python tests, exact lint,
+governance, byte identity, allowlist, and clean-tree checks passed. The
+detached real-state validator correctly rejected the untagged detached
+development context with `CKRS016`; attached real-state validation passed.
+R1R7 product/schema/test bytes remain unchanged. Push and hosted certification
+remain unauthorized.
+
+[Phase 12R1R10](v1.13.16-phase12r1r10-exact-candidate-profile-a-failure-recovery.md)
+accepts the genuine Profile A failure at exact candidate `de4a7821...` as a
+mixed recovery: the missing-recipe test is reconciled to the already-frozen
+fail-closed contract, while trustworthy ABORTED retry, semantic repair retry
+accounting, and sealing occupancy are CK-V11316-015 remediation regressions.
+No new finding is established. Exactly two production files, four test files,
+and the named authority documents may change in four append-only commits.
+Push, hosted certification, and Phase 13 remain unauthorized.
+
+[Phase 12R1R13](v1.13.16-phase12r1r13-concurrent-aborted-repair-contention-recovery.md)
+retains R1R10 implementation head `dcb2e1e...` and classifies its Profile A
+concurrency stop as a CK-V11316-015 remediation regression. A transient
+`PROCESSING` recipe chunk requires bounded waiting outside the completed-
+repair mutex and every publication/database lock, followed by complete fresh
+validation. Safe losing-attempt cleanup deletes quarantined staging before
+waiting; cleanup failure is terminal and preserves owned state for startup
+recovery. No new finding, schema change, push, hosted certification, or Phase
+13 work is authorized.
+
+[Phase 12R1R15](v1.13.16-phase12r1r15-postgresql-concurrent-repair-publication-recovery.md)
+classifies the PostgreSQL publication race as a CK-V11316-015 remediation
+regression: affected chunk rows were not locked before final fingerprint
+revalidation. It authorizes deterministic placement/chunk/legacy row locking,
+fresh locked validation, and a defensive exact status/retry CAS. Contention is
+handled only after rollback, attempt cleanup, and release of all locks. No new
+finding, schema change, push, hosted certification, or Phase 13 work is
+authorized.
+
+[Phase 12R1R17](v1.13.16-phase12r1r17-concurrent-repair-pre-plan-convergence-recovery.md)
+classifies the clean-environment shared-chunk stress failure as a CK-015
+remediation regression. Validation may observe a non-reusable chunk before a
+competing Store heals it, while later planning sees zero work. R1R17 discards
+that entire stale decision and reclassifies current state under repair
+serialization as healthy, `PROCESSING`, repairable, or fail-closed. Canonical
+stability observation is mutation-free and bounded by the existing deadline.
+No new finding, schema change, push, hosted certification, or Phase 13 work is
+authorized.
+
+R1R17 authority `78864f0e...`, RED/seams `af492726...`, and implementation
+`5e7fb399...` preserve that contract. Complete attached and restarted fresh-
+detached certification passed with Go 1.26.7, golangci-lint 2.9.0, PostgreSQL
+16.15, full ordinary/race suites, and exact scope/identity/clean-tree proof.
+The mandatory fresh Profile A restart against the evidence commit remains
+pending; push, hosted certification, and Phase 13 remain unauthorized.
+
+[Phase 12R1R18](v1.13.16-phase12r1r18-profile-a-adversarial-timeout-recovery.md)
+preserves the first genuine evidence-head Profile A failure: the full long-run
+adversarial race package reached Go's implicit ten-minute package timeout
+during active zstd work. Historical timing and a controlled identical
+pre/post-R1R17 comparison establish a timeout-policy/harness problem rather
+than a CK-015 performance/liveness regression, product defect, or new finding.
+R1R18 authorizes an explicit finite 20-minute package ceiling only for that
+unchanged full gate, plus exact checklist/workflow enforcement. No product or
+adversarial workload change is authorized.
+
+R1R18 authority `77212554...`, RED enforcement `a9f9d2ab...`, and correction
+`9d736c0f...` preserve the unchanged workload. Complete attached and fresh-
+detached recovery certification passed the affected harness, full adversarial
+long-run race package in both codec profiles, scripts ordinary/race, exact
+tooling, governance, scope, byte-identity, and clean-tree gates. Fresh Profile
+A at the evidence commit remains mandatory; push, hosted certification, and
+Phase 13 remain unauthorized.
+
+[Phase 12R1R21 hosted-certification reconciliation](v1.13.16-phase12r1r21-hosted-certification-reconciliation.md)
+records the later exact-candidate evidence. Fresh Profile A passed at evidence
+head `8b9047e6b007cb5c5de1a4e3530c033df3519ec3`; the independent R1R19 audit
+approved that candidate for one push; and R1R20 pushed it exactly once. CI
+`34682397528` passed 36/36, CodeQL `34682397530` passed 4/4, and all 40
+exact-head checks passed. All four benchmark-integrity profiles passed; the 22
+hosted timing observations remain informational and establish no performance
+guarantee. Post-CodeQL repository and release-branch alert enumerations were
+zero, and Codacy was `NOT_EXPOSED`. CK-V11316-015 is therefore closed
+certified, while CK-V11316-007 remains open and CK-V11316-014 remains an
+unresolved external proposal excluded from repository counters.
+
+[Phase 12R1R22 CK-V11316-014 required-proof reliability remediation](v1.13.16-phase12r1r22-ck014-test-reliability-remediation.md)
+confirmed CK-V11316-014 as open and authorized its bounded local remediation. Its
+private per-invocation downstream reader preserves real fail-fast full
+preflight, the normal production path, and existing unsafe-continuation
+boundaries. Required Go JSON evidence is bound to exact package/test identities
+and requires independent Go-process, evidence-capture, event-completeness, and
+proof success. This prospective policy does not rewrite the historically
+unspecified public aggregation boundary. The later R1R32 reconciliation closes
+CK-V11316-014 from its completed local and exact-candidate hosted proof.
+CK-V11316-015 remains closed certified, CK-V11316-007 remains open, findings
+are 15 confirmed and 14/15 closed, and Phase 12 completion and Phase 13 remain
+unauthorized.
+
+R1R42 supersedes that aggregate pointer after the successful final independent
+technical-closure audit. Phase 12 is Complete, v1.x technical correctness is
+established, and Phase 13 is Next in PLAN mode. Earlier failed audits and
+diagnostics remain historical evidence rather than being rewritten. Phase 13A
+has not started, requires successful exact-head R1R42 hosted certification and
+separate owner authorization, and retains CK-V11316-007 as open. V1.x full
+closure is not established.
+
+### Historical Phase 6 chronology
+
+The chronology below preserves the pre-closure recovery states and is
+superseded where its pending wording conflicts with the current Phase 6R10
+authority above.
+
+v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
+Closure is the active exceptional critical-maintenance source train. Phases 0
+through 5 are Complete. Phase 6 is Next and locally certified pending exact-
+head hosted gates; Phase 6R2 is the locally certified snapshot-only lifecycle
+correction, and Phase 6R3 is locally certified pending exact-head hosted
+recertification. Phase 6R7 passed corrected detached certification, including
+all 12 retained PostgreSQL selectors, and its accepted head was pushed once.
+[Phase 6R9](v1.13.16-phase6r9-critical-coverage-throughput-recovery.md)
+completed its one-file throughput isolation and passed branch-worktree and
+clean committed-tree certification. Detached certification stopped only in
+the unchanged benchmark signal-cleanup regression. [Phase 6R9R2](v1.13.16-phase6r9r2-benchmark-signal-test-recovery.md)
+implemented the bounded one-file test-harness recovery for CK-V11316-011 and
+passed the complete branch-worktree matrix. Clean committed-tree, detached,
+and hosted certification remain pending.
+Phase 7 is not started. Eleven findings are confirmed and one is closed at
+this candidate state.
+Phase 4 completed exact-head certification at
+`6c11bc6245b301873c598fe784a4df3cbc5ba809`: CI `33303282081` attempt 2 passed
+36/36 jobs, reused CodeQL `33303282125` passed 4/4, and open alerts remain zero.
+CK-V11316-001 and CK-V11316-008 are implemented and locally certified pending
+exact-head hosted closure. Phase 5 product
+commit `cc4186b1c095bae06ee92e12048c1262d53e843d` implements fail-closed
+selector accounting and atomic rollback and has passed clean-tree, SQLite, and
+PostgreSQL plain/AES-GCM certification. Evidence commit
+`4ba598fb57a3594d094ed3297c3fb5549dbc401f` passed exact-head CI run
+`33307923059` with 36/36 jobs including Required Gate and CodeQL run
+`33307923075` with 4/4 jobs and zero open alerts. CK-V11316-002 is closed
+certified. Technical correctness closure is withheld.
+
+Phase 6R2 sealed product
+`e8cc9b3650ab9548ce46e7df18e9c6f3483e2574` and permanent test
+`854a3187adc66dcc04d7e95f41f8925cdcd608bf` passed clean detached full-Go,
+vet, SQLite, PostgreSQL plain/AES-GCM, race, release-state, governance, Python,
+and CI-enforcement certification. Exact-head CI, Required Gate, CodeQL,
+zero-open-alert confirmation, and Codacy truth remain pending.
+
+Exact-head CI `33331967865` at that evidence commit passed quality,
+cross-platform validation, critical coverage, legacy compatibility, benchmark
+integrity, and timing advisories, while both PostgreSQL correctness profiles
+failed on the same two stale migration-compatibility expectations. CodeQL
+`33331967855` passed 4/4 with zero open alerts. Phase 6R3 authority
+`a72602ed988978476bd500c130d428a8c4471cfe` authorized only
+`tests/integration/v18_migration_compatibility_integration_test.go` to reconcile
+stored-path unlink and current/pin/snapshot root-union assertions. Test commit
+`81df6a497a2ae07ecba177fb645e1b4bf556fa15` completed that reconciliation
+with zero product runtime changes and passed exact-affected and complete
+PostgreSQL plain/AES-GCM short/race profiles plus the clean detached full local
+gate. Exact-head hosted certification remains pending; Phase 7 is not
+authorized.
+
+Phase 6R5 is the authorized final gate reconciliation after exact-head CI
+`33334609160` at `ce7271a068aea1656d7239c5e282752928ed2e31` exposed a stale
+stored-path lifecycle in smoke and stdout batch-item parsing plus incomplete
+conservative-state proof in G15. CodeQL `33334609155` passed 4/4 with zero open
+alerts. No product runtime defect is established: only `scripts/smoke.sh` and
+the G14–G17 adversarial test may change. Phase 6 is withheld pending this
+reconciliation and exact-head hosted certification; Phase 7 is not authorized.
+
+Phase 6R5 authority `2870ef1e8504e8ac42640d41c05fff6b8fd4b008` and
+test `d7deb4097d681751f7373ac7f11ef6bb8bb18790` completed the bounded
+reconciliation. Plain/AES-GCM smoke, focused and complete adversarial,
+PostgreSQL correctness, migration compatibility, race, and the detached full
+local gate passed with zero product runtime changes. Phase 6 is now a candidate
+pending exact-head hosted certification; the prior finding state was `1/8`, and
+Phase 7 is not authorized.
+
+Final CI `33365683050` at `bd45a0e611d3dacb726490c3beb5fac5cd598f34`
+then failed the plain quality gate because
+`TestVerifySystemDeepPackedSQLiteSingleConnection` applied its 250 ms
+verification timeout to packed-fixture Store setup. The same boundary had
+failed under coverage in CI `33303282081` attempt 1. Phase 6R6 classified the
+repetition as `COMBINATION`: primarily fixture-isolation drift, with a
+contributing test-timeout-policy defect; no product or CI-infrastructure defect
+is established. [Phase 6R7](v1.13.16-phase6r7-single-connection-verify-test-recovery.md)
+authorized only `internal/verify/verify_system_single_connection_test.go` to
+separate default-timeout fixture construction from successful and deliberately
+blocked 250 ms verification children. Authority
+`ce815419c0e72d341da6892eec01662de734292f` and test
+`7399b38b22c2f19fe0e12e1c0a8ec06cadc7ebce` completed that one-file
+recovery. The 100/50/50 targeted repetitions, exact local `golangci-lint`
+v2.9.0, full Go/race/vet and 215 Python tests passed. An isolated PostgreSQL
+16.15 service pinned by digest and bound only to dynamic localhost port 32768
+then passed the complete plain/AES-GCM Phase 6R5 preservation matrix; the
+existing port-5432 service was unchanged. CK-V11316-009 is implemented pending
+exact-head hosted certification, findings remain `1/9` closed, CI
+`33365683050` was not retried, Phase 6 remains withheld, and Phase 7 remains
+unauthorized.
+
+Evidence commit `96f19cbd333b0120ab1e18a65c6309eb6d9a2210` was created after
+the branch-worktree and isolated PostgreSQL matrices passed but before detached
+certification completed. Its earlier locally-certified wording is superseded:
+the later detached attempt passed lint, targeted ordinary/race/atomic coverage,
+and full `internal/verify` ordinary/race, then stopped in
+`TestEngineDependencyDirection`. Phase 6R7R3 proved a linked-worktree VCS
+stamping environment defect; `GOFLAGS=-buildvcs=false` is authorized only as a
+source-neutral detached validation policy. Corrected detached execution passed,
+including all 12 retained PostgreSQL selectors, and head
+`f58be125eee09c6c1cfb76b911ada18e7f232a69` was pushed exactly once. CI
+`33407340364` passed 35 of 36 jobs, failing only critical coverage; CodeQL
+`33407340517` passed 4 of 4 with zero alerts. CK-V11316-010 classifies that
+failure as primary gate composition, secondary measurement stability, with
+coverage instrumentation contributing. It is not a product or CI
+infrastructure regression. Phase 6R9 authority `6be80e391...` and test
+`9439c433...` completed the one-file implementation. Ordinary 20x, race 10x,
+atomic 10x, full Phase 1 coverage, three critical reports, full repository
+ordinary/race, exact lint, and 215 Python tests passed. CK-V11316-010 is
+implemented pending exact-head hosted certification; committed and detached
+certification remain pending.
+
+The earlier Phase 1 pointer, "Phase 2 is Next", the Phase 4 Complete / Phase 5
+Next authorization pointer, and the Phase 5 pre-implementation RED pointer are
+historical and superseded by the current Phase 6 authority above.
+
+v1.13.15 remains the published stable immutable historical product baseline,
+release `378768097`. Annotated tag object
 `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
 baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`. Tag CI `33210164827`,
 tag-native installation on Linux, macOS, and Windows, CodeQL `33210164772`,
@@ -85,13 +438,11 @@ The canonical publication body remains `v1.13.15-release-body.md`, exactly
 1,815 bytes at SHA-256
 `477796fc1c44151ddc77825559c48876c49ab742540586a190abc2c878eea357`.
 The release was published at `2026-08-28T21:17:21Z` with zero custom assets and
-a verified immutable-release attestation. Phases 0–10 are Complete and tracked
-authority is `post-release-closed`. Terminal effectiveness remains conditional
-on the protected Phase 10 merge, exact-final-main recertification, authorized
-cleanup of all five temporary branches, and successful read-only Phase 10T.
+a verified immutable-release attestation. Its Phases 0–10 and
+`post-release-closed` state remain historical release truth.
 
-v1.13.14 remains unchanged immutable published historical state. V1.x planned
-work is closed and frozen in the terminal candidate. V2 planning review is
+v1.13.14 remains unchanged immutable published historical state. Planned v1
+feature and architecture work remains closed and frozen. V2 planning review is
 authorized; v2 implementation has not started and requires a separate plan.
 
 ## Historical v1.13.14 current-state narrative
@@ -481,3 +832,262 @@ The v1.13.13 publication authority is the
   v1.x baseline, explicit v2.0 inputs, and v2/v3 scope boundary.
 - v1.13.10's public release, tag, merge, tag-CI, and deleted-release-branch
   evidence is recorded separately from its historical pre-release gate narrative.
+
+Phase 12R1R27 authorizes a two-commit local recovery for four skipped refcount
+proofs and the benchmark producer's contradictory execution-image provenance.
+It requires observed container, endpoint, registry, platform-manifest, image-
+configuration, and server identity to match the effective benchmark connection,
+with retained pre/post observations and current-format fail-closed acceptance.
+Historical evidence remains immutable and requirement-specific; no push,
+finding mutation, full Profile A restart, or Phase 13 work is authorized.
+
+Authority: [Phase 12R1R27 refcount execution and benchmark provenance recovery](v1.13.16-phase12r1r27-refcount-execution-and-benchmark-provenance-recovery.md).
+
+Phase 12R1R32 reconciles CK-V11316-014's completed remediation against exact
+candidate `f275a0fb0ee8f7e66022afd80275be5ade76a3ee`. Candidate CI
+`34765041894` passed 36/36, CodeQL `34765042034` passed 4/4, all 40 exact-head
+checks passed, and the three package-bound required-proof profiles passed all
+6/1/4 obligations with successful Go, capture, checker, and package outcomes.
+All four hosted benchmark-integrity profiles passed with execution provenance
+bound to observed PostgreSQL 16.14; the 36 timing observations remain
+informational. The failed laptop effective-connection comparison and later
+successful offline artifact validation retain their distinct meanings.
+
+At the historical R1R32 boundary, CK-V11316-014 was closed certified, making
+14/15 findings closed. CK-V11316-015
+remains closed and CK-V11316-007 remains open. The distinct, unnumbered R1R27
+benchmark-provenance root retains separate ownership. Phase 12 remains
+Next/PLAN, a successful final independent technical-closure audit has not been
+established, v1.x technical correctness closure remains withheld, and Phase 13
+is unauthorized. The documentation-only closure head requires fresh hosted
+certification; its run identities are reported externally without another
+repository commit.
+
+Authority: [Phase 12R1R32 CK-V11316-014 hosted-evidence reconciliation](v1.13.16-phase12r1r32-ck014-hosted-evidence-reconciliation.md).
+
+The historical R1R42 commit then superseded that aggregate pointer: Phase 12
+was Complete
+after the accepted final independent technical-closure audit, and Phase 13 is
+Next in PLAN mode. At that commit boundary Phase 13A had not started,
+CK-V11316-007 remained open, and
+v1.x full closure is not established.
+
+## Phase 12R1R34 CK-V11316-015 lookup-error remediation
+
+[Phase 12R1R34](v1.13.16-phase12r1r34-ck015-initial-lookup-error-propagation.md)
+preserves R1R33's failed independent technical-audit verdict and classifies a
+newly confirmed initial completed-object lookup error path as an original
+CK-V11316-015 interception-boundary omission. A transient non-`ErrNoRows`
+lookup or `Scan` error could be mistaken for an inapplicable repair interceptor
+and reach the destructive legacy fallback after database recovery.
+
+CK-V11316-015 is reopened; CK-V11316-014 remains closed certified,
+CK-V11316-007 remains open, and findings remain 15 confirmed with 13/15
+closed. The one-file decision reorder is retained unchanged at
+`c7e2675ffac65a30b7a34700feb1c9343af7c87a`. R1R35 corrected only the private
+fault-driver wrapper and locally certified implementation-and-test head
+`d5ab1864d31ac2fa6b762a0d3f7f2e6a7ca80946` in clean attached and fresh
+detached trees. Exact Go 1.26.7, golangci-lint 2.9.0, PostgreSQL 16.15, named
+no-skip proofs, complete ordinary/race suites, governance, and the applicable
+snapshot gate passed. Push, hosted certification, CK-V11316-015 closure,
+Phase 12 completion, and Phase 13 remain unauthorized.
+
+## Phase 12R1R38 CK-015 hosted named-proof wiring recovery
+
+R1R37 stopped before push because the locally certified CK-015 correction had
+no committed hosted route for its named SQLite and PostgreSQL obligations.
+R1R38 accepts that proof-wiring gap without treating it as a product or test
+failure. It authorizes one nine-document authority commit followed by one
+six-path workflow/checker/audit/checklist commit, then scoped clean attached
+and fresh-detached validation.
+
+The new profiles require seven SQLite and five PostgreSQL event identities in
+the existing `correctness-matrix` plain leg, preserve CK-014 and Required Gate
+wiring, and retain complete invocation-specific evidence. CK-V11316-015 stays
+open, findings remain 15 confirmed and 13/15 closed, and no push or hosted run
+is authorized.
+
+Authority: [Phase 12R1R38 CK-015 hosted named-proof wiring recovery](v1.13.16-phase12r1r38-ck015-hosted-named-proof-wiring-recovery.md).
+
+## Phase 12R1R39 CK-015 proof-enforcement gap correction
+
+Repository-native review of candidate `236a6198...` confirmed that the current
+audit accepts sixteen isolated mutations disabling CK-015 stale refusal,
+evidence completeness, immediate pipeline-status capture, or Go-failure
+propagation. R1R39 authorizes one nine-document authority commit followed by
+one two-file audit/test correction commit. The runtime workflow, Profile A
+checklist, event checker/profiles, product source, and storage tests remain
+byte-frozen.
+
+The Build adds active bounded wrapper-grammar enforcement, exact negative
+mutations, and paired synthetic success/missing-record behavior for all four
+wrapper forms. It does not add a finding or authorize a storage/database proof
+cycle, push, hosted run, finding closure, Phase 12 completion, or Phase 13.
+CK-V11316-015 remains open; findings remain 15 confirmed and 13/15 closed.
+
+Authority: [Phase 12R1R39 CK-015 proof-enforcement gap correction](v1.13.16-phase12r1r39-ck015-proof-enforcement-gap-correction.md).
+
+## Phase 12R1R40 CK-015 status-lifetime enforcement correction
+
+Native confirmation at R1R39 candidate `f1a4bc0e...` proved that one unchanged
+control passes while eight isolated evidence/Go status-reset mutations still
+escape the audit. R1R40 authorizes one nine-document authority commit and one
+two-file audit/test commit. It freezes literal identities for the four complete
+hosted/local SQLite/PostgreSQL sections, preserves existing property
+diagnostics, and requires direct focused-suite exports for one positive plus 32
+correct rejections in each certification context.
+
+Runtime wrappers, workflow, checklist, checker/profiles, product and storage
+code/tests remain byte-frozen. No storage/database proof, push, hosted run,
+finding closure, Phase 12 completion, or Phase 13 follows. CK-V11316-015 stays
+open; findings remain 15 confirmed and 13/15 closed.
+
+Authority: [Phase 12R1R40 CK-015 status-lifetime enforcement correction](v1.13.16-phase12r1r40-ck015-status-lifetime-enforcement-correction.md).
+
+## Phase 12R1R41 CK-015 hosted-certification closure reconciliation (historical boundary)
+
+[Phase 12R1R41](v1.13.16-phase12r1r41-ck015-hosted-certification-reconciliation.md)
+reconciles the completed R1R40 exact-candidate hosted evidence at
+`8773efc19a0317aa2d99e6387c3caa3a967689cd`. The release branch was pushed
+once to that candidate. Its attempt-1 plain correctness job passed all seven
+SQLite and five PostgreSQL CK-015 named proofs with no FAIL or SKIP, and
+CodeQL `35269430570` passed on attempt 1.
+
+CI `35269430953` attempt 1 remains preserved as failed after an isolated
+`Benchmark integrity (none-w4)` registry/Buildx failure. Read-only diagnosis
+classified it as external transient. Exactly one bounded specific-job retry
+created attempt 2, where benchmark job `105841024592` and downstream
+`CI Required Gate` job `105841548250` passed. CI attempt 2 and all 40 latest
+exact-head checks therefore passed; the CK-015 proofs and CodeQL were not
+rerun.
+
+At the R1R41 boundary, CK-V11316-015 was closed certified, findings were 15
+confirmed and 14/15 closed, and CK-V11316-007 remained open. Phase 12 then
+remained Next/PLAN because a
+successful final independent technical-closure audit has not been
+established. Phase 13 remains unauthorized and v1.x technical correctness
+closure remains withheld. This documentation-only authority head requires
+fresh hosted certification after one non-force push; its run identities are
+reported externally without another repository commit.
+
+## Phase 12R1R42 final technical-closure reconciliation (historical boundary)
+
+[Phase 12R1R42](v1.13.16-phase12r1r42-final-technical-closure-reconciliation.md)
+accepts the final independent read-only audit at closure head
+`4a983569a19d9735109851e4348b55c45853f78e`. Its verified evidence establishes
+the Phase 12 technical-audit predicate without reopening a closed finding or
+creating a new technical finding. All ten technical domains passed, all 15
+finding rows were reviewed, and all 54 changed technical paths retain an
+authority owner with no module or dependency delta.
+
+At the R1R42 commit boundary, Phase 12 became Complete and v1.x technical
+correctness was established. Findings
+remain 15 confirmed and 14/15 closed; CK-V11316-007 remains open for the
+Phase 13A/13B/13C and Phase 19 documentation/process lifecycle. Phase 13 was
+Next in PLAN mode, but Phase 13A had not started and required successful fresh
+hosted certification of the exact R1R42 documentation head plus separate owner
+authorization. V1.x full closure is not established.
+
+## Phase 13R1 governance/help truthfulness recovery
+
+Phase 13A completed read-only at exact R1R42 head and froze eight CK-007
+sub-findings externally. Its archive SHA-256
+`d7cdb10c2a8179e19f93cfdb423578b71ed46a9f14cd75345b74abaf1d04530e`
+and all 288 manifest entries reverified before Phase 13R1 authority.
+
+[Phase 13R1](v1.13.16-phase13r1-governance-help-truthfulness-recovery.md)
+completed exactly four append-only local commits. Implementation/test candidate
+`ffa27e0554088bef24d0a8db07f62c3642f62d8d` corrects DOC-005's governance
+false PASS and DOC-006's generated-help prerequisite. Attached and one fresh
+detached exact-toolchain certification passed, while direct source comparison
+proves runtime startup-recovery behavior unchanged. At that retained local
+boundary Phase 13B stayed documentation-only and withheld pending owner
+acceptance and separately authorized hosted certification. No push or hosted
+execution had occurred. A later single push produced the preserved failure
+described below; the succeeding R1R1 fresh candidate is certified in the next
+section.
+
+## Phase 13R1R1 CK-015 SQLite test-harness recovery
+
+Phase 13R1 exact-head CI attempt 1 failed in
+`TestCKV11316015SharedProcessingChunkWaitersConvergeWithoutDeadlock` with
+SQLite `database is locked`; Required Gate correctly failed, while the scoped
+governance/help proofs and CodeQL passed. The failed attempt is preserved and
+no hosted retry is authorized.
+
+Read-only diagnosis established no Phase 13R1 runtime-byte delta and reproduced
+the pre-existing failure locally (599 passes and one failure in 600 AES-labelled
+focused executions). The fixture used eight SQLite connections although the
+supported simulated SQLite path uses one shared connection. This is a CK-015
+test-harness reliability defect, not a product regression; CK-V11316-015 remains
+closed certified and Phase 12 technical correctness remains established.
+
+[Phase 13R1R1](v1.13.16-phase13r1r1-ck015-sqlite-test-harness-recovery.md)
+authorizes exactly three append-only local commits. Its sole test change is
+`internal/storage/store_atomic_repair_test.go`, setting the affected fixture to
+one maximum open and idle connection while preserving both Store goroutines,
+the contention/convergence orchestration, and every assertion. Production,
+runtime, workflow, schema, module, and dependency bytes remain frozen. The
+Build completed locally in exactly three commits. Test candidate
+`5093082365652911fc4e0369e8491116f026ff5d` passed attached AES/plain focused
+repetitions at 1000/200 and detached repetitions at 500/100, all with zero
+failures. Both contexts passed storage and complete hosted-quality race sweeps,
+253 Python tests, governance and CI gates, vet, exact lint 2.9.0 with zero
+issues, module verification, and the full 30-minute Go sweep. Production
+runtime delta remains none. No push, hosted execution, Phase 13B, or
+CK-V11316-007 closure is authorized.
+
+That no-push statement describes only the R1R1 local Build boundary. The later
+candidate `49ce732d2742956e0f8a256458090cb7c2691c34` was pushed once and passed
+fresh CI `35442074207` at 36/36, Required Gate job `105897391981`, CodeQL
+`35442074196` at 4/4, and all 40 exact-head checks without retry. DOC-005 and
+DOC-006's help prerequisite are hosted-certified; the original R1 failure
+remains preserved.
+
+## Phase 13B documentation remediation authority and external result
+
+[Phase 13B](v1.13.16-phase13a-audit-reconciliation-and-phase13b-remediation.md)
+accepts the retained Phase 13A eight-sub-finding register and the fresh
+Phase 13R1R1 hosted boundary. CI `35442074207` passed 36/36 with Required Gate
+job `105897391981`; CodeQL `35442074196` passed 4/4; all 40 exact-head checks
+passed and the release ref has zero open CodeQL alerts. The original failed
+Phase 13R1 CI `35436261398` remains preserved and was not rerun.
+
+Historical `AT_COMMIT` Phase 13B local-evidence boundary: the local Build is
+exactly three append-only commits with path counts 8/14/8.
+Commit 2 is limited to the fourteen documentation paths frozen by the Phase
+13A audit after DOC-005 and DOC-006's generated-help prerequisite were
+resolved by Phase 13R1. It may remediate all eight documentation sub-findings
+as candidates. At that commit boundary, CK-V11316-007 remained open pending
+fresh hosted certification and the independent Phase 13C re-audit; the local
+Build itself authorized no push, hosted run, Phase 13C execution, Phase 14
+work, merge, tag, or release.
+
+Commit 2 applies candidate remediations for DOC-001 through DOC-008 in the
+frozen fourteen documentation paths. DOC-005 remains satisfied by the frozen
+hosted-certified validator correction, and DOC-006 combines that frozen help
+prerequisite with the README/architecture clarification. These are local
+candidate dispositions only until Commit 3 records validation; hosted
+certification and Phase 13C remain separate.
+
+The local Build completed with authority commit
+`fa0f2737f6eb5041c77645f832b6680f502451a4` and remediation commit
+`df1fc4e65f172a68d11919fbcbf42b65064ab45a`. Exact 8/14 staged scopes,
+sole-parent topology, Markdown links/fences, release-state, governance,
+smart-quote, allowlist, linearity, evidence-name, validation-matrix, local-CI,
+semantic contradiction checks, and all 253 Python tests passed. All
+non-documentation bytes remain parent-identical. The Build is complete locally
+pending owner review; no push or hosted execution occurred at that historical
+commit boundary.
+
+The later external Phase 13B certification passed at exact head
+`568289d974032255e8c6af55a59c784a303f179c`: CI `35445325315` attempt 1 passed
+36/36, Required Gate job `105906206611` passed, CodeQL `35445325237` attempt 1
+passed 4/4, all 40 exact-head checks passed, and open CodeQL alerts were zero.
+The first independent Phase 13C re-audit then completed read-only with
+`PASS_6_OF_8_FAIL_2_OF_8`: DOC-001 and DOC-002 retained current-authority and
+external-state residuals, DOC-003 through DOC-008 passed, and no new CK-007
+sub-finding was established. This correction addresses only those two
+residuals. CK-V11316-007 cannot close until a later independent Phase 13C
+re-audit passes and a separate owner-authorized closure reconciliation records
+that result.

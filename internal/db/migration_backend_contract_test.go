@@ -49,7 +49,8 @@ func TestSCH009PostgresVersionElevenAutoMigration(t *testing.T) {
 		if backend.Kind != db.BackendPostgres {
 			return
 		}
-		mustExec(t, backend.DB, `UPDATE schema_version SET version = 11 WHERE version < 11`)
+		mustExec(t, backend.DB, `ALTER TABLE schema_version RENAME COLUMN catalog_version TO version`)
+		mustExec(t, backend.DB, `UPDATE schema_version SET version = 11`)
 		if err := db.EnsureSchema(backend.DB); err != nil {
 			t.Fatalf("auto-migrate PostgreSQL v11 fixture: %v", err)
 		}

@@ -145,6 +145,12 @@ func TestRepairChunkLiveRefCountsResultWithDBRepairsMismatch(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert file_chunk: %v", err)
 	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`,
+		"/repair/chunk-repair.bin", logicalID,
+	); err != nil {
+		t.Fatalf("insert current physical mapping: %v", err)
+	}
 
 	result, err := RepairChunkLiveRefCountsResultWithDB(dbconn)
 	if err != nil {
@@ -160,5 +166,66 @@ func TestRepairChunkLiveRefCountsResultWithDBRepairsMismatch(t *testing.T) {
 	}
 	if liveRef != 1 {
 		t.Fatalf("expected repaired live_ref_count=1, got %d", liveRef)
+	}
+}
+
+func TestRepairChunkLiveRefCountsUsesCompletedCurrentRootOccurrences(t *testing.T) {
+	dbconn := openMaintenanceSQLiteDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	insertLogical := func(name, hash, status string, refCount int64) int64 {
+		t.Helper()
+		var id int64
+		if err := dbconn.QueryRow(`
+			INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+			VALUES ($1, 3, $2, $3, $4, 'v1-simple-rolling') RETURNING id
+		`, name, hash, status, refCount).Scan(&id); err != nil {
+			t.Fatalf("insert logical file %s: %v", name, err)
+		}
+		return id
+	}
+
+	activeID := insertLogical("active.bin", strings.Repeat("a", 64), filestate.LogicalFileCompleted, 1)
+	rootlessID := insertLogical("rootless.bin", strings.Repeat("b", 64), filestate.LogicalFileCompleted, 0)
+	processingID := insertLogical("processing.bin", strings.Repeat("e", 64), filestate.LogicalFileProcessing, 1)
+
+	var chunkID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		VALUES ($1, 3, $2, 99, 0, 0, 'v1-simple-rolling') RETURNING id
+	`, strings.Repeat("f", 64), filestate.ChunkCompleted).Scan(&chunkID); err != nil {
+		t.Fatalf("insert shared chunk: %v", err)
+	}
+
+	for _, row := range []struct {
+		logicalID int64
+		order     int64
+	}{
+		{activeID, 0},
+		{activeID, 1},
+		{rootlessID, 0},
+		{processingID, 0},
+	} {
+		if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)`, row.logicalID, chunkID, row.order); err != nil {
+			t.Fatalf("insert recipe occurrence %+v: %v", row, err)
+		}
+	}
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES ('/repair/active.bin', $1), ('/repair/processing.bin', $2)`, activeID, processingID); err != nil {
+		t.Fatalf("insert physical roots: %v", err)
+	}
+
+	result, err := RepairChunkLiveRefCountsResultWithDB(dbconn)
+	if err != nil {
+		t.Fatalf("repair current-root occurrence formula: %v", err)
+	}
+	if result.UpdatedChunks != 1 {
+		t.Fatalf("expected one repaired shared chunk, got %+v", result)
+	}
+	var liveRef int64
+	if err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&liveRef); err != nil {
+		t.Fatalf("read repaired live_ref_count: %v", err)
+	}
+	if liveRef != 2 {
+		t.Fatalf("expected two active COMPLETED recipe occurrences, got %d", liveRef)
 	}
 }

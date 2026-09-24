@@ -39,7 +39,7 @@ const (
 	// phase1SchemaVersion is the schema version expected after all Phase 1
 	// migrations (Steps 1.1–1.5) have been applied. Updated to 16 with the
 	// addition of the UNIQUE(container_id, container_offset) index (V3).
-	phase1SchemaVersion = 16
+	phase1SchemaVersion = 17
 )
 
 // phase1Repo is an isolated repository with its own SQLite DB and container dir.
@@ -182,7 +182,7 @@ func TestPhase1CompatMigrationReachesSchemaV15(t *testing.T) {
 	repo := newPhase1Repo(t)
 
 	var version int
-	if err := repo.dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
+	if err := repo.dbconn.QueryRow(`SELECT MAX(catalog_version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
 	if version != phase1SchemaVersion {
@@ -268,7 +268,7 @@ func TestPhase1CompatMigrationIsIdempotent(t *testing.T) {
 	blocksBefore := countRows(`SELECT COUNT(*) FROM storage_blocks`)
 	chunksBefore := countRows(`SELECT COUNT(*) FROM chunk`)
 	physicalBefore := countRows(`SELECT COUNT(*) FROM physical_file`)
-	versionBefore := countRows(`SELECT MAX(version) FROM schema_version`)
+	versionBefore := countRows(`SELECT MAX(catalog_version) FROM schema_version`)
 	refCountMismatchesBefore := countRows(`
 		SELECT COUNT(*)
 		FROM logical_file lf
@@ -287,7 +287,7 @@ func TestPhase1CompatMigrationIsIdempotent(t *testing.T) {
 	blocksAfter := countRows(`SELECT COUNT(*) FROM storage_blocks`)
 	chunksAfter := countRows(`SELECT COUNT(*) FROM chunk`)
 	physicalAfter := countRows(`SELECT COUNT(*) FROM physical_file`)
-	versionAfter := countRows(`SELECT MAX(version) FROM schema_version`)
+	versionAfter := countRows(`SELECT MAX(catalog_version) FROM schema_version`)
 	refCountMismatchesAfter := countRows(`
 		SELECT COUNT(*)
 		FROM logical_file lf
@@ -530,11 +530,12 @@ func TestPhase1CompatRestoreDeterminismAfterConcurrentWrites(t *testing.T) {
 
 // phase1BenchThresholds defines acceptable performance limits relative to a
 // reference measurement. The tests do NOT compare against a committed baseline
-// file (that is done by external CI tooling) — they assert that Phase 1 code
-// stays within a generous factor so egregious regressions are caught without
-// flakiness from CI hardware variance. The minimum throughput floors are
-// build-tagged so race-enabled CI can stay conservative while non-race runs
-// enforce the stricter steady-state floor.
+// file (that is done by external CI tooling). Ordinary non-race runs enforce the
+// 5.0 MB/s floor, and race runs without coverage enforce the 1.0 MB/s floor.
+// Coverage-instrumented runs still execute and measure the real operations, and
+// restore correctness remains enforced, but the tests are reported as skipped
+// after that work because coverage instrumentation does not enforce a
+// wall-clock floor. Dedicated performance governance is outside this phase.
 
 // maxStoreDBInserts is the maximum number of storage_blocks rows we expect
 // per 4 MiB file (generous upper bound to catch runaway INSERT loops).
@@ -542,6 +543,15 @@ const maxStoreDBInsertsPerMiB = 100
 
 // benchPayloadMiB is the payload size for parity benchmarks.
 const benchPayloadMiB = 4
+
+func skipPhase1ThroughputFloorUnderCoverage(t *testing.T, operation string, measuredMBps, thresholdMBps float64, elapsed time.Duration) {
+	t.Helper()
+	mode := testing.CoverMode()
+	if mode == "" {
+		return
+	}
+	t.Skipf("Phase1 %s throughput coverage mode %q: real operation completed; measured %.2f MB/s against active %.2f MB/s threshold over %v; only the numeric wall-clock floor is not enforced", operation, mode, measuredMBps, thresholdMBps, elapsed)
+}
 
 // TestPhase1CompatStoreThroughputWithinTolerance measures store throughput for
 // a ~4 MiB payload and asserts it is above the conservative minimum floor.
@@ -565,6 +575,8 @@ func TestPhase1CompatStoreThroughputWithinTolerance(t *testing.T) {
 
 	mbps := float64(payloadBytes) / (1024 * 1024) / elapsed.Seconds()
 	t.Logf("Phase1 store throughput: %.2f MB/s for %d MiB (%v)", mbps, benchPayloadMiB, elapsed)
+
+	skipPhase1ThroughputFloorUnderCoverage(t, "store", mbps, storeThroughputMinMBps, elapsed)
 
 	if mbps < storeThroughputMinMBps {
 		t.Fatalf("store throughput %.2f MB/s is below minimum %.2f MB/s", mbps, storeThroughputMinMBps)
@@ -593,12 +605,14 @@ func TestPhase1CompatRestoreThroughputWithinTolerance(t *testing.T) {
 	mbps := float64(payloadBytes) / (1024 * 1024) / elapsed.Seconds()
 	t.Logf("Phase1 restore throughput: %.2f MB/s for %d MiB (%v)", mbps, benchPayloadMiB, elapsed)
 
-	if mbps < restoreThroughputMinMBps {
-		t.Fatalf("restore throughput %.2f MB/s is below minimum %.2f MB/s", mbps, restoreThroughputMinMBps)
-	}
-
 	if !bytes.Equal(got, data) {
 		t.Fatal("restore parity check failed: bytes do not match original")
+	}
+
+	skipPhase1ThroughputFloorUnderCoverage(t, "restore", mbps, restoreThroughputMinMBps, elapsed)
+
+	if mbps < restoreThroughputMinMBps {
+		t.Fatalf("restore throughput %.2f MB/s is below minimum %.2f MB/s", mbps, restoreThroughputMinMBps)
 	}
 }
 

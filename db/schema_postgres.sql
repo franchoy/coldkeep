@@ -647,4 +647,103 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_blocks_container_id_offset ON stor
 
 UPDATE schema_version SET version = 16 WHERE version < 16;
 
+-- Schema version 17: durable copy-on-write state for completed-object repair.
+CREATE TABLE IF NOT EXISTS store_repair_attempt (
+  id BIGSERIAL PRIMARY KEY,
+  logical_file_id BIGINT NOT NULL REFERENCES logical_file(id) ON DELETE RESTRICT,
+  source_file_hash TEXT NOT NULL,
+  source_total_size BIGINT NOT NULL CHECK (source_total_size >= 0),
+  recipe_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('PREPARING', 'READY', 'PUBLISHED', 'ABORTED')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_store_repair_attempt_live
+  ON store_repair_attempt(logical_file_id)
+  WHERE status IN ('PREPARING', 'READY');
+
+CREATE TABLE IF NOT EXISTS store_repair_container (
+  attempt_id BIGINT NOT NULL REFERENCES store_repair_attempt(id) ON DELETE CASCADE,
+  container_id BIGINT NOT NULL UNIQUE REFERENCES container(id) ON DELETE RESTRICT,
+  physical_size BIGINT NOT NULL CHECK (physical_size >= 64),
+  physical_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('ALLOCATED', 'DURABLE', 'PUBLISHED')),
+  PRIMARY KEY (attempt_id, container_id)
+);
+
+CREATE TABLE IF NOT EXISTS store_repair_block (
+  attempt_id BIGINT NOT NULL REFERENCES store_repair_attempt(id) ON DELETE CASCADE,
+  block_ordinal INTEGER NOT NULL CHECK (block_ordinal >= 0),
+  format_version INTEGER NOT NULL CHECK (format_version > 0),
+  codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
+  plaintext_size BIGINT NOT NULL CHECK (plaintext_size > 0),
+  compression_codec TEXT NOT NULL CHECK (compression_codec IN ('none', 'zstd')),
+  compression_level INTEGER,
+  compressed_size BIGINT NOT NULL CHECK (compressed_size > 0),
+  stored_size BIGINT NOT NULL CHECK (stored_size > 0),
+  container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+  container_offset BIGINT NOT NULL CHECK (container_offset >= 0),
+  block_hash BYTEA NOT NULL,
+  compression_ratio DOUBLE PRECISION NOT NULL,
+  payload_hash TEXT NOT NULL,
+  compressed_hash BYTEA NOT NULL,
+  physical_hash BYTEA NOT NULL,
+  legacy_nonce BYTEA,
+  PRIMARY KEY (attempt_id, block_ordinal),
+  UNIQUE (container_id, container_offset),
+  CHECK (
+    (compression_codec = 'none' AND compression_level IS NULL) OR
+    (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+  )
+);
+
+CREATE TABLE IF NOT EXISTS store_repair_chunk (
+  attempt_id BIGINT NOT NULL REFERENCES store_repair_attempt(id) ON DELETE CASCADE,
+  chunk_id BIGINT NOT NULL REFERENCES chunk(id) ON DELETE RESTRICT,
+  chunk_order INTEGER NOT NULL CHECK (chunk_order >= 0),
+  block_ordinal INTEGER NOT NULL CHECK (block_ordinal >= 0),
+  offset_in_block BIGINT NOT NULL CHECK (offset_in_block >= 0),
+  size_in_block BIGINT NOT NULL CHECK (size_in_block > 0),
+  PRIMARY KEY (attempt_id, chunk_id),
+  UNIQUE (attempt_id, chunk_order),
+  FOREIGN KEY (attempt_id, block_ordinal)
+    REFERENCES store_repair_block(attempt_id, block_ordinal) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS retired_chunk_block_ref (
+  block_id BIGINT NOT NULL REFERENCES storage_blocks(id) ON DELETE RESTRICT,
+  embedded_chunk_id BIGINT NOT NULL,
+  offset_in_block BIGINT NOT NULL CHECK (offset_in_block >= 0),
+  size_in_block BIGINT NOT NULL CHECK (size_in_block > 0),
+  repair_attempt_id BIGINT NOT NULL REFERENCES store_repair_attempt(id) ON DELETE RESTRICT,
+  retired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (block_id, embedded_chunk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_retired_chunk_block_ref_attempt
+  ON retired_chunk_block_ref(repair_attempt_id);
+
+CREATE TABLE IF NOT EXISTS retired_legacy_block_extent (
+  container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+  block_offset BIGINT NOT NULL CHECK (block_offset >= 0),
+  stored_size BIGINT NOT NULL CHECK (stored_size > 0),
+  plaintext_size BIGINT NOT NULL CHECK (plaintext_size > 0),
+  codec TEXT NOT NULL CHECK (codec IN ('plain', 'aes-gcm')),
+  format_version INTEGER NOT NULL CHECK (format_version > 0),
+  nonce BYTEA,
+  historical_block_id BIGINT NOT NULL,
+  historical_chunk_id BIGINT NOT NULL,
+  repair_attempt_id BIGINT NOT NULL REFERENCES store_repair_attempt(id) ON DELETE RESTRICT,
+  retired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (container_id, block_offset)
+);
+CREATE INDEX IF NOT EXISTS idx_retired_legacy_block_extent_attempt
+  ON retired_legacy_block_extent(repair_attempt_id);
+
+UPDATE schema_version SET version = 17 WHERE version < 17;
+
+-- SCHEMA_V17_METADATA_FENCE
+ALTER TABLE schema_version RENAME COLUMN version TO catalog_version;
+DELETE FROM schema_version;
+INSERT INTO schema_version(catalog_version) VALUES (17);
+
 COMMIT;

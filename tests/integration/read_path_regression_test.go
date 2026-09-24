@@ -65,11 +65,11 @@ func mustReadSchemaVersion(t *testing.T) int {
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+	schemaVersion, err := db.CurrentSchemaVersion(dbconn)
+	if err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	return schemaVersion
+	return int(schemaVersion)
 }
 
 func TestReadPathRestoreAfterMigrationIntegration(t *testing.T) {
@@ -219,9 +219,13 @@ func TestReadPathSnapshotRestoreAfterMigrationIntegration(t *testing.T) {
 	if !ok || strings.TrimSpace(storedPath) == "" {
 		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
 	}
-	trimmedStoredPath := strings.TrimLeft(filepath.ToSlash(storedPath), "/")
+	memberPath, err := filepath.Rel(inputDir, storedPath)
+	if err != nil {
+		t.Fatalf("derive snapshot member path: %v", err)
+	}
+	trimmedStoredPath := filepath.ToSlash(memberPath)
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "snap-step11-read-path", "--output", "json"), "snapshot")
 
 	restoreRoot := filepath.Join(tmp, "snapshot-restore")
@@ -498,7 +502,7 @@ func TestBackwardCompatV15CLIWorkflowIntegration(t *testing.T) {
 	}
 
 	// snapshot create
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, inputDir, binPath, env,
 		"snapshot", "create", "--id", "compat-snap", "--output", "json"), "snapshot")
 
 	// snapshot list

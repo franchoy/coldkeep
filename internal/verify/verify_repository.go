@@ -148,38 +148,51 @@ func packedManifestIndexChecks() []packedManifestIndexCheck {
 					FROM chunk_block_refs r
 					WHERE r.block_id = sb.id
 				)
+				AND NOT EXISTS (
+					SELECT 1
+					FROM retired_chunk_block_ref rr
+					WHERE rr.block_id = sb.id
+				)
 			`,
-			queryLabel: "query storage_blocks without chunk_block_refs",
+			queryLabel: "query storage_blocks without active or retired membership",
 			errorCode:  verifyErrMetadataMissing,
-			errorFmt:   "storage_blocks missing chunk_block_refs=%d",
+			errorFmt:   "storage_blocks missing active and retired membership=%d",
 		},
 		{
 			query: `
 				SELECT COUNT(*)
 				FROM (
 					SELECT block_id, offset_in_block
-					FROM chunk_block_refs
+					FROM (
+						SELECT block_id, offset_in_block FROM chunk_block_refs
+						UNION ALL
+						SELECT block_id, offset_in_block FROM retired_chunk_block_ref
+					) membership
 					GROUP BY block_id, offset_in_block
 					HAVING COUNT(*) > 1
 				) t
 			`,
-			queryLabel: "query conflicting offsets",
+			queryLabel: "query conflicting active/retired offsets",
 			errorCode:  verifyErrMetadataInvalid,
-			errorFmt:   "conflicting chunk_block_refs offsets=%d",
+			errorFmt:   "conflicting active/retired packed offsets=%d",
 		},
 		{
 			query: `
 				SELECT COUNT(*)
 				FROM (
-					SELECT block_id, chunk_id
-					FROM chunk_block_refs
-					GROUP BY block_id, chunk_id
+					SELECT block_id, embedded_chunk_id
+					FROM (
+						SELECT block_id, chunk_id AS embedded_chunk_id FROM chunk_block_refs
+						UNION ALL
+						SELECT block_id, embedded_chunk_id FROM retired_chunk_block_ref
+					) membership
+					GROUP BY block_id, embedded_chunk_id
 					HAVING COUNT(*) > 1
 				) t
 			`,
-			queryLabel: "query conflicting chunk entries",
+			queryLabel: "query duplicate or overlapping active/retired entries",
 			errorCode:  verifyErrMetadataInvalid,
-			errorFmt:   "conflicting chunk_block_refs entries=%d",
+			errorFmt:   "duplicate or overlapping active/retired packed entries=%d",
 		},
 	}
 }
@@ -247,6 +260,22 @@ func verifyPackedBoundsContext(ctx context.Context, dbconn *sql.DB) error {
 	}
 	if outOfBoundsRefs > 0 {
 		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedBounds: chunk_block_refs range exceeds plaintext_size=%d", outOfBoundsRefs), nil)
+	}
+
+	var outOfBoundsRetiredRefs int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM retired_chunk_block_ref r
+		JOIN storage_blocks sb ON sb.id = r.block_id
+		WHERE r.offset_in_block < 0
+		   OR r.size_in_block <= 0
+		   OR r.offset_in_block > sb.plaintext_size
+		   OR r.size_in_block > sb.plaintext_size - r.offset_in_block
+	`).Scan(&outOfBoundsRetiredRefs); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedBounds: query out-of-bounds retired packed refs", err)
+	}
+	if outOfBoundsRetiredRefs > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedBounds: retired_chunk_block_ref range exceeds plaintext_size=%d", outOfBoundsRetiredRefs), nil)
 	}
 
 	log.Println(" SUCCESS ")
@@ -900,11 +929,20 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 	meta := verifyBlockFailureMeta(VerifyStageChunkRefs, blockID, containerID, containerOffset)
 
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT r.chunk_id, r.offset_in_block, r.size_in_block, c.size
-		FROM chunk_block_refs r
-		JOIN chunk c ON c.id = r.chunk_id
-		WHERE r.block_id = $1
-		ORDER BY r.offset_in_block ASC
+		SELECT embedded_chunk_id, offset_in_block, size_in_block, chunk_size, membership_kind
+		FROM (
+			SELECT r.chunk_id AS embedded_chunk_id, r.offset_in_block,
+			       r.size_in_block, c.size AS chunk_size, 'active' AS membership_kind
+			FROM chunk_block_refs r
+			JOIN chunk c ON c.id = r.chunk_id
+			WHERE r.block_id = $1
+			UNION ALL
+			SELECT r.embedded_chunk_id, r.offset_in_block,
+			       r.size_in_block, NULL AS chunk_size, 'retired' AS membership_kind
+			FROM retired_chunk_block_ref r
+			WHERE r.block_id = $1
+		) membership
+		ORDER BY offset_in_block ASC, embedded_chunk_id ASC
 	`, blockID)
 	if err != nil {
 		return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: query chunk refs for block %d", blockID), err)
@@ -916,9 +954,13 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		var chunkID int64
 		var offset int64
 		var size int64
-		var chunkSize int64
-		if err := rows.Scan(&chunkID, &offset, &size, &chunkSize); err != nil {
+		var chunkSize sql.NullInt64
+		var membershipKind string
+		if err := rows.Scan(&chunkID, &offset, &size, &chunkSize, &membershipKind); err != nil {
 			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: scan chunk ref for block %d", blockID), err)
+		}
+		if membershipKind != "active" && membershipKind != "retired" {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d has unknown membership kind %q", blockID, membershipKind), nil)
 		}
 		if offset < 0 {
 			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d has negative offset_in_block for chunk %d", blockID, chunkID), nil)
@@ -926,14 +968,14 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		if size <= 0 {
 			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d has non-positive size_in_block for chunk %d", blockID, chunkID), nil)
 		}
-		if chunkSize > 0 && size != chunkSize {
-			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d size mismatch ref=%d chunk.size=%d", blockID, chunkID, size, chunkSize), nil)
+		if membershipKind == "active" && (!chunkSize.Valid || chunkSize.Int64 <= 0 || size != chunkSize.Int64) {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d size mismatch ref=%d chunk.size=%d", blockID, chunkID, size, chunkSize.Int64), nil)
 		}
 		segments = append(segments, verifyChunkRefSegment{
 			chunkID:   chunkID,
 			offset:    uint64(offset),
 			size:      uint64(size),
-			chunkSize: chunkSize,
+			chunkSize: chunkSize.Int64,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -954,17 +996,21 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 
 	refsByKey := make(map[verifyChunkRefSegment]struct{}, len(segments))
 	for _, s := range segments {
-		refsByKey[verifyChunkRefSegment{
+		key := verifyChunkRefSegment{
 			chunkID: s.chunkID,
 			offset:  s.offset,
 			size:    s.size,
-		}] = struct{}{}
+		}
+		if _, exists := refsByKey[key]; exists {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d has duplicate active/retired membership chunk=%d offset=%d size=%d", blockID, s.chunkID, s.offset, s.size), nil)
+		}
+		refsByKey[key] = struct{}{}
 	}
 
 	for _, s := range segments {
 		k := verifyChunkRefSegment{chunkID: s.chunkID, offset: s.offset, size: s.size}
 		if _, ok := decodedEntriesByKey[k]; !ok {
-			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk_block_ref references chunk not in encoded block table chunk=%d offset=%d size=%d", blockID, s.chunkID, s.offset, s.size), nil)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk_block_ref references chunk not in encoded block table (active/retired membership) chunk=%d offset=%d size=%d", blockID, s.chunkID, s.offset, s.size), nil)
 		}
 	}
 
@@ -975,7 +1021,7 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		}
 		k := verifyChunkRefSegment{chunkID: chunkID, offset: e.Offset, size: e.Size}
 		if _, ok := refsByKey[k]; !ok {
-			return verifyStageError(verifyErrMetadataMissing, meta, fmt.Sprintf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size), nil)
+			return verifyStageError(verifyErrMetadataMissing, meta, fmt.Sprintf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs or retired membership chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size), nil)
 		}
 	}
 
