@@ -41,6 +41,8 @@ from release_state_support import (
     metadata_named,
     parse_lifecycle_boundaries,
     parse_lifecycle_declaration,
+    parse_predecessor_declaration,
+    parse_failed_predecessor_disposition,
     parse_phase_states,
     parse_source_version,
     passed_gate,
@@ -159,7 +161,22 @@ def active_docs(
         "reconciliation": f"{directory}/{stem}-release-train-reconciliation.md",
         "contract": f"{directory}/{stem}-release-state-validator-contract.md",
     }
-    return {key: read_document(root, path, result) for key, path in paths.items()}
+    documents = {key: read_document(root, path, result) for key, path in paths.items()}
+    disposition_path = f"{directory}/{stem}-predecessor-disposition.md"
+    try:
+        documents["predecessor_disposition"] = Document.load(
+            root, disposition_path
+        )
+    except FileNotFoundError:
+        documents["predecessor_disposition"] = None
+    except UnicodeDecodeError:
+        # The selected route assigns encoding failures to CKRS010. An empty
+        # sentinel document keeps discovery non-exceptional and lets that
+        # rule report the bounded structural failure.
+        documents["predecessor_disposition"] = Document(
+            root, disposition_path, []
+        )
+    return documents
 
 
 def check_ckrs002(version: str, doc: Optional[Document], result: ValidationResult) -> None:
@@ -306,20 +323,202 @@ def check_ckrs008(version: str, title: Optional[str], doc: Optional[Document], r
         result.add("CKRS008", doc.path, line, f"release train historical proposal for {version} is not labeled Historical proposed")
 
 
-def check_ckrs009(version: str, doc: Optional[Document], result: ValidationResult) -> Optional[str]:
+def check_ckrs009(
+    version: str,
+    doc: Optional[Document],
+    predecessor_model: Optional[str],
+    result: ValidationResult,
+) -> Optional[str]:
     if not doc:
         return None
     headings = heading_versions(doc)
     if len(headings) < 2 or headings[0][1] != version:
         return None
     line, previous, suffix = headings[1]
-    if "Unreleased" in suffix or not re.search(r"-\s+\d{4}-\d{2}-\d{2}\b", suffix):
+    dated = re.search(r"-\s+\d{4}-\d{2}-\d{2}\b", suffix) is not None
+    if predecessor_model:
+        marker_count = suffix.count("[failed-publication-predecessor]")
+        forbidden = re.search(r"\b(?:Unreleased|published|released|closed)\b", suffix, re.IGNORECASE)
+        if not dated or marker_count != 1 or forbidden:
+            result.add(
+                "CKRS009",
+                doc.path,
+                line,
+                f"previous release {previous} lacks the selected failed-publication changelog marker",
+            )
+    elif "Unreleased" in suffix or not dated:
         result.add("CKRS009", doc.path, line, f"previous release {previous} is not recorded as released in CHANGELOG.md")
     return previous
 
 
-def check_ckrs010(root: Path, previous: Optional[str], result: ValidationResult) -> None:
+def check_ckrs010(
+    root: Path,
+    version: str,
+    previous: Optional[str],
+    declaration: Optional[LifecycleDeclaration],
+    predecessor_model: Optional[str],
+    disposition_doc: Optional[Document],
+    result: ValidationResult,
+) -> None:
     if not previous:
+        return
+    if predecessor_model:
+        directory, stem = release_paths(version)
+        disposition_path = f"{directory}/{stem}-predecessor-disposition.md"
+        target = root / disposition_path
+        if disposition_doc is None:
+            result.add(
+                "CKRS010",
+                disposition_path,
+                0,
+                f"failed-publication predecessor {previous} requires canonical disposition {disposition_path}: file is missing",
+            )
+            return
+        if not target.is_file() or target.is_symlink():
+            result.add(
+                "CKRS010",
+                disposition_path,
+                0,
+                "failed-publication predecessor disposition is structurally invalid: file must be regular and non-symlink",
+            )
+            return
+        raw = target.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw:
+            result.add(
+                "CKRS010",
+                disposition_path,
+                0,
+                "failed-publication predecessor disposition is structurally invalid: encoding or newline form is invalid",
+            )
+            return
+        disposition, detail = parse_failed_predecessor_disposition(disposition_doc)
+        if disposition is None:
+            if detail == "failed-publication disposition claims an unsupported publication or closure state":
+                result.add("CKRS010", disposition_path, 0, detail)
+                return
+            rule_text = (
+                "failed-publication predecessor disposition requires the exact schema-v1 key set"
+                if detail and ("key set" in detail or "machine row" in detail)
+                else "failed-publication predecessor disposition is structurally invalid"
+            )
+            result.add("CKRS010", disposition_path, 0, f"{rule_text}: {detail}")
+            return
+        values = disposition.values
+        try:
+            successor_parts = tuple(int(item) for item in version.split("."))
+            predecessor_parts = tuple(int(item) for item in previous.split("."))
+        except ValueError:
+            successor_parts = predecessor_parts = (-1, -1, -1)
+        relationship_ok = (
+            values["SUCCESSOR_VERSION"] == version
+            and values["PREDECESSOR_VERSION"] == previous
+            and successor_parts[:2] == predecessor_parts[:2]
+            and successor_parts[2] == predecessor_parts[2] + 1
+        )
+        if not relationship_ok:
+            result.add(
+                "CKRS010",
+                disposition_path,
+                0,
+                "disposition successor/predecessor does not match active and immediate changelog versions",
+            )
+            return
+        if (
+            declaration is None
+            or values["CANONICAL_REPOSITORY"] != declaration.canonical_repository
+            or values["PREDECESSOR_REF"] != f"refs/tags/v{previous}"
+        ):
+            result.add(
+                "CKRS010",
+                disposition_path,
+                0,
+                "disposition repository or predecessor ref conflicts with the selected release contract",
+            )
+            return
+
+        def unavailable(name: str) -> None:
+            result.add(
+                "CKRS010", disposition_path, 0,
+                f"predecessor Git identity is unavailable: {name}",
+            )
+
+        def inconsistent(name: str) -> None:
+            result.add(
+                "CKRS010", disposition_path, 0,
+                f"predecessor Git identity is inconsistent: {name}",
+            )
+
+        ref_result = run_git(
+            root,
+            ["show-ref", "--verify", "--hash", values["PREDECESSOR_REF"]],
+            allow_failure=True,
+        )
+        ref_lines = ref_result.stdout.splitlines() if ref_result.returncode == 0 else []
+        if len(ref_lines) != 1:
+            unavailable("PREDECESSOR_REF")
+            return
+        if ref_lines[0] != values["TAG_OBJECT"]:
+            inconsistent("TAG_OBJECT")
+            return
+        tag_type = run_git(root, ["cat-file", "-t", values["TAG_OBJECT"]], allow_failure=True)
+        if tag_type.returncode:
+            unavailable("TAG_OBJECT")
+            return
+        if tag_type.stdout.strip() != "tag":
+            inconsistent("TAG_OBJECT_TYPE")
+            return
+        tag_size = run_git(root, ["cat-file", "-s", values["TAG_OBJECT"]], allow_failure=True)
+        if tag_size.returncode or re.fullmatch(r"[0-9]+", tag_size.stdout.strip()) is None:
+            unavailable("TAG_OBJECT")
+            return
+        if int(tag_size.stdout.strip()) > 65536:
+            inconsistent("TAG_OBJECT_HEADER_SIZE")
+            return
+        tag_body = run_git(root, ["cat-file", "-p", values["TAG_OBJECT"]], allow_failure=True)
+        if tag_body.returncode:
+            unavailable("TAG_OBJECT")
+            return
+        headers = tag_body.stdout.split("\n\n", 1)[0].splitlines()
+        objects = [line[7:] for line in headers if line.startswith("object ")]
+        types = [line[5:] for line in headers if line.startswith("type ")]
+        if len(objects) != 1 or objects[0] != values["DIRECT_TARGET"]:
+            inconsistent("DIRECT_TARGET")
+            return
+        if len(types) != 1 or types[0] != values["DIRECT_TARGET_DECLARED_TYPE"]:
+            inconsistent("DIRECT_TARGET_DECLARED_TYPE")
+            return
+        for key in ("DIRECT_TARGET", "SUCCESSOR_BASE"):
+            object_type = run_git(root, ["cat-file", "-t", values[key]], allow_failure=True)
+            if object_type.returncode:
+                unavailable(key)
+                return
+            if object_type.stdout.strip() != "commit":
+                inconsistent(f"{key}_ACTUAL_TYPE")
+                return
+
+        def ancestor_or_equal(ancestor: str, descendant: str) -> Optional[bool]:
+            if ancestor == descendant:
+                return True
+            probe = run_git(
+                root,
+                ["merge-base", "--is-ancestor", ancestor, descendant],
+                allow_failure=True,
+            )
+            return probe.returncode == 0 if probe.returncode in (0, 1) else None
+
+        head = run_git(root, ["rev-parse", "HEAD"]).stdout.strip()
+        relations = (
+            ("DIRECT_TARGET_TO_SUCCESSOR_BASE", values["DIRECT_TARGET"], values["SUCCESSOR_BASE"]),
+            ("SUCCESSOR_BASE_TO_HEAD", values["SUCCESSOR_BASE"], head),
+        )
+        for name, ancestor, descendant in relations:
+            relation = ancestor_or_equal(ancestor, descendant)
+            if relation is None:
+                unavailable(name)
+                return
+            if not relation:
+                inconsistent(name)
+                return
         return
     directory, stem = release_paths(previous)
     scope_path = f"{directory}/{stem}-scope.md"
@@ -827,6 +1026,9 @@ def validate(
     declaration, declaration_detail = parse_lifecycle_declaration(
         docs["contract"]
     )
+    predecessor_model, predecessor_detail = parse_predecessor_declaration(
+        docs["contract"]
+    )
     phase_numbers: list[int] = []
     if docs["phase_list"]:
         phase_numbers, _ = parse_phase_states(docs["phase_list"], "Status")
@@ -860,6 +1062,33 @@ def validate(
             docs["contract"].path if docs["contract"] else "",
             0,
             "immutable-transition-v1 requires valid lifecycle boundary metadata",
+        )
+    disposition_path = (
+        f"docs/release/v{version.rsplit('.', 1)[0]}/"
+        f"v{version}-predecessor-disposition.md"
+    )
+    disposition_target = root / disposition_path
+    disposition_present = disposition_target.exists() or disposition_target.is_symlink()
+    if predecessor_detail:
+        result.add(
+            "CKRS019",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            f"predecessor disposition declaration is invalid: {predecessor_detail}",
+        )
+    elif predecessor_model and declaration is None:
+        result.add(
+            "CKRS019",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            "failed-publication-predecessor-v1 requires a valid immutable lifecycle declaration",
+        )
+    elif predecessor_model is None and disposition_present:
+        result.add(
+            "CKRS019",
+            disposition_path,
+            0,
+            "predecessor disposition is present but not selected by the active contract",
         )
     if requested_state == "auto":
         state, context, evidence_scope = infer_state(
@@ -919,8 +1148,21 @@ def validate(
     scope = tracker_metadata(docs["scope"], result)
     check_ckrs007(version, docs, state, result)
     check_ckrs008(version, scope[1] if scope else None, docs["train"], result)
-    previous = check_ckrs009(version, docs["changelog"], result) or previous_from_changelog
-    check_ckrs010(root, previous, result)
+    previous = check_ckrs009(
+        version, docs["changelog"], predecessor_model, result
+    ) or previous_from_changelog
+    if predecessor_detail is None and not (
+        predecessor_model is None and disposition_present
+    ):
+        check_ckrs010(
+            root,
+            version,
+            previous,
+            declaration,
+            predecessor_model,
+            docs["predecessor_disposition"],
+            result,
+        )
     check_ckrs011(previous, docs["readme"], docs["release_readme"], docs["train"], result)
     check_ckrs012_014(docs, state, boundaries, declaration, result)
     check_ckrs015(root, docs["phase_list"], result)

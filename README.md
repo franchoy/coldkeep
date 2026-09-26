@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.16%20ready%20for%20release-blue)
+![Status](https://img.shields.io/badge/status-v1.13.17%20recovery%20development-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -31,10 +31,14 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.16
-PHASE_12: COMPLETE
-PHASE_13: COMPLETE
-CK-V11316-007: CLOSED
+SOURCE_VERSION: 1.13.17
+RECOVERY_ROUTE: C_SUCCESSOR_VERSION
+CURRENT_PHASE: 2_NEXT
+TRACKED_PUBLICATION_MATERIAL: ABSENT
+V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
+V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
+CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
@@ -42,22 +46,15 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.16 — Snapshot Retention Integrity, Observability Truth, and Final v1.x
-Closure is the active exceptional critical-maintenance source train and is
-ready for release. Phase 12 technical correctness is established, Phase 13
-and external Phase 14 execution are complete, CK-V11316-007 is closed, and all
-15 findings are closed. Phase 15 tracked completion is a conditional candidate
-assertion: protected-merge authority becomes effective only if a separate
-owner-authorized Phase 15 audit approves the exact PR head and base. Phase 16
-is Next but cannot execute before that authorization. V1.x full closure is not
-established. Planned v1 feature and architecture work remains closed and
-frozen.
-
-The [Phase 15R2 immutable lifecycle contract recovery](docs/release/v1.13/v1.13.16-phase15r2-immutable-lifecycle-contract-recovery.md)
-adds fail-closed structural states for a future normal merge, exact annotated
-tag, and conditional closure while explicitly leaving authorization and
-certification to their external phase owners. It records no live merge, tag,
-publication, or closure.
+v1.13.17 — Annotated-Tag Certification Recovery is the active Route C
+development successor. Phases 0-1 are Complete, Phase 2 is Next, and its
+publication body/checksum are intentionally absent. The work is limited to
+release-state, tag-identity diagnostics, CI enforcement, and governance; it
+does not change product storage behavior. v1.13.16 is the immutable
+failed-publication predecessor: annotated tag A16 exists, its required tag CI
+failed, the tag certificate was withheld, no GitHub Release exists, and
+publication and Phase 19 remain unauthorized. V1.x full closure is not
+established.
 
 The latest published stable release remains v1.13.15. Its annotated tag object
 `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
@@ -69,13 +66,10 @@ V2 planning review is authorized. V2 implementation has not started and
 requires a separate plan.
 
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
-    V1_13_16: ACTIVE_EXCEPTIONAL_CRITICAL_MAINTENANCE
-    RELEASE_STATE: PRE_RELEASE
-    PHASE_12: COMPLETE
-    PHASE_13: COMPLETE
-    PHASE_14: COMPLETE
-    PHASE_15: COMPLETE_CONDITIONAL_CANDIDATE
-    PHASE_16: NEXT
+    V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+    V1_13_17: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
+    RELEASE_STATE: DEVELOPMENT
+    PHASE_2: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

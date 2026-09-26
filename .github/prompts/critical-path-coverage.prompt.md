@@ -2,10 +2,14 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.16
-PHASE_12: COMPLETE
-PHASE_13: COMPLETE
-CK-V11316-007: CLOSED
+SOURCE_VERSION: 1.13.17
+RECOVERY_ROUTE: C_SUCCESSOR_VERSION
+CURRENT_PHASE: 2_NEXT
+TRACKED_PUBLICATION_MATERIAL: ABSENT
+V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
+V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
+CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
@@ -102,16 +106,13 @@ When proposing coverage, provide:
 - whether it is release-blocking or advisory;
 - scope risks.
 
-## Active v1.13.16 maintenance boundaries
+## Active v1.13.17 recovery boundaries
 
-v1.13.16 is the active exceptional critical-maintenance train. Phase 12
-technical correctness is established, Phase 13 is complete, CK-V11316-007 is
-closed, and all 15 findings are closed. The source candidate is ready for
-release and external Phase 14 execution is complete. Phase 15 tracked
-completion is conditional on separate exact-head protected-merge authority;
-Phase 16 is Next but cannot execute before that authorization. v1.13.15 remains
-published stable and immutable. Follow the 20-phase plan, exact phase mode,
-and phase allowlist:
+v1.13.17 is the active Route C recovery successor. Phases 0-1 are Complete,
+Phase 2 is Next, and publication material is absent. v1.13.16 remains the
+immutable failed-publication predecessor, while v1.13.15 remains published
+stable and immutable. Follow the 10-phase plan, exact phase mode, and phase
+allowlist:
 
 - do not implement v2 or SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;

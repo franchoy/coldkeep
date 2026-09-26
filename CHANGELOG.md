@@ -20,7 +20,17 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.16 - 2026-09-20 — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
+## v1.13.17 - Unreleased — Annotated-Tag Certification Recovery
+
+- Starts the Route C recovery successor from the exact v1.13.16 merge commit.
+- Corrects release-state handling for annotated-tag object and direct-target
+  identities, adds bounded diagnostic schema v2, and records the selected
+  failed-publication predecessor without changing product storage behavior.
+- Phases 0-1 are Complete, Phase 2 is Next, and tracked publication material
+  remains absent. No push, PR, merge, successor tag, Release, or closure is
+  represented by this development entry.
+
+## v1.13.16 - 2026-09-20 [failed-publication-predecessor] — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
 
 - Activates the separately authorized exceptional v1.x critical-maintenance
   train from immutable v1.13.15 product baseline
@@ -38,13 +48,10 @@ project, do not start here; start with [README.md](README.md).
   closure candidate records all 15 confirmed findings closed, including
   CK-V11316-007, and materializes the canonical source-only v1.13.16 release
   body and checksum.
-- The source candidate is ready for release. External Phase 14 execution is
-  complete. Phase 15 tracked completion is a conditional candidate assertion
-  required by the lifecycle contract; protected-merge authority requires a
-  separate audit of the exact PR head and base. Phase 16 is Next but merge and
-  Phase 16 execution remain unauthorized until that audit succeeds. No
-  v1.13.16 tag or GitHub release exists, and final v1.x closure remains
-  reserved for Phase 19T.
+- The source merged as M16 and annotated tag A16 was created, but the original
+  required tag CI attempt failed. Its tag certificate was withheld, no GitHub
+  Release was created, publication was not authorized, and Phase 19 did not
+  start.
 - Added the Phase 15R2 `immutable-transition-v1` validator contract. It
   distinguishes normal-merge, annotated-tag, and conditional-closure artifacts
   without treating local or event-structure checks as authorization,

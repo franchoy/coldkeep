@@ -76,10 +76,14 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.16
-PHASE_12: COMPLETE
-PHASE_13: COMPLETE
-CK-V11316-007: CLOSED
+SOURCE_VERSION: 1.13.17
+RECOVERY_ROUTE: C_SUCCESSOR_VERSION
+CURRENT_PHASE: 2_NEXT
+TRACKED_PUBLICATION_MATERIAL: ABSENT
+V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
+V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
+CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
@@ -87,7 +91,13 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
-### Current pre-release candidate and protected-merge boundary
+v1.13.17 is the active Route C recovery successor in development. Phases 0-1
+are Complete and Phase 2 is Next. Publication material is absent. v1.13.16 is
+the immutable failed-publication predecessor; its tag certificate was withheld
+and no GitHub Release exists. No successor push, PR, merge, tag, publication,
+or closure is authorized by this tracked state.
+
+## Historical v1.13.16 authority narrative
 
 v1.13.16 remains the active exceptional critical-maintenance source train and
 is ready for release. Phase 13 completed with CK-V11316-007 closed and all 15

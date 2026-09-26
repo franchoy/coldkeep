@@ -2,10 +2,14 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.16
-PHASE_12: COMPLETE
-PHASE_13: COMPLETE
-CK-V11316-007: CLOSED
+SOURCE_VERSION: 1.13.17
+RECOVERY_ROUTE: C_SUCCESSOR_VERSION
+CURRENT_PHASE: 2_NEXT
+TRACKED_PUBLICATION_MATERIAL: ABSENT
+V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
+V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
+CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
@@ -17,13 +21,11 @@ Coldkeep is a correctness-first cold storage engine. The primary invariant is: n
 
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
 
-v1.13.16 is the active exceptional critical-maintenance train. Phase 12
-technical correctness is established, Phase 13 is complete, CK-V11316-007 is
-closed, and all 15 findings are closed. The source candidate is ready for
-release and external Phase 14 execution is complete. Phase 15 tracked
-completion is a conditional candidate assertion: protected-merge authority
-requires a separate audit of the exact PR head and base. Phase 16 is Next but
-cannot execute before that authorization. v1.13.15 remains
+v1.13.17 is the active Route C recovery successor in development, limited to
+release-state and tag-certification correction. Phases 0-1 are Complete and
+Phase 2 is Next. v1.13.16 is the immutable failed-publication predecessor: its
+public tag failed required certification, no GitHub Release exists, and no
+publication or closure is authorized. v1.13.15 remains
 published stable and immutable as the final planned v1.x release; planned v1
 feature and architecture work remains closed and frozen.
 
@@ -55,7 +57,7 @@ SQLite-first local productization belongs to v2.x.
 Do not remove PostgreSQL compatibility.
 Do not introduce SQLite-only assumptions into engine or catalog contracts.
 
-The root `AGENTS.md` and v1.13.16 20-phase controls are authoritative. Follow
+The root `AGENTS.md` and v1.13.17 10-phase controls are authoritative. Follow
 the exact phase mode and allowlist; do not perform an out-of-phase repair.
 Stop on scope expansion, unexpected dependency movement, release-identity
 drift, or newly discovered private security impact.
@@ -63,7 +65,7 @@ drift, or newly discovered private security impact.
 V2 planning review is authorized. V2 implementation has not started and
 requires a separate plan and explicit authorization. Do not introduce broad
 refactors, dependency movement, schema/format changes, or unplanned product
-work during v1.13.16.
+work during v1.13.17.
 
 Codacy is signal, not authority.
 Do not chase style-only or generic maintainability warnings at the expense of correctness.

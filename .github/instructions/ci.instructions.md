@@ -2,10 +2,14 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.16
-PHASE_12: COMPLETE
-PHASE_13: COMPLETE
-CK-V11316-007: CLOSED
+SOURCE_VERSION: 1.13.17
+RECOVERY_ROUTE: C_SUCCESSOR_VERSION
+CURRENT_PHASE: 2_NEXT
+TRACKED_PUBLICATION_MATERIAL: ABSENT
+V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
+V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
+CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
@@ -98,16 +102,14 @@ Critical-path coverage should focus on:
 
 Do not add global coverage gates unless explicitly approved.
 
-## v1.13.16 Maintenance Boundary
+## v1.13.17 Recovery Boundary
 
-v1.13.16 is the active exceptional critical-maintenance train. Phase 12
-technical correctness is established, Phase 13 is complete, CK-V11316-007 is
-closed, and all 15 findings are closed. The source candidate is ready for
-release and external Phase 14 execution is complete. Phase 15 tracked
-completion is conditional on a separate exact-head protected-merge
-authorization; Phase 16 is Next but cannot execute before it. v1.13.15 remains
-published stable and immutable. Use pre-release-state validation on
-`release/v1.13.16`, follow the 20-phase plan and exact phase mode, and do not
+v1.13.17 is the active Route C recovery successor in development. Phases 0-1
+are Complete and Phase 2 is Next. v1.13.16 is the immutable failed-publication
+predecessor; its public tag failed required certification and no GitHub
+Release exists. v1.13.15 remains published stable and immutable. Use
+development-state validation on `release/v1.13.17`, follow the 10-phase plan
+and exact phase mode, and do not
 use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
@@ -117,7 +119,8 @@ use CI work to introduce:
 - unassigned dependency or toolchain movement;
 - required gates outside the active phase allowlist.
 
-Treat v1.13.14 and v1.13.15 release evidence as immutable historical state.
+Treat v1.13.14 and v1.13.15 release evidence, and the v1.13.16
+failed-publication disposition, as immutable historical state.
 Do not perform out-of-phase repair, dependency movement, or schema/format
 change. V2 planning review is authorized; v2 implementation requires a
 separate plan. Stop on release identity drift or newly discovered private

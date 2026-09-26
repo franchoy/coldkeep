@@ -1,4 +1,6 @@
 from pathlib import Path
+import hashlib
+import re
 import shutil
 import tempfile
 import unittest
@@ -20,9 +22,63 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
         self.checksum.write_bytes(
             (governance.ROOT / governance.CANONICAL_RELEASE_BODY_CHECKSUM).read_bytes()
         )
+        for relative in (
+            governance.CANONICAL_CURRENT_STATE_FILE,
+            Path("docs/release/v1.13/v1.13.17-phase-list.md"),
+        ):
+            destination = self.root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(governance.ROOT / relative, destination)
 
     def assert_invalid(self) -> None:
         self.assertNotEqual(governance.validate_release_body(self.root), [])
+
+    def freeze_successor_body(self) -> tuple[Path, Path]:
+        body_path = self.root / governance.CURRENT_RELEASE_BODY
+        checksum_path = self.root / governance.CURRENT_RELEASE_BODY_CHECKSUM
+        body_path.parent.mkdir(parents=True, exist_ok=True)
+        body = (
+            "# v1.13.17 Annotated-Tag Certification Recovery\n\n"
+            "This source-only release has no custom assets. It preserves the "
+            "v1.13.15 stable state and the v1.13.16 failed publication while "
+            "distinguishing inherited product repairs from this release-tool correction.\n"
+        ).encode("utf-8")
+        digest = hashlib.sha256(body).hexdigest()
+        body_path.write_bytes(body)
+        checksum_path.write_text(
+            f"{digest}  {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+            encoding="ascii",
+        )
+        state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        state = state_path.read_text(encoding="utf-8")
+        state = state.replace("CURRENT_PHASE: 2_NEXT", "CURRENT_PHASE: 5_NEXT", 1)
+        state = state.replace(
+            "V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT",
+            "V1_13_17_STATE: READY_PRE_RELEASE",
+            1,
+        )
+        state = state.replace(
+            "TRACKED_PUBLICATION_MATERIAL: ABSENT",
+            "TRACKED_PUBLICATION_MATERIAL: FROZEN",
+            1,
+        )
+        state = state.replace(
+            "RELEASE_BODY_SHA256: ABSENT",
+            f"RELEASE_BODY_SHA256: {digest}",
+            1,
+        )
+        state_path.write_text(state, encoding="utf-8")
+        phase_path = self.root / Path("docs/release/v1.13/v1.13.17-phase-list.md")
+        phase = phase_path.read_text(encoding="utf-8")
+        for number in (2, 3, 4):
+            pattern = rf"(?ms)(^## Phase {number}\b.*?^\*\*Status:\*\*) (?:Next|Not started)$"
+            phase, count = re.subn(pattern, r"\1 Complete", phase, count=1)
+            self.assertEqual(count, 1)
+        pattern = r"(?ms)(^## Phase 5\b.*?^\*\*Status:\*\*) Not started$"
+        phase, count = re.subn(pattern, r"\1 Next", phase, count=1)
+        self.assertEqual(count, 1)
+        phase_path.write_text(phase, encoding="utf-8")
+        return body_path, checksum_path
 
     def test_exact_valid_identity_passes(self) -> None:
         self.assertEqual(governance.validate_release_body(self.root), [])
@@ -91,6 +147,26 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
         self.checksum.symlink_to(target)
         self.assert_invalid()
 
+    def test_absent_successor_pair_rejects_partial_presence(self) -> None:
+        body = self.root / governance.CURRENT_RELEASE_BODY
+        body.parent.mkdir(parents=True, exist_ok=True)
+        body.write_text("fixture\n", encoding="utf-8")
+        self.assert_invalid()
+
+    def test_frozen_successor_body_passes(self) -> None:
+        self.freeze_successor_body()
+        self.assertEqual(governance.validate_release_body(self.root), [])
+
+    def test_frozen_successor_digest_mismatch_fails(self) -> None:
+        body, _ = self.freeze_successor_body()
+        body.write_bytes(body.read_bytes().replace(b"source-only", b"source only", 1))
+        self.assert_invalid()
+
+    def test_frozen_successor_checksum_path_mismatch_fails(self) -> None:
+        _, checksum = self.freeze_successor_body()
+        checksum.write_text("0" * 64 + "  wrong.md\n", encoding="ascii")
+        self.assert_invalid()
+
 
 class GovernanceValidatorTests(unittest.TestCase):
     def test_repository_contracts_pass(self) -> None:
@@ -120,10 +196,18 @@ class GovernanceValidatorTests(unittest.TestCase):
             "historical-release",
         )
 
-    def test_v11316_current_authority_is_classified_current(self) -> None:
+    def test_v11316_failed_predecessor_is_historical(self) -> None:
         self.assertEqual(
             governance.classify_path(
                 Path("docs/release/v1.13/v1.13.16-release-state.md")
+            ),
+            "historical-release",
+        )
+
+    def test_v11317_current_authority_is_classified_current(self) -> None:
+        self.assertEqual(
+            governance.classify_path(
+                Path("docs/release/v1.13/v1.13.17-release-state.md")
             ),
             "current-authority",
         )
@@ -222,7 +306,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         self.assertEqual(governance.validate(self.root), [])
 
     def test_future_canonical_state_requires_mirror_updates(self) -> None:
-        self.replace_canonical_value("PHASE_13", "PHASE_13: FUTURE")
+        self.replace_canonical_value("CURRENT_PHASE", "CURRENT_PHASE: 3_NEXT")
         self.assert_governance_fails()
 
     def test_missing_required_canonical_field_fails(self) -> None:
@@ -253,8 +337,8 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
 
     def test_ck_row_aggregate_mismatch_fails(self) -> None:
         self.replace_once(
-            Path("docs/release/v1.13/v1.13.16-release-state.md"),
-            "CK-V11316-015: CLOSED_CERTIFIED\n",
+            governance.CANONICAL_CURRENT_STATE_FILE,
+            "CK-V11316-015: CLOSED_AT_V1.13.16_SOURCE_SCOPE\n",
             "",
         )
         self.assert_governance_fails()
@@ -274,11 +358,11 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         self.assert_governance_fails()
 
     def test_stale_live_mirror_fails(self) -> None:
-        phase_13 = self.canonical_state()["PHASE_13"]
+        current_phase = self.canonical_state()["CURRENT_PHASE"]
         self.replace_once(
             Path("AGENTS.md"),
-            f"PHASE_13: {phase_13}",
-            "PHASE_13: STALE_TEST_VALUE",
+            f"CURRENT_PHASE: {current_phase}",
+            "CURRENT_PHASE: STALE_TEST_VALUE",
         )
         self.assert_governance_fails()
 

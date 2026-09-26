@@ -25,7 +25,23 @@ LIFECYCLE_BOUNDARY = re.compile(
 LIFECYCLE_DECLARATION = re.compile(
     r"^\*\*(Lifecycle declaration model|Canonical repository):\*\*\s*(.*)$",
 )
+PREDECESSOR_DECLARATION = re.compile(
+    r"^\*\*Predecessor disposition model:\*\*\s*(.*)$",
+)
 SUPPORTED_LIFECYCLE_DECLARATION = "immutable-transition-v1"
+SUPPORTED_PREDECESSOR_DECLARATION = "failed-publication-predecessor-v1"
+PREDECESSOR_DISPOSITION_KEYS = (
+    "SCHEMA", "SUCCESSOR_VERSION", "PREDECESSOR_VERSION",
+    "CANONICAL_REPOSITORY", "PREDECESSOR_REF", "TAG_OBJECT",
+    "TAG_OBJECT_TYPE", "DIRECT_TARGET", "DIRECT_TARGET_DECLARED_TYPE",
+    "DIRECT_TARGET_ACTUAL_TYPE", "SUCCESSOR_BASE", "ORIGINAL_TAG_CI_RUN",
+    "ORIGINAL_TAG_CI_ATTEMPT", "ORIGINAL_TAG_CI_CONCLUSION",
+    "TAG_CERTIFICATE", "GITHUB_RELEASE_OBSERVATION",
+    "GITHUB_RELEASE_OBSERVED_AT_UTC", "PUBLICATION_AUTHORITY",
+    "TERMINAL_CLOSURE", "PREDECESSOR_FINAL_PHASE",
+    "DIAGNOSIS_ARCHIVE_BYTES", "DIAGNOSIS_ARCHIVE_SHA256",
+    "DIAGNOSIS_MANIFEST_SHA256",
+)
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 NONZERO_GIT_SHA = re.compile(r"^(?!0{40}$)[0-9a-f]{40}$")
 ProcessResult = subprocess.CompletedProcess[str]
@@ -68,7 +84,7 @@ class InternalError(Exception):
         self.message = message
 
 
-DIAGNOSTIC_SCHEMA = "coldkeep-release-state-diagnostic/v1"
+DIAGNOSTIC_SCHEMA = "coldkeep-release-state-diagnostic/v2"
 DIAGNOSTIC_RESULTS = {"PASS", "FAIL", "NOT_EVALUATED", "UNAVAILABLE"}
 PR_PREDICATES = (
     ("pr.env.actions", "environment", "GITHUB_ACTIONS equals true"),
@@ -110,6 +126,42 @@ RELEASE_PUSH_PREDICATES = (
     ("release_push.event.json", "event-file", "the consumed event text parses as JSON"),
     ("release_push.event.object", "event-file", "the parsed event is an object"),
     ("release_push.context", "environment-and-event", "the release-push context compound predicate matches"),
+)
+TAG_PREDICATES = (
+    ("tag.env.actions", "environment", "GITHUB_ACTIONS equals true"),
+    ("tag.env.event", "environment", "GITHUB_EVENT_NAME equals push"),
+    ("tag.env.full_ref", "environment", "GITHUB_REF equals the active version tag ref"),
+    ("tag.env.short_ref", "environment", "GITHUB_REF_NAME equals the active version tag"),
+    ("tag.env.ref_type", "environment", "GITHUB_REF_TYPE equals tag"),
+    ("tag.env.repository", "environment", "GITHUB_REPOSITORY equals the canonical repository"),
+    ("tag.env.runtime_sha_format", "environment", "GITHUB_SHA is a canonical full lowercase SHA"),
+    ("tag.env.event_path", "environment", "GITHUB_EVENT_PATH is present"),
+    ("tag.event.read", "event-file", "the selected event file is readable"),
+    ("tag.event.size", "event-file", "the selected event is at most 1048576 bytes"),
+    ("tag.event.utf8", "event-file", "the consumed event bytes decode as UTF-8"),
+    ("tag.event.json", "event-file", "the consumed event text parses as JSON"),
+    ("tag.event.object", "event-file", "the parsed event is an object"),
+    ("tag.payload.ref", "event-payload", "event ref equals the active version tag ref"),
+    ("tag.payload.before", "event-payload", "event before is the all-zero creation value"),
+    ("tag.payload.after_format", "event-payload", "event after is a canonical full lowercase SHA"),
+    ("tag.payload.created", "event-payload", "event created is boolean true"),
+    ("tag.payload.deleted", "event-payload", "event deleted is boolean false"),
+    ("tag.payload.forced", "event-payload", "event forced is boolean false"),
+    ("tag.payload.repository", "event-payload", "event repository is canonical"),
+    ("tag.git.not_shallow", "git-administration", "the repository is not shallow"),
+    ("tag.git.no_alternates", "git-administration", "no object alternates are configured"),
+    ("tag.git.no_grafts", "git-administration", "no grafts file is present"),
+    ("tag.git.no_replacements", "git-administration", "no replacement refs or namespace are active"),
+    ("tag.git.named_ref", "git-object", "the exact named tag ref resolves to one canonical object"),
+    ("tag.git.named_ref_type", "git-object", "the exact named object has raw type tag"),
+    ("tag.git.direct_target", "git-object", "the tag has exactly one direct object target"),
+    ("tag.git.direct_target_declared_type", "git-object", "the tag declares direct target type commit"),
+    ("tag.git.direct_target_actual_type", "git-object", "the direct target actual type is commit"),
+    ("tag.git.target_equals_head", "git-object", "the direct target equals checkout HEAD"),
+    ("tag.identity.runtime_sha", "environment-and-git", "runtime SHA is exact A or M and resolves to M"),
+    ("tag.identity.event_after", "event-and-git", "event after is exact A or M and resolves to M"),
+    ("tag.topology.parents_and_ancestry", "git-object", "HEAD is a normal ordered two-parent merge with first parent ancestral to second"),
+    ("tag.topology.tree", "git-object", "HEAD tree equals the second-parent candidate tree"),
 )
 
 
@@ -208,6 +260,8 @@ class DiagnosticRecorder:
             "event-snapshot-unavailable",
             "predicate-recording-unavailable",
             "diagnostic-construction-unavailable",
+            "output-size-limit",
+            "tag-observation-unavailable",
         } and reason not in self.incomplete_reasons:
             self.incomplete_reasons.append(reason)
 
@@ -290,8 +344,38 @@ class DiagnosticRecorder:
         branch: str,
         version: str,
         canonical_repository: str,
+        route: str,
     ) -> dict[str, object]:
         sha_pattern = GIT_SHA
+        if route == "tag-push":
+            tag_ref = f"refs/tags/v{version}"
+            return {
+                "github_actions": _bounded_identity(env.get("GITHUB_ACTIONS"), category="unexpected-actions", expected="true"),
+                "event_name": _bounded_identity(env.get("GITHUB_EVENT_NAME"), category="unexpected-event", expected="push"),
+                "full_ref": _bounded_identity(env.get("GITHUB_REF"), category="unexpected-full-ref", expected=tag_ref),
+                "short_ref": _bounded_identity(env.get("GITHUB_REF_NAME"), category="unexpected-short-ref", expected=f"v{version}"),
+                "ref_type": _bounded_identity(env.get("GITHUB_REF_TYPE"), category="unexpected-ref-type", expected="tag"),
+                "repository": _bounded_identity(env.get("GITHUB_REPOSITORY"), category="unexpected-repository", expected=canonical_repository),
+                "runtime_sha": _bounded_identity(env.get("GITHUB_SHA"), category="unexpected-runtime-sha", allow=sha_pattern),
+                "actual_checkout_commit": _bounded_identity(head, category="unexpected-checkout", allow=sha_pattern),
+                "actual_branch": _bounded_identity(branch, category="unexpected-branch", expected=""),
+                "checkout_tree": _unavailable_identity(),
+                "selected_ref": _bounded_identity(tag_ref, category="unexpected-tag-ref", expected=tag_ref),
+                "tag_object": _unavailable_identity(),
+                "tag_object_type": _unavailable_identity(),
+                "direct_target": _unavailable_identity(),
+                "direct_target_declared_type": _unavailable_identity(),
+                "direct_target_actual_type": _unavailable_identity(),
+                "runtime_sha_classification": _unavailable_identity(),
+                "runtime_sha_resolved_commit": _unavailable_identity(),
+                "event_after": _unavailable_identity(),
+                "event_after_classification": _unavailable_identity(),
+                "event_after_resolved_commit": _unavailable_identity(),
+                "isolation": {"shallow": None, "alternates": None, "grafts": None, "replacements": None},
+                "checkout_parents": [],
+                "first_parent_tree": _unavailable_identity(),
+                "second_parent_tree": _unavailable_identity(),
+            }
         ref_pattern = re.compile(r"refs/pull/[1-9][0-9]*/merge")
         short_ref_pattern = re.compile(r"[1-9][0-9]*/merge")
         return {
@@ -321,12 +405,18 @@ class DiagnosticRecorder:
         canonical_repository: str,
     ) -> int:
         evaluation_id = len(self.evaluations) + 1
+        route = (
+            "tag-push" if site.endswith("tag-push") else
+            "release-push" if site.endswith("release-push") else
+            "release-pr"
+        )
         self.evaluations.append({
             "id": evaluation_id,
             "site": site,
+            "route": route,
             "sequence": evaluation_id,
             "event_snapshot_id": None,
-            "runtime_context": self._runtime_context(env, head, branch, version, canonical_repository),
+            "runtime_context": self._runtime_context(env, head, branch, version, canonical_repository, route),
             "result": "UNAVAILABLE",
             "first_rejecting_predicate": None,
             "predicates": [],
@@ -337,17 +427,17 @@ class DiagnosticRecorder:
         self,
         evaluation_id: int,
         predicate_id: str,
-        passed: bool,
+        passed: Optional[bool],
         observed: dict[str, object],
     ) -> bool:
         try:
             evaluation = self.evaluations[evaluation_id - 1]
             spec = next(
                 item
-                for item in (*PR_PREDICATES, *RELEASE_PUSH_PREDICATES)
+                for item in (*PR_PREDICATES, *RELEASE_PUSH_PREDICATES, *TAG_PREDICATES)
                 if item[0] == predicate_id
             )
-            status = "PASS" if passed else "FAIL"
+            status = "PASS" if passed is True else "FAIL" if passed is False else "UNAVAILABLE"
             evaluation["predicates"].append({
                 "id": predicate_id,
                 "source_path": "scripts/release_state_support.py",
@@ -358,9 +448,9 @@ class DiagnosticRecorder:
                 "result": status,
                 "observed": observed,
             })
-            if not passed and evaluation["first_rejecting_predicate"] is None:
+            if passed is False and evaluation["first_rejecting_predicate"] is None:
                 evaluation["first_rejecting_predicate"] = predicate_id
-            return passed
+            return passed is True
         except Exception:
             self.mark_incomplete("predicate-recording-unavailable")
             return passed
@@ -377,9 +467,9 @@ class DiagnosticRecorder:
     def context_update(self, evaluation_id: int, **values: object) -> None:
         try:
             context = self.evaluations[evaluation_id - 1]["runtime_context"]
-            for key in ("checkout_parents", "checkout_tree", "payload_head_tree", "object_availability"):
-                if key in values:
-                    context[key] = values[key]
+            for key, value in values.items():
+                if key in context:
+                    context[key] = value
         except Exception:
             self.mark_incomplete("predicate-recording-unavailable")
 
@@ -388,9 +478,9 @@ class DiagnosticRecorder:
             evaluation = self.evaluations[evaluation_id - 1]
             seen = {item["id"] for item in evaluation["predicates"]}
             specs = (
-                RELEASE_PUSH_PREDICATES
-                if str(evaluation["site"]).endswith("release-push")
-                else PR_PREDICATES
+                TAG_PREDICATES if evaluation["route"] == "tag-push" else
+                RELEASE_PUSH_PREDICATES if evaluation["route"] == "release-push" else
+                PR_PREDICATES
             )
             for predicate_id, input_source, required_relation in specs:
                 if predicate_id in seen:
@@ -405,7 +495,12 @@ class DiagnosticRecorder:
                     "result": "NOT_EVALUATED",
                     "observed": _unavailable_identity("not-evaluated"),
                 })
-            evaluation["result"] = "PASS" if accepted else "FAIL"
+            evaluation["result"] = (
+                "PASS" if accepted else
+                "UNAVAILABLE" if evaluation["first_rejecting_predicate"] is None
+                and any(item["result"] == "UNAVAILABLE" for item in evaluation["predicates"])
+                else "FAIL"
+            )
         except Exception:
             self.mark_incomplete("predicate-recording-unavailable")
         return accepted
@@ -451,7 +546,7 @@ class DiagnosticRecorder:
                 "run_attempt": _bounded_identity(self.environment.get("GITHUB_RUN_ATTEMPT"), category="unexpected-run-attempt", allow=digits),
                 "job": _bounded_identity(self.environment.get("GITHUB_JOB"), category="unexpected-job", expected="quality"),
                 "workflow": _bounded_identity(self.environment.get("GITHUB_WORKFLOW"), category="unexpected-workflow", expected="CI"),
-                "event_name": _bounded_identity(self.environment.get("GITHUB_EVENT_NAME"), category="unexpected-event", expected="pull_request"),
+                "event_name": _bounded_identity(self.environment.get("GITHUB_EVENT_NAME"), category="unexpected-event", allow=re.compile(r"(?:pull_request|push)")),
             },
             "event_snapshots": self.event_snapshots,
             "evaluations": self.evaluations,
@@ -487,6 +582,9 @@ class DiagnosticRecorder:
         if target.resolve() in protected:
             raise OSError("diagnostic destination unavailable")
         encoded = (json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(encoded) > 262144:
+            self.mark_incomplete("output-size-limit")
+            raise OSError("diagnostic output exceeds size limit")
         temporary_name: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -565,6 +663,13 @@ class LifecycleDeclaration:
 
     model: str
     canonical_repository: str
+
+
+@dataclass(frozen=True)
+class FailedPredecessorDisposition:
+    """Strict successor-owned record for a public but unpublished predecessor."""
+
+    values: dict[str, str]
 
 
 def heading_closes_section(line: str, level: int) -> bool:
@@ -811,6 +916,91 @@ def parse_lifecycle_declaration(
     if re.fullmatch(repository_pattern, repository) is None:
         return None, "canonical repository is malformed"
     return LifecycleDeclaration(model, repository), None
+
+
+def parse_predecessor_declaration(
+    doc: Optional[Document],
+) -> tuple[Optional[str], Optional[str]]:
+    """Parse the exact failed-publication selector independently."""
+    if doc is None:
+        return None, None
+    values = [
+        match.group(1).strip()
+        for line in doc.lines
+        if (match := PREDECESSOR_DECLARATION.match(line))
+    ]
+    if not values:
+        return None, None
+    if len(values) != 1 or not values[0]:
+        return None, "predecessor disposition declaration is empty or ambiguous"
+    if values[0] != SUPPORTED_PREDECESSOR_DECLARATION:
+        return None, "predecessor disposition declaration is unsupported"
+    return values[0], None
+
+
+def parse_failed_predecessor_disposition(
+    doc: Optional[Document],
+) -> tuple[Optional[FailedPredecessorDisposition], Optional[str]]:
+    """Parse one closed ordered predecessor-disposition block."""
+    if doc is None:
+        return None, "file is missing"
+    start_marker = "<!-- coldkeep-predecessor-disposition:start -->"
+    end_marker = "<!-- coldkeep-predecessor-disposition:end -->"
+    starts = [index for index, line in enumerate(doc.lines) if line == start_marker]
+    ends = [index for index, line in enumerate(doc.lines) if line == end_marker]
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        return None, "marker region is missing or ambiguous"
+    region = doc.lines[starts[0] + 1 : ends[0]]
+    if len(region) < 2 or region[0] != "```text" or region[-1] != "```":
+        return None, "marker region must contain one exact text fence"
+    if any(line.startswith("```") for line in region[1:-1]):
+        return None, "marker region contains an unexpected fence"
+    pairs: list[tuple[str, str]] = []
+    for line in region[1:-1]:
+        match = re.fullmatch(r"([A-Z0-9_]+): (\S(?:.*\S)?)", line)
+        if match is None:
+            return None, "machine row syntax is invalid"
+        pairs.append((match.group(1), match.group(2)))
+    keys = tuple(key for key, _ in pairs)
+    if keys != PREDECESSOR_DISPOSITION_KEYS:
+        return None, "schema-v1 key set or order is invalid"
+    values = dict(pairs)
+    if values["SCHEMA"] != "coldkeep-failed-publication-predecessor/v1":
+        return None, "SCHEMA is unsupported"
+    if any(
+        re.fullmatch(r"\d+\.\d+\.\d+", values[key]) is None
+        for key in ("SUCCESSOR_VERSION", "PREDECESSOR_VERSION")
+    ):
+        return None, "version field is malformed"
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", values["CANONICAL_REPOSITORY"]) is None:
+        return None, "CANONICAL_REPOSITORY is malformed"
+    if values["PREDECESSOR_REF"] != f"refs/tags/v{values['PREDECESSOR_VERSION']}":
+        return None, "PREDECESSOR_REF conflicts with PREDECESSOR_VERSION"
+    for key in ("TAG_OBJECT", "DIRECT_TARGET", "SUCCESSOR_BASE"):
+        if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
+            return None, f"{key} is malformed"
+    for key in ("DIAGNOSIS_ARCHIVE_SHA256", "DIAGNOSIS_MANIFEST_SHA256"):
+        if re.fullmatch(r"[0-9a-f]{64}", values[key]) is None:
+            return None, f"{key} is malformed"
+    for key in ("ORIGINAL_TAG_CI_RUN", "ORIGINAL_TAG_CI_ATTEMPT", "DIAGNOSIS_ARCHIVE_BYTES"):
+        if re.fullmatch(r"[1-9][0-9]*", values[key]) is None:
+            return None, f"{key} must be a positive integer"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", values["GITHUB_RELEASE_OBSERVED_AT_UTC"]) is None:
+        return None, "GITHUB_RELEASE_OBSERVED_AT_UTC is malformed"
+    expected_enums = {
+        "TAG_OBJECT_TYPE": "tag",
+        "DIRECT_TARGET_DECLARED_TYPE": "commit",
+        "DIRECT_TARGET_ACTUAL_TYPE": "commit",
+        "ORIGINAL_TAG_CI_CONCLUSION": "failure",
+        "TAG_CERTIFICATE": "withheld",
+        "GITHUB_RELEASE_OBSERVATION": "absent-including-drafts",
+        "PUBLICATION_AUTHORITY": "not-granted",
+        "TERMINAL_CLOSURE": "not-established",
+        "PREDECESSOR_FINAL_PHASE": "not-started-not-authorized",
+    }
+    if any(values[key] != expected for key, expected in expected_enums.items()):
+        return None, "failed-publication disposition claims an unsupported publication or closure state"
+    return FailedPredecessorDisposition(values), None
 
 
 def lifecycle_boundaries_match_topology(
@@ -1213,7 +1403,7 @@ def _diagnostic_predicate(
     recorder: Optional[DiagnosticRecorder],
     evaluation_id: Optional[int],
     predicate_id: str,
-    passed: bool,
+    passed: Optional[bool],
     observed: dict[str, object],
 ) -> bool:
     """Record a predicate without permitting diagnostics to alter its value."""
@@ -1222,7 +1412,7 @@ def _diagnostic_predicate(
             recorder.predicate(evaluation_id, predicate_id, passed, observed)
         except Exception:
             recorder.mark_incomplete("predicate-recording-unavailable")
-    return passed
+    return passed is True
 
 
 def _load_event(
@@ -1237,20 +1427,26 @@ def _load_event(
     """Load the exact event byte snapshot consumed by one evaluation."""
     path_bytes = path.encode("utf-8", errors="surrogatepass")
     basename = Path(path).name
+    route = (
+        "tag-push" if predicate_prefix == "tag" else
+        "release-push" if predicate_prefix == "release_push" else
+        "release-pr"
+    )
     snapshot: dict[str, object] = {
         "id": 0,
+        "route": route,
         "selector": "GITHUB_EVENT_PATH",
-        "path_basename": _bounded_identity(
+        "safe_basename": _bounded_identity(
             basename,
             category="unexpected-event-basename",
             expected="event.json",
         ),
-        "path_sha256": hashlib.sha256(path_bytes).hexdigest(),
+        "path_string_sha256": hashlib.sha256(path_bytes).hexdigest(),
         "present": None,
         "readable": False,
         "size_bytes": None,
         "content_sha256": None,
-        "configured_size_limit_bytes": None,
+        "size_limit_bytes": 1048576 if predicate_prefix == "tag" else None,
         "size_limit_status": "NOT_EVALUATED",
         "utf8_status": "NOT_EVALUATED",
         "json_status": "NOT_EVALUATED",
@@ -1261,8 +1457,13 @@ def _load_event(
         recorder.attach_snapshot(evaluation_id, snapshot)
     # diagnostic-predicate: pr.event.read
     # diagnostic-predicate: release_push.event.read
+    # diagnostic-predicate: tag.event.read
     try:
-        raw = Path(path).read_bytes()
+        if predicate_prefix == "tag":
+            with Path(path).open("rb") as handle:
+                raw = handle.read(1048577)
+        else:
+            raw = Path(path).read_bytes()
     except FileNotFoundError:
         snapshot["present"] = False
         _diagnostic_predicate(recorder, evaluation_id, f"{predicate_prefix}.event.read", False, _unavailable_identity("not-found"))
@@ -1276,8 +1477,15 @@ def _load_event(
     snapshot["size_bytes"] = len(raw)
     snapshot["content_sha256"] = hashlib.sha256(raw).hexdigest()
     _diagnostic_predicate(recorder, evaluation_id, f"{predicate_prefix}.event.read", True, _bounded_identity(len(raw), category="unexpected-size", allow_positive_integer=True))
+    if predicate_prefix == "tag":
+        within_limit = len(raw) <= 1048576
+        snapshot["size_limit_status"] = "PASS" if within_limit else "FAIL"
+        # diagnostic-predicate: tag.event.size
+        if not _diagnostic_predicate(recorder, evaluation_id, "tag.event.size", within_limit, _bounded_identity(len(raw), category="unexpected-size", allow_positive_integer=True)):
+            return None
     # diagnostic-predicate: pr.event.utf8
     # diagnostic-predicate: release_push.event.utf8
+    # diagnostic-predicate: tag.event.utf8
     try:
         text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     except UnicodeDecodeError:
@@ -1288,6 +1496,7 @@ def _load_event(
     _diagnostic_predicate(recorder, evaluation_id, f"{predicate_prefix}.event.utf8", True, _bounded_identity("utf-8", category="unexpected-encoding", expected="utf-8"))
     # diagnostic-predicate: pr.event.json
     # diagnostic-predicate: release_push.event.json
+    # diagnostic-predicate: tag.event.json
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
@@ -1300,10 +1509,22 @@ def _load_event(
     is_object = isinstance(payload, dict)
     # diagnostic-predicate: pr.event.object
     # diagnostic-predicate: release_push.event.object
+    # diagnostic-predicate: tag.event.object
     _diagnostic_predicate(recorder, evaluation_id, f"{predicate_prefix}.event.object", is_object, _bounded_identity(_type_name(payload), category="unexpected-event-shape", expected="object"))
     if not is_object:
         return None
-    snapshot["projection"] = _event_projection(payload, version, canonical_repository)
+    if predicate_prefix == "tag":
+        snapshot["projection"] = {
+            "ref": _bounded_identity(payload.get("ref"), category="unexpected-tag-ref", expected=f"refs/tags/v{version}"),
+            "before": _bounded_identity(payload.get("before"), category="unexpected-before", expected="0" * 40),
+            "after": _bounded_identity(payload.get("after"), category="unexpected-after", allow=GIT_SHA),
+            "created": _bounded_identity(payload.get("created"), category="unexpected-created", expected=None),
+            "deleted": _bounded_identity(payload.get("deleted"), category="unexpected-deleted", expected=None),
+            "forced": _bounded_identity(payload.get("forced"), category="unexpected-forced", expected=None),
+            "repository": _bounded_identity(_repository_name(payload.get("repository")), category="unexpected-repository", expected=canonical_repository),
+        }
+    else:
+        snapshot["projection"] = _event_projection(payload, version, canonical_repository)
     return payload
 
 
@@ -1706,33 +1927,291 @@ def strict_tag_push_context(
     head: str,
     env: dict[str, str],
     canonical_repository: str,
+    *,
+    branch: str = "",
+    diagnostic: Optional[DiagnosticRecorder] = None,
+    diagnostic_site: str = "tag-push",
 ) -> bool:
-    """Validate ordinary tag-creation event context separately from main."""
+    """Validate the selected annotated-tag creation through one ordered path."""
     expected_ref = f"refs/tags/v{version}"
-    payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
-    tag_object_result = run_git(
-        root, ["rev-parse", expected_ref], allow_failure=True
+    evaluation_id: Optional[int] = None
+    if diagnostic is not None:
+        try:
+            evaluation_id = diagnostic.begin_evaluation(
+                diagnostic_site,
+                env,
+                head,
+                branch,
+                version,
+                canonical_repository,
+            )
+        except Exception:
+            diagnostic.mark_incomplete("diagnostic-construction-unavailable")
+
+    def observed(
+        value: object,
+        category: str,
+        *,
+        expected: Optional[str] = None,
+        allow: Optional[re.Pattern[str]] = None,
+    ) -> dict[str, object]:
+        return _bounded_identity(
+            value,
+            category=category,
+            expected=expected,
+            allow=allow,
+        )
+
+    def check(
+        predicate_id: str,
+        condition: Optional[bool],
+        value: dict[str, object],
+    ) -> bool:
+        return _diagnostic_predicate(
+            diagnostic, evaluation_id, predicate_id, condition, value
+        )
+
+    def finish(accepted: bool) -> bool:
+        if diagnostic is not None and evaluation_id is not None:
+            return diagnostic.finish_evaluation(evaluation_id, accepted)
+        return accepted
+
+    def tag_git(args: list[str]) -> Optional[ProcessResult]:
+        child_env = dict(os.environ)
+        child_env["GIT_NO_REPLACE_OBJECTS"] = "1"
+        try:
+            return run_process(
+                [resolved_executable("git"), "-C", str(root), *args],
+                env=child_env,
+            )
+        except OSError:
+            if diagnostic is not None:
+                diagnostic.mark_incomplete("tag-observation-unavailable")
+            return None
+
+    # diagnostic-predicate: tag.env.actions
+    if not check("tag.env.actions", env["GITHUB_ACTIONS"] == "true", observed(env["GITHUB_ACTIONS"], "unexpected-actions", expected="true")):
+        return finish(False)
+    # diagnostic-predicate: tag.env.event
+    if not check("tag.env.event", env["GITHUB_EVENT_NAME"] == "push", observed(env["GITHUB_EVENT_NAME"], "unexpected-event", expected="push")):
+        return finish(False)
+    # diagnostic-predicate: tag.env.full_ref
+    if not check("tag.env.full_ref", env["GITHUB_REF"] == expected_ref, observed(env["GITHUB_REF"], "unexpected-full-ref", expected=expected_ref)):
+        return finish(False)
+    # diagnostic-predicate: tag.env.short_ref
+    if not check("tag.env.short_ref", env["GITHUB_REF_NAME"] == f"v{version}", observed(env["GITHUB_REF_NAME"], "unexpected-short-ref", expected=f"v{version}")):
+        return finish(False)
+    # diagnostic-predicate: tag.env.ref_type
+    if not check("tag.env.ref_type", env["GITHUB_REF_TYPE"] == "tag", observed(env["GITHUB_REF_TYPE"], "unexpected-ref-type", expected="tag")):
+        return finish(False)
+    # diagnostic-predicate: tag.env.repository
+    if not check("tag.env.repository", env["GITHUB_REPOSITORY"] == canonical_repository, observed(env["GITHUB_REPOSITORY"], "unexpected-repository", expected=canonical_repository)):
+        return finish(False)
+    runtime_sha_valid = GIT_SHA.fullmatch(env["GITHUB_SHA"]) is not None
+    # diagnostic-predicate: tag.env.runtime_sha_format
+    if not check("tag.env.runtime_sha_format", runtime_sha_valid, observed(env["GITHUB_SHA"], "unexpected-runtime-sha", allow=GIT_SHA)):
+        return finish(False)
+    # diagnostic-predicate: tag.env.event_path
+    if not check("tag.env.event_path", bool(env["GITHUB_EVENT_PATH"]), observed("present" if env["GITHUB_EVENT_PATH"] else "absent", "unexpected-event-path-state", expected="present")):
+        return finish(False)
+
+    payload = _load_event(
+        env["GITHUB_EVENT_PATH"],
+        recorder=diagnostic,
+        evaluation_id=evaluation_id,
+        version=version,
+        canonical_repository=canonical_repository,
+        predicate_prefix="tag",
     )
-    tag_object = tag_object_result.stdout.strip()
-    return bool(
-        env["GITHUB_ACTIONS"] == "true"
-        and env["GITHUB_EVENT_NAME"] == "push"
-        and env["GITHUB_REF"] == expected_ref
-        and env["GITHUB_REF_NAME"] == f"v{version}"
-        and env["GITHUB_REF_TYPE"] == "tag"
-        and env["GITHUB_REPOSITORY"] == canonical_repository
-        and env["GITHUB_SHA"] == head
-        and payload
-        and payload.get("ref") == expected_ref
-        and payload.get("before") == "0" * 40
-        and tag_object_result.returncode == 0
-        and GIT_SHA.fullmatch(tag_object)
-        and payload.get("after") == head
-        and payload.get("created") is True
-        and payload.get("deleted") is False
-        and payload.get("forced") is False
-        and _repository_name(payload.get("repository")) == canonical_repository
+    if payload is None:
+        return finish(False)
+
+    # diagnostic-predicate: tag.payload.ref
+    if not check("tag.payload.ref", payload.get("ref") == expected_ref, observed(payload.get("ref"), "unexpected-tag-ref", expected=expected_ref)):
+        return finish(False)
+    # diagnostic-predicate: tag.payload.before
+    if not check("tag.payload.before", payload.get("before") == "0" * 40, observed(payload.get("before"), "unexpected-before", expected="0" * 40)):
+        return finish(False)
+    after = payload.get("after")
+    after_valid = isinstance(after, str) and GIT_SHA.fullmatch(after) is not None
+    # diagnostic-predicate: tag.payload.after_format
+    if not check("tag.payload.after_format", after_valid, observed(after, "unexpected-after", allow=GIT_SHA)):
+        return finish(False)
+    # diagnostic-predicate: tag.payload.created
+    if not check("tag.payload.created", payload.get("created") is True, observed(_type_name(payload.get("created")), "unexpected-created", expected="boolean")):
+        return finish(False)
+    # diagnostic-predicate: tag.payload.deleted
+    if not check("tag.payload.deleted", payload.get("deleted") is False, observed(_type_name(payload.get("deleted")), "unexpected-deleted", expected="boolean")):
+        return finish(False)
+    # diagnostic-predicate: tag.payload.forced
+    if not check("tag.payload.forced", payload.get("forced") is False, observed(_type_name(payload.get("forced")), "unexpected-forced", expected="boolean")):
+        return finish(False)
+    repository = _repository_name(payload.get("repository"))
+    # diagnostic-predicate: tag.payload.repository
+    if not check("tag.payload.repository", repository == canonical_repository, observed(repository, "unexpected-repository", expected=canonical_repository)):
+        return finish(False)
+
+    shallow = tag_git(["rev-parse", "--is-shallow-repository"])
+    shallow_value = shallow.stdout.strip() if shallow and shallow.returncode == 0 else None
+    shallow_ok: Optional[bool] = shallow_value == "false" if shallow_value is not None else None
+    # diagnostic-predicate: tag.git.not_shallow
+    if not check("tag.git.not_shallow", shallow_ok, observed(shallow_value, "unexpected-shallow-state", expected="false")):
+        return finish(False)
+
+    alternate_path_result = tag_git(["rev-parse", "--git-path", "objects/info/alternates"])
+    alternate_path = Path(alternate_path_result.stdout.strip()) if alternate_path_result and alternate_path_result.returncode == 0 and alternate_path_result.stdout.strip() else None
+    if alternate_path is not None and not alternate_path.is_absolute():
+        alternate_path = root / alternate_path
+    alternate_file_absent = alternate_path is not None and not alternate_path.exists()
+    alternate_env_absent = not os.environ.get("GIT_ALTERNATE_OBJECT_DIRECTORIES") and not os.environ.get("GIT_OBJECT_DIRECTORY")
+    alternates_ok: Optional[bool] = alternate_file_absent and alternate_env_absent if alternate_path is not None else None
+    # diagnostic-predicate: tag.git.no_alternates
+    if not check("tag.git.no_alternates", alternates_ok, observed("absent" if alternates_ok else "present" if alternates_ok is False else None, "unexpected-alternates-state", expected="absent")):
+        return finish(False)
+
+    graft_path_result = tag_git(["rev-parse", "--git-path", "info/grafts"])
+    graft_path = Path(graft_path_result.stdout.strip()) if graft_path_result and graft_path_result.returncode == 0 and graft_path_result.stdout.strip() else None
+    if graft_path is not None and not graft_path.is_absolute():
+        graft_path = root / graft_path
+    grafts_ok: Optional[bool] = (not graft_path.exists() or graft_path.stat().st_size == 0) if graft_path is not None else None
+    # diagnostic-predicate: tag.git.no_grafts
+    if not check("tag.git.no_grafts", grafts_ok, observed("absent" if grafts_ok else "present" if grafts_ok is False else None, "unexpected-grafts-state", expected="absent")):
+        return finish(False)
+
+    replacements = tag_git(["for-each-ref", "--format=%(refname)", "refs/replace"])
+    replacement_env_absent = not os.environ.get("GIT_REPLACE_REF_BASE") and not os.environ.get("GIT_NAMESPACE")
+    replacements_ok: Optional[bool] = (not replacements.stdout.strip() and replacement_env_absent) if replacements and replacements.returncode == 0 else None
+    # diagnostic-predicate: tag.git.no_replacements
+    if not check("tag.git.no_replacements", replacements_ok, observed("absent" if replacements_ok else "present" if replacements_ok is False else None, "unexpected-replacement-state", expected="absent")):
+        return finish(False)
+
+    named = tag_git(["show-ref", "--verify", "--hash", expected_ref])
+    named_lines = named.stdout.splitlines() if named and named.returncode == 0 else []
+    tag_object = named_lines[0] if len(named_lines) == 1 and GIT_SHA.fullmatch(named_lines[0]) else None
+    named_ok: Optional[bool] = tag_object is not None if named is not None and named.returncode in (0, 1) else None
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(evaluation_id, tag_object=observed(tag_object, "unexpected-tag-object", allow=GIT_SHA))
+    # diagnostic-predicate: tag.git.named_ref
+    if not check("tag.git.named_ref", named_ok, observed(tag_object, "unexpected-tag-object", allow=GIT_SHA)):
+        return finish(False)
+
+    tag_type_result = tag_git(["cat-file", "-t", tag_object])
+    tag_type = tag_type_result.stdout.strip() if tag_type_result and tag_type_result.returncode == 0 else None
+    tag_type_ok: Optional[bool] = tag_type == "tag" if tag_type is not None else None
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(evaluation_id, tag_object_type=observed(tag_type, "unexpected-tag-object-type", expected="tag"))
+    # diagnostic-predicate: tag.git.named_ref_type
+    if not check("tag.git.named_ref_type", tag_type_ok, observed(tag_type, "unexpected-tag-object-type", expected="tag")):
+        return finish(False)
+
+    tag_size_result = tag_git(["cat-file", "-s", tag_object])
+    tag_size = (
+        int(tag_size_result.stdout.strip())
+        if tag_size_result
+        and tag_size_result.returncode == 0
+        and re.fullmatch(r"[0-9]+", tag_size_result.stdout.strip())
+        else None
     )
+    if tag_size is None:
+        check("tag.git.direct_target", None, _unavailable_identity("tag-size-unavailable"))
+        return finish(False)
+    if tag_size > 65536:
+        check("tag.git.direct_target", False, observed("oversized", "unexpected-tag-size", expected="bounded"))
+        return finish(False)
+    tag_body_result = tag_git(["cat-file", "-p", tag_object])
+    if tag_body_result is None or tag_body_result.returncode != 0:
+        check("tag.git.direct_target", None, _unavailable_identity("tag-object-unavailable"))
+        return finish(False)
+    headers = tag_body_result.stdout.split("\n\n", 1)[0].splitlines()
+    object_headers = [line.removeprefix("object ") for line in headers if line.startswith("object ")]
+    type_headers = [line.removeprefix("type ") for line in headers if line.startswith("type ")]
+    direct_target = object_headers[0] if len(object_headers) == 1 and GIT_SHA.fullmatch(object_headers[0]) else None
+    direct_ok = direct_target is not None
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(evaluation_id, direct_target=observed(direct_target, "unexpected-direct-target", allow=GIT_SHA))
+    # diagnostic-predicate: tag.git.direct_target
+    if not check("tag.git.direct_target", direct_ok, observed(direct_target, "unexpected-direct-target", allow=GIT_SHA)):
+        return finish(False)
+    declared_type = type_headers[0] if len(type_headers) == 1 else None
+    declared_ok = declared_type == "commit"
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(evaluation_id, direct_target_declared_type=observed(declared_type, "unexpected-declared-type", expected="commit"))
+    # diagnostic-predicate: tag.git.direct_target_declared_type
+    if not check("tag.git.direct_target_declared_type", declared_ok, observed(declared_type, "unexpected-declared-type", expected="commit")):
+        return finish(False)
+
+    direct_type_result = tag_git(["cat-file", "-t", direct_target])
+    direct_type = direct_type_result.stdout.strip() if direct_type_result and direct_type_result.returncode == 0 else None
+    direct_type_ok: Optional[bool] = direct_type == "commit" if direct_type is not None else None
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(evaluation_id, direct_target_actual_type=observed(direct_type, "unexpected-direct-target-type", expected="commit"))
+    # diagnostic-predicate: tag.git.direct_target_actual_type
+    if not check("tag.git.direct_target_actual_type", direct_type_ok, observed(direct_type, "unexpected-direct-target-type", expected="commit")):
+        return finish(False)
+    # diagnostic-predicate: tag.git.target_equals_head
+    if not check("tag.git.target_equals_head", direct_target == head, observed("equal" if direct_target == head else "different", "unexpected-target-relation", expected="equal")):
+        return finish(False)
+
+    def classify(raw: object) -> tuple[Optional[str], Optional[str]]:
+        if raw == head:
+            return "merge-commit", head
+        if raw == tag_object:
+            return "annotated-tag", direct_target
+        return None, None
+
+    runtime_class, runtime_resolved = classify(env["GITHUB_SHA"])
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(
+            evaluation_id,
+            runtime_sha_classification=observed(runtime_class, "unexpected-runtime-class", allow=re.compile(r"(?:merge-commit|annotated-tag)")),
+            runtime_sha_resolved_commit=observed(runtime_resolved, "unexpected-runtime-resolution", allow=GIT_SHA),
+            event_after=observed(after, "unexpected-after", allow=GIT_SHA),
+        )
+    runtime_ok = runtime_resolved == head
+    # diagnostic-predicate: tag.identity.runtime_sha
+    if not check("tag.identity.runtime_sha", runtime_ok, observed(runtime_class, "unexpected-runtime-class", allow=re.compile(r"(?:merge-commit|annotated-tag)"))):
+        return finish(False)
+    after_class, after_resolved = classify(after)
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(
+            evaluation_id,
+            event_after_classification=observed(after_class, "unexpected-after-class", allow=re.compile(r"(?:merge-commit|annotated-tag)")),
+            event_after_resolved_commit=observed(after_resolved, "unexpected-after-resolution", allow=GIT_SHA),
+        )
+    after_ok = after_resolved == head
+    # diagnostic-predicate: tag.identity.event_after
+    if not check("tag.identity.event_after", after_ok, observed(after_class, "unexpected-after-class", allow=re.compile(r"(?:merge-commit|annotated-tag)"))):
+        return finish(False)
+
+    parents_result = tag_git(["rev-list", "--parents", "-n", "1", head])
+    parent_parts = parents_result.stdout.strip().split() if parents_result and parents_result.returncode == 0 else []
+    parents = parent_parts[1:] if parent_parts and parent_parts[0] == head else []
+    ancestry_result = tag_git(["merge-base", "--is-ancestor", parents[0], parents[1]]) if len(parents) == 2 else None
+    ancestry_ok: Optional[bool] = ancestry_result.returncode == 0 if ancestry_result and ancestry_result.returncode in (0, 1) else None
+    topology_ok: Optional[bool] = len(parents) == 2 and ancestry_ok if parents_result and parents_result.returncode == 0 else None
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(evaluation_id, checkout_parents=parents[:2])
+    # diagnostic-predicate: tag.topology.parents_and_ancestry
+    if not check("tag.topology.parents_and_ancestry", topology_ok, observed("ordered-normal-merge" if topology_ok else "different" if topology_ok is False else None, "unexpected-topology", expected="ordered-normal-merge")):
+        return finish(False)
+
+    head_tree_result = tag_git(["rev-parse", f"{head}^{{tree}}"])
+    second_tree_result = tag_git(["rev-parse", f"{parents[1]}^{{tree}}"])
+    first_tree_result = tag_git(["rev-parse", f"{parents[0]}^{{tree}}"])
+    head_tree = head_tree_result.stdout.strip() if head_tree_result and head_tree_result.returncode == 0 and GIT_SHA.fullmatch(head_tree_result.stdout.strip()) else None
+    second_tree = second_tree_result.stdout.strip() if second_tree_result and second_tree_result.returncode == 0 and GIT_SHA.fullmatch(second_tree_result.stdout.strip()) else None
+    first_tree = first_tree_result.stdout.strip() if first_tree_result and first_tree_result.returncode == 0 and GIT_SHA.fullmatch(first_tree_result.stdout.strip()) else None
+    trees_ok: Optional[bool] = head_tree == second_tree if head_tree is not None and second_tree is not None else None
+    if diagnostic is not None and evaluation_id is not None:
+        diagnostic.context_update(
+            evaluation_id,
+            checkout_tree=observed(head_tree, "unexpected-tree", allow=GIT_SHA),
+            first_parent_tree=observed(first_tree, "unexpected-tree", allow=GIT_SHA),
+            second_parent_tree=observed(second_tree, "unexpected-tree", allow=GIT_SHA),
+        )
+    # diagnostic-predicate: tag.topology.tree
+    check("tag.topology.tree", trees_ok, observed("equal" if trees_ok else "different" if trees_ok is False else None, "unexpected-tree-relation", expected="equal"))
+    return finish(trees_ok is True)
 
 
 def _same_repository_pr(
@@ -1876,7 +2355,14 @@ def v1_context_scope(
                 return None
             return "LOCAL_TAG_ARTIFACT_ONLY"
         if strict_tag_push_context(
-            root, version, head, env, declaration.canonical_repository
+            root,
+            version,
+            head,
+            env,
+            declaration.canonical_repository,
+            branch=branch,
+            diagnostic=diagnostic,
+            diagnostic_site=f"{diagnostic_site}-tag-push",
         ):
             if state == "tagged-pending-tag-certification" and not normal_merge_artifact(
                 root, head
