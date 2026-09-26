@@ -37,6 +37,7 @@ from release_state_support import (
     gate_verdict_present,
     lifecycle_boundaries_match_topology,
     lifecycle_progression_valid,
+    load_predecessor_disposition_document,
     main_context,
     metadata_named,
     parse_lifecycle_boundaries,
@@ -161,22 +162,7 @@ def active_docs(
         "reconciliation": f"{directory}/{stem}-release-train-reconciliation.md",
         "contract": f"{directory}/{stem}-release-state-validator-contract.md",
     }
-    documents = {key: read_document(root, path, result) for key, path in paths.items()}
-    disposition_path = f"{directory}/{stem}-predecessor-disposition.md"
-    try:
-        documents["predecessor_disposition"] = Document.load(
-            root, disposition_path
-        )
-    except FileNotFoundError:
-        documents["predecessor_disposition"] = None
-    except UnicodeDecodeError:
-        # The selected route assigns encoding failures to CKRS010. An empty
-        # sentinel document keeps discovery non-exceptional and lets that
-        # rule report the bounded structural failure.
-        documents["predecessor_disposition"] = Document(
-            root, disposition_path, []
-        )
-    return documents
+    return {key: read_document(root, path, result) for key, path in paths.items()}
 
 
 def check_ckrs002(version: str, doc: Optional[Document], result: ValidationResult) -> None:
@@ -358,6 +344,7 @@ def check_ckrs010(
     declaration: Optional[LifecycleDeclaration],
     predecessor_model: Optional[str],
     disposition_doc: Optional[Document],
+    disposition_load_error: Optional[str],
     result: ValidationResult,
 ) -> None:
     if not previous:
@@ -365,30 +352,21 @@ def check_ckrs010(
     if predecessor_model:
         directory, stem = release_paths(version)
         disposition_path = f"{directory}/{stem}-predecessor-disposition.md"
-        target = root / disposition_path
+        if disposition_load_error is not None:
+            result.add(
+                "CKRS010",
+                disposition_path,
+                0,
+                "failed-publication predecessor disposition is structurally invalid: "
+                f"{disposition_load_error}",
+            )
+            return
         if disposition_doc is None:
             result.add(
                 "CKRS010",
                 disposition_path,
                 0,
                 f"failed-publication predecessor {previous} requires canonical disposition {disposition_path}: file is missing",
-            )
-            return
-        if not target.is_file() or target.is_symlink():
-            result.add(
-                "CKRS010",
-                disposition_path,
-                0,
-                "failed-publication predecessor disposition is structurally invalid: file must be regular and non-symlink",
-            )
-            return
-        raw = target.read_bytes()
-        if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw:
-            result.add(
-                "CKRS010",
-                disposition_path,
-                0,
-                "failed-publication predecessor disposition is structurally invalid: encoding or newline form is invalid",
             )
             return
         disposition, detail = parse_failed_predecessor_disposition(disposition_doc)
@@ -1068,7 +1046,15 @@ def validate(
         f"v{version}-predecessor-disposition.md"
     )
     disposition_target = root / disposition_path
-    disposition_present = disposition_target.exists() or disposition_target.is_symlink()
+    try:
+        os.lstat(disposition_target)
+        disposition_present = True
+    except FileNotFoundError:
+        disposition_present = False
+    except OSError:
+        disposition_present = True
+    disposition_doc: Optional[Document] = None
+    disposition_load_error: Optional[str] = None
     if predecessor_detail:
         result.add(
             "CKRS019",
@@ -1089,6 +1075,10 @@ def validate(
             disposition_path,
             0,
             "predecessor disposition is present but not selected by the active contract",
+        )
+    elif predecessor_model:
+        disposition_doc, disposition_load_error = (
+            load_predecessor_disposition_document(root, disposition_path)
         )
     if requested_state == "auto":
         state, context, evidence_scope = infer_state(
@@ -1160,7 +1150,8 @@ def validate(
             previous,
             declaration,
             predecessor_model,
-            docs["predecessor_disposition"],
+            disposition_doc,
+            disposition_load_error,
             result,
         )
     check_ckrs011(previous, docs["readme"], docs["release_readme"], docs["train"], result)
@@ -1296,7 +1287,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         status = emit(result, args.json)
         write_diagnostic(
             resolved_state=result.state,
-            result_status="pass" if status == 0 else "failed",
+            result_status="ok" if status == 0 else "error",
             exit_code=status,
             rule_codes=[item.rule for item in result.ordered()],
         )

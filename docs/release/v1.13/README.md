@@ -99,16 +99,19 @@ or closure is authorized by this tracked state.
 
 ## Historical v1.13.16 authority narrative
 
-v1.13.16 remains the active exceptional critical-maintenance source train and
-is ready for release. Phase 13 completed with CK-V11316-007 closed and all 15
-findings closed. The closure head passed fresh hosted certification and final
-exact-head Phase 13C recertification; external Phase 14 execution then
-completed at the development boundary. Phase 15 tracked completion is a
-pre-release conditional candidate assertion required by the lifecycle
-contract. Protected-merge authority becomes externally effective only if a
-separate owner-authorized Phase 15 audit approves this exact PR head and base.
-Phase 16 is Next but merge and Phase 16 execution are not authorized until
-then. V1.x full closure is not established.
+At its pre-merge checkpoint, v1.13.16 was the active exceptional
+critical-maintenance source train and was ready for release. Phase 13 had
+completed with CK-V11316-007 closed and all 15 findings closed. The closure
+head passed fresh hosted certification and final exact-head Phase 13C
+recertification; external Phase 14 execution then completed at the development
+boundary. Phase 15 tracked completion was a pre-release conditional candidate
+assertion required by the lifecycle contract, and Phase 16 was then Next.
+
+Subsequent execution merged that source candidate as M16 and created annotated
+tag A16, but the original tag CI failed certification. Its tag certificate was
+withheld, no GitHub Release was created, and v1.13.16 became the immutable
+failed-publication predecessor of the active v1.13.17 Route C successor. V1.x
+full closure remains unestablished.
 
 The [Phase 15R2 immutable lifecycle recovery](v1.13.16-phase15r2-immutable-lifecycle-contract-recovery.md)
 adds fail-closed, non-authorizing structural states for the same candidate

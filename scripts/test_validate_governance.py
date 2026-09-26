@@ -33,10 +33,46 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
     def assert_invalid(self) -> None:
         self.assertNotEqual(governance.validate_release_body(self.root), [])
 
-    def freeze_successor_body(self) -> tuple[Path, Path]:
+    def set_successor_phase(self, next_phase: int | None) -> None:
+        key = f"{next_phase}_NEXT" if next_phase is not None else "NONE_CLOSURE_CANDIDATE"
+        state_value = (
+            "READY_PRE_RELEASE" if next_phase == 5 else
+            "PUBLISHED_CLOSURE_PENDING" if next_phase == 9 else
+            "CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT" if next_phase is None else
+            "ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT"
+        )
+        state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        state = state_path.read_text(encoding="utf-8")
+        state = re.sub(r"(?m)^CURRENT_PHASE: \S+$", f"CURRENT_PHASE: {key}", state, count=1)
+        state = re.sub(
+            r"(?m)^V1_13_17_STATE: \S+$",
+            f"V1_13_17_STATE: {state_value}",
+            state,
+            count=1,
+        )
+        state_path.write_text(state, encoding="utf-8")
+        phase_path = self.root / Path("docs/release/v1.13/v1.13.17-phase-list.md")
+        phase = phase_path.read_text(encoding="utf-8")
+        for number in range(10):
+            status = (
+                "Complete" if next_phase is None or number < next_phase else
+                "Next" if number == next_phase else
+                "Not started"
+            )
+            pattern = rf"(?ms)(^## Phase {number}\b.*?^\*\*Status:\*\*) (?:Complete|Next|Not started)$"
+            phase, count = re.subn(pattern, rf"\1 {status}", phase, count=1)
+            self.assertEqual(count, 1)
+        phase_path.write_text(phase, encoding="utf-8")
+
+    def freeze_successor_body(self, next_phase: int | None = 5) -> tuple[Path, Path]:
         body_path = self.root / governance.CURRENT_RELEASE_BODY
         checksum_path = self.root / governance.CURRENT_RELEASE_BODY_CHECKSUM
         body_path.parent.mkdir(parents=True, exist_ok=True)
+        for candidate in (body_path, checksum_path):
+            if candidate.is_symlink() or candidate.is_file():
+                candidate.unlink()
+            elif candidate.exists():
+                candidate.rmdir()
         body = (
             "# v1.13.17 Annotated-Tag Certification Recovery\n\n"
             "This source-only release has no custom assets. It preserves the "
@@ -49,35 +85,22 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
             f"{digest}  {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
             encoding="ascii",
         )
+        self.set_successor_phase(next_phase)
         state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
         state = state_path.read_text(encoding="utf-8")
-        state = state.replace("CURRENT_PHASE: 2_NEXT", "CURRENT_PHASE: 5_NEXT", 1)
-        state = state.replace(
-            "V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT",
-            "V1_13_17_STATE: READY_PRE_RELEASE",
-            1,
-        )
-        state = state.replace(
-            "TRACKED_PUBLICATION_MATERIAL: ABSENT",
+        state = re.sub(
+            r"(?m)^TRACKED_PUBLICATION_MATERIAL: \S+$",
             "TRACKED_PUBLICATION_MATERIAL: FROZEN",
-            1,
+            state,
+            count=1,
         )
-        state = state.replace(
-            "RELEASE_BODY_SHA256: ABSENT",
+        state = re.sub(
+            r"(?m)^RELEASE_BODY_SHA256: \S+$",
             f"RELEASE_BODY_SHA256: {digest}",
-            1,
+            state,
+            count=1,
         )
         state_path.write_text(state, encoding="utf-8")
-        phase_path = self.root / Path("docs/release/v1.13/v1.13.17-phase-list.md")
-        phase = phase_path.read_text(encoding="utf-8")
-        for number in (2, 3, 4):
-            pattern = rf"(?ms)(^## Phase {number}\b.*?^\*\*Status:\*\*) (?:Next|Not started)$"
-            phase, count = re.subn(pattern, r"\1 Complete", phase, count=1)
-            self.assertEqual(count, 1)
-        pattern = r"(?ms)(^## Phase 5\b.*?^\*\*Status:\*\*) Not started$"
-        phase, count = re.subn(pattern, r"\1 Next", phase, count=1)
-        self.assertEqual(count, 1)
-        phase_path.write_text(phase, encoding="utf-8")
         return body_path, checksum_path
 
     def test_exact_valid_identity_passes(self) -> None:
@@ -153,9 +176,141 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
         body.write_text("fixture\n", encoding="utf-8")
         self.assert_invalid()
 
+    def test_absent_successor_matrix_for_phases_2_3_and_4(self) -> None:
+        for phase in (2, 3, 4):
+            with self.subTest(phase=phase):
+                self.set_successor_phase(phase)
+                self.assertEqual(governance.validate_release_body(self.root), [])
+
+    def test_absent_successor_rejects_files_digest_and_late_phase(self) -> None:
+        body = self.root / governance.CURRENT_RELEASE_BODY
+        checksum = self.root / governance.CURRENT_RELEASE_BODY_CHECKSUM
+        body.parent.mkdir(parents=True, exist_ok=True)
+        for case in ("body", "checksum", "both", "digest", "phase"):
+            with self.subTest(case=case):
+                if body.exists():
+                    body.unlink()
+                if checksum.exists():
+                    checksum.unlink()
+                self.set_successor_phase(2)
+                state = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+                if case in ("body", "both"):
+                    body.write_text("fixture\n", encoding="utf-8")
+                if case in ("checksum", "both"):
+                    checksum.write_text("fixture\n", encoding="utf-8")
+                if case == "digest":
+                    state.write_text(
+                        state.read_text(encoding="utf-8").replace(
+                            "RELEASE_BODY_SHA256: ABSENT",
+                            f"RELEASE_BODY_SHA256: {'0' * 64}",
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                if case == "phase":
+                    self.set_successor_phase(5)
+                self.assert_invalid()
+
     def test_frozen_successor_body_passes(self) -> None:
-        self.freeze_successor_body()
-        self.assertEqual(governance.validate_release_body(self.root), [])
+        for phase in (5, 9, None):
+            with self.subTest(phase=phase):
+                self.freeze_successor_body(phase)
+                self.assertEqual(governance.validate_release_body(self.root), [])
+
+    def test_frozen_successor_byte_boundaries(self) -> None:
+        mutations = {
+            "empty": b"",
+            "over-limit": b"x" * 65537,
+            "bom": b"\xef\xbb\xbfvalid\n",
+            "invalid-utf8": b"\xff\n",
+            "crlf": b"valid\r\n",
+            "missing-lf": b"valid",
+            "extra-lf": b"valid\n\n",
+            "trailing-space": b"valid \n",
+        }
+        for name, content in mutations.items():
+            with self.subTest(name=name):
+                body, _ = self.freeze_successor_body()
+                body.write_bytes(content)
+                self.assert_invalid()
+
+    def test_frozen_successor_file_types_and_checksum_grammar(self) -> None:
+        for case in ("body-symlink", "body-directory", "checksum-symlink", "checksum-directory"):
+            with self.subTest(case=case):
+                body, checksum = self.freeze_successor_body()
+                selected = body if case.startswith("body") else checksum
+                original = selected.read_bytes()
+                selected.unlink()
+                if case.endswith("symlink"):
+                    target = self.root / f"TEST_FIXTURE_ONLY-{case}"
+                    target.write_bytes(original)
+                    selected.symlink_to(target)
+                else:
+                    selected.mkdir()
+                self.assert_invalid()
+        for value in (
+            "0" * 64 + f" {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+            "g" * 64 + f"  {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+            "0" * 64 + "  wrong.md\n",
+            "0" * 64 + f"  {governance.CURRENT_RELEASE_BODY.as_posix()}\nextra\n",
+        ):
+            with self.subTest(checksum=value):
+                _, checksum = self.freeze_successor_body()
+                checksum.write_text(value, encoding="ascii")
+                self.assert_invalid()
+
+    def test_frozen_successor_semantic_requirements_and_future_assertions(self) -> None:
+        required = (
+            "v1.13.17", "v1.13.16", "v1.13.15", "inherited",
+            "failed publication", "source-only", "no custom assets",
+        )
+        for marker in required:
+            with self.subTest(missing=marker):
+                body, checksum = self.freeze_successor_body()
+                text = body.read_text(encoding="utf-8")
+                body.write_text(text.replace(marker, "omitted", 1), encoding="utf-8")
+                digest = hashlib.sha256(body.read_bytes()).hexdigest()
+                checksum.write_text(
+                    f"{digest}  {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+                    encoding="ascii",
+                )
+                state = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+                state.write_text(
+                    re.sub(
+                        r"(?m)^RELEASE_BODY_SHA256: [0-9a-f]{64}$",
+                        f"RELEASE_BODY_SHA256: {digest}",
+                        state.read_text(encoding="utf-8"),
+                        count=1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_invalid()
+        for assertion in (
+            "M17", "run_id", "certificate is successful", "closure is established",
+        ):
+            with self.subTest(assertion=assertion):
+                body, checksum = self.freeze_successor_body()
+                body.write_text(
+                    body.read_text(encoding="utf-8").removesuffix("\n")
+                    + f" {assertion}\n",
+                    encoding="utf-8",
+                )
+                digest = hashlib.sha256(body.read_bytes()).hexdigest()
+                checksum.write_text(
+                    f"{digest}  {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+                    encoding="ascii",
+                )
+                state = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+                state.write_text(
+                    re.sub(
+                        r"(?m)^RELEASE_BODY_SHA256: [0-9a-f]{64}$",
+                        f"RELEASE_BODY_SHA256: {digest}",
+                        state.read_text(encoding="utf-8"),
+                        count=1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_invalid()
 
     def test_frozen_successor_digest_mismatch_fails(self) -> None:
         body, _ = self.freeze_successor_body()

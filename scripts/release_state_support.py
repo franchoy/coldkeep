@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -42,6 +43,7 @@ PREDECESSOR_DISPOSITION_KEYS = (
     "DIAGNOSIS_ARCHIVE_BYTES", "DIAGNOSIS_ARCHIVE_SHA256",
     "DIAGNOSIS_MANIFEST_SHA256",
 )
+PREDECESSOR_DISPOSITION_MAX_BYTES = 65536
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 NONZERO_GIT_SHA = re.compile(r"^(?!0{40}$)[0-9a-f]{40}$")
 ProcessResult = subprocess.CompletedProcess[str]
@@ -646,6 +648,78 @@ class Document:
             if match and match.group(1) == name:
                 values.append((index, match.group(2).strip()))
         return values
+
+
+def load_predecessor_disposition_document(
+    root: Path,
+    path: str,
+) -> tuple[Optional[Document], Optional[str]]:
+    """Load the selected disposition through checked, bounded POSIX I/O."""
+    relative = PurePosixPath(path)
+    if relative.is_absolute() or not relative.parts or any(
+        part in ("", ".", "..") for part in relative.parts
+    ):
+        return None, "canonical path is invalid"
+    required_flags = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    if any(not hasattr(os, name) for name in required_flags):
+        return None, "safe no-follow loading is unavailable on this platform"
+
+    directory_fds: list[int] = []
+    file_fd: Optional[int] = None
+    try:
+        directory_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+        current_fd = os.open(root, directory_flags)
+        directory_fds.append(current_fd)
+        for component in relative.parts[:-1]:
+            current_fd = os.open(component, directory_flags, dir_fd=current_fd)
+            directory_fds.append(current_fd)
+        file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+        file_fd = os.open(relative.parts[-1], file_flags, dir_fd=current_fd)
+        opened = os.fstat(file_fd)
+        if not stat.S_ISREG(opened.st_mode):
+            return None, "file must be regular and non-symlink"
+        if opened.st_size > PREDECESSOR_DISPOSITION_MAX_BYTES:
+            return None, "file exceeds the 65536-byte predecessor disposition limit"
+        chunks: list[bytes] = []
+        remaining = PREDECESSOR_DISPOSITION_MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(file_fd, min(8192, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if len(raw) > PREDECESSOR_DISPOSITION_MAX_BYTES:
+            return None, "file exceeds the 65536-byte predecessor disposition limit"
+        current = os.stat(
+            relative.parts[-1],
+            dir_fd=current_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            return None, "canonical path changed during the bounded read"
+    except FileNotFoundError:
+        return None, "file is missing"
+    except (NotADirectoryError, IsADirectoryError):
+        return None, "file must be regular and non-symlink"
+    except OSError:
+        return None, "file could not be safely opened or read"
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        for descriptor in reversed(directory_fds):
+            os.close(descriptor)
+
+    if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw:
+        return None, "encoding or newline form is invalid"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "encoding or newline form is invalid"
+    return Document(root, path, text.splitlines()), None
 
 
 @dataclass(frozen=True)
@@ -1334,6 +1408,19 @@ def _empty_event_projection() -> dict[str, object]:
     }
 
 
+def _empty_tag_event_projection() -> dict[str, object]:
+    """Return the fixed tag projection before a tag payload is available."""
+    return {
+        "ref": _unavailable_identity(),
+        "before": _unavailable_identity(),
+        "after": _unavailable_identity(),
+        "created": _unavailable_identity(),
+        "deleted": _unavailable_identity(),
+        "forced": _unavailable_identity(),
+        "repository": _unavailable_identity(),
+    }
+
+
 def _event_projection(
     payload: dict[str, object],
     version: str,
@@ -1451,7 +1538,11 @@ def _load_event(
         "utf8_status": "NOT_EVALUATED",
         "json_status": "NOT_EVALUATED",
         "top_level_shape": "unavailable",
-        "projection": _empty_event_projection(),
+        "projection": (
+            _empty_tag_event_projection()
+            if predicate_prefix == "tag"
+            else _empty_event_projection()
+        ),
     }
     if recorder is not None and evaluation_id is not None:
         recorder.attach_snapshot(evaluation_id, snapshot)
@@ -1474,15 +1565,20 @@ def _load_event(
         return None
     snapshot["present"] = True
     snapshot["readable"] = True
-    snapshot["size_bytes"] = len(raw)
-    snapshot["content_sha256"] = hashlib.sha256(raw).hexdigest()
-    _diagnostic_predicate(recorder, evaluation_id, f"{predicate_prefix}.event.read", True, _bounded_identity(len(raw), category="unexpected-size", allow_positive_integer=True))
+    _diagnostic_predicate(recorder, evaluation_id, f"{predicate_prefix}.event.read", True, _bounded_identity("readable", category="unexpected-read-status", expected="readable"))
     if predicate_prefix == "tag":
         within_limit = len(raw) <= 1048576
         snapshot["size_limit_status"] = "PASS" if within_limit else "FAIL"
         # diagnostic-predicate: tag.event.size
-        if not _diagnostic_predicate(recorder, evaluation_id, "tag.event.size", within_limit, _bounded_identity(len(raw), category="unexpected-size", allow_positive_integer=True)):
+        observed_size = (
+            _bounded_identity(len(raw), category="unexpected-size", allow_positive_integer=True)
+            if within_limit
+            else _bounded_identity("oversize", category="unexpected-size", expected="oversize")
+        )
+        if not _diagnostic_predicate(recorder, evaluation_id, "tag.event.size", within_limit, observed_size):
             return None
+    snapshot["size_bytes"] = len(raw)
+    snapshot["content_sha256"] = hashlib.sha256(raw).hexdigest()
     # diagnostic-predicate: pr.event.utf8
     # diagnostic-predicate: release_push.event.utf8
     # diagnostic-predicate: tag.event.utf8
@@ -2154,41 +2250,46 @@ def strict_tag_push_context(
 
     def classify(raw: object) -> tuple[Optional[str], Optional[str]]:
         if raw == head:
-            return "merge-commit", head
+            return "EXACT_COMMIT_M", head
         if raw == tag_object:
-            return "annotated-tag", direct_target
+            return "EXACT_NAMED_TAG_A", direct_target
         return None, None
 
     runtime_class, runtime_resolved = classify(env["GITHUB_SHA"])
     if diagnostic is not None and evaluation_id is not None:
         diagnostic.context_update(
             evaluation_id,
-            runtime_sha_classification=observed(runtime_class, "unexpected-runtime-class", allow=re.compile(r"(?:merge-commit|annotated-tag)")),
+            runtime_sha_classification=observed(runtime_class, "unexpected-runtime-class", allow=re.compile(r"(?:EXACT_COMMIT_M|EXACT_NAMED_TAG_A)")),
             runtime_sha_resolved_commit=observed(runtime_resolved, "unexpected-runtime-resolution", allow=GIT_SHA),
             event_after=observed(after, "unexpected-after", allow=GIT_SHA),
         )
     runtime_ok = runtime_resolved == head
     # diagnostic-predicate: tag.identity.runtime_sha
-    if not check("tag.identity.runtime_sha", runtime_ok, observed(runtime_class, "unexpected-runtime-class", allow=re.compile(r"(?:merge-commit|annotated-tag)"))):
+    if not check("tag.identity.runtime_sha", runtime_ok, observed(runtime_class, "unexpected-runtime-class", allow=re.compile(r"(?:EXACT_COMMIT_M|EXACT_NAMED_TAG_A)"))):
         return finish(False)
     after_class, after_resolved = classify(after)
     if diagnostic is not None and evaluation_id is not None:
         diagnostic.context_update(
             evaluation_id,
-            event_after_classification=observed(after_class, "unexpected-after-class", allow=re.compile(r"(?:merge-commit|annotated-tag)")),
+            event_after_classification=observed(after_class, "unexpected-after-class", allow=re.compile(r"(?:EXACT_COMMIT_M|EXACT_NAMED_TAG_A)")),
             event_after_resolved_commit=observed(after_resolved, "unexpected-after-resolution", allow=GIT_SHA),
         )
     after_ok = after_resolved == head
     # diagnostic-predicate: tag.identity.event_after
-    if not check("tag.identity.event_after", after_ok, observed(after_class, "unexpected-after-class", allow=re.compile(r"(?:merge-commit|annotated-tag)"))):
+    if not check("tag.identity.event_after", after_ok, observed(after_class, "unexpected-after-class", allow=re.compile(r"(?:EXACT_COMMIT_M|EXACT_NAMED_TAG_A)"))):
         return finish(False)
 
     parents_result = tag_git(["rev-list", "--parents", "-n", "1", head])
     parent_parts = parents_result.stdout.strip().split() if parents_result and parents_result.returncode == 0 else []
     parents = parent_parts[1:] if parent_parts and parent_parts[0] == head else []
-    ancestry_result = tag_git(["merge-base", "--is-ancestor", parents[0], parents[1]]) if len(parents) == 2 else None
+    parents_distinct = len(parents) == 2 and parents[0] != parents[1]
+    ancestry_result = tag_git(["merge-base", "--is-ancestor", parents[0], parents[1]]) if parents_distinct else None
     ancestry_ok: Optional[bool] = ancestry_result.returncode == 0 if ancestry_result and ancestry_result.returncode in (0, 1) else None
-    topology_ok: Optional[bool] = len(parents) == 2 and ancestry_ok if parents_result and parents_result.returncode == 0 else None
+    topology_ok: Optional[bool] = (
+        parents_distinct and ancestry_ok
+        if parents_result and parents_result.returncode == 0
+        else None
+    )
     if diagnostic is not None and evaluation_id is not None:
         diagnostic.context_update(evaluation_id, checkout_parents=parents[:2])
     # diagnostic-predicate: tag.topology.parents_and_ancestry

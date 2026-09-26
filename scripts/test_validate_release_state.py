@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,6 +20,7 @@ from unittest import mock
 
 import release_state_support
 import validate_release_state
+import validate_governance
 from release_state_support import (
     LifecycleBoundaries,
     ProcessResult,
@@ -2582,6 +2585,23 @@ class DiagnosticCaptureTests(unittest.TestCase):
         return process, destination, self.load_diagnostic(destination)
 
     def test_tag_v2_inventory_and_site_attribution(self) -> None:
+        expected_ids = [
+            "tag.env.actions", "tag.env.event", "tag.env.full_ref",
+            "tag.env.short_ref", "tag.env.ref_type", "tag.env.repository",
+            "tag.env.runtime_sha_format", "tag.env.event_path",
+            "tag.event.read", "tag.event.size", "tag.event.utf8",
+            "tag.event.json", "tag.event.object", "tag.payload.ref",
+            "tag.payload.before", "tag.payload.after_format",
+            "tag.payload.created", "tag.payload.deleted",
+            "tag.payload.forced", "tag.payload.repository",
+            "tag.git.not_shallow", "tag.git.no_alternates",
+            "tag.git.no_grafts", "tag.git.no_replacements",
+            "tag.git.named_ref", "tag.git.named_ref_type",
+            "tag.git.direct_target", "tag.git.direct_target_declared_type",
+            "tag.git.direct_target_actual_type", "tag.git.target_equals_head",
+            "tag.identity.runtime_sha", "tag.identity.event_after",
+            "tag.topology.parents_and_ancestry", "tag.topology.tree",
+        ]
         for mode, expected_sites in (
             ("auto", ["inference-tag-push", "ckrs016-tag-push"]),
             (
@@ -2624,7 +2644,6 @@ class DiagnosticCaptureTests(unittest.TestCase):
                 evaluations = diagnostic["evaluations"]
                 self.assertEqual([item["site"] for item in evaluations], expected_sites)
                 self.assertEqual([item["event_snapshot_id"] for item in evaluations], [1, 2])
-                expected_ids = [item[0] for item in release_state_support.TAG_PREDICATES]
                 for evaluation in evaluations:
                     self.assertEqual(evaluation["route"], "tag-push")
                     self.assertEqual(evaluation["result"], "PASS")
@@ -2635,6 +2654,56 @@ class DiagnosticCaptureTests(unittest.TestCase):
                     )
                     self.assertTrue(
                         all(item["result"] == "PASS" for item in evaluation["predicates"])
+                    )
+                    context = evaluation["runtime_context"]
+                    self.assertEqual(
+                        context["runtime_sha_classification"]["value"],
+                        "EXACT_NAMED_TAG_A",
+                    )
+                    self.assertEqual(
+                        context["event_after_classification"]["value"],
+                        "EXACT_NAMED_TAG_A",
+                    )
+
+    def test_tag_identity_classification_vocabulary_matrix(self) -> None:
+        fixture = self.fixture()
+        _, _, merge = fixture.create_immutable_merge()
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "TEST_FIXTURE_ONLY")
+        tag_object = fixture.rev_parse("refs/tags/v1.13.10")
+        expected = {
+            merge: "EXACT_COMMIT_M",
+            tag_object: "EXACT_NAMED_TAG_A",
+        }
+        for runtime_sha, event_after in (
+            (merge, merge), (merge, tag_object),
+            (tag_object, merge), (tag_object, tag_object),
+        ):
+            with self.subTest(runtime_sha=runtime_sha, event_after=event_after):
+                event = fixture.write_push_event(
+                    "refs/tags/v1.13.10", "0" * 40, event_after, created=True
+                )
+                destination = self.output_path(
+                    f"classification-{runtime_sha[:6]}-{event_after[:6]}.json"
+                )
+                process = fixture.run(
+                    "--state", "tagged-pending-tag-certification",
+                    "--diagnostic-json", str(destination),
+                    env=fixture.push_env(
+                        "refs/tags/v1.13.10", runtime_sha, event, ref_type="tag"
+                    ),
+                )
+                self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+                diagnostic = self.load_diagnostic(destination)
+                self.assertEqual(diagnostic["validator"]["result"], "ok")
+                for evaluation in diagnostic["evaluations"]:
+                    context = evaluation["runtime_context"]
+                    self.assertEqual(
+                        context["runtime_sha_classification"]["value"],
+                        expected[runtime_sha],
+                    )
+                    self.assertEqual(
+                        context["event_after_classification"]["value"],
+                        expected[event_after],
                     )
 
     def test_tag_event_size_limit_stops_before_decode(self) -> None:
@@ -2655,13 +2724,163 @@ class DiagnosticCaptureTests(unittest.TestCase):
         )
         self.assertEqual(process.returncode, 1)
         diagnostic = self.load_diagnostic(destination)
+        self.assertEqual(diagnostic["validator"]["result"], "error")
         for evaluation in diagnostic["evaluations"]:
+            snapshot = diagnostic["event_snapshots"][
+                evaluation["event_snapshot_id"] - 1
+            ]
+            self.assertIsNone(snapshot["size_bytes"])
+            self.assertIsNone(snapshot["content_sha256"])
+            self.assertEqual(snapshot["size_limit_status"], "FAIL")
+            self.assertEqual(snapshot["utf8_status"], "NOT_EVALUATED")
+            self.assertEqual(snapshot["json_status"], "NOT_EVALUATED")
+            self.assertEqual(
+                set(snapshot["projection"]),
+                {"ref", "before", "after", "created", "deleted", "forced", "repository"},
+            )
             predicate = self.predicate(evaluation, "tag.event.size")
             self.assertEqual(predicate["result"], "FAIL")
             self.assertEqual(
                 self.predicate(evaluation, "tag.event.utf8")["result"],
                 "NOT_EVALUATED",
             )
+
+    def test_tag_event_limit_has_truthful_whole_event_measurements(self) -> None:
+        limit = 1048576
+        cases = (
+            ("limit", b"{}" + b" " * (limit - 2), True),
+            ("limit-plus-one", b"x" * (limit + 1), False),
+            ("limit-plus-two", b"x" * (limit + 2), False),
+            ("large-a", b"x" * (limit + 1) + b"a" * (limit + 16), False),
+            ("large-b", b"x" * (limit + 1) + b"b" * (limit + 16), False),
+        )
+        oversized_snapshots = []
+        for name, raw, accepted in cases:
+            with self.subTest(name=name):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                event = Path(temporary.name) / "event.json"
+                event.write_bytes(raw)
+                recorder = release_state_support.DiagnosticRecorder("auto", {})
+                evaluation = recorder.begin_evaluation(
+                    "TEST_FIXTURE_ONLY-tag-push",
+                    {},
+                    "1" * 40,
+                    "",
+                    "1.13.10",
+                    "fixture/coldkeep",
+                )
+                payload = release_state_support._load_event(
+                    str(event),
+                    recorder=recorder,
+                    evaluation_id=evaluation,
+                    version="1.13.10",
+                    canonical_repository="fixture/coldkeep",
+                    predicate_prefix="tag",
+                )
+                snapshot = recorder.event_snapshots[0]
+                if accepted:
+                    self.assertIsInstance(payload, dict)
+                    self.assertEqual(snapshot["size_bytes"], limit)
+                    self.assertEqual(
+                        snapshot["content_sha256"],
+                        hashlib.sha256(raw).hexdigest(),
+                    )
+                    self.assertEqual(snapshot["size_limit_status"], "PASS")
+                else:
+                    self.assertIsNone(payload)
+                    self.assertIsNone(snapshot["size_bytes"])
+                    self.assertIsNone(snapshot["content_sha256"])
+                    self.assertEqual(snapshot["size_limit_status"], "FAIL")
+                    self.assertEqual(snapshot["utf8_status"], "NOT_EVALUATED")
+                    self.assertEqual(snapshot["json_status"], "NOT_EVALUATED")
+                    oversized_snapshots.append(snapshot.copy())
+        self.assertEqual(len(oversized_snapshots), 4)
+        self.assertEqual(
+            {
+                (item["size_bytes"], item["content_sha256"])
+                for item in oversized_snapshots[-2:]
+            },
+            {(None, None)},
+        )
+
+    def test_duplicate_parent_raw_commit_has_truthful_strict_topology_trace(self) -> None:
+        fixture = self.fixture()
+        _, candidate, _ = fixture.create_immutable_merge()
+        tree = fixture.rev_parse(f"{candidate}^{{tree}}")
+        raw = (
+            f"tree {tree}\n"
+            f"parent {candidate}\n"
+            f"parent {candidate}\n"
+            "author fixture <fixture@example.invalid> 1700000000 +0000\n"
+            "committer fixture <fixture@example.invalid> 1700000000 +0000\n"
+            "\nTEST_FIXTURE_ONLY duplicate parent\n"
+        )
+        created = subprocess.run(
+            [
+                resolved_executable("git"), "-C", str(fixture.root),
+                "hash-object", "-t", "commit", "-w", "--stdin",
+            ],
+            input=raw,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
+        stored = run_process(
+            [resolved_executable("git"), "-C", str(fixture.root), "cat-file", "-p", created],
+            check=True,
+        ).stdout
+        self.assertEqual(stored, raw)
+        self.assertEqual(
+            run_process(
+                [resolved_executable("git"), "-C", str(fixture.root), "cat-file", "-t", created],
+                check=True,
+            ).stdout.strip(),
+            "commit",
+        )
+        parents = run_process(
+            [resolved_executable("git"), "-C", str(fixture.root), "rev-list", "--parents", "-n", "1", created],
+            check=True,
+        ).stdout.strip().split()[1:]
+        self.assertEqual(parents, [candidate, candidate])
+        self.assertEqual(fixture.rev_parse(f"{created}^{{tree}}"), tree)
+        git(fixture.root, "checkout", "--detach", created)
+        git(fixture.root, "tag", "-a", "v1.13.10", "-m", "TEST_FIXTURE_ONLY")
+        tag_object = fixture.rev_parse("refs/tags/v1.13.10")
+        event = fixture.write_push_event(
+            "refs/tags/v1.13.10", "0" * 40, tag_object, created=True
+        )
+        environment = fixture.push_env(
+            "refs/tags/v1.13.10", tag_object, event, ref_type="tag"
+        )
+        for mode in ("auto", "tagged-pending-tag-certification"):
+            with self.subTest(mode=mode):
+                destination = self.output_path(f"duplicate-{mode}.json")
+                process = fixture.run(
+                    "--state", mode,
+                    "--diagnostic-json", str(destination),
+                    env=environment,
+                )
+                self.assertEqual(process.returncode, 1, process.stdout + process.stderr)
+                self.assertIn("[CKRS016]", process.stdout)
+                diagnostic = self.load_diagnostic(destination)
+                reached = [
+                    item for item in diagnostic["evaluations"]
+                    if self.predicate(
+                        item, "tag.topology.parents_and_ancestry"
+                    )["result"] == "FAIL"
+                ]
+                self.assertTrue(reached)
+                for evaluation in reached:
+                    self.assertEqual(
+                        evaluation["runtime_context"]["checkout_parents"],
+                        [candidate, candidate],
+                    )
+                    self.assertEqual(
+                        self.predicate(evaluation, "tag.topology.tree")["result"],
+                        "NOT_EVALUATED",
+                    )
 
     def test_diagnostic_pass_equivalence_for_matching_and_null_synthetic_values(self) -> None:
         for case in ("matching", "null"):
@@ -2683,7 +2902,7 @@ class DiagnosticCaptureTests(unittest.TestCase):
                 self.assertEqual(active.stdout, inactive.stdout)
                 self.assertEqual(active.stderr, inactive.stderr)
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-                self.assertEqual(diagnostic["validator"]["result"], "pass")
+                self.assertEqual(diagnostic["validator"]["result"], "ok")
                 self.assertEqual(diagnostic["validator"]["exit_code"], 0)
                 self.assertEqual(len(diagnostic["evaluations"]), 4)
                 self.assertEqual(len(diagnostic["event_snapshots"]), 4)
@@ -3417,6 +3636,523 @@ class FailedPredecessorContractTests(unittest.TestCase):
         self.assertIsNotNone(
             release_state_support.parse_predecessor_declaration(duplicate)[1]
         )
+
+
+class FailedPredecessorReadBoundaryTests(unittest.TestCase):
+    """Exercise the selected predecessor's first-read security boundary."""
+
+    def fixture(self) -> Fixture:
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        return fixture
+
+    @staticmethod
+    def select(fixture: Fixture) -> Path:
+        return ReleaseStateValidatorTests().select_failed_predecessor(fixture)
+
+    def assert_ckrs010(self, fixture: Fixture) -> None:
+        process = fixture.run("--state", "development")
+        self.assertEqual(process.returncode, 1, process.stdout + process.stderr)
+        self.assertIn("[CKRS010]", process.stdout)
+        self.assertNotIn("[CKRS019]", process.stdout)
+        self.assertNotIn("Traceback", process.stderr)
+
+    def test_selected_regular_and_missing_public_cli_routes(self) -> None:
+        fixture = self.fixture()
+        path = self.select(fixture)
+        process = fixture.run("--state", "development")
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        path.unlink()
+        self.assert_ckrs010(fixture)
+
+    def test_selected_symlink_dangling_directory_and_oversize_are_ckrs010(self) -> None:
+        for case in ("symlink", "dangling", "directory", "oversize"):
+            with self.subTest(case=case):
+                fixture = self.fixture()
+                path = self.select(fixture)
+                original = path.read_bytes()
+                path.unlink()
+                if case == "symlink":
+                    target = fixture.root / "TEST_FIXTURE_ONLY-disposition-target"
+                    target.write_bytes(original)
+                    path.symlink_to(target)
+                elif case == "dangling":
+                    path.symlink_to(fixture.root / "TEST_FIXTURE_ONLY-absent")
+                elif case == "directory":
+                    path.mkdir()
+                else:
+                    path.write_bytes(b"x" * 65537)
+                self.assert_ckrs010(fixture)
+
+    def test_selected_encoding_and_newline_failures_are_ckrs010(self) -> None:
+        for prefix in (b"\xff", b"\xef\xbb\xbf", b"\r"):
+            with self.subTest(prefix=prefix):
+                fixture = self.fixture()
+                path = self.select(fixture)
+                path.write_bytes(prefix + path.read_bytes())
+                self.assert_ckrs010(fixture)
+
+    def test_unselected_dangling_symlink_is_ckrs019_without_loader_call(self) -> None:
+        fixture = self.fixture()
+        path = (
+            fixture.root
+            / "docs/release/v1.13/v1.13.10-predecessor-disposition.md"
+        )
+        path.symlink_to(fixture.root / "TEST_FIXTURE_ONLY-absent")
+        with mock.patch.object(
+            validate_release_state,
+            "load_predecessor_disposition_document",
+        ) as loader:
+            result = validate_release_state.validate(fixture.root, "development")
+        loader.assert_not_called()
+        self.assertIn("CKRS019", [item.rule for item in result.violations])
+        self.assertNotIn("CKRS010", [item.rule for item in result.violations])
+
+    def test_rejected_file_types_and_known_oversize_are_not_read(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        relative = "docs/release/v1.13/disposition.md"
+        path = root / relative
+        path.parent.mkdir(parents=True)
+        for case in ("symlink", "directory", "oversize"):
+            with self.subTest(case=case):
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+                elif path.exists():
+                    path.rmdir()
+                if case == "symlink":
+                    target = root / "TEST_FIXTURE_ONLY-target"
+                    target.write_text("harmless\n", encoding="utf-8")
+                    path.symlink_to(target)
+                elif case == "directory":
+                    path.mkdir()
+                else:
+                    path.write_bytes(b"x" * 65537)
+                with mock.patch.object(
+                    release_state_support.os,
+                    "read",
+                    wraps=os.read,
+                ) as reader:
+                    document, detail = (
+                        release_state_support.load_predecessor_disposition_document(
+                            root, relative
+                        )
+                    )
+                self.assertIsNone(document)
+                self.assertIsNotNone(detail)
+                reader.assert_not_called()
+
+    def test_limit_plus_one_read_and_injected_open_read_type_failures(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        relative = "docs/release/v1.13/disposition.md"
+        path = root / relative
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"x" * 65536)
+        document, detail = release_state_support.load_predecessor_disposition_document(
+            root, relative
+        )
+        self.assertIsNone(detail)
+        self.assertEqual(len(document.lines[0]), 65536)
+
+        for primitive in ("open", "read", "fstat"):
+            with self.subTest(primitive=primitive):
+                patches = []
+                if primitive == "open":
+                    patches.append(mock.patch.object(os, "open", side_effect=OSError()))
+                elif primitive == "read":
+                    patches.append(mock.patch.object(os, "read", side_effect=OSError()))
+                else:
+                    fifo_result = os.stat_result((stat.S_IFIFO, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+                    patches.append(mock.patch.object(os, "fstat", return_value=fifo_result))
+                    patches.append(mock.patch.object(os, "read", wraps=os.read))
+                entered = [patch.start() for patch in patches]
+                try:
+                    rejected, error = (
+                        release_state_support.load_predecessor_disposition_document(
+                            root, relative
+                        )
+                    )
+                finally:
+                    for patch in reversed(patches):
+                        patch.stop()
+                self.assertIsNone(rejected)
+                self.assertIsNotNone(error)
+                if primitive == "fstat":
+                    entered[-1].assert_not_called()
+
+    def test_selected_path_replacement_is_rejected_after_checked_read(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        relative = "docs/release/v1.13/disposition.md"
+        path = root / relative
+        path.parent.mkdir(parents=True)
+        path.write_text("TEST_FIXTURE_ONLY checked object\n", encoding="utf-8")
+        target = root / "TEST_FIXTURE_ONLY-replacement-target"
+        target.write_text("TEST_FIXTURE_ONLY replacement\n", encoding="utf-8")
+        original_open = os.open
+        replaced = False
+
+        def replacing_open(
+            selected: object,
+            flags: int,
+            *args: object,
+            **kwargs: object,
+        ) -> int:
+            nonlocal replaced
+            descriptor = original_open(selected, flags, *args, **kwargs)
+            if selected == path.name and not replaced:
+                replaced = True
+                path.unlink()
+                path.symlink_to(target)
+            return descriptor
+
+        with mock.patch.object(os, "open", side_effect=replacing_open):
+            document, detail = (
+                release_state_support.load_predecessor_disposition_document(
+                    root, relative
+                )
+            )
+        self.assertTrue(replaced)
+        self.assertIsNone(document)
+        self.assertEqual(detail, "canonical path changed during the bounded read")
+
+
+class SuccessorLifecycleIntegrationTests(unittest.TestCase):
+    """Exercise the complete successor authority through C, M, A and closure."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "repo"
+        self.root.mkdir()
+        source_root = SCRIPT.parents[1]
+        tracked = run_process(
+            [resolved_executable("git"), "-C", str(source_root), "ls-files", "-z"],
+            check=True,
+        ).stdout.split("\0")
+        for relative in (item for item in tracked if item):
+            source = source_root / relative
+            destination = self.root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        git(self.root, "init")
+        git(self.root, "config", "user.name", "fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        git(self.root, "add", ".")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY predecessor base")
+        self.predecessor = self.rev_parse("HEAD")
+        git(self.root, "tag", "-a", "v1.13.16", "-m", "TEST_FIXTURE_ONLY")
+        predecessor_tag = self.rev_parse("refs/tags/v1.13.16")
+        disposition = (
+            self.root
+            / "docs/release/v1.13/v1.13.17-predecessor-disposition.md"
+        )
+        text = disposition.read_text(encoding="utf-8")
+        text = re.sub(r"(?m)^TAG_OBJECT: [0-9a-f]{40}$", f"TAG_OBJECT: {predecessor_tag}", text)
+        text = re.sub(r"(?m)^DIRECT_TARGET: [0-9a-f]{40}$", f"DIRECT_TARGET: {self.predecessor}", text)
+        text = re.sub(r"(?m)^SUCCESSOR_BASE: [0-9a-f]{40}$", f"SUCCESSOR_BASE: {self.predecessor}", text)
+        disposition.write_text(text, encoding="utf-8")
+        git(self.root, "add", disposition.relative_to(self.root).as_posix())
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY successor development")
+        git(self.root, "checkout", "-b", "release/v1.13.17")
+
+    def rev_parse(self, value: str) -> str:
+        return run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", value],
+            check=True,
+        ).stdout.strip()
+
+    def validator(
+        self,
+        mode: str,
+        env: dict[str, str] | None = None,
+    ) -> ProcessResult:
+        return run_validator(self.root, "--state", mode, "--json", env=env)
+
+    def set_state_values(self, values: dict[str, str]) -> None:
+        paths = (validate_governance.CANONICAL_CURRENT_STATE_FILE,) + (
+            validate_governance.CURRENT_STATE_MIRROR_FILES
+        )
+        for relative in paths:
+            path = self.root / relative
+            text = path.read_text(encoding="utf-8")
+            for key, value in values.items():
+                text, count = re.subn(
+                    rf"(?m)^{re.escape(key)}: \S+$",
+                    f"{key}: {value}",
+                    text,
+                    count=1,
+                )
+                self.assertEqual(count, 1, f"{relative}: {key}")
+            path.write_text(text, encoding="utf-8")
+
+    def set_phase_progression(self, next_phase: int | None) -> None:
+        for relative, field in (
+            (Path("docs/release/v1.13/v1.13.17-phase-list.md"), "Status"),
+            (Path("docs/release/v1.13/v1.13.17-validation-checklist.md"), "Phase status"),
+        ):
+            path = self.root / relative
+            text = path.read_text(encoding="utf-8")
+            for number in range(10):
+                status = (
+                    "Complete" if next_phase is None or number < next_phase else
+                    "Next" if number == next_phase else
+                    "Not started"
+                )
+                pattern = rf"(?ms)(^## Phase {number}\b.*?^\*\*{re.escape(field)}:\*\*) (?:Complete|Next|Not started)$"
+                text, count = re.subn(pattern, rf"\1 {status}", text, count=1)
+                self.assertEqual(count, 1, f"{relative}: Phase {number}")
+            path.write_text(text, encoding="utf-8")
+
+    def set_tracker_status(self, status: str) -> None:
+        for relative in (
+            "docs/release/v1.13/v1.13.17-scope.md",
+            "docs/release/v1.13/v1.13.17-phase-list.md",
+            "docs/release/v1.13/v1.13.17-validation-checklist.md",
+        ):
+            path = self.root / relative
+            text = path.read_text(encoding="utf-8")
+            text, count = re.subn(
+                r"(?m)^\*\*Status:\*\* .+$",
+                f"**Status:** {status}",
+                text,
+                count=1,
+            )
+            self.assertEqual(count, 1, relative)
+            path.write_text(text, encoding="utf-8")
+
+    def freeze_candidate(self) -> None:
+        body_path = self.root / validate_governance.CURRENT_RELEASE_BODY
+        checksum_path = self.root / validate_governance.CURRENT_RELEASE_BODY_CHECKSUM
+        body = (
+            "# v1.13.17 Annotated-Tag Certification Recovery\n\n"
+            "This source-only release has no custom assets. It preserves the "
+            "v1.13.15 stable state and the v1.13.16 failed publication while "
+            "distinguishing inherited product repairs from release-tool correction.\n"
+        ).encode("utf-8")
+        body_path.write_bytes(body)
+        digest = hashlib.sha256(body).hexdigest()
+        checksum_path.write_text(
+            f"{digest}  {validate_governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+            encoding="ascii",
+        )
+        self.set_phase_progression(5)
+        self.set_tracker_status("Ready for release")
+        self.set_state_values({
+            "CURRENT_PHASE": "5_NEXT",
+            "TRACKED_PUBLICATION_MATERIAL": "FROZEN",
+            "V1_13_17_STATE": "READY_PRE_RELEASE",
+        })
+        state = self.root / validate_governance.CANONICAL_CURRENT_STATE_FILE
+        state.write_text(
+            state.read_text(encoding="utf-8").replace(
+                "RELEASE_BODY_SHA256: ABSENT",
+                f"RELEASE_BODY_SHA256: {digest}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        changelog = self.root / "CHANGELOG.md"
+        changelog.write_text(
+            changelog.read_text(encoding="utf-8").replace(
+                "## v1.13.17 - Unreleased",
+                "## v1.13.17 - 2026-01-02",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        readme = self.root / "README.md"
+        readme.write_text(
+            readme.read_text(encoding="utf-8")
+            .replace("v1.13.17%20recovery%20development", "v1.13.17%20ready")
+            .replace("is the active Route C", "is the ready Route C", 1),
+            encoding="utf-8",
+        )
+        release_readme = self.root / "docs/release/v1.13/README.md"
+        release_readme.write_text(
+            release_readme.read_text(encoding="utf-8")
+            .replace(
+                "v1.13.17 is the active Route C recovery successor in development.",
+                "v1.13.17 is the ready Route C recovery successor.",
+                1,
+            )
+            .replace(
+                "Phases 0-1\nare Complete and Phase 2 is Next. Publication material is absent.",
+                "Phases 0-4\nare Complete and Phase 5 is Next. Publication material is frozen.",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        scope = self.root / "docs/release/v1.13/v1.13.17-scope.md"
+        scope.write_text(
+            scope.read_text(encoding="utf-8").replace(
+                "Phases 0-1 are Complete. Phase 2 is Next. The release gate is not passed and\npublication material is absent.",
+                "Phases 0-4 are Complete. Phase 5 is Next. The release gate is passed and\npublication material is frozen.",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        gate = self.root / "docs/release/v1.13/v1.13.17-release-gate.md"
+        gate.write_text(
+            "# v1.13.17 Release Gate\n\n"
+            "**Status:** Passed — pre-merge prerequisites complete\n\n"
+            "## Final verdict\n\nPASS — PRE-MERGE PREREQUISITES COMPLETE\n",
+            encoding="utf-8",
+        )
+
+    def tag_environment(self, runtime_sha: str, event_after: str) -> dict[str, str]:
+        event = self.root / "TEST_FIXTURE_ONLY-tag-event.json"
+        event.write_text(
+            json.dumps({
+                "ref": "refs/tags/v1.13.17",
+                "before": "0" * 40,
+                "after": event_after,
+                "created": True,
+                "deleted": False,
+                "forced": False,
+                "repository": {"full_name": "franchoy/coldkeep"},
+            }),
+            encoding="utf-8",
+        )
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/tags/v1.13.17",
+            "GITHUB_REF_NAME": "v1.13.17",
+            "GITHUB_REF_TYPE": "tag",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": runtime_sha,
+        }
+
+    def test_complete_successor_development_candidate_merge_tag_and_closure(self) -> None:
+        development = self.validator("development")
+        self.assertEqual(development.returncode, 0, development.stdout + development.stderr)
+        self.assertEqual(validate_governance.validate(self.root), [])
+        self.assertFalse((self.root / validate_governance.CURRENT_RELEASE_BODY).exists())
+        self.assertNotEqual(self.rev_parse("refs/tags/v1.13.16^{}"), self.rev_parse("HEAD"))
+
+        git(self.root, "branch", "main", self.predecessor)
+        self.freeze_candidate()
+        git(self.root, "add", ".")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY final candidate C")
+        candidate = self.rev_parse("HEAD")
+        pre_release = self.validator("pre-release")
+        self.assertEqual(pre_release.returncode, 0, pre_release.stdout + pre_release.stderr)
+        self.assertEqual(validate_governance.validate(self.root), [])
+
+        relevant = (
+            "CHANGELOG.md", "README.md", "SECURITY.md",
+            "docs/release/v1.13/README.md",
+            "docs/release/v1.13/v1.13.17-scope.md",
+            "docs/release/v1.13/v1.13.17-phase-list.md",
+            "docs/release/v1.13/v1.13.17-validation-checklist.md",
+            "docs/release/v1.13/v1.13.17-release-state.md",
+            "docs/release/v1.13/v1.13.17-release-gate.md",
+            validate_governance.CURRENT_RELEASE_BODY.as_posix(),
+            validate_governance.CURRENT_RELEASE_BODY_CHECKSUM.as_posix(),
+        )
+        candidate_blobs = {
+            path: self.rev_parse(f"{candidate}:{path}") for path in relevant
+        }
+        git(self.root, "checkout", "main")
+        git(
+            self.root, "merge", "--no-ff", "release/v1.13.17",
+            "-m", "TEST_FIXTURE_ONLY normal merge M",
+        )
+        merge = self.rev_parse("HEAD")
+        self.assertEqual(
+            run_process(
+                [resolved_executable("git"), "-C", str(self.root), "rev-list", "--parents", "-n", "1", merge],
+                check=True,
+            ).stdout.strip().split()[1:],
+            [self.predecessor, candidate],
+        )
+        self.assertEqual(self.rev_parse(f"{merge}^{{tree}}"), self.rev_parse(f"{candidate}^{{tree}}"))
+        self.assertEqual(
+            {path: self.rev_parse(f"{merge}:{path}") for path in relevant},
+            candidate_blobs,
+        )
+        git(self.root, "tag", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY")
+        tag_object = self.rev_parse("refs/tags/v1.13.17")
+        self.assertEqual(self.rev_parse("refs/tags/v1.13.17^{}"), merge)
+        self.assertEqual(validate_governance.validate(self.root), [])
+
+        for runtime_sha, event_after in (
+            (merge, merge), (merge, tag_object),
+            (tag_object, merge), (tag_object, tag_object),
+        ):
+            for mode in ("auto", "tagged-pending-tag-certification"):
+                with self.subTest(runtime_sha=runtime_sha, event_after=event_after, mode=mode):
+                    process = self.validator(
+                        mode, self.tag_environment(runtime_sha, event_after)
+                    )
+                    self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+                    payload = json.loads(process.stdout)
+                    self.assertEqual(
+                        payload["authorization_status"],
+                        "NOT_EVALUATED_BY_VALIDATOR",
+                    )
+                    self.assertEqual(
+                        payload["certification_status"],
+                        "PENDING_EXTERNAL_EVIDENCE",
+                    )
+
+        git(self.root, "checkout", "-b", "release/v1.13.17-post-publication-closure")
+        self.set_phase_progression(None)
+        self.set_tracker_status("Published; post-publication closure pending")
+        self.set_state_values({
+            "CURRENT_PHASE": "NONE_CLOSURE_CANDIDATE",
+            "V1_13_17_STATE": "CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT",
+        })
+        for relative, old, new in (
+            ("README.md", "v1.13.17%20ready", "v1.13.17%20published"),
+            ("README.md", "is the ready Route C", "is the published Route C"),
+            ("docs/release/v1.13/README.md", "v1.13.17 is the ready Route C", "v1.13.17 is the published Route C"),
+        ):
+            path = self.root / relative
+            path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+        gate = self.root / "docs/release/v1.13/v1.13.17-release-gate.md"
+        gate.write_text(
+            "# v1.13.17 Release Gate\n\n"
+            "**Status:** Passed and released — closure pending\n\n"
+            "## Final verdict\n\nPASS — PUBLICATION COMPLETE; TERMINAL AUDIT PENDING\n",
+            encoding="utf-8",
+        )
+        git(self.root, "add", ".")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY closure candidate")
+        closure_candidate = self.rev_parse("HEAD")
+        closure = self.validator("post-release-closure-candidate")
+        self.assertEqual(closure.returncode, 0, closure.stdout + closure.stderr)
+        self.assertEqual(validate_governance.validate(self.root), [])
+        git(self.root, "checkout", "main")
+        git(
+            self.root, "merge", "--no-ff", "release/v1.13.17-post-publication-closure",
+            "-m", "TEST_FIXTURE_ONLY closure main",
+        )
+        closure_merge = self.rev_parse("HEAD")
+        event = self.root / "TEST_FIXTURE_ONLY-closure-event.json"
+        event.write_text(
+            json.dumps({
+                "ref": "refs/heads/main", "before": merge, "after": closure_merge,
+                "created": False, "deleted": False, "forced": False,
+                "repository": {"full_name": "franchoy/coldkeep"},
+            }),
+            encoding="utf-8",
+        )
+        environment = {
+            "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/main", "GITHUB_REF_NAME": "main",
+            "GITHUB_REF_TYPE": "branch", "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep", "GITHUB_SHA": closure_merge,
+        }
+        closure_main = self.validator("post-release-closure-candidate", environment)
+        self.assertEqual(closure_main.returncode, 0, closure_main.stdout + closure_main.stderr)
+        self.assertNotEqual(self.rev_parse(f"{closure_candidate}^{{tree}}"), self.rev_parse(f"{merge}^{{tree}}"))
 
 
 class LifecycleBoundaryCompatibilityTests(unittest.TestCase):
