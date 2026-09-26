@@ -103,6 +103,53 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
         state_path.write_text(state, encoding="utf-8")
         return body_path, checksum_path
 
+    def synchronize_successor_body(self, content: bytes) -> list[str]:
+        body, checksum = self.freeze_successor_body()
+        body.write_bytes(content)
+        digest = hashlib.sha256(content).hexdigest()
+        checksum.write_text(
+            f"{digest}  {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+            encoding="ascii",
+        )
+        state = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        state.write_text(
+            re.sub(
+                r"(?m)^RELEASE_BODY_SHA256: [0-9a-f]{64}$",
+                f"RELEASE_BODY_SHA256: {digest}",
+                state.read_text(encoding="utf-8"),
+                count=1,
+            ),
+            encoding="utf-8",
+        )
+        return governance.validate_release_body(self.root)
+
+    def reset_absent_successor(self, next_phase: int | None) -> None:
+        for relative in (
+            governance.CURRENT_RELEASE_BODY,
+            governance.CURRENT_RELEASE_BODY_CHECKSUM,
+        ):
+            candidate = self.root / relative
+            if candidate.is_symlink() or candidate.is_file():
+                candidate.unlink()
+            elif candidate.exists():
+                candidate.rmdir()
+        self.set_successor_phase(next_phase)
+        state = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        text = state.read_text(encoding="utf-8")
+        text = re.sub(
+            r"(?m)^TRACKED_PUBLICATION_MATERIAL: \S+$",
+            "TRACKED_PUBLICATION_MATERIAL: ABSENT",
+            text,
+            count=1,
+        )
+        text = re.sub(
+            r"(?m)^RELEASE_BODY_SHA256: \S+$",
+            "RELEASE_BODY_SHA256: ABSENT",
+            text,
+            count=1,
+        )
+        state.write_text(text, encoding="utf-8")
+
     def test_exact_valid_identity_passes(self) -> None:
         self.assertEqual(governance.validate_release_body(self.root), [])
 
@@ -218,21 +265,63 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
                 self.assertEqual(governance.validate_release_body(self.root), [])
 
     def test_frozen_successor_byte_boundaries(self) -> None:
-        mutations = {
-            "empty": b"",
-            "over-limit": b"x" * 65537,
-            "bom": b"\xef\xbb\xbfvalid\n",
-            "invalid-utf8": b"\xff\n",
-            "crlf": b"valid\r\n",
-            "missing-lf": b"valid",
-            "extra-lf": b"valid\n\n",
-            "trailing-space": b"valid \n",
-        }
-        for name, content in mutations.items():
+        body, _ = self.freeze_successor_body()
+        valid = body.read_bytes()
+        exact_limit = valid.removesuffix(b"\n")
+        exact_limit += b"x" * (65535 - len(exact_limit)) + b"\n"
+        self.assertEqual(len(exact_limit), 65536)
+        self.assertEqual(self.synchronize_successor_body(exact_limit), [])
+
+        cases = (
+            ("empty", b"", "body size must be 1..65536 bytes", True),
+            ("one-byte", b"\n", "body size must be 1..65536 bytes", False),
+            (
+                "over-limit",
+                exact_limit.removesuffix(b"\n") + b"x\n",
+                "body size must be 1..65536 bytes",
+                True,
+            ),
+            ("bom", b"\xef\xbb\xbf" + valid, "UTF-8 BOM is forbidden", True),
+            ("invalid-utf8", valid.removesuffix(b"\n") + b"\xff\n", "invalid UTF-8", True),
+            ("crlf", valid.replace(b"\n", b"\r\n", 1), "only LF newlines are allowed", True),
+            ("missing-lf", valid.removesuffix(b"\n"), "exactly one terminal LF is required", True),
+            ("extra-lf", valid + b"\n", "exactly one terminal LF is required", True),
+            ("trailing-space", valid.removesuffix(b"\n") + b" \n", "trailing whitespace is forbidden", True),
+        )
+        for name, content, message, present in cases:
             with self.subTest(name=name):
-                body, _ = self.freeze_successor_body()
-                body.write_bytes(content)
-                self.assert_invalid()
+                violations = self.synchronize_successor_body(content)
+                matches = [item for item in violations if message in item]
+                if present:
+                    self.assertEqual(len(matches), 1, violations)
+                else:
+                    self.assertEqual(matches, [], violations)
+                    self.assertTrue(
+                        any("missing semantic marker" in item for item in violations),
+                        violations,
+                    )
+                self.assertFalse(
+                    any("digest" in item or "checksum" in item for item in violations),
+                    violations,
+                )
+
+    def test_invalid_successor_material_phase_cross_product(self) -> None:
+        for phase in (5, 9, None):
+            with self.subTest(material="ABSENT", phase=phase):
+                self.reset_absent_successor(phase)
+                violations = governance.validate_release_body(self.root)
+                key = f"{phase}_NEXT" if phase is not None else "NONE_CLOSURE_CANDIDATE"
+                self.assertIn(
+                    f"{governance.CANONICAL_CURRENT_STATE_FILE}: ABSENT publication material is invalid for {key}",
+                    violations,
+                )
+        for phase in (2, 3, 4):
+            with self.subTest(material="FROZEN", phase=phase):
+                self.freeze_successor_body(phase)
+                self.assertIn(
+                    f"{governance.CANONICAL_CURRENT_STATE_FILE}: publication material state and phase are inconsistent",
+                    governance.validate_release_body(self.root),
+                )
 
     def test_frozen_successor_file_types_and_checksum_grammar(self) -> None:
         for case in ("body-symlink", "body-directory", "checksum-symlink", "checksum-directory"):
@@ -247,17 +336,31 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
                     selected.symlink_to(target)
                 else:
                     selected.mkdir()
-                self.assert_invalid()
-        for value in (
-            "0" * 64 + f" {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
-            "g" * 64 + f"  {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
-            "0" * 64 + "  wrong.md\n",
-            "0" * 64 + f"  {governance.CURRENT_RELEASE_BODY.as_posix()}\nextra\n",
-        ):
-            with self.subTest(checksum=value):
-                _, checksum = self.freeze_successor_body()
+                relative = (
+                    governance.CURRENT_RELEASE_BODY
+                    if case.startswith("body")
+                    else governance.CURRENT_RELEASE_BODY_CHECKSUM
+                )
+                self.assertIn(
+                    f"{relative}: required regular non-symlink file is missing",
+                    governance.validate_release_body(self.root),
+                )
+        for case in ("malformed", "wrong-digest", "wrong-path", "extra-line"):
+            with self.subTest(checksum=case):
+                body, checksum = self.freeze_successor_body()
+                digest = hashlib.sha256(body.read_bytes()).hexdigest()
+                values = {
+                    "malformed": "not a checksum\n",
+                    "wrong-digest": "0" * 64 + f"  {governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+                    "wrong-path": f"{digest}  wrong.md\n",
+                    "extra-line": f"{digest}  {governance.CURRENT_RELEASE_BODY.as_posix()}\nextra\n",
+                }
+                value = values[case]
                 checksum.write_text(value, encoding="ascii")
-                self.assert_invalid()
+                self.assertIn(
+                    f"{governance.CURRENT_RELEASE_BODY_CHECKSUM}: bytes do not match body digest and exact path",
+                    governance.validate_release_body(self.root),
+                )
 
     def test_frozen_successor_semantic_requirements_and_future_assertions(self) -> None:
         required = (

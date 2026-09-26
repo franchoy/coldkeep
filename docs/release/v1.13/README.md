@@ -115,9 +115,12 @@ full closure remains unestablished.
 
 The [Phase 15R2 immutable lifecycle recovery](v1.13.16-phase15r2-immutable-lifecycle-contract-recovery.md)
 adds fail-closed, non-authorizing structural states for the same candidate
-after a normal merge, exact annotated tag, and conditional closure. This is a
-local contract candidate only: live refs, PR state, workflows, tag/release
-absence, Phase 16 Next, and the external authorization boundary are unchanged.
+after a normal merge, exact annotated tag, and conditional closure. At the
+Phase 15R2 pre-merge checkpoint, it was a local contract candidate only: live
+refs, PR state, workflows, tag/release absence, Phase 16 Next, and the external
+authorization boundary were unchanged. The later M16/A16 publication attempt
+and failed tag certification are recorded above; this historical checkpoint
+does not describe the current live-tag state.
 Phase 8 implementation and certification are complete at executable/evidence
 head `f884ecba169f8eee908e9c8078d01d056cb1a0bd`. Its linear authority chain is
 `1967df264919a908680db4bc2a3dbf1fa5f673da`,

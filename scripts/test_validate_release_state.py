@@ -2555,6 +2555,62 @@ class DiagnosticCaptureTests(unittest.TestCase):
             if item["id"] == predicate_id
         )
 
+    def test_diagnostic_contract_closes_scalar_and_collection_vocabulary(self) -> None:
+        contract = (
+            SCRIPT.parents[1]
+            / "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+        ).read_text(encoding="utf-8")
+        normalized_contract = " ".join(contract.split())
+        required_literals = (
+            "Accepted exposed strings are limited to these finite families",
+            "No other category, exposed scalar, identity type, or identity key is valid.",
+            "`checkout_parents` has cardinality 0 before observation",
+            "preserves the complete ordered Git parent list",
+            "Records occur uniquely in `base`, `head` order",
+            "Complete evaluation predicate cardinality is 32 for release PR, 5",
+            "for release push, and 34 for tag push.",
+            "original member count, with no producer maximum",
+            "up to four snapshots are truthful repeated reads",
+            "failed artifact has no producer maximum",
+            "`inference-tag-push`, `ckrs016-tag-push`",
+            "`explicit-state-tag-push`, `ckrs016-tag-push`",
+            "`EXACT_COMMIT_M`",
+            "`EXACT_NAMED_TAG_A`",
+        )
+        for literal in required_literals:
+            with self.subTest(literal=literal):
+                self.assertIn(literal, normalized_contract)
+        expected_pr = (
+            "pr.env.actions", "pr.env.event", "pr.env.full_ref",
+            "pr.env.short_ref", "pr.env.head_ref", "pr.env.base_ref",
+            "pr.env.repository", "pr.env.runtime_sha", "pr.env.event_path",
+            "pr.event.read", "pr.event.utf8", "pr.event.json",
+            "pr.event.object", "pr.payload.pull_request", "pr.payload.number",
+            "pr.payload.number_ref", "pr.payload.repository",
+            "pr.payload.base_object", "pr.payload.head_object",
+            "pr.payload.base_ref", "pr.payload.head_ref",
+            "pr.payload.base_repository", "pr.payload.head_repository",
+            "pr.payload.base_sha", "pr.payload.head_sha",
+            "pr.git.base_object", "pr.git.head_object", "pr.route",
+            "pr.payload.merge_member", "pr.payload.merge_value",
+            "pr.git.parents", "pr.git.tree",
+        )
+        expected_release_push = (
+            "release_push.event.read", "release_push.event.utf8",
+            "release_push.event.json", "release_push.event.object",
+            "release_push.context",
+        )
+        self.assertEqual(
+            tuple(item[0] for item in release_state_support.PR_PREDICATES),
+            expected_pr,
+        )
+        self.assertEqual(
+            tuple(item[0] for item in release_state_support.RELEASE_PUSH_PREDICATES),
+            expected_release_push,
+        )
+        for predicate_id in (*expected_pr, *expected_release_push):
+            self.assertIn(f"`{predicate_id}`", contract)
+
     def run_active(
         self,
         fixture: Fixture,
@@ -2747,12 +2803,13 @@ class DiagnosticCaptureTests(unittest.TestCase):
 
     def test_tag_event_limit_has_truthful_whole_event_measurements(self) -> None:
         limit = 1048576
+        common_oversize_prefix = b"x" * (limit + 1)
         cases = (
             ("limit", b"{}" + b" " * (limit - 2), True),
             ("limit-plus-one", b"x" * (limit + 1), False),
             ("limit-plus-two", b"x" * (limit + 2), False),
-            ("large-a", b"x" * (limit + 1) + b"a" * (limit + 16), False),
-            ("large-b", b"x" * (limit + 1) + b"b" * (limit + 16), False),
+            ("large-a", common_oversize_prefix + b"a" * (limit + 16), False),
+            ("large-b", common_oversize_prefix + b"b" * (limit + 16), False),
         )
         oversized_snapshots = []
         for name, raw, accepted in cases:
@@ -2770,16 +2827,45 @@ class DiagnosticCaptureTests(unittest.TestCase):
                     "1.13.10",
                     "fixture/coldkeep",
                 )
-                payload = release_state_support._load_event(
-                    str(event),
-                    recorder=recorder,
-                    evaluation_id=evaluation,
-                    version="1.13.10",
-                    canonical_repository="fixture/coldkeep",
-                    predicate_prefix="tag",
-                )
+                original_open = Path.open
+                reads: list[tuple[int, int]] = []
+
+                class ObservedReader:
+                    def __init__(self, handle: object) -> None:
+                        self.handle = handle
+
+                    def __enter__(self) -> "ObservedReader":
+                        self.handle.__enter__()
+                        return self
+
+                    def __exit__(self, *args: object) -> object:
+                        return self.handle.__exit__(*args)
+
+                    def read(self, requested: int = -1) -> bytes:
+                        returned = self.handle.read(requested)
+                        reads.append((requested, len(returned)))
+                        return returned
+
+                def observed_open(selected: Path, *args: object, **kwargs: object) -> object:
+                    handle = original_open(selected, *args, **kwargs)
+                    return ObservedReader(handle) if selected == event else handle
+
+                original_loads = json.loads
+                with mock.patch.object(Path, "open", new=observed_open), mock.patch.object(
+                    release_state_support.json, "loads", wraps=original_loads
+                ) as decoder:
+                    payload = release_state_support._load_event(
+                        str(event),
+                        recorder=recorder,
+                        evaluation_id=evaluation,
+                        version="1.13.10",
+                        canonical_repository="fixture/coldkeep",
+                        predicate_prefix="tag",
+                    )
+                self.assertEqual(reads, [(limit + 1, min(len(raw), limit + 1))])
                 snapshot = recorder.event_snapshots[0]
                 if accepted:
+                    decoder.assert_called_once()
                     self.assertIsInstance(payload, dict)
                     self.assertEqual(snapshot["size_bytes"], limit)
                     self.assertEqual(
@@ -2788,6 +2874,7 @@ class DiagnosticCaptureTests(unittest.TestCase):
                     )
                     self.assertEqual(snapshot["size_limit_status"], "PASS")
                 else:
+                    decoder.assert_not_called()
                     self.assertIsNone(payload)
                     self.assertIsNone(snapshot["size_bytes"])
                     self.assertIsNone(snapshot["content_sha256"])
@@ -3783,6 +3870,77 @@ class FailedPredecessorReadBoundaryTests(unittest.TestCase):
                 if primitive == "fstat":
                     entered[-1].assert_not_called()
 
+    def test_exact_read_budget_and_short_read_accounting(self) -> None:
+        limit = release_state_support.PREDECESSOR_DISPOSITION_MAX_BYTES
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        relative = "docs/release/v1.13/disposition.md"
+        path = root / relative
+        path.parent.mkdir(parents=True)
+        original_read = os.read
+        original_fstat = os.fstat
+
+        def exercise(
+            content: bytes,
+            *,
+            advertised_size: int | None = None,
+            short_read: int | None = None,
+        ) -> tuple[release_state_support.Document | None, str | None, list[tuple[int, int]]]:
+            path.write_bytes(content)
+            calls: list[tuple[int, int]] = []
+
+            def observed_read(descriptor: int, requested: int) -> bytes:
+                actual_request = min(requested, short_read) if short_read else requested
+                returned = original_read(descriptor, actual_request)
+                calls.append((requested, len(returned)))
+                return returned
+
+            def observed_fstat(descriptor: int) -> os.stat_result:
+                value = original_fstat(descriptor)
+                if advertised_size is None:
+                    return value
+                fields = list(value)
+                fields[6] = advertised_size
+                return os.stat_result(fields)
+
+            with mock.patch.object(os, "read", side_effect=observed_read), mock.patch.object(
+                os, "fstat", side_effect=observed_fstat
+            ):
+                document, detail = release_state_support.load_predecessor_disposition_document(
+                    root, relative
+                )
+            remaining = limit + 1
+            for requested, returned in calls:
+                self.assertEqual(requested, min(8192, remaining))
+                self.assertLessEqual(returned, requested)
+                remaining -= returned
+            self.assertGreaterEqual(remaining, 0)
+            return document, detail, calls
+
+        exact, detail, calls = exercise(b"x" * limit)
+        self.assertIsNone(detail)
+        self.assertEqual(len(exact.lines[0]), limit)
+        self.assertEqual(sum(returned for _, returned in calls), limit)
+        self.assertEqual(calls[-1], (1, 0))
+
+        grown, detail, calls = exercise(
+            b"x" * (limit + 1), advertised_size=limit
+        )
+        self.assertIsNone(grown)
+        self.assertEqual(
+            detail, "file exceeds the 65536-byte predecessor disposition limit"
+        )
+        self.assertEqual(sum(returned for _, returned in calls), limit + 1)
+        self.assertEqual(calls[-1], (1, 1))
+
+        short, detail, calls = exercise(b"x" * limit, short_read=997)
+        self.assertIsNone(detail)
+        self.assertEqual(len(short.lines[0]), limit)
+        self.assertEqual(sum(returned for _, returned in calls), limit)
+        self.assertEqual(calls[-1], (1, 0))
+        self.assertGreater(len(calls), 8)
+
     def test_selected_path_replacement_is_rejected_after_checked_read(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -4029,9 +4187,52 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             "GITHUB_SHA": runtime_sha,
         }
 
+    def main_environment(self, before: str, after: str) -> dict[str, str]:
+        event = self.root / "TEST_FIXTURE_ONLY-main-event.json"
+        event.write_text(
+            json.dumps({
+                "ref": "refs/heads/main", "before": before, "after": after,
+                "created": False, "deleted": False, "forced": False,
+                "repository": {"full_name": "franchoy/coldkeep"},
+            }),
+            encoding="utf-8",
+        )
+        return {
+            "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/main", "GITHUB_REF_NAME": "main",
+            "GITHUB_REF_TYPE": "branch", "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep", "GITHUB_SHA": after,
+        }
+
+    def assert_projection(
+        self,
+        process: ProcessResult,
+        state: str,
+        evidence_scope: str,
+    ) -> dict[str, object]:
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        payload = json.loads(process.stdout)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["state"], state)
+        self.assertEqual(payload["artifact_state"], state)
+        self.assertEqual(payload["active_version"], "1.13.17")
+        self.assertEqual(payload["violations"], [])
+        self.assertIsNone(payload["error"])
+        self.assertEqual(payload["evidence_scope"], evidence_scope)
+        self.assertEqual(
+            payload["authorization_status"], "NOT_EVALUATED_BY_VALIDATOR"
+        )
+        self.assertEqual(
+            payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
+        )
+        return payload
+
     def test_complete_successor_development_candidate_merge_tag_and_closure(self) -> None:
-        development = self.validator("development")
-        self.assertEqual(development.returncode, 0, development.stdout + development.stderr)
+        for mode in ("auto", "development"):
+            with self.subTest(checkpoint="development", mode=mode):
+                self.assert_projection(
+                    self.validator(mode), "development", "LOCAL_RELEASE_BRANCH"
+                )
         self.assertEqual(validate_governance.validate(self.root), [])
         self.assertFalse((self.root / validate_governance.CURRENT_RELEASE_BODY).exists())
         self.assertNotEqual(self.rev_parse("refs/tags/v1.13.16^{}"), self.rev_parse("HEAD"))
@@ -4041,8 +4242,11 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
         git(self.root, "add", ".")
         git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY final candidate C")
         candidate = self.rev_parse("HEAD")
-        pre_release = self.validator("pre-release")
-        self.assertEqual(pre_release.returncode, 0, pre_release.stdout + pre_release.stderr)
+        for mode in ("auto", "pre-release"):
+            with self.subTest(checkpoint="pre-release", mode=mode):
+                self.assert_projection(
+                    self.validator(mode), "pre-release", "LOCAL_RELEASE_BRANCH"
+                )
         self.assertEqual(validate_governance.validate(self.root), [])
 
         relevant = (
@@ -4077,6 +4281,21 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             {path: self.rev_parse(f"{merge}:{path}") for path in relevant},
             candidate_blobs,
         )
+        self.assertFalse(
+            run_process(
+                [resolved_executable("git"), "-C", str(self.root), "show-ref", "--verify", "--quiet", "refs/tags/v1.13.17"],
+                check=False,
+            ).returncode == 0
+        )
+        git(self.root, "checkout", "--detach", merge)
+        pending_environment = self.main_environment(self.predecessor, merge)
+        for mode in ("auto", "merged-pending-final-main-certification"):
+            with self.subTest(checkpoint="pending-main", mode=mode):
+                self.assert_projection(
+                    self.validator(mode, pending_environment),
+                    "merged-pending-final-main-certification",
+                    "GITHUB_MAIN_PUSH_CONTEXT_CONSISTENCY",
+                )
         git(self.root, "tag", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY")
         tag_object = self.rev_parse("refs/tags/v1.13.17")
         self.assertEqual(self.rev_parse("refs/tags/v1.13.17^{}"), merge)
@@ -4091,15 +4310,10 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
                     process = self.validator(
                         mode, self.tag_environment(runtime_sha, event_after)
                     )
-                    self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
-                    payload = json.loads(process.stdout)
-                    self.assertEqual(
-                        payload["authorization_status"],
-                        "NOT_EVALUATED_BY_VALIDATOR",
-                    )
-                    self.assertEqual(
-                        payload["certification_status"],
-                        "PENDING_EXTERNAL_EVIDENCE",
+                    self.assert_projection(
+                        process,
+                        "tagged-pending-tag-certification",
+                        "GITHUB_TAG_EVENT_CONTEXT_CONSISTENCY",
                     )
 
         git(self.root, "checkout", "-b", "release/v1.13.17-post-publication-closure")
@@ -4126,8 +4340,13 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
         git(self.root, "add", ".")
         git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY closure candidate")
         closure_candidate = self.rev_parse("HEAD")
-        closure = self.validator("post-release-closure-candidate")
-        self.assertEqual(closure.returncode, 0, closure.stdout + closure.stderr)
+        for mode in ("auto", "post-release-closure-candidate"):
+            with self.subTest(checkpoint="closure-branch", mode=mode):
+                self.assert_projection(
+                    self.validator(mode),
+                    "post-release-closure-candidate",
+                    "LOCAL_CLOSURE_ARTIFACT_ONLY",
+                )
         self.assertEqual(validate_governance.validate(self.root), [])
         git(self.root, "checkout", "main")
         git(
@@ -4135,24 +4354,265 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             "-m", "TEST_FIXTURE_ONLY closure main",
         )
         closure_merge = self.rev_parse("HEAD")
-        event = self.root / "TEST_FIXTURE_ONLY-closure-event.json"
-        event.write_text(
-            json.dumps({
-                "ref": "refs/heads/main", "before": merge, "after": closure_merge,
-                "created": False, "deleted": False, "forced": False,
-                "repository": {"full_name": "franchoy/coldkeep"},
-            }),
+        git(self.root, "checkout", "--detach", closure_merge)
+        environment = self.main_environment(merge, closure_merge)
+        for mode in ("auto", "post-release-closure-candidate"):
+            with self.subTest(checkpoint="closure-main", mode=mode):
+                self.assert_projection(
+                    self.validator(mode, environment),
+                    "post-release-closure-candidate",
+                    "GITHUB_CLOSURE_MAIN_CONTEXT_CONSISTENCY",
+                )
+        terminal = self.validator("post-release-closed", environment)
+        self.assertEqual(terminal.returncode, 1, terminal.stdout + terminal.stderr)
+        terminal_payload = json.loads(terminal.stdout)
+        self.assertEqual(terminal_payload["state"], "post-release-closed")
+        self.assertIn(
+            "CKRS019", {item["rule"] for item in terminal_payload["violations"]}
+        )
+        self.assertNotEqual(self.rev_parse(f"{closure_candidate}^{{tree}}"), self.rev_parse(f"{merge}^{{tree}}"))
+        self.assertEqual(self.rev_parse("refs/tags/v1.13.17^{}"), merge)
+
+    def test_complete_successor_semantic_negatives(self) -> None:
+        def rules(process: ProcessResult) -> set[str]:
+            self.assertEqual(process.returncode, 1, process.stdout + process.stderr)
+            return {item["rule"] for item in json.loads(process.stdout)["violations"]}
+
+        disposition = self.root / "docs/release/v1.13/v1.13.17-predecessor-disposition.md"
+        original_disposition = disposition.read_bytes()
+        for name, mutation in (
+            ("missing", None),
+            ("malformed", b"TEST_FIXTURE_ONLY malformed\n"),
+            (
+                "contradictory",
+                re.sub(
+                    rb"(?m)^DIRECT_TARGET: [0-9a-f]{40}$",
+                    b"DIRECT_TARGET: " + b"0" * 40,
+                    original_disposition,
+                    count=1,
+                ),
+            ),
+        ):
+            with self.subTest(checkpoint="predecessor", case=name):
+                if disposition.exists():
+                    disposition.unlink()
+                if mutation is not None:
+                    disposition.write_bytes(mutation)
+                self.assertIn("CKRS010", rules(self.validator("development")))
+                disposition.write_bytes(original_disposition)
+
+        contract = self.root / "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+        original_contract = contract.read_bytes()
+        contract.write_bytes(
+            original_contract.replace(
+                b"**Predecessor disposition model:** failed-publication-predecessor-v1\n",
+                b"",
+                1,
+            )
+        )
+        ordinary_fallback = rules(self.validator("development"))
+        self.assertIn("CKRS019", ordinary_fallback)
+        self.assertNotIn("CKRS010", ordinary_fallback)
+        contract.write_bytes(original_contract)
+
+        git(self.root, "branch", "main", self.predecessor)
+        self.freeze_candidate()
+        body = self.root / validate_governance.CURRENT_RELEASE_BODY
+        checksum = self.root / validate_governance.CURRENT_RELEASE_BODY_CHECKSUM
+        state = self.root / validate_governance.CANONICAL_CURRENT_STATE_FILE
+        originals = (body.read_bytes(), checksum.read_bytes(), state.read_bytes())
+
+        def restore_body() -> None:
+            body.write_bytes(originals[0])
+            checksum.write_bytes(originals[1])
+            state.write_bytes(originals[2])
+
+        body.write_bytes(body.read_bytes().replace(b"source-only", b"source only", 1))
+        body_violations = validate_governance.validate(self.root)
+        self.assertTrue(any("digest does not match" in item for item in body_violations))
+        self.assertTrue(
+            any("bytes do not match body digest and exact path" in item for item in body_violations)
+        )
+        restore_body()
+
+        checksum.write_text(
+            "0" * 64 + f"  {validate_governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+            encoding="ascii",
+        )
+        checksum_violations = validate_governance.validate(self.root)
+        self.assertTrue(
+            any("bytes do not match body digest and exact path" in item for item in checksum_violations)
+        )
+        self.assertFalse(any("digest does not match" in item for item in checksum_violations))
+        restore_body()
+
+        state.write_text(
+            re.sub(
+                r"(?m)^RELEASE_BODY_SHA256: [0-9a-f]{64}$",
+                f"RELEASE_BODY_SHA256: {'0' * 64}",
+                state.read_text(encoding="utf-8"),
+                count=1,
+            ),
             encoding="utf-8",
         )
-        environment = {
-            "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "push",
-            "GITHUB_REF": "refs/heads/main", "GITHUB_REF_NAME": "main",
-            "GITHUB_REF_TYPE": "branch", "GITHUB_EVENT_PATH": str(event),
-            "GITHUB_REPOSITORY": "franchoy/coldkeep", "GITHUB_SHA": closure_merge,
-        }
-        closure_main = self.validator("post-release-closure-candidate", environment)
-        self.assertEqual(closure_main.returncode, 0, closure_main.stdout + closure_main.stderr)
-        self.assertNotEqual(self.rev_parse(f"{closure_candidate}^{{tree}}"), self.rev_parse(f"{merge}^{{tree}}"))
+        canonical_violations = validate_governance.validate(self.root)
+        self.assertTrue(any("digest does not match" in item for item in canonical_violations))
+        self.assertFalse(
+            any("bytes do not match body digest and exact path" in item for item in canonical_violations)
+        )
+        restore_body()
+
+        semantic_body = body.read_bytes().replace(b"source-only", b"archival", 1)
+        semantic_digest = hashlib.sha256(semantic_body).hexdigest()
+        body.write_bytes(semantic_body)
+        checksum.write_text(
+            f"{semantic_digest}  {validate_governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+            encoding="ascii",
+        )
+        state.write_text(
+            re.sub(
+                r"(?m)^RELEASE_BODY_SHA256: [0-9a-f]{64}$",
+                f"RELEASE_BODY_SHA256: {semantic_digest}",
+                state.read_text(encoding="utf-8"),
+                count=1,
+            ),
+            encoding="utf-8",
+        )
+        semantic_violations = validate_governance.validate(self.root)
+        self.assertTrue(
+            any("missing semantic marker 'source-only'" in item for item in semantic_violations),
+            semantic_violations,
+        )
+        self.assertFalse(
+            any("digest" in item or "checksum" in item for item in semantic_violations),
+            semantic_violations,
+        )
+        restore_body()
+
+        mirror = self.root / "AGENTS.md"
+        original_mirror = mirror.read_bytes()
+        mirror.write_bytes(original_mirror.replace(b"CURRENT_PHASE: 5_NEXT", b"CURRENT_PHASE: 4_NEXT", 1))
+        mirror_violations = validate_governance.validate(self.root)
+        self.assertTrue(
+            any("AGENTS.md" in item and "mirror" in item for item in mirror_violations),
+            mirror_violations,
+        )
+        mirror.write_bytes(original_mirror)
+
+        gate = self.root / "docs/release/v1.13/v1.13.17-release-gate.md"
+        original_gate = gate.read_bytes()
+        gate.write_bytes(original_gate.replace(b"Passed", b"Failed", 1))
+        self.assertIn("CKRS018", rules(self.validator("pre-release")))
+        gate.write_bytes(original_gate)
+
+        git(self.root, "add", ".")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY final candidate C")
+        candidate = self.rev_parse("HEAD")
+        git(self.root, "checkout", "main")
+        git(
+            self.root, "merge", "--no-ff", "release/v1.13.17",
+            "-m", "TEST_FIXTURE_ONLY normal merge M",
+        )
+        merge = self.rev_parse("HEAD")
+        git(self.root, "checkout", "--detach", merge)
+        git(self.root, "tag", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY")
+        tag_object = self.rev_parse("refs/tags/v1.13.17")
+        self.assert_projection(
+            self.validator(
+                "tagged-pending-tag-certification",
+                self.tag_environment(tag_object, tag_object),
+            ),
+            "tagged-pending-tag-certification",
+            "GITHUB_TAG_EVENT_CONTEXT_CONSISTENCY",
+        )
+
+        for name in ("wrong-after", "missing-created"):
+            environment = self.tag_environment(
+                merge, self.predecessor if name == "wrong-after" else tag_object
+            )
+            if name == "missing-created":
+                event = Path(environment["GITHUB_EVENT_PATH"])
+                payload = json.loads(event.read_text(encoding="utf-8"))
+                del payload["created"]
+                event.write_text(json.dumps(payload), encoding="utf-8")
+            with self.subTest(checkpoint="tag-event", case=name):
+                self.assertIn(
+                    "CKRS016",
+                    rules(self.validator("tagged-pending-tag-certification", environment)),
+                )
+                self.assert_projection(
+                    self.validator(
+                        "tagged-pending-tag-certification",
+                        self.tag_environment(tag_object, tag_object),
+                    ),
+                    "tagged-pending-tag-certification",
+                    "GITHUB_TAG_EVENT_CONTEXT_CONSISTENCY",
+                )
+
+        def commit_tree(tree: str, parents: tuple[str, ...], message: str) -> str:
+            command = [resolved_executable("git"), "-C", str(self.root), "commit-tree", tree]
+            for parent in parents:
+                command.extend(("-p", parent))
+            command.extend(("-m", message))
+            return run_process(command, check=True).stdout.strip()
+
+        candidate_tree = self.rev_parse(f"{candidate}^{{tree}}")
+        predecessor_tree = self.rev_parse(f"{self.predecessor}^{{tree}}")
+        unrelated = commit_tree(candidate_tree, (), "TEST_FIXTURE_ONLY unrelated")
+        bad_commits = (
+            ("wrong-order", commit_tree(candidate_tree, (candidate, self.predecessor), "TEST_FIXTURE_ONLY reversed")),
+            ("nonancestor", commit_tree(candidate_tree, (self.predecessor, unrelated), "TEST_FIXTURE_ONLY nonancestor")),
+            ("wrong-tree", commit_tree(predecessor_tree, (self.predecessor, candidate), "TEST_FIXTURE_ONLY wrong tree")),
+        )
+        for name, bad_commit in bad_commits:
+            with self.subTest(checkpoint="tag-topology", case=name):
+                self.assertEqual(
+                    run_process(
+                        [resolved_executable("git"), "-C", str(self.root), "cat-file", "-t", bad_commit],
+                        check=True,
+                    ).stdout.strip(),
+                    "commit",
+                )
+                raw_commit = run_process(
+                    [resolved_executable("git"), "-C", str(self.root), "cat-file", "-p", bad_commit],
+                    check=True,
+                ).stdout
+                expected_parents = {
+                    "wrong-order": [candidate, self.predecessor],
+                    "nonancestor": [self.predecessor, unrelated],
+                    "wrong-tree": [self.predecessor, candidate],
+                }[name]
+                self.assertEqual(
+                    re.findall(r"(?m)^parent ([0-9a-f]{40})$", raw_commit),
+                    expected_parents,
+                )
+                self.assertEqual(
+                    re.search(r"(?m)^tree ([0-9a-f]{40})$", raw_commit).group(1),
+                    predecessor_tree if name == "wrong-tree" else candidate_tree,
+                )
+                git(self.root, "checkout", "--detach", bad_commit)
+                git(self.root, "tag", "-f", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY")
+                bad_tag = self.rev_parse("refs/tags/v1.13.17")
+                self.assertIn(
+                    "CKRS016",
+                    rules(
+                        self.validator(
+                            "tagged-pending-tag-certification",
+                            self.tag_environment(bad_commit, bad_tag),
+                        )
+                    ),
+                )
+                git(self.root, "checkout", "--detach", merge)
+                git(self.root, "tag", "-f", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY")
+                restored_tag = self.rev_parse("refs/tags/v1.13.17")
+                self.assert_projection(
+                    self.validator(
+                        "tagged-pending-tag-certification",
+                        self.tag_environment(restored_tag, restored_tag),
+                    ),
+                    "tagged-pending-tag-certification",
+                    "GITHUB_TAG_EVENT_CONTEXT_CONSISTENCY",
+                )
 
 
 class LifecycleBoundaryCompatibilityTests(unittest.TestCase):
