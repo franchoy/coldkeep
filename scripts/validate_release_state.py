@@ -55,6 +55,7 @@ from release_state_support import (
     readme_current_state_valid,
     run_git,
     strict_git_ancestor,
+    strict_release_push_context,
     topology_valid,
     train_definition_invalid,
     train_marker_index,
@@ -794,7 +795,29 @@ def infer_state(
             else "LEGACY_STRUCTURAL_CONTEXT"
         )
         return state, context, scope or "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
-    if branch == release_branch or accepted_release_pr(version, env):
+    detached_release_push_scope: Optional[str] = None
+    if (
+        declaration
+        and branch == ""
+        and env["GITHUB_REF"] == f"refs/heads/{release_branch}"
+        and strict_release_push_context(
+            version,
+            head,
+            env,
+            declaration.canonical_repository,
+            branch=branch,
+            diagnostic=diagnostic,
+            diagnostic_site="inference-release-push",
+        )
+    ):
+        detached_release_push_scope = (
+            "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY"
+        )
+    if (
+        branch == release_branch
+        or accepted_release_pr(version, env)
+        or detached_release_push_scope
+    ):
         if boundaries and phase_doc:
             state = (
                 "pre-release"
@@ -805,20 +828,22 @@ def infer_state(
             )
         else:
             state = "pre-release" if phases_complete(phase_doc) else "development"
-        scope = (
-            v1_context_scope(
-                root,
-                version,
-                state,
-                context,
-                env,
-                declaration,
-                diagnostic,
-                "inference",
+        scope = detached_release_push_scope
+        if scope is None:
+            scope = (
+                v1_context_scope(
+                    root,
+                    version,
+                    state,
+                    context,
+                    env,
+                    declaration,
+                    diagnostic,
+                    "inference",
+                )
+                if declaration
+                else "LEGACY_STRUCTURAL_CONTEXT"
             )
-            if declaration
-            else "LEGACY_STRUCTURAL_CONTEXT"
-        )
         return state, context, scope or "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
     raise InternalError("git-context", "unable to infer release lifecycle from the current Git context")
 

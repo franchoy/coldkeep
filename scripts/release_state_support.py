@@ -1913,6 +1913,8 @@ def strict_release_push_context(
         else None
     )
     before = payload.get("before") if payload else None
+    created = payload.get("created") if payload else None
+    zero_sha = "0" * 40
     accepted = bool(
         env["GITHUB_ACTIONS"] == "true"
         and env["GITHUB_EVENT_NAME"] == "push"
@@ -1921,13 +1923,16 @@ def strict_release_push_context(
         and env["GITHUB_REF_TYPE"] == "branch"
         and env["GITHUB_REPOSITORY"] == canonical_repository
         and env["GITHUB_SHA"] == head
+        and branch in ("", f"release/v{version}")
         and payload
         and payload.get("ref") == expected_ref
         and payload.get("after") == head
         and isinstance(before, str)
         and GIT_SHA.fullmatch(before)
-        and before != "0" * 40
-        and payload.get("created") is False
+        and (
+            (created is True and before == zero_sha)
+            or (created is False and before != zero_sha)
+        )
         and payload.get("deleted") is False
         and payload.get("forced") is False
         and _repository_name(payload.get("repository")) == canonical_repository

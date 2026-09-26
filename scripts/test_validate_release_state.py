@@ -4017,6 +4017,7 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
         git(self.root, "add", disposition.relative_to(self.root).as_posix())
         git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY successor development")
         git(self.root, "checkout", "-b", "release/v1.13.17")
+        self.release_push_event_number = 0
 
     def rev_parse(self, value: str) -> str:
         return run_process(
@@ -4030,6 +4031,19 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
         env: dict[str, str] | None = None,
     ) -> ProcessResult:
         return run_validator(self.root, "--state", mode, "--json", env=env)
+
+    def fixture_validator(
+        self,
+        mode: str,
+        env: dict[str, str] | None = None,
+        *extra: str,
+    ) -> ProcessResult:
+        return run_validator_script(
+            self.root / "scripts/validate_release_state.py",
+            self.root,
+            "--state", mode, "--json", *extra,
+            env=env,
+        )
 
     def set_state_values(self, values: dict[str, str]) -> None:
         paths = (validate_governance.CANONICAL_CURRENT_STATE_FILE,) + (
@@ -4204,6 +4218,114 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             "GITHUB_REPOSITORY": "franchoy/coldkeep", "GITHUB_SHA": after,
         }
 
+    def release_push_environment(
+        self,
+        before: object,
+        after: str,
+        created: object,
+        *,
+        payload_updates: dict[str, object] | None = None,
+        payload_remove: tuple[str, ...] = (),
+        environment_updates: dict[str, str] | None = None,
+        raw_event: str | None = None,
+    ) -> dict[str, str]:
+        self.release_push_event_number += 1
+        event = self.root / (
+            "TEST_FIXTURE_ONLY-release-push-"
+            f"{self.release_push_event_number}.json"
+        )
+        payload: dict[str, object] = {
+            "ref": "refs/heads/release/v1.13.17",
+            "before": before,
+            "after": after,
+            "created": created,
+            "deleted": False,
+            "forced": False,
+            "repository": {"full_name": "franchoy/coldkeep"},
+        }
+        if payload_updates:
+            payload.update(payload_updates)
+        for key in payload_remove:
+            payload.pop(key, None)
+        event.write_text(
+            raw_event if raw_event is not None else json.dumps(payload),
+            encoding="utf-8",
+        )
+        environment = {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/release/v1.13.17",
+            "GITHUB_REF_NAME": "release/v1.13.17",
+            "GITHUB_REF_TYPE": "branch",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": after,
+        }
+        if environment_updates:
+            environment.update(environment_updates)
+        return environment
+
+    def add_development_history(self) -> str:
+        git(self.root, "commit", "--allow-empty", "-m", "TEST_FIXTURE_ONLY development step one")
+        git(self.root, "commit", "--allow-empty", "-m", "TEST_FIXTURE_ONLY development step two")
+        candidate = self.rev_parse("HEAD")
+        self.assertEqual(
+            self.rev_parse(f"{candidate}^{{commit}}"),
+            candidate,
+        )
+        self.assertEqual(
+            self.rev_parse(f"{self.predecessor}^{{commit}}"),
+            self.predecessor,
+        )
+        self.assertEqual(
+            run_process(
+                [
+                    resolved_executable("git"), "-C", str(self.root),
+                    "rev-list", "--count", f"{self.predecessor}..{candidate}",
+                ],
+                check=True,
+            ).stdout.strip(),
+            "3",
+        )
+        return candidate
+
+    def assert_release_push_rejected(
+        self,
+        environment: dict[str, str],
+        automatic_state: str | None = None,
+    ) -> None:
+        automatic = self.validator("auto", environment)
+        payload = json.loads(automatic.stdout)
+        if automatic_state is None:
+            self.assertEqual(
+                automatic.returncode, 2, automatic.stdout + automatic.stderr
+            )
+            self.assertIsNone(payload["state"])
+            self.assertEqual(payload["evidence_scope"], "UNAVAILABLE")
+            self.assertEqual(payload["violations"], [])
+            self.assertEqual(payload["error"]["kind"], "git-context")
+        else:
+            self.assertEqual(
+                automatic.returncode, 1, automatic.stdout + automatic.stderr
+            )
+            self.assertEqual(payload["state"], automatic_state)
+            self.assertEqual(
+                payload["evidence_scope"], "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
+            )
+            self.assertIn(
+                "CKRS016", {item["rule"] for item in payload["violations"]}
+            )
+        explicit = self.validator("development", environment)
+        self.assertEqual(explicit.returncode, 1, explicit.stdout + explicit.stderr)
+        payload = json.loads(explicit.stdout)
+        self.assertIn(
+            "CKRS016",
+            {item["rule"] for item in payload["violations"]},
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
+        )
+
     def assert_projection(
         self,
         process: ProcessResult,
@@ -4226,6 +4348,522 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
         )
         return payload
+
+    def test_release_branch_push_creation_parent_red_and_repaired_green(self) -> None:
+        candidate = self.add_development_history()
+        self.assert_projection(
+            self.validator("auto"), "development", "LOCAL_RELEASE_BRANCH"
+        )
+        update = self.release_push_environment(
+            self.predecessor, candidate, False
+        )
+        self.assert_projection(
+            self.validator("auto", update),
+            "development",
+            "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+        )
+        creation = self.release_push_environment("0" * 40, candidate, True)
+        for mode in ("auto", "development"):
+            with self.subTest(mode=mode):
+                self.assert_projection(
+                    self.validator(mode, creation),
+                    "development",
+                    "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+                )
+        for name, environment in (("creation", creation), ("update", update)):
+            with self.subTest(human=name):
+                process = run_validator(
+                    self.root, "--state", "auto", env=environment
+                )
+                self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+                self.assertEqual(
+                    process.stdout,
+                    "[release-state] OK state=development "
+                    "active_version=1.13.17 violations=0\n",
+                )
+                self.assertEqual(process.stderr, "")
+
+    def test_release_branch_push_creation_update_complete_matrix(self) -> None:
+        candidate = self.add_development_history()
+        for lifecycle, explicit in (
+            ("development", "development"),
+            ("pre-release", "pre-release"),
+        ):
+            if lifecycle == "pre-release":
+                git(self.root, "checkout", "release/v1.13.17")
+                self.freeze_candidate()
+                git(self.root, "add", ".")
+                git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY final candidate C")
+                candidate = self.rev_parse("HEAD")
+            self.assertEqual(validate_governance.validate(self.root), [])
+            for checkout in ("attached", "detached"):
+                if checkout == "attached":
+                    git(self.root, "checkout", "release/v1.13.17")
+                else:
+                    git(self.root, "checkout", "--detach", candidate)
+                self.assertEqual(self.rev_parse("HEAD"), candidate)
+                for transition, before, created in (
+                    ("creation", "0" * 40, True),
+                    ("update", self.predecessor, False),
+                ):
+                    environment = self.release_push_environment(
+                        before, candidate, created
+                    )
+                    for mode in ("auto", explicit):
+                        with self.subTest(
+                            lifecycle=lifecycle,
+                            checkout=checkout,
+                            transition=transition,
+                            mode=mode,
+                        ):
+                            self.assert_projection(
+                                self.validator(mode, environment),
+                                lifecycle,
+                                "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+                            )
+                    if checkout == "detached":
+                        with self.subTest(
+                            lifecycle=lifecycle,
+                            checkout=checkout,
+                            transition=transition,
+                            mode="auto-human",
+                        ):
+                            process = run_validator(
+                                self.root, "--state", "auto", env=environment
+                            )
+                            self.assertEqual(
+                                process.returncode,
+                                0,
+                                process.stdout + process.stderr,
+                            )
+                            self.assertEqual(
+                                process.stdout,
+                                f"[release-state] OK state={lifecycle} "
+                                "active_version=1.13.17 violations=0\n",
+                            )
+                            self.assertEqual(process.stderr, "")
+            if lifecycle == "development":
+                git(self.root, "checkout", "release/v1.13.17")
+
+    def test_release_branch_push_pairing_types_and_common_guards(self) -> None:
+        candidate = self.add_development_history()
+        git(self.root, "checkout", "--detach", candidate)
+        valid_transitions = (
+            ("creation", "0" * 40, True),
+            ("update", self.predecessor, False),
+        )
+        for name, before, created in valid_transitions:
+            with self.subTest(control=name):
+                self.assert_projection(
+                    self.validator(
+                        "development",
+                        self.release_push_environment(before, candidate, created),
+                    ),
+                    "development",
+                    "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+                )
+
+        pairing_cases = (
+            ("zero-false", "0" * 40, False, {}, ()),
+            ("nonzero-true", self.predecessor, True, {}, ()),
+            ("created-missing", "0" * 40, True, {}, ("created",)),
+            ("created-null", "0" * 40, None, {}, ()),
+            ("created-zero", "0" * 40, 0, {}, ()),
+            ("created-one", "0" * 40, 1, {}, ()),
+            ("created-string-true", "0" * 40, "true", {}, ()),
+            ("created-string-false", self.predecessor, "false", {}, ()),
+            ("created-list", "0" * 40, [], {}, ()),
+            ("created-object", "0" * 40, {}, {}, ()),
+            ("before-missing", "0" * 40, True, {}, ("before",)),
+            ("before-null", None, True, {}, ()),
+            ("before-number", 0, True, {}, ()),
+            ("before-empty", "", True, {}, ()),
+            ("before-short", "0" * 39, True, {}, ()),
+            ("before-long", "0" * 41, True, {}, ()),
+            ("before-nonhex", "g" * 40, True, {}, ()),
+            ("before-uppercase", "A" * 40, False, {}, ()),
+            ("before-leading-space", " " + "0" * 40, True, {}, ()),
+            ("before-trailing-space", "0" * 40 + " ", True, {}, ()),
+        )
+        for name, before, created, updates, remove in pairing_cases:
+            with self.subTest(pairing=name):
+                self.assert_release_push_rejected(
+                    self.release_push_environment(
+                        before,
+                        candidate,
+                        created,
+                        payload_updates=updates,
+                        payload_remove=remove,
+                    )
+                )
+
+        payload_guards = (
+            ("deleted-true", {"deleted": True}, ()),
+            ("deleted-missing", {}, ("deleted",)),
+            ("deleted-string", {"deleted": "false"}, ()),
+            ("forced-true", {"forced": True}, ()),
+            ("forced-missing", {}, ("forced",)),
+            ("forced-number", {"forced": 0}, ()),
+            ("repository-wrong", {"repository": {"full_name": "fork/coldkeep"}}, ()),
+            ("repository-missing", {}, ("repository",)),
+            ("repository-shape", {"repository": "franchoy/coldkeep"}, ()),
+            ("event-ref", {"ref": "refs/heads/main"}, ()),
+            ("event-after", {"after": self.predecessor}, ()),
+        )
+        environment_guards = (
+            ("actions-missing", {"GITHUB_ACTIONS": ""}),
+            ("event-name-create", {"GITHUB_EVENT_NAME": "create"}),
+            ("full-ref", {"GITHUB_REF": "refs/heads/main"}),
+            ("short-ref", {"GITHUB_REF_NAME": "main"}),
+            ("ref-type-tag", {"GITHUB_REF_TYPE": "tag"}),
+            ("repository", {"GITHUB_REPOSITORY": "fork/coldkeep"}),
+            ("runtime-sha", {"GITHUB_SHA": self.predecessor}),
+            ("event-path-missing", {"GITHUB_EVENT_PATH": ""}),
+            ("closure-ref", {
+                "GITHUB_REF": "refs/heads/release/v1.13.17-post-publication-closure",
+                "GITHUB_REF_NAME": "release/v1.13.17-post-publication-closure",
+            }),
+            ("wrong-release", {
+                "GITHUB_REF": "refs/heads/release/v1.13.18",
+                "GITHUB_REF_NAME": "release/v1.13.18",
+            }),
+        )
+        for transition, before, created in valid_transitions:
+            for name, updates, remove in payload_guards:
+                with self.subTest(transition=transition, payload_guard=name):
+                    self.assert_release_push_rejected(
+                        self.release_push_environment(
+                            before,
+                            candidate,
+                            created,
+                            payload_updates=updates,
+                            payload_remove=remove,
+                        )
+                    )
+            for name, updates in environment_guards:
+                with self.subTest(transition=transition, environment_guard=name):
+                    self.assert_release_push_rejected(
+                        self.release_push_environment(
+                            before,
+                            candidate,
+                            created,
+                            environment_updates=updates,
+                        ),
+                        "merged-not-tagged" if name == "full-ref" else None,
+                    )
+            with self.subTest(transition=transition, event="malformed"):
+                self.assert_release_push_rejected(
+                    self.release_push_environment(
+                        before, candidate, created, raw_event="{"
+                    )
+                )
+            with self.subTest(transition=transition, event="wrong-shape"):
+                self.assert_release_push_rejected(
+                    self.release_push_environment(
+                        before, candidate, created, raw_event="[]"
+                    )
+                )
+            missing = self.release_push_environment(before, candidate, created)
+            Path(missing["GITHUB_EVENT_PATH"]).unlink()
+            with self.subTest(transition=transition, event="missing"):
+                self.assert_release_push_rejected(missing)
+
+        for name, before, created in valid_transitions:
+            with self.subTest(restored=name):
+                self.assert_projection(
+                    self.validator(
+                        "development",
+                        self.release_push_environment(before, candidate, created),
+                    ),
+                    "development",
+                    "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+                )
+
+    def test_detached_auto_release_push_inference_boundaries(self) -> None:
+        candidate = self.add_development_history()
+        valid = self.release_push_environment("0" * 40, candidate, True)
+
+        git(self.root, "checkout", "--detach", candidate)
+        self.assert_projection(
+            self.validator("auto", valid),
+            "development",
+            "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+        )
+
+        git(self.root, "checkout", "-b", "TEST_FIXTURE_ONLY-wrong", candidate)
+        for mode, expected_exit in (("auto", 2), ("development", 1)):
+            with self.subTest(actual_branch="wrong", mode=mode):
+                process = self.validator(mode, valid)
+                self.assertEqual(
+                    process.returncode,
+                    expected_exit,
+                    process.stdout + process.stderr,
+                )
+                payload = json.loads(process.stdout)
+                self.assertNotEqual(
+                    payload["evidence_scope"],
+                    "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+                )
+                if mode == "auto":
+                    self.assertEqual(payload["error"]["kind"], "git-context")
+                else:
+                    self.assertIn(
+                        "CKRS016",
+                        {item["rule"] for item in payload["violations"]},
+                    )
+
+        git(self.root, "checkout", "--detach", candidate)
+        substitutions = (
+            ("main", {
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_REF_NAME": "main",
+            }, 1, "merged-not-tagged", "UNSUPPORTED_OR_CONFLICTING_CONTEXT", None, "CKRS016"),
+            ("tag", {
+                "GITHUB_REF": "refs/tags/v1.13.17",
+                "GITHUB_REF_NAME": "v1.13.17",
+                "GITHUB_REF_TYPE": "tag",
+            }, 2, None, "UNAVAILABLE", "git-context", None),
+            ("closure", {
+                "GITHUB_REF": "refs/heads/release/v1.13.17-post-publication-closure",
+                "GITHUB_REF_NAME": "release/v1.13.17-post-publication-closure",
+            }, 2, None, "UNAVAILABLE", "git-context", None),
+            ("pr", {
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_REF": "refs/pull/17/merge",
+                "GITHUB_REF_NAME": "17/merge",
+                "GITHUB_HEAD_REF": "release/v1.13.17",
+                "GITHUB_BASE_REF": "main",
+            }, 1, "development", "UNSUPPORTED_OR_CONFLICTING_CONTEXT", None, "CKRS016"),
+        )
+        for name, updates, exit_code, state, scope, error, rule in substitutions:
+            with self.subTest(context=name):
+                environment = dict(valid)
+                environment.update(updates)
+                process = self.validator("auto", environment)
+                self.assertEqual(
+                    process.returncode,
+                    exit_code,
+                    process.stdout + process.stderr,
+                )
+                payload = json.loads(process.stdout)
+                self.assertEqual(payload["state"], state)
+                self.assertEqual(payload["evidence_scope"], scope)
+                if error:
+                    self.assertEqual(payload["error"]["kind"], error)
+                    self.assertEqual(payload["violations"], [])
+                else:
+                    self.assertIsNone(payload["error"])
+                    self.assertIn(
+                        rule,
+                        {item["rule"] for item in payload["violations"]},
+                    )
+
+        git(self.root, "branch", "main", candidate)
+        git(self.root, "checkout", "main")
+        actual_main = self.validator("auto", valid)
+        self.assertEqual(
+            actual_main.returncode,
+            1,
+            actual_main.stdout + actual_main.stderr,
+        )
+        actual_main_payload = json.loads(actual_main.stdout)
+        self.assertEqual(actual_main_payload["state"], "merged-not-tagged")
+        self.assertEqual(
+            actual_main_payload["evidence_scope"],
+            "UNSUPPORTED_OR_CONFLICTING_CONTEXT",
+        )
+        self.assertIn(
+            "CKRS016",
+            {item["rule"] for item in actual_main_payload["violations"]},
+        )
+
+        git(self.root, "checkout", "--detach", candidate)
+
+        contract = (
+            self.root
+            / "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+        )
+        original = contract.read_text(encoding="utf-8")
+        try:
+            for name, replacement in (
+                ("missing", ""),
+                (
+                    "malformed",
+                    "**Lifecycle declaration model:** immutable-transition-v2\n",
+                ),
+            ):
+                with self.subTest(declaration=name):
+                    contract.write_text(
+                        original.replace(
+                            "**Lifecycle declaration model:** immutable-transition-v1\n",
+                            replacement,
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                    automatic = self.validator("auto", valid)
+                    self.assertEqual(
+                        automatic.returncode,
+                        2,
+                        automatic.stdout + automatic.stderr,
+                    )
+                    self.assertEqual(
+                        json.loads(automatic.stdout)["error"]["kind"],
+                        "git-context",
+                    )
+                    explicit = self.validator("development", valid)
+                    self.assertEqual(
+                        explicit.returncode,
+                        1,
+                        explicit.stdout + explicit.stderr,
+                    )
+                    self.assertIn(
+                        "CKRS019",
+                        {
+                            item["rule"]
+                            for item in json.loads(explicit.stdout)["violations"]
+                        },
+                    )
+        finally:
+            contract.write_text(original, encoding="utf-8")
+
+    def test_detached_auto_release_push_rechecks_event_for_ckrs016(self) -> None:
+        candidate = self.add_development_history()
+        environment = self.release_push_environment("0" * 40, candidate, True)
+        event = Path(environment["GITHUB_EVENT_PATH"])
+        git(self.root, "checkout", "--detach", candidate)
+        actual_environment = os.environ.copy()
+        for key in GITHUB_KEYS:
+            actual_environment.pop(key, None)
+        actual_environment.update(environment)
+        original_load = release_state_support._load_event
+        release_push_reads = 0
+
+        def mutate_after_inference(*args: object, **kwargs: object) -> object:
+            nonlocal release_push_reads
+            payload = original_load(*args, **kwargs)
+            if kwargs.get("predicate_prefix") == "release_push":
+                release_push_reads += 1
+                if release_push_reads == 1:
+                    changed = json.loads(event.read_text(encoding="utf-8"))
+                    changed["forced"] = True
+                    event.write_text(json.dumps(changed), encoding="utf-8")
+            return payload
+
+        with mock.patch.dict(os.environ, actual_environment, clear=True), mock.patch.object(
+            release_state_support,
+            "_load_event",
+            side_effect=mutate_after_inference,
+        ):
+            result = validate_release_state.validate(self.root, "auto")
+        self.assertEqual(release_push_reads, 2)
+        self.assertEqual(result.state, "development")
+        self.assertEqual(
+            result.evidence_scope,
+            "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY",
+        )
+        self.assertIn("CKRS016", {item.rule for item in result.violations})
+
+    def test_release_branch_push_diagnostic_compatibility(self) -> None:
+        candidate = self.add_development_history()
+        git(self.root, "checkout", "--detach", candidate)
+        cases = (
+            ("creation", "0" * 40, True, {}, True),
+            ("update", self.predecessor, False, {}, True),
+            ("crossed", "0" * 40, False, {}, False),
+            ("creation-wrong-repository", "0" * 40, True, {
+                "GITHUB_REPOSITORY": "fork/coldkeep",
+            }, False),
+        )
+        for mode in ("auto", "development"):
+            for name, before, created, env_updates, accepted in cases:
+                environment = self.release_push_environment(
+                    before,
+                    candidate,
+                    created,
+                    environment_updates=env_updates,
+                )
+                inactive = self.fixture_validator(mode, environment)
+                destination = self.root / (
+                    f"TEST_FIXTURE_ONLY-{mode}-{name}-diagnostic.json"
+                )
+                active = self.fixture_validator(
+                    mode,
+                    environment,
+                    "--diagnostic-json", str(destination),
+                )
+                with self.subTest(mode=mode, case=name):
+                    self.assertEqual(active.returncode, inactive.returncode)
+                    self.assertEqual(active.stdout, inactive.stdout)
+                    self.assertEqual(active.stderr, inactive.stderr)
+                    diagnostic = json.loads(
+                        destination.read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(
+                        diagnostic["schema"],
+                        "coldkeep-release-state-diagnostic/v2",
+                    )
+                    self.assertTrue(diagnostic["capture"]["complete"])
+                    self.assertEqual(
+                        diagnostic["validator"]["exit_code"], active.returncode
+                    )
+                    self.assertEqual(
+                        diagnostic["validator"]["result"],
+                        "ok" if accepted else "error",
+                    )
+                    self.assertEqual(
+                        diagnostic["validator"]["resolved_state"],
+                        None if mode == "auto" and not accepted else "development",
+                    )
+                    evaluations = [
+                        item for item in diagnostic["evaluations"]
+                        if item["route"] == "release-push"
+                    ]
+                    expected_sites = (
+                        ["inference-release-push", "ckrs016-release-push"]
+                        if mode == "auto" and accepted else
+                        ["inference-release-push"]
+                        if mode == "auto" else
+                        ["explicit-state-release-push", "ckrs016-release-push"]
+                    )
+                    self.assertEqual(
+                        [item["site"] for item in evaluations], expected_sites
+                    )
+                    snapshot_ids = [
+                        item["event_snapshot_id"] for item in evaluations
+                    ]
+                    self.assertTrue(all(item is not None for item in snapshot_ids))
+                    self.assertEqual(len(set(snapshot_ids)), len(snapshot_ids))
+                    for evaluation in evaluations:
+                        self.assertEqual(len(evaluation["predicates"]), 5)
+                        self.assertEqual(
+                            evaluation["result"],
+                            "PASS" if accepted else "FAIL",
+                        )
+                        self.assertEqual(
+                            evaluation["first_rejecting_predicate"],
+                            None if accepted else "release_push.context",
+                        )
+                        self.assertTrue(
+                            all(
+                                item["source_path"]
+                                == "scripts/release_state_support.py"
+                                and item["source_sha256"] is not None
+                                for item in evaluation["predicates"]
+                            )
+                        )
+                    for source in diagnostic["validator"]["sources"]:
+                        self.assertTrue(source["loaded_path_match"])
+                        self.assertTrue(source["matches_git_blob"])
+                        self.assertEqual(
+                            source["git_blob"], source["measured_git_blob"]
+                        )
+                        self.assertEqual(
+                            source["measured_sha256"],
+                            hashlib.sha256(
+                                (self.root / source["path"]).read_bytes()
+                            ).hexdigest(),
+                        )
 
     def test_complete_successor_development_candidate_merge_tag_and_closure(self) -> None:
         for mode in ("auto", "development"):
