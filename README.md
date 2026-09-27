@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.17%20recovery%20development-blue)
+![Status](https://img.shields.io/badge/status-v1.13.17%20ready-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -33,11 +33,11 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: 2_NEXT
-TRACKED_PUBLICATION_MATERIAL: ABSENT
+CURRENT_PHASE: 5_NEXT
+TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
+V1_13_17_STATE: READY_PRE_RELEASE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
@@ -46,9 +46,11 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.17 — Annotated-Tag Certification Recovery is the active Route C
-development successor. Phases 0-1 are Complete, Phase 2 is Next, and its
-publication body/checksum are intentionally absent. The work is limited to
+v1.13.17 — Annotated-Tag Certification Recovery is the ready Route C
+successor. Phases 0-4 are Complete in the tracked local candidate declaration,
+Phase 5 is Next, and its source-only publication body/checksum are frozen. The
+candidate still requires independent acceptance and fresh exact-head branch
+certification before any later PR or merge authority. The work is limited to
 release-state, tag-identity diagnostics, CI enforcement, and governance; it
 does not change product storage behavior. v1.13.16 is the immutable
 failed-publication predecessor: annotated tag A16 exists, its required tag CI
@@ -67,9 +69,9 @@ requires a separate plan.
 
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-    V1_13_17: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
-    RELEASE_STATE: DEVELOPMENT
-    PHASE_2: NEXT
+    V1_13_17: READY_PRE_RELEASE
+    RELEASE_STATE: PRE_RELEASE
+    PHASE_5: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

@@ -64,6 +64,27 @@ def git(root: Path, *args: str) -> None:
     )
 
 
+def copy_successor_fixture_source(source_root: Path, destination_root: Path) -> None:
+    """Copy the tracked source plus the explicit current publication pair."""
+    tracked = run_process(
+        [resolved_executable("git"), "-C", str(source_root), "ls-files", "-z"],
+        check=True,
+    ).stdout.split("\0")
+    paths = {Path(item) for item in tracked if item}
+    for relative in (
+        validate_governance.CURRENT_RELEASE_BODY,
+        validate_governance.CURRENT_RELEASE_BODY_CHECKSUM,
+    ):
+        source = source_root / relative
+        if source.exists() or source.is_symlink():
+            paths.add(relative)
+    for relative in sorted(paths):
+        source = source_root / relative
+        destination = destination_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination, follow_symlinks=False)
+
+
 def run_validator(
     root: Path,
     *args: str,
@@ -3979,6 +4000,37 @@ class FailedPredecessorReadBoundaryTests(unittest.TestCase):
         self.assertEqual(detail, "canonical path changed during the bounded read")
 
 
+class SuccessorFixtureSourceCopyTests(unittest.TestCase):
+    def test_current_pair_copy_is_independent_of_index_membership(self) -> None:
+        pair = (
+            validate_governance.CURRENT_RELEASE_BODY,
+            validate_governance.CURRENT_RELEASE_BODY_CHECKSUM,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            body = b"TEST_FIXTURE_ONLY body\n"
+            digest = hashlib.sha256(body).hexdigest()
+            for relative, content in (
+                (pair[0], body),
+                (pair[1], f"{digest}  {pair[0].as_posix()}\n".encode("ascii")),
+            ):
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            git(source, "init")
+            observed = []
+            for index_state in ("untracked", "tracked"):
+                if index_state == "tracked":
+                    git(source, "add", *(item.as_posix() for item in pair))
+                destination = Path(directory) / index_state
+                destination.mkdir()
+                copy_successor_fixture_source(source, destination)
+                observed.append(tuple((destination / item).read_bytes() for item in pair))
+            self.assertEqual(observed[0], observed[1])
+            self.assertEqual(observed[0], (body, f"{digest}  {pair[0].as_posix()}\n".encode("ascii")))
+
+
 class SuccessorLifecycleIntegrationTests(unittest.TestCase):
     """Exercise the complete successor authority through C, M, A and closure."""
 
@@ -3988,15 +4040,8 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
         self.root = Path(temporary.name) / "repo"
         self.root.mkdir()
         source_root = SCRIPT.parents[1]
-        tracked = run_process(
-            [resolved_executable("git"), "-C", str(source_root), "ls-files", "-z"],
-            check=True,
-        ).stdout.split("\0")
-        for relative in (item for item in tracked if item):
-            source = source_root / relative
-            destination = self.root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+        copy_successor_fixture_source(source_root, self.root)
+        self.prepare_development_candidate()
         git(self.root, "init")
         git(self.root, "config", "user.name", "fixture")
         git(self.root, "config", "user.email", "fixture@example.invalid")
@@ -4043,6 +4088,143 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             self.root,
             "--state", mode, "--json", *extra,
             env=env,
+        )
+
+    def replace_regex_once(
+        self,
+        relative: str | Path,
+        pattern: str,
+        replacement: str,
+        *,
+        flags: int = 0,
+    ) -> None:
+        path = self.root / relative
+        text, count = re.subn(
+            pattern,
+            replacement,
+            path.read_text(encoding="utf-8"),
+            count=1,
+            flags=flags,
+        )
+        self.assertEqual(count, 1, f"{relative}: {pattern}")
+        path.write_text(text, encoding="utf-8")
+
+    def set_canonical_value(self, key: str, value: str) -> None:
+        self.replace_regex_once(
+            validate_governance.CANONICAL_CURRENT_STATE_FILE,
+            rf"(?m)^{re.escape(key)}: \S+$",
+            f"{key}: {value}",
+        )
+
+    def remove_successor_publication_pair(self) -> None:
+        for relative in (
+            validate_governance.CURRENT_RELEASE_BODY,
+            validate_governance.CURRENT_RELEASE_BODY_CHECKSUM,
+        ):
+            path = self.root / relative
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.exists():
+                raise AssertionError(f"unexpected non-file fixture path: {relative}")
+
+    def set_lifecycle_prose(self, lifecycle: str) -> None:
+        if lifecycle == "development":
+            badge = "v1.13.17%20recovery%20development"
+            readme_state = (
+                "v1.13.17 — Annotated-Tag Certification Recovery is the active Route C\n"
+                "development successor. Phases 0-1 are Complete, Phase 2 is Next, and its\n"
+                "publication body/checksum are intentionally absent. The work is limited to\n"
+                "release-state, tag-identity diagnostics, CI enforcement, and governance; it\n"
+                "does not change product storage behavior. v1.13.16 is the immutable\n"
+                "failed-publication predecessor: annotated tag A16 exists, its required tag CI\n"
+                "failed, the tag certificate was withheld, no GitHub Release exists, and\n"
+                "publication and Phase 19 remain unauthorized. V1.x full closure is not\n"
+                "established."
+            )
+            release_state = (
+                "v1.13.17 is the active Route C recovery successor in development. Phases 0-1\n"
+                "are Complete and Phase 2 is Next. Publication material is absent. v1.13.16 is\n"
+                "the immutable failed-publication predecessor; its tag certificate was withheld\n"
+                "and no GitHub Release exists. No successor push, PR, merge, tag, publication,\n"
+                "or closure is authorized by this tracked state."
+            )
+            scope_state = (
+                "Phases 0-1 are Complete. Phase 2 is Next. The release gate is not passed and\n"
+                "publication material is absent."
+            )
+        elif lifecycle == "pre-release":
+            badge = "v1.13.17%20ready"
+            readme_state = (
+                "v1.13.17 — Annotated-Tag Certification Recovery is the ready Route C\n"
+                "successor. Phases 0-4 are Complete, Phase 5 is Next, and its source-only\n"
+                "publication body/checksum are frozen. The candidate remains local and does\n"
+                "not authorize a push, PR, merge, tag, publication, or closure. v1.13.16 is\n"
+                "the immutable failed-publication predecessor. V1.x full closure is not\n"
+                "established."
+            )
+            release_state = (
+                "v1.13.17 is the ready Route C recovery successor. Phases 0-4 are Complete and\n"
+                "Phase 5 is Next. Publication material is frozen. v1.13.16 is the immutable\n"
+                "failed-publication predecessor. No push, PR, merge, tag, publication, or\n"
+                "closure is authorized by this tracked state."
+            )
+            scope_state = (
+                "Phases 0-4 are Complete. Phase 5 is Next. The pre-merge prerequisite gate is\n"
+                "passed and publication material is frozen."
+            )
+        else:
+            raise AssertionError(f"unsupported fixture lifecycle: {lifecycle}")
+        self.replace_regex_once(
+            "README.md",
+            r"(?m)^!\[Status\]\(https://img\.shields\.io/badge/status-v1\.13\.17%20[^)]*\)$",
+            f"![Status](https://img.shields.io/badge/status-{badge})",
+        )
+        self.replace_regex_once(
+            "README.md",
+            r"(?ms)^v1\.13\.17 — Annotated-Tag Certification Recovery is the .*?^established\.$",
+            readme_state,
+        )
+        self.replace_regex_once(
+            "docs/release/v1.13/README.md",
+            r"(?ms)^v1\.13\.17 is the .*?^[^\n]*closure is authorized by this tracked state\.$",
+            release_state,
+        )
+        self.replace_regex_once(
+            "docs/release/v1.13/v1.13.17-scope.md",
+            r"(?ms)^Phases 0-.*?(?=\n\n## Boundaries$)",
+            scope_state,
+        )
+
+    def prepare_development_candidate(self) -> None:
+        """Construct the declared development scenario from any valid source phase."""
+        self.remove_successor_publication_pair()
+        self.set_phase_progression(2)
+        self.set_tracker_status("Active")
+        self.set_state_values({
+            "CURRENT_PHASE": "2_NEXT",
+            "TRACKED_PUBLICATION_MATERIAL": "ABSENT",
+            "V1_13_17_STATE": "ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT",
+        })
+        self.set_canonical_value("RELEASE_BODY_SHA256", "ABSENT")
+        self.replace_regex_once(
+            "CHANGELOG.md",
+            r"(?m)^## v1\.13\.17 - (?:Unreleased|\d{4}-\d{2}-\d{2}) —",
+            "## v1.13.17 - Unreleased —",
+        )
+        self.set_lifecycle_prose("development")
+        gate = self.root / "docs/release/v1.13/v1.13.17-release-gate.md"
+        gate.write_text(
+            "# v1.13.17 Release Gate\n\n"
+            "**Status:** Development — gate not passed\n\n"
+            "## Current gate\n\n"
+            "Phases 0-1 are Complete and Phase 2 is Next. The successor publication body\n"
+            "and checksum are absent. Local implementation does not establish independent\n"
+            "acceptance, hosted certification, protected-merge permission, tag authority,\n"
+            "publication authority, or closure.\n\n"
+            "## Final verdict\n\n"
+            "Not passed. Continue only under the separately authorized phase that owns the\n"
+            "next transition.\n",
+            encoding="utf-8",
         )
 
     def set_state_values(self, values: dict[str, str]) -> None:
@@ -4106,6 +4288,7 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             "v1.13.15 stable state and the v1.13.16 failed publication while "
             "distinguishing inherited product repairs from release-tool correction.\n"
         ).encode("utf-8")
+        body_path.parent.mkdir(parents=True, exist_ok=True)
         body_path.write_bytes(body)
         digest = hashlib.sha256(body).hexdigest()
         checksum_path.write_text(
@@ -4119,55 +4302,13 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             "TRACKED_PUBLICATION_MATERIAL": "FROZEN",
             "V1_13_17_STATE": "READY_PRE_RELEASE",
         })
-        state = self.root / validate_governance.CANONICAL_CURRENT_STATE_FILE
-        state.write_text(
-            state.read_text(encoding="utf-8").replace(
-                "RELEASE_BODY_SHA256: ABSENT",
-                f"RELEASE_BODY_SHA256: {digest}",
-                1,
-            ),
-            encoding="utf-8",
+        self.set_canonical_value("RELEASE_BODY_SHA256", digest)
+        self.replace_regex_once(
+            "CHANGELOG.md",
+            r"(?m)^## v1\.13\.17 - (?:Unreleased|\d{4}-\d{2}-\d{2}) —",
+            "## v1.13.17 - 2026-01-02 —",
         )
-        changelog = self.root / "CHANGELOG.md"
-        changelog.write_text(
-            changelog.read_text(encoding="utf-8").replace(
-                "## v1.13.17 - Unreleased",
-                "## v1.13.17 - 2026-01-02",
-                1,
-            ),
-            encoding="utf-8",
-        )
-        readme = self.root / "README.md"
-        readme.write_text(
-            readme.read_text(encoding="utf-8")
-            .replace("v1.13.17%20recovery%20development", "v1.13.17%20ready")
-            .replace("is the active Route C", "is the ready Route C", 1),
-            encoding="utf-8",
-        )
-        release_readme = self.root / "docs/release/v1.13/README.md"
-        release_readme.write_text(
-            release_readme.read_text(encoding="utf-8")
-            .replace(
-                "v1.13.17 is the active Route C recovery successor in development.",
-                "v1.13.17 is the ready Route C recovery successor.",
-                1,
-            )
-            .replace(
-                "Phases 0-1\nare Complete and Phase 2 is Next. Publication material is absent.",
-                "Phases 0-4\nare Complete and Phase 5 is Next. Publication material is frozen.",
-                1,
-            ),
-            encoding="utf-8",
-        )
-        scope = self.root / "docs/release/v1.13/v1.13.17-scope.md"
-        scope.write_text(
-            scope.read_text(encoding="utf-8").replace(
-                "Phases 0-1 are Complete. Phase 2 is Next. The release gate is not passed and\npublication material is absent.",
-                "Phases 0-4 are Complete. Phase 5 is Next. The release gate is passed and\npublication material is frozen.",
-                1,
-            ),
-            encoding="utf-8",
-        )
+        self.set_lifecycle_prose("pre-release")
         gate = self.root / "docs/release/v1.13/v1.13.17-release-gate.md"
         gate.write_text(
             "# v1.13.17 Release Gate\n\n"
@@ -4864,6 +5005,74 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
                                 (self.root / source["path"]).read_bytes()
                             ).hexdigest(),
                         )
+
+    def test_scenario_factory_is_source_phase_independent(self) -> None:
+        self.prepare_development_candidate()
+        self.assert_projection(
+            self.validator("development"), "development", "LOCAL_RELEASE_BRANCH"
+        )
+        self.assertEqual(validate_governance.validate(self.root), [])
+        canonical = self.root / validate_governance.CANONICAL_CURRENT_STATE_FILE
+        development = canonical.read_text(encoding="utf-8")
+        self.assertIn("CURRENT_PHASE: 2_NEXT", development)
+        self.assertIn("TRACKED_PUBLICATION_MATERIAL: ABSENT", development)
+        self.assertIn("RELEASE_BODY_SHA256: ABSENT", development)
+        self.assertFalse((self.root / validate_governance.CURRENT_RELEASE_BODY).exists())
+        self.assertFalse(
+            (self.root / validate_governance.CURRENT_RELEASE_BODY_CHECKSUM).exists()
+        )
+
+        self.freeze_candidate()
+        first_digest = hashlib.sha256(
+            (self.root / validate_governance.CURRENT_RELEASE_BODY).read_bytes()
+        ).hexdigest()
+        self.set_canonical_value("RELEASE_BODY_SHA256", "1" * 64)
+        self.freeze_candidate()
+        frozen = canonical.read_text(encoding="utf-8")
+        self.assertIn(f"RELEASE_BODY_SHA256: {first_digest}", frozen)
+        self.assertNotIn(f"RELEASE_BODY_SHA256: {'1' * 64}", frozen)
+        self.assert_projection(
+            self.validator("pre-release"), "pre-release", "LOCAL_RELEASE_BRANCH"
+        )
+        self.assertEqual(validate_governance.validate(self.root), [])
+
+        self.prepare_development_candidate()
+        self.assert_projection(
+            self.validator("development"), "development", "LOCAL_RELEASE_BRANCH"
+        )
+        self.freeze_candidate()
+        self.set_phase_progression(9)
+        self.set_tracker_status("Published; post-publication closure pending")
+        self.set_state_values({
+            "CURRENT_PHASE": "9_NEXT",
+            "V1_13_17_STATE": "PUBLISHED_CLOSURE_PENDING",
+        })
+        phase_nine = canonical.read_text(encoding="utf-8")
+        self.assertIn("CURRENT_PHASE: 9_NEXT", phase_nine)
+        self.assertIn("TRACKED_PUBLICATION_MATERIAL: FROZEN", phase_nine)
+        self.set_phase_progression(None)
+        self.set_state_values({
+            "CURRENT_PHASE": "NONE_CLOSURE_CANDIDATE",
+            "V1_13_17_STATE": "CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT",
+        })
+        self.assertIn(
+            "CURRENT_PHASE: NONE_CLOSURE_CANDIDATE",
+            canonical.read_text(encoding="utf-8"),
+        )
+
+        self.freeze_candidate()
+        checksum = self.root / validate_governance.CURRENT_RELEASE_BODY_CHECKSUM
+        checksum.write_text(
+            "0" * 64
+            + f"  {validate_governance.CURRENT_RELEASE_BODY.as_posix()}\n",
+            encoding="ascii",
+        )
+        self.assertTrue(
+            any(
+                "bytes do not match body digest and exact path" in item
+                for item in validate_governance.validate(self.root)
+            )
+        )
 
     def test_complete_successor_development_candidate_merge_tag_and_closure(self) -> None:
         for mode in ("auto", "development"):

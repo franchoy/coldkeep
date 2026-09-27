@@ -4,11 +4,11 @@
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: 2_NEXT
-TRACKED_PUBLICATION_MATERIAL: ABSENT
+CURRENT_PHASE: 5_NEXT
+TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT
+V1_13_17_STATE: READY_PRE_RELEASE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
@@ -104,11 +104,13 @@ Do not add global coverage gates unless explicitly approved.
 
 ## v1.13.17 Recovery Boundary
 
-v1.13.17 is the active Route C recovery successor in development. Phases 0-1
-are Complete and Phase 2 is Next. v1.13.16 is the immutable failed-publication
+v1.13.17 is the ready Route C recovery successor. Phases 0-4 are Complete in
+the tracked local candidate declaration, Phase 5 is Next, and publication
+material is frozen. This state does not certify its own checks or authorize a
+push, PR, merge, tag, publication, or closure. v1.13.16 is the immutable failed-publication
 predecessor; its public tag failed required certification and no GitHub
 Release exists. v1.13.15 remains published stable and immutable. Use
-development-state validation on `release/v1.13.17`, follow the 10-phase plan
+pre-release-state validation on `release/v1.13.17`, follow the 10-phase plan
 and exact phase mode, and do not
 use CI work to introduce:
 

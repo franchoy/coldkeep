@@ -1,11 +1,51 @@
 from pathlib import Path
 import hashlib
+import os
 import re
 import shutil
+import subprocess
 import tempfile
 import unittest
 
 import validate_governance as governance
+
+
+CURRENT_GOVERNANCE_INPUTS = tuple(dict.fromkeys(
+    governance.ACTIVE_PROVIDER_FILES
+    + governance.CURRENT_AUTHORITY_FILES
+    + (
+        governance.HISTORICAL_PROVIDER_FILE,
+        governance.CANONICAL_RELEASE_BODY,
+        governance.CANONICAL_RELEASE_BODY_CHECKSUM,
+        governance.CURRENT_RELEASE_BODY,
+        governance.CURRENT_RELEASE_BODY_CHECKSUM,
+    )
+))
+
+
+def copy_fixture_paths(
+    source_root: Path,
+    destination_root: Path,
+    paths: tuple[Path, ...],
+) -> None:
+    """Faithfully copy declared paths without deriving them from a Git index."""
+    for relative in paths:
+        source = source_root / relative
+        destination = destination_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_symlink():
+            destination.symlink_to(os.readlink(source))
+        elif source.is_dir():
+            destination.mkdir()
+        elif source.exists():
+            shutil.copy2(source, destination)
+
+
+def copy_current_governance_inputs(
+    source_root: Path,
+    destination_root: Path,
+) -> None:
+    copy_fixture_paths(source_root, destination_root, CURRENT_GOVERNANCE_INPUTS)
 
 
 class ReleaseBodyValidatorTests(unittest.TestCase):
@@ -25,10 +65,22 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
         for relative in (
             governance.CANONICAL_CURRENT_STATE_FILE,
             Path("docs/release/v1.13/v1.13.17-phase-list.md"),
+            governance.CURRENT_RELEASE_BODY,
+            governance.CURRENT_RELEASE_BODY_CHECKSUM,
         ):
-            destination = self.root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(governance.ROOT / relative, destination)
+            copy_fixture_paths(governance.ROOT, self.root, (relative,))
+
+    def replace_state_value(self, key: str, value: str) -> None:
+        state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        state = state_path.read_text(encoding="utf-8")
+        state, count = re.subn(
+            rf"(?m)^{re.escape(key)}: \S+$",
+            f"{key}: {value}",
+            state,
+            count=1,
+        )
+        self.assertEqual(count, 1, key)
+        state_path.write_text(state, encoding="utf-8")
 
     def assert_invalid(self) -> None:
         self.assertNotEqual(governance.validate_release_body(self.root), [])
@@ -41,16 +93,8 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
             "CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT" if next_phase is None else
             "ACTIVE_RECOVERY_SUCCESSOR_DEVELOPMENT"
         )
-        state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
-        state = state_path.read_text(encoding="utf-8")
-        state = re.sub(r"(?m)^CURRENT_PHASE: \S+$", f"CURRENT_PHASE: {key}", state, count=1)
-        state = re.sub(
-            r"(?m)^V1_13_17_STATE: \S+$",
-            f"V1_13_17_STATE: {state_value}",
-            state,
-            count=1,
-        )
-        state_path.write_text(state, encoding="utf-8")
+        self.replace_state_value("CURRENT_PHASE", key)
+        self.replace_state_value("V1_13_17_STATE", state_value)
         phase_path = self.root / Path("docs/release/v1.13/v1.13.17-phase-list.md")
         phase = phase_path.read_text(encoding="utf-8")
         for number in range(10):
@@ -86,21 +130,8 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
             encoding="ascii",
         )
         self.set_successor_phase(next_phase)
-        state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
-        state = state_path.read_text(encoding="utf-8")
-        state = re.sub(
-            r"(?m)^TRACKED_PUBLICATION_MATERIAL: \S+$",
-            "TRACKED_PUBLICATION_MATERIAL: FROZEN",
-            state,
-            count=1,
-        )
-        state = re.sub(
-            r"(?m)^RELEASE_BODY_SHA256: \S+$",
-            f"RELEASE_BODY_SHA256: {digest}",
-            state,
-            count=1,
-        )
-        state_path.write_text(state, encoding="utf-8")
+        self.replace_state_value("TRACKED_PUBLICATION_MATERIAL", "FROZEN")
+        self.replace_state_value("RELEASE_BODY_SHA256", digest)
         return body_path, checksum_path
 
     def synchronize_successor_body(self, content: bytes) -> list[str]:
@@ -134,21 +165,8 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
             elif candidate.exists():
                 candidate.rmdir()
         self.set_successor_phase(next_phase)
-        state = self.root / governance.CANONICAL_CURRENT_STATE_FILE
-        text = state.read_text(encoding="utf-8")
-        text = re.sub(
-            r"(?m)^TRACKED_PUBLICATION_MATERIAL: \S+$",
-            "TRACKED_PUBLICATION_MATERIAL: ABSENT",
-            text,
-            count=1,
-        )
-        text = re.sub(
-            r"(?m)^RELEASE_BODY_SHA256: \S+$",
-            "RELEASE_BODY_SHA256: ABSENT",
-            text,
-            count=1,
-        )
-        state.write_text(text, encoding="utf-8")
+        self.replace_state_value("TRACKED_PUBLICATION_MATERIAL", "ABSENT")
+        self.replace_state_value("RELEASE_BODY_SHA256", "ABSENT")
 
     def test_exact_valid_identity_passes(self) -> None:
         self.assertEqual(governance.validate_release_body(self.root), [])
@@ -218,6 +236,7 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
         self.assert_invalid()
 
     def test_absent_successor_pair_rejects_partial_presence(self) -> None:
+        self.reset_absent_successor(2)
         body = self.root / governance.CURRENT_RELEASE_BODY
         body.parent.mkdir(parents=True, exist_ok=True)
         body.write_text("fixture\n", encoding="utf-8")
@@ -226,7 +245,7 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
     def test_absent_successor_matrix_for_phases_2_3_and_4(self) -> None:
         for phase in (2, 3, 4):
             with self.subTest(phase=phase):
-                self.set_successor_phase(phase)
+                self.reset_absent_successor(phase)
                 self.assertEqual(governance.validate_release_body(self.root), [])
 
     def test_absent_successor_rejects_files_digest_and_late_phase(self) -> None:
@@ -235,11 +254,7 @@ class ReleaseBodyValidatorTests(unittest.TestCase):
         body.parent.mkdir(parents=True, exist_ok=True)
         for case in ("body", "checksum", "both", "digest", "phase"):
             with self.subTest(case=case):
-                if body.exists():
-                    body.unlink()
-                if checksum.exists():
-                    checksum.unlink()
-                self.set_successor_phase(2)
+                self.reset_absent_successor(2)
                 state = self.root / governance.CANONICAL_CURRENT_STATE_FILE
                 if case in ("body", "both"):
                     body.write_text("fixture\n", encoding="utf-8")
@@ -491,19 +506,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        inputs = (
-            governance.ACTIVE_PROVIDER_FILES
-            + governance.CURRENT_AUTHORITY_FILES
-            + (
-                governance.HISTORICAL_PROVIDER_FILE,
-                governance.CANONICAL_RELEASE_BODY,
-                governance.CANONICAL_RELEASE_BODY_CHECKSUM,
-            )
-        )
-        for relative in inputs:
-            destination = self.root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(governance.ROOT / relative, destination)
+        copy_current_governance_inputs(governance.ROOT, self.root)
         fixture_mirror = governance_test_mirror_from_canonical(self.root)
         for relative in GOVERNANCE_TEST_MIRROR_FILES:
             path = self.root / relative
@@ -562,6 +565,61 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(governance.validate(self.root), [])
+
+    def test_current_pair_copy_is_independent_of_index_membership(self) -> None:
+        pair = (
+            governance.CURRENT_RELEASE_BODY,
+            governance.CURRENT_RELEASE_BODY_CHECKSUM,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            copy_fixture_paths(governance.ROOT, source, pair)
+            git = shutil.which("git")
+            self.assertIsNotNone(git)
+            subprocess.run([git, "-C", str(source), "init"], check=True, capture_output=True)
+            copies = []
+            for index_state in ("untracked", "tracked"):
+                if index_state == "tracked":
+                    subprocess.run(
+                        [git, "-C", str(source), "add", *(item.as_posix() for item in pair)],
+                        check=True,
+                        capture_output=True,
+                    )
+                destination = Path(directory) / index_state
+                copy_fixture_paths(source, destination, pair)
+                copies.append(tuple((destination / item).read_bytes() for item in pair))
+            self.assertEqual(copies[0], copies[1])
+            self.assertEqual(
+                copies[0], tuple((governance.ROOT / item).read_bytes() for item in pair)
+            )
+
+    def test_current_copy_does_not_heal_missing_partial_or_inconsistent_pair(self) -> None:
+        pair = (
+            governance.CURRENT_RELEASE_BODY,
+            governance.CURRENT_RELEASE_BODY_CHECKSUM,
+        )
+        for case in ("missing", "partial", "inconsistent"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "source"
+                source.mkdir()
+                copy_fixture_paths(governance.ROOT, source, CURRENT_GOVERNANCE_INPUTS)
+                body, checksum = (source / item for item in pair)
+                if case == "missing":
+                    body.unlink()
+                    checksum.unlink()
+                elif case == "partial":
+                    checksum.unlink()
+                else:
+                    checksum.write_text(
+                        "0" * 64 + f"  {pair[0].as_posix()}\n",
+                        encoding="ascii",
+                    )
+                destination = Path(directory) / "copy"
+                copy_current_governance_inputs(source, destination)
+                self.assertEqual((destination / pair[0]).exists(), case != "missing")
+                self.assertEqual((destination / pair[1]).exists(), case == "inconsistent")
+                self.assertNotEqual(governance.validate(destination), [])
 
     def test_future_canonical_state_requires_mirror_updates(self) -> None:
         self.replace_canonical_value("CURRENT_PHASE", "CURRENT_PHASE: 3_NEXT")

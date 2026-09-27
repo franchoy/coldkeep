@@ -20,15 +20,17 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.17 - Unreleased — Annotated-Tag Certification Recovery
+## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 
 - Starts the Route C recovery successor from the exact v1.13.16 merge commit.
 - Corrects release-state handling for annotated-tag object and direct-target
   identities, adds bounded diagnostic schema v2, and records the selected
   failed-publication predecessor without changing product storage behavior.
-- Phases 0-1 are Complete, Phase 2 is Next, and tracked publication material
-  remains absent. No push, PR, merge, successor tag, Release, or closure is
-  represented by this development entry.
+- Phases 0-4 are Complete in the tracked local candidate declaration, Phase 5
+  is Next, and the source-only publication body/checksum are frozen. The
+  existing branch evidence remains bound to its earlier exact head; independent
+  and fresh hosted acceptance of this candidate are still required before a
+  later PR or protected merge can be authorized.
 
 ## v1.13.16 - 2026-09-20 [failed-publication-predecessor] — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
 
