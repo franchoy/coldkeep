@@ -49,6 +49,12 @@ GITHUB_KEYS = (
     "GITHUB_WORKFLOW",
     "GITHUB_TOKEN",
 )
+FIXTURE_GIT_CONFIG = (
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "gc.auto=0",
+)
 
 
 def write(root: Path, relative: str, content: str) -> None:
@@ -58,10 +64,114 @@ def write(root: Path, relative: str, content: str) -> None:
 
 
 def git(root: Path, *args: str) -> None:
+    # Fixture-owned repositories must not outlive awaited Git through auto work.
     run_process(
-        [resolved_executable("git"), "-C", str(root), *args],
+        [
+            resolved_executable("git"),
+            *FIXTURE_GIT_CONFIG,
+            "-C",
+            str(root),
+            *args,
+        ],
         check=True,
     )
+
+
+class FixtureGitWrapperTests(unittest.TestCase):
+    def test_git_wrapper_disables_automatic_maintenance(self) -> None:
+        root = Path("/TEST_FIXTURE_ONLY/repository")
+        for suffix in (
+            ("init",),
+            ("commit", "--allow-empty", "-m", "TEST_FIXTURE_ONLY"),
+            ("rev-parse", "HEAD"),
+        ):
+            with self.subTest(suffix=suffix):
+                completed = ProcessResult(["TEST_FIXTURE_ONLY"], 0, "", "")
+                with mock.patch.object(
+                    sys.modules[__name__],
+                    "run_process",
+                    return_value=completed,
+                ) as process:
+                    result = git(root, *suffix)
+                self.assertIsNone(result)
+                process.assert_called_once_with(
+                    [
+                        resolved_executable("git"),
+                        "-c",
+                        "maintenance.auto=false",
+                        "-c",
+                        "gc.auto=0",
+                        "-C",
+                        str(root),
+                        *suffix,
+                    ],
+                    check=True,
+                )
+
+        failure = subprocess.CalledProcessError(9, ["TEST_FIXTURE_ONLY"])
+        with mock.patch.object(
+            sys.modules[__name__],
+            "run_process",
+            side_effect=failure,
+        ):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                git(root, "status")
+        self.assertIs(raised.exception, failure)
+
+        actual_run_process = run_process
+        contrary = os.environ.copy()
+        contrary.update(
+            {
+                "GIT_CONFIG_COUNT": "2",
+                "GIT_CONFIG_KEY_0": "maintenance.auto",
+                "GIT_CONFIG_VALUE_0": "true",
+                "GIT_CONFIG_KEY_1": "gc.auto",
+                "GIT_CONFIG_VALUE_1": "1",
+            }
+        )
+        observed: list[ProcessResult] = []
+
+        def execute(argv: list[str], **kwargs: object) -> ProcessResult:
+            process = actual_run_process(argv, env=contrary, **kwargs)
+            observed.append(process)
+            return process
+
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory) / "repo"
+            repository.mkdir()
+            with mock.patch.object(
+                sys.modules[__name__],
+                "run_process",
+                side_effect=execute,
+            ):
+                git(repository, "init")
+                git(repository, "config", "--get", "maintenance.auto")
+                git(repository, "config", "--get", "gc.auto")
+            self.assertEqual(
+                [process.stdout.strip() for process in observed[-2:]],
+                ["false", "0"],
+            )
+
+            clean_environment = os.environ.copy()
+            for key in tuple(clean_environment):
+                if key.startswith("GIT_CONFIG"):
+                    clean_environment.pop(key)
+            for key in ("maintenance.auto", "gc.auto"):
+                with self.subTest(local_config=key):
+                    local = actual_run_process(
+                        [
+                            resolved_executable("git"),
+                            "-C",
+                            str(repository),
+                            "config",
+                            "--local",
+                            "--get",
+                            key,
+                        ],
+                        env=clean_environment,
+                        check=False,
+                    )
+                    self.assertEqual(local.returncode, 1, local.stdout + local.stderr)
 
 
 def copy_successor_fixture_source(source_root: Path, destination_root: Path) -> None:
