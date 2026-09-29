@@ -979,7 +979,7 @@ check_release_diagnostic_workflow() {
   local validator_line=""
   local upload_line=""
   local next_step=""
-  local enablement="github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')"
+  local enablement="(github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')) || (github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v'))"
   # shellcheck disable=SC2016 # Match literal GitHub expression syntax.
   local path='${{ runner.temp }}/coldkeep-release-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}.json'
   # shellcheck disable=SC2016 # Match literal GitHub expression syntax.
@@ -1016,7 +1016,7 @@ check_release_diagnostic_workflow() {
     fi
   fi
 
-  require_content_literal "$validator_block" "COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED: \${{ $enablement }}" 'diagnostic argument uses the release-PR scope' || check_status=1
+  require_content_literal "$validator_block" "COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED: \${{ $enablement }}" 'diagnostic argument uses the release-PR-or-tag scope' || check_status=1
   require_content_literal "$validator_block" "COLDKEEP_RELEASE_DIAGNOSTIC_PATH: $path" 'diagnostic validator path is fixed and run-attributed' || check_status=1
   # shellcheck disable=SC2016 # Match literal validator variables.
   require_content_literal "$validator_block" 'if [ "$COLDKEEP_RELEASE_DIAGNOSTIC_ENABLED" = "true" ]; then' 'diagnostic argument selection uses the scoped Boolean' || check_status=1
@@ -1035,7 +1035,7 @@ check_release_diagnostic_workflow() {
     echo "[audit] ok: diagnostic validator status remains blocking and unmasked"
   fi
 
-  require_content_literal "$upload_block" "if: \${{ always() && $enablement }}" 'diagnostic upload uses always and the release-PR scope' || check_status=1
+  require_content_literal "$upload_block" "if: \${{ always() && ($enablement) }}" 'diagnostic upload uses always and the release-PR-or-tag scope' || check_status=1
   require_content_literal "$upload_block" 'uses: actions/upload-artifact@v4' 'diagnostic upload uses the authorized v4 action' || check_status=1
   require_content_literal "$upload_block" "name: $artifact" 'diagnostic artifact name is run/job/checkout attributed' || check_status=1
   require_content_literal "$upload_block" "path: $path" 'diagnostic upload uses the exact single-file path' || check_status=1
@@ -1768,7 +1768,7 @@ check_local_workflow() {
   require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.7'" 'source installation pins Go 1.26.7' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
-  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.16" 'source installation proves binary identity' || check_status=1
+  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.17" 'source installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'remote candidate installation covers Linux, macOS, and Windows' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.7'" 'remote candidate installation pins Go 1.26.7' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'cache:\s*false' 'remote candidate installation does not require checkout-backed Go caching' || check_status=1
@@ -1820,7 +1820,7 @@ check_local_workflow() {
   require_content_pattern "$remote_candidate_install_block" 'go install "\$\{module\}/cmd/coldkeep@\$\{CANDIDATE_QUERY\}"' 'Unix public installation uses the selected candidate query' || check_status=1
   # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'go install "\$module/cmd/coldkeep@\$env:CANDIDATE_QUERY"' 'Windows public installation uses the selected candidate query' || check_status=1
-  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.16" 'remote candidate installation proves binary identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.17" 'remote candidate installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "go1\\\.26\\\.7" 'remote candidate installation proves binary compiler identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'grep -F .*resolved_version.*binary-build-info\.txt' 'Unix remote installation proves module build metadata' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'installed module build identity mismatch' 'Windows remote installation proves module build metadata' || check_status=1

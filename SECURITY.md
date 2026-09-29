@@ -4,10 +4,14 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.16
-PHASE_12: COMPLETE
-PHASE_13: COMPLETE
-CK-V11316-007: CLOSED
+SOURCE_VERSION: 1.13.17
+RECOVERY_ROUTE: C_SUCCESSOR_VERSION
+CURRENT_PHASE: 5_NEXT
+TRACKED_PUBLICATION_MATERIAL: FROZEN
+V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
+V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_17_STATE: READY_PRE_RELEASE
+CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
@@ -26,17 +30,19 @@ documented bounds, and cooperative same-host/local-filesystem repository
 coordination. v1.13.15 is the published stable final planned v1.x release.
 Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
-attestation are immutable. v1.13.16 is the active exceptional
-critical-maintenance source train. Phase 12 technical correctness is
-established, Phase 13 is complete, CK-V11316-007 is closed, and all 15
-findings are closed. The source candidate is ready for release and external
-Phase 14 execution is complete. Phase 15 tracked completion is conditional on
-separate exact-head protected-merge authority; Phase 16 is Next but cannot
-execute before it. V1.x full closure is not established.
+attestation are immutable. v1.13.17 is the active Route C recovery successor
+and is ready for release. Phases 0-4 are Complete in the tracked local candidate declaration, Phase 5 is
+Next, and publication material is frozen. Independent and hosted exact-head
+acceptance remain required, and this state authorizes no remote or release
+operation. v1.13.16 is the
+immutable failed-publication predecessor: its public annotated tag failed
+required certification and no GitHub Release exists. V1.x full closure is not
+established.
 Planned v1 feature and architecture work remains closed and frozen. Existing
 security and crash-consistency limitations below are unchanged.
 
-v1.13.14 and v1.13.15 remain immutable historical release state. V2 planning
+v1.13.14, v1.13.15, and the v1.13.16 failed-publication disposition remain
+immutable historical release state. V2 planning
 review is authorized. V2 implementation has not started and requires a
 separate plan.
 

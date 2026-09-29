@@ -6,10 +6,14 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.16
-PHASE_12: COMPLETE
-PHASE_13: COMPLETE
-CK-V11316-007: CLOSED
+SOURCE_VERSION: 1.13.17
+RECOVERY_ROUTE: C_SUCCESSOR_VERSION
+CURRENT_PHASE: 5_NEXT
+TRACKED_PUBLICATION_MATERIAL: FROZEN
+V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
+V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_17_STATE: READY_PRE_RELEASE
+CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
@@ -17,13 +21,15 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
-- `v1.13.16` is the active exceptional critical-maintenance train. Phase 12
-  technical correctness is established; Phase 13 and the external Phase 14
-  execution are complete, CK-V11316-007 is closed, and all 15 findings are
-  closed. This is the ready-for-release candidate: Phase 15 tracked completion
-  is conditional on a separate exact-head protected-merge authorization,
-  Phase 16 is Next, and neither merge nor Phase 16 execution is authorized by
-  the tracked candidate alone.
+- `v1.13.17` is the ready Route C recovery successor. It is limited to
+  release-state, tag-certification, workflow, and governance correction.
+  Phases 0-4 are Complete in the tracked local candidate declaration, Phase 5
+  is Next, and tracked publication material is frozen. This structural state
+  does not certify its own evidence or authorize a push, PR, merge, tag,
+  publication, or closure.
+- `v1.13.16` is the immutable failed-publication predecessor: its public
+  annotated tag failed required certification, no GitHub Release exists, and
+  publication and Phase 19 remain unauthorized.
 - `v1.13.15` remains published stable, immutable, and the final planned v1.x
   release. Planned v1 feature and architecture work stays closed and frozen.
 - `v1.13.14` is immutable historical release state. Do not edit its release
@@ -32,15 +38,14 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The v1.13.16 scope, 20-phase list, validation checklist, remediation tracker,
-  source/test allowlist, release state, and release gate under
+- The v1.13.17 scope, 10-phase list, validation checklist, source/test
+  allowlist, release state, predecessor disposition, and release gate under
   `docs/release/v1.13/` are binding current authority.
 - Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
   boundary.
-- Phase 15R2 locally versions the validator as `immutable-transition-v1` so
-  later artifacts can be described without self-certifying their operations.
-  Its pending-main, pending-tag, and closure-candidate states are structural
-  only; they do not authorize Phase 16-19 actions or establish full closure.
+- The `immutable-transition-v1` projections and predecessor disposition are
+  structural only. They do not certify hosted operations or authorize a push,
+  PR, merge, tag, publication, closure, or v2 implementation.
 
 ## Correctness rules
 
@@ -55,13 +60,13 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ## Validation
 
 Use the canonical commands in `PRE_RELEASE_CHECKLIST.md` and the active
-v1.13.16 validation checklist. At minimum, run focused tests for the changed
+v1.13.17 validation checklist. At minimum, run focused tests for the changed
 area before the broader applicable gate. Do not represent unavailable hosted
 evidence as passing.
 
 The baseline repository-governance commands are:
 
-- `python3 scripts/validate_release_state.py --state development --json`
+- `python3 scripts/validate_release_state.py --state pre-release --json`
 - `python3 scripts/validate_governance.py`
 - `python3 -m unittest discover -s scripts -p 'test_*.py' -v`
 - `bash scripts/audit_ci_enforcement.sh --local-only`
@@ -71,13 +76,10 @@ The frozen v1 release-critical execution contract uses Go 1.26.7 with
 
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
-    V1_13_16: ACTIVE_EXCEPTIONAL_CRITICAL_MAINTENANCE
+    V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+    V1_13_17: READY_PRE_RELEASE
     RELEASE_STATE: PRE_RELEASE
-    PHASE_12: COMPLETE
-    PHASE_13: COMPLETE
-    PHASE_14: COMPLETE
-    PHASE_15: COMPLETE_CONDITIONAL_CANDIDATE
-    PHASE_16: NEXT
+    PHASE_5: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

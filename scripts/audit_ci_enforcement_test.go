@@ -2940,7 +2940,7 @@ exit 94
 		"GITHUB_RUN_ATTEMPT=1",
 		"GITHUB_JOB=synthetic-"+name,
 		"GITHUB_REPOSITORY=franchoy/coldkeep",
-		"GITHUB_REF=refs/heads/release/v1.13.16",
+		"GITHUB_REF=refs/heads/release/v1.13.17",
 		"COLDKEEP_PROFILE_A_EVIDENCE_DIR="+profileRoot,
 		"CK015_CONTINUATION_FILE="+continuationPath,
 		"CK015_DELETE_GO_STDERR="+deleteValue,
