@@ -8,11 +8,11 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: READY_PRE_RELEASE
+V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
@@ -21,12 +21,11 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
-- `v1.13.17` is the ready Route C recovery successor. It is limited to
-  release-state, tag-certification, workflow, and governance correction.
-  Phases 0-4 are Complete in the tracked local candidate declaration, Phase 5
-  is Next, and tracked publication material is frozen. This structural state
-  does not certify its own evidence or authorize a push, PR, merge, tag,
-  publication, or closure.
+- `v1.13.17` is published at immutable M17/A17 and GitHub Release
+  `400460267`. Its tracked descendant is an unpublished local closure
+  candidate. Phases 0-9 serialize as Complete for review, but external
+  terminal effectiveness and full v1.x closure remain unestablished. It
+  authorizes no push, PR, merge, tag, Release change, or terminal audit.
 - `v1.13.16` is the immutable failed-publication predecessor: its public
   annotated tag failed required certification, no GitHub Release exists, and
   publication and Phase 19 remain unauthorized.
@@ -77,9 +76,9 @@ The frozen v1 release-critical execution contract uses Go 1.26.7 with
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-    V1_13_17: READY_PRE_RELEASE
-    RELEASE_STATE: PRE_RELEASE
-    PHASE_5: NEXT
+    V1_13_17: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
+    RELEASE_STATE: POST_RELEASE_CLOSURE_CANDIDATE
+    PHASE_9: CONDITIONALLY_COMPLETE_PENDING_TERMINAL_AUDIT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

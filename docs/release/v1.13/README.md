@@ -78,11 +78,11 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: READY_PRE_RELEASE
+V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
@@ -91,13 +91,15 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.17 is the ready Route C recovery successor. Phases 0-4 are Complete in
-the tracked local candidate declaration and Phase 5 is Next. Publication
-material is frozen. v1.13.16 is
+v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
+The tracked descendant is an unpublished local closure candidate. Phases 0-9
+serialize as Complete for review, while external Phase-9 terminal
+effectiveness and full v1.x closure remain unestablished. Publication material
+is frozen. v1.13.16 is
 the immutable failed-publication predecessor; its tag certificate was withheld
 and no GitHub Release exists. The original successor-branch push and its
-exact-N evidence are historical; this candidate has not been pushed or
-independently accepted. No further push, PR, merge, tag, publication, or
+exact-N evidence are historical; this closure candidate has not been pushed or
+independently accepted. No further push, PR, merge, tag, Release change, or
 closure is authorized by this tracked state.
 
 ## Historical v1.13.16 authority narrative

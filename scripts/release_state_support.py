@@ -1510,6 +1510,7 @@ def _load_event(
     version: str = "",
     canonical_repository: str = "",
     predicate_prefix: str = "pr",
+    bounded: bool = False,
 ) -> Optional[dict[str, object]]:
     """Load the exact event byte snapshot consumed by one evaluation."""
     path_bytes = path.encode("utf-8", errors="surrogatepass")
@@ -1550,7 +1551,7 @@ def _load_event(
     # diagnostic-predicate: release_push.event.read
     # diagnostic-predicate: tag.event.read
     try:
-        if predicate_prefix == "tag":
+        if predicate_prefix == "tag" or bounded:
             with Path(path).open("rb") as handle:
                 raw = handle.read(1048577)
         else:
@@ -1566,7 +1567,7 @@ def _load_event(
     snapshot["present"] = True
     snapshot["readable"] = True
     _diagnostic_predicate(recorder, evaluation_id, f"{predicate_prefix}.event.read", True, _bounded_identity("readable", category="unexpected-read-status", expected="readable"))
-    if predicate_prefix == "tag":
+    if predicate_prefix == "tag" or bounded:
         within_limit = len(raw) <= 1048576
         snapshot["size_limit_status"] = "PASS" if within_limit else "FAIL"
         # diagnostic-predicate: tag.event.size
@@ -1952,6 +1953,170 @@ def strict_release_push_context(
     if diagnostic is not None and evaluation_id is not None:
         diagnostic.finish_evaluation(evaluation_id, accepted)
     return accepted
+
+
+def strict_closure_push_context(
+    root: Path,
+    version: str,
+    head: str,
+    context: tuple[str, str, bool, bool, Optional[str]],
+    env: dict[str, str],
+    canonical_repository: str,
+) -> bool:
+    """Validate one attached post-publication closure-branch push."""
+    closure_branch = f"release/v{version}-post-publication-closure"
+    expected_ref = f"refs/heads/{closure_branch}"
+    if not (
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "push"
+        and env["GITHUB_REF"] == expected_ref
+        and env["GITHUB_REF_NAME"] == closure_branch
+        and env["GITHUB_REF_TYPE"] == "branch"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and NONZERO_GIT_SHA.fullmatch(env["GITHUB_SHA"])
+        and env["GITHUB_SHA"] == head
+        and env["GITHUB_EVENT_PATH"]
+    ):
+        return False
+    payload = _load_event(env["GITHUB_EVENT_PATH"], bounded=True)
+    if payload is None:
+        return False
+    before = payload.get("before")
+    created = payload.get("created")
+    if not (
+        payload.get("ref") == expected_ref
+        and isinstance(payload.get("after"), str)
+        and NONZERO_GIT_SHA.fullmatch(payload["after"])
+        and payload["after"] == head
+        and isinstance(before, str)
+        and GIT_SHA.fullmatch(before)
+        and (
+            (created is True and before == "0" * 40)
+            or (created is False and before != "0" * 40)
+        )
+        and payload.get("deleted") is False
+        and payload.get("forced") is False
+        and _repository_name(payload.get("repository")) == canonical_repository
+    ):
+        return False
+    if any(
+        os.environ.get(name)
+        for name in (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_NAMESPACE",
+        )
+    ):
+        return False
+
+    child_env = dict(os.environ)
+    child_env["GIT_NO_REPLACE_OBJECTS"] = "1"
+
+    def closure_git(args: list[str]) -> Optional[ProcessResult]:
+        try:
+            return run_process(
+                [resolved_executable("git"), "-C", str(root), *args],
+                env=child_env,
+            )
+        except OSError:
+            return None
+
+    fresh_head_result = closure_git(["rev-parse", "--verify", "HEAD^{commit}"])
+    fresh_head = (
+        fresh_head_result.stdout.strip()
+        if fresh_head_result and fresh_head_result.returncode == 0
+        else None
+    )
+    fresh_branch_result = closure_git(
+        ["symbolic-ref", "--quiet", "--short", "HEAD"]
+    )
+    fresh_branch = (
+        fresh_branch_result.stdout.strip()
+        if fresh_branch_result and fresh_branch_result.returncode == 0
+        else None
+    )
+    if fresh_head != head or fresh_branch != closure_branch:
+        return False
+    if context[0] != fresh_head or context[1] != fresh_branch:
+        return False
+
+    shallow = closure_git(["rev-parse", "--is-shallow-repository"])
+    if not shallow or shallow.returncode != 0 or shallow.stdout.strip() != "false":
+        return False
+    alternate_path_result = closure_git(
+        ["rev-parse", "--git-path", "objects/info/alternates"]
+    )
+    if not alternate_path_result or alternate_path_result.returncode != 0:
+        return False
+    alternate_path = Path(alternate_path_result.stdout.strip())
+    if not alternate_path.is_absolute():
+        alternate_path = root / alternate_path
+    if alternate_path.exists():
+        return False
+    graft_path_result = closure_git(["rev-parse", "--git-path", "info/grafts"])
+    if not graft_path_result or graft_path_result.returncode != 0:
+        return False
+    graft_path = Path(graft_path_result.stdout.strip())
+    if not graft_path.is_absolute():
+        graft_path = root / graft_path
+    if graft_path.exists() and graft_path.stat().st_size != 0:
+        return False
+    replacements = closure_git(
+        ["for-each-ref", "--format=%(refname)", "refs/replace"]
+    )
+    if not replacements or replacements.returncode != 0 or replacements.stdout.strip():
+        return False
+
+    tag_ref = f"refs/tags/v{version}"
+    named = closure_git(["show-ref", "--verify", "--hash", tag_ref])
+    named_lines = named.stdout.splitlines() if named and named.returncode == 0 else []
+    tag_object = (
+        named_lines[0]
+        if len(named_lines) == 1 and GIT_SHA.fullmatch(named_lines[0])
+        else None
+    )
+    tag_type = closure_git(["cat-file", "-t", tag_object or ""])
+    tag_size = closure_git(["cat-file", "-s", tag_object or ""])
+    if not (
+        tag_object
+        and tag_type
+        and tag_type.returncode == 0
+        and tag_type.stdout.strip() == "tag"
+        and tag_size
+        and tag_size.returncode == 0
+        and re.fullmatch(r"[0-9]+", tag_size.stdout.strip())
+        and int(tag_size.stdout.strip()) <= 65536
+    ):
+        return False
+    tag_body = closure_git(["cat-file", "-p", tag_object])
+    if not tag_body or tag_body.returncode != 0:
+        return False
+    headers = tag_body.stdout.split("\n\n", 1)[0].splitlines()
+    object_headers = [
+        line.removeprefix("object ")
+        for line in headers
+        if line.startswith("object ")
+    ]
+    type_headers = [
+        line.removeprefix("type ")
+        for line in headers
+        if line.startswith("type ")
+    ]
+    direct_target = (
+        object_headers[0]
+        if len(object_headers) == 1 and GIT_SHA.fullmatch(object_headers[0])
+        else None
+    )
+    if not direct_target or type_headers != ["commit"]:
+        return False
+    direct_type = closure_git(["cat-file", "-t", direct_target])
+    if not direct_type or direct_type.returncode != 0 or direct_type.stdout.strip() != "commit":
+        return False
+    ancestry = closure_git(["merge-base", "--is-ancestor", direct_target, head])
+    if not ancestry or ancestry.returncode != 0 or direct_target == head:
+        return False
+    return context[2:] == (True, True, direct_target)
 
 
 def commit_parents(root: Path, commit: str) -> list[str]:
@@ -2482,6 +2647,15 @@ def v1_context_scope(
     ):
         if not any_github and branch in ("main", release_branch, closure_branch):
             return "LOCAL_CLOSURE_ARTIFACT_ONLY"
+        if strict_closure_push_context(
+            root,
+            version,
+            head,
+            context,
+            env,
+            declaration.canonical_repository,
+        ):
+            return "GITHUB_CLOSURE_PUSH_CONTEXT_CONSISTENCY"
         if strict_main_push_context(
             root, head, env, declaration.canonical_repository
         ):

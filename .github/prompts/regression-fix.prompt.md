@@ -4,11 +4,11 @@
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: READY_PRE_RELEASE
+V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
@@ -51,10 +51,11 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
-- v1.13.17 is the ready Route C recovery successor. Phases 0-4 are Complete
-  in the tracked local candidate declaration, Phase 5 is Next, and publication
-  material is frozen. This state does not certify or authorize later
-  operations. v1.13.16 is the
+- v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
+  The tracked descendant is an unpublished local closure candidate. Phases
+  0-9 serialize as Complete for review, while external terminal effectiveness
+  and full v1.x closure remain unestablished. This state does not certify or
+  authorize later operations. v1.13.16 is the
   immutable failed-publication predecessor. Follow the successor's 10-phase
   plan and exact phase mode.
 - v1.13.15 remains published stable and immutable; planned v1 feature and

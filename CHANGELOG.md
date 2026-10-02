@@ -31,6 +31,11 @@ project, do not start here; start with [README.md](README.md).
   existing branch evidence remains bound to its earlier exact head; independent
   and fresh hosted acceptance of this candidate are still required before a
   later PR or protected merge can be authorized.
+- Publication completed on 2026-09-30 at immutable merge M17, one-level
+  annotated tag A17, and source-only GitHub Release `400460267`. A later local
+  descendant repairs only attached closure-push context validation and records
+  the conditional Phase-9 closure candidate. It is not part of the published
+  tag and does not establish terminal effectiveness or full v1.x closure.
 
 ## v1.13.16 - 2026-09-20 [failed-publication-predecessor] — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
 
