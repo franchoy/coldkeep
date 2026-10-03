@@ -45,6 +45,15 @@ V1_X_FULL_CLOSURE: NOT_ESTABLISHED
 - The `immutable-transition-v1` projections and predecessor disposition are
   structural only. They do not certify hosted operations or authorize a push,
   PR, merge, tag, publication, closure, or v2 implementation.
+- The active Phase 9ER2 recovery is a local-only five-path repair of the
+  post-publication closure-PR synthetic metadata rule. It preserves the direct
+  route and every common identity/topology guard, treats only a present null or
+  canonical lowercase nonzero full SHA as advisory, and may create at most one
+  ordinary local child of K17 with subject
+  `fix: treat closure PR merge metadata as advisory`. It does not authorize a
+  push, PR #122 write, workflow intervention, merge, tag/Release mutation,
+  publication, independent acceptance or terminal closure. Stop after the
+  committed attached certificate for separate exact-head review.
 
 ## Correctness rules
 

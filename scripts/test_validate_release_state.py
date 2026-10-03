@@ -4573,24 +4573,27 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
         number: int = 902,
         checkout_sha: str | None = None,
         merge_commit_sha: str | None = None,
+        include_merge_commit_sha: bool = True,
     ) -> dict[str, str]:
         branch = "release/v1.13.17-post-publication-closure"
         event = self.root / f"TEST_FIXTURE_ONLY-closure-pr-{number}.json"
+        pull_request: dict[str, object] = {
+            "base": {
+                "ref": "main", "sha": base_sha,
+                "repo": {"full_name": "franchoy/coldkeep"},
+            },
+            "head": {
+                "ref": branch, "sha": head_sha,
+                "repo": {"full_name": "franchoy/coldkeep"},
+            },
+        }
+        if include_merge_commit_sha:
+            pull_request["merge_commit_sha"] = merge_commit_sha
         event.write_text(
             json.dumps({
                 "number": number,
                 "repository": {"full_name": "franchoy/coldkeep"},
-                "pull_request": {
-                    "base": {
-                        "ref": "main", "sha": base_sha,
-                        "repo": {"full_name": "franchoy/coldkeep"},
-                    },
-                    "head": {
-                        "ref": branch, "sha": head_sha,
-                        "repo": {"full_name": "franchoy/coldkeep"},
-                    },
-                    "merge_commit_sha": merge_commit_sha,
-                },
+                "pull_request": pull_request,
             }),
             encoding="utf-8",
         )
@@ -4614,6 +4617,568 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
             environment["GITHUB_REF"].removeprefix("refs/pull/"),
         )
         return environment
+
+    def prepare_synthetic_closure_pr(self) -> tuple[str, str, str]:
+        """Build a real ordered [published, closure-head] synthetic checkout."""
+        published, closure_head = self.prepare_direct_closure_candidate()
+        git(self.root, "checkout", "main")
+        git(
+            self.root, "merge", "--no-ff",
+            "release/v1.13.17-post-publication-closure",
+            "-m", "TEST_FIXTURE_ONLY synthetic closure checkout",
+        )
+        checkout = self.rev_parse("HEAD")
+        self.assertEqual(
+            run_process(
+                [
+                    resolved_executable("git"), "-C", str(self.root),
+                    "rev-list", "--parents", "-n", "1", checkout,
+                ],
+                check=True,
+            ).stdout.strip().split()[1:],
+            [published, closure_head],
+        )
+        self.assertEqual(
+            self.rev_parse(f"{checkout}^{{tree}}"),
+            self.rev_parse(f"{closure_head}^{{tree}}"),
+        )
+        git(self.root, "checkout", "--detach", checkout)
+        return published, closure_head, checkout
+
+    def test_closure_pr_advisory_metadata_red_green_contract(self) -> None:
+        """CP-01/03: public synthetic advisory values and direct nonconsumption."""
+        published, closure_head, checkout = self.prepare_synthetic_closure_pr()
+        cases = (
+            ("matching", checkout),
+            ("present-null", None),
+            ("different-existing-object", published),
+            ("different-non-object", "1" * 40),
+        )
+        self.assertNotEqual(published, checkout)
+        self.assertNotEqual("1" * 40, checkout)
+        self.assertNotEqual(
+            run_process(
+                [
+                    resolved_executable("git"), "-C", str(self.root),
+                    "cat-file", "-e", f"{'1' * 40}^{{object}}",
+                ],
+                check=False,
+            ).returncode,
+            0,
+        )
+        for index, (name, metadata) in enumerate(cases, 930):
+            environment = self.closure_pr_environment(
+                published, closure_head, number=index,
+                checkout_sha=checkout, merge_commit_sha=metadata,
+            )
+            for mode in ("auto", "post-release-closure-candidate"):
+                with self.subTest(route="synthetic", case=name, mode=mode):
+                    self.assert_projection(
+                        self.validator(mode, environment),
+                        "post-release-closure-candidate",
+                        "GITHUB_CLOSURE_PR_CONTEXT_CONSISTENCY",
+                    )
+        git(self.root, "checkout", "--detach", closure_head)
+        direct = self.closure_pr_environment(
+            published, closure_head, number=934,
+            include_merge_commit_sha=False,
+        )
+        for mode in ("auto", "post-release-closure-candidate"):
+            with self.subTest(route="direct-head", case="missing", mode=mode):
+                self.assert_projection(
+                    self.validator(mode, direct),
+                    "post-release-closure-candidate",
+                    "GITHUB_CLOSURE_PR_CONTEXT_CONSISTENCY",
+                )
+
+    def assert_closure_pr_rejected(
+        self,
+        environment: dict[str, str],
+        *,
+        explicit_state: str = "post-release-closure-candidate",
+    ) -> None:
+        for mode in ("auto", explicit_state):
+            process = self.validator(mode, environment)
+            payload = json.loads(process.stdout)
+            with self.subTest(rejected_mode=mode):
+                if mode == "auto" and process.returncode == 2:
+                    self.assertEqual(payload["evidence_scope"], "UNAVAILABLE")
+                    self.assertEqual(payload["error"]["kind"], "git-context")
+                else:
+                    self.assertEqual(
+                        process.returncode, 1, process.stdout + process.stderr
+                    )
+                    self.assertEqual(
+                        payload["evidence_scope"],
+                        "UNSUPPORTED_OR_CONFLICTING_CONTEXT",
+                    )
+                    self.assertIn(
+                        "CKRS016",
+                        {item["rule"] for item in payload["violations"]},
+                    )
+
+    @staticmethod
+    def rewrite_fixture_event(
+        environment: dict[str, str],
+        mutate: object,
+    ) -> None:
+        event = Path(environment["GITHUB_EVENT_PATH"])
+        payload = json.loads(event.read_text(encoding="utf-8"))
+        mutate(payload)
+        event.write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_closure_pr_metadata_rejection_and_direct_nonconsumption(self) -> None:
+        """CP-02/03: malformed synthetic metadata rejects; direct ignores it."""
+        published, closure_head, checkout = self.prepare_synthetic_closure_pr()
+        malformed = (
+            ("absent", None, False),
+            ("true", True, True),
+            ("false", False, True),
+            ("integer", 7, True),
+            ("float", 1.5, True),
+            ("array", [], True),
+            ("object", {}, True),
+            ("empty", "", True),
+            ("short", "a" * 39, True),
+            ("long", "a" * 41, True),
+            ("uppercase", "A" * 40, True),
+            ("mixed-case", "a" * 39 + "A", True),
+            ("non-hex", "g" * 40, True),
+            ("leading-space", " " + "a" * 40, True),
+            ("trailing-space", "a" * 40 + " ", True),
+            ("all-zero", "0" * 40, True),
+        )
+        for index, (name, metadata, present) in enumerate(malformed, 940):
+            with self.subTest(route="synthetic", case=name):
+                environment = self.closure_pr_environment(
+                    published, closure_head, number=index,
+                    checkout_sha=checkout, merge_commit_sha=metadata,
+                    include_merge_commit_sha=present,
+                )
+                self.assert_closure_pr_rejected(environment)
+
+        git(self.root, "checkout", "--detach", closure_head)
+        direct_values = (
+            ("absent", None, False), ("null", None, True),
+            ("matching", closure_head, True), ("differing", published, True),
+            ("boolean", True, True), ("object", {}, True),
+            ("all-zero", "0" * 40, True),
+        )
+        for index, (name, metadata, present) in enumerate(direct_values, 960):
+            environment = self.closure_pr_environment(
+                published, closure_head, number=index,
+                merge_commit_sha=metadata,
+                include_merge_commit_sha=present,
+            )
+            for mode in ("auto", "post-release-closure-candidate"):
+                with self.subTest(route="direct", case=name, mode=mode):
+                    self.assert_projection(
+                        self.validator(mode, environment),
+                        "post-release-closure-candidate",
+                        "GITHUB_CLOSURE_PR_CONTEXT_CONSISTENCY",
+                    )
+        malformed_event = self.closure_pr_environment(
+            published, closure_head, number=967,
+            include_merge_commit_sha=False,
+        )
+        Path(malformed_event["GITHUB_EVENT_PATH"]).write_text("[]", encoding="utf-8")
+        self.assert_closure_pr_rejected(malformed_event)
+        conflicting = self.closure_pr_environment(
+            published, closure_head, number=968,
+            include_merge_commit_sha=False,
+        )
+        conflicting["GITHUB_REPOSITORY"] = "fork/coldkeep"
+        self.assert_closure_pr_rejected(conflicting)
+
+    def test_closure_pr_common_identity_and_object_guards(self) -> None:
+        """CP-04: accepted differing metadata cannot bypass common guards."""
+        published, closure_head, checkout = self.prepare_synthetic_closure_pr()
+        blob = self.rev_parse(f"{closure_head}:README.md")
+
+        def baseline(number: int) -> dict[str, str]:
+            return self.closure_pr_environment(
+                published, closure_head, number=number,
+                checkout_sha=checkout, merge_commit_sha=published,
+            )
+
+        environment_cases = (
+            ("actions", "GITHUB_ACTIONS", "false"),
+            ("event", "GITHUB_EVENT_NAME", "push"),
+            ("full-ref", "GITHUB_REF", "refs/pull/999/merge"),
+            ("short-ref", "GITHUB_REF_NAME", "999/merge"),
+            ("base-ref", "GITHUB_BASE_REF", "develop"),
+            ("head-ref", "GITHUB_HEAD_REF", "release/v1.13.17"),
+            ("repository", "GITHUB_REPOSITORY", "fork/coldkeep"),
+            ("runtime", "GITHUB_SHA", closure_head),
+            ("event-path", "GITHUB_EVENT_PATH", ""),
+        )
+        for index, (name, key, value) in enumerate(environment_cases, 970):
+            with self.subTest(source="environment", case=name):
+                environment = baseline(index)
+                environment[key] = value
+                self.assert_closure_pr_rejected(environment)
+
+        def remove_number(payload: dict[str, object]) -> None:
+            payload.pop("number")
+        def wrong_number(payload: dict[str, object]) -> None:
+            payload["number"] = 1
+        def wrong_repository(payload: dict[str, object]) -> None:
+            payload["repository"] = {"full_name": "fork/coldkeep"}
+        def missing_pr(payload: dict[str, object]) -> None:
+            payload.pop("pull_request")
+        def wrong_pr_shape(payload: dict[str, object]) -> None:
+            payload["pull_request"] = []
+        def wrong_base_ref(payload: dict[str, object]) -> None:
+            payload["pull_request"]["base"]["ref"] = "develop"
+        def wrong_head_ref(payload: dict[str, object]) -> None:
+            payload["pull_request"]["head"]["ref"] = "release/v1.13.17"
+        def wrong_base_repo(payload: dict[str, object]) -> None:
+            payload["pull_request"]["base"]["repo"]["full_name"] = "fork/coldkeep"
+        def wrong_head_repo(payload: dict[str, object]) -> None:
+            payload["pull_request"]["head"]["repo"]["full_name"] = "fork/coldkeep"
+        def base_shape(payload: dict[str, object]) -> None:
+            payload["pull_request"]["base"] = []
+        def head_shape(payload: dict[str, object]) -> None:
+            payload["pull_request"]["head"] = []
+        def base_unavailable(payload: dict[str, object]) -> None:
+            payload["pull_request"]["base"]["sha"] = "2" * 40
+        def head_unavailable(payload: dict[str, object]) -> None:
+            payload["pull_request"]["head"]["sha"] = "3" * 40
+        def base_wrong_type(payload: dict[str, object]) -> None:
+            payload["pull_request"]["base"]["sha"] = blob
+        def head_wrong_type(payload: dict[str, object]) -> None:
+            payload["pull_request"]["head"]["sha"] = blob
+
+        event_cases = (
+            ("missing-number", remove_number), ("wrong-number", wrong_number),
+            ("repository", wrong_repository), ("missing-pr", missing_pr),
+            ("pr-shape", wrong_pr_shape), ("base-ref", wrong_base_ref),
+            ("head-ref", wrong_head_ref), ("base-repo", wrong_base_repo),
+            ("head-repo", wrong_head_repo), ("base-shape", base_shape),
+            ("head-shape", head_shape), ("base-unavailable", base_unavailable),
+            ("head-unavailable", head_unavailable),
+            ("base-wrong-type", base_wrong_type),
+            ("head-wrong-type", head_wrong_type),
+        )
+        for index, (name, mutation) in enumerate(event_cases, 980):
+            with self.subTest(source="event", case=name):
+                environment = baseline(index)
+                self.rewrite_fixture_event(environment, mutation)
+                self.assert_closure_pr_rejected(environment)
+
+    def test_closure_pr_real_topology_and_event_negatives(self) -> None:
+        """CP-05/06: real raw topology and event loader negatives."""
+        published, closure_head, checkout = self.prepare_synthetic_closure_pr()
+        head_tree = self.rev_parse(f"{closure_head}^{{tree}}")
+        wrong_tree = self.rev_parse(f"{published}^{{tree}}")
+
+        def raw_commit(parents: list[str], tree: str, label: str) -> str:
+            raw = (
+                f"tree {tree}\n"
+                + "".join(f"parent {parent}\n" for parent in parents)
+                + "author fixture <fixture@example.invalid> 1700000000 +0000\n"
+                + "committer fixture <fixture@example.invalid> 1700000000 +0000\n"
+                + f"\nTEST_FIXTURE_ONLY {label}\n"
+            )
+            created = subprocess.run(
+                [resolved_executable("git"), "-C", str(self.root),
+                 "hash-object", "-t", "commit", "-w", "--stdin"],
+                input=raw, text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, check=True,
+            ).stdout.strip()
+            self.assertEqual(
+                run_process(
+                    [resolved_executable("git"), "-C", str(self.root),
+                     "cat-file", "-p", created], check=True,
+                ).stdout,
+                raw,
+            )
+            self.assertEqual(
+                run_process(
+                    [resolved_executable("git"), "-C", str(self.root),
+                     "cat-file", "-t", created], check=True,
+                ).stdout.strip(),
+                "commit",
+            )
+            return created
+
+        topology = (
+            ("reversed", [closure_head, published], head_tree),
+            ("missing", [published], head_tree),
+            ("extra", [published, closure_head, self.predecessor], head_tree),
+            ("duplicate", [published, closure_head, closure_head], head_tree),
+            ("wrong-tree", [published, closure_head], wrong_tree),
+        )
+        for index, (name, parents, tree) in enumerate(topology, 1000):
+            bad = raw_commit(parents, tree, name)
+            stored = run_process(
+                [resolved_executable("git"), "-C", str(self.root),
+                 "cat-file", "-p", bad], check=True,
+            ).stdout
+            self.assertEqual(
+                re.findall(r"(?m)^parent ([0-9a-f]{40})$", stored), parents
+            )
+            self.assertEqual(
+                re.search(r"(?m)^tree ([0-9a-f]{40})$", stored).group(1), tree
+            )
+            git(self.root, "checkout", "--detach", bad)
+            environment = self.closure_pr_environment(
+                published, closure_head, number=index,
+                checkout_sha=bad, merge_commit_sha=published,
+            )
+            with self.subTest(topology=name):
+                self.assert_closure_pr_rejected(environment)
+
+        git(self.root, "checkout", "--detach", checkout)
+        for index, (name, raw) in enumerate((
+            ("malformed", "{"), ("array", "[]"), ("null", "null")
+        ), 1010):
+            environment = self.closure_pr_environment(
+                published, closure_head, number=index,
+                checkout_sha=checkout, merge_commit_sha=published,
+            )
+            Path(environment["GITHUB_EVENT_PATH"]).write_text(raw, encoding="utf-8")
+            with self.subTest(event=name):
+                self.assert_closure_pr_rejected(environment)
+        missing = self.closure_pr_environment(
+            published, closure_head, number=1013,
+            checkout_sha=checkout, merge_commit_sha=published,
+        )
+        Path(missing["GITHUB_EVENT_PATH"]).unlink()
+        self.assert_closure_pr_rejected(missing)
+        # The PR loader is intentionally unbounded. A coherent object just above the
+        # tag loader's bound remains valid and proves this repair adds no new limit.
+        large = self.closure_pr_environment(
+            published, closure_head, number=1014,
+            checkout_sha=checkout, merge_commit_sha=published,
+        )
+        event = Path(large["GITHUB_EVENT_PATH"])
+        payload = json.loads(event.read_text(encoding="utf-8"))
+        payload["padding"] = "x" * 1048576
+        event.write_text(json.dumps(payload), encoding="utf-8")
+        self.assertGreater(event.stat().st_size, 1048576)
+        for mode in ("auto", "post-release-closure-candidate"):
+            self.assert_projection(
+                self.validator(mode, large),
+                "post-release-closure-candidate",
+                "GITHUB_CLOSURE_PR_CONTEXT_CONSISTENCY",
+            )
+
+    def test_closure_pr_rechecks_event_for_ckrs016(self) -> None:
+        """CP-07: inference acceptance is never cached for final CKRS016."""
+        published, closure_head, checkout = self.prepare_synthetic_closure_pr()
+        for name, mutate in (
+            (
+                "authoritative-base",
+                lambda payload: payload["pull_request"]["base"].update(
+                    {"ref": "develop"}
+                ),
+            ),
+            (
+                "metadata-shape",
+                lambda payload: payload["pull_request"].update(
+                    {"merge_commit_sha": True}
+                ),
+            ),
+        ):
+            environment = self.closure_pr_environment(
+                published, closure_head, number=1020,
+                checkout_sha=checkout, merge_commit_sha=None,
+            )
+            event = Path(environment["GITHUB_EVENT_PATH"])
+            actual_environment = os.environ.copy()
+            for key in GITHUB_KEYS:
+                actual_environment.pop(key, None)
+            actual_environment.update(environment)
+            original_context = release_state_support.strict_post_release_pr_context
+            evaluations = 0
+
+            def mutate_after_inference(*args: object, **kwargs: object) -> object:
+                nonlocal evaluations
+                accepted = original_context(*args, **kwargs)
+                evaluations += 1
+                if evaluations == 1:
+                    changed = json.loads(event.read_text(encoding="utf-8"))
+                    mutate(changed)
+                    event.write_text(json.dumps(changed), encoding="utf-8")
+                return accepted
+
+            with self.subTest(case=name), mock.patch.dict(
+                os.environ, actual_environment, clear=True
+            ), mock.patch.object(
+                release_state_support,
+                "strict_post_release_pr_context",
+                side_effect=mutate_after_inference,
+            ):
+                result = validate_release_state.validate(self.root, "auto")
+                self.assertEqual(evaluations, 2)
+                self.assertEqual(result.state, "post-release-closure-candidate")
+                self.assertEqual(
+                    result.evidence_scope,
+                    "GITHUB_CLOSURE_PR_CONTEXT_CONSISTENCY",
+                )
+                self.assertIn("CKRS016", {item.rule for item in result.violations})
+
+    def test_closure_pr_diagnostic_parity_and_source_binding(self) -> None:
+        """CP-08: closure diagnostics stay empty and behavior-neutral."""
+        published, closure_head, checkout = self.prepare_synthetic_closure_pr()
+        synthetic = (
+            ("matching", checkout, True), ("null", None, True),
+            ("differing", published, True), ("invalid", True, False),
+        )
+        for index, (name, metadata, accepted) in enumerate(synthetic, 1030):
+            environment = self.closure_pr_environment(
+                published, closure_head, number=index,
+                checkout_sha=checkout, merge_commit_sha=metadata,
+            )
+            for mode in ("auto", "post-release-closure-candidate"):
+                inactive = self.fixture_validator(mode, environment)
+                destination = self.root / f"TEST_FIXTURE_ONLY-pr-{index}-{mode}.json"
+                active = self.fixture_validator(
+                    mode, environment,
+                    "--diagnostic-json", str(destination),
+                )
+                with self.subTest(route="synthetic", case=name, mode=mode):
+                    self.assertEqual(active.returncode, inactive.returncode)
+                    self.assertEqual(active.stdout, inactive.stdout)
+                    self.assertEqual(active.stderr, inactive.stderr)
+                    self.assertEqual(active.returncode, 0 if accepted else 1)
+                    diagnostic = json.loads(destination.read_text(encoding="utf-8"))
+                    self.assertTrue(diagnostic["capture"]["complete"])
+                    self.assertEqual(diagnostic["evaluations"], [])
+                    self.assertEqual(diagnostic["event_snapshots"], [])
+                    self.assertEqual(
+                        diagnostic["validator"]["exit_code"], active.returncode
+                    )
+                    for source in diagnostic["validator"]["sources"]:
+                        self.assertTrue(source["loaded_path_match"])
+                        self.assertEqual(
+                            source["measured_sha256"],
+                            hashlib.sha256(
+                                (self.root / source["path"]).read_bytes()
+                            ).hexdigest(),
+                        )
+        git(self.root, "checkout", "--detach", closure_head)
+        direct = self.closure_pr_environment(
+            published, closure_head, number=1034,
+            include_merge_commit_sha=False,
+        )
+        for mode in ("auto", "post-release-closure-candidate"):
+            inactive = self.fixture_validator(mode, direct)
+            destination = self.root / f"TEST_FIXTURE_ONLY-pr-direct-{mode}.json"
+            active = self.fixture_validator(
+                mode, direct, "--diagnostic-json", str(destination)
+            )
+            self.assertEqual(
+                (active.returncode, active.stdout, active.stderr),
+                (inactive.returncode, inactive.stdout, inactive.stderr),
+            )
+            diagnostic = json.loads(destination.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostic["evaluations"], [])
+            self.assertEqual(diagnostic["event_snapshots"], [])
+
+    def test_two_commit_closure_forward_routes_and_terminal_boundary(self) -> None:
+        """CP-09: fixture M -> K -> H supports update, PR and first main."""
+        support = self.root / "scripts/release_state_support.py"
+        repaired = support.read_text(encoding="utf-8")
+        old = repaired.replace(
+            'merge_present\n        and merge_field_valid',
+            'pull_request.get("merge_commit_sha") == head',
+            1,
+        )
+        self.assertNotEqual(old, repaired)
+        support.write_text(old, encoding="utf-8")
+        published, initial_closure = self.prepare_direct_closure_candidate()
+        support.write_text(repaired, encoding="utf-8")
+        git(self.root, "add", "scripts/release_state_support.py")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY closure metadata repair H")
+        repaired_closure = self.rev_parse("HEAD")
+        self.assertEqual(self.rev_parse(f"{repaired_closure}^"), initial_closure)
+        self.assertEqual(self.rev_parse("refs/tags/v1.13.17^{}"), published)
+        update = self.closure_push_environment(
+            initial_closure, repaired_closure, False
+        )
+        for mode in ("auto", "post-release-closure-candidate"):
+            self.assert_projection(
+                self.validator(mode, update),
+                "post-release-closure-candidate",
+                "GITHUB_CLOSURE_PUSH_CONTEXT_CONSISTENCY",
+            )
+        git(self.root, "checkout", "main")
+        git(
+            self.root, "merge", "--no-ff",
+            "release/v1.13.17-post-publication-closure",
+            "-m", "TEST_FIXTURE_ONLY first closure main C",
+        )
+        first_main = self.rev_parse("HEAD")
+        self.assertEqual(
+            self.rev_parse(f"{first_main}^{{tree}}"),
+            self.rev_parse(f"{repaired_closure}^{{tree}}"),
+        )
+        self.assertEqual(
+            run_process(
+                [resolved_executable("git"), "-C", str(self.root),
+                 "rev-list", "--parents", "-n", "1", first_main],
+                check=True,
+            ).stdout.strip().split()[1:],
+            [published, repaired_closure],
+        )
+        git(self.root, "checkout", "--detach", first_main)
+        for index, metadata in enumerate((None, initial_closure), 1040):
+            environment = self.closure_pr_environment(
+                published, repaired_closure, number=index,
+                checkout_sha=first_main, merge_commit_sha=metadata,
+            )
+            for mode in ("auto", "post-release-closure-candidate"):
+                self.assert_projection(
+                    self.validator(mode, environment),
+                    "post-release-closure-candidate",
+                    "GITHUB_CLOSURE_PR_CONTEXT_CONSISTENCY",
+                )
+        main = self.main_environment(published, first_main)
+        for mode in ("auto", "post-release-closure-candidate"):
+            self.assert_projection(
+                self.validator(mode, main),
+                "post-release-closure-candidate",
+                "GITHUB_CLOSURE_MAIN_CONTEXT_CONSISTENCY",
+            )
+        terminal = self.validator("post-release-closed", main)
+        self.assertEqual(terminal.returncode, 1, terminal.stdout + terminal.stderr)
+        self.assertIn(
+            "CKRS019",
+            {item["rule"] for item in json.loads(terminal.stdout)["violations"]},
+        )
+        self.assert_closure_pr_rejected(
+            self.closure_pr_environment(
+                published, repaired_closure, number=1042,
+                checkout_sha=repaired_closure,
+                merge_commit_sha=initial_closure,
+            ) | {"GITHUB_SHA": repaired_closure}
+        )
+        self.assertEqual(self.rev_parse("refs/tags/v1.13.17^{}"), published)
+
+    def test_pending_closure_pr_accepts_null_and_differing_metadata(self) -> None:
+        """CP-10: the shared helper preserves the pending-closure caller."""
+        published, pending = self.prepare_direct_closure_candidate(candidate=False)
+        git(self.root, "checkout", "main")
+        git(
+            self.root, "merge", "--no-ff",
+            "release/v1.13.17-post-publication-closure",
+            "-m", "TEST_FIXTURE_ONLY pending synthetic PR",
+        )
+        checkout = self.rev_parse("HEAD")
+        git(self.root, "checkout", "--detach", checkout)
+        for index, metadata in enumerate((None, published), 1050):
+            environment = self.closure_pr_environment(
+                published, pending, number=index,
+                checkout_sha=checkout, merge_commit_sha=metadata,
+            )
+            for mode in ("auto", "post-release-pending-closure"):
+                self.assert_projection(
+                    self.validator(mode, environment),
+                    "post-release-pending-closure",
+                    "GITHUB_CLOSURE_PR_CONTEXT_CONSISTENCY",
+                )
 
     def prepare_direct_closure_candidate(
         self,

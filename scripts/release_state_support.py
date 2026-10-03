@@ -1869,8 +1869,16 @@ def strict_post_release_pr_context(
     if head == head_sha:
         return True
     parents = commit_parents(root, head)
+    merge_present = "merge_commit_sha" in pull_request
+    merge_sha = pull_request.get("merge_commit_sha")
+    merge_field_valid = merge_sha is None or (
+        isinstance(merge_sha, str)
+        and GIT_SHA.fullmatch(merge_sha) is not None
+        and merge_sha != "0" * 40
+    )
     return bool(
-        pull_request.get("merge_commit_sha") == head
+        merge_present
+        and merge_field_valid
         and parents == [base_sha, head_sha]
         and commit_tree(root, head) == commit_tree(root, head_sha)
     )
