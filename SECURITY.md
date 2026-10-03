@@ -6,11 +6,11 @@
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: READY_PRE_RELEASE
+V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
@@ -30,11 +30,14 @@ documented bounds, and cooperative same-host/local-filesystem repository
 coordination. v1.13.15 is the published stable final planned v1.x release.
 Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
-attestation are immutable. v1.13.17 is the active Route C recovery successor
-and is ready for release. Phases 0-4 are Complete in the tracked local candidate declaration, Phase 5 is
-Next, and publication material is frozen. Independent and hosted exact-head
-acceptance remain required, and this state authorizes no remote or release
-operation. v1.13.16 is the
+attestation are immutable. v1.13.17 is published at immutable M17/A17 and
+GitHub Release `400460267`; its publication material remains frozen. The
+tracked descendant is an unpublished local closure candidate. Phases 0-9
+serialize as Complete for review. The earlier marker `v1.13.17 is the active
+Route C recovery successor` is historical pre-publication wording, not current
+state. External terminal effectiveness and
+full v1.x closure remain unestablished. This state authorizes no remote or
+Release operation. v1.13.16 is the
 immutable failed-publication predecessor: its public annotated tag failed
 required certification and no GitHub Release exists. V1.x full closure is not
 established.

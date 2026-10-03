@@ -4,11 +4,11 @@
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: READY_PRE_RELEASE
+V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
@@ -21,10 +21,14 @@ Coldkeep is a correctness-first cold storage engine. The primary invariant is: n
 
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
 
-v1.13.17 is the active Route C recovery successor and is ready for release,
-limited to release-state and tag-certification correction. Phases 0-4 are Complete in the tracked local
-candidate declaration, Phase 5 is Next, and publication material is frozen.
-This state does not certify or authorize later operations. v1.13.16 is the
+v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
+The tracked descendant is an unpublished local closure candidate, limited to
+the attached closure-push context repair and governance reconciliation.
+The earlier marker `v1.13.17 is the active Route C recovery successor` is
+retained only as historical pre-publication wording; it is not current state.
+Phases 0-9 serialize as Complete for review, while external terminal
+effectiveness and full v1.x closure remain unestablished. This state does not
+certify or authorize later operations. v1.13.16 is the
 immutable failed-publication predecessor: its
 public tag failed required certification, no GitHub Release exists, and no
 publication or closure is authorized. v1.13.15 remains
