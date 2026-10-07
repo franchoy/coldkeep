@@ -33,25 +33,28 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
+CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
+V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
 ```
 <!-- coldkeep-current-state:end -->
 
 v1.13.17 — Annotated-Tag Certification Recovery is published at immutable
 M17/A17 and GitHub Release `400460267`; its source-only publication body and
-checksum remain frozen. The tracked descendant is an unpublished local
-closure candidate. Phases 0-9 serialize as Complete for review, but external
-terminal effectiveness and full v1.x closure remain unestablished. It
-authorizes no push, PR, merge, tag, Release change, or terminal audit. The
+checksum remain frozen. Phase 9M established the external terminal disposition
+at C on a source-scoped qualified basis. The tracked descendant is a
+non-authorizing terminal-serialization declaration; protected-main
+serialization and effectiveness readback remain separate. It authorizes no
+push, PR, merge, tag, Release change, or new audit. The
 work remains limited to release governance and does not change product storage
 behavior. v1.13.16 is the immutable
 failed-publication predecessor: annotated tag A16 exists, its required tag CI

@@ -4,16 +4,18 @@
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
+CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
+V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -52,10 +54,10 @@ Identify and state:
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
 - v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
-  The tracked descendant is an unpublished local closure candidate. Phases
-  0-9 serialize as Complete for review, while external terminal effectiveness
-  and full v1.x closure remain unestablished. This state does not certify or
-  authorize later operations. v1.13.16 is the
+  The tracked descendant is a non-authorizing terminal-disposition declaration.
+  Phase 9M established source-scoped qualified external closure at C; protected-
+  main serialization and effectiveness readback remain separate. This state
+  does not certify or authorize later operations. v1.13.16 is the
   immutable failed-publication predecessor. Follow the successor's 10-phase
   plan and exact phase mode.
 - v1.13.15 remains published stable and immutable; planned v1 feature and

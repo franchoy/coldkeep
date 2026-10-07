@@ -174,7 +174,30 @@ class FixtureGitWrapperTests(unittest.TestCase):
                     self.assertEqual(local.returncode, 1, local.stdout + local.stderr)
 
 
-def copy_successor_fixture_source(source_root: Path, destination_root: Path) -> None:
+SUCCESSOR_COMPATIBILITY_BASE = "3d32e1662fdc0de251fd87bc5af6a309fcf3b6a6"
+SUCCESSOR_HISTORICAL_PATHS = (
+    Path("docs/release/v1.13/v1.13.17-release-state.md"),
+    Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+    Path("AGENTS.md"),
+    Path("README.md"),
+    Path("SECURITY.md"),
+    Path(".github/copilot-instructions.md"),
+    Path(".github/instructions/ci.instructions.md"),
+    Path(".github/prompts/critical-path-coverage.prompt.md"),
+    Path(".github/prompts/regression-fix.prompt.md"),
+    Path("docs/release/v1.13/README.md"),
+)
+SUCCESSOR_TERMINAL_ONLY_PATHS = (
+    validate_governance.TERMINAL_DISPOSITION_REFERENCE_FILE,
+)
+
+
+def copy_successor_fixture_source(
+    source_root: Path,
+    destination_root: Path,
+    *,
+    compatibility_base: str = SUCCESSOR_COMPATIBILITY_BASE,
+) -> None:
     """Copy the tracked source plus the explicit current publication pair."""
     tracked = run_process(
         [resolved_executable("git"), "-C", str(source_root), "ls-files", "-z"],
@@ -188,11 +211,56 @@ def copy_successor_fixture_source(source_root: Path, destination_root: Path) -> 
         source = source_root / relative
         if source.exists() or source.is_symlink():
             paths.add(relative)
+    paths.difference_update(SUCCESSOR_TERMINAL_ONLY_PATHS)
     for relative in sorted(paths):
         source = source_root / relative
         destination = destination_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination, follow_symlinks=False)
+    # Compatibility fixtures model the historical successor lifecycle, not the
+    # terminal serialization route added by this change. Keep their production
+    # Python current while anchoring the two route-selector documents at C.
+    for relative in SUCCESSOR_HISTORICAL_PATHS:
+        if not (source_root / relative).is_file():
+            raise FileNotFoundError(
+                f"required compatibility source is unavailable: {relative}"
+            )
+        historical = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(source_root),
+                "show",
+                f"{compatibility_base}:{relative.as_posix()}",
+            ],
+            check=True,
+        )
+        (destination_root / relative).write_text(
+            historical.stdout, encoding="utf-8"
+        )
+    for relative in SUCCESSOR_TERMINAL_ONLY_PATHS:
+        if (destination_root / relative).exists() or (
+            destination_root / relative
+        ).is_symlink():
+            raise AssertionError(f"historical fixture retained terminal path: {relative}")
+    state = (
+        destination_root / validate_governance.CANONICAL_CURRENT_STATE_FILE
+    ).read_text(encoding="utf-8")
+    contract = (
+        destination_root
+        / "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+    ).read_text(encoding="utf-8")
+    forbidden = (
+        "NONE_TERMINAL_DISPOSITION_DECLARED",
+        "TERMINAL_DISPOSITION_REFERENCE:",
+        "coldkeep-terminal-disposition-expectations:",
+    )
+    combined = state + "\n" + contract
+    retained = [marker for marker in forbidden if marker in combined]
+    if retained:
+        raise AssertionError(
+            f"historical fixture retained terminal selectors: {retained}"
+        )
 
 
 def run_validator(
@@ -4111,6 +4179,16 @@ class FailedPredecessorReadBoundaryTests(unittest.TestCase):
 
 
 class SuccessorFixtureSourceCopyTests(unittest.TestCase):
+    def make_source(self, root: Path) -> str:
+        for relative in SUCCESSOR_HISTORICAL_PATHS:
+            write(root, relative.as_posix(), f"TEST_FIXTURE_ONLY {relative}\n")
+        git(root, "init")
+        git(root, "config", "user.name", "fixture")
+        git(root, "config", "user.email", "fixture@example.invalid")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "TEST_FIXTURE_ONLY historical base")
+        return "HEAD"
+
     def test_current_pair_copy_is_independent_of_index_membership(self) -> None:
         pair = (
             validate_governance.CURRENT_RELEASE_BODY,
@@ -4119,6 +4197,7 @@ class SuccessorFixtureSourceCopyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source"
             source.mkdir()
+            base = self.make_source(source)
             body = b"TEST_FIXTURE_ONLY body\n"
             digest = hashlib.sha256(body).hexdigest()
             for relative, content in (
@@ -4128,17 +4207,87 @@ class SuccessorFixtureSourceCopyTests(unittest.TestCase):
                 path = source / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(content)
-            git(source, "init")
             observed = []
             for index_state in ("untracked", "tracked"):
                 if index_state == "tracked":
                     git(source, "add", *(item.as_posix() for item in pair))
                 destination = Path(directory) / index_state
                 destination.mkdir()
-                copy_successor_fixture_source(source, destination)
+                copy_successor_fixture_source(
+                    source, destination, compatibility_base=base
+                )
                 observed.append(tuple((destination / item).read_bytes() for item in pair))
             self.assertEqual(observed[0], observed[1])
             self.assertEqual(observed[0], (body, f"{digest}  {pair[0].as_posix()}\n".encode("ascii")))
+
+    def test_terminal_reference_is_excluded_regardless_of_index_membership(self) -> None:
+        relative = validate_governance.TERMINAL_DISPOSITION_REFERENCE_FILE
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            base = self.make_source(source)
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((SCRIPT.parents[1] / relative).read_bytes())
+            for index_state in ("untracked", "tracked"):
+                if index_state == "tracked":
+                    git(source, "add", relative.as_posix())
+                destination = Path(directory) / index_state
+                destination.mkdir()
+                copy_successor_fixture_source(
+                    source, destination, compatibility_base=base
+                )
+                self.assertFalse((destination / relative).exists())
+
+    def test_missing_current_or_historical_source_fails_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            base = self.make_source(source)
+            missing_current = SUCCESSOR_HISTORICAL_PATHS[0]
+            (source / missing_current).unlink()
+            with self.assertRaises(FileNotFoundError):
+                copy_successor_fixture_source(
+                    source,
+                    Path(directory) / "missing-current",
+                    compatibility_base=base,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            base = self.make_source(source)
+            missing_historical = SUCCESSOR_HISTORICAL_PATHS[0]
+            git(source, "rm", missing_historical.as_posix())
+            git(source, "commit", "-m", "TEST_FIXTURE_ONLY remove historical path")
+            write(source, missing_historical.as_posix(), "TEST_FIXTURE_ONLY current only\n")
+            with self.assertRaises(subprocess.CalledProcessError):
+                copy_successor_fixture_source(
+                    source,
+                    Path(directory) / "missing-historical",
+                    compatibility_base="HEAD",
+                )
+
+    def test_historical_fixture_rejects_injected_terminal_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "historical"
+            destination.mkdir()
+            source = SCRIPT.parents[1]
+            copy_successor_fixture_source(source, destination)
+            self.assertEqual(validate_governance.validate(destination), [])
+            relative = validate_governance.TERMINAL_DISPOSITION_REFERENCE_FILE
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((source / relative).read_bytes())
+            violations = validate_governance.validate(destination)
+            self.assertTrue(
+                any(
+                    "unexpected terminal disposition material for historical vocabulary"
+                    in item
+                    for item in violations
+                ),
+                violations,
+            )
 
 
 class SuccessorLifecycleIntegrationTests(unittest.TestCase):
@@ -6801,6 +6950,754 @@ class SuccessorLifecycleIntegrationTests(unittest.TestCase):
                     "tagged-pending-tag-certification",
                     "GITHUB_TAG_EVENT_CONTEXT_CONSISTENCY",
                 )
+
+
+class TerminalSerializationContractTests(unittest.TestCase):
+    """Phase 9N-R1 terminal serialization fixtures and boundaries."""
+
+    TERMINAL_BRANCH = "release/v1.13.17-terminal-serialization"
+    TERMINAL_DOCS = (
+        "docs/release/v1.13/v1.13.17-release-state.md",
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        "docs/release/v1.13/v1.13.17-terminal-disposition-reference.md",
+        "docs/release/v1.13/v1.13.17-release-gate.md",
+        "docs/release/v1.13/v1.13.17-scope.md",
+        "docs/release/v1.13/v1.13.17-phase-list.md",
+        "docs/release/v1.13/v1.13.17-validation-checklist.md",
+    )
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "repo"
+        source = SCRIPT.parent.parent
+        self.root.mkdir()
+        committed = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(source),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                "-z",
+                "HEAD",
+            ],
+            check=True,
+        ).stdout.split("\0")
+        inventory = {Path(item) for item in committed if item}
+        inventory.update(Path(item) for item in self.TERMINAL_DOCS)
+        for relative in sorted(inventory):
+            source_path = source / relative
+            if not source_path.is_file():
+                raise FileNotFoundError(f"terminal fixture input is unavailable: {relative}")
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, target, follow_symlinks=False)
+        git(self.root, "init")
+        git(self.root, "config", "user.name", "fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY predecessor")
+        predecessor = self.rev_parse("HEAD")
+        git(self.root, "tag", "-a", "v1.13.16", "-m", "TEST_FIXTURE_ONLY")
+        predecessor_tag = self.rev_parse("refs/tags/v1.13.16")
+        disposition = (
+            self.root
+            / "docs/release/v1.13/v1.13.17-predecessor-disposition.md"
+        )
+        disposition_text = disposition.read_text(encoding="utf-8")
+        for key, value in (
+            ("TAG_OBJECT", predecessor_tag),
+            ("DIRECT_TARGET", predecessor),
+            ("SUCCESSOR_BASE", predecessor),
+        ):
+            disposition_text, count = re.subn(
+                rf"(?m)^{key}: [0-9a-f]{{40}}$",
+                f"{key}: {value}",
+                disposition_text,
+                count=1,
+            )
+            if count != 1:
+                raise AssertionError(f"missing predecessor identity {key}")
+        disposition.write_text(disposition_text, encoding="utf-8")
+        git(self.root, "add", disposition.relative_to(self.root).as_posix())
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY published M17")
+        self.M17 = self.rev_parse("HEAD")
+        git(self.root, "tag", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY")
+        self.A17 = self.rev_parse("refs/tags/v1.13.17")
+        (self.root / "TEST_FIXTURE_ONLY-terminal-c").write_text(
+            "scratch C tree discriminator\n", encoding="utf-8"
+        )
+        git(self.root, "add", "TEST_FIXTURE_ONLY-terminal-c")
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY accepted C")
+        self.C = self.rev_parse("HEAD")
+        self.C_TREE = self.rev_parse("HEAD^{tree}")
+        identities = {
+            "ACCEPTED_C": self.C,
+            "ACCEPTED_C_TREE": self.C_TREE,
+            "PUBLISHED_M17": self.M17,
+            "ANNOTATED_TAG_A17": self.A17,
+            "TAG_DIRECT_TARGET": self.M17,
+        }
+        for relative, prefix in (
+            (Path(self.TERMINAL_DOCS[1]), "EXPECTED_"),
+            (Path(self.TERMINAL_DOCS[2]), ""),
+        ):
+            target = self.root / relative
+            text = target.read_text(encoding="utf-8")
+            for key, value in identities.items():
+                text, count = re.subn(
+                    rf"(?m)^{prefix}{re.escape(key)}: \S+$",
+                    f"{prefix}{key}: {value}",
+                    text,
+                    count=1,
+                )
+                if count != 1:
+                    raise AssertionError(f"missing terminal identity {prefix}{key}")
+            target.write_text(text, encoding="utf-8")
+        git(self.root, "checkout", "--quiet", "-b", self.TERMINAL_BRANCH)
+        git(self.root, "add", self.TERMINAL_DOCS[1], self.TERMINAL_DOCS[2])
+        git(
+            self.root,
+            "commit",
+            "--quiet",
+            "-m",
+            "TEST_FIXTURE_ONLY terminal serialization candidate",
+        )
+        self.candidate = self.rev_parse("HEAD")
+        completed = run_validator(self.root, "--state", "auto", "--json")
+        if completed.returncode != 0:
+            raise AssertionError(completed.stdout + completed.stderr)
+
+    def rev_parse(self, value: str) -> str:
+        return run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", value],
+            check=True,
+        ).stdout.strip()
+
+    def test_fixture_graph_is_owned_and_has_required_topology(self) -> None:
+        for relative in (
+            ".git/objects/info/alternates",
+            ".git/info/grafts",
+        ):
+            self.assertFalse((self.root / relative).exists(), relative)
+        replacements = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(self.root),
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/replace",
+            ],
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(replacements, "")
+        self.assertEqual(self.rev_parse(f"{self.candidate}^"), self.C)
+        ancestry = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(self.root),
+                "merge-base",
+                "--is-ancestor",
+                self.M17,
+                self.C,
+            ],
+            check=False,
+        )
+        self.assertEqual(ancestry.returncode, 0, ancestry.stderr)
+        self.assertEqual(self.rev_parse("v1.13.17^{}"), self.M17)
+
+    def test_executed_validator_is_current_working_image(self) -> None:
+        modules = (
+            ("scripts/validate_release_state.py", validate_release_state),
+            ("scripts/release_state_support.py", release_state_support),
+            ("scripts/validate_governance.py", validate_governance),
+        )
+        for relative, module in modules:
+            with self.subTest(relative=relative):
+                loaded = Path(module.__file__).resolve()
+                current = (SCRIPT.parents[1] / relative).resolve()
+                copied = self.root / relative
+                self.assertEqual(loaded, current)
+                self.assertEqual(copied.read_bytes(), current.read_bytes())
+                self.assertEqual(
+                    hashlib.sha256(copied.read_bytes()).hexdigest(),
+                    hashlib.sha256(loaded.read_bytes()).hexdigest(),
+                )
+
+    def test_exact_attached_candidate_reference_and_projection(self) -> None:
+        """TS-REF-01/CTX-01/AUTH-01: exact local Hts is structural only."""
+        completed = run_validator(
+            self.root,
+            "--state",
+            "auto",
+            "--json",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(
+            payload["state"], "post-release-terminal-serialization-candidate"
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "LOCAL_TERMINAL_SERIALIZATION_CANDIDATE"
+        )
+        self.assertEqual(
+            payload["authorization_status"], "NOT_EVALUATED_BY_VALIDATOR"
+        )
+        self.assertEqual(
+            payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
+        )
+
+    def run_json(
+        self,
+        state: str = "auto",
+        *,
+        env: dict[str, str] | None = None,
+        diagnostic: Path | None = None,
+    ) -> tuple[ProcessResult, dict[str, object]]:
+        arguments = ["--state", state, "--json"]
+        if diagnostic is not None:
+            arguments.extend(("--diagnostic-json", str(diagnostic)))
+        completed = run_validator(self.root, *arguments, env=env)
+        return completed, json.loads(completed.stdout)
+
+    def assert_reference_failure(self, expected_class: str) -> None:
+        completed, payload = self.run_json(
+            "post-release-terminal-serialization-candidate"
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        messages = [
+            item["message"]
+            for item in payload["violations"]
+            if item["rule"] == "CKRS019"
+        ]
+        self.assertTrue(
+            any(
+                f"terminal disposition reference {expected_class}:" in message
+                for message in messages
+            ),
+            messages,
+        )
+
+    def test_reference_unavailable_boundaries(self) -> None:
+        """TS-REF-02: missing/type/ancestor/oversize are unavailable."""
+        relative = Path(
+            "docs/release/v1.13/v1.13.17-terminal-disposition-reference.md"
+        )
+        target = self.root / relative
+        original = target.read_bytes()
+
+        target.unlink()
+        self.assert_reference_failure("unavailable")
+        target.write_bytes(original)
+
+        target.unlink()
+        target.mkdir()
+        self.assert_reference_failure("unavailable")
+        target.rmdir()
+        target.write_bytes(original)
+
+        parent = target.parent
+        real_parent = parent.with_name("v1.13-real")
+        parent.rename(real_parent)
+        parent.symlink_to(real_parent.name, target_is_directory=True)
+        self.assert_reference_failure("unavailable")
+        parent.unlink()
+        real_parent.rename(parent)
+
+        target.write_bytes(b"X" * 8193)
+        self.assert_reference_failure("unavailable")
+        target.write_bytes(original)
+
+    def test_reference_invalid_byte_and_shape_boundaries(self) -> None:
+        """TS-REF-02: malformed bytes/newlines/markers/fields are invalid."""
+        target = self.root / self.TERMINAL_DOCS[2]
+        original = target.read_bytes()
+        text = original.decode("utf-8")
+        lines = text.splitlines(keepends=True)
+        accepted_c = next(
+            line for line in lines if line.startswith("ACCEPTED_C: ")
+        )
+        published = next(
+            line for line in lines if line.startswith("PUBLISHED_M17: ")
+        )
+        cases = {
+            "bom": b"\xef\xbb\xbf" + original,
+            "cr": original.replace(b"\n", b"\r\n", 1),
+            "nul": original.replace(b"source-only", b"source\x00-only", 1),
+            "utf8": original.replace(b"source-only", b"source-\xff", 1),
+            "final-lf-missing": original[:-1],
+            "extra-final-lf": original + b"\n",
+            "marker": original.replace(
+                b"coldkeep-terminal-disposition-reference:start",
+                b"coldkeep-terminal-disposition-reference:wrong",
+                1,
+            ),
+            "fence": original.replace(b"```text\n", b"```yaml\n", 1),
+            "order": text.replace(
+                accepted_c, "TEST_FIXTURE_ONLY_PLACEHOLDER\n", 1
+            ).replace(
+                published, accepted_c, 1
+            ).replace(
+                "TEST_FIXTURE_ONLY_PLACEHOLDER\n", published, 1
+            ).encode("utf-8"),
+            "duplicate": text.replace(accepted_c, accepted_c + accepted_c, 1).encode("utf-8"),
+            "extra": text.replace(accepted_c, accepted_c + "EXTRA: VALUE\n", 1).encode("utf-8"),
+            "missing": text.replace(accepted_c, "", 1).encode("utf-8"),
+        }
+        for name, content in cases.items():
+            with self.subTest(name=name):
+                target.write_bytes(content)
+                self.assert_reference_failure("invalid")
+        target.write_bytes(original)
+
+    def test_reference_expectation_and_topology_boundaries(self) -> None:
+        """TS-REF-03: compared values and pinned local objects fail closed."""
+        reference = self.root / self.TERMINAL_DOCS[2]
+        contract = self.root / self.TERMINAL_DOCS[1]
+        reference_original = reference.read_text(encoding="utf-8")
+        contract_original = contract.read_text(encoding="utf-8")
+        m17 = self.M17
+        m17_tree = self.rev_parse(f"{m17}^{{tree}}")
+        cases = (
+            ("release-id", "400460267", "400460268", False),
+            (
+                "manifest-digest",
+                "f0f2505a7cfceba71081ff994c859500a47b3da22b5eb949c0f8a7ebbc5961cf",
+                "0" * 64,
+                False,
+            ),
+            (
+                "owner-record-digest",
+                "f9c679196deab62311d785e76c23215ec18c93fd439bd4c25780e245b7a755b3",
+                "1" * 64,
+                False,
+            ),
+            (
+                "timestamp",
+                "2026-10-04T20:07:58.267870Z",
+                "2026-10-04T20:07:58.267871Z",
+                False,
+            ),
+            (
+                "scope",
+                "V1_X_LIFECYCLE_TERMINAL_CLOSURE_QUALIFIED",
+                "V1_X_LIFECYCLE_TERMINAL_CLOSURE_OTHER",
+                False,
+            ),
+            ("annotated-tag-object-type", self.A17, self.C, True),
+            ("accepted-c", self.C, m17, True),
+            (
+                "accepted-c-tree",
+                self.C_TREE,
+                m17_tree,
+                True,
+            ),
+            ("published-m17", m17, self.C, True),
+            ("tag-direct-target", m17, self.C, True),
+        )
+        fields = {
+            "release-id": "GITHUB_RELEASE_ID",
+            "manifest-digest": "PHASE9M_MANIFEST_SHA256",
+            "owner-record-digest": "PHASE9M_OWNER_RECORD_SHA256",
+            "timestamp": "OWNER_DISPOSITION_AT_UTC",
+            "scope": "SOURCE_SCOPE",
+            "annotated-tag-object-type": "ANNOTATED_TAG_A17",
+            "accepted-c": "ACCEPTED_C",
+            "accepted-c-tree": "ACCEPTED_C_TREE",
+            "published-m17": "PUBLISHED_M17",
+            "tag-direct-target": "TAG_DIRECT_TARGET",
+        }
+        for name, old, new, mutate_both in cases:
+            with self.subTest(name=name):
+                key = fields[name]
+                reference.write_text(
+                    reference_original.replace(
+                        f"{key}: {old}", f"{key}: {new}", 1
+                    ),
+                    encoding="utf-8",
+                )
+                if mutate_both:
+                    contract.write_text(
+                        contract_original.replace(
+                            f"EXPECTED_{key}: {old}",
+                            f"EXPECTED_{key}: {new}",
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                self.assert_reference_failure("invalid")
+                reference.write_text(reference_original, encoding="utf-8")
+                contract.write_text(contract_original, encoding="utf-8")
+
+    def test_terminal_state_selection_never_downgrades(self) -> None:
+        """TS-REF-01: missing/mixed/new material cannot select old closure."""
+        state_path = self.root / self.TERMINAL_DOCS[0]
+        reference = self.root / self.TERMINAL_DOCS[2]
+        original = state_path.read_text(encoding="utf-8")
+
+        state_path.write_text(
+            original.replace(
+                "CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED",
+                "CURRENT_PHASE: NONE_CLOSURE_CANDIDATE",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        completed, payload = self.run_json()
+        self.assertEqual(completed.returncode, 1)
+        self.assertNotEqual(payload["state"], "post-release-closure-candidate")
+        self.assertIn("CKRS019", [item["rule"] for item in payload["violations"]])
+
+        old = original
+        replacements = {
+            "CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED": "CURRENT_PHASE: NONE_CLOSURE_CANDIDATE",
+            "V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT": "V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT",
+            "V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED": "V1_X_FULL_CLOSURE: NOT_ESTABLISHED",
+            "EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED\n": "",
+            "TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING\n": "",
+            "TERMINAL_DISPOSITION_REFERENCE: docs/release/v1.13/v1.13.17-terminal-disposition-reference.md\n": "",
+        }
+        for before, after in replacements.items():
+            old = old.replace(before, after, 1)
+        state_path.write_text(old, encoding="utf-8")
+        completed, payload = self.run_json()
+        self.assertEqual(completed.returncode, 1)
+        self.assertNotEqual(payload["state"], "post-release-closure-candidate")
+        self.assertIn("CKRS019", [item["rule"] for item in payload["violations"]])
+        state_path.write_text(original, encoding="utf-8")
+        self.assertTrue(reference.is_file())
+
+    def push_environment(
+        self, event: Path, *, before: str, created: bool
+    ) -> dict[str, str]:
+        event.write_text(
+            json.dumps(
+                {
+                    "ref": f"refs/heads/{self.TERMINAL_BRANCH}",
+                    "before": before,
+                    "after": self.candidate,
+                    "created": created,
+                    "deleted": False,
+                    "forced": False,
+                    "repository": {"full_name": "franchoy/coldkeep"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": f"refs/heads/{self.TERMINAL_BRANCH}",
+            "GITHUB_REF_NAME": self.TERMINAL_BRANCH,
+            "GITHUB_REF_TYPE": "branch",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": self.candidate,
+        }
+
+    def test_candidate_detachment_and_push_contexts(self) -> None:
+        """TS-CTX-01/02: local detachment rejects; exact fixed-C pushes pass."""
+        git(self.root, "checkout", "--quiet", "--detach", self.candidate)
+        completed, payload = self.run_json(
+            "post-release-terminal-serialization-candidate"
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("CKRS016", [item["rule"] for item in payload["violations"]])
+
+        event = self.root / "terminal-push.json"
+        for name, before, created in (
+            ("creation", "0" * 40, True),
+            ("fixed-c-update", self.C, False),
+        ):
+            with self.subTest(name=name):
+                env = self.push_environment(event, before=before, created=created)
+                completed, payload = self.run_json(env=env)
+                self.assertEqual(completed.returncode, 0, completed.stdout)
+                self.assertEqual(
+                    payload["evidence_scope"],
+                    "GITHUB_TERMINAL_SERIALIZATION_PUSH_CONTEXT_CONSISTENCY",
+                )
+        env = self.push_environment(event, before="1" * 40, created=False)
+        completed, payload = self.run_json(
+            "post-release-terminal-serialization-candidate", env=env
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("CKRS016", [item["rule"] for item in payload["violations"]])
+        for name, mutate_event, mutate_env in (
+            ("forced", {"forced": True}, {}),
+            ("deleted", {"deleted": True}, {}),
+            ("wrong-repository", {}, {"GITHUB_REPOSITORY": "fork/coldkeep"}),
+            ("wrong-ref", {}, {"GITHUB_REF": "refs/heads/release/other"}),
+            ("wrong-sha", {}, {"GITHUB_SHA": self.C}),
+        ):
+            with self.subTest(rejection=name):
+                env = self.push_environment(event, before=self.C, created=False)
+                if mutate_event:
+                    body = json.loads(event.read_text(encoding="utf-8"))
+                    body.update(mutate_event)
+                    event.write_text(json.dumps(body), encoding="utf-8")
+                env.update(mutate_env)
+                completed, payload = self.run_json(
+                    "post-release-terminal-serialization-candidate", env=env
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn(
+                    "CKRS016", [item["rule"] for item in payload["violations"]]
+                )
+        git(self.root, "checkout", "--quiet", "-b", "fixture/wrong", self.candidate)
+        env = self.push_environment(event, before=self.C, created=False)
+        completed, payload = self.run_json(
+            "post-release-terminal-serialization-candidate", env=env
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("CKRS016", [item["rule"] for item in payload["violations"]])
+
+    def pr_environment(self, event: Path, checkout: str) -> dict[str, str]:
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/pull/7/merge",
+            "GITHUB_REF_NAME": "7/merge",
+            "GITHUB_HEAD_REF": self.TERMINAL_BRANCH,
+            "GITHUB_BASE_REF": "main",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": checkout,
+        }
+
+    def write_terminal_pr(self, event: Path, merge_sha: object = None) -> None:
+        event.write_text(
+            json.dumps(
+                {
+                    "repository": {"full_name": "franchoy/coldkeep"},
+                    "number": 7,
+                    "pull_request": {
+                        "base": {
+                            "ref": "main",
+                            "sha": self.C,
+                            "repo": {"full_name": "franchoy/coldkeep"},
+                        },
+                        "head": {
+                            "ref": self.TERMINAL_BRANCH,
+                            "sha": self.candidate,
+                            "repo": {"full_name": "franchoy/coldkeep"},
+                        },
+                        "merge_commit_sha": merge_sha,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def commit_tree(self, *parents: str) -> str:
+        tree = self.rev_parse(f"{self.candidate}^{{tree}}")
+        command = [
+            resolved_executable("git"), "-C", str(self.root), "commit-tree", tree
+        ]
+        for parent in parents:
+            command.extend(("-p", parent))
+        command.extend(("-m", "TEST_FIXTURE_ONLY terminal topology"))
+        return run_process(
+            command,
+            check=True,
+        ).stdout.strip()
+
+    def test_direct_and_synthetic_pr_contexts(self) -> None:
+        """TS-CTX-03: direct and synthetic terminal PR forms are exact."""
+        event = self.root / "terminal-pr.json"
+        self.write_terminal_pr(event)
+        diagnostic = Path(self.temporary.name) / "terminal-pr-diagnostic.json"
+        completed, payload = self.run_json(
+            env=self.pr_environment(event, self.candidate),
+            diagnostic=diagnostic,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_TERMINAL_SERIALIZATION_PR_CONTEXT_CONSISTENCY",
+        )
+        record = json.loads(diagnostic.read_text(encoding="utf-8"))
+        self.assertEqual(len(record["validator"]["sources"]), 2)
+        self.assertGreaterEqual(len(record["evaluations"]), 2)
+        for evaluation in record["evaluations"]:
+            self.assertEqual(
+                evaluation["runtime_context"]["head_ref"]["value"],
+                self.TERMINAL_BRANCH,
+            )
+
+        synthetic = self.commit_tree(self.C, self.candidate)
+        git(self.root, "checkout", "--quiet", "--detach", synthetic)
+        self.write_terminal_pr(event, "1" * 40)
+        completed, payload = self.run_json(
+            env=self.pr_environment(event, synthetic)
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_TERMINAL_SERIALIZATION_PR_CONTEXT_CONSISTENCY",
+        )
+        event.write_text(
+            event.read_text(encoding="utf-8").replace(
+                "franchoy/coldkeep", "fork/coldkeep", 1
+            ),
+            encoding="utf-8",
+        )
+        completed, payload = self.run_json(
+            "post-release-terminal-serialization-candidate",
+            env=self.pr_environment(event, synthetic),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("CKRS016", [item["rule"] for item in payload["violations"]])
+        for name, mutation in (
+            ("wrong-base", ("base", "sha", "1" * 40)),
+            ("wrong-head", ("head", "sha", self.C)),
+            ("wrong-head-ref", ("head", "ref", "release/other")),
+        ):
+            with self.subTest(rejection=name):
+                self.write_terminal_pr(event, "1" * 40)
+                body = json.loads(event.read_text(encoding="utf-8"))
+                side, key, value = mutation
+                body["pull_request"][side][key] = value
+                event.write_text(json.dumps(body), encoding="utf-8")
+                completed, payload = self.run_json(
+                    "post-release-terminal-serialization-candidate",
+                    env=self.pr_environment(event, synthetic),
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn(
+                    "CKRS016", [item["rule"] for item in payload["violations"]]
+                )
+        for name, merge_value, remove in (
+            ("zero-merge-metadata", "0" * 40, False),
+            ("malformed-merge-metadata", "not-a-sha", False),
+            ("missing-merge-metadata", None, True),
+        ):
+            with self.subTest(rejection=name):
+                self.write_terminal_pr(event, merge_value)
+                if remove:
+                    body = json.loads(event.read_text(encoding="utf-8"))
+                    del body["pull_request"]["merge_commit_sha"]
+                    event.write_text(json.dumps(body), encoding="utf-8")
+                completed, payload = self.run_json(
+                    "post-release-terminal-serialization-candidate",
+                    env=self.pr_environment(event, synthetic),
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn(
+                    "CKRS016", [item["rule"] for item in payload["violations"]]
+                )
+
+    def test_terminal_main_local_and_event_contexts(self) -> None:
+        """TS-CTX-04: exact S works attached or event-backed detached."""
+        main = self.commit_tree(self.C, self.candidate)
+        git(self.root, "checkout", "--quiet", "-B", "main", main)
+        completed, payload = self.run_json()
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertEqual(
+            payload["state"], "post-release-terminal-serialization-main"
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "LOCAL_TERMINAL_SERIALIZATION_MAIN_ARTIFACT_ONLY",
+        )
+
+        event = self.root / "terminal-main-push.json"
+        event.write_text(
+            json.dumps(
+                {
+                    "ref": "refs/heads/main",
+                    "before": self.C,
+                    "after": main,
+                    "created": False,
+                    "deleted": False,
+                    "forced": False,
+                    "repository": {"full_name": "franchoy/coldkeep"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        git(self.root, "checkout", "--quiet", "--detach", main)
+        env = {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_REF_NAME": "main",
+            "GITHUB_REF_TYPE": "branch",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": main,
+        }
+        completed, payload = self.run_json(env=env)
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_TERMINAL_SERIALIZATION_MAIN_CONTEXT_CONSISTENCY",
+        )
+        completed, payload = self.run_json(
+            "post-release-terminal-serialization-main"
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("CKRS016", [item["rule"] for item in payload["violations"]])
+        for name, key, value in (
+            ("wrong-before", "before", "1" * 40),
+            ("forced", "forced", True),
+            ("deleted", "deleted", True),
+        ):
+            with self.subTest(rejection=name):
+                body = json.loads(event.read_text(encoding="utf-8"))
+                body.update(
+                    {
+                        "before": self.C,
+                        "after": main,
+                        "forced": False,
+                        "deleted": False,
+                    }
+                )
+                body[key] = value
+                event.write_text(json.dumps(body), encoding="utf-8")
+                completed, payload = self.run_json(
+                    "post-release-terminal-serialization-main", env=env
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn(
+                    "CKRS016", [item["rule"] for item in payload["violations"]]
+                )
+
+        wrong_parent = self.commit_tree(self.M17, self.candidate)
+        git(self.root, "checkout", "--quiet", "--detach", wrong_parent)
+        body = json.loads(event.read_text(encoding="utf-8"))
+        body.update(
+            {
+                "before": self.C,
+                "after": wrong_parent,
+                "forced": False,
+                "deleted": False,
+            }
+        )
+        event.write_text(json.dumps(body), encoding="utf-8")
+        env["GITHUB_SHA"] = wrong_parent
+        completed, payload = self.run_json(
+            "post-release-terminal-serialization-main", env=env
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("CKRS016", [item["rule"] for item in payload["violations"]])
+
+    def test_terminal_diagnostic_remains_non_authorizing(self) -> None:
+        """TS-AUTH-02: diagnostics retain two sources and no authority claim."""
+        diagnostic = Path(self.temporary.name) / "terminal-diagnostic.json"
+        completed, payload = self.run_json(diagnostic=diagnostic)
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertEqual(payload["authorization_status"], "NOT_EVALUATED_BY_VALIDATOR")
+        self.assertEqual(payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE")
+        record = json.loads(diagnostic.read_text(encoding="utf-8"))
+        self.assertEqual(len(record["validator"]["sources"]), 2)
+        rendered = json.dumps(record, sort_keys=True)
+        self.assertNotIn("PHASE9M_MANIFEST_SHA256", rendered)
+        self.assertNotIn("EFFECTIVE_TRACKED_TERMINAL_SERIALIZATION", rendered)
 
 
 class LifecycleBoundaryCompatibilityTests(unittest.TestCase):

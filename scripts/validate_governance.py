@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import sys
 
+from release_state_support import Document, load_terminal_disposition
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,6 +51,9 @@ CANONICAL_RELEASE_BODY_SHA256 = (
 CANONICAL_CURRENT_STATE_FILE = Path(
     "docs/release/v1.13/v1.13.17-release-state.md"
 )
+TERMINAL_DISPOSITION_REFERENCE_FILE = Path(
+    "docs/release/v1.13/v1.13.17-terminal-disposition-reference.md"
+)
 CURRENT_RELEASE_BODY = Path("docs/release/v1.13/v1.13.17-release-body.md")
 CURRENT_RELEASE_BODY_CHECKSUM = Path(
     "docs/release/v1.13/v1.13.17-release-body.sha256"
@@ -63,7 +68,7 @@ CURRENT_STATE_MIRROR_FILES = (
     Path("SECURITY.md"),
     Path("docs/release/v1.13/README.md"),
 )
-CURRENT_STATE_KEYS = (
+BASE_CURRENT_STATE_KEYS = (
     "SOURCE_VERSION",
     "RECOVERY_ROUTE",
     "CURRENT_PHASE",
@@ -77,7 +82,15 @@ CURRENT_STATE_KEYS = (
     "V1_X_TECHNICAL_CORRECTNESS",
     "V1_X_FULL_CLOSURE",
 )
-CANONICAL_ONLY_STATE_KEYS = ("RELEASE_BODY_SHA256",)
+TERMINAL_MIRROR_STATE_KEYS = (
+    "EXTERNAL_TERMINAL_DISPOSITION",
+    "TRACKED_TERMINAL_SERIALIZATION",
+)
+CURRENT_STATE_KEYS = BASE_CURRENT_STATE_KEYS + TERMINAL_MIRROR_STATE_KEYS
+CANONICAL_ONLY_STATE_KEYS = (
+    "RELEASE_BODY_SHA256",
+    "TERMINAL_DISPOSITION_REFERENCE",
+)
 CURRENT_STATE_MIRROR_START = "<!-- coldkeep-current-state:start -->"
 CURRENT_STATE_MIRROR_END = "<!-- coldkeep-current-state:end -->"
 
@@ -182,10 +195,23 @@ def canonical_current_state(text: str) -> tuple[dict[str, str], list[str]]:
             f"found {len(blocks)}"
         ]
 
+    present_keys = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", blocks[0]))
+    terminal_selected = bool(
+        present_keys
+        & set(TERMINAL_MIRROR_STATE_KEYS + ("TERMINAL_DISPOSITION_REFERENCE",))
+    ) or "NONE_TERMINAL_DISPOSITION_DECLARED" in blocks[0]
+    required_mirror = (
+        CURRENT_STATE_KEYS if terminal_selected else BASE_CURRENT_STATE_KEYS
+    )
+    required_canonical = (
+        CANONICAL_ONLY_STATE_KEYS
+        if terminal_selected
+        else ("RELEASE_BODY_SHA256",)
+    )
     state, violations = parse_state_lines(
         path,
         blocks[0],
-        CURRENT_STATE_KEYS + CANONICAL_ONLY_STATE_KEYS,
+        required_mirror + required_canonical,
         "canonical current-state block",
     )
     expected = {
@@ -197,14 +223,16 @@ def canonical_current_state(text: str) -> tuple[dict[str, str], list[str]]:
         "FINDINGS_CONFIRMED": "15",
         "FINDINGS_CLOSED": "15/15",
         "V1_X_TECHNICAL_CORRECTNESS": "ESTABLISHED",
-        "V1_X_FULL_CLOSURE": "NOT_ESTABLISHED",
     }
     for key, value in expected.items():
         if key in state and state[key] != value:
             violations.append(
                 f"{path}: canonical {key}={state[key]!r} does not match {value!r}"
             )
-    allowed_phases = {"2_NEXT", "3_NEXT", "4_NEXT", "5_NEXT", "9_NEXT", "NONE_CLOSURE_CANDIDATE"}
+    allowed_phases = {
+        "2_NEXT", "3_NEXT", "4_NEXT", "5_NEXT", "9_NEXT",
+        "NONE_CLOSURE_CANDIDATE", "NONE_TERMINAL_DISPOSITION_DECLARED",
+    }
     if state.get("CURRENT_PHASE") not in allowed_phases:
         violations.append(f"{path}: CURRENT_PHASE is unsupported")
     successor_by_phase = {
@@ -214,11 +242,26 @@ def canonical_current_state(text: str) -> tuple[dict[str, str], list[str]]:
         "5_NEXT": "READY_PRE_RELEASE",
         "9_NEXT": "PUBLISHED_CLOSURE_PENDING",
         "NONE_CLOSURE_CANDIDATE": "CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT",
+        "NONE_TERMINAL_DISPOSITION_DECLARED": "TERMINAL_DISPOSITION_DECLARATION_PRESENT",
     }
     expected_successor = successor_by_phase.get(state.get("CURRENT_PHASE", ""))
     if expected_successor and state.get("V1_13_17_STATE") != expected_successor:
         violations.append(
             f"{path}: V1_13_17_STATE does not match CURRENT_PHASE"
+        )
+    terminal_values = {
+        "V1_X_FULL_CLOSURE": "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
+        "EXTERNAL_TERMINAL_DISPOSITION": "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
+        "TRACKED_TERMINAL_SERIALIZATION": "DECLARATION_PRESENT_NON_AUTHORIZING",
+    }
+    if terminal_selected:
+        for key, value in terminal_values.items():
+            if state.get(key) != value:
+                violations.append(f"{path}: terminal {key} is unsupported")
+    elif state.get("V1_X_FULL_CLOSURE") != "NOT_ESTABLISHED":
+        violations.append(
+            f"{path}: canonical V1_X_FULL_CLOSURE={state.get('V1_X_FULL_CLOSURE')!r} "
+            "does not match 'NOT_ESTABLISHED'"
         )
     material = state.get("TRACKED_PUBLICATION_MATERIAL")
     digest = state.get("RELEASE_BODY_SHA256")
@@ -277,7 +320,7 @@ def canonical_current_state(text: str) -> tuple[dict[str, str], list[str]]:
             )
     present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", blocks[0]))
     finding_keys = {f"CK-V11316-{number:03d}" for number in range(1, 16)}
-    allowed = set(CURRENT_STATE_KEYS + CANONICAL_ONLY_STATE_KEYS) | finding_keys
+    allowed = set(required_mirror + required_canonical) | finding_keys
     extras = sorted(present - allowed)
     if extras:
         violations.append(f"{path}: canonical current-state block has extra keys {extras}")
@@ -302,11 +345,15 @@ def current_state_mirror(
             f"{path}: current-state mirror requires exactly one fenced text block, "
             f"found {len(blocks)}"
         ]
-    state, violations = parse_state_lines(
-        path, blocks[0], CURRENT_STATE_KEYS, "current-state mirror"
-    )
     present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", blocks[0]))
-    extras = sorted(present - set(CURRENT_STATE_KEYS))
+    terminal_selected = bool(present & set(TERMINAL_MIRROR_STATE_KEYS)) or (
+        "NONE_TERMINAL_DISPOSITION_DECLARED" in blocks[0]
+    )
+    required = CURRENT_STATE_KEYS if terminal_selected else BASE_CURRENT_STATE_KEYS
+    state, violations = parse_state_lines(
+        path, blocks[0], required, "current-state mirror"
+    )
+    extras = sorted(present - set(required))
     if extras:
         violations.append(f"{path}: current-state mirror has extra keys {extras}")
     return state, violations
@@ -324,13 +371,62 @@ def validate_current_state_contract(texts: dict[Path, str]) -> list[str]:
             continue
         mirror, mirror_violations = current_state_mirror(path, text)
         violations.extend(mirror_violations)
-        for key in CURRENT_STATE_KEYS:
+        keys = (
+            CURRENT_STATE_KEYS
+            if canonical.get("CURRENT_PHASE") == "NONE_TERMINAL_DISPOSITION_DECLARED"
+            else BASE_CURRENT_STATE_KEYS
+        )
+        for key in keys:
             if key in canonical and key in mirror and mirror[key] != canonical[key]:
                 violations.append(
                     f"{path}: mirror {key}={mirror[key]!r} does not match "
                     f"canonical {canonical[key]!r}"
                 )
     return violations
+
+
+def validate_terminal_disposition_contract(
+    root: Path, texts: dict[Path, str]
+) -> list[str]:
+    """Fail closed across old/new vocabulary and terminal material selection."""
+    state_text = texts.get(CANONICAL_CURRENT_STATE_FILE)
+    contract_path = Path(
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+    )
+    contract_text = texts.get(contract_path)
+    if state_text is None or contract_text is None:
+        return []
+    state, _ = canonical_current_state(state_text)
+    terminal_selected = (
+        state.get("CURRENT_PHASE") == "NONE_TERMINAL_DISPOSITION_DECLARED"
+    )
+    expectation_present = (
+        "coldkeep-terminal-disposition-expectations:" in contract_text
+    )
+    reference_path = TERMINAL_DISPOSITION_REFERENCE_FILE
+    reference_present = (root / reference_path).exists() or (
+        root / reference_path
+    ).is_symlink()
+    if not terminal_selected:
+        if expectation_present or reference_present or state.get(
+            "TERMINAL_DISPOSITION_REFERENCE"
+        ):
+            return [
+                f"{CANONICAL_CURRENT_STATE_FILE}: unexpected terminal disposition material for historical vocabulary"
+            ]
+        return []
+    contract = Document(root, contract_path.as_posix(), contract_text.splitlines())
+    disposition, detail = load_terminal_disposition(
+        root, contract, state.get("TERMINAL_DISPOSITION_REFERENCE")
+    )
+    if detail:
+        return [f"{contract_path}: {detail}"]
+    if disposition is None:
+        return [
+            f"{contract_path}: terminal disposition reference invalid: "
+            "expectation block is missing"
+        ]
+    return []
 
 
 def require_markers(path: Path, text: str, markers: tuple[str, ...]) -> list[str]:
@@ -415,7 +511,11 @@ def validate_release_body(root: Path = ROOT) -> list[str]:
     all_complete = bool(phase_rows) and all(status == "Complete" for _, status in phase_rows)
     derived_phase = (
         f"{next_phases[0]}_NEXT" if len(next_phases) == 1
-        else "NONE_CLOSURE_CANDIDATE" if all_complete
+        else (
+            "NONE_TERMINAL_DISPOSITION_DECLARED"
+            if state.get("CURRENT_PHASE") == "NONE_TERMINAL_DISPOSITION_DECLARED"
+            else "NONE_CLOSURE_CANDIDATE"
+        ) if all_complete
         else None
     )
     if derived_phase != state.get("CURRENT_PHASE"):
@@ -437,7 +537,10 @@ def validate_release_body(root: Path = ROOT) -> list[str]:
         if body_present or checksum_present:
             violations.append("v1.13.17 publication material must be wholly absent in development")
         return violations
-    if material != "FROZEN" or current_phase not in {"5_NEXT", "9_NEXT", "NONE_CLOSURE_CANDIDATE"}:
+    if material != "FROZEN" or current_phase not in {
+        "5_NEXT", "9_NEXT", "NONE_CLOSURE_CANDIDATE",
+        "NONE_TERMINAL_DISPOSITION_DECLARED",
+    }:
         violations.append(
             f"{CANONICAL_CURRENT_STATE_FILE}: publication material state and phase are inconsistent"
         )
@@ -508,6 +611,7 @@ def validate(root: Path = ROOT) -> list[str]:
             violations.extend(active_text_violations(relative, texts[relative]))
 
     violations.extend(validate_current_state_contract(texts))
+    violations.extend(validate_terminal_disposition_contract(root, texts))
 
     marker_contracts = {
         Path("AGENTS.md"): (

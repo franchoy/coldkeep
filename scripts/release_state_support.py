@@ -44,6 +44,32 @@ PREDECESSOR_DISPOSITION_KEYS = (
     "DIAGNOSIS_MANIFEST_SHA256",
 )
 PREDECESSOR_DISPOSITION_MAX_BYTES = 65536
+TERMINAL_DISPOSITION_MAX_BYTES = 8192
+TERMINAL_EXPECTATION_KEYS = (
+    "SCHEMA", "REFERENCE_PATH", "REFERENCE_MAX_BYTES",
+    "EXPECTED_REFERENCE_SCHEMA", "EXPECTED_SOURCE_VERSION",
+    "EXPECTED_CANONICAL_REPOSITORY", "EXPECTED_OWNER_DISPOSITION_PHASE",
+    "EXPECTED_OWNER_DISPOSITION_STATUS", "EXPECTED_OWNER_DISPOSITION_AT_UTC",
+    "EXPECTED_SOURCE_SCOPE", "EXPECTED_ACCEPTED_C", "EXPECTED_ACCEPTED_C_TREE",
+    "EXPECTED_PUBLISHED_M17", "EXPECTED_ANNOTATED_TAG_A17",
+    "EXPECTED_TAG_DIRECT_TARGET", "EXPECTED_GITHUB_RELEASE_ID",
+    "EXPECTED_PHASE9M_MANIFEST_SHA256", "EXPECTED_PHASE9M_OWNER_RECORD_SHA256",
+    "EXPECTED_ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE",
+    "EXPECTED_RETROSPECTIVE_PROCEDURAL_EXCEPTION",
+    "EXPECTED_PRIVATE_EVIDENCE_LOCATION",
+    "EXPECTED_TRACKED_SERIALIZATION_AUTHORITY", "EXPECTED_VALIDATOR_EFFECT",
+)
+TERMINAL_REFERENCE_KEYS = (
+    "SCHEMA", "SOURCE_VERSION", "CANONICAL_REPOSITORY",
+    "OWNER_DISPOSITION_PHASE", "OWNER_DISPOSITION_STATUS",
+    "OWNER_DISPOSITION_AT_UTC", "SOURCE_SCOPE", "ACCEPTED_C",
+    "ACCEPTED_C_TREE", "PUBLISHED_M17", "ANNOTATED_TAG_A17",
+    "TAG_DIRECT_TARGET", "GITHUB_RELEASE_ID", "PHASE9M_MANIFEST_SHA256",
+    "PHASE9M_OWNER_RECORD_SHA256",
+    "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE",
+    "RETROSPECTIVE_PROCEDURAL_EXCEPTION", "PRIVATE_EVIDENCE_LOCATION",
+    "TRACKED_SERIALIZATION_AUTHORITY", "VALIDATOR_EFFECT",
+)
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 NONZERO_GIT_SHA = re.compile(r"^(?!0{40}$)[0-9a-f]{40}$")
 ProcessResult = subprocess.CompletedProcess[str]
@@ -347,6 +373,7 @@ class DiagnosticRecorder:
         version: str,
         canonical_repository: str,
         route: str,
+        selected_head_branch: Optional[str] = None,
     ) -> dict[str, object]:
         sha_pattern = GIT_SHA
         if route == "tag-push":
@@ -380,17 +407,18 @@ class DiagnosticRecorder:
             }
         ref_pattern = re.compile(r"refs/pull/[1-9][0-9]*/merge")
         short_ref_pattern = re.compile(r"[1-9][0-9]*/merge")
+        expected_head_branch = selected_head_branch or f"release/v{version}"
         return {
             "github_actions": _bounded_identity(env.get("GITHUB_ACTIONS"), category="unexpected-actions", expected="true"),
             "event_name": _bounded_identity(env.get("GITHUB_EVENT_NAME"), category="unexpected-event", expected="pull_request"),
             "full_ref": _bounded_identity(env.get("GITHUB_REF"), category="unexpected-full-ref", allow=ref_pattern),
             "short_ref": _bounded_identity(env.get("GITHUB_REF_NAME"), category="unexpected-short-ref", allow=short_ref_pattern),
-            "head_ref": _bounded_identity(env.get("GITHUB_HEAD_REF"), category="unexpected-head-ref", expected=f"release/v{version}"),
+            "head_ref": _bounded_identity(env.get("GITHUB_HEAD_REF"), category="unexpected-head-ref", expected=expected_head_branch),
             "base_ref": _bounded_identity(env.get("GITHUB_BASE_REF"), category="unexpected-base-ref", expected="main"),
             "repository": _bounded_identity(env.get("GITHUB_REPOSITORY"), category="unexpected-repository", expected=canonical_repository),
             "runtime_sha": _bounded_identity(env.get("GITHUB_SHA"), category="unexpected-runtime-sha", allow=sha_pattern),
             "actual_checkout_commit": _bounded_identity(head, category="unexpected-checkout", allow=sha_pattern),
-            "actual_branch": _bounded_identity(branch, category="unexpected-branch", expected="") if branch == "" else _bounded_identity(branch, category="unexpected-branch", expected=f"release/v{version}"),
+            "actual_branch": _bounded_identity(branch, category="unexpected-branch", expected="") if branch == "" else _bounded_identity(branch, category="unexpected-branch", expected=expected_head_branch),
             "checkout_parents": [],
             "checkout_tree": _unavailable_identity(),
             "payload_head_tree": _unavailable_identity(),
@@ -405,6 +433,7 @@ class DiagnosticRecorder:
         branch: str,
         version: str,
         canonical_repository: str,
+        selected_head_branch: Optional[str] = None,
     ) -> int:
         evaluation_id = len(self.evaluations) + 1
         route = (
@@ -418,7 +447,10 @@ class DiagnosticRecorder:
             "route": route,
             "sequence": evaluation_id,
             "event_snapshot_id": None,
-            "runtime_context": self._runtime_context(env, head, branch, version, canonical_repository, route),
+            "runtime_context": self._runtime_context(
+                env, head, branch, version, canonical_repository, route,
+                selected_head_branch,
+            ),
             "result": "UNAVAILABLE",
             "first_rejecting_predicate": None,
             "predicates": [],
@@ -744,6 +776,248 @@ class FailedPredecessorDisposition:
     """Strict successor-owned record for a public but unpublished predecessor."""
 
     values: dict[str, str]
+
+
+@dataclass(frozen=True)
+class TerminalDisposition:
+    """Parsed structural terminal-disposition contract and public reference."""
+
+    expectations: dict[str, str]
+    values: dict[str, str]
+
+
+def _ordered_marked_values(
+    lines: list[str],
+    start_marker: str,
+    end_marker: str,
+    keys: tuple[str, ...],
+) -> tuple[Optional[dict[str, str]], Optional[str]]:
+    """Parse one exact marker/fence/key block without accepting extensions."""
+    starts = [index for index, line in enumerate(lines) if line == start_marker]
+    ends = [index for index, line in enumerate(lines) if line == end_marker]
+    if not starts and not ends:
+        return None, None
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        return None, "marker cardinality or order is invalid"
+    start, end = starts[0], ends[0]
+    if start + 2 > end or lines[start + 1] != "```text" or lines[end - 1] != "```":
+        return None, "fence placement is invalid"
+    body = lines[start + 2 : end - 1]
+    if len(body) != len(keys):
+        return None, "field count is invalid"
+    values: dict[str, str] = {}
+    for expected, line in zip(keys, body):
+        match = re.fullmatch(r"([A-Z0-9_]+): ([^\s].*[^\s]|[^\s])", line)
+        if not match or match.group(1) != expected:
+            return None, "field order or grammar is invalid"
+        values[expected] = match.group(2)
+    return values, None
+
+
+def _safe_terminal_reference_bytes(
+    root: Path,
+    path: str,
+    maximum: int,
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Read one bounded repository-relative regular file through no-follow FDs."""
+    if "\\" in path or "\x00" in path or "//" in path:
+        return None, "canonical path is invalid"
+    relative = PurePosixPath(path)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or relative.as_posix() != path
+        or any(part in ("", ".", "..") for part in relative.parts)
+    ):
+        return None, "canonical path is invalid"
+    required_flags = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    if any(not hasattr(os, name) for name in required_flags):
+        return None, "safe no-follow loading is unavailable on this platform"
+    directory_fds: list[int] = []
+    file_fd: Optional[int] = None
+    try:
+        directory_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+        current_fd = os.open(root, directory_flags)
+        directory_fds.append(current_fd)
+        for component in relative.parts[:-1]:
+            current_fd = os.open(component, directory_flags, dir_fd=current_fd)
+            directory_fds.append(current_fd)
+        file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+        file_fd = os.open(relative.parts[-1], file_flags, dir_fd=current_fd)
+        opened = os.fstat(file_fd)
+        if not stat.S_ISREG(opened.st_mode):
+            return None, "file must be regular and non-symlink"
+        if opened.st_size > maximum:
+            return None, "file exceeds the configured byte limit"
+        chunks: list[bytes] = []
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(file_fd, min(8192, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if len(raw) > maximum:
+            return None, "file exceeds the configured byte limit"
+        current = os.stat(relative.parts[-1], dir_fd=current_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or (current.st_dev, current.st_ino, current.st_mode)
+            != (opened.st_dev, opened.st_ino, opened.st_mode)
+        ):
+            return None, "canonical path changed during the bounded read"
+        return raw, None
+    except FileNotFoundError:
+        return None, "file is missing"
+    except (NotADirectoryError, IsADirectoryError):
+        return None, "file must be regular and non-symlink"
+    except OSError:
+        return None, "file could not be safely opened or read"
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        for descriptor in reversed(directory_fds):
+            os.close(descriptor)
+
+
+def _terminal_reference_grammar(values: dict[str, str]) -> Optional[str]:
+    semver = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+    repository = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    digest = re.compile(r"^[0-9a-f]{64}$")
+    timestamp = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
+    if values["SCHEMA"] != "coldkeep-v1-terminal-disposition-reference/v1":
+        return "reference schema is unsupported"
+    if semver.fullmatch(values["SOURCE_VERSION"]) is None:
+        return "source version grammar is invalid"
+    if repository.fullmatch(values["CANONICAL_REPOSITORY"]) is None:
+        return "canonical repository grammar is invalid"
+    if values["OWNER_DISPOSITION_PHASE"] != "9M":
+        return "owner disposition phase is unsupported"
+    if values["OWNER_DISPOSITION_STATUS"] != "ESTABLISHED_AT_C_ON_SOURCE_SCOPED_QUALIFIED_BASIS_BY_PHASE9M_OWNER_DISPOSITION":
+        return "owner disposition status is unsupported"
+    if timestamp.fullmatch(values["OWNER_DISPOSITION_AT_UTC"]) is None:
+        return "owner disposition timestamp grammar is invalid"
+    try:
+        datetime.strptime(
+            values["OWNER_DISPOSITION_AT_UTC"], "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+    except ValueError:
+        return "owner disposition timestamp is invalid"
+    if values["SOURCE_SCOPE"] != "V1_X_LIFECYCLE_TERMINAL_CLOSURE_QUALIFIED":
+        return "source scope is unsupported"
+    for key in (
+        "ACCEPTED_C", "ACCEPTED_C_TREE", "PUBLISHED_M17",
+        "ANNOTATED_TAG_A17", "TAG_DIRECT_TARGET",
+    ):
+        if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
+            return f"{key} grammar is invalid"
+    if re.fullmatch(r"[1-9][0-9]*", values["GITHUB_RELEASE_ID"]) is None:
+        return "GitHub Release ID grammar is invalid"
+    for key in ("PHASE9M_MANIFEST_SHA256", "PHASE9M_OWNER_RECORD_SHA256"):
+        if digest.fullmatch(values[key]) is None:
+            return f"{key} grammar is invalid"
+    enums = {
+        "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE": "NOT_SATISFIED",
+        "RETROSPECTIVE_PROCEDURAL_EXCEPTION": "NOT_GRANTED",
+        "PRIVATE_EVIDENCE_LOCATION": "EXTERNAL_NOT_REQUIRED_BY_HOSTED_VALIDATION",
+        "TRACKED_SERIALIZATION_AUTHORITY": "NONE_STRUCTURAL_REFERENCE_ONLY",
+        "VALIDATOR_EFFECT": "STRUCTURAL_NON_AUTHORIZING",
+    }
+    for key, expected in enums.items():
+        if values[key] != expected:
+            return f"{key} is unsupported"
+    return None
+
+
+def load_terminal_disposition(
+    root: Path,
+    contract: Optional[Document],
+    pointer: Optional[str],
+) -> tuple[Optional[TerminalDisposition], Optional[str]]:
+    """Load, compare, and locally validate the terminal disposition record."""
+    if contract is None:
+        return None, None
+    start = "<!-- coldkeep-terminal-disposition-expectations:start -->"
+    end = "<!-- coldkeep-terminal-disposition-expectations:end -->"
+    expectations, detail = _ordered_marked_values(
+        contract.lines, start, end, TERMINAL_EXPECTATION_KEYS
+    )
+    if expectations is None:
+        if detail is None:
+            return None, None
+        return None, f"terminal disposition reference invalid: {detail}"
+    if expectations["SCHEMA"] != "coldkeep-v1-terminal-disposition-expectations/v1":
+        return None, "terminal disposition reference invalid: expectation schema is unsupported"
+    if expectations["REFERENCE_MAX_BYTES"] != str(TERMINAL_DISPOSITION_MAX_BYTES):
+        return None, "terminal disposition reference invalid: byte limit is unsupported"
+    expected_path = expectations["REFERENCE_PATH"]
+    if pointer != expected_path:
+        return None, "terminal disposition reference invalid: canonical pointer disagrees with expectations"
+    raw, unavailable = _safe_terminal_reference_bytes(
+        root, expected_path, TERMINAL_DISPOSITION_MAX_BYTES
+    )
+    if unavailable:
+        return None, f"terminal disposition reference unavailable: {unavailable}"
+    assert raw is not None
+    if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw or b"\x00" in raw:
+        return None, "terminal disposition reference invalid: encoding or newline form is invalid"
+    if not raw.endswith(b"\n") or raw.endswith(b"\n\n"):
+        return None, "terminal disposition reference invalid: exactly one terminal LF is required"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "terminal disposition reference invalid: encoding is invalid"
+    lines = text[:-1].split("\n")
+    reference_start = "<!-- coldkeep-terminal-disposition-reference:start -->"
+    reference_end = "<!-- coldkeep-terminal-disposition-reference:end -->"
+    if lines.count("```text") != 1 or lines.count("```") != 1:
+        return None, "terminal disposition reference invalid: fence cardinality is invalid"
+    values, detail = _ordered_marked_values(
+        lines, reference_start, reference_end, TERMINAL_REFERENCE_KEYS
+    )
+    if values is None:
+        return None, f"terminal disposition reference invalid: {detail or 'reference block is missing'}"
+    grammar_detail = _terminal_reference_grammar(values)
+    if grammar_detail:
+        return None, f"terminal disposition reference invalid: {grammar_detail}"
+    for key in TERMINAL_REFERENCE_KEYS:
+        expectation_key = "EXPECTED_REFERENCE_SCHEMA" if key == "SCHEMA" else f"EXPECTED_{key}"
+        if expectations.get(expectation_key) != values[key]:
+            return None, f"terminal disposition reference invalid: {key} disagrees with expectations"
+
+    def object_type(identity: str) -> Optional[str]:
+        result = run_git(root, ["cat-file", "-t", identity], allow_failure=True)
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    for key, expected_type in (
+        ("ACCEPTED_C", "commit"),
+        ("ACCEPTED_C_TREE", "tree"),
+        ("PUBLISHED_M17", "commit"),
+        ("ANNOTATED_TAG_A17", "tag"),
+        ("TAG_DIRECT_TARGET", "commit"),
+    ):
+        actual_type = object_type(values[key])
+        if actual_type is None:
+            return None, f"terminal disposition reference unavailable: required {key} object is unavailable"
+        if actual_type != expected_type:
+            return None, f"terminal disposition reference invalid: {key} object type is invalid"
+    accepted_tree = commit_tree(root, values["ACCEPTED_C"])
+    if accepted_tree != values["ACCEPTED_C_TREE"]:
+        return None, "terminal disposition reference invalid: ACCEPTED_C tree disagrees"
+    tag = run_git(
+        root, ["cat-file", "-p", values["ANNOTATED_TAG_A17"]], allow_failure=True
+    )
+    if tag.returncode:
+        return None, "terminal disposition reference unavailable: annotated tag body is unavailable"
+    headers = tag.stdout.split("\n\n", 1)[0].splitlines()
+    objects = [line[7:] for line in headers if line.startswith("object ")]
+    types = [line[5:] for line in headers if line.startswith("type ")]
+    if objects != [values["TAG_DIRECT_TARGET"]] or types != ["commit"]:
+        return None, "terminal disposition reference invalid: annotated tag direct target disagrees"
+    if values["TAG_DIRECT_TARGET"] != values["PUBLISHED_M17"]:
+        return None, "terminal disposition reference invalid: tag target is not the published commit"
+    return TerminalDisposition(expectations, values), None
 
 
 def heading_closes_section(line: str, level: int) -> bool:
@@ -1137,6 +1411,8 @@ def changelog_entry_valid(
         "released",
         "post-release-pending-closure",
         "post-release-closure-candidate",
+        "post-release-terminal-serialization-candidate",
+        "post-release-terminal-serialization-main",
         "post-release-closed",
     )
     dated = bool(re.search(r"-\s+\d{4}-\d{2}-\d{2}\b", suffix))
@@ -1161,6 +1437,8 @@ def readme_current_state_valid(
         if state in (
             "post-release-pending-closure",
             "post-release-closure-candidate",
+            "post-release-terminal-serialization-candidate",
+            "post-release-terminal-serialization-main",
             "post-release-closed",
         )
         else "ready"
@@ -1356,6 +1634,11 @@ def lifecycle_progression_valid(
     if state == "post-release-pending-closure":
         return progression_at_phase(ordered, boundaries.closure)
     if state == "post-release-closure-candidate":
+        return bool(declaration and complete)
+    if state in (
+        "post-release-terminal-serialization-candidate",
+        "post-release-terminal-serialization-main",
+    ):
         return bool(declaration and complete)
     if state == "post-release-closed":
         return declaration is None and complete
@@ -1650,13 +1933,20 @@ def strict_release_pr_context(
     branch: str = "",
     diagnostic: Optional[DiagnosticRecorder] = None,
     diagnostic_site: str = "strict-release-pr",
+    selected_head_branch: Optional[str] = None,
 ) -> bool:
     """Validate a same-repository PR head or synthetic merge checkout."""
     evaluation_id: Optional[int] = None
     if diagnostic is not None:
         try:
             evaluation_id = diagnostic.begin_evaluation(
-                diagnostic_site, env, head, branch, version, canonical_repository
+                diagnostic_site,
+                env,
+                head,
+                branch,
+                version,
+                canonical_repository,
+                selected_head_branch,
             )
         except Exception:
             diagnostic.mark_incomplete("diagnostic-construction-unavailable")
@@ -1672,6 +1962,7 @@ def strict_release_pr_context(
             return diagnostic.finish_evaluation(evaluation_id, accepted)
         return accepted
 
+    expected_head_branch = selected_head_branch or f"release/v{version}"
     # The sequential checks below are the prior compound expression in the same order.
     # diagnostic-predicate: pr.env.actions
     if not check("pr.env.actions", env["GITHUB_ACTIONS"] == "true", observed(env["GITHUB_ACTIONS"], "unexpected-actions", expected="true")):
@@ -1686,7 +1977,7 @@ def strict_release_pr_context(
     if not check("pr.env.short_ref", env["GITHUB_REF_NAME"] == env["GITHUB_REF"].removeprefix("refs/pull/"), observed(env["GITHUB_REF_NAME"], "unexpected-short-ref", expected=env["GITHUB_REF"].removeprefix("refs/pull/"))):
         return finish(False)
     # diagnostic-predicate: pr.env.head_ref
-    if not check("pr.env.head_ref", env["GITHUB_HEAD_REF"] == f"release/v{version}", observed(env["GITHUB_HEAD_REF"], "unexpected-head-ref", expected=f"release/v{version}")):
+    if not check("pr.env.head_ref", env["GITHUB_HEAD_REF"] == expected_head_branch, observed(env["GITHUB_HEAD_REF"], "unexpected-head-ref", expected=expected_head_branch)):
         return finish(False)
     # diagnostic-predicate: pr.env.base_ref
     if not check("pr.env.base_ref", env["GITHUB_BASE_REF"] == "main", observed(env["GITHUB_BASE_REF"], "unexpected-base-ref", expected="main")):
@@ -1744,7 +2035,7 @@ def strict_release_pr_context(
     if not check("pr.payload.base_ref", base_ref == "main", observed(base_ref, "unexpected-base-ref", expected="main")):
         return finish(False)
     # diagnostic-predicate: pr.payload.head_ref
-    if not check("pr.payload.head_ref", head_ref == f"release/v{version}", observed(head_ref, "unexpected-head-ref", expected=f"release/v{version}")):
+    if not check("pr.payload.head_ref", head_ref == expected_head_branch, observed(head_ref, "unexpected-head-ref", expected=expected_head_branch)):
         return finish(False)
     # diagnostic-predicate: pr.payload.base_repository
     if not check("pr.payload.base_repository", base_repo == canonical_repository, observed(base_repo, "unexpected-base-repository", expected=canonical_repository)):
@@ -2195,6 +2486,179 @@ def strict_main_push_context(
     )
 
 
+def terminal_candidate_artifact(
+    root: Path, head: str, accepted_c: str
+) -> bool:
+    """Validate the fixed one-commit terminal serialization candidate."""
+    return bool(
+        commit_tree(root, accepted_c) is not None
+        and commit_tree(root, head) is not None
+        and commit_parents(root, head) == [accepted_c]
+    )
+
+
+def strict_terminal_push_context(
+    root: Path,
+    version: str,
+    head: str,
+    branch: str,
+    env: dict[str, str],
+    canonical_repository: str,
+    accepted_c: str,
+) -> bool:
+    """Validate the fixed-C terminal branch creation or update push."""
+    terminal_branch = f"release/v{version}-terminal-serialization"
+    expected_ref = f"refs/heads/{terminal_branch}"
+    payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
+    before = payload.get("before") if payload else None
+    created = payload.get("created") if payload else None
+    return bool(
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "push"
+        and env["GITHUB_REF"] == expected_ref
+        and env["GITHUB_REF_NAME"] == terminal_branch
+        and env["GITHUB_REF_TYPE"] == "branch"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and env["GITHUB_SHA"] == head
+        and branch in ("", terminal_branch)
+        and payload
+        and payload.get("ref") == expected_ref
+        and payload.get("after") == head
+        and (
+            (before == "0" * 40 and created is True)
+            or (before == accepted_c and created is False)
+        )
+        and payload.get("deleted") is False
+        and payload.get("forced") is False
+        and _repository_name(payload.get("repository")) == canonical_repository
+        and terminal_candidate_artifact(root, head, accepted_c)
+    )
+
+
+def strict_terminal_pr_context(
+    root: Path,
+    version: str,
+    head: str,
+    branch: str,
+    env: dict[str, str],
+    canonical_repository: str,
+    accepted_c: str,
+    diagnostic: Optional[DiagnosticRecorder] = None,
+    diagnostic_site: str = "terminal-pr",
+) -> bool:
+    """Validate direct-head or synthetic same-repository terminal PR checkout."""
+    terminal_branch = f"release/v{version}-terminal-serialization"
+    if not strict_release_pr_context(
+        root,
+        version,
+        head,
+        env,
+        canonical_repository,
+        branch=branch,
+        diagnostic=diagnostic,
+        diagnostic_site=diagnostic_site,
+        selected_head_branch=terminal_branch,
+    ):
+        return False
+    if not (
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "pull_request"
+        and re.fullmatch(r"refs/pull/[1-9][0-9]*/merge", env["GITHUB_REF"])
+        and env["GITHUB_REF_NAME"] == env["GITHUB_REF"].removeprefix("refs/pull/")
+        and env["GITHUB_HEAD_REF"] == terminal_branch
+        and env["GITHUB_BASE_REF"] == "main"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and env["GITHUB_SHA"] == head
+        and env["GITHUB_EVENT_PATH"]
+    ):
+        return False
+    payload = _load_event(env["GITHUB_EVENT_PATH"])
+    pull_request = payload.get("pull_request") if payload else None
+    number = payload.get("number") if payload else None
+    if not isinstance(pull_request, dict) or not isinstance(number, int) or number <= 0:
+        return False
+    if env["GITHUB_REF"] != f"refs/pull/{number}/merge":
+        return False
+    if _repository_name(payload.get("repository")) != canonical_repository:
+        return False
+    base = _pr_ref_identity(pull_request.get("base"))
+    pr_head = _pr_ref_identity(pull_request.get("head"))
+    if not base or not pr_head:
+        return False
+    base_ref, base_sha, base_repo = base
+    head_ref, head_sha, head_repo = pr_head
+    if not (
+        base == ("main", accepted_c, canonical_repository)
+        and head_ref == terminal_branch
+        and head_repo == canonical_repository
+        and isinstance(head_sha, str)
+        and NONZERO_GIT_SHA.fullmatch(head_sha)
+        and terminal_candidate_artifact(root, head_sha, accepted_c)
+    ):
+        return False
+    if head == head_sha:
+        return branch in ("", terminal_branch)
+    merge_sha = pull_request.get("merge_commit_sha")
+    return bool(
+        branch == ""
+        and "merge_commit_sha" in pull_request
+        and (
+            merge_sha is None
+            or (
+                isinstance(merge_sha, str)
+                and NONZERO_GIT_SHA.fullmatch(merge_sha)
+            )
+        )
+        and commit_parents(root, head) == [accepted_c, head_sha]
+        and commit_tree(root, head) == commit_tree(root, head_sha)
+    )
+
+
+def terminal_main_artifact(
+    root: Path, head: str, accepted_c: str
+) -> bool:
+    """Validate S with ordered parents [C,Hts] and candidate tree equality."""
+    parents = commit_parents(root, head)
+    if len(parents) != 2 or parents[0] != accepted_c:
+        return False
+    candidate = parents[1]
+    return bool(
+        terminal_candidate_artifact(root, candidate, accepted_c)
+        and commit_tree(root, head) == commit_tree(root, candidate)
+    )
+
+
+def strict_terminal_main_push_context(
+    root: Path,
+    head: str,
+    branch: str,
+    env: dict[str, str],
+    canonical_repository: str,
+    accepted_c: str,
+) -> bool:
+    """Validate the first fixed-C protected-main serialization push."""
+    payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
+    return bool(
+        env["GITHUB_ACTIONS"] == "true"
+        and env["GITHUB_EVENT_NAME"] == "push"
+        and env["GITHUB_REF"] == "refs/heads/main"
+        and env["GITHUB_REF_NAME"] == "main"
+        and env["GITHUB_REF_TYPE"] == "branch"
+        and env["GITHUB_REPOSITORY"] == canonical_repository
+        and env["GITHUB_SHA"] == head
+        and branch in ("", "main")
+        and payload
+        and payload.get("ref") == "refs/heads/main"
+        and payload.get("before") == accepted_c
+        and payload.get("after") == head
+        and payload.get("created") is False
+        and payload.get("deleted") is False
+        and payload.get("forced") is False
+        and _repository_name(payload.get("repository")) == canonical_repository
+        and terminal_main_artifact(root, head, accepted_c)
+    )
+
+
 def strict_tag_push_context(
     root: Path,
     version: str,
@@ -2575,12 +3039,53 @@ def v1_context_scope(
     declaration: LifecycleDeclaration,
     diagnostic: Optional[DiagnosticRecorder] = None,
     diagnostic_site: str = "context",
+    terminal_disposition: Optional[TerminalDisposition] = None,
 ) -> Optional[str]:
     """Return bounded structural evidence scope for one v1 state."""
     head, branch, _, _, _ = context
     release_branch = f"release/v{version}"
     closure_branch = f"release/v{version}-post-publication-closure"
     any_github = github_context_present(env)
+    if state == "post-release-terminal-serialization-candidate":
+        if terminal_disposition is None:
+            return None
+        accepted_c = terminal_disposition.values["ACCEPTED_C"]
+        terminal_branch = f"release/v{version}-terminal-serialization"
+        if (
+            not any_github
+            and branch == terminal_branch
+            and terminal_candidate_artifact(root, head, accepted_c)
+        ):
+            return "LOCAL_TERMINAL_SERIALIZATION_CANDIDATE"
+        if strict_terminal_push_context(
+            root, version, head, branch, env,
+            declaration.canonical_repository, accepted_c,
+        ):
+            return "GITHUB_TERMINAL_SERIALIZATION_PUSH_CONTEXT_CONSISTENCY"
+        if strict_terminal_pr_context(
+            root, version, head, branch, env,
+            declaration.canonical_repository, accepted_c,
+            diagnostic,
+            diagnostic_site,
+        ):
+            return "GITHUB_TERMINAL_SERIALIZATION_PR_CONTEXT_CONSISTENCY"
+        return None
+    if state == "post-release-terminal-serialization-main":
+        if terminal_disposition is None:
+            return None
+        accepted_c = terminal_disposition.values["ACCEPTED_C"]
+        if (
+            not any_github
+            and branch == "main"
+            and terminal_main_artifact(root, head, accepted_c)
+        ):
+            return "LOCAL_TERMINAL_SERIALIZATION_MAIN_ARTIFACT_ONLY"
+        if strict_terminal_main_push_context(
+            root, head, branch, env,
+            declaration.canonical_repository, accepted_c,
+        ):
+            return "GITHUB_TERMINAL_SERIALIZATION_MAIN_CONTEXT_CONSISTENCY"
+        return None
     if state in ("development", "pre-release"):
         if not any_github and branch == release_branch:
             return "LOCAL_RELEASE_BRANCH"
@@ -2687,6 +3192,7 @@ def git_context_matches(
     declaration: Optional[LifecycleDeclaration] = None,
     diagnostic: Optional[DiagnosticRecorder] = None,
     diagnostic_site: str = "ckrs016",
+    terminal_disposition: Optional[TerminalDisposition] = None,
 ) -> bool:
     """Return whether branch and GitHub refs are compatible with lifecycle."""
     if declaration is not None:
@@ -2702,6 +3208,7 @@ def git_context_matches(
                 declaration,
                 diagnostic,
                 diagnostic_site,
+                terminal_disposition,
             )
         )
     release_branch = f"release/v{version}"

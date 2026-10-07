@@ -19,6 +19,7 @@ CURRENT_GOVERNANCE_INPUTS = tuple(dict.fromkeys(
         governance.CANONICAL_RELEASE_BODY_CHECKSUM,
         governance.CURRENT_RELEASE_BODY,
         governance.CURRENT_RELEASE_BODY_CHECKSUM,
+        governance.TERMINAL_DISPOSITION_REFERENCE_FILE,
     )
 ))
 
@@ -46,6 +47,62 @@ def copy_current_governance_inputs(
     destination_root: Path,
 ) -> None:
     copy_fixture_paths(source_root, destination_root, CURRENT_GOVERNANCE_INPUTS)
+
+
+def fixture_git(root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        [shutil.which("git") or "git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def replace_terminal_identity(root: Path, key: str, value: str) -> None:
+    for relative, prefix in (
+        (
+            Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+            "EXPECTED_",
+        ),
+        (governance.TERMINAL_DISPOSITION_REFERENCE_FILE, ""),
+    ):
+        path = root / relative
+        text = path.read_text(encoding="utf-8")
+        text, count = re.subn(
+            rf"(?m)^{prefix}{re.escape(key)}: \S+$",
+            f"{prefix}{key}: {value}",
+            text,
+            count=1,
+        )
+        if count != 1:
+            raise AssertionError(f"missing terminal identity {prefix}{key} in {relative}")
+        path.write_text(text, encoding="utf-8")
+
+
+def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
+    """Create M -> C and annotated A entirely inside the fixture object store."""
+    fixture_git(root, "init", "--quiet")
+    fixture_git(root, "config", "user.name", "fixture")
+    fixture_git(root, "config", "user.email", "fixture@example.invalid")
+    fixture_git(root, "add", ".")
+    fixture_git(root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY published M17")
+    published = fixture_git(root, "rev-parse", "HEAD")
+    fixture_git(root, "tag", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY", published)
+    annotated_tag = fixture_git(root, "rev-parse", "refs/tags/v1.13.17")
+    fixture_git(root, "commit", "--quiet", "--allow-empty", "-m", "TEST_FIXTURE_ONLY accepted C")
+    accepted = fixture_git(root, "rev-parse", "HEAD")
+    accepted_tree = fixture_git(root, "rev-parse", "HEAD^{tree}")
+    values = {
+        "ACCEPTED_C": accepted,
+        "ACCEPTED_C_TREE": accepted_tree,
+        "PUBLISHED_M17": published,
+        "ANNOTATED_TAG_A17": annotated_tag,
+        "TAG_DIRECT_TARGET": published,
+    }
+    for key, value in values.items():
+        replace_terminal_identity(root, key, value)
+    return values
 
 
 class ReleaseBodyValidatorTests(unittest.TestCase):
@@ -507,6 +564,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         copy_current_governance_inputs(governance.ROOT, self.root)
+        self.identities = prepare_owned_terminal_graph(self.root)
         fixture_mirror = governance_test_mirror_from_canonical(self.root)
         for relative in GOVERNANCE_TEST_MIRROR_FILES:
             path = self.root / relative
@@ -546,6 +604,115 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
 
     def test_current_repository_authority_passes(self) -> None:
         self.assertEqual(governance.validate(self.root), [])
+
+    def test_terminal_serialization_vocabulary_is_accepted(self) -> None:
+        """TS-GOV-01: the exact canonical/eight-mirror terminal state is valid."""
+        state = self.canonical_state()
+        self.assertEqual(
+            state["CURRENT_PHASE"], "NONE_TERMINAL_DISPOSITION_DECLARED"
+        )
+        self.assertEqual(
+            state["TRACKED_TERMINAL_SERIALIZATION"],
+            "DECLARATION_PRESENT_NON_AUTHORIZING",
+        )
+        self.assertEqual(governance.validate(self.root), [])
+
+    def test_terminal_serialization_keys_fail_closed(self) -> None:
+        """TS-GOV-02: accepted terminal state fails on one-key mutations."""
+        cases = (
+            ("missing", "TRACKED_TERMINAL_SERIALIZATION", ""),
+            (
+                "unsupported",
+                "TRACKED_TERMINAL_SERIALIZATION",
+                "TRACKED_TERMINAL_SERIALIZATION: EFFECTIVE",
+            ),
+            (
+                "duplicate",
+                "EXTERNAL_TERMINAL_DISPOSITION",
+                "EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED\n"
+                "EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
+            ),
+        )
+        for name, key, replacement in cases:
+            with self.subTest(name=name):
+                self.assertEqual(governance.validate(self.root), [])
+                path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+                original = path.read_text(encoding="utf-8")
+                value = governance.canonical_current_state(original)[0][key]
+                path.write_text(
+                    original.replace(f"{key}: {value}", replacement, 1),
+                    encoding="utf-8",
+                )
+                self.assertNotEqual(governance.validate(self.root), [])
+                path.write_text(original, encoding="utf-8")
+
+    def test_selected_terminal_requires_expectation_block(self) -> None:
+        """TS-GOV-02: selected terminal vocabulary cannot omit expectations."""
+        self.assertEqual(governance.validate(self.root), [])
+        contract = self.root / Path(
+            "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+        )
+        text = contract.read_text(encoding="utf-8")
+        start = "<!-- coldkeep-terminal-disposition-expectations:start -->"
+        end = "<!-- coldkeep-terminal-disposition-expectations:end -->"
+        before, selected, remainder = text.partition(start)
+        self.assertTrue(selected)
+        _, selected_end, after = remainder.partition(end)
+        self.assertTrue(selected_end)
+        contract.write_text(before + after, encoding="utf-8")
+        violations = governance.validate_terminal_disposition_contract(
+            self.root,
+            {
+                governance.CANONICAL_CURRENT_STATE_FILE: (
+                    self.root / governance.CANONICAL_CURRENT_STATE_FILE
+                ).read_text(encoding="utf-8"),
+                Path(
+                    "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+                ): contract.read_text(encoding="utf-8"),
+            },
+        )
+        self.assertTrue(
+            any("expectation block is missing" in item for item in violations),
+            violations,
+        )
+
+    def test_selected_terminal_malformed_expectation_marker_fails(self) -> None:
+        self.assertEqual(governance.validate(self.root), [])
+        contract = self.root / Path(
+            "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+        )
+        contract.write_text(
+            contract.read_text(encoding="utf-8").replace(
+                "coldkeep-terminal-disposition-expectations:end",
+                "coldkeep-terminal-disposition-expectations:wrong",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        violations = governance.validate(self.root)
+        self.assertTrue(any("reference invalid" in item for item in violations), violations)
+
+    def test_fixture_owns_its_object_graph(self) -> None:
+        self.assertEqual(governance.validate(self.root), [])
+        for relative in (
+            ".git/objects/info/alternates",
+            ".git/info/grafts",
+        ):
+            self.assertFalse((self.root / relative).exists(), relative)
+        replacements = fixture_git(
+            self.root, "for-each-ref", "--format=%(refname)", "refs/replace"
+        )
+        self.assertEqual(replacements, "")
+        self.assertEqual(
+            fixture_git(
+                self.root,
+                "merge-base",
+                "--is-ancestor",
+                self.identities["PUBLISHED_M17"],
+                self.identities["ACCEPTED_C"],
+            ),
+            "",
+        )
 
     def test_stale_current_readme_prose_fails(self) -> None:
         self.replace_once(

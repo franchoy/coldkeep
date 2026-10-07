@@ -18,6 +18,7 @@ from release_state_support import (
     InternalError,
     LifecycleBoundaries,
     LifecycleDeclaration,
+    TerminalDisposition,
     ValidationResult,
     accepted_post_release_pr,
     accepted_recovery_pr,
@@ -37,6 +38,7 @@ from release_state_support import (
     gate_verdict_present,
     lifecycle_boundaries_match_topology,
     lifecycle_progression_valid,
+    load_terminal_disposition,
     load_predecessor_disposition_document,
     main_context,
     metadata_named,
@@ -79,6 +81,8 @@ STATES = (
     "released",
     "post-release-pending-closure",
     "post-release-closure-candidate",
+    "post-release-terminal-serialization-candidate",
+    "post-release-terminal-serialization-main",
     "post-release-closed",
 )
 
@@ -97,6 +101,13 @@ OBLIGATION_ORDER = (
 
 def outstanding_obligations(state: str) -> list[str]:
     """Return deterministic external obligations not evaluated here."""
+    if state == "post-release-terminal-serialization-candidate":
+        return [
+            "protected-main-terminal-serialization",
+            "effective-serialization-readback",
+        ]
+    if state == "post-release-terminal-serialization-main":
+        return ["effective-serialization-readback"]
     starts = {
         "development": 0,
         "pre-release": 0,
@@ -162,8 +173,90 @@ def active_docs(
         "train": f"{directory}/v{major}.{minor}.x-release-train.md",
         "reconciliation": f"{directory}/{stem}-release-train-reconciliation.md",
         "contract": f"{directory}/{stem}-release-state-validator-contract.md",
+        "canonical_state": f"{directory}/{stem}-release-state.md",
     }
-    return {key: read_document(root, path, result) for key, path in paths.items()}
+    return {
+        key: read_document(
+            root, path, result, required=(key != "canonical_state")
+        )
+        for key, path in paths.items()
+    }
+
+
+def terminal_disposition_selection(
+    root: Path,
+    version: str,
+    state_doc: Optional[Document],
+    contract_doc: Optional[Document],
+) -> tuple[str, Optional[TerminalDisposition], Optional[str]]:
+    """Select legacy or exact terminal vocabulary without downgrade fallback."""
+    if state_doc is None:
+        return "legacy", None, None
+    preamble: list[str] = []
+    for line in state_doc.lines:
+        if line.startswith("## "):
+            break
+        preamble.append(line)
+    names = (
+        "CURRENT_PHASE", "V1_13_17_STATE", "V1_X_FULL_CLOSURE",
+        "EXTERNAL_TERMINAL_DISPOSITION", "TRACKED_TERMINAL_SERIALIZATION",
+        "TERMINAL_DISPOSITION_REFERENCE",
+    )
+    values: dict[str, list[str]] = {name: [] for name in names}
+    for line in preamble:
+        match = re.fullmatch(r"([A-Z0-9_.-]+): (\S.*)", line)
+        if match and match.group(1) in values:
+            values[match.group(1)].append(match.group(2))
+    new_expected = {
+        "CURRENT_PHASE": "NONE_TERMINAL_DISPOSITION_DECLARED",
+        "V1_13_17_STATE": "TERMINAL_DISPOSITION_DECLARATION_PRESENT",
+        "V1_X_FULL_CLOSURE": "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
+        "EXTERNAL_TERMINAL_DISPOSITION": "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
+        "TRACKED_TERMINAL_SERIALIZATION": "DECLARATION_PRESENT_NON_AUTHORIZING",
+    }
+    terminal_tokens = any(
+        value in new_expected.values()
+        for found in values.values()
+        for value in found
+    ) or bool(values["TERMINAL_DISPOSITION_REFERENCE"])
+    reference_path = (
+        f"docs/release/v{version.rsplit('.', 1)[0]}/"
+        f"v{version}-terminal-disposition-reference.md"
+    )
+    reference_present = False
+    try:
+        os.lstat(root / reference_path)
+        reference_present = True
+    except FileNotFoundError:
+        pass
+    except OSError:
+        reference_present = True
+    expectation_present = bool(
+        contract_doc
+        and any(
+            line == "<!-- coldkeep-terminal-disposition-expectations:start -->"
+            for line in contract_doc.lines
+        )
+    )
+    if terminal_tokens:
+        for key, expected in new_expected.items():
+            if values[key] != [expected]:
+                return "invalid", None, "terminal vocabulary is mixed, missing, duplicated, or unsupported"
+        if len(values["TERMINAL_DISPOSITION_REFERENCE"]) != 1:
+            return "invalid", None, "terminal disposition reference pointer is missing or duplicated"
+        disposition, detail = load_terminal_disposition(
+            root, contract_doc, values["TERMINAL_DISPOSITION_REFERENCE"][0]
+        )
+        if detail:
+            return "invalid", None, detail
+        if disposition is None:
+            return "invalid", None, "terminal disposition reference invalid: expectation block is missing"
+        if disposition.values["SOURCE_VERSION"] != version:
+            return "invalid", None, "terminal disposition reference invalid: source version disagrees"
+        return "terminal", disposition, None
+    if expectation_present or reference_present:
+        return "invalid", None, "unexpected terminal disposition material for historical vocabulary"
+    return "legacy", None, None
 
 
 def check_ckrs002(version: str, doc: Optional[Document], result: ValidationResult) -> None:
@@ -241,6 +334,8 @@ def check_ckrs006(version: str, doc: Optional[Document], state: Optional[str], r
         if state in (
             "post-release-pending-closure",
             "post-release-closure-candidate",
+            "post-release-terminal-serialization-candidate",
+            "post-release-terminal-serialization-main",
             "post-release-closed",
         )
         else "ready"
@@ -286,6 +381,11 @@ def check_ckrs007(
         if state in (
             "post-release-pending-closure",
             "post-release-closure-candidate",
+        )
+        else "Released; terminal disposition declared"
+        if state in (
+            "post-release-terminal-serialization-candidate",
+            "post-release-terminal-serialization-main",
         )
         else "Released and operationally closed"
         if state == "post-release-closed"
@@ -688,6 +788,7 @@ def infer_state(
     boundaries: Optional[LifecycleBoundaries],
     declaration: Optional[LifecycleDeclaration],
     diagnostic: Optional[DiagnosticRecorder] = None,
+    terminal_disposition: Optional[TerminalDisposition] = None,
 ) -> tuple[
     str,
     tuple[str, str, bool, bool, Optional[str]],
@@ -703,6 +804,30 @@ def infer_state(
             phase_states.get(number, ("missing", 0))[0]
             for number in numbers
         ]
+    if terminal_disposition is not None:
+        for state in (
+            "post-release-terminal-serialization-main",
+            "post-release-terminal-serialization-candidate",
+        ):
+            scope = v1_context_scope(
+                root,
+                version,
+                state,
+                context,
+                env,
+                declaration,
+                diagnostic,
+                "inference",
+                terminal_disposition,
+            ) if declaration else None
+            if scope and lifecycle_progression_valid(
+                state, ordered, boundaries, declaration
+            ):
+                return state, context, scope
+        raise InternalError(
+            "git-context",
+            "unable to infer terminal serialization lifecycle from the current Git context",
+        )
     if exact_tag_matches_head(head, exists, annotated, target):
         if declaration and lifecycle_progression_valid(
             "tagged-pending-tag-certification",
@@ -856,6 +981,7 @@ def check_ckrs016(
     declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
     diagnostic: Optional[DiagnosticRecorder] = None,
+    terminal_disposition: Optional[TerminalDisposition] = None,
 ) -> None:
     _, branch, _, _, _ = context
     if not git_context_matches(
@@ -868,6 +994,7 @@ def check_ckrs016(
         declaration=declaration,
         diagnostic=diagnostic,
         diagnostic_site="ckrs016",
+        terminal_disposition=terminal_disposition,
     ):
         result.add("CKRS016", ".git", 0, f"Git context branch={branch or 'detached'} is incompatible with {state} for {version}")
 
@@ -920,6 +1047,8 @@ def check_ckrs017(
     elif state in (
         "post-release-pending-closure",
         "post-release-closure-candidate",
+        "post-release-terminal-serialization-candidate",
+        "post-release-terminal-serialization-main",
         "post-release-closed",
     ):
         detail = post_release_closed_tag_detail(root, head, exists, annotated, target)
@@ -983,6 +1112,25 @@ def check_ckrs018(
             )
         return
     if state in (
+        "post-release-terminal-serialization-candidate",
+        "post-release-terminal-serialization-main",
+    ):
+        valid = (
+            progression_valid
+            and gate_status_exact(
+                gate, "Passed and released — terminal disposition declared"
+            )
+            and gate_verdict_present(gate, allow_pending=True)
+        )
+        if not valid:
+            result.add(
+                "CKRS018",
+                path,
+                0,
+                f"current release gate is invalid for {state}",
+            )
+        return
+    if state in (
         "post-release-pending-closure",
         "post-release-closure-candidate",
     ):
@@ -1029,6 +1177,33 @@ def validate(
     declaration, declaration_detail = parse_lifecycle_declaration(
         docs["contract"]
     )
+    terminal_mode, terminal_disposition, terminal_detail = (
+        terminal_disposition_selection(
+            root,
+            version,
+            docs["canonical_state"],
+            docs["contract"],
+        )
+    )
+    if terminal_detail:
+        result.add(
+            "CKRS019",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            terminal_detail,
+        )
+    if (
+        terminal_disposition is not None
+        and declaration is not None
+        and terminal_disposition.values["CANONICAL_REPOSITORY"]
+        != declaration.canonical_repository
+    ):
+        result.add(
+            "CKRS019",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            "terminal disposition reference invalid: canonical repository disagrees with lifecycle declaration",
+        )
     predecessor_model, predecessor_detail = parse_predecessor_declaration(
         docs["contract"]
     )
@@ -1105,7 +1280,7 @@ def validate(
         disposition_doc, disposition_load_error = (
             load_predecessor_disposition_document(root, disposition_path)
         )
-    if requested_state == "auto":
+    if requested_state == "auto" and terminal_mode != "invalid":
         state, context, evidence_scope = infer_state(
             root,
             version,
@@ -1113,7 +1288,17 @@ def validate(
             boundaries,
             declaration,
             diagnostic,
+            terminal_disposition,
         )
+    elif requested_state == "auto":
+        context = git_context(root, version)
+        _, branch, _, _, _ = context
+        state = (
+            "post-release-terminal-serialization-main"
+            if branch == "main" or github_context()["GITHUB_REF"] == "refs/heads/main"
+            else "post-release-terminal-serialization-candidate"
+        )
+        evidence_scope = "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
     else:
         state, context = requested_state, git_context(root, version)
         evidence_scope = (
@@ -1126,6 +1311,7 @@ def validate(
                 declaration,
                 diagnostic,
                 "explicit-state",
+                terminal_disposition,
             )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
@@ -1139,6 +1325,8 @@ def validate(
         "merged-pending-final-main-certification",
         "tagged-pending-tag-certification",
         "post-release-closure-candidate",
+        "post-release-terminal-serialization-candidate",
+        "post-release-terminal-serialization-main",
     }
     if state in immutable_only_states and declaration is None:
         result.add(
@@ -1190,6 +1378,7 @@ def validate(
         declaration,
         result,
         diagnostic,
+        terminal_disposition,
     )
     check_ckrs017(root, version, state, context, result)
     check_ckrs018(
