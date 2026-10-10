@@ -1076,6 +1076,14 @@ job `105897391981`; CodeQL `35442074196` passed 4/4; all 40 exact-head checks
 passed and the release ref has zero open CodeQL alerts. The original failed
 Phase 13R1 CI `35436261398` remains preserved and was not rerun.
 
+## Proposed v1.13.17 security-toolchain progression
+
+The current non-authorizing progression reference anchors preserved H1
+`3726f1fb034924d390b51abcd0b579e5168958e2` and permits only one exact 25-path
+ordinary child. Go 1.26.9 with `GOTOOLCHAIN=local` is the proposed build and
+ordinary-output scan baseline. This reference does not create H2, alter the
+published candidate, or report a security result.
+
 Historical `AT_COMMIT` Phase 13B local-evidence boundary: the local Build is
 exactly three append-only commits with path counts 8/14/8.
 Commit 2 is limited to the fourteen documentation paths frozen by the Phase

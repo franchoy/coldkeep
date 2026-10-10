@@ -80,6 +80,30 @@ def replace_terminal_identity(root: Path, key: str, value: str) -> None:
         path.write_text(text, encoding="utf-8")
 
 
+def replace_progression_identity(root: Path, key: str, value: str) -> None:
+    """Remap one progression anchor in its expectation and reference owners."""
+    for relative, prefix in (
+        (
+            Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+            "EXPECTED_",
+        ),
+        (governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE, ""),
+    ):
+        path = root / relative
+        text = path.read_text(encoding="utf-8")
+        text, count = re.subn(
+            rf"(?m)^{prefix}{re.escape(key)}: \S+$",
+            f"{prefix}{key}: {value}",
+            text,
+            count=1,
+        )
+        if count != 1:
+            raise AssertionError(
+                f"missing progression identity {prefix}{key} in {relative}"
+            )
+        path.write_text(text, encoding="utf-8")
+
+
 def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
     """Create M -> C and annotated A entirely inside the fixture object store."""
     fixture_git(root, "init", "--quiet")
@@ -102,6 +126,47 @@ def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
     }
     for key, value in values.items():
         replace_terminal_identity(root, key, value)
+    fixture_git(
+        root,
+        "add",
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        governance.TERMINAL_DISPOSITION_REFERENCE_FILE.as_posix(),
+    )
+    fixture_git(
+        root,
+        "commit",
+        "--quiet",
+        "-m",
+        "TEST_FIXTURE_ONLY historical H1",
+    )
+    historical_h1 = fixture_git(root, "rev-parse", "HEAD")
+    historical_h1_tree = fixture_git(root, "rev-parse", "HEAD^{tree}")
+    progression_values = {
+        "BASE_C": accepted,
+        "BASE_C_TREE": accepted_tree,
+        "HISTORICAL_H1": historical_h1,
+        "HISTORICAL_H1_PARENT": accepted,
+        "HISTORICAL_H1_TREE": historical_h1_tree,
+    }
+    for key, value in progression_values.items():
+        replace_progression_identity(root, key, value)
+    progression_reference = (
+        root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
+    ).read_bytes()
+    progression_digest = hashlib.sha256(progression_reference).hexdigest()
+    contract = root / Path(
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+    )
+    contract_text, count = re.subn(
+        r"(?m)^EXPECTED_REFERENCE_SHA256: [0-9a-f]{64}$",
+        f"EXPECTED_REFERENCE_SHA256: {progression_digest}",
+        contract.read_text(encoding="utf-8"),
+        count=1,
+    )
+    if count != 1:
+        raise AssertionError("missing progression reference digest")
+    contract.write_text(contract_text, encoding="utf-8")
+    values.update(progression_values)
     return values
 
 
@@ -604,6 +669,139 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
 
     def test_current_repository_authority_passes(self) -> None:
         self.assertEqual(governance.validate(self.root), [])
+
+    def test_security_progression_reference_is_exact_and_selected(self) -> None:
+        """SP-GOV-01: the pointer, remapped anchors, and digest parse together."""
+        state = self.canonical_state()
+        self.assertEqual(
+            state["SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE"],
+            governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE.as_posix(),
+        )
+        self.assertEqual(governance.validate(self.root), [])
+
+    def test_security_progression_partial_and_mutated_material_fails(self) -> None:
+        """SP-GOV-02: selected progression material has no downgrade route."""
+        state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        reference_path = (
+            self.root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
+        )
+        state_original = state_path.read_text(encoding="utf-8")
+        reference_original = reference_path.read_bytes()
+
+        state_path.write_text(
+            re.sub(
+                r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE: .*\n",
+                "",
+                state_original,
+                count=1,
+            ),
+            encoding="utf-8",
+        )
+        self.assert_governance_fails()
+        state_path.write_text(state_original, encoding="utf-8")
+
+        reference_path.write_bytes(
+            reference_original.replace(b"DELTA_COUNT: 25", b"DELTA_COUNT: 24", 1)
+        )
+        self.assert_governance_fails()
+        reference_path.write_bytes(reference_original)
+
+        reference_path.unlink()
+        violations = governance.validate(self.root)
+        self.assertTrue(
+            any("security progression reference unavailable:" in item for item in violations),
+            violations,
+        )
+
+    def test_security_progression_selected_mixed_and_absent_matrix(self) -> None:
+        """SP-GOV-03: all three selectors are atomic; total absence is historical."""
+        state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        contract_path = self.root / Path(
+            "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+        )
+        reference_path = (
+            self.root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
+        )
+        originals = {
+            "state": state_path.read_text(encoding="utf-8"),
+            "contract": contract_path.read_text(encoding="utf-8"),
+            "reference": reference_path.read_bytes(),
+        }
+
+        def remove_pointer() -> None:
+            state_path.write_text(
+                re.sub(
+                    r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE: .*\n",
+                    "",
+                    originals["state"],
+                    count=1,
+                ),
+                encoding="utf-8",
+            )
+
+        def remove_expectation() -> None:
+            contract_path.write_text(
+                re.sub(
+                    r"(?ms)^<!-- coldkeep-security-toolchain-progression-expectations:start -->\n.*?^<!-- coldkeep-security-toolchain-progression-expectations:end -->\n?",
+                    "",
+                    originals["contract"],
+                    count=1,
+                ),
+                encoding="utf-8",
+            )
+
+        def texts() -> dict[Path, str]:
+            result = {}
+            for relative in (
+                governance.CANONICAL_CURRENT_STATE_FILE,
+                Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+                governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE,
+            ):
+                path = self.root / relative
+                if path.is_file() and not path.is_symlink():
+                    result[relative] = path.read_text(encoding="utf-8")
+            return result
+
+        self.assertEqual(
+            governance.validate_security_progression_contract(self.root, texts()),
+            [],
+        )
+        for name, pointer, expectation, reference in (
+            ("expectation-and-reference", False, True, True),
+            ("pointer-and-reference", True, False, True),
+            ("pointer-only", True, False, False),
+            ("expectation-only", False, True, False),
+            ("reference-only", False, False, True),
+        ):
+            with self.subTest(name=name):
+                state_path.write_text(originals["state"], encoding="utf-8")
+                contract_path.write_text(originals["contract"], encoding="utf-8")
+                reference_path.write_bytes(originals["reference"])
+                if not pointer:
+                    remove_pointer()
+                if not expectation:
+                    remove_expectation()
+                if not reference:
+                    reference_path.unlink()
+                violations = governance.validate_security_progression_contract(
+                    self.root, texts()
+                )
+                self.assertNotEqual(violations, [])
+                self.assertTrue(
+                    any("selected together" in item for item in violations),
+                    violations,
+                )
+
+        state_path.write_text(originals["state"], encoding="utf-8")
+        contract_path.write_text(originals["contract"], encoding="utf-8")
+        if reference_path.exists() or reference_path.is_symlink():
+            reference_path.unlink()
+        remove_pointer()
+        remove_expectation()
+        self.assertEqual(
+            governance.validate_security_progression_contract(self.root, texts()),
+            [],
+        )
 
     def test_terminal_serialization_vocabulary_is_accepted(self) -> None:
         """TS-GOV-01: the exact canonical/eight-mirror terminal state is valid."""

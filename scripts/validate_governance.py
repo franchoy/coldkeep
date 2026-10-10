@@ -8,7 +8,11 @@ from pathlib import Path
 import re
 import sys
 
-from release_state_support import Document, load_terminal_disposition
+from release_state_support import (
+    Document,
+    load_security_toolchain_progression,
+    load_terminal_disposition,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,6 +41,7 @@ CURRENT_AUTHORITY_FILES = (
     Path("docs/release/v1.13/v1.13.17-source-test-allowlist.md"),
     Path("docs/release/v1.13/v1.13.17-release-gate.md"),
     Path("docs/release/v1.13/v1.13.17-predecessor-disposition.md"),
+    Path("docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md"),
 )
 HISTORICAL_PROVIDER_FILE = Path(".github/prompts/v110-phase.prompt.md")
 CANONICAL_RELEASE_BODY = Path(
@@ -53,6 +58,9 @@ CANONICAL_CURRENT_STATE_FILE = Path(
 )
 TERMINAL_DISPOSITION_REFERENCE_FILE = Path(
     "docs/release/v1.13/v1.13.17-terminal-disposition-reference.md"
+)
+SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE = Path(
+    "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md"
 )
 CURRENT_RELEASE_BODY = Path("docs/release/v1.13/v1.13.17-release-body.md")
 CURRENT_RELEASE_BODY_CHECKSUM = Path(
@@ -90,6 +98,7 @@ CURRENT_STATE_KEYS = BASE_CURRENT_STATE_KEYS + TERMINAL_MIRROR_STATE_KEYS
 CANONICAL_ONLY_STATE_KEYS = (
     "RELEASE_BODY_SHA256",
     "TERMINAL_DISPOSITION_REFERENCE",
+    "SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE",
 )
 CURRENT_STATE_MIRROR_START = "<!-- coldkeep-current-state:start -->"
 CURRENT_STATE_MIRROR_END = "<!-- coldkeep-current-state:end -->"
@@ -429,6 +438,44 @@ def validate_terminal_disposition_contract(
     return []
 
 
+def validate_security_progression_contract(
+    root: Path, texts: dict[Path, str]
+) -> list[str]:
+    """Require the progression pointer, expectations, and reference together."""
+    state_text = texts.get(CANONICAL_CURRENT_STATE_FILE)
+    contract_path = Path(
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+    )
+    contract_text = texts.get(contract_path)
+    if state_text is None or contract_text is None:
+        return []
+    state, _ = canonical_current_state(state_text)
+    pointer = state.get("SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE")
+    expectation_present = (
+        "coldkeep-security-toolchain-progression-expectations:" in contract_text
+    )
+    reference_path = SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
+    reference_present = (root / reference_path).exists() or (
+        root / reference_path
+    ).is_symlink()
+    selected = bool(pointer or expectation_present or reference_present)
+    if not selected:
+        return []
+    if not pointer or not expectation_present:
+        return [
+            f"{CANONICAL_CURRENT_STATE_FILE}: progression pointer, expectations, and reference must be selected together"
+        ]
+    contract = Document(root, contract_path.as_posix(), contract_text.splitlines())
+    progression, detail = load_security_toolchain_progression(
+        root, contract, pointer
+    )
+    if detail:
+        return [f"{contract_path}: {detail}"]
+    if progression is None:
+        return [f"{contract_path}: security progression reference is missing"]
+    return []
+
+
 def require_markers(path: Path, text: str, markers: tuple[str, ...]) -> list[str]:
     normalized_text = " ".join(text.split())
     return [
@@ -602,6 +649,8 @@ def validate(root: Path = ROOT) -> list[str]:
     for relative in files:
         path = root / relative
         if not path.is_file() or path.is_symlink():
+            if relative == SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE:
+                continue
             violations.append(f"{relative}: required regular non-symlink file is missing")
             continue
         texts[relative] = path.read_text(encoding="utf-8")
@@ -612,6 +661,7 @@ def validate(root: Path = ROOT) -> list[str]:
 
     violations.extend(validate_current_state_contract(texts))
     violations.extend(validate_terminal_disposition_contract(root, texts))
+    violations.extend(validate_security_progression_contract(root, texts))
 
     marker_contracts = {
         Path("AGENTS.md"): (

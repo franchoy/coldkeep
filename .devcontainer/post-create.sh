@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly expected_go_version="go1.26.7"
+readonly expected_go_version="go1.26.9"
 readonly repository_root="/workspaces/coldkeep"
 
 actual_go_version="$(go env GOVERSION)"

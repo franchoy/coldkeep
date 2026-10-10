@@ -74,7 +74,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -177,7 +177,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -743,7 +743,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -794,7 +794,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -845,7 +845,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -898,7 +898,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -1148,7 +1148,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -1227,7 +1227,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -1356,7 +1356,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -1479,7 +1479,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -1510,7 +1510,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -1553,7 +1553,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -1579,7 +1579,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: true
 
@@ -1588,7 +1588,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$(go env GOVERSION)" = "go1.26.7"
+          test "$(go env GOVERSION)" = "go1.26.9"
           test "$(go env GOTOOLCHAIN)" = "local"
           cc --version
           CGO_ENABLED=1 go build ./cmd/coldkeep
@@ -1608,7 +1608,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if ((go env GOVERSION) -ne 'go1.26.7') { throw 'Go version drift' }
+          if ((go env GOVERSION) -ne 'go1.26.9') { throw 'Go version drift' }
           if ((go env GOTOOLCHAIN) -ne 'local') { throw 'GOTOOLCHAIN drift' }
           if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { throw 'native gcc is unavailable' }
           gcc --version
@@ -1644,7 +1644,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.7'
+          go-version: '1.26.9'
           check-latest: false
           cache: false
 
@@ -1653,7 +1653,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$(go env GOVERSION)" = "go1.26.7"
+          test "$(go env GOVERSION)" = "go1.26.9"
           test "$(go env GOTOOLCHAIN)" = "local"
           cc --version
 
@@ -1703,7 +1703,7 @@ jobs:
           go install "${module}/cmd/coldkeep@${CANDIDATE_QUERY}"
           "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.17'
           go version -m "${GOBIN}/coldkeep" > binary-build-info.txt
-          head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'
+          head -n 1 binary-build-info.txt | grep -E ': go1\.26\.9$'
           grep -F "$(printf 'mod\t%s\t%s' "${module}" "${resolved_version}")" binary-build-info.txt
 
           {
@@ -1729,7 +1729,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if ((go env GOVERSION) -ne 'go1.26.7') { throw 'Go version drift' }
+          if ((go env GOVERSION) -ne 'go1.26.9') { throw 'Go version drift' }
           if ((go env GOTOOLCHAIN) -ne 'local') { throw 'GOTOOLCHAIN drift' }
           if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { throw 'native gcc is unavailable' }
           gcc --version
@@ -1794,7 +1794,7 @@ jobs:
           if ((& $binary version) -ne 'coldkeep version 1.13.17') { throw 'binary identity mismatch' }
           $buildInfo = go version -m $binary
           $buildInfo | Out-File -FilePath binary-build-info.txt -Encoding utf8
-          if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }
+          if ($buildInfo[0] -notmatch ': go1\.26\.9$') { throw 'binary Go toolchain identity mismatch' }
           if (($buildInfo -join "`n") -notmatch [regex]::Escape("mod`t$module`t$($moduleInfo.Version)")) {
             throw 'installed module build identity mismatch'
           }
@@ -1881,7 +1881,7 @@ jobs:
           docker compose --project-name "$project" -f .devcontainer/docker-compose.yml up -d postgres workspace
           docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash .devcontainer/post-create.sh
           docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash .devcontainer/post-create.sh
-          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash -lc 'test "$(go env GOVERSION)" = go1.26.7 && test "$(go env GOTOOLCHAIN)" = local && gcc --version'
+          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash -lc 'test "$(go env GOVERSION)" = go1.26.9 && test "$(go env GOTOOLCHAIN)" = local && gcc --version'
 
   ci-required:
     name: CI Required Gate

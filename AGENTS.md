@@ -82,7 +82,7 @@ The baseline repository-governance commands are:
 - `python3 -m unittest discover -s scripts -p 'test_*.py' -v`
 - `bash scripts/audit_ci_enforcement.sh --local-only`
 
-The frozen v1 release-critical execution contract uses Go 1.26.7 with
+The frozen v1 release-critical execution contract uses Go 1.26.9 with
 `GOTOOLCHAIN=local`; the module language floor remains Go 1.25.
 
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE

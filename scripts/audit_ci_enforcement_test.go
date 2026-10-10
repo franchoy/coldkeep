@@ -40,6 +40,9 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	if output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false); !strings.Contains(output, "[audit] PASSED") {
+		t.Fatalf("coherent current remote-install fixture did not pass:\n%s", output)
+	}
 
 	tests := []struct {
 		name        string
@@ -139,12 +142,54 @@ func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T
 			wantMessage: "Unix public installation uses the selected candidate query",
 		},
 		{
+			name: "Unix binary compiler restored to old patch",
+			mutate: func(value string) string {
+				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.9$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'`, 1)
+			},
+			wantMessage: "Unix remote candidate installation proves binary compiler identity",
+		},
+		{
+			name: "Unix binary compiler wildcard",
+			mutate: func(value string) string {
+				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.9$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.x$'`, 1)
+			},
+			wantMessage: "Unix remote candidate installation proves binary compiler identity",
+		},
+		{
+			name: "Unix binary compiler proof removed",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.9$'\n", "", 1)
+			},
+			wantMessage: "Unix remote candidate installation proves binary compiler identity",
+		},
+		{
+			name: "Windows binary compiler restored to old patch",
+			mutate: func(value string) string {
+				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.9$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }`, 1)
+			},
+			wantMessage: "Windows remote candidate installation proves binary compiler identity",
+		},
+		{
+			name: "Windows binary compiler wildcard",
+			mutate: func(value string) string {
+				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.9$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.x$') { throw 'binary Go toolchain identity mismatch' }`, 1)
+			},
+			wantMessage: "Windows remote candidate installation proves binary compiler identity",
+		},
+		{
+			name: "Windows binary compiler proof removed",
+			mutate: func(value string) string {
+				return strings.Replace(value, "          if ($buildInfo[0] -notmatch ': go1\\.26\\.9$') { throw 'binary Go toolchain identity mismatch' }\n", "", 1)
+			},
+			wantMessage: "Windows remote candidate installation proves binary compiler identity",
+		},
+		{
 			name: "checkout contamination",
 			mutate: func(value string) string {
 				return strings.Replace(
 					value,
-					"    steps:\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.7'\n          check-latest: false\n          cache: false",
-					"    steps:\n      - uses: actions/checkout@v6\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.7'\n          check-latest: false\n          cache: false",
+					"    steps:\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.9'\n          check-latest: false\n          cache: false",
+					"    steps:\n      - uses: actions/checkout@v6\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.9'\n          check-latest: false\n          cache: false",
 					1,
 				)
 			},
@@ -322,12 +367,12 @@ func TestAuditCIEnforcementRequiresCertifiedToolchainEverywhere(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 
-	mutated := strings.Replace(workflow, "go-version: '1.26.7'", "go-version: '1.26.x'", 1)
+	mutated := strings.Replace(workflow, "go-version: '1.26.9'", "go-version: '1.26.x'", 1)
 	if mutated == workflow {
 		t.Fatal("certified CI toolchain fixture not found")
 	}
 	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
-	if !strings.Contains(stderr, "every required CI setup-go step must pin Go 1.26.7 exactly") {
+	if !strings.Contains(stderr, "every required CI setup-go step must pin Go 1.26.9 exactly") {
 		t.Fatalf("expected exact CI toolchain failure, got:\n%s", stderr)
 	}
 }
@@ -371,12 +416,75 @@ func TestAuditCIEnforcementRequiresPinnedBenchmarkCalibrationToolchain(t *testin
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 	baselineWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "benchmark-baseline.yml"))
-	baselineWorkflow = strings.Replace(baselineWorkflow, "go-version: '1.26.7'", "go-version: '1.26.x'", 1)
-
-	stderr := runAuditLocalOnlyWithBaseline(t, workflow, codeqlWorkflow, baselineWorkflow, true)
-	if !strings.Contains(stderr, "benchmark calibration pins the certified Go patch") {
-		t.Fatalf("expected benchmark calibration toolchain error, got:\n%s", stderr)
+	if output := runAuditLocalOnlyWithBaseline(t, workflow, codeqlWorkflow, baselineWorkflow, false); !strings.Contains(output, "[audit] PASSED") {
+		t.Fatalf("coherent current benchmark-calibration fixture did not pass:\n%s", output)
 	}
+
+	tests := []struct {
+		name        string
+		replacement string
+	}{
+		{name: "old patch", replacement: "go-version: '1.26.7'"},
+		{name: "wildcard patch", replacement: "go-version: '1.26.x'"},
+		{name: "assertion removed", replacement: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutated := strings.Replace(baselineWorkflow, "go-version: '1.26.9'", tt.replacement, 1)
+			if mutated == baselineWorkflow {
+				t.Fatal("benchmark calibration toolchain fixture was not mutated")
+			}
+			stderr := runAuditLocalOnlyWithBaseline(t, workflow, codeqlWorkflow, mutated, true)
+			if !strings.Contains(stderr, "benchmark calibration pins the certified Go patch") {
+				t.Fatalf("expected benchmark calibration toolchain error, got:\n%s", stderr)
+			}
+		})
+	}
+}
+
+func TestAuditCIEnforcementRequiresPinnedBenchmarkIntegrityToolchain(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	if output := runAuditLocalOnly(t, workflow, codeqlWorkflow, false); !strings.Contains(output, "[audit] PASSED") {
+		t.Fatalf("coherent current benchmark-integrity fixture did not pass:\n%s", output)
+	}
+
+	tests := []struct {
+		name        string
+		replacement string
+	}{
+		{name: "old patch", replacement: "go-version: '1.26.7'"},
+		{name: "wildcard patch", replacement: "go-version: '1.26.x'"},
+		{name: "assertion removed", replacement: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutated := mutateBenchmarkIntegrityGoVersion(t, workflow, tt.replacement)
+			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, "integrity matrix pins the certified Go patch version") {
+				t.Fatalf("expected benchmark integrity toolchain error, got:\n%s", stderr)
+			}
+		})
+	}
+}
+
+func mutateBenchmarkIntegrityGoVersion(t *testing.T, workflow, replacement string) string {
+	t.Helper()
+	start := strings.Index(workflow, "\n  benchmark-integrity:\n")
+	if start < 0 {
+		t.Fatal("benchmark-integrity job fixture not found")
+	}
+	endRelative := strings.Index(workflow[start+1:], "\n  benchmark-timing-advisory:\n")
+	if endRelative < 0 {
+		t.Fatal("benchmark-timing-advisory boundary fixture not found")
+	}
+	end := start + 1 + endRelative
+	block := workflow[start:end]
+	mutatedBlock := strings.Replace(block, "go-version: '1.26.9'", replacement, 1)
+	if mutatedBlock == block {
+		t.Fatal("benchmark-integrity toolchain fixture was not mutated")
+	}
+	return workflow[:start] + mutatedBlock + workflow[end:]
 }
 
 func TestAuditCIEnforcementRejectsUnsafeBenchmarkCalibrationWorkflow(t *testing.T) {
@@ -2828,7 +2936,7 @@ func runCK015SyntheticWrapperCase(t *testing.T, name, kind, profile, body string
 	writeExecutableFixture(t, filepath.Join(stubDir, "go"), `#!/usr/bin/env bash
 set -eu
 if [ "$#" -eq 1 ] && [ "$1" = version ]; then
-  printf '%s\n' 'go version go1.26.7 linux/amd64'
+  printf '%s\n' 'go version go1.26.9 linux/amd64'
   exit 0
 fi
 if [ "$#" -ne 9 ] || [ "$1" != test ] || [ "$2" != -race ] || [ "$3" != -count=1 ] || [ "$4" != -p=1 ] || [ "$5" != -parallel=1 ] || [ "$6" != -json ] || [ "$7" != ./internal/storage ] || [ "$8" != -run ]; then

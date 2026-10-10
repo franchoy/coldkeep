@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Product image only. Development tooling belongs in .devcontainer/.
-FROM --platform=$BUILDPLATFORM golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -17,7 +17,7 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY db/ ./db/
 
-RUN test "$(go env GOVERSION)" = "go1.26.7" && \
+RUN test "$(go env GOVERSION)" = "go1.26.9" && \
     CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
     go build -trimpath -buildvcs=false -o /out/coldkeep ./cmd/coldkeep
 

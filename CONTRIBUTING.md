@@ -80,6 +80,8 @@ This focus preserves system reliability as the primary delivery criterion.
 
 - Go 1.26.7 exactly with `GOTOOLCHAIN=local` for the certified v1.13.15 path
   (`go 1.25` remains the module language floor)
+- Go 1.26.9 exactly with `GOTOOLCHAIN=local` for the current checkout and
+  proposed v1.13.17 security-progression validation
 - A native C compiler supported by Go on Linux, macOS, or Windows
 - PostgreSQL 16
 - Docker (recommended for reproducibility)
@@ -95,7 +97,7 @@ If this is your first change, do not start with the full release checklist.
 Use this shorter loop first:
 
 1. Read `README.md`, then skim `ARCHITECTURE.md` for the invariants your change could affect.
-2. Verify `go version` reports Go 1.26.7 and set `GOTOOLCHAIN=local`.
+2. Verify `go version` reports Go 1.26.9 and set `GOTOOLCHAIN=local`.
 3. Start PostgreSQL with `docker compose up -d coldkeep_postgres`.
 4. Build the binary with `go build -o coldkeep ./cmd/coldkeep`.
 5. Run one health command such as `./coldkeep doctor`.

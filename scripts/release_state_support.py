@@ -70,6 +70,31 @@ TERMINAL_REFERENCE_KEYS = (
     "RETROSPECTIVE_PROCEDURAL_EXCEPTION", "PRIVATE_EVIDENCE_LOCATION",
     "TRACKED_SERIALIZATION_AUTHORITY", "VALIDATOR_EFFECT",
 )
+SECURITY_PROGRESSION_MAX_BYTES = 16384
+SECURITY_PROGRESSION_EXPECTATION_KEYS = (
+    "SCHEMA", "REFERENCE_PATH", "REFERENCE_MAX_BYTES",
+    "EXPECTED_REFERENCE_SHA256", "EXPECTED_REFERENCE_SCHEMA",
+    "EXPECTED_SOURCE_VERSION", "EXPECTED_CANONICAL_REPOSITORY",
+    "EXPECTED_REPOSITORY_ID", "EXPECTED_BRANCH_REF", "EXPECTED_BASE_REF",
+    "EXPECTED_PR_NUMBER", "EXPECTED_BASE_C", "EXPECTED_BASE_C_TREE",
+    "EXPECTED_HISTORICAL_H1", "EXPECTED_HISTORICAL_H1_PARENT",
+    "EXPECTED_HISTORICAL_H1_TREE", "EXPECTED_OLD_TOOLCHAIN",
+    "EXPECTED_NEW_TOOLCHAIN", "EXPECTED_LANGUAGE_FLOOR", "EXPECTED_PURPOSE",
+    "EXPECTED_DELTA_SCHEMA", "EXPECTED_DELTA_COUNT", "EXPECTED_STATUS",
+    "EXPECTED_VALIDATOR_EFFECT", "EXPECTED_OWNER_AUTHORITY",
+    "EXPECTED_SECURITY_RESULT", "EXPECTED_PROVENANCE",
+)
+SECURITY_PROGRESSION_REFERENCE_KEYS = (
+    "SCHEMA", "SOURCE_VERSION", "CANONICAL_REPOSITORY", "REPOSITORY_ID",
+    "BRANCH_REF", "BASE_REF", "PR_NUMBER", "BASE_C", "BASE_C_TREE",
+    "HISTORICAL_H1", "HISTORICAL_H1_PARENT", "HISTORICAL_H1_TREE",
+    "OLD_TOOLCHAIN", "NEW_TOOLCHAIN", "LANGUAGE_FLOOR", "PURPOSE",
+    "DELTA_SCHEMA", "DELTA_COUNT",
+)
+SECURITY_PROGRESSION_TRAILER_KEYS = (
+    "STATUS", "VALIDATOR_EFFECT", "OWNER_AUTHORITY", "SECURITY_RESULT",
+    "PROVENANCE",
+)
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 NONZERO_GIT_SHA = re.compile(r"^(?!0{40}$)[0-9a-f]{40}$")
 ProcessResult = subprocess.CompletedProcess[str]
@@ -93,6 +118,8 @@ class ValidationResult:
     certification_status: str = "PENDING_EXTERNAL_EVIDENCE"
     outstanding_obligations: list[str] = field(default_factory=list)
     evidence_scope: str = "UNAVAILABLE"
+    security_progression: str = "NOT_SELECTED"
+    security_result: str = "NOT_EVALUATED_BY_VALIDATOR"
 
     def add(self, rule: str, path: str, line: int, message: str) -> None:
         self.violations.append(Violation(rule, path, line, message))
@@ -112,7 +139,7 @@ class InternalError(Exception):
         self.message = message
 
 
-DIAGNOSTIC_SCHEMA = "coldkeep-release-state-diagnostic/v2"
+DIAGNOSTIC_SCHEMA = "coldkeep-release-state-diagnostic/v3"
 DIAGNOSTIC_RESULTS = {"PASS", "FAIL", "NOT_EVALUATED", "UNAVAILABLE"}
 PR_PREDICATES = (
     ("pr.env.actions", "environment", "GITHUB_ACTIONS equals true"),
@@ -256,6 +283,9 @@ class DiagnosticRecorder:
     _SOURCE_PATHS = (
         "scripts/release_state_support.py",
         "scripts/validate_release_state.py",
+        "docs/release/v1.13/v1.13.17-release-state.md",
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md",
     )
 
     def __init__(self, requested_state: str, environment: dict[str, str]) -> None:
@@ -306,8 +336,20 @@ class DiagnosticRecorder:
             records = []
             attribution_complete = True
             for relative in self._SOURCE_PATHS:
-                actual_path = loaded[relative]
                 expected_path = (root / relative).resolve()
+                actual_path = loaded.get(relative, expected_path)
+                if not actual_path.is_file() or actual_path.is_symlink():
+                    attribution_complete = False
+                    records.append({
+                        "path": relative,
+                        "loaded_path_match": None,
+                        "git_blob": None,
+                        "measured_git_blob": None,
+                        "measured_sha256": None,
+                        "matches_git_blob": None,
+                        "bytes": None,
+                    })
+                    continue
                 loaded_path_match = actual_path == expected_path
                 content = actual_path.read_bytes()
                 measured_sha256 = hashlib.sha256(content).hexdigest()
@@ -546,6 +588,8 @@ class DiagnosticRecorder:
         result_status: str,
         exit_code: int,
         rule_codes: list[str],
+        security_progression: str,
+        security_result: str,
     ) -> dict[str, object]:
         expected_repository: Optional[str] = None
         for evaluation in self.evaluations:
@@ -573,6 +617,8 @@ class DiagnosticRecorder:
                 "checkout_commit": self.checkout_commit,
                 "checkout_tree": self.checkout_tree,
                 "sources": self.source_records,
+                "security_progression": security_progression,
+                "security_result": security_result,
             },
             "attribution": {
                 "repository": repository,
@@ -784,6 +830,15 @@ class TerminalDisposition:
 
     expectations: dict[str, str]
     values: dict[str, str]
+
+
+@dataclass(frozen=True)
+class SecurityToolchainProgression:
+    """Parsed non-authorizing H1-to-one-child progression contract."""
+
+    expectations: dict[str, str]
+    values: dict[str, str]
+    delta: tuple[tuple[str, str, str], ...]
 
 
 def _ordered_marked_values(
@@ -1018,6 +1073,183 @@ def load_terminal_disposition(
     if values["TAG_DIRECT_TARGET"] != values["PUBLISHED_M17"]:
         return None, "terminal disposition reference invalid: tag target is not the published commit"
     return TerminalDisposition(expectations, values), None
+
+
+def _security_progression_grammar(
+    values: dict[str, str],
+    delta: tuple[tuple[str, str, str], ...],
+) -> Optional[str]:
+    """Validate the closed scalar and delta grammar of the progression record."""
+    if values["SCHEMA"] != "coldkeep-v1-security-toolchain-progression-reference/v1":
+        return "reference schema is unsupported"
+    if re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", values["SOURCE_VERSION"]) is None:
+        return "source version grammar is invalid"
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", values["CANONICAL_REPOSITORY"]) is None:
+        return "canonical repository grammar is invalid"
+    for key in ("REPOSITORY_ID", "PR_NUMBER", "DELTA_COUNT"):
+        if re.fullmatch(r"[1-9][0-9]*", values[key]) is None:
+            return f"{key} grammar is invalid"
+    for key in (
+        "BASE_C", "BASE_C_TREE", "HISTORICAL_H1",
+        "HISTORICAL_H1_PARENT", "HISTORICAL_H1_TREE",
+    ):
+        if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
+            return f"{key} grammar is invalid"
+    exact = {
+        "BRANCH_REF": "refs/heads/release/v1.13.17-terminal-serialization",
+        "BASE_REF": "refs/heads/main",
+        "OLD_TOOLCHAIN": "go1.26.7",
+        "NEW_TOOLCHAIN": "go1.26.9",
+        "LANGUAGE_FLOOR": "go1.25.0",
+        "PURPOSE": "GO-2026-6607_SAME_SERIES_TOOLCHAIN_AND_ONE_STEP_PROGRESSION",
+        "DELTA_SCHEMA": "STATUS MODE PATH",
+        "STATUS": "STRUCTURAL_NON_AUTHORIZING_UNEXECUTED_PROPOSAL",
+        "VALIDATOR_EFFECT": "ONE_EXACT_H1_CHILD_ONLY",
+        "OWNER_AUTHORITY": "NONE_REFERENCE_REQUIRES_INDEPENDENT_EXACT_DIFF_REVIEW",
+        "SECURITY_RESULT": "NOT_EXECUTED_NOT_REMEDIATED",
+        "PROVENANCE": "PHASE9V_MANIFEST_SHA256_254b72f12113f4f53ca73b40ae4c423e6a873ae98cf3ff02cbee1738440cdcb0",
+    }
+    for key, expected in exact.items():
+        if values[key] != expected:
+            return f"{key} is unsupported"
+    if int(values["DELTA_COUNT"]) != len(delta) or len(delta) != 25:
+        return "delta count is invalid"
+    paths: list[str] = []
+    for status_value, mode, path in delta:
+        if status_value not in ("M", "A") or mode not in ("100644", "100755"):
+            return "delta status or mode is invalid"
+        if "\\" in path or "\x00" in path or "//" in path:
+            return "delta path is non-canonical"
+        relative = PurePosixPath(path)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or relative.as_posix() != path
+            or any(part in ("", ".", "..") for part in relative.parts)
+        ):
+            return "delta path is non-canonical"
+        paths.append(path)
+    if paths != sorted(paths) or len(set(paths)) != len(paths):
+        return "delta paths are duplicated or out of order"
+    if sum(1 for status_value, _, _ in delta if status_value == "A") != 1:
+        return "delta addition cardinality is invalid"
+    return None
+
+
+def load_security_toolchain_progression(
+    root: Path,
+    contract: Optional[Document],
+    pointer: Optional[str],
+) -> tuple[Optional[SecurityToolchainProgression], Optional[str]]:
+    """Load and validate the exact digest-bound security progression record."""
+    if contract is None:
+        return None, "security progression reference invalid: expectation owner is missing"
+    expectations, detail = _ordered_marked_values(
+        contract.lines,
+        "<!-- coldkeep-security-toolchain-progression-expectations:start -->",
+        "<!-- coldkeep-security-toolchain-progression-expectations:end -->",
+        SECURITY_PROGRESSION_EXPECTATION_KEYS,
+    )
+    if expectations is None:
+        return None, f"security progression reference invalid: {detail or 'expectation block is missing'}"
+    if expectations["SCHEMA"] != "coldkeep-v1-security-toolchain-progression-expectations/v1":
+        return None, "security progression reference invalid: expectation schema is unsupported"
+    if expectations["REFERENCE_MAX_BYTES"] != str(SECURITY_PROGRESSION_MAX_BYTES):
+        return None, "security progression reference invalid: byte limit is unsupported"
+    expected_path = expectations["REFERENCE_PATH"]
+    if pointer != expected_path:
+        return None, "security progression reference invalid: canonical pointer disagrees with expectations"
+    raw, unavailable = _safe_terminal_reference_bytes(
+        root, expected_path, SECURITY_PROGRESSION_MAX_BYTES
+    )
+    if unavailable:
+        return None, f"security progression reference unavailable: {unavailable}"
+    assert raw is not None
+    measured_digest = hashlib.sha256(raw).hexdigest()
+    if measured_digest != expectations["EXPECTED_REFERENCE_SHA256"]:
+        return None, "security progression reference invalid: digest disagrees with expectations"
+    if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw or b"\x00" in raw:
+        return None, "security progression reference invalid: encoding or newline form is invalid"
+    if not raw.endswith(b"\n") or raw.endswith(b"\n\n"):
+        return None, "security progression reference invalid: exactly one terminal LF is required"
+    try:
+        lines = raw[:-1].decode("utf-8").split("\n")
+    except UnicodeDecodeError:
+        return None, "security progression reference invalid: encoding is invalid"
+    start_marker = "<!-- coldkeep-security-toolchain-progression-reference:start -->"
+    end_marker = "<!-- coldkeep-security-toolchain-progression-reference:end -->"
+    starts = [index for index, line in enumerate(lines) if line == start_marker]
+    ends = [index for index, line in enumerate(lines) if line == end_marker]
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        return None, "security progression reference invalid: marker cardinality or order is invalid"
+    start, end = starts[0], ends[0]
+    if lines.count("```text") != 1 or lines.count("```") != 1:
+        return None, "security progression reference invalid: fence cardinality is invalid"
+    if lines[start + 1 : start + 2] != ["```text"] or lines[end - 1 : end] != ["```"]:
+        return None, "security progression reference invalid: fence placement is invalid"
+    body = lines[start + 2 : end - 1]
+    required_body_length = (
+        len(SECURITY_PROGRESSION_REFERENCE_KEYS) + 25
+        + len(SECURITY_PROGRESSION_TRAILER_KEYS)
+    )
+    if len(body) != required_body_length:
+        return None, "security progression reference invalid: field or delta count is invalid"
+    values: dict[str, str] = {}
+    for key, line in zip(SECURITY_PROGRESSION_REFERENCE_KEYS, body):
+        match = re.fullmatch(r"([A-Z0-9_]+): ([^\s].*[^\s]|[^\s])", line)
+        if not match or match.group(1) != key:
+            return None, "security progression reference invalid: field order or grammar is invalid"
+        values[key] = match.group(2)
+    delta_lines = body[
+        len(SECURITY_PROGRESSION_REFERENCE_KEYS):
+        len(SECURITY_PROGRESSION_REFERENCE_KEYS) + 25
+    ]
+    delta: list[tuple[str, str, str]] = []
+    for line in delta_lines:
+        match = re.fullmatch(r"([MA]) (100644|100755) (\S+)", line)
+        if match is None:
+            return None, "security progression reference invalid: delta row grammar is invalid"
+        delta.append((match.group(1), match.group(2), match.group(3)))
+    trailer = body[-len(SECURITY_PROGRESSION_TRAILER_KEYS):]
+    for key, line in zip(SECURITY_PROGRESSION_TRAILER_KEYS, trailer):
+        match = re.fullmatch(r"([A-Z0-9_]+): ([^\s].*[^\s]|[^\s])", line)
+        if not match or match.group(1) != key:
+            return None, "security progression reference invalid: trailer order or grammar is invalid"
+        values[key] = match.group(2)
+    frozen_delta = tuple(delta)
+    grammar_detail = _security_progression_grammar(values, frozen_delta)
+    if grammar_detail:
+        return None, f"security progression reference invalid: {grammar_detail}"
+    for key in SECURITY_PROGRESSION_REFERENCE_KEYS + SECURITY_PROGRESSION_TRAILER_KEYS:
+        expectation_key = "EXPECTED_REFERENCE_SCHEMA" if key == "SCHEMA" else f"EXPECTED_{key}"
+        if expectations.get(expectation_key) != values[key]:
+            return None, f"security progression reference invalid: {key} disagrees with expectations"
+
+    def required_object(key: str, kind: str) -> Optional[str]:
+        query = run_git(root, ["cat-file", "-t", values[key]], allow_failure=True)
+        if query.returncode:
+            return f"security progression reference unavailable: required {key} object is unavailable"
+        if query.stdout.strip() != kind:
+            return f"security progression reference invalid: {key} object type is invalid"
+        return None
+
+    for key, kind in (
+        ("BASE_C", "commit"), ("BASE_C_TREE", "tree"),
+        ("HISTORICAL_H1", "commit"), ("HISTORICAL_H1_PARENT", "commit"),
+        ("HISTORICAL_H1_TREE", "tree"),
+    ):
+        object_detail = required_object(key, kind)
+        if object_detail:
+            return None, object_detail
+    if values["HISTORICAL_H1_PARENT"] != values["BASE_C"]:
+        return None, "security progression reference invalid: historical H1 parent anchor disagrees"
+    if commit_tree(root, values["BASE_C"]) != values["BASE_C_TREE"]:
+        return None, "security progression reference invalid: BASE_C tree disagrees"
+    if commit_parents(root, values["HISTORICAL_H1"]) != [values["BASE_C"]]:
+        return None, "security progression reference invalid: historical H1 parents disagree"
+    if commit_tree(root, values["HISTORICAL_H1"]) != values["HISTORICAL_H1_TREE"]:
+        return None, "security progression reference invalid: historical H1 tree disagrees"
+    return SecurityToolchainProgression(expectations, values, frozen_delta), None
 
 
 def heading_closes_section(line: str, level: int) -> bool:
@@ -1655,6 +1887,7 @@ def github_context() -> dict[str, str]:
         "GITHUB_BASE_REF",
         "GITHUB_EVENT_PATH",
         "GITHUB_REPOSITORY",
+        "GITHUB_REPOSITORY_ID",
         "GITHUB_SHA",
         "GITHUB_ACTIONS",
         "GITHUB_REF_TYPE",
@@ -1915,6 +2148,11 @@ def github_context_present(env: dict[str, str]) -> bool:
 
 def _repository_name(value: object) -> Optional[str]:
     return value.get("full_name") if isinstance(value, dict) else None
+
+
+def _repository_id(value: object) -> Optional[int]:
+    identity = value.get("id") if isinstance(value, dict) else None
+    return identity if isinstance(identity, int) and not isinstance(identity, bool) else None
 
 
 def _pr_ref_identity(value: object) -> Optional[tuple[object, object, object]]:
@@ -2487,14 +2725,114 @@ def strict_main_push_context(
 
 
 def terminal_candidate_artifact(
-    root: Path, head: str, accepted_c: str
+    root: Path,
+    head: str,
+    accepted_c: str,
+    progression: Optional[SecurityToolchainProgression] = None,
 ) -> bool:
     """Validate the fixed one-commit terminal serialization candidate."""
+    if progression is not None:
+        historical_h1 = progression.values["HISTORICAL_H1"]
+        return head == historical_h1 or progressed_h2_artifact(
+            root, head, progression
+        )
     return bool(
         commit_tree(root, accepted_c) is not None
         and commit_tree(root, head) is not None
         and commit_parents(root, head) == [accepted_c]
     )
+
+
+def _tree_inventory(root: Path, commit: str) -> Optional[dict[str, tuple[str, str]]]:
+    """Return path to mode/type from one recursively listed commit tree."""
+    completed = run_git(root, ["ls-tree", "-r", "-z", commit], allow_failure=True)
+    if completed.returncode:
+        return None
+    inventory: dict[str, tuple[str, str]] = {}
+    for record in completed.stdout.split("\0"):
+        if not record:
+            continue
+        match = re.fullmatch(r"([0-7]{6}) ([a-z]+) [0-9a-f]{40}\t(.+)", record)
+        if match is None or match.group(3) in inventory:
+            return None
+        inventory[match.group(3)] = (match.group(1), match.group(2))
+    return inventory
+
+
+def progressed_h2_artifact(
+    root: Path,
+    head: str,
+    progression: SecurityToolchainProgression,
+) -> bool:
+    """Require one exact H1 child with the closed status/mode/path delta."""
+    historical_h1 = progression.values["HISTORICAL_H1"]
+    if head == historical_h1 or commit_parents(root, head) != [historical_h1]:
+        return False
+    completed = run_git(
+        root,
+        [
+            "diff-tree", "--no-commit-id", "--name-status", "-r", "-z",
+            "--no-renames", historical_h1, head,
+        ],
+        allow_failure=True,
+    )
+    if completed.returncode:
+        return False
+    parts = completed.stdout.split("\0")
+    if parts and parts[-1] == "":
+        parts.pop()
+    if len(parts) % 2:
+        return False
+    status_paths = tuple(
+        (parts[index], parts[index + 1])
+        for index in range(0, len(parts), 2)
+    )
+    expected_status_paths = tuple(
+        (status_value, path)
+        for status_value, _, path in progression.delta
+    )
+    if status_paths != expected_status_paths:
+        return False
+    old_inventory = _tree_inventory(root, historical_h1)
+    new_inventory = _tree_inventory(root, head)
+    if old_inventory is None or new_inventory is None:
+        return False
+    for status_value, mode, path in progression.delta:
+        new_entry = new_inventory.get(path)
+        if new_entry != (mode, "blob"):
+            return False
+        if status_value == "M" and old_inventory.get(path) != (mode, "blob"):
+            return False
+        if status_value == "A" and path in old_inventory:
+            return False
+    return True
+
+
+def security_progression_status(
+    root: Path,
+    head: str,
+    progression: Optional[SecurityToolchainProgression],
+) -> str:
+    """Classify only the exact historical or progressed structural artifact."""
+    if progression is None:
+        return "NOT_SELECTED"
+    historical_h1 = progression.values["HISTORICAL_H1"]
+    if head == historical_h1:
+        return "HISTORICAL_H1_UNPATCHED"
+    if progressed_h2_artifact(root, head, progression):
+        return "PROGRESSED_H2_STRUCTURAL_ONLY"
+    parents = commit_parents(root, head)
+    if (
+        len(parents) == 2
+        and parents[0] == progression.values["BASE_C"]
+        and progressed_h2_artifact(root, parents[1], progression)
+        and commit_tree(root, head) == commit_tree(root, parents[1])
+    ):
+        return "PROGRESSED_H2_STRUCTURAL_ONLY"
+    available = run_git(
+        root, ["cat-file", "-e", f"{head}^{{commit}}"], allow_failure=True
+    ).returncode == 0
+    return "INVALID" if available else "UNAVAILABLE"
 
 
 def strict_terminal_push_context(
@@ -2505,6 +2843,7 @@ def strict_terminal_push_context(
     env: dict[str, str],
     canonical_repository: str,
     accepted_c: str,
+    progression: Optional[SecurityToolchainProgression] = None,
 ) -> bool:
     """Validate the fixed-C terminal branch creation or update push."""
     terminal_branch = f"release/v{version}-terminal-serialization"
@@ -2512,6 +2851,18 @@ def strict_terminal_push_context(
     payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
     before = payload.get("before") if payload else None
     created = payload.get("created") if payload else None
+    expected_before = (
+        progression.values["HISTORICAL_H1"] if progression is not None else accepted_c
+    )
+    expected_repository_id = (
+        progression.values["REPOSITORY_ID"] if progression is not None else None
+    )
+    transition_matches = (
+        before == expected_before and created is False
+        if progression is not None
+        else (before == "0" * 40 and created is True)
+        or (before == accepted_c and created is False)
+    )
     return bool(
         env["GITHUB_ACTIONS"] == "true"
         and env["GITHUB_EVENT_NAME"] == "push"
@@ -2519,19 +2870,25 @@ def strict_terminal_push_context(
         and env["GITHUB_REF_NAME"] == terminal_branch
         and env["GITHUB_REF_TYPE"] == "branch"
         and env["GITHUB_REPOSITORY"] == canonical_repository
+        and (
+            expected_repository_id is None
+            or env.get("GITHUB_REPOSITORY_ID") == expected_repository_id
+        )
         and env["GITHUB_SHA"] == head
         and branch in ("", terminal_branch)
         and payload
         and payload.get("ref") == expected_ref
         and payload.get("after") == head
-        and (
-            (before == "0" * 40 and created is True)
-            or (before == accepted_c and created is False)
-        )
+        and transition_matches
         and payload.get("deleted") is False
         and payload.get("forced") is False
         and _repository_name(payload.get("repository")) == canonical_repository
-        and terminal_candidate_artifact(root, head, accepted_c)
+        and (
+            expected_repository_id is None
+            or _repository_id(payload.get("repository")) == int(expected_repository_id)
+        )
+        and terminal_candidate_artifact(root, head, accepted_c, progression)
+        and (progression is None or progressed_h2_artifact(root, head, progression))
     )
 
 
@@ -2543,6 +2900,7 @@ def strict_terminal_pr_context(
     env: dict[str, str],
     canonical_repository: str,
     accepted_c: str,
+    progression: Optional[SecurityToolchainProgression] = None,
     diagnostic: Optional[DiagnosticRecorder] = None,
     diagnostic_site: str = "terminal-pr",
 ) -> bool:
@@ -2577,6 +2935,13 @@ def strict_terminal_pr_context(
     number = payload.get("number") if payload else None
     if not isinstance(pull_request, dict) or not isinstance(number, int) or number <= 0:
         return False
+    if progression is not None and (
+        number != int(progression.values["PR_NUMBER"])
+        or env.get("GITHUB_REPOSITORY_ID") != progression.values["REPOSITORY_ID"]
+        or _repository_id(payload.get("repository"))
+        != int(progression.values["REPOSITORY_ID"])
+    ):
+        return False
     if env["GITHUB_REF"] != f"refs/pull/{number}/merge":
         return False
     if _repository_name(payload.get("repository")) != canonical_repository:
@@ -2593,7 +2958,8 @@ def strict_terminal_pr_context(
         and head_repo == canonical_repository
         and isinstance(head_sha, str)
         and NONZERO_GIT_SHA.fullmatch(head_sha)
-        and terminal_candidate_artifact(root, head_sha, accepted_c)
+        and terminal_candidate_artifact(root, head_sha, accepted_c, progression)
+        and (progression is None or progressed_h2_artifact(root, head_sha, progression))
     ):
         return False
     if head == head_sha:
@@ -2615,7 +2981,10 @@ def strict_terminal_pr_context(
 
 
 def terminal_main_artifact(
-    root: Path, head: str, accepted_c: str
+    root: Path,
+    head: str,
+    accepted_c: str,
+    progression: Optional[SecurityToolchainProgression] = None,
 ) -> bool:
     """Validate S with ordered parents [C,Hts] and candidate tree equality."""
     parents = commit_parents(root, head)
@@ -2623,7 +2992,8 @@ def terminal_main_artifact(
         return False
     candidate = parents[1]
     return bool(
-        terminal_candidate_artifact(root, candidate, accepted_c)
+        terminal_candidate_artifact(root, candidate, accepted_c, progression)
+        and (progression is None or progressed_h2_artifact(root, candidate, progression))
         and commit_tree(root, head) == commit_tree(root, candidate)
     )
 
@@ -2635,6 +3005,7 @@ def strict_terminal_main_push_context(
     env: dict[str, str],
     canonical_repository: str,
     accepted_c: str,
+    progression: Optional[SecurityToolchainProgression] = None,
 ) -> bool:
     """Validate the first fixed-C protected-main serialization push."""
     payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
@@ -2645,6 +3016,10 @@ def strict_terminal_main_push_context(
         and env["GITHUB_REF_NAME"] == "main"
         and env["GITHUB_REF_TYPE"] == "branch"
         and env["GITHUB_REPOSITORY"] == canonical_repository
+        and (
+            progression is None
+            or env.get("GITHUB_REPOSITORY_ID") == progression.values["REPOSITORY_ID"]
+        )
         and env["GITHUB_SHA"] == head
         and branch in ("", "main")
         and payload
@@ -2655,7 +3030,12 @@ def strict_terminal_main_push_context(
         and payload.get("deleted") is False
         and payload.get("forced") is False
         and _repository_name(payload.get("repository")) == canonical_repository
-        and terminal_main_artifact(root, head, accepted_c)
+        and (
+            progression is None
+            or _repository_id(payload.get("repository"))
+            == int(progression.values["REPOSITORY_ID"])
+        )
+        and terminal_main_artifact(root, head, accepted_c, progression)
     )
 
 
@@ -3040,6 +3420,7 @@ def v1_context_scope(
     diagnostic: Optional[DiagnosticRecorder] = None,
     diagnostic_site: str = "context",
     terminal_disposition: Optional[TerminalDisposition] = None,
+    security_progression: Optional[SecurityToolchainProgression] = None,
 ) -> Optional[str]:
     """Return bounded structural evidence scope for one v1 state."""
     head, branch, _, _, _ = context
@@ -3054,19 +3435,20 @@ def v1_context_scope(
         if (
             not any_github
             and branch == terminal_branch
-            and terminal_candidate_artifact(root, head, accepted_c)
+            and terminal_candidate_artifact(
+                root, head, accepted_c, security_progression
+            )
         ):
             return "LOCAL_TERMINAL_SERIALIZATION_CANDIDATE"
         if strict_terminal_push_context(
             root, version, head, branch, env,
-            declaration.canonical_repository, accepted_c,
+            declaration.canonical_repository, accepted_c, security_progression,
         ):
             return "GITHUB_TERMINAL_SERIALIZATION_PUSH_CONTEXT_CONSISTENCY"
         if strict_terminal_pr_context(
             root, version, head, branch, env,
             declaration.canonical_repository, accepted_c,
-            diagnostic,
-            diagnostic_site,
+            security_progression, diagnostic, diagnostic_site,
         ):
             return "GITHUB_TERMINAL_SERIALIZATION_PR_CONTEXT_CONSISTENCY"
         return None
@@ -3077,12 +3459,14 @@ def v1_context_scope(
         if (
             not any_github
             and branch == "main"
-            and terminal_main_artifact(root, head, accepted_c)
+            and terminal_main_artifact(
+                root, head, accepted_c, security_progression
+            )
         ):
             return "LOCAL_TERMINAL_SERIALIZATION_MAIN_ARTIFACT_ONLY"
         if strict_terminal_main_push_context(
             root, head, branch, env,
-            declaration.canonical_repository, accepted_c,
+            declaration.canonical_repository, accepted_c, security_progression,
         ):
             return "GITHUB_TERMINAL_SERIALIZATION_MAIN_CONTEXT_CONSISTENCY"
         return None
@@ -3193,6 +3577,7 @@ def git_context_matches(
     diagnostic: Optional[DiagnosticRecorder] = None,
     diagnostic_site: str = "ckrs016",
     terminal_disposition: Optional[TerminalDisposition] = None,
+    security_progression: Optional[SecurityToolchainProgression] = None,
 ) -> bool:
     """Return whether branch and GitHub refs are compatible with lifecycle."""
     if declaration is not None:
@@ -3209,6 +3594,7 @@ def git_context_matches(
                 diagnostic,
                 diagnostic_site,
                 terminal_disposition,
+                security_progression,
             )
         )
     release_branch = f"release/v{version}"

@@ -373,7 +373,7 @@ Not a fit (v1.x scope):
 
 A small samples directory is included for local testing.
 
-### Source-only distribution contract
+### Historical v1.13.15 source-only distribution contract
 
 Coldkeep v1.13.15 is distributed as source only; the GitHub release does not
 provide prebuilt executables. The supported installation families are Linux,
@@ -395,9 +395,13 @@ GOTOOLCHAIN=local go install github.com/franchoy/coldkeep/cmd/coldkeep@v1.13.15
 Run that command with Go 1.26.7; do not infer broader platform or architecture
 support from source availability.
 
-For a host build, install Go 1.26.7 and a native C compiler first. The `go 1.25`
-module directive is the language floor; Go 1.26.7 with `GOTOOLCHAIN=local` is
-the certified v1.13.15 build environment. Normal v1.x CLI operation remains
+Those statements describe the published v1.13.15 artifact. A `toolchain`
+suggestion does not select the compiler used by `go install package@version`.
+
+For the current checkout and the proposed v1.13.17 H2 security progression,
+install Go 1.26.9 and a native C compiler first. The `go 1.25` module directive
+remains the language floor; exact Go 1.26.9 with `GOTOOLCHAIN=local` is the
+active build and scan baseline. Normal v1.x CLI operation remains
 PostgreSQL-backed; SQLite-first local productization belongs to v2.x.
 
 ### Host binary with PostgreSQL
@@ -405,7 +409,7 @@ PostgreSQL-backed; SQLite-first local productization belongs to v2.x.
 ```bash
 # 1) Verify the certified toolchain and build before invoking Coldkeep
 export GOTOOLCHAIN=local
-go version # must report go1.26.7
+go version # must report go1.26.9
 go build -o coldkeep ./cmd/coldkeep
 
 # 2) Initialize fresh development key material (.env)

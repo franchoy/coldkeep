@@ -18,6 +18,7 @@ from release_state_support import (
     InternalError,
     LifecycleBoundaries,
     LifecycleDeclaration,
+    SecurityToolchainProgression,
     TerminalDisposition,
     ValidationResult,
     accepted_post_release_pr,
@@ -39,6 +40,7 @@ from release_state_support import (
     lifecycle_boundaries_match_topology,
     lifecycle_progression_valid,
     load_terminal_disposition,
+    load_security_toolchain_progression,
     load_predecessor_disposition_document,
     main_context,
     metadata_named,
@@ -56,6 +58,7 @@ from release_state_support import (
     prior_is_active,
     readme_current_state_valid,
     run_git,
+    security_progression_status,
     strict_git_ancestor,
     strict_release_push_context,
     topology_valid,
@@ -257,6 +260,60 @@ def terminal_disposition_selection(
     if expectation_present or reference_present:
         return "invalid", None, "unexpected terminal disposition material for historical vocabulary"
     return "legacy", None, None
+
+
+def security_progression_selection(
+    root: Path,
+    version: str,
+    state_doc: Optional[Document],
+    contract_doc: Optional[Document],
+) -> tuple[str, Optional[SecurityToolchainProgression], Optional[str]]:
+    """Select the closed progression contract without mixed-state fallback."""
+    reference_path = (
+        f"docs/release/v{version.rsplit('.', 1)[0]}/"
+        f"v{version}-security-toolchain-progression-reference.md"
+    )
+    pointers: list[str] = []
+    if state_doc is not None:
+        for line in state_doc.lines:
+            if line.startswith("## "):
+                break
+            match = re.fullmatch(
+                r"SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE: (\S.*)", line
+            )
+            if match:
+                pointers.append(match.group(1))
+    expectation_present = bool(
+        contract_doc
+        and "<!-- coldkeep-security-toolchain-progression-expectations:start -->"
+        in contract_doc.lines
+    )
+    try:
+        os.lstat(root / reference_path)
+        reference_present = True
+    except FileNotFoundError:
+        reference_present = False
+    except OSError:
+        reference_present = True
+    if not pointers and not expectation_present and not reference_present:
+        return "legacy", None, None
+    if len(pointers) != 1 or not expectation_present:
+        return (
+            "invalid",
+            None,
+            "security progression reference invalid: pointer, expectations, and reference must be selected together",
+        )
+    progression, detail = load_security_toolchain_progression(
+        root, contract_doc, pointers[0]
+    )
+    if detail:
+        mode = "unavailable" if " reference unavailable:" in detail else "invalid"
+        return mode, None, detail
+    if progression is None:
+        return "invalid", None, "security progression reference invalid: progression is missing"
+    if progression.values["SOURCE_VERSION"] != version:
+        return "invalid", None, "security progression reference invalid: source version disagrees"
+    return "progression", progression, None
 
 
 def check_ckrs002(version: str, doc: Optional[Document], result: ValidationResult) -> None:
@@ -789,6 +846,7 @@ def infer_state(
     declaration: Optional[LifecycleDeclaration],
     diagnostic: Optional[DiagnosticRecorder] = None,
     terminal_disposition: Optional[TerminalDisposition] = None,
+    security_progression: Optional[SecurityToolchainProgression] = None,
 ) -> tuple[
     str,
     tuple[str, str, bool, bool, Optional[str]],
@@ -819,6 +877,7 @@ def infer_state(
                 diagnostic,
                 "inference",
                 terminal_disposition,
+                security_progression,
             ) if declaration else None
             if scope and lifecycle_progression_valid(
                 state, ordered, boundaries, declaration
@@ -982,6 +1041,7 @@ def check_ckrs016(
     result: ValidationResult,
     diagnostic: Optional[DiagnosticRecorder] = None,
     terminal_disposition: Optional[TerminalDisposition] = None,
+    security_progression: Optional[SecurityToolchainProgression] = None,
 ) -> None:
     _, branch, _, _, _ = context
     if not git_context_matches(
@@ -995,6 +1055,7 @@ def check_ckrs016(
         diagnostic=diagnostic,
         diagnostic_site="ckrs016",
         terminal_disposition=terminal_disposition,
+        security_progression=security_progression,
     ):
         result.add("CKRS016", ".git", 0, f"Git context branch={branch or 'detached'} is incompatible with {state} for {version}")
 
@@ -1185,6 +1246,36 @@ def validate(
             docs["contract"],
         )
     )
+    progression_mode, security_progression, progression_detail = (
+        security_progression_selection(
+            root,
+            version,
+            docs["canonical_state"],
+            docs["contract"],
+        )
+    )
+    if progression_detail:
+        result.security_progression = (
+            "UNAVAILABLE" if progression_mode == "unavailable" else "INVALID"
+        )
+        result.add(
+            "CKRS020",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            progression_detail,
+        )
+    elif security_progression is not None and declaration is not None:
+        if (
+            security_progression.values["CANONICAL_REPOSITORY"]
+            != declaration.canonical_repository
+        ):
+            result.security_progression = "INVALID"
+            result.add(
+                "CKRS020",
+                docs["contract"].path if docs["contract"] else "",
+                0,
+                "security progression reference invalid: canonical repository disagrees with lifecycle declaration",
+            )
     if terminal_detail:
         result.add(
             "CKRS019",
@@ -1280,7 +1371,8 @@ def validate(
         disposition_doc, disposition_load_error = (
             load_predecessor_disposition_document(root, disposition_path)
         )
-    if requested_state == "auto" and terminal_mode != "invalid":
+    progression_selectable = progression_mode not in ("invalid", "unavailable")
+    if requested_state == "auto" and terminal_mode != "invalid" and progression_selectable:
         state, context, evidence_scope = infer_state(
             root,
             version,
@@ -1289,6 +1381,7 @@ def validate(
             declaration,
             diagnostic,
             terminal_disposition,
+            security_progression,
         )
     elif requested_state == "auto":
         context = git_context(root, version)
@@ -1312,6 +1405,7 @@ def validate(
                 diagnostic,
                 "explicit-state",
                 terminal_disposition,
+                security_progression,
             )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
@@ -1321,6 +1415,18 @@ def validate(
     result.artifact_state = state
     result.outstanding_obligations = outstanding_obligations(state)
     result.evidence_scope = evidence_scope
+    if security_progression is not None and not progression_detail:
+        progression_status = security_progression_status(
+            root, context[0], security_progression
+        )
+        result.security_progression = progression_status
+        if progression_status in ("INVALID", "UNAVAILABLE"):
+            result.add(
+                "CKRS020",
+                ".git",
+                0,
+                "security progression artifact is unavailable or violates the exact H1/H2 topology and delta",
+            )
     immutable_only_states = {
         "merged-pending-final-main-certification",
         "tagged-pending-tag-certification",
@@ -1379,6 +1485,7 @@ def validate(
         result,
         diagnostic,
         terminal_disposition,
+        security_progression,
     )
     check_ckrs017(root, version, state, context, result)
     check_ckrs018(
@@ -1406,17 +1513,30 @@ def emit(result: ValidationResult, as_json: bool) -> int:
             "certification_status": result.certification_status,
             "outstanding_obligations": result.outstanding_obligations,
             "evidence_scope": result.evidence_scope,
+            "security_progression": result.security_progression,
+            "security_result": result.security_result,
             "violations": [item.__dict__ for item in violations],
             "error": None,
         }
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     elif not violations:
-        print(f"[release-state] OK state={result.state} active_version={result.active_version} violations=0")
+        print(
+            f"[release-state] OK state={result.state} "
+            f"active_version={result.active_version} violations=0 "
+            f"security_progression={result.security_progression} "
+            f"security_result={result.security_result}"
+        )
     else:
         for item in violations:
             location = item.path if item.line == 0 else f"{item.path}:{item.line}"
             print(f"[{item.rule}] {location} {item.message}")
-        print(f"[release-state] FAILED state={result.state or 'unknown'} active_version={result.active_version or 'unknown'} violations={len(violations)}")
+        print(
+            f"[release-state] FAILED state={result.state or 'unknown'} "
+            f"active_version={result.active_version or 'unknown'} "
+            f"violations={len(violations)} "
+            f"security_progression={result.security_progression} "
+            f"security_result={result.security_result}"
+        )
     return 0 if not violations else 1
 
 
@@ -1432,6 +1552,8 @@ def emit_error(error: InternalError, as_json: bool) -> int:
             "certification_status": "PENDING_EXTERNAL_EVIDENCE",
             "outstanding_obligations": [],
             "evidence_scope": "UNAVAILABLE",
+            "security_progression": "UNAVAILABLE",
+            "security_result": "NOT_EVALUATED_BY_VALIDATOR",
             "violations": [],
             "error": {"kind": error.kind, "message": error.message},
         }
@@ -1470,6 +1592,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         result_status: str,
         exit_code: int,
         rule_codes: list[str],
+        security_progression: str,
+        security_result: str,
     ) -> None:
         if diagnostic_initialization_failed:
             print(
@@ -1485,6 +1609,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 result_status=result_status,
                 exit_code=exit_code,
                 rule_codes=rule_codes,
+                security_progression=security_progression,
+                security_result=security_result,
             )
             diagnostic.write(args.diagnostic_json, document)
         except Exception:
@@ -1504,6 +1630,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             result_status="ok" if status == 0 else "error",
             exit_code=status,
             rule_codes=[item.rule for item in result.ordered()],
+            security_progression=result.security_progression,
+            security_result=result.security_result,
         )
         return status
     except InternalError as error:
@@ -1513,6 +1641,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             result_status="error",
             exit_code=status,
             rule_codes=[],
+            security_progression="UNAVAILABLE",
+            security_result="NOT_EVALUATED_BY_VALIDATOR",
         )
         return status
     except Exception as error:  # defensive boundary; no traceback for callers
@@ -1522,6 +1652,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             result_status="error",
             exit_code=status,
             rule_codes=[],
+            security_progression="UNAVAILABLE",
+            security_result="NOT_EVALUATED_BY_VALIDATOR",
         )
         return status
 
