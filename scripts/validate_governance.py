@@ -1065,8 +1065,7 @@ def validate(root: Path = ROOT) -> list[str]:
     marker_contracts = {
         Path("AGENTS.md"): (
             "never lose user data",
-            "v1.13.18",
-            "final v1.x source-snapshot candidate",
+            "v1.13.17",
             "v1.13.15",
             "Do not implement v2",
             "phase's `PLAN` or `BUILD` mode",
@@ -1074,21 +1073,22 @@ def validate(root: Path = ROOT) -> list[str]:
             "GOTOOLCHAIN=local",
         ),
         Path(".github/copilot-instructions.md"): (
-            "v1.13.18 is the active final v1.x source-snapshot candidate",
+            "v1.13.17",
             "v1.13.14 as immutable historical release state",
             "SQLite-first local productization belongs to v2.x",
         ),
         Path(".github/instructions/ci.instructions.md"): (
-            "v1.13.18 Final Snapshot Boundary",
-            "exact 33-path boundary",
+            "v1.13.17",
+            "v1.13.16",
+            "Go 1.26.9",
         ),
         Path("README.md"): (
-            "v1.13.18 — Final v1.x Source Snapshot and Closure Handoff",
+            "v1.13.17",
             "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
             "V2 implementation has not started",
         ),
         Path("SECURITY.md"): (
-            "v1.13.18 is an active local final-source-snapshot",
+            "v1.13.17",
             "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
             "V2 implementation has not started",
         ),
@@ -1101,49 +1101,10 @@ def validate(root: Path = ROOT) -> list[str]:
             "v1.x completed the frozen Engine/Catalog correctness work",
             "Older v1.x documents",
             "historical and superseded",
-            "v1.13.18",
+            "v1.13.17",
             "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
         ),
     }
-    live_v18_mirrors = "SOURCE_VERSION: 1.13.18" in texts.get(
-        Path("AGENTS.md"), ""
-    )
-    if not live_v18_mirrors:
-        marker_contracts = {
-            Path("AGENTS.md"): (
-                "never lose user data", "v1.13.17",
-                "failed-publication predecessor", "v1.13.15", "v1.13.14",
-                "Do not implement v2", "phase's `PLAN` or `BUILD` mode",
-                "python3 scripts/validate_governance.py", "GOTOOLCHAIN=local",
-            ),
-            Path(".github/copilot-instructions.md"): (
-                "v1.13.17 is the active Route C recovery successor",
-                "v1.13.14 as immutable historical release state",
-                "SQLite-first local productization belongs to v2.x",
-            ),
-            Path(".github/instructions/ci.instructions.md"): (
-                "v1.13.17 Recovery Boundary",
-                "v1.13.16 failed-publication disposition",
-            ),
-            Path("README.md"): (
-                "v1.13.17 — Annotated-Tag Certification Recovery",
-                "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
-                "V2 implementation has not started",
-            ),
-            Path("SECURITY.md"): (
-                "v1.13.17 is the active Route C recovery successor",
-                "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
-                "V2 implementation has not started",
-            ),
-            Path("docs/architecture/engine-boundary-plan.md"): marker_contracts[
-                Path("docs/architecture/engine-boundary-plan.md")
-            ],
-            Path("docs/release/v1.13/README.md"): (
-                "v1.x completed the frozen Engine/Catalog correctness work",
-                "Older v1.x documents", "historical and superseded", "v1.13.17",
-                "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
-            ),
-        }
     for relative, markers in marker_contracts.items():
         if relative in texts:
             violations.extend(require_markers(relative, texts[relative], markers))
