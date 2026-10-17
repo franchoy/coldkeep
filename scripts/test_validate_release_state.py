@@ -11964,6 +11964,27 @@ class FinalSnapshotDeltaContractTests(unittest.TestCase):
         )
         self.assertEqual(detail, "delta inventory is unsupported")
 
+    def test_committed_complete_inventory_accepts_git_tree_order(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        head = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(FINAL_SNAPSHOT_TEST_ROOT),
+                "rev-parse",
+                "HEAD",
+            ],
+            check=True,
+        ).stdout.strip()
+        self.assertTrue(
+            release_state_support.final_snapshot_artifact(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                head,
+                snapshot,
+                require_complete=True,
+            )
+        )
+
 
 class FinalSnapshotReleasePushContextTests(unittest.TestCase):
     def test_local_release_branch_is_bounded_by_snapshot(self) -> None:

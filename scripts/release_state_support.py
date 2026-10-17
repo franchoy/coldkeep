@@ -3568,8 +3568,10 @@ def final_snapshot_artifact(
         for index in range(0, len(parts), 2)
     )
     expected = tuple((status, path) for status, _, path in snapshot.delta)
+    if len(actual) != len(set(actual)):
+        return False
     if require_complete:
-        if actual != expected:
+        if len(actual) != len(expected) or set(actual) != set(expected):
             return False
     elif any(item not in expected for item in actual):
         return False
