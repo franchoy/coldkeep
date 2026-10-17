@@ -79,7 +79,7 @@ promotes a section into the active gate for a special release.
 
 Install these before claiming CI parity locally:
 
-- Go 1.26.7 exactly for v1.13.17 recovery certification. The module language floor
+- Go 1.26.9 exactly for v1.13.17 security-progression certification. The module language floor
   remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
 - `docker compose`.
 - PostgreSQL client tools, including `psql`.

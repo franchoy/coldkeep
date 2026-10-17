@@ -33,25 +33,28 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
+CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
+V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
 ```
 <!-- coldkeep-current-state:end -->
 
 v1.13.17 — Annotated-Tag Certification Recovery is published at immutable
 M17/A17 and GitHub Release `400460267`; its source-only publication body and
-checksum remain frozen. The tracked descendant is an unpublished local
-closure candidate. Phases 0-9 serialize as Complete for review, but external
-terminal effectiveness and full v1.x closure remain unestablished. It
-authorizes no push, PR, merge, tag, Release change, or terminal audit. The
+checksum remain frozen. Phase 9M established the external terminal disposition
+at C on a source-scoped qualified basis. The tracked descendant is a
+non-authorizing terminal-serialization declaration; protected-main
+serialization and effectiveness readback remain separate. It authorizes no
+push, PR, merge, tag, Release change, or new audit. The
 work remains limited to release governance and does not change product storage
 behavior. v1.13.16 is the immutable
 failed-publication predecessor: annotated tag A16 exists, its required tag CI
@@ -370,7 +373,7 @@ Not a fit (v1.x scope):
 
 A small samples directory is included for local testing.
 
-### Source-only distribution contract
+### Historical v1.13.15 source-only distribution contract
 
 Coldkeep v1.13.15 is distributed as source only; the GitHub release does not
 provide prebuilt executables. The supported installation families are Linux,
@@ -392,9 +395,13 @@ GOTOOLCHAIN=local go install github.com/franchoy/coldkeep/cmd/coldkeep@v1.13.15
 Run that command with Go 1.26.7; do not infer broader platform or architecture
 support from source availability.
 
-For a host build, install Go 1.26.7 and a native C compiler first. The `go 1.25`
-module directive is the language floor; Go 1.26.7 with `GOTOOLCHAIN=local` is
-the certified v1.13.15 build environment. Normal v1.x CLI operation remains
+Those statements describe the published v1.13.15 artifact. A `toolchain`
+suggestion does not select the compiler used by `go install package@version`.
+
+For the current checkout and the proposed v1.13.17 H2 security progression,
+install Go 1.26.9 and a native C compiler first. The `go 1.25` module directive
+remains the language floor; exact Go 1.26.9 with `GOTOOLCHAIN=local` is the
+active build and scan baseline. Normal v1.x CLI operation remains
 PostgreSQL-backed; SQLite-first local productization belongs to v2.x.
 
 ### Host binary with PostgreSQL
@@ -402,7 +409,7 @@ PostgreSQL-backed; SQLite-first local productization belongs to v2.x.
 ```bash
 # 1) Verify the certified toolchain and build before invoking Coldkeep
 export GOTOOLCHAIN=local
-go version # must report go1.26.7
+go version # must report go1.26.9
 go build -o coldkeep ./cmd/coldkeep
 
 # 2) Initialize fresh development key material (.env)

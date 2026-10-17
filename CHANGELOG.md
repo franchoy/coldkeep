@@ -36,6 +36,10 @@ project, do not start here; start with [README.md](README.md).
   descendant repairs only attached closure-push context validation and records
   the conditional Phase-9 closure candidate. It is not part of the published
   tag and does not establish terminal effectiveness or full v1.x closure.
+- Phase 9M later established a source-scoped qualified external terminal
+  disposition at accepted source C. The tracked terminal-serialization
+  declaration references that dated disposition without certifying its own
+  commit or establishing future protected-main serialization effectiveness.
 
 ## v1.13.16 - 2026-09-20 [failed-publication-predecessor] — Snapshot Retention Integrity, Observability Truth, and Final v1.x Closure
 

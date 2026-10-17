@@ -78,27 +78,29 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
+CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
+V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
 ```
 <!-- coldkeep-current-state:end -->
 
 v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
-The tracked descendant is an unpublished local closure candidate. Phases 0-9
-serialize as Complete for review, while external Phase-9 terminal
-effectiveness and full v1.x closure remain unestablished. Publication material
-is frozen. v1.13.16 is
+The tracked descendant is a non-authorizing terminal-disposition declaration.
+Phase 9M established source-scoped qualified external closure at C; protected-
+main serialization and effectiveness readback remain separate. Publication
+material is frozen. v1.13.16 is
 the immutable failed-publication predecessor; its tag certificate was withheld
 and no GitHub Release exists. The original successor-branch push and its
-exact-N evidence are historical; this closure candidate has not been pushed or
+exact-N evidence are historical; this serialization candidate has not been pushed or
 independently accepted. No further push, PR, merge, tag, Release change, or
 closure is authorized by this tracked state.
 
@@ -1073,6 +1075,14 @@ Phase 13R1R1 hosted boundary. CI `35442074207` passed 36/36 with Required Gate
 job `105897391981`; CodeQL `35442074196` passed 4/4; all 40 exact-head checks
 passed and the release ref has zero open CodeQL alerts. The original failed
 Phase 13R1 CI `35436261398` remains preserved and was not rerun.
+
+## Proposed v1.13.17 security-toolchain progression
+
+The current non-authorizing progression reference anchors preserved H1
+`3726f1fb034924d390b51abcd0b579e5168958e2` and permits only one exact 25-path
+ordinary child. Go 1.26.9 with `GOTOOLCHAIN=local` is the proposed build and
+ordinary-output scan baseline. This reference does not create H2, alter the
+published candidate, or report a security result.
 
 Historical `AT_COMMIT` Phase 13B local-evidence boundary: the local Build is
 exactly three append-only commits with path counts 8/14/8.

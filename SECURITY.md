@@ -6,16 +6,18 @@
 ```text
 SOURCE_VERSION: 1.13.17
 RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_CLOSURE_CANDIDATE
+CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: CLOSURE_CANDIDATE_PENDING_TERMINAL_AUDIT
+V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -32,15 +34,14 @@ Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
 attestation are immutable. v1.13.17 is published at immutable M17/A17 and
 GitHub Release `400460267`; its publication material remains frozen. The
-tracked descendant is an unpublished local closure candidate. Phases 0-9
-serialize as Complete for review. The earlier marker `v1.13.17 is the active
+tracked descendant is a non-authorizing terminal-serialization declaration.
+The earlier marker `v1.13.17 is the active
 Route C recovery successor` is historical pre-publication wording, not current
-state. External terminal effectiveness and
-full v1.x closure remain unestablished. This state authorizes no remote or
-Release operation. v1.13.16 is the
+state. Phase 9M established source-scoped qualified external v1.x closure at
+C; protected-main serialization and effectiveness readback remain separate.
+This state authorizes no remote or Release operation. v1.13.16 is the
 immutable failed-publication predecessor: its public annotated tag failed
-required certification and no GitHub Release exists. V1.x full closure is not
-established.
+required certification and no GitHub Release exists.
 Planned v1 feature and architecture work remains closed and frozen. Existing
 security and crash-consistency limitations below are unchanged.
 
