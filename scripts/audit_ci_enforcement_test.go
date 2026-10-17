@@ -232,6 +232,57 @@ func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T
 	}
 }
 
+func TestAuditCIEnforcementRejectsStaleApplicationVersion(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+
+	for _, job := range []struct {
+		name     string
+		next     string
+		anchor   string
+		expected string
+		message  string
+	}{
+		{
+			name:     "source-install",
+			next:     "remote-candidate-install",
+			anchor:   "coldkeep version 1.13.18",
+			expected: "coldkeep version 1.13.17",
+			message:  "source installation proves binary identity",
+		},
+		{
+			name:     "remote-candidate-install",
+			next:     "product-container",
+			anchor:   "coldkeep version 1.13.18",
+			expected: "coldkeep version 1.13.17",
+			message:  "remote candidate installation proves binary identity",
+		},
+	} {
+		t.Run(job.name, func(t *testing.T) {
+			mutated := workflow
+			start := strings.Index(mutated, "  "+job.name+":")
+			if start < 0 {
+				t.Fatalf("missing %s job", job.name)
+			}
+			end := strings.Index(mutated[start+1:], "\n  "+job.next+":")
+			if end < 0 {
+				t.Fatalf("missing end of %s job", job.name)
+			}
+			end += start + 1
+			block := mutated[start:end]
+			stale := strings.ReplaceAll(block, job.anchor, job.expected)
+			if stale == block {
+				t.Fatalf("%s version fixture was not mutated", job.name)
+			}
+			mutated = mutated[:start] + stale + mutated[end:]
+			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, job.message) {
+				t.Fatalf("expected %q, got:\n%s", job.message, stderr)
+			}
+		})
+	}
+}
+
 func TestAuditCIEnforcementRequiresCandidateLintParity(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))

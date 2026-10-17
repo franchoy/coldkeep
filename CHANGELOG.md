@@ -20,6 +20,20 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.18 - Unreleased — Final v1.x Source Snapshot and Closure Handoff
+
+- Versions the accepted final v1.x protected-main source as an exceptional
+  source-only snapshot; it adds no product feature, schema, storage/repository
+  format, dependency, or default-behavior change.
+- Retains the Go 1.25.0 language floor and Go 1.26.9 toolchain while advancing
+  only the application version and release/CI identity to 1.13.18.
+- Adds a separate fail-closed final-source-snapshot selector bound to exact M,
+  the 33-path cumulative delta, frozen v1.13.17 history, and non-authorizing
+  branch/PR/main/tag simulations.
+- Phase 2 local implementation is complete and Phase 3 independent source
+  review is Next. No hosted certification, merge, tag, Release, cleanup, or
+  owner publication acceptance is claimed.
+
 ## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 
 - Starts the Route C recovery successor from the exact v1.13.16 merge commit.

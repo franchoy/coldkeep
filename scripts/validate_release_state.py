@@ -15,6 +15,7 @@ from release_state_support import (
     CHANGELOG_HEADING,
     DiagnosticRecorder,
     Document,
+    FinalSourceSnapshot,
     InternalError,
     LifecycleBoundaries,
     LifecycleDeclaration,
@@ -32,6 +33,7 @@ from release_state_support import (
     current_train_definitions,
     current_train_section,
     exact_tag_matches_head,
+    final_snapshot_artifact,
     field_from_lines,
     first_invalid_phase,
     git_context_matches,
@@ -42,6 +44,7 @@ from release_state_support import (
     lifecycle_boundaries_match_topology,
     lifecycle_progression_valid,
     load_terminal_disposition,
+    load_final_source_snapshot,
     load_security_toolchain_progression,
     load_predecessor_disposition_document,
     main_context,
@@ -309,6 +312,62 @@ def terminal_disposition_selection(
         contract_doc,
         values["TERMINAL_DISPOSITION_REFERENCE"][0],
     )
+
+
+def final_snapshot_selection(
+    root: Path,
+    version: str,
+    state_doc: Optional[Document],
+    contract_doc: Optional[Document],
+) -> tuple[str, Optional[FinalSourceSnapshot], Optional[str]]:
+    """Select the v1.13.18 snapshot contract without legacy fallback."""
+    reference_path = (
+        f"docs/release/v{version.rsplit('.', 1)[0]}/"
+        f"v{version}-final-source-snapshot-reference.md"
+    )
+    selection = _preamble_values(
+        state_doc,
+        ("FINAL_SOURCE_SNAPSHOT_SCHEMA", "FINAL_SOURCE_SNAPSHOT_REFERENCE"),
+    )
+    schemas = selection["FINAL_SOURCE_SNAPSHOT_SCHEMA"]
+    pointers = selection["FINAL_SOURCE_SNAPSHOT_REFERENCE"]
+    marker = "<!-- coldkeep-v1-final-source-snapshot-expectations:start -->"
+    expectation_present = bool(contract_doc and marker in contract_doc.lines)
+    reference_present = _path_entry_present(root / reference_path)
+    claimed = bool(schemas or pointers or expectation_present or reference_present)
+    if not claimed:
+        if version == "1.13.18":
+            return (
+                "invalid",
+                None,
+                "final snapshot reference invalid: required selector material is missing",
+            )
+        return "legacy", None, None
+    if version != "1.13.18":
+        return (
+            "invalid",
+            None,
+            "final snapshot reference invalid: material is selected by an unsupported source version",
+        )
+    if schemas != ["coldkeep-v1-final-source-snapshot-selection/v1"]:
+        return (
+            "invalid",
+            None,
+            "final snapshot reference invalid: selection schema is missing, duplicated, or unsupported",
+        )
+    if pointers != [reference_path] or not expectation_present or not reference_present:
+        return (
+            "invalid",
+            None,
+            "final snapshot reference invalid: selector, pointer, expectations, and reference must be present together",
+        )
+    snapshot, detail = load_final_source_snapshot(root, contract_doc, pointers[0])
+    if detail:
+        state = "unavailable" if " reference unavailable:" in detail else "invalid"
+        return state, None, detail
+    if snapshot is None:
+        return "invalid", None, "final snapshot reference invalid: snapshot is missing"
+    return "snapshot", snapshot, None
 
 
 def _progression_expectation_versions(
@@ -1021,6 +1080,7 @@ def infer_state(
     diagnostic: Optional[DiagnosticRecorder] = None,
     terminal_disposition: Optional[TerminalDisposition] = None,
     security_progression: Optional[SecurityToolchainProgression] = None,
+    final_snapshot: Optional[FinalSourceSnapshot] = None,
 ) -> tuple[
     str,
     tuple[str, str, bool, bool, Optional[str]],
@@ -1052,6 +1112,7 @@ def infer_state(
                 "inference",
                 terminal_disposition,
                 security_progression,
+                final_snapshot,
             ) if declaration else None
             if scope and lifecycle_progression_valid(
                 state, ordered, boundaries, declaration
@@ -1081,6 +1142,7 @@ def infer_state(
                 declaration,
                 diagnostic,
                 "inference",
+                final_snapshot=final_snapshot,
             )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
@@ -1117,6 +1179,7 @@ def infer_state(
                 declaration,
                 diagnostic,
                 "inference",
+                final_snapshot=final_snapshot,
             )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
@@ -1148,6 +1211,7 @@ def infer_state(
                 declaration,
                 diagnostic,
                 "inference",
+                final_snapshot=final_snapshot,
             )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
@@ -1158,6 +1222,12 @@ def infer_state(
         declaration
         and branch == ""
         and env["GITHUB_REF"] == f"refs/heads/{release_branch}"
+        and (
+            final_snapshot is None
+            or final_snapshot_artifact(
+                root, head, final_snapshot, require_complete=False
+            )
+        )
         and strict_release_push_context(
             version,
             head,
@@ -1198,6 +1268,7 @@ def infer_state(
                     declaration,
                     diagnostic,
                     "inference",
+                    final_snapshot=final_snapshot,
                 )
                 if declaration
                 else "LEGACY_STRUCTURAL_CONTEXT"
@@ -1216,6 +1287,7 @@ def check_ckrs016(
     diagnostic: Optional[DiagnosticRecorder] = None,
     terminal_disposition: Optional[TerminalDisposition] = None,
     security_progression: Optional[SecurityToolchainProgression] = None,
+    final_snapshot: Optional[FinalSourceSnapshot] = None,
 ) -> None:
     _, branch, _, _, _ = context
     if not git_context_matches(
@@ -1230,6 +1302,7 @@ def check_ckrs016(
         diagnostic_site="ckrs016",
         terminal_disposition=terminal_disposition,
         security_progression=security_progression,
+        final_snapshot=final_snapshot,
     ):
         result.add("CKRS016", ".git", 0, f"Git context branch={branch or 'detached'} is incompatible with {state} for {version}")
 
@@ -1428,6 +1501,41 @@ def validate(
             docs["contract"],
         )
     )
+    snapshot_mode, final_snapshot, snapshot_detail = final_snapshot_selection(
+        root,
+        version,
+        docs["canonical_state"],
+        docs["contract"],
+    )
+    if snapshot_mode != "legacy":
+        result.diagnostic_schema = "coldkeep-release-state-diagnostic/v5"
+        result.final_snapshot_contract_schema = (
+            "INVALID"
+            if snapshot_mode == "invalid"
+            else "UNAVAILABLE"
+            if snapshot_mode == "unavailable"
+            else "coldkeep-v1-final-source-snapshot-reference/v1"
+        )
+    if snapshot_detail:
+        result.final_snapshot = (
+            "UNAVAILABLE" if snapshot_mode == "unavailable" else "INVALID"
+        )
+        result.add(
+            "CKRS020",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            snapshot_detail,
+        )
+    if snapshot_mode != "legacy" and (
+        terminal_mode != "legacy" or progression_mode != "legacy"
+    ):
+        result.final_snapshot = "INVALID"
+        result.add(
+            "CKRS020",
+            docs["contract"].path if docs["contract"] else "",
+            0,
+            "final snapshot reference invalid: terminal/progression selector material must not be mixed with the final snapshot route",
+        )
     if progression_mode.startswith(("v2-", "v3-", "v4-", "v5-")):
         progression_version = progression_mode[1]
         result.diagnostic_schema = "coldkeep-release-state-diagnostic/v4"
@@ -1556,7 +1664,13 @@ def validate(
     progression_selectable = not progression_mode.endswith(
         ("invalid", "unavailable")
     )
-    if requested_state == "auto" and terminal_mode != "invalid" and progression_selectable:
+    snapshot_selectable = snapshot_mode not in ("invalid", "unavailable")
+    if (
+        requested_state == "auto"
+        and terminal_mode != "invalid"
+        and progression_selectable
+        and snapshot_selectable
+    ):
         state, context, evidence_scope = infer_state(
             root,
             version,
@@ -1566,7 +1680,19 @@ def validate(
             diagnostic,
             terminal_disposition,
             security_progression,
+            final_snapshot,
         )
+    elif requested_state == "auto" and snapshot_mode in ("invalid", "unavailable"):
+        context = git_context(root, version)
+        _, branch, _, _, _ = context
+        state = (
+            "development"
+            if branch == f"release/v{version}"
+            else "merged-not-tagged"
+            if branch == "main"
+            else "development"
+        )
+        evidence_scope = "UNSUPPORTED_OR_CONFLICTING_CONTEXT"
     elif requested_state == "auto":
         context = git_context(root, version)
         _, branch, _, _, _ = context
@@ -1590,6 +1716,7 @@ def validate(
                 "explicit-state",
                 terminal_disposition,
                 security_progression,
+                final_snapshot,
             )
             if declaration
             else "LEGACY_STRUCTURAL_CONTEXT"
@@ -1599,6 +1726,33 @@ def validate(
     result.artifact_state = state
     result.outstanding_obligations = outstanding_obligations(state)
     result.evidence_scope = evidence_scope
+    if final_snapshot is not None and not snapshot_detail:
+        complete = final_snapshot_artifact(
+            root,
+            context[0],
+            final_snapshot,
+            require_complete=True,
+        )
+        subset = complete or final_snapshot_artifact(
+            root,
+            context[0],
+            final_snapshot,
+            require_complete=False,
+        )
+        result.final_snapshot = (
+            "CANDIDATE_COMPLETE_VALID"
+            if complete
+            else "CANDIDATE_SUBSET_VALID"
+            if subset
+            else "INVALID"
+        )
+        if not subset:
+            result.add(
+                "CKRS020",
+                ".git",
+                0,
+                "final snapshot artifact violates the exact baseline, merge-free ancestry, status, mode, or path contract",
+            )
     if security_progression is not None and not progression_detail:
         progression_status = security_progression_status(
             root, context[0], security_progression
@@ -1644,7 +1798,7 @@ def validate(
     previous = check_ckrs009(
         version, docs["changelog"], predecessor_model, result
     ) or previous_from_changelog
-    if predecessor_detail is None and not (
+    if final_snapshot is None and predecessor_detail is None and not (
         predecessor_model is None and disposition_present
     ):
         check_ckrs010(
@@ -1670,6 +1824,7 @@ def validate(
         diagnostic,
         terminal_disposition,
         security_progression,
+        final_snapshot,
     )
     check_ckrs017(root, version, state, context, result)
     check_ckrs018(
@@ -1684,13 +1839,20 @@ def validate(
     return result
 
 
-def _v2_human_suffix(result: ValidationResult) -> str:
-    """Render selected-v2 fields already carried by the evaluated result."""
-    if result.diagnostic_schema != "coldkeep-release-state-diagnostic/v4":
+def _contract_human_suffix(result: ValidationResult) -> str:
+    """Render selected closed-contract fields carried by the result."""
+    selected = ""
+    if result.diagnostic_schema == "coldkeep-release-state-diagnostic/v4":
+        selected = f" progression_contract_schema={result.progression_contract_schema}"
+    elif result.diagnostic_schema == "coldkeep-release-state-diagnostic/v5":
+        selected = (
+            f" final_snapshot={result.final_snapshot}"
+            f" final_snapshot_contract_schema={result.final_snapshot_contract_schema}"
+        )
+    if not selected:
         return ""
     return (
-        f" progression_contract_schema={result.progression_contract_schema}"
-        f" authorization_status={result.authorization_status}"
+        selected + f" authorization_status={result.authorization_status}"
         f" certification_status={result.certification_status}"
         f" evidence_scope={result.evidence_scope}"
     )
@@ -1716,9 +1878,12 @@ def emit(result: ValidationResult, as_json: bool) -> int:
         }
         if result.diagnostic_schema == "coldkeep-release-state-diagnostic/v4":
             payload["progression_contract_schema"] = result.progression_contract_schema
+        if result.diagnostic_schema == "coldkeep-release-state-diagnostic/v5":
+            payload["final_snapshot"] = result.final_snapshot
+            payload["final_snapshot_contract_schema"] = result.final_snapshot_contract_schema
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     elif not violations:
-        contract_suffix = _v2_human_suffix(result)
+        contract_suffix = _contract_human_suffix(result)
         print(
             f"[release-state] OK state={result.state} "
             f"active_version={result.active_version} violations=0 "
@@ -1729,7 +1894,7 @@ def emit(result: ValidationResult, as_json: bool) -> int:
         for item in violations:
             location = item.path if item.line == 0 else f"{item.path}:{item.line}"
             print(f"[{item.rule}] {location} {item.message}")
-        contract_suffix = _v2_human_suffix(result)
+        contract_suffix = _contract_human_suffix(result)
         print(
             f"[release-state] FAILED state={result.state or 'unknown'} "
             f"active_version={result.active_version or 'unknown'} "
@@ -1796,6 +1961,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         security_result: str,
         diagnostic_schema: str = "coldkeep-release-state-diagnostic/v3",
         progression_contract_schema: Optional[str] = None,
+        final_snapshot: str = "NOT_SELECTED",
+        final_snapshot_contract_schema: Optional[str] = None,
     ) -> None:
         if diagnostic_initialization_failed:
             print(
@@ -1815,6 +1982,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 security_result=security_result,
                 diagnostic_schema=diagnostic_schema,
                 progression_contract_schema=progression_contract_schema,
+                final_snapshot=final_snapshot,
+                final_snapshot_contract_schema=final_snapshot_contract_schema,
             )
             diagnostic.write(args.diagnostic_json, document)
         except Exception:
@@ -1838,6 +2007,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             security_result=result.security_result,
             diagnostic_schema=result.diagnostic_schema,
             progression_contract_schema=result.progression_contract_schema,
+            final_snapshot=result.final_snapshot,
+            final_snapshot_contract_schema=result.final_snapshot_contract_schema,
         )
         return status
     except InternalError as error:

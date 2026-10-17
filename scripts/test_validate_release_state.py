@@ -209,6 +209,11 @@ SUCCESSOR_COMPATIBILITY_BASE = "3d32e1662fdc0de251fd87bc5af6a309fcf3b6a6"
 SUCCESSOR_HISTORICAL_PATHS = (
     Path("docs/release/v1.13/v1.13.17-release-state.md"),
     Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+    Path("internal/version/version.go"),
+    Path("internal/version/version_test.go"),
+    Path("CHANGELOG.md"),
+    Path("CONTRIBUTING.md"),
+    Path("PRE_RELEASE_CHECKLIST.md"),
     Path("AGENTS.md"),
     Path("README.md"),
     Path("SECURITY.md"),
@@ -216,7 +221,9 @@ SUCCESSOR_HISTORICAL_PATHS = (
     Path(".github/instructions/ci.instructions.md"),
     Path(".github/prompts/critical-path-coverage.prompt.md"),
     Path(".github/prompts/regression-fix.prompt.md"),
+    Path(".github/workflows/ci.yml"),
     Path("docs/release/v1.13/README.md"),
+    Path("docs/release/v1.13/v1.13.x-release-train.md"),
 )
 SUCCESSOR_TERMINAL_ONLY_PATHS = (
     validate_governance.TERMINAL_DISPOSITION_REFERENCE_FILE,
@@ -244,6 +251,7 @@ def copy_successor_fixture_source(
         if source.exists() or source.is_symlink():
             paths.add(relative)
     paths.difference_update(SUCCESSOR_TERMINAL_ONLY_PATHS)
+    paths.difference_update(validate_governance.V18_AUTHORITY_FILES)
     for relative in sorted(paths):
         source = source_root / relative
         destination = destination_root / relative
@@ -7289,6 +7297,7 @@ class TerminalSerializationContractTests(unittest.TestCase):
             check=True,
         ).stdout.split("\0")
         inventory = {Path(item) for item in committed if item}
+        inventory.difference_update(validate_governance.V18_AUTHORITY_FILES)
         inventory.update(Path(item) for item in self.TERMINAL_DOCS)
         for relative in sorted(inventory):
             source_path = source / relative
@@ -7296,7 +7305,17 @@ class TerminalSerializationContractTests(unittest.TestCase):
                 raise FileNotFoundError(f"terminal fixture input is unavailable: {relative}")
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, target, follow_symlinks=False)
+            if relative in SUCCESSOR_HISTORICAL_PATHS:
+                blob = run_process(
+                    [
+                        resolved_executable("git"), "-C", str(source), "show",
+                        f"HEAD:{relative.as_posix()}",
+                    ],
+                    check=True,
+                ).stdout
+                target.write_text(blob, encoding="utf-8")
+            else:
+                shutil.copy2(source_path, target, follow_symlinks=False)
         # The existing progression methods are immutable historical-v1 tests.
         # Source their three inputs from exact H2, never the current checkout.
         for relative in (
@@ -9161,6 +9180,15 @@ class _V2ProgressionFixture:
                     [
                         resolved_executable("git"), "-C", str(source), "show",
                         f"{self.PUBLISHED_H3_SOURCE}:{name}",
+                    ],
+                    check=True,
+                ).stdout
+                target.write_text(content, encoding="utf-8")
+            elif relative in SUCCESSOR_HISTORICAL_PATHS:
+                content = run_process(
+                    [
+                        resolved_executable("git"), "-C", str(source), "show",
+                        f"HEAD:{name}",
                     ],
                     check=True,
                 ).stdout
@@ -11809,6 +11837,300 @@ class TerminalSerializationV2ContractTests(unittest.TestCase):
             reference.write_bytes(reference_original)
 
         assert_restored_valid()
+
+
+FINAL_SNAPSHOT_TEST_ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_final_snapshot_for_test() -> release_state_support.FinalSourceSnapshot:
+    contract_path = (
+        "docs/release/v1.13/v1.13.18-release-state-validator-contract.md"
+    )
+    reference_path = (
+        "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+    )
+    contract = release_state_support.Document.load(
+        FINAL_SNAPSHOT_TEST_ROOT, contract_path
+    )
+    snapshot, detail = release_state_support.load_final_source_snapshot(
+        FINAL_SNAPSHOT_TEST_ROOT, contract, reference_path
+    )
+    if detail or snapshot is None:
+        raise AssertionError(detail or "snapshot was not loaded")
+    return snapshot
+
+
+class FinalSnapshotReferenceGovernanceTests(unittest.TestCase):
+    def test_reference_and_expectations_load_atomically(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        self.assertEqual(snapshot.values["SOURCE_VERSION"], "1.13.18")
+        self.assertEqual(len(snapshot.delta), 33)
+
+    def test_wrong_pointer_has_no_fallback(self) -> None:
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        snapshot, detail = release_state_support.load_final_source_snapshot(
+            FINAL_SNAPSHOT_TEST_ROOT, contract, "wrong.md"
+        )
+        self.assertIsNone(snapshot)
+        self.assertIn("pointer disagrees", detail or "")
+
+
+class FinalSnapshotSelectionTests(unittest.TestCase):
+    def test_exact_selector_is_selected(self) -> None:
+        state = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state.md",
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        mode, snapshot, detail = validate_release_state.final_snapshot_selection(
+            FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", state, contract
+        )
+        self.assertEqual((mode, detail), ("snapshot", None))
+        self.assertIsNotNone(snapshot)
+
+    def test_partial_selector_fails_closed(self) -> None:
+        state = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state.md",
+        )
+        state = release_state_support.Document(
+            state.root,
+            state.path,
+            [
+                line
+                for line in state.lines
+                if not line.startswith("FINAL_SOURCE_SNAPSHOT_SCHEMA:")
+            ],
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        mode, snapshot, detail = validate_release_state.final_snapshot_selection(
+            FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", state, contract
+        )
+        self.assertEqual(mode, "invalid")
+        self.assertIsNone(snapshot)
+        self.assertIn("selection schema", detail or "")
+
+    def test_selected_route_emits_diagnostic_v5_fields(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            result = validate_release_state.validate(
+                FINAL_SNAPSHOT_TEST_ROOT, "auto"
+            )
+        self.assertEqual(
+            result.diagnostic_schema, "coldkeep-release-state-diagnostic/v5"
+        )
+        self.assertIn(
+            result.final_snapshot,
+            {"CANDIDATE_SUBSET_VALID", "CANDIDATE_COMPLETE_VALID"},
+        )
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = validate_release_state.emit(result, True)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["final_snapshot"], result.final_snapshot)
+        self.assertEqual(
+            payload["final_snapshot_contract_schema"],
+            "coldkeep-v1-final-source-snapshot-reference/v1",
+        )
+
+
+class FinalSnapshotDeltaContractTests(unittest.TestCase):
+    def test_baseline_is_a_valid_development_subset(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        self.assertTrue(
+            release_state_support.final_snapshot_artifact(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                snapshot.values["BASE_M"],
+                snapshot,
+                require_complete=False,
+            )
+        )
+
+    def test_one_wrong_status_is_rejected(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        changed = list(snapshot.delta)
+        changed[0] = ("A", changed[0][1], changed[0][2])
+        detail = release_state_support._final_snapshot_grammar(
+            snapshot.values, tuple(changed)
+        )
+        self.assertEqual(detail, "delta inventory is unsupported")
+
+
+class FinalSnapshotReleasePushContextTests(unittest.TestCase):
+    def test_local_release_branch_is_bounded_by_snapshot(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        declaration = release_state_support.LifecycleDeclaration(
+            "immutable-transition-v1", "franchoy/coldkeep"
+        )
+        context = (
+            snapshot.values["BASE_M"], "release/v1.13.18", False, False, None
+        )
+        env = {key: "" for key in release_state_support.github_context()}
+        scope = release_state_support.v1_context_scope(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "1.13.18",
+            "development",
+            context,
+            env,
+            declaration,
+            final_snapshot=snapshot,
+        )
+        self.assertEqual(scope, "LOCAL_RELEASE_BRANCH")
+
+
+class FinalSnapshotPullRequestContextTests(unittest.TestCase):
+    def test_pr_requires_exact_m_base(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        declaration = release_state_support.LifecycleDeclaration(
+            "immutable-transition-v1", "franchoy/coldkeep"
+        )
+        context = (snapshot.values["BASE_M"], "", False, False, None)
+        env = {key: "TEST" for key in release_state_support.github_context()}
+        with (
+            mock.patch.object(
+                release_state_support,
+                "strict_release_pr_context",
+                return_value=True,
+            ),
+            mock.patch.object(
+                release_state_support,
+                "final_snapshot_artifact",
+                return_value=True,
+            ),
+            mock.patch.object(
+                release_state_support,
+                "final_snapshot_pr_base_matches",
+                side_effect=(True, False),
+            ),
+        ):
+            accepted = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "development",
+                context,
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+            rejected = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "development",
+                context,
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+        self.assertEqual(accepted, "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY")
+        self.assertIsNone(rejected)
+
+
+class FinalSnapshotMainContextTests(unittest.TestCase):
+    def test_main_requires_exact_snapshot_merge_artifact(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        declaration = release_state_support.LifecycleDeclaration(
+            "immutable-transition-v1", "franchoy/coldkeep"
+        )
+        context = ("f" * 40, "main", False, False, None)
+        env = {key: "" for key in release_state_support.github_context()}
+        with (
+            mock.patch.object(
+                release_state_support, "normal_merge_artifact", return_value=True
+            ),
+            mock.patch.object(
+                release_state_support,
+                "final_snapshot_main_artifact",
+                side_effect=(True, False),
+            ),
+        ):
+            accepted = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "merged-pending-final-main-certification",
+                context,
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+            rejected = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "merged-pending-final-main-certification",
+                context,
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+        self.assertEqual(accepted, "LOCAL_ARTIFACT_ONLY")
+        self.assertIsNone(rejected)
+
+
+class FinalSnapshotTagSimulationTests(unittest.TestCase):
+    def test_tag_simulation_requires_snapshot_main_artifact(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        declaration = release_state_support.LifecycleDeclaration(
+            "immutable-transition-v1", "franchoy/coldkeep"
+        )
+        env = {key: "" for key in release_state_support.github_context()}
+        with mock.patch.object(
+            release_state_support,
+            "final_snapshot_main_artifact",
+            return_value=True,
+        ):
+            scope = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "tagged",
+                ("f" * 40, "", True, True, "f" * 40),
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+        self.assertEqual(scope, "LOCAL_TAG_ARTIFACT_ONLY")
+
+
+class FinalSnapshotAuthorityBoundaryTests(unittest.TestCase):
+    def test_reference_is_explicitly_non_authorizing(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        self.assertEqual(snapshot.values["STATUS"], "STRUCTURAL_NON_AUTHORIZING")
+        self.assertEqual(
+            snapshot.expectations["EXPECTED_VALIDATOR_EFFECT"],
+            "STRUCTURAL_ONLY_NO_PROVIDER_OR_OWNER_AUTHORITY",
+        )
+
+
+class HistoricalV11317ImmutabilityTests(unittest.TestCase):
+    def test_every_frozen_release_document_matches_phase01_digest(self) -> None:
+        self.assertEqual(validate_governance._validate_v11317_frozen(
+            FINAL_SNAPSHOT_TEST_ROOT
+        ), [])
+
+
+class FinalSnapshotErroneousContextTests(unittest.TestCase):
+    def test_wrong_source_version_cannot_select_snapshot(self) -> None:
+        state = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state.md",
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        mode, snapshot, detail = validate_release_state.final_snapshot_selection(
+            FINAL_SNAPSHOT_TEST_ROOT, "1.13.19", state, contract
+        )
+        self.assertEqual(mode, "invalid")
+        self.assertIsNone(snapshot)
+        self.assertIn("unsupported source version", detail or "")
 
 
 if __name__ == "__main__":

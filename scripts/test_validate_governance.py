@@ -1406,5 +1406,62 @@ class SecurityProgressionV2GovernanceTests(unittest.TestCase):
         self.assertIn("coldkeep-v1-security-toolchain-progression-expectations/v1", contract)
         self.assertIn("coldkeep-v1-security-toolchain-progression-reference/v1", reference)
 
+class FinalSnapshotGovernanceTests(unittest.TestCase):
+    def test_v18_canonical_state_and_mirrors_are_exact(self) -> None:
+        canonical_path = governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
+        state, violations = governance._v18_canonical_state(
+            canonical_path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(violations, [])
+        for relative in governance.CURRENT_STATE_MIRROR_FILES:
+            mirror, mirror_violations = governance._v18_mirror(
+                relative,
+                (governance.ROOT / relative).read_text(encoding="utf-8"),
+            )
+            self.assertEqual(mirror_violations, [])
+            self.assertEqual(
+                {key: mirror[key] for key in governance.V18_MIRROR_KEYS},
+                {key: state[key] for key in governance.V18_MIRROR_KEYS},
+            )
+
+    def test_v18_body_checksum_is_canonical(self) -> None:
+        state_path = governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
+        state, violations = governance._v18_canonical_state(
+            state_path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(violations, [])
+        self.assertEqual(
+            governance._validate_v18_release_body(governance.ROOT, state), []
+        )
+
+    def test_v18_mirror_one_premise_mutation_fails(self) -> None:
+        relative = Path("AGENTS.md")
+        text = (governance.ROOT / relative).read_text(encoding="utf-8")
+        mutated = text.replace(
+            "CURRENT_PHASE: 3_NEXT", "CURRENT_PHASE: 4_NEXT", 1
+        )
+        mirror, violations = governance._v18_mirror(relative, mutated)
+        self.assertEqual(violations, [])
+        canonical, _ = governance._v18_canonical_state(
+            (
+                governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
+            ).read_text(encoding="utf-8")
+        )
+        self.assertNotEqual(mirror["CURRENT_PHASE"], canonical["CURRENT_PHASE"])
+
+    def test_historical_digest_mutation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in governance.V11317_FROZEN_SHA256:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(governance.ROOT / relative, destination)
+            target = root / next(iter(governance.V11317_FROZEN_SHA256))
+            target.write_bytes(target.read_bytes() + b"TEST_FIXTURE_ONLY\n")
+            violations = governance._validate_v11317_frozen(root)
+            self.assertEqual(len(violations), 1)
+            self.assertIn("frozen historical SHA-256", violations[0])
+
+
 if __name__ == "__main__":
     unittest.main()

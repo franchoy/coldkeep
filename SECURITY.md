@@ -4,20 +4,21 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.17
-RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
+SOURCE_VERSION: 1.13.18
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+CURRENT_PHASE: 3_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
+V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+V1_13_18_PUBLICATION: NOT_PUBLISHED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -32,14 +33,11 @@ documented bounds, and cooperative same-host/local-filesystem repository
 coordination. v1.13.15 is the published stable final planned v1.x release.
 Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
-attestation are immutable. v1.13.17 is published at immutable M17/A17 and
-GitHub Release `400460267`; its publication material remains frozen. The
-tracked descendant is a non-authorizing terminal-serialization declaration.
-The earlier marker `v1.13.17 is the active
-Route C recovery successor` is historical pre-publication wording, not current
-state. Phase 9M established source-scoped qualified external v1.x closure at
-C; protected-main serialization and effectiveness readback remain separate.
-This state authorizes no remote or Release operation. v1.13.16 is the
+attestation are immutable. v1.13.18 is an active local final-source-snapshot
+candidate with Phase 3 independent review Next and no publication claim.
+v1.13.17 remains published at immutable M17/A17 and GitHub Release `400460267`;
+its qualified Phase 9M and TS history remains unchanged. This state authorizes
+no remote or Release operation. v1.13.16 is the
 immutable failed-publication predecessor: its public annotated tag failed
 required certification and no GitHub Release exists.
 Planned v1 feature and architecture work remains closed and frozen. Existing

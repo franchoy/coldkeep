@@ -235,6 +235,67 @@ SECURITY_PROGRESSION_TRAILER_KEYS = (
     "STATUS", "VALIDATOR_EFFECT", "OWNER_AUTHORITY", "SECURITY_RESULT",
     "PROVENANCE",
 )
+FINAL_SNAPSHOT_MAX_BYTES = 32768
+FINAL_SNAPSHOT_EXPECTATION_KEYS = (
+    "SCHEMA", "SELECTION_SCHEMA", "REFERENCE_PATH", "REFERENCE_MAX_BYTES",
+    "EXPECTED_REFERENCE_SHA256", "EXPECTED_REFERENCE_SCHEMA",
+    "EXPECTED_SOURCE_VERSION", "EXPECTED_CANONICAL_REPOSITORY",
+    "EXPECTED_REPOSITORY_ID", "EXPECTED_BRANCH_REF", "EXPECTED_BASE_REF",
+    "EXPECTED_TAG_REF", "EXPECTED_BASE_M", "EXPECTED_BASE_M_TREE",
+    "EXPECTED_BASE_M_PARENTS", "EXPECTED_LANGUAGE_FLOOR",
+    "EXPECTED_TOOLCHAIN", "EXPECTED_PUBLISHED_M17",
+    "EXPECTED_ANNOTATED_TAG_A17", "EXPECTED_GITHUB_RELEASE_ID",
+    "EXPECTED_TS_ACCEPTANCE_STATUS", "EXPECTED_TS_ACCEPTANCE_SHA256",
+    "EXPECTED_ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE",
+    "EXPECTED_RETROSPECTIVE_PROCEDURAL_EXCEPTION",
+    "EXPECTED_DELTA_SCHEMA", "EXPECTED_DELTA_COUNT", "EXPECTED_STATUS",
+    "EXPECTED_VALIDATOR_EFFECT",
+)
+FINAL_SNAPSHOT_REFERENCE_KEYS = (
+    "SCHEMA", "SOURCE_VERSION", "CANONICAL_REPOSITORY", "REPOSITORY_ID",
+    "BRANCH_REF", "BASE_REF", "TAG_REF", "BASE_M", "BASE_M_TREE",
+    "BASE_M_PARENTS", "LANGUAGE_FLOOR", "TOOLCHAIN", "PUBLISHED_M17",
+    "ANNOTATED_TAG_A17", "GITHUB_RELEASE_ID", "TS_ACCEPTANCE_STATUS",
+    "TS_ACCEPTANCE_SHA256",
+    "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE",
+    "RETROSPECTIVE_PROCEDURAL_EXCEPTION", "DELTA_SCHEMA", "DELTA_COUNT",
+    "STATUS",
+)
+FINAL_SNAPSHOT_DELTA = (
+    ("M", "100644", ".github/copilot-instructions.md"),
+    ("M", "100644", ".github/instructions/ci.instructions.md"),
+    ("M", "100644", ".github/prompts/critical-path-coverage.prompt.md"),
+    ("M", "100644", ".github/prompts/regression-fix.prompt.md"),
+    ("M", "100644", ".github/workflows/ci.yml"),
+    ("M", "100644", "AGENTS.md"),
+    ("M", "100644", "CHANGELOG.md"),
+    ("M", "100644", "CONTRIBUTING.md"),
+    ("M", "100644", "PRE_RELEASE_CHECKLIST.md"),
+    ("M", "100644", "README.md"),
+    ("M", "100644", "SECURITY.md"),
+    ("M", "100644", "docs/release/v1.13/README.md"),
+    ("M", "100644", "docs/release/v1.13/v1.13.x-release-train.md"),
+    ("M", "100644", "internal/version/version.go"),
+    ("M", "100644", "internal/version/version_test.go"),
+    ("M", "100755", "scripts/audit_ci_enforcement.sh"),
+    ("M", "100644", "scripts/audit_ci_enforcement_test.go"),
+    ("M", "100644", "scripts/release_state_support.py"),
+    ("M", "100644", "scripts/test_validate_governance.py"),
+    ("M", "100644", "scripts/test_validate_release_state.py"),
+    ("M", "100755", "scripts/validate_governance.py"),
+    ("M", "100644", "scripts/validate_release_state.py"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-phase-list.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-release-body.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-release-body.sha256"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-release-gate.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-release-state-validator-contract.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-release-state.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-release-train-reconciliation.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-scope.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-source-test-allowlist.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.18-validation-checklist.md"),
+)
 SECURITY_PROGRESSION_V2_DELTA = (
     ("M", "100644", "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
     ("M", "100644", "docs/release/v1.13/v1.13.17-release-state.md"),
@@ -276,6 +337,8 @@ class ValidationResult:
     security_result: str = "NOT_EVALUATED_BY_VALIDATOR"
     diagnostic_schema: str = "coldkeep-release-state-diagnostic/v3"
     progression_contract_schema: Optional[str] = None
+    final_snapshot: str = "NOT_SELECTED"
+    final_snapshot_contract_schema: Optional[str] = None
 
     def add(self, rule: str, path: str, line: int, message: str) -> None:
         self.violations.append(Violation(rule, path, line, message))
@@ -297,6 +360,7 @@ class InternalError(Exception):
 
 DIAGNOSTIC_SCHEMA = "coldkeep-release-state-diagnostic/v3"
 DIAGNOSTIC_SCHEMA_V4 = "coldkeep-release-state-diagnostic/v4"
+DIAGNOSTIC_SCHEMA_V5 = "coldkeep-release-state-diagnostic/v5"
 DIAGNOSTIC_RESULTS = {"PASS", "FAIL", "NOT_EVALUATED", "UNAVAILABLE"}
 PR_PREDICATES = (
     ("pr.env.actions", "environment", "GITHUB_ACTIONS equals true"),
@@ -444,6 +508,13 @@ class DiagnosticRecorder:
         "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
         "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md",
     )
+    _FINAL_SNAPSHOT_SOURCE_PATHS = (
+        "scripts/release_state_support.py",
+        "scripts/validate_release_state.py",
+        "docs/release/v1.13/v1.13.18-release-state.md",
+        "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md",
+    )
 
     def __init__(self, requested_state: str, environment: dict[str, str]) -> None:
         self.requested_state = requested_state
@@ -454,6 +525,7 @@ class DiagnosticRecorder:
         self.root: Optional[Path] = None
         self.checkout_commit: Optional[str] = None
         self.checkout_tree: Optional[str] = None
+        self.source_paths = self._SOURCE_PATHS
         self.source_records: list[dict[str, object]] = [
             {
                 "path": relative,
@@ -484,6 +556,23 @@ class DiagnosticRecorder:
         """Measure loaded implementation bytes once at startup."""
         self.root = root
         try:
+            version_source = (root / "internal/version/version.go").read_text(
+                encoding="utf-8"
+            )
+            if re.search(r"(?m)^\s*Patch\s*=\s*18\s*$", version_source):
+                self.source_paths = self._FINAL_SNAPSHOT_SOURCE_PATHS
+                self.source_records = [
+                    {
+                        "path": relative,
+                        "loaded_path_match": None,
+                        "git_blob": None,
+                        "measured_git_blob": None,
+                        "measured_sha256": None,
+                        "matches_git_blob": None,
+                        "bytes": None,
+                    }
+                    for relative in self.source_paths
+                ]
             self.checkout_commit = run_git(root, ["rev-parse", "HEAD"]).stdout.strip()
             self.checkout_tree = run_git(root, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
             loaded = {
@@ -492,7 +581,7 @@ class DiagnosticRecorder:
             }
             records = []
             attribution_complete = True
-            for relative in self._SOURCE_PATHS:
+            for relative in self.source_paths:
                 expected_path = (root / relative).resolve()
                 actual_path = loaded.get(relative, expected_path)
                 if not actual_path.is_file() or actual_path.is_symlink():
@@ -560,7 +649,7 @@ class DiagnosticRecorder:
                     "matches_git_blob": None,
                     "bytes": None,
                 }
-                for relative in self._SOURCE_PATHS
+                for relative in self.source_paths
             ]
             self.mark_incomplete("source-attribution-unavailable")
 
@@ -749,6 +838,8 @@ class DiagnosticRecorder:
         security_result: str,
         diagnostic_schema: str = DIAGNOSTIC_SCHEMA,
         progression_contract_schema: Optional[str] = None,
+        final_snapshot: str = "NOT_SELECTED",
+        final_snapshot_contract_schema: Optional[str] = None,
     ) -> dict[str, object]:
         expected_repository: Optional[str] = None
         for evaluation in self.evaluations:
@@ -801,6 +892,11 @@ class DiagnosticRecorder:
         }
         if diagnostic_schema == DIAGNOSTIC_SCHEMA_V4:
             document["validator"]["progression_contract_schema"] = progression_contract_schema
+        if diagnostic_schema == DIAGNOSTIC_SCHEMA_V5:
+            document["validator"]["final_snapshot"] = final_snapshot
+            document["validator"]["final_snapshot_contract_schema"] = (
+                final_snapshot_contract_schema
+            )
         return document
 
     def write(self, destination: str, document: dict[str, object]) -> None:
@@ -997,6 +1093,15 @@ class TerminalDisposition:
 @dataclass(frozen=True)
 class SecurityToolchainProgression:
     """Parsed non-authorizing closed progression contract."""
+
+    expectations: dict[str, str]
+    values: dict[str, str]
+    delta: tuple[tuple[str, str, str], ...]
+
+
+@dataclass(frozen=True)
+class FinalSourceSnapshot:
+    """Parsed exact final-v1 source-snapshot selection."""
 
     expectations: dict[str, str]
     values: dict[str, str]
@@ -1235,6 +1340,199 @@ def load_terminal_disposition(
     if values["TAG_DIRECT_TARGET"] != values["PUBLISHED_M17"]:
         return None, "terminal disposition reference invalid: tag target is not the published commit"
     return TerminalDisposition(expectations, values), None
+
+
+def _final_snapshot_grammar(
+    values: dict[str, str],
+    delta: tuple[tuple[str, str, str], ...],
+) -> Optional[str]:
+    """Validate the closed scalar and delta grammar for v1.13.18."""
+    exact = {
+        "SCHEMA": "coldkeep-v1-final-source-snapshot-reference/v1",
+        "SOURCE_VERSION": "1.13.18",
+        "CANONICAL_REPOSITORY": "franchoy/coldkeep",
+        "REPOSITORY_ID": "1158711822",
+        "BRANCH_REF": "refs/heads/release/v1.13.18",
+        "BASE_REF": "refs/heads/main",
+        "TAG_REF": "refs/tags/v1.13.18",
+        "LANGUAGE_FLOOR": "go1.25.0",
+        "TOOLCHAIN": "go1.26.9",
+        "GITHUB_RELEASE_ID": "400460267",
+        "TS_ACCEPTANCE_STATUS": (
+            "TS_READBACK_01_OWNER_ACCEPTED_PROTECTED_MAIN_"
+            "EFFECTIVE_QUALIFIED_AT_M"
+        ),
+        "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE": "NOT_SATISFIED",
+        "RETROSPECTIVE_PROCEDURAL_EXCEPTION": "NOT_GRANTED",
+        "DELTA_SCHEMA": "coldkeep-v1-final-source-snapshot-delta/v1",
+        "DELTA_COUNT": "33",
+        "STATUS": "STRUCTURAL_NON_AUTHORIZING",
+    }
+    for key, expected in exact.items():
+        if values[key] != expected:
+            return f"{key} is unsupported"
+    for key in (
+        "BASE_M", "BASE_M_TREE", "PUBLISHED_M17", "ANNOTATED_TAG_A17",
+    ):
+        if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
+            return f"{key} grammar is invalid"
+    parents = values["BASE_M_PARENTS"].split(",")
+    if (
+        len(parents) != 2
+        or parents[0] == parents[1]
+        or any(NONZERO_GIT_SHA.fullmatch(value) is None for value in parents)
+    ):
+        return "BASE_M_PARENTS grammar is invalid"
+    if re.fullmatch(r"[0-9a-f]{64}", values["TS_ACCEPTANCE_SHA256"]) is None:
+        return "TS_ACCEPTANCE_SHA256 grammar is invalid"
+    if delta != FINAL_SNAPSHOT_DELTA:
+        return "delta inventory is unsupported"
+    if len(delta) != int(values["DELTA_COUNT"]):
+        return "delta count is invalid"
+    paths = [path for _, _, path in delta]
+    if len(paths) != len(set(paths)):
+        return "delta paths are duplicated"
+    for status_value, mode, path in delta:
+        if status_value not in ("M", "A") or mode not in ("100644", "100755"):
+            return "delta status or mode is invalid"
+        relative = PurePosixPath(path)
+        if (
+            "\\" in path
+            or "\x00" in path
+            or "//" in path
+            or relative.is_absolute()
+            or not relative.parts
+            or relative.as_posix() != path
+            or any(part in ("", ".", "..") for part in relative.parts)
+        ):
+            return "delta path is non-canonical"
+    return None
+
+
+def load_final_source_snapshot(
+    root: Path,
+    contract: Optional[Document],
+    pointer: Optional[str],
+) -> tuple[Optional[FinalSourceSnapshot], Optional[str]]:
+    """Load and verify the isolated final-source-snapshot reference."""
+    if contract is None:
+        return None, "final snapshot reference invalid: expectation owner is missing"
+    start = "<!-- coldkeep-v1-final-source-snapshot-expectations:start -->"
+    end = "<!-- coldkeep-v1-final-source-snapshot-expectations:end -->"
+    expectations, detail = _ordered_marked_values(
+        contract.lines, start, end, FINAL_SNAPSHOT_EXPECTATION_KEYS
+    )
+    if expectations is None:
+        return None, (
+            "final snapshot reference invalid: "
+            + (detail or "expectation block is missing")
+        )
+    if expectations["SCHEMA"] != "coldkeep-v1-final-source-snapshot-expectations/v1":
+        return None, "final snapshot reference invalid: expectation schema is unsupported"
+    if expectations["SELECTION_SCHEMA"] != "coldkeep-v1-final-source-snapshot-selection/v1":
+        return None, "final snapshot reference invalid: selection schema is unsupported"
+    if expectations["REFERENCE_MAX_BYTES"] != str(FINAL_SNAPSHOT_MAX_BYTES):
+        return None, "final snapshot reference invalid: byte limit is unsupported"
+    expected_path = expectations["REFERENCE_PATH"]
+    if pointer != expected_path:
+        return None, "final snapshot reference invalid: canonical pointer disagrees with expectations"
+    raw, unavailable = _safe_terminal_reference_bytes(
+        root, expected_path, FINAL_SNAPSHOT_MAX_BYTES
+    )
+    if unavailable:
+        return None, f"final snapshot reference unavailable: {unavailable}"
+    assert raw is not None
+    if hashlib.sha256(raw).hexdigest() != expectations["EXPECTED_REFERENCE_SHA256"]:
+        return None, "final snapshot reference invalid: digest disagrees with expectations"
+    if raw.startswith(b"\xef\xbb\xbf") or b"\r" in raw or b"\x00" in raw:
+        return None, "final snapshot reference invalid: encoding or newline form is invalid"
+    if not raw.endswith(b"\n") or raw.endswith(b"\n\n"):
+        return None, "final snapshot reference invalid: exactly one terminal LF is required"
+    try:
+        lines = raw[:-1].decode("utf-8").split("\n")
+    except UnicodeDecodeError:
+        return None, "final snapshot reference invalid: encoding is invalid"
+    values, detail = _ordered_marked_values(
+        lines,
+        "<!-- coldkeep-v1-final-source-snapshot-reference:start -->",
+        "<!-- coldkeep-v1-final-source-snapshot-reference:end -->",
+        FINAL_SNAPSHOT_REFERENCE_KEYS,
+    )
+    if values is None:
+        return None, (
+            "final snapshot reference invalid: scalar block "
+            + (detail or "is missing")
+        )
+    delta_start = "<!-- coldkeep-v1-final-source-snapshot-delta:start -->"
+    delta_end = "<!-- coldkeep-v1-final-source-snapshot-delta:end -->"
+    starts = [index for index, line in enumerate(lines) if line == delta_start]
+    ends = [index for index, line in enumerate(lines) if line == delta_end]
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        return None, "final snapshot reference invalid: delta marker cardinality or order is invalid"
+    start_index, end_index = starts[0], ends[0]
+    if (
+        lines[start_index + 1 : start_index + 2] != ["```text"]
+        or lines[end_index - 1 : end_index] != ["```"]
+    ):
+        return None, "final snapshot reference invalid: delta fence placement is invalid"
+    delta: list[tuple[str, str, str]] = []
+    for line in lines[start_index + 2 : end_index - 1]:
+        match = re.fullmatch(r"([MA]) (100644|100755) (\S+)", line)
+        if match is None:
+            return None, "final snapshot reference invalid: delta row grammar is invalid"
+        delta.append((match.group(1), match.group(2), match.group(3)))
+    frozen_delta = tuple(delta)
+    grammar_detail = _final_snapshot_grammar(values, frozen_delta)
+    if grammar_detail:
+        return None, f"final snapshot reference invalid: {grammar_detail}"
+    for key in FINAL_SNAPSHOT_REFERENCE_KEYS:
+        expectation_key = (
+            "EXPECTED_REFERENCE_SCHEMA" if key == "SCHEMA" else f"EXPECTED_{key}"
+        )
+        if expectations.get(expectation_key) != values[key]:
+            return None, f"final snapshot reference invalid: {key} disagrees with expectations"
+    if expectations["EXPECTED_VALIDATOR_EFFECT"] != (
+        "STRUCTURAL_ONLY_NO_PROVIDER_OR_OWNER_AUTHORITY"
+    ):
+        return None, "final snapshot reference invalid: validator effect is unsupported"
+
+    def object_type(key: str, expected: str) -> Optional[str]:
+        completed = run_git(root, ["cat-file", "-t", values[key]], allow_failure=True)
+        if completed.returncode:
+            return f"final snapshot reference unavailable: required {key} object is unavailable"
+        if completed.stdout.strip() != expected:
+            return f"final snapshot reference invalid: {key} object type is invalid"
+        return None
+
+    for key, expected in (
+        ("BASE_M", "commit"), ("BASE_M_TREE", "tree"),
+        ("PUBLISHED_M17", "commit"), ("ANNOTATED_TAG_A17", "tag"),
+    ):
+        object_detail = object_type(key, expected)
+        if object_detail:
+            return None, object_detail
+    if commit_tree(root, values["BASE_M"]) != values["BASE_M_TREE"]:
+        return None, "final snapshot reference invalid: BASE_M tree disagrees"
+    if commit_parents(root, values["BASE_M"]) != values["BASE_M_PARENTS"].split(","):
+        return None, "final snapshot reference invalid: BASE_M parents disagree"
+    tag_ref = run_git(
+        root, ["show-ref", "--verify", "--hash", "refs/tags/v1.13.17"],
+        allow_failure=True,
+    )
+    if tag_ref.returncode or tag_ref.stdout.strip() != values["ANNOTATED_TAG_A17"]:
+        return None, "final snapshot reference invalid: historical annotated tag ref disagrees"
+    tag_body = run_git(
+        root, ["cat-file", "-p", values["ANNOTATED_TAG_A17"]],
+        allow_failure=True,
+    )
+    headers = tag_body.stdout.split("\n\n", 1)[0].splitlines() if not tag_body.returncode else []
+    if (
+        [line[7:] for line in headers if line.startswith("object ")]
+        != [values["PUBLISHED_M17"]]
+        or [line[5:] for line in headers if line.startswith("type ")] != ["commit"]
+    ):
+        return None, "final snapshot reference invalid: historical tag direct target disagrees"
+    return FinalSourceSnapshot(expectations, values, frozen_delta), None
 
 
 def _security_progression_grammar(
@@ -3224,6 +3522,108 @@ def _tree_inventory(root: Path, commit: str) -> Optional[dict[str, tuple[str, st
     return inventory
 
 
+def final_snapshot_artifact(
+    root: Path,
+    head: str,
+    snapshot: FinalSourceSnapshot,
+    *,
+    require_complete: bool,
+) -> bool:
+    """Validate a merge-free candidate against exact M and the frozen delta."""
+    base = snapshot.values["BASE_M"]
+    if (
+        commit_tree(root, base) != snapshot.values["BASE_M_TREE"]
+        or commit_parents(root, base)
+        != snapshot.values["BASE_M_PARENTS"].split(",")
+    ):
+        return False
+    if head != base:
+        ancestry = run_git(
+            root, ["merge-base", "--is-ancestor", base, head], allow_failure=True
+        )
+        if ancestry.returncode != 0:
+            return False
+    merges = run_git(
+        root, ["rev-list", "--merges", f"{base}..{head}"], allow_failure=True
+    )
+    if merges.returncode or merges.stdout.strip():
+        return False
+    changed = run_git(
+        root,
+        [
+            "diff-tree", "--no-commit-id", "--name-status", "-r", "-z",
+            "--no-renames", base, head,
+        ],
+        allow_failure=True,
+    )
+    if changed.returncode:
+        return False
+    parts = changed.stdout.split("\0")
+    if parts and parts[-1] == "":
+        parts.pop()
+    if len(parts) % 2:
+        return False
+    actual = tuple(
+        (parts[index], parts[index + 1])
+        for index in range(0, len(parts), 2)
+    )
+    expected = tuple((status, path) for status, _, path in snapshot.delta)
+    if require_complete:
+        if actual != expected:
+            return False
+    elif any(item not in expected for item in actual):
+        return False
+    old_inventory = _tree_inventory(root, base)
+    new_inventory = _tree_inventory(root, head)
+    if old_inventory is None or new_inventory is None:
+        return False
+    expected_by_path = {
+        path: (status, mode) for status, mode, path in snapshot.delta
+    }
+    for status_value, path in actual:
+        expected_status, mode = expected_by_path[path]
+        if status_value != expected_status or new_inventory.get(path) != (mode, "blob"):
+            return False
+        if expected_status == "M" and old_inventory.get(path) != (mode, "blob"):
+            return False
+        if expected_status == "A" and path in old_inventory:
+            return False
+    return True
+
+
+def final_snapshot_main_artifact(
+    root: Path,
+    head: str,
+    snapshot: FinalSourceSnapshot,
+) -> bool:
+    """Validate exact protected-main topology `[M,R18]` and candidate tree."""
+    parents = commit_parents(root, head)
+    if len(parents) != 2 or parents[0] != snapshot.values["BASE_M"]:
+        return False
+    candidate = parents[1]
+    return bool(
+        commit_tree(root, head) is not None
+        and commit_tree(root, head) == commit_tree(root, candidate)
+        and final_snapshot_artifact(
+            root, candidate, snapshot, require_complete=True
+        )
+    )
+
+
+def final_snapshot_pr_base_matches(
+    env: dict[str, str], snapshot: FinalSourceSnapshot
+) -> bool:
+    """Require the PR payload base to remain exact M."""
+    payload = _load_event(env.get("GITHUB_EVENT_PATH", ""))
+    pull_request = payload.get("pull_request") if payload else None
+    base = pull_request.get("base") if isinstance(pull_request, dict) else None
+    return bool(
+        isinstance(base, dict)
+        and base.get("ref") == "main"
+        and base.get("sha") == snapshot.values["BASE_M"]
+    )
+
+
 def _successor_commit_identity_matches(
     root: Path,
     head: str,
@@ -4015,6 +4415,7 @@ def v1_context_scope(
     diagnostic_site: str = "context",
     terminal_disposition: Optional[TerminalDisposition] = None,
     security_progression: Optional[SecurityToolchainProgression] = None,
+    final_snapshot: Optional[FinalSourceSnapshot] = None,
 ) -> Optional[str]:
     """Return bounded structural evidence scope for one v1 state."""
     head, branch, _, _, _ = context
@@ -4109,9 +4510,18 @@ def v1_context_scope(
             )
         return None
     if state in ("development", "pre-release"):
-        if not any_github and branch == release_branch:
+        snapshot_ok = bool(
+            final_snapshot is None
+            or final_snapshot_artifact(
+                root,
+                head,
+                final_snapshot,
+                require_complete=state == "pre-release",
+            )
+        )
+        if not any_github and branch == release_branch and snapshot_ok:
             return "LOCAL_RELEASE_BRANCH"
-        if strict_release_push_context(
+        if snapshot_ok and strict_release_push_context(
             version,
             head,
             env,
@@ -4121,7 +4531,9 @@ def v1_context_scope(
             diagnostic_site=f"{diagnostic_site}-release-push",
         ):
             return "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY"
-        if strict_release_pr_context(
+        if (
+            snapshot_ok
+            and strict_release_pr_context(
             root,
             version,
             head,
@@ -4130,13 +4542,27 @@ def v1_context_scope(
             branch=branch,
             diagnostic=diagnostic,
             diagnostic_site=diagnostic_site,
+            )
+            and (
+                final_snapshot is None
+                or final_snapshot_pr_base_matches(env, final_snapshot)
+            )
         ):
             return "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY"
         return None
     if state == "merged-pending-final-main-certification":
-        if not any_github and branch == "main" and normal_merge_artifact(root, head):
+        snapshot_main_ok = bool(
+            final_snapshot is None
+            or final_snapshot_main_artifact(root, head, final_snapshot)
+        )
+        if (
+            not any_github
+            and branch == "main"
+            and normal_merge_artifact(root, head)
+            and snapshot_main_ok
+        ):
             return "LOCAL_ARTIFACT_ONLY"
-        if strict_main_push_context(
+        if snapshot_main_ok and strict_main_push_context(
             root, head, env, declaration.canonical_repository
         ):
             return "GITHUB_MAIN_PUSH_CONTEXT_CONSISTENCY"
@@ -4154,13 +4580,17 @@ def v1_context_scope(
             return "GITHUB_RECOVERY_PR_CONTEXT_CONSISTENCY"
         return None
     if state in ("tagged-pending-tag-certification", "tagged"):
+        snapshot_main_ok = bool(
+            final_snapshot is None
+            or final_snapshot_main_artifact(root, head, final_snapshot)
+        )
         if not any_github:
             if state == "tagged-pending-tag-certification" and not normal_merge_artifact(
                 root, head
             ):
                 return None
-            return "LOCAL_TAG_ARTIFACT_ONLY"
-        if strict_tag_push_context(
+            return "LOCAL_TAG_ARTIFACT_ONLY" if snapshot_main_ok else None
+        if snapshot_main_ok and strict_tag_push_context(
             root,
             version,
             head,
@@ -4216,6 +4646,7 @@ def git_context_matches(
     diagnostic_site: str = "ckrs016",
     terminal_disposition: Optional[TerminalDisposition] = None,
     security_progression: Optional[SecurityToolchainProgression] = None,
+    final_snapshot: Optional[FinalSourceSnapshot] = None,
 ) -> bool:
     """Return whether branch and GitHub refs are compatible with lifecycle."""
     if declaration is not None:
@@ -4233,6 +4664,7 @@ def git_context_matches(
                 diagnostic_site,
                 terminal_disposition,
                 security_progression,
+                final_snapshot,
             )
         )
     release_branch = f"release/v{version}"

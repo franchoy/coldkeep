@@ -80,8 +80,8 @@ This focus preserves system reliability as the primary delivery criterion.
 
 - Go 1.26.7 exactly with `GOTOOLCHAIN=local` for the certified v1.13.15 path
   (`go 1.25` remains the module language floor)
-- Go 1.26.9 exactly with `GOTOOLCHAIN=local` for the current checkout and
-  proposed v1.13.17 security-progression validation
+- Go 1.26.9 exactly with `GOTOOLCHAIN=local` for the current v1.13.18 final
+  source-snapshot checkout and validation
 - A native C compiler supported by Go on Linux, macOS, or Windows
 - PostgreSQL 16
 - Docker (recommended for reproducibility)

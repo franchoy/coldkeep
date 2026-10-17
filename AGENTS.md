@@ -6,29 +6,31 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.17
-RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
+SOURCE_VERSION: 1.13.18
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+CURRENT_PHASE: 3_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
+V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+V1_13_18_PUBLICATION: NOT_PUBLISHED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-- `v1.13.17` is published at immutable M17/A17 and GitHub Release
-  `400460267`. Phase 9M established a source-scoped qualified external terminal
-  disposition at C. The tracked descendant declares that dated result through
-  a structural, non-authorizing reference; protected-main serialization and
-  independent effectiveness readback remain separate. It authorizes no push,
-  PR, merge, tag, Release change, or new audit.
+- `v1.13.18` is the active final v1.x source-snapshot candidate. Phase 2 local
+  implementation is complete and Phase 3 independent source review is Next.
+  The tracked state is structural and non-authorizing; it claims no hosted
+  certification, merge, tag, publication, cleanup, or owner acceptance.
+- `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
+  Phase 9M and TS-READBACK-01 remain source-scoped qualified historical facts,
+  including their recorded failed-attempt qualifications.
 - `v1.13.16` is the immutable failed-publication predecessor: its public
   annotated tag failed required certification, no GitHub Release exists, and
   publication and Phase 19 remain unauthorized.
@@ -40,23 +42,18 @@ TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The v1.13.17 scope, 10-phase list, validation checklist, source/test
-  allowlist, release state, predecessor disposition, and release gate under
+- The v1.13.18 scope, 10-phase list, validation checklist, exact 33-path
+  allowlist, release state, snapshot reference, and release gate under
   `docs/release/v1.13/` are binding current authority.
 - Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
   boundary.
 - The `immutable-transition-v1` projections and predecessor disposition are
   structural only. They do not certify hosted operations or authorize a push,
   PR, merge, tag, publication, closure, or v2 implementation.
-- The active Phase 9ER2 recovery is a local-only five-path repair of the
-  post-publication closure-PR synthetic metadata rule. It preserves the direct
-  route and every common identity/topology guard, treats only a present null or
-  canonical lowercase nonzero full SHA as advisory, and may create at most one
-  ordinary local child of K17 with subject
-  `fix: treat closure PR merge metadata as advisory`. It does not authorize a
-  push, PR #122 write, workflow intervention, merge, tag/Release mutation,
-  publication, independent acceptance or terminal closure. Stop after the
-  committed attached certificate for separate exact-head review.
+- Phase 2 may modify only the exact 33 paths and must preserve every
+  `v1.13.17-*` release document byte. The four historical release branches and
+  all their worktrees remain untouched. No push, PR, merge, tag, Release,
+  workflow dispatch, cleanup, or v2 work is authorized.
 
 ## Correctness rules
 
@@ -71,7 +68,7 @@ TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
 ## Validation
 
 Use the canonical commands in `PRE_RELEASE_CHECKLIST.md` and the active
-v1.13.17 validation checklist. At minimum, run focused tests for the changed
+v1.13.18 validation checklist. At minimum, run focused tests for the changed
 area before the broader applicable gate. Do not represent unavailable hosted
 evidence as passing.
 
@@ -88,15 +85,16 @@ The frozen v1 release-critical execution contract uses Go 1.26.9 with
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-    V1_13_17: TERMINAL_DISPOSITION_DECLARATION_PRESENT
-    RELEASE_STATE: POST_RELEASE_TERMINAL_SERIALIZATION_CANDIDATE
-    PHASE_9: EXTERNAL_DISPOSITION_ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
+    V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+    V1_13_18: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+    RELEASE_STATE: DEVELOPMENT
+    PHASE_3: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED
     V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-    V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-    TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+    V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+    V1_13_18_PUBLICATION: NOT_PUBLISHED
     V2_PLANNING_REVIEW: AUTHORIZED
     V2_IMPLEMENTATION: NOT_STARTED
     V2_IMPLEMENTATION_AUTHORIZATION: REQUIRES_SEPARATE_PLAN

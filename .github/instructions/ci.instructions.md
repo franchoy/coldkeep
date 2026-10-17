@@ -2,20 +2,21 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.17
-RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
+SOURCE_VERSION: 1.13.18
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+CURRENT_PHASE: 3_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
+V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+V1_13_18_PUBLICATION: NOT_PUBLISHED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -104,18 +105,16 @@ Critical-path coverage should focus on:
 
 Do not add global coverage gates unless explicitly approved.
 
-## v1.13.17 Recovery Boundary
+## v1.13.18 Final Snapshot Boundary
 
-v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
-Its tracked descendant is a non-authorizing terminal-disposition declaration.
-Phase 9M established source-scoped qualified external closure at C; protected-
-main serialization and effectiveness readback remain separate. This state does
-not certify its own checks or authorize a push, PR, merge, tag, Release change,
-or closure. v1.13.16 is the immutable failed-publication
+v1.13.18 is an active local final-source-snapshot candidate with Phase 3
+independent review Next. It changes release identity and enforcement only,
+keeps Go 1.26.9, and claims no hosted certification or publication. v1.13.17
+remains immutable at M17/A17 and Release `400460267`; its qualified Phase 9M
+and TS history is preserved. v1.13.16 is the immutable failed-publication
 predecessor; its public tag failed required certification and no GitHub
-Release exists. v1.13.15 remains published stable and immutable. Use
-terminal-serialization validation on its exact branch, follow the 10-phase plan
-and exact phase mode, and do not
+Release exists. v1.13.15 remains published stable and immutable. Follow the
+v1.13.18 10-phase plan and exact 33-path boundary, and do not
 use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;

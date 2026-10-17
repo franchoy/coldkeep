@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.17%20published-blue)
+![Status](https://img.shields.io/badge/status-v1.13.18%20active-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -31,32 +31,29 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.17
-RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
+SOURCE_VERSION: 1.13.18
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+CURRENT_PHASE: 3_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
+V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+V1_13_18_PUBLICATION: NOT_PUBLISHED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.17 — Annotated-Tag Certification Recovery is published at immutable
-M17/A17 and GitHub Release `400460267`; its source-only publication body and
-checksum remain frozen. Phase 9M established the external terminal disposition
-at C on a source-scoped qualified basis. The tracked descendant is a
-non-authorizing terminal-serialization declaration; protected-main
-serialization and effectiveness readback remain separate. It authorizes no
-push, PR, merge, tag, Release change, or new audit. The
-work remains limited to release governance and does not change product storage
-behavior. v1.13.16 is the immutable
+v1.13.18 — Final v1.x Source Snapshot and Closure Handoff is active locally.
+Phase 2 implementation is complete and Phase 3 independent source review is
+Next. It adds no product feature or format change and is not yet published.
+v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
+and TS-READBACK-01 retain their source-scoped qualification. v1.13.16 is the immutable
 failed-publication predecessor: annotated tag A16 exists, its required tag CI
 failed, the tag certificate was withheld, no GitHub Release exists, and
 publication and Phase 19 remain unauthorized.
@@ -72,14 +69,16 @@ requires a separate plan.
 
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-    V1_13_17: READY_PRE_RELEASE
-    RELEASE_STATE: PRE_RELEASE
-    PHASE_5: NEXT
+    V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+    V1_13_18: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+    RELEASE_STATE: DEVELOPMENT
+    PHASE_3: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED
     V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-    V1_X_FULL_CLOSURE: NOT_ESTABLISHED
+    V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+    V1_13_18_PUBLICATION: NOT_PUBLISHED
     V2_IMPLEMENTATION: NOT_STARTED
 
 ## Historical release-state narrative through v1.13.14
