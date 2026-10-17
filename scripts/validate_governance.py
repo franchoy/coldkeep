@@ -98,6 +98,7 @@ CURRENT_STATE_KEYS = BASE_CURRENT_STATE_KEYS + TERMINAL_MIRROR_STATE_KEYS
 CANONICAL_ONLY_STATE_KEYS = (
     "RELEASE_BODY_SHA256",
     "TERMINAL_DISPOSITION_REFERENCE",
+    "SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA",
     "SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE",
 )
 CURRENT_STATE_MIRROR_START = "<!-- coldkeep-current-state:start -->"
@@ -450,18 +451,29 @@ def validate_security_progression_contract(
     if state_text is None or contract_text is None:
         return []
     state, _ = canonical_current_state(state_text)
+    schema = state.get("SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA")
     pointer = state.get("SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE")
-    expectation_present = (
+    v1_expectation_present = (
         "coldkeep-security-toolchain-progression-expectations:" in contract_text
+    )
+    v2_expectation_present = (
+        "coldkeep-security-toolchain-progression-v2-expectations:" in contract_text
     )
     reference_path = SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
     reference_present = (root / reference_path).exists() or (
         root / reference_path
     ).is_symlink()
-    selected = bool(pointer or expectation_present or reference_present)
+    selected = bool(schema or pointer or v1_expectation_present or v2_expectation_present or reference_present)
     if not selected:
         return []
-    if not pointer or not expectation_present:
+    if schema:
+        if schema != "coldkeep-v1-security-toolchain-progression-selection/v2":
+            return [f"{CANONICAL_CURRENT_STATE_FILE}: progression selection schema is unsupported"]
+        if not pointer or not v2_expectation_present or v1_expectation_present:
+            return [
+                f"{CANONICAL_CURRENT_STATE_FILE}: v2 progression schema, pointer, expectations, and reference must be selected together without v1 material"
+            ]
+    elif not pointer or not v1_expectation_present or v2_expectation_present:
         return [
             f"{CANONICAL_CURRENT_STATE_FILE}: progression pointer, expectations, and reference must be selected together"
         ]

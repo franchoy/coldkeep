@@ -18,9 +18,11 @@ from release_state_support import (
     InternalError,
     LifecycleBoundaries,
     LifecycleDeclaration,
+    SECURITY_PROGRESSION_MAX_BYTES,
     SecurityToolchainProgression,
     TerminalDisposition,
     ValidationResult,
+    _safe_terminal_reference_bytes,
     accepted_post_release_pr,
     accepted_recovery_pr,
     accepted_release_pr,
@@ -274,20 +276,35 @@ def security_progression_selection(
         f"v{version}-security-toolchain-progression-reference.md"
     )
     pointers: list[str] = []
+    schemas: list[str] = []
     if state_doc is not None:
         for line in state_doc.lines:
             if line.startswith("## "):
                 break
-            match = re.fullmatch(
-                r"SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE: (\S.*)", line
-            )
-            if match:
-                pointers.append(match.group(1))
-    expectation_present = bool(
+            if line.startswith("SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE:"):
+                pointers.append(line.partition(":")[2].strip())
+            if line.startswith("SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA:"):
+                schemas.append(line.partition(":")[2].strip())
+    v1_expectation_present = bool(
         contract_doc
         and "<!-- coldkeep-security-toolchain-progression-expectations:start -->"
         in contract_doc.lines
     )
+    v2_expectation_present = bool(
+        contract_doc
+        and "<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->"
+        in contract_doc.lines
+    )
+    if contract_doc:
+        v1_expectation_present = v1_expectation_present or (
+            "SCHEMA: coldkeep-v1-security-toolchain-progression-expectations/v1"
+            in contract_doc.lines
+        )
+        v2_expectation_present = v2_expectation_present or (
+            "SCHEMA: coldkeep-v1-security-toolchain-progression-expectations/v2"
+            in contract_doc.lines
+        )
+    loaded_reference: Optional[tuple[Optional[bytes], Optional[str]]] = None
     try:
         os.lstat(root / reference_path)
         reference_present = True
@@ -295,25 +312,39 @@ def security_progression_selection(
         reference_present = False
     except OSError:
         reference_present = True
-    if not pointers and not expectation_present and not reference_present:
+    if reference_present:
+        loaded_reference = _safe_terminal_reference_bytes(
+            root, reference_path, SECURITY_PROGRESSION_MAX_BYTES
+        )
+    v2_selected = bool(schemas or v2_expectation_present)
+    if not v2_selected and loaded_reference is not None and loaded_reference[0] is not None:
+        v2_selected = b"SCHEMA: coldkeep-v1-security-toolchain-progression-reference/v2\n" in loaded_reference[0]
+    if not pointers and not schemas and not v1_expectation_present and not v2_expectation_present and not reference_present:
         return "legacy", None, None
-    if len(pointers) != 1 or not expectation_present:
+    if v2_selected:
+        if schemas != ["coldkeep-v1-security-toolchain-progression-selection/v2"]:
+            return "v2-invalid", None, "security progression reference invalid: v2 selection schema is missing, duplicated, or unsupported"
+        if len(pointers) != 1 or not v2_expectation_present or v1_expectation_present:
+            return "v2-invalid", None, "security progression reference invalid: v2 pointer, expectations, and reference must be selected together without v1 material"
+    elif len(pointers) != 1 or not v1_expectation_present:
         return (
             "invalid",
             None,
             "security progression reference invalid: pointer, expectations, and reference must be selected together",
         )
     progression, detail = load_security_toolchain_progression(
-        root, contract_doc, pointers[0]
+        root, contract_doc, pointers[0], loaded_reference
     )
     if detail:
         mode = "unavailable" if " reference unavailable:" in detail else "invalid"
+        if v2_selected:
+            mode = f"v2-{mode}"
         return mode, None, detail
     if progression is None:
-        return "invalid", None, "security progression reference invalid: progression is missing"
+        return "v2-invalid" if v2_selected else "invalid", None, "security progression reference invalid: progression is missing"
     if progression.values["SOURCE_VERSION"] != version:
-        return "invalid", None, "security progression reference invalid: source version disagrees"
-    return "progression", progression, None
+        return "v2-invalid" if v2_selected else "invalid", None, "security progression reference invalid: source version disagrees"
+    return "v2-progression" if v2_selected else "progression", progression, None
 
 
 def check_ckrs002(version: str, doc: Optional[Document], result: ValidationResult) -> None:
@@ -1254,9 +1285,16 @@ def validate(
             docs["contract"],
         )
     )
+    if progression_mode.startswith("v2-"):
+        result.diagnostic_schema = "coldkeep-release-state-diagnostic/v4"
+        result.progression_contract_schema = (
+            "INVALID" if progression_mode == "v2-invalid" else
+            "UNAVAILABLE" if progression_mode == "v2-unavailable" else
+            "coldkeep-v1-security-toolchain-progression-reference/v2"
+        )
     if progression_detail:
         result.security_progression = (
-            "UNAVAILABLE" if progression_mode == "unavailable" else "INVALID"
+            "UNAVAILABLE" if progression_mode in ("unavailable", "v2-unavailable") else "INVALID"
         )
         result.add(
             "CKRS020",
@@ -1371,7 +1409,9 @@ def validate(
         disposition_doc, disposition_load_error = (
             load_predecessor_disposition_document(root, disposition_path)
         )
-    progression_selectable = progression_mode not in ("invalid", "unavailable")
+    progression_selectable = progression_mode not in (
+        "invalid", "unavailable", "v2-invalid", "v2-unavailable"
+    )
     if requested_state == "auto" and terminal_mode != "invalid" and progression_selectable:
         state, context, evidence_scope = infer_state(
             root,
@@ -1425,7 +1465,7 @@ def validate(
                 "CKRS020",
                 ".git",
                 0,
-                "security progression artifact is unavailable or violates the exact H1/H2 topology and delta",
+                "security progression artifact is unavailable or violates the exact selected progression topology and delta",
             )
     immutable_only_states = {
         "merged-pending-final-main-certification",
@@ -1500,6 +1540,18 @@ def validate(
     return result
 
 
+def _v2_human_suffix(result: ValidationResult) -> str:
+    """Render selected-v2 fields already carried by the evaluated result."""
+    if result.diagnostic_schema != "coldkeep-release-state-diagnostic/v4":
+        return ""
+    return (
+        f" progression_contract_schema={result.progression_contract_schema}"
+        f" authorization_status={result.authorization_status}"
+        f" certification_status={result.certification_status}"
+        f" evidence_scope={result.evidence_scope}"
+    )
+
+
 def emit(result: ValidationResult, as_json: bool) -> int:
     violations = result.ordered()
     if as_json:
@@ -1518,24 +1570,28 @@ def emit(result: ValidationResult, as_json: bool) -> int:
             "violations": [item.__dict__ for item in violations],
             "error": None,
         }
+        if result.diagnostic_schema == "coldkeep-release-state-diagnostic/v4":
+            payload["progression_contract_schema"] = result.progression_contract_schema
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     elif not violations:
+        contract_suffix = _v2_human_suffix(result)
         print(
             f"[release-state] OK state={result.state} "
             f"active_version={result.active_version} violations=0 "
             f"security_progression={result.security_progression} "
-            f"security_result={result.security_result}"
+            f"security_result={result.security_result}{contract_suffix}"
         )
     else:
         for item in violations:
             location = item.path if item.line == 0 else f"{item.path}:{item.line}"
             print(f"[{item.rule}] {location} {item.message}")
+        contract_suffix = _v2_human_suffix(result)
         print(
             f"[release-state] FAILED state={result.state or 'unknown'} "
             f"active_version={result.active_version or 'unknown'} "
             f"violations={len(violations)} "
             f"security_progression={result.security_progression} "
-            f"security_result={result.security_result}"
+            f"security_result={result.security_result}{contract_suffix}"
         )
     return 0 if not violations else 1
 
@@ -1594,6 +1650,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         rule_codes: list[str],
         security_progression: str,
         security_result: str,
+        diagnostic_schema: str = "coldkeep-release-state-diagnostic/v3",
+        progression_contract_schema: Optional[str] = None,
     ) -> None:
         if diagnostic_initialization_failed:
             print(
@@ -1611,6 +1669,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 rule_codes=rule_codes,
                 security_progression=security_progression,
                 security_result=security_result,
+                diagnostic_schema=diagnostic_schema,
+                progression_contract_schema=progression_contract_schema,
             )
             diagnostic.write(args.diagnostic_json, document)
         except Exception:
@@ -1632,6 +1692,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             rule_codes=[item.rule for item in result.ordered()],
             security_progression=result.security_progression,
             security_result=result.security_result,
+            diagnostic_schema=result.diagnostic_schema,
+            progression_contract_schema=result.progression_contract_schema,
         )
         return status
     except InternalError as error:

@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -31,6 +31,36 @@ from release_state_support import (
 )
 
 
+def parse_release_state_human_output(output: str) -> dict[str, object]:
+    """Parse one unambiguous human summary and its ordered CKRS rule list."""
+    lines = output.splitlines()
+    summaries = [
+        line for line in lines if line.startswith("[release-state] ")
+    ]
+    if len(summaries) != 1:
+        raise AssertionError(f"expected one release-state summary, got {summaries!r}")
+    summary = summaries[0]
+    match = re.fullmatch(r"\[release-state\] (OK|FAILED)(?: ([^\n]+))?", summary)
+    if match is None:
+        raise AssertionError(f"malformed release-state summary: {summary!r}")
+    fields: dict[str, str] = {}
+    for token in (match.group(2) or "").split():
+        if token.count("=") != 1:
+            raise AssertionError(f"ambiguous release-state token: {token!r}")
+        key, value = token.split("=", 1)
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", key) or not value:
+            raise AssertionError(f"invalid release-state token: {token!r}")
+        if key in fields:
+            raise AssertionError(f"duplicate release-state field: {key}")
+        fields[key] = value
+    rules = []
+    for line in lines:
+        rule = re.match(r"^\[(CKRS[0-9]{3})\](?: |$)", line)
+        if rule:
+            rules.append(rule.group(1))
+    return {"status": match.group(1), "fields": fields, "rules": rules}
+
+
 SCRIPT = Path(__file__).with_name("validate_release_state.py").resolve()
 GITHUB_KEYS = (
     "GITHUB_EVENT_NAME",
@@ -40,6 +70,7 @@ GITHUB_KEYS = (
     "GITHUB_BASE_REF",
     "GITHUB_EVENT_PATH",
     "GITHUB_REPOSITORY",
+    "GITHUB_REPOSITORY_ID",
     "GITHUB_SHA",
     "GITHUB_ACTIONS",
     "GITHUB_REF_TYPE",
@@ -304,6 +335,251 @@ def run_validator_script(
         env=actual_env,
         check=False,
     )
+
+
+class FixtureEnvironmentIsolationV2Tests(unittest.TestCase):
+    """Prove fixture launchers remove every ambient GitHub context field."""
+
+    def captured_environment(self, *, outer: dict[str, str], explicit: dict[str, str] | None = None) -> dict[str, str]:
+        captured: dict[str, str] = {}
+
+        def capture(*args: object, **kwargs: object) -> ProcessResult:
+            captured.update(kwargs["env"])
+            return ProcessResult(["TEST_FIXTURE_ONLY"], 0, "", "")
+
+        with mock.patch.dict(os.environ, outer, clear=True), mock.patch.object(
+            sys.modules[__name__], "run_process", side_effect=capture
+        ):
+            run_validator(Path("/TEST_FIXTURE_ONLY/repository"), env=explicit)
+        return captured
+
+    def real_fixture_run(
+        self,
+        fixture: "_V2ProgressionFixture",
+        *,
+        outer: dict[str, str],
+        explicit: dict[str, str] | None = None,
+        state: str = "auto",
+    ) -> tuple[ProcessResult, dict[str, object], dict[str, str]]:
+        """Record one delegated real validator child and prove parent restoration."""
+        actual_run_process = run_process
+        observed: list[dict[str, object]] = []
+
+        def delegate(argv: list[str], **kwargs: object) -> ProcessResult:
+            observed.append(
+                {
+                    "argv": list(argv),
+                    "cwd": kwargs.get("cwd"),
+                    "env": dict(kwargs["env"]),
+                }
+            )
+            return actual_run_process(argv, **kwargs)
+
+        original_parent = dict(os.environ)
+        with mock.patch.dict(os.environ, outer, clear=True):
+            patched_parent = dict(os.environ)
+            with mock.patch.object(
+                sys.modules[__name__], "run_process", side_effect=delegate
+            ):
+                completed, payload = fixture.run_json(state, env=explicit)
+            self.assertEqual(os.environ, patched_parent)
+        self.assertEqual(os.environ, original_parent)
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0]["argv"][0], sys.executable)
+        self.assertEqual(Path(observed[0]["argv"][1]).resolve(), SCRIPT)
+        return completed, payload, observed[0]["env"]
+
+    def contaminated_outer(self, **github: str) -> dict[str, str]:
+        outer = dict(os.environ)
+        outer["COLDKEEP_TEST_UNRELATED"] = "retained"
+        outer.update(github)
+        return outer
+
+    def test_github_keys_cover_every_production_context_field(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            production = set(release_state_support.github_context())
+        self.assertTrue(production.issubset(set(GITHUB_KEYS)))
+        self.assertIn("GITHUB_REPOSITORY_ID", GITHUB_KEYS)
+
+    def test_run_validator_explicit_repository_id_override_wins_after_cleanup(self) -> None:
+        env = self.captured_environment(
+            outer={"GITHUB_REPOSITORY_ID": "999999999"},
+            explicit={"GITHUB_REPOSITORY_ID": "1158711822"},
+        )
+        self.assertEqual(env["GITHUB_REPOSITORY_ID"], "1158711822")
+        fixture = _V2ProgressionFixture()
+        self.addCleanup(fixture.close)
+        h3 = fixture.make_h3()
+        _, exact = fixture.push_context(h3)
+        outer = self.contaminated_outer(GITHUB_REPOSITORY_ID="999999999")
+        completed, payload, child = self.real_fixture_run(
+            fixture, outer=outer, explicit=exact
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H2_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY",
+        )
+        self.assertEqual(child["GITHUB_REPOSITORY_ID"], "1158711822")
+        for name, value in (
+            ("missing", None),
+            ("wrong", "1158711821"),
+            ("boolean-like", "true"),
+            ("zero", "0"),
+            ("signed", "+1158711822"),
+            ("whitespace", " 1158711822 "),
+            ("partial", "115871182"),
+        ):
+            with self.subTest(explicit_repository_id=name):
+                invalid = dict(exact)
+                if value is None:
+                    invalid.pop("GITHUB_REPOSITORY_ID")
+                else:
+                    invalid["GITHUB_REPOSITORY_ID"] = value
+                failed, failed_payload, failed_child = self.real_fixture_run(
+                    fixture, outer=outer, explicit=invalid,
+                    state="post-release-terminal-serialization-candidate",
+                )
+                self.assertEqual(failed.returncode, 1)
+                self.assertIn(
+                    "CKRS016",
+                    [item["rule"] for item in failed_payload["violations"]],
+                )
+                self.assertEqual(
+                    failed_child.get("GITHUB_REPOSITORY_ID"), value
+                )
+
+    def test_run_validator_preserves_unrelated_parent_environment_and_restores_outer_environment(self) -> None:
+        outer = {"COLDKEEP_TEST_UNRELATED": "retained", "GITHUB_SHA": "a" * 40}
+        with mock.patch.dict(os.environ, outer, clear=True):
+            env = self.captured_environment(outer=dict(os.environ))
+            self.assertEqual(os.environ, outer)
+        self.assertEqual(env["COLDKEEP_TEST_UNRELATED"], "retained")
+        self.assertNotIn("GITHUB_SHA", env)
+        fixture = _V2ProgressionFixture()
+        self.addCleanup(fixture.close)
+        h3 = fixture.make_h3()
+        complete_outer = self.contaminated_outer(
+            **{key: f"ambient-{index}" for index, key in enumerate(GITHUB_KEYS)}
+        )
+        completed, payload, child = self.real_fixture_run(
+            fixture, outer=complete_outer
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(payload["evidence_scope"], "LOCAL_H2_SUCCESSOR_CANDIDATE")
+        self.assertEqual(child["COLDKEEP_TEST_UNRELATED"], "retained")
+        self.assertTrue(all(key not in child for key in GITHUB_KEYS))
+        _, push = fixture.push_context(h3)
+        push["GITHUB_REPOSITORY_ID"] = "wrong"
+        failed, failed_payload, failed_child = self.real_fixture_run(
+            fixture,
+            outer=complete_outer,
+            explicit=push,
+            state="post-release-terminal-serialization-candidate",
+        )
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn(
+            "CKRS016", [item["rule"] for item in failed_payload["violations"]]
+        )
+        self.assertEqual(failed_child["COLDKEEP_TEST_UNRELATED"], "retained")
+
+    def test_run_validator_strips_ambient_repository_id_before_local_fixture(self) -> None:
+        env = self.captured_environment(outer={"GITHUB_REPOSITORY_ID": "999999999"})
+        self.assertNotIn("GITHUB_REPOSITORY_ID", env)
+        fixture = _V2ProgressionFixture()
+        self.addCleanup(fixture.close)
+        fixture.make_h3()
+        outer = self.contaminated_outer(GITHUB_REPOSITORY_ID="999999999")
+        completed, payload, child = self.real_fixture_run(fixture, outer=outer)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(payload["state"], "post-release-terminal-serialization-candidate")
+        self.assertEqual(payload["evidence_scope"], "LOCAL_H2_SUCCESSOR_CANDIDATE")
+        self.assertEqual(payload["security_progression"], "H2_SUCCESSOR_STRUCTURAL_ONLY")
+        self.assertNotIn("GITHUB_REPOSITORY_ID", child)
+        self.assertEqual(child["COLDKEEP_TEST_UNRELATED"], "retained")
+
+    def test_run_validator_strips_full_ambient_pr_context_before_fixture_override(self) -> None:
+        ambient = {key: f"ambient-{index}" for index, key in enumerate(GITHUB_KEYS)}
+        explicit = {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/123/merge"}
+        env = self.captured_environment(outer=ambient, explicit=explicit)
+        self.assertEqual({key: env[key] for key in explicit}, explicit)
+        self.assertTrue(all(key not in env for key in set(GITHUB_KEYS) - set(explicit)))
+        fixture = _V2ProgressionFixture()
+        self.addCleanup(fixture.close)
+        h3 = fixture.make_h3()
+        outer = self.contaminated_outer(**ambient)
+        completed, payload, local_child = self.real_fixture_run(
+            fixture, outer=outer
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(payload["evidence_scope"], "LOCAL_H2_SUCCESSOR_CANDIDATE")
+        self.assertTrue(all(key not in local_child for key in GITHUB_KEYS))
+        _, direct = fixture.pr_context(h3, h3)
+        completed, payload, direct_child = self.real_fixture_run(
+            fixture, outer=outer, explicit=direct
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H2_SUCCESSOR_PR_DIRECT_CONTEXT_CONSISTENCY",
+        )
+        self.assertEqual(
+            {key: direct_child[key] for key in direct}, direct
+        )
+        self.assertTrue(
+            all(key not in direct_child for key in set(GITHUB_KEYS) - set(direct))
+        )
+        synthetic = fixture.synthetic_merge(h3)
+        fixture.checkout_detached(synthetic)
+        _, synthetic_environment = fixture.pr_context(h3, synthetic)
+        completed, payload, synthetic_child = self.real_fixture_run(
+            fixture, outer=outer, explicit=synthetic_environment
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H2_SUCCESSOR_PR_SYNTHETIC_CONTEXT_CONSISTENCY",
+        )
+        self.assertEqual(
+            synthetic_child["GITHUB_EVENT_PATH"],
+            synthetic_environment["GITHUB_EVENT_PATH"],
+        )
+
+    def test_run_validator_strips_full_ambient_push_context_before_fixture_override(self) -> None:
+        ambient = {key: f"ambient-{index}" for index, key in enumerate(GITHUB_KEYS)}
+        explicit = {"GITHUB_EVENT_NAME": "push", "GITHUB_REPOSITORY_ID": "1158711822"}
+        env = self.captured_environment(outer=ambient, explicit=explicit)
+        self.assertEqual({key: env[key] for key in explicit}, explicit)
+        self.assertTrue(all(key not in env for key in set(GITHUB_KEYS) - set(explicit)))
+        fixture = _V2ProgressionFixture()
+        self.addCleanup(fixture.close)
+        h3 = fixture.make_h3()
+        outer = self.contaminated_outer(**ambient)
+        completed, payload, local_child = self.real_fixture_run(
+            fixture, outer=outer
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(payload["evidence_scope"], "LOCAL_H2_SUCCESSOR_CANDIDATE")
+        self.assertTrue(all(key not in local_child for key in GITHUB_KEYS))
+        _, push = fixture.push_context(h3)
+        for attachment in ("attached", "detached"):
+            with self.subTest(attachment=attachment):
+                if attachment == "detached":
+                    fixture.checkout_detached(h3)
+                completed, payload, child = self.real_fixture_run(
+                    fixture, outer=outer, explicit=push
+                )
+                self.assertEqual(
+                    completed.returncode, 0, completed.stdout + completed.stderr
+                )
+                self.assertEqual(
+                    payload["evidence_scope"],
+                    "GITHUB_H2_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY",
+                )
+                self.assertEqual({key: child[key] for key in push}, push)
+                self.assertTrue(
+                    all(key not in child for key in set(GITHUB_KEYS) - set(push))
+                )
 
 
 def replace(root: Path, relative: str, old: str, new: str) -> None:
@@ -7018,6 +7294,20 @@ class TerminalSerializationContractTests(unittest.TestCase):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, target, follow_symlinks=False)
+        # The existing progression methods are immutable historical-v1 tests.
+        # Source their three contract inputs from exact H2, not the dirty v2 image.
+        for relative in (
+            Path(self.TERMINAL_DOCS[0]),
+            Path(self.TERMINAL_DOCS[1]),
+            Path("docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md"),
+        ):
+            blob = run_process(
+                [resolved_executable("git"), "-C", str(source), "show", f"HEAD:{relative.as_posix()}"],
+                check=True,
+            ).stdout
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(blob, encoding="utf-8")
         progression_reference = Path(
             "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md"
         )
@@ -7221,7 +7511,10 @@ class TerminalSerializationContractTests(unittest.TestCase):
         reference_relative = Path(
             "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md"
         )
-        reference = (source_root / reference_relative).read_text(encoding="utf-8")
+        reference = run_process(
+            [resolved_executable("git"), "-C", str(source_root), "show", f"HEAD:{reference_relative.as_posix()}"],
+            check=True,
+        ).stdout
         replacements = {
             "3d32e1662fdc0de251fd87bc5af6a309fcf3b6a6": self.C,
             "34c44fcce146336834e9b4cf38fe9308cb35c3e0": self.C_TREE,
@@ -7234,9 +7527,10 @@ class TerminalSerializationContractTests(unittest.TestCase):
         reference_path.write_text(reference, encoding="utf-8")
         reference_digest = hashlib.sha256(reference.encode("utf-8")).hexdigest()
 
-        source_contract = (
-            source_root / self.TERMINAL_DOCS[1]
-        ).read_text(encoding="utf-8")
+        source_contract = run_process(
+            [resolved_executable("git"), "-C", str(source_root), "show", f"HEAD:{self.TERMINAL_DOCS[1]}"],
+            check=True,
+        ).stdout
         block_match = re.search(
             r"(?ms)^<!-- coldkeep-security-toolchain-progression-expectations:start -->\n.*?^<!-- coldkeep-security-toolchain-progression-expectations:end -->$",
             source_contract,
@@ -8801,6 +9095,1819 @@ class LifecycleBoundaryCompatibilityTests(unittest.TestCase):
                 "post-release-closed", self.progression(19), self.boundaries
             )
         )
+
+
+class _V2ProgressionFixture:
+    """Fixture-owned predecessor -> M17 -> C -> H1 -> H2 graph."""
+
+    PATHS = (
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        "docs/release/v1.13/v1.13.17-release-state.md",
+        "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md",
+        "docs/release/v1.13/v1.13.17-source-test-allowlist.md",
+        "scripts/release_state_support.py", "scripts/test_validate_governance.py",
+        "scripts/test_validate_release_state.py", "scripts/validate_governance.py",
+        "scripts/validate_release_state.py",
+    )
+    PREDECESSOR_PATH = (
+        "docs/release/v1.13/v1.13.17-predecessor-disposition.md"
+    )
+    TERMINAL_PATH = (
+        "docs/release/v1.13/v1.13.17-terminal-disposition-reference.md"
+    )
+
+    def __init__(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "repo"
+        self.root.mkdir()
+        source = SCRIPT.parents[1]
+        tracked = run_process(
+            [resolved_executable("git"), "-C", str(source), "ls-tree", "-r", "--name-only", "-z", "HEAD"],
+            check=True,
+        ).stdout.split("\0")
+        for name in tracked:
+            if not name:
+                continue
+            relative = Path(name)
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / relative, target, follow_symlinks=False)
+        git(self.root, "init")
+        git(self.root, "config", "user.name", "fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY predecessor P")
+        self.P = self.rev("HEAD")
+        git(self.root, "tag", "-a", "v1.13.16", "-m", "TEST_FIXTURE_ONLY predecessor")
+        self.PREDECESSOR_TAG = self.rev("refs/tags/v1.13.16")
+        self.set_fields(
+            self.PREDECESSOR_PATH,
+            {
+                "TAG_OBJECT": self.PREDECESSOR_TAG,
+                "DIRECT_TARGET": self.P,
+                "SUCCESSOR_BASE": self.P,
+            },
+        )
+        git(self.root, "add", self.PREDECESSOR_PATH)
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY published M17")
+        self.M17 = self.rev("HEAD")
+        git(self.root, "tag", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY publication")
+        self.A17 = self.rev("refs/tags/v1.13.17")
+        discriminator = self.root / "TEST_FIXTURE_ONLY-v2-c"
+        discriminator.write_text("fixture-owned accepted C tree\n", encoding="utf-8")
+        git(self.root, "add", discriminator.name)
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY accepted C")
+        self.C = self.rev("HEAD")
+        self.C_TREE = self.rev("HEAD^{tree}")
+        self.sync_terminal_identities()
+        self.sync_progression_identities(
+            {
+                "BASE_C": self.C,
+                "BASE_C_TREE": self.C_TREE,
+            }
+        )
+        git(self.root, "add", self.PATHS[0], self.PATHS[2], self.TERMINAL_PATH)
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY historical H1")
+        self.H1 = self.rev("HEAD")
+        self.H1_TREE = self.rev("HEAD^{tree}")
+        self.sync_progression_identities(
+            {
+                "HISTORICAL_H1": self.H1,
+                "HISTORICAL_H1_PARENT": self.C,
+                "HISTORICAL_H1_TREE": self.H1_TREE,
+            }
+        )
+        git(self.root, "add", self.PATHS[0], self.PATHS[2])
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY published H2")
+        self.H2 = self.rev("HEAD")
+        self.H2_TREE = self.rev("HEAD^{tree}")
+        self.sync_progression_identities(
+            {
+                "PUBLISHED_H2": self.H2,
+                "PUBLISHED_H2_PARENT": self.H1,
+                "PUBLISHED_H2_TREE": self.H2_TREE,
+                "SUCCESSOR_PARENT": self.H2,
+            }
+        )
+        self.sync_digest()
+        git(self.root, "checkout", "--quiet", "-b", "release/v1.13.17-terminal-serialization")
+        if self.object_type(self.PREDECESSOR_TAG) != "tag":
+            raise AssertionError("fixture predecessor tag is not annotated")
+        if self.object_type(self.A17) != "tag":
+            raise AssertionError("fixture publication tag is not annotated")
+        if self.rev("refs/tags/v1.13.16^{}") != self.P:
+            raise AssertionError("fixture predecessor tag target disagrees")
+        if self.rev("refs/tags/v1.13.17^{}") != self.M17:
+            raise AssertionError("fixture publication tag target disagrees")
+        if self.rev(f"{self.H1}^") != self.C or self.rev(f"{self.H2}^") != self.H1:
+            raise AssertionError("fixture C/H1/H2 parent topology disagrees")
+
+    def close(self) -> None:
+        self.temporary.cleanup()
+
+    def rev(self, value: str) -> str:
+        return run_process([resolved_executable("git"), "-C", str(self.root), "rev-parse", value], check=True).stdout.strip()
+
+    def object_type(self, value: str) -> str:
+        return run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(self.root),
+                "cat-file",
+                "-t",
+                value,
+            ],
+            check=True,
+        ).stdout.strip()
+
+    def set_fields(self, relative: str, values: dict[str, str]) -> None:
+        target = self.root / relative
+        text = target.read_text(encoding="utf-8")
+        for key, value in values.items():
+            text, count = re.subn(
+                rf"(?m)^{re.escape(key)}: \S+$",
+                f"{key}: {value}",
+                text,
+                count=1,
+            )
+            if count != 1:
+                raise AssertionError(
+                    f"fixture field replacement missing or ambiguous in {relative}: {key}"
+                )
+        target.write_text(text, encoding="utf-8")
+
+    def sync_terminal_identities(self) -> None:
+        identities = {
+            "ACCEPTED_C": self.C,
+            "ACCEPTED_C_TREE": self.C_TREE,
+            "PUBLISHED_M17": self.M17,
+            "ANNOTATED_TAG_A17": self.A17,
+            "TAG_DIRECT_TARGET": self.M17,
+        }
+        self.set_fields(self.TERMINAL_PATH, identities)
+        self.set_fields(
+            self.PATHS[0],
+            {f"EXPECTED_{key}": value for key, value in identities.items()},
+        )
+
+    def sync_progression_identities(self, identities: dict[str, str]) -> None:
+        self.set_fields(self.PATHS[2], identities)
+        self.set_fields(
+            self.PATHS[0],
+            {f"EXPECTED_{key}": value for key, value in identities.items()},
+        )
+
+    def sync_digest(self) -> None:
+        reference = self.root / self.PATHS[2]
+        contract = self.root / self.PATHS[0]
+        digest = hashlib.sha256(reference.read_bytes()).hexdigest()
+        text, count = re.subn(r"(?m)^EXPECTED_REFERENCE_SHA256: [0-9a-f]{64}$", f"EXPECTED_REFERENCE_SHA256: {digest}", contract.read_text(encoding="utf-8"), count=1)
+        if count != 1:
+            raise AssertionError("missing v2 digest expectation")
+        contract.write_text(text, encoding="utf-8")
+
+    def progression(self) -> release_state_support.SecurityToolchainProgression:
+        contract_path = self.root / self.PATHS[0]
+        contract = release_state_support.Document(self.root, self.PATHS[0], contract_path.read_text(encoding="utf-8").splitlines())
+        progression, detail = release_state_support.load_security_toolchain_progression(self.root, contract, self.PATHS[2])
+        if progression is None:
+            raise AssertionError(detail)
+        return progression
+
+    def make_h3(self) -> str:
+        dirty = {self.PATHS[0], self.PATHS[2]}
+        for relative in self.PATHS:
+            if relative in dirty:
+                continue
+            target = self.root / relative
+            marker = "# TEST_FIXTURE_ONLY v2 delta\n" if target.suffix == ".py" else "<!-- TEST_FIXTURE_ONLY v2 delta -->\n"
+            with target.open("a", encoding="utf-8") as stream:
+                stream.write(marker)
+        git(self.root, "add", *self.PATHS)
+        git(self.root, "commit", "--quiet", "-m", "TEST_FIXTURE_ONLY H2 successor H3")
+        h3 = self.rev("HEAD")
+        changed = run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(self.root),
+                "diff-tree",
+                "--no-commit-id",
+                "--name-status",
+                "-r",
+                self.H2,
+                h3,
+            ],
+            check=True,
+        ).stdout.splitlines()
+        if changed != [f"M\t{relative}" for relative in self.PATHS]:
+            raise AssertionError(f"fixture successor delta disagrees: {changed!r}")
+        for relative in self.PATHS:
+            mode = run_process(
+                [
+                    resolved_executable("git"),
+                    *FIXTURE_GIT_CONFIG,
+                    "-C",
+                    str(self.root),
+                    "ls-tree",
+                    h3,
+                    "--",
+                    relative,
+                ],
+                check=True,
+            ).stdout.split()[0]
+            expected = "100755" if relative == "scripts/validate_governance.py" else "100644"
+            if mode != expected:
+                raise AssertionError(
+                    f"fixture successor mode disagrees for {relative}: {mode}"
+                )
+        status = run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(self.root),
+                "status",
+                "--porcelain=v2",
+                "--untracked-files=all",
+                "-z",
+            ],
+            check=True,
+        ).stdout
+        if status:
+            raise AssertionError(f"fixture successor is not clean: {status!r}")
+        return h3
+
+    def documents(
+        self,
+    ) -> tuple[Path, Path, Path]:
+        return (
+            self.root / self.PATHS[1],
+            self.root / self.PATHS[0],
+            self.root / self.PATHS[2],
+        )
+
+    def contract_document(self) -> release_state_support.Document:
+        contract = self.root / self.PATHS[0]
+        return release_state_support.Document(
+            self.root,
+            self.PATHS[0],
+            contract.read_text(encoding="utf-8").splitlines(),
+        )
+
+    def state_document(self) -> release_state_support.Document:
+        state = self.root / self.PATHS[1]
+        return release_state_support.Document(
+            self.root,
+            self.PATHS[1],
+            state.read_text(encoding="utf-8").splitlines(),
+        )
+
+    def load_progression(
+        self,
+    ) -> tuple[release_state_support.SecurityToolchainProgression | None, str | None]:
+        return release_state_support.load_security_toolchain_progression(
+            self.root, self.contract_document(), self.PATHS[2]
+        )
+
+    def select_progression(
+        self,
+    ) -> tuple[str, release_state_support.SecurityToolchainProgression | None, str | None]:
+        return validate_release_state.security_progression_selection(
+            self.root,
+            "1.13.17",
+            self.state_document(),
+            self.contract_document(),
+        )
+
+    def run_json(
+        self,
+        state: str = "auto",
+        *,
+        env: dict[str, str] | None = None,
+        diagnostic: Path | None = None,
+        copied_validator: bool = False,
+    ) -> tuple[ProcessResult, dict[str, object]]:
+        arguments = ["--state", state, "--json"]
+        if diagnostic is not None:
+            arguments.extend(("--diagnostic-json", str(diagnostic)))
+        if copied_validator:
+            completed = run_validator_script(
+                self.root / "scripts/validate_release_state.py",
+                self.root,
+                *arguments,
+                env=env,
+            )
+        else:
+            completed = run_validator(self.root, *arguments, env=env)
+        return completed, json.loads(completed.stdout)
+
+    def run_human(
+        self,
+        state: str = "auto",
+        *,
+        env: dict[str, str] | None = None,
+        copied_validator: bool = False,
+    ) -> ProcessResult:
+        if copied_validator:
+            return run_validator_script(
+                self.root / "scripts/validate_release_state.py",
+                self.root,
+                "--state",
+                state,
+                env=env,
+            )
+        return run_validator(self.root, "--state", state, env=env)
+
+    def checkout_detached(self, commit: str) -> None:
+        git(self.root, "checkout", "--quiet", "--force", "--detach", commit)
+
+    def checkout_branch(self, branch: str, commit: str) -> None:
+        git(self.root, "checkout", "--quiet", "--force", "-B", branch, commit)
+
+    def raw_commit_tree(self, tree: str, *parents: str) -> str:
+        command = [
+            resolved_executable("git"),
+            *FIXTURE_GIT_CONFIG,
+            "-C",
+            str(self.root),
+            "commit-tree",
+            tree,
+        ]
+        for parent in parents:
+            command.extend(("-p", parent))
+        command.extend(("-m", "TEST_FIXTURE_ONLY v2 topology"))
+        return run_process(command, check=True).stdout.strip()
+
+    def synthetic_merge(self, h3: str) -> str:
+        return self.raw_commit_tree(self.rev(f"{h3}^{{tree}}"), self.C, h3)
+
+    def hash_blob(self, content: bytes) -> str:
+        blob = Path(self.temporary.name) / "TEST_FIXTURE_ONLY-v2-blob"
+        blob.write_bytes(content)
+        return run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(self.root),
+                "hash-object",
+                "-w",
+                str(blob),
+            ],
+            check=True,
+        ).stdout.strip()
+
+    def variant_tree(
+        self,
+        base: str,
+        changes: tuple[tuple[str, str | None, str | None], ...],
+    ) -> str:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = os.environ.copy()
+            environment["GIT_INDEX_FILE"] = str(Path(directory) / "index")
+            prefix = [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(self.root),
+            ]
+            run_process(prefix + ["read-tree", base], env=environment, check=True)
+            for path, mode, object_id in changes:
+                if mode is None:
+                    run_process(
+                        prefix + ["update-index", "--force-remove", "--", path],
+                        env=environment,
+                        check=True,
+                    )
+                else:
+                    if object_id is None:
+                        raise AssertionError("fixture object ID is required")
+                    run_process(
+                        prefix
+                        + [
+                            "update-index",
+                            "--add",
+                            "--cacheinfo",
+                            f"{mode},{object_id},{path}",
+                        ],
+                        env=environment,
+                        check=True,
+                    )
+            return run_process(
+                prefix + ["write-tree"], env=environment, check=True
+            ).stdout.strip()
+
+    def push_context(
+        self, h3: str
+    ) -> tuple[Path, dict[str, str]]:
+        event = self.root / "TEST_FIXTURE_ONLY-v2-push.json"
+        event.write_text(
+            json.dumps(
+                {
+                    "ref": "refs/heads/release/v1.13.17-terminal-serialization",
+                    "before": self.H2,
+                    "after": h3,
+                    "created": False,
+                    "deleted": False,
+                    "forced": False,
+                    "repository": {
+                        "full_name": "franchoy/coldkeep",
+                        "id": 1158711822,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return event, {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/release/v1.13.17-terminal-serialization",
+            "GITHUB_REF_NAME": "release/v1.13.17-terminal-serialization",
+            "GITHUB_REF_TYPE": "branch",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_REPOSITORY_ID": "1158711822",
+            "GITHUB_SHA": h3,
+        }
+
+    def pr_context(
+        self,
+        h3: str,
+        checkout: str,
+        *,
+        merge_value: object = None,
+    ) -> tuple[Path, dict[str, str]]:
+        event = self.root / "TEST_FIXTURE_ONLY-v2-pr.json"
+        event.write_text(
+            json.dumps(
+                {
+                    "repository": {
+                        "full_name": "franchoy/coldkeep",
+                        "id": 1158711822,
+                    },
+                    "number": 123,
+                    "pull_request": {
+                        "base": {
+                            "ref": "main",
+                            "sha": self.C,
+                            "repo": {"full_name": "franchoy/coldkeep"},
+                        },
+                        "head": {
+                            "ref": "release/v1.13.17-terminal-serialization",
+                            "sha": h3,
+                            "repo": {"full_name": "franchoy/coldkeep"},
+                        },
+                        "merge_commit_sha": merge_value,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return event, {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/pull/123/merge",
+            "GITHUB_REF_NAME": "123/merge",
+            "GITHUB_REF_TYPE": "branch",
+            "GITHUB_HEAD_REF": "release/v1.13.17-terminal-serialization",
+            "GITHUB_BASE_REF": "main",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_REPOSITORY_ID": "1158711822",
+            "GITHUB_SHA": checkout,
+        }
+
+    def main_context(
+        self, main: str
+    ) -> tuple[Path, dict[str, str]]:
+        event = self.root / "TEST_FIXTURE_ONLY-v2-main.json"
+        event.write_text(
+            json.dumps(
+                {
+                    "ref": "refs/heads/main",
+                    "before": self.C,
+                    "after": main,
+                    "created": False,
+                    "deleted": False,
+                    "forced": False,
+                    "repository": {
+                        "full_name": "franchoy/coldkeep",
+                        "id": 1158711822,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return event, {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_REF_NAME": "main",
+            "GITHUB_REF_TYPE": "branch",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_REPOSITORY_ID": "1158711822",
+            "GITHUB_SHA": main,
+        }
+
+
+class TerminalSerializationV2ContractTests(unittest.TestCase):
+    """Complete direct matrix for the closed H2-successor contract."""
+
+    def setUp(self) -> None:
+        self.fixture = _V2ProgressionFixture()
+        self.addCleanup(self.fixture.close)
+
+    def assert_human_json_semantic_parity(
+        self,
+        human: ProcessResult,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        parsed = parse_release_state_human_output(human.stdout)
+        expected_status = "OK" if payload["status"] == "ok" else "FAILED"
+        self.assertEqual(parsed["status"], expected_status)
+        fields = parsed["fields"]
+        self.assertIsInstance(fields, dict)
+        for key in (
+            "state",
+            "active_version",
+            "security_progression",
+            "security_result",
+            "progression_contract_schema",
+            "authorization_status",
+            "certification_status",
+            "evidence_scope",
+        ):
+            with self.subTest(human_json_field=key):
+                self.assertIsInstance(payload[key], str)
+                self.assertEqual(fields.get(key), payload[key])
+        violations = payload["violations"]
+        self.assertIsInstance(violations, list)
+        self.assertEqual(fields.get("violations"), str(len(violations)))
+        self.assertEqual(
+            parsed["rules"],
+            [violation["rule"] for violation in violations],
+        )
+        return parsed
+
+    def assert_repository_id_matrix_rejected(
+        self,
+        *,
+        label: str,
+        state: str,
+        event: Path,
+        environment: dict[str, str],
+    ) -> None:
+        original = event.read_text(encoding="utf-8")
+        completed, payload = self.fixture.run_json(state, env=environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(payload["security_progression"], "H2_SUCCESSOR_STRUCTURAL_ONLY")
+
+        environment_values: tuple[tuple[str, str | None], ...] = (
+            ("wrong", "1158711821"),
+            ("missing", None),
+            ("boolean-like", "true"),
+            ("zero", "0"),
+            ("signed", "-1158711822"),
+            ("whitespace", " 1158711822 "),
+            ("partial", "115871182"),
+        )
+        for name, value in environment_values:
+            with self.subTest(context=label, owner="environment", case=name):
+                event.write_text(original, encoding="utf-8")
+                mutated = dict(environment)
+                if value is None:
+                    mutated.pop("GITHUB_REPOSITORY_ID")
+                else:
+                    mutated["GITHUB_REPOSITORY_ID"] = value
+                failed, result = self.fixture.run_json(state, env=mutated)
+                self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+                self.assertIn(
+                    "CKRS016", [item["rule"] for item in result["violations"]]
+                )
+                self.assertEqual(
+                    result["security_progression"], "H2_SUCCESSOR_STRUCTURAL_ONLY"
+                )
+
+        payload_values: tuple[tuple[str, object, bool], ...] = (
+            ("wrong", 1158711821, False),
+            ("missing", None, True),
+            ("boolean", True, False),
+            ("zero", 0, False),
+            ("signed", -1158711822, False),
+            ("whitespace", " 1158711822 ", False),
+            ("partial", 115871182, False),
+        )
+        for name, value, remove in payload_values:
+            with self.subTest(context=label, owner="payload", case=name):
+                body = json.loads(original)
+                if remove:
+                    body["repository"].pop("id")
+                else:
+                    body["repository"]["id"] = value
+                event.write_text(json.dumps(body), encoding="utf-8")
+                failed, result = self.fixture.run_json(state, env=environment)
+                self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+                self.assertIn(
+                    "CKRS016", [item["rule"] for item in result["violations"]]
+                )
+                self.assertEqual(
+                    result["security_progression"], "H2_SUCCESSOR_STRUCTURAL_ONLY"
+                )
+        event.write_text(original, encoding="utf-8")
+
+    def test_v2_historical_h1_and_exact_h2_statuses(self) -> None:
+        progression = self.fixture.progression()
+        self.assertEqual(release_state_support.security_progression_status(self.fixture.root, self.fixture.H1, progression), "HISTORICAL_H1_UNPATCHED")
+        self.assertEqual(release_state_support.security_progression_status(self.fixture.root, self.fixture.H2, progression), "PUBLISHED_H2_STRUCTURAL_ONLY_ORIGINAL_CI_FAILED")
+        h3 = self.fixture.make_h3()
+        completed, payload = self.fixture.run_json()
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(
+            payload["evidence_scope"], "LOCAL_H2_SUCCESSOR_CANDIDATE"
+        )
+
+        git(self.fixture.root, "tag", "-d", "v1.13.16")
+        failed, failed_payload = self.fixture.run_json(
+            "post-release-terminal-serialization-candidate"
+        )
+        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+        predecessor = [
+            item
+            for item in failed_payload["violations"]
+            if item["rule"] == "CKRS010"
+        ]
+        self.assertEqual(len(predecessor), 1, failed.stdout)
+        self.assertIn("PREDECESSOR_REF", predecessor[0]["message"])
+        git(
+            self.fixture.root,
+            "update-ref",
+            "refs/tags/v1.13.16",
+            self.fixture.PREDECESSOR_TAG,
+        )
+
+        git(self.fixture.root, "tag", "-d", "v1.13.17")
+        git(
+            self.fixture.root,
+            "update-ref",
+            "refs/tags/v1.13.17",
+            self.fixture.M17,
+        )
+        failed, failed_payload = self.fixture.run_json(
+            "post-release-terminal-serialization-candidate"
+        )
+        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+        publication = [
+            item
+            for item in failed_payload["violations"]
+            if item["rule"] == "CKRS017"
+        ]
+        self.assertEqual(len(publication), 1, failed.stdout)
+        self.assertIn("lightweight", publication[0]["message"])
+        git(
+            self.fixture.root,
+            "update-ref",
+            "refs/tags/v1.13.17",
+            self.fixture.A17,
+        )
+
+        terminal = self.fixture.root / self.fixture.TERMINAL_PATH
+        original_terminal = terminal.read_bytes()
+        self.fixture.set_fields(
+            self.fixture.TERMINAL_PATH, {"ACCEPTED_C": self.fixture.H1}
+        )
+        failed, failed_payload = self.fixture.run_json(
+            "post-release-terminal-serialization-candidate"
+        )
+        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+        terminal_rules = [
+            item["rule"] for item in failed_payload["violations"]
+        ]
+        self.assertIn("CKRS019", terminal_rules)
+        self.assertTrue(set(terminal_rules).issubset({"CKRS016", "CKRS019"}))
+        terminal.write_bytes(original_terminal)
+
+        restored, restored_payload = self.fixture.run_json()
+        self.assertEqual(
+            restored.returncode, 0, restored.stdout + restored.stderr
+        )
+        self.assertEqual(restored_payload["status"], "ok")
+        self.assertEqual(self.fixture.rev("HEAD"), h3)
+
+    def test_v2_h2_successor_topology_and_delta_boundaries(self) -> None:
+        progression = self.fixture.progression()
+        h3 = self.fixture.make_h3()
+        self.assertTrue(release_state_support.progressed_h2_artifact(self.fixture.root, h3, progression))
+        self.assertEqual(release_state_support.security_progression_status(self.fixture.root, h3, progression), "H2_SUCCESSOR_STRUCTURAL_ONLY")
+        path = self.fixture.PATHS[4]
+        h2_blob = self.fixture.rev(f"{self.fixture.H2}:{path}")
+        h3_blob = self.fixture.rev(f"{h3}:{path}")
+        extra_blob = self.fixture.hash_blob(b"TEST_FIXTURE_ONLY v2 extra\n")
+        symlink_blob = self.fixture.hash_blob(b"TEST_FIXTURE_ONLY-target")
+        variants = {
+            "omitted": self.fixture.variant_tree(h3, ((path, "100644", h2_blob),)),
+            "extra": self.fixture.variant_tree(
+                h3, (("TEST_FIXTURE_ONLY-v2-extra", "100644", extra_blob),)
+            ),
+            "copy": self.fixture.variant_tree(
+                h3, (("TEST_FIXTURE_ONLY-v2-copy.py", "100644", h3_blob),)
+            ),
+            "delete": self.fixture.variant_tree(h3, ((path, None, None),)),
+            "mode": self.fixture.variant_tree(h3, ((path, "100755", h3_blob),)),
+            "rename": self.fixture.variant_tree(
+                h3,
+                (
+                    (path, None, None),
+                    ("scripts/TEST_FIXTURE_ONLY-renamed.py", "100644", h3_blob),
+                ),
+            ),
+            "symlink-type": self.fixture.variant_tree(
+                h3, ((path, "120000", symlink_blob),)
+            ),
+            "gitlink-type": self.fixture.variant_tree(
+                h3, ((path, "160000", self.fixture.C),)
+            ),
+        }
+        for name, tree in variants.items():
+            with self.subTest(structural_delta=name):
+                candidate = self.fixture.raw_commit_tree(tree, self.fixture.H2)
+                self.assertFalse(
+                    release_state_support.progressed_h2_artifact(
+                        self.fixture.root, candidate, progression
+                    )
+                )
+                self.assertEqual(
+                    release_state_support.security_progression_status(
+                        self.fixture.root, candidate, progression
+                    ),
+                    "INVALID",
+                )
+
+        state, contract, reference = self.fixture.documents()
+        del state
+        original_contract = contract.read_bytes()
+        original_reference = reference.read_bytes()
+        rows = [
+            line
+            for line in original_reference.splitlines(keepends=True)
+            if re.fullmatch(rb"M 100(?:644|755) \S+\n", line)
+        ]
+        self.assertEqual(len(rows), 9)
+        grammar_variants = {
+            "status": original_reference.replace(rows[0], b"A" + rows[0][1:], 1),
+            "path-order": original_reference.replace(
+                rows[0] + rows[1], rows[1] + rows[0], 1
+            ),
+        }
+        for name, content in grammar_variants.items():
+            with self.subTest(reference_delta=name):
+                contract.write_bytes(original_contract)
+                reference.write_bytes(content)
+                self.fixture.sync_digest()
+                loaded, detail = self.fixture.load_progression()
+                self.assertIsNone(loaded)
+                self.assertIn("security progression reference invalid:", detail or "")
+        contract.write_bytes(original_contract)
+        reference.write_bytes(original_reference)
+
+    def test_v2_unapproved_siblings_extra_parents_and_descendants_reject(self) -> None:
+        progression = self.fixture.progression()
+        h3 = self.fixture.make_h3()
+        valid_before, valid_before_payload = self.fixture.run_json(
+            "post-release-terminal-serialization-candidate",
+            copied_validator=True,
+        )
+        self.assertEqual(
+            valid_before.returncode,
+            0,
+            valid_before.stdout + valid_before.stderr,
+        )
+        self.assertEqual(valid_before_payload["status"], "ok")
+        self.assertEqual(
+            valid_before_payload["evidence_scope"],
+            "LOCAL_H2_SUCCESSOR_CANDIDATE",
+        )
+        h3_tree = self.fixture.rev(f"{h3}^{{tree}}")
+        c_tree = self.fixture.rev(f"{self.fixture.C}^{{tree}}")
+        path = self.fixture.PATHS[4]
+        h2_blob = self.fixture.rev(f"{self.fixture.H2}:{path}")
+        nonconforming_tree = self.fixture.variant_tree(
+            h3, ((path, "100644", h2_blob),)
+        )
+        descendant = self.fixture.raw_commit_tree(h3_tree, h3)
+        deeper = self.fixture.raw_commit_tree(h3_tree, descendant)
+        structural_rejections = {
+            "h1-based-child": self.fixture.raw_commit_tree(h3_tree, self.fixture.H1),
+            "zero-parent": self.fixture.raw_commit_tree(h3_tree),
+            "extra-parent": self.fixture.raw_commit_tree(
+                h3_tree, self.fixture.H2, self.fixture.C
+            ),
+            "wrong-h2-tree": self.fixture.raw_commit_tree(c_tree, self.fixture.H2),
+            "nonconforming-sibling": self.fixture.raw_commit_tree(
+                nonconforming_tree, self.fixture.H2
+            ),
+            "descendant": descendant,
+            "deeper-descendant": deeper,
+            "merge-reversed": self.fixture.raw_commit_tree(
+                h3_tree, h3, self.fixture.C
+            ),
+            "merge-extra-parent": self.fixture.raw_commit_tree(
+                h3_tree, self.fixture.C, h3, self.fixture.H2
+            ),
+            "merge-wrong-second-parent": self.fixture.raw_commit_tree(
+                h3_tree, self.fixture.C, self.fixture.H2
+            ),
+            "merge-wrong-tree": self.fixture.raw_commit_tree(
+                c_tree, self.fixture.C, h3
+            ),
+        }
+        for name, candidate in structural_rejections.items():
+            with self.subTest(topology=name):
+                self.assertEqual(
+                    release_state_support.security_progression_status(
+                        self.fixture.root, candidate, progression
+                    ),
+                    "INVALID",
+                )
+
+        equivalent_sibling = self.fixture.raw_commit_tree(
+            h3_tree, self.fixture.H2
+        )
+        self.assertNotEqual(equivalent_sibling, h3)
+        self.assertTrue(
+            release_state_support.progressed_h2_artifact(
+                self.fixture.root, equivalent_sibling, progression
+            )
+        )
+        self.assertEqual(
+            release_state_support.security_progression_status(
+                self.fixture.root, equivalent_sibling, progression
+            ),
+            "H2_SUCCESSOR_STRUCTURAL_ONLY",
+        )
+        _, bound_environment = self.fixture.push_context(h3)
+        self.assertFalse(
+            release_state_support.strict_terminal_push_context(
+                self.fixture.root,
+                "1.13.17",
+                equivalent_sibling,
+                "",
+                bound_environment,
+                "franchoy/coldkeep",
+                self.fixture.C,
+                progression,
+            )
+        )
+
+        values = dict(progression.values)
+        values["PUBLISHED_H2"] = self.fixture.H1
+        wrong_h2 = release_state_support.SecurityToolchainProgression(
+            progression.expectations, values, progression.delta
+        )
+        self.assertFalse(
+            release_state_support.progressed_h2_artifact(
+                self.fixture.root, h3, wrong_h2
+            )
+        )
+
+        _, contract, reference = self.fixture.documents()
+        contract_original = contract.read_bytes()
+        reference_original = reference.read_bytes()
+        reference_start = (
+            b"<!-- coldkeep-security-toolchain-progression-v2-reference:start -->"
+        )
+        reference_end = (
+            b"<!-- coldkeep-security-toolchain-progression-v2-reference:end -->"
+        )
+        expectation_start = (
+            b"<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->"
+        )
+        expectation_end = (
+            b"<!-- coldkeep-security-toolchain-progression-v2-expectations:end -->"
+        )
+
+        def replace_unique_marked_field(
+            content: bytes,
+            start_marker: bytes,
+            end_marker: bytes,
+            original_field: bytes,
+            replacement_field: bytes,
+        ) -> bytes:
+            self.assertEqual(content.count(start_marker), 1)
+            self.assertEqual(content.count(end_marker), 1)
+            start = content.index(start_marker)
+            end = content.index(end_marker, start) + len(end_marker)
+            self.assertLess(start, end)
+            marked = content[start:end]
+            self.assertEqual(marked.count(original_field), 1)
+            self.assertEqual(content.count(original_field), 1)
+            replaced = marked.replace(original_field, replacement_field, 1)
+            result = content[:start] + replaced + content[end:]
+            self.assertEqual(result[:start], content[:start])
+            self.assertEqual(result[end:], content[end:])
+            return result
+
+        original_tree_field = (
+            f"PUBLISHED_H2_TREE: {self.fixture.H2_TREE}".encode()
+        )
+        replacement_tree_field = (
+            f"PUBLISHED_H2_TREE: {self.fixture.C_TREE}".encode()
+        )
+        expected_reference = replace_unique_marked_field(
+            reference_original,
+            reference_start,
+            reference_end,
+            original_tree_field,
+            replacement_tree_field,
+        )
+        original_expectation_field = (
+            f"EXPECTED_PUBLISHED_H2_TREE: {self.fixture.H2_TREE}".encode()
+        )
+        replacement_expectation_field = (
+            f"EXPECTED_PUBLISHED_H2_TREE: {self.fixture.C_TREE}".encode()
+        )
+        expected_contract_before_digest = replace_unique_marked_field(
+            contract_original,
+            expectation_start,
+            expectation_end,
+            original_expectation_field,
+            replacement_expectation_field,
+        )
+        original_digest = hashlib.sha256(reference_original).hexdigest().encode()
+        replacement_digest = hashlib.sha256(expected_reference).hexdigest().encode()
+        expected_contract = replace_unique_marked_field(
+            expected_contract_before_digest,
+            expectation_start,
+            expectation_end,
+            b"EXPECTED_REFERENCE_SHA256: " + original_digest,
+            b"EXPECTED_REFERENCE_SHA256: " + replacement_digest,
+        )
+        original_delta_rows = [
+            line
+            for line in reference_original.splitlines(keepends=True)
+            if re.fullmatch(rb"M 100(?:644|755) \S+\n", line)
+        ]
+        expected_delta_rows = [
+            line
+            for line in expected_reference.splitlines(keepends=True)
+            if re.fullmatch(rb"M 100(?:644|755) \S+\n", line)
+        ]
+        self.assertEqual(expected_delta_rows, original_delta_rows)
+        self.assertEqual(len(expected_delta_rows), 9)
+        self.assertNotIn(b"\r", expected_reference)
+        expected_reference.decode("utf-8", "strict")
+        expected_contract.decode("utf-8", "strict")
+        graph_before = {
+            "head": self.fixture.rev("HEAD"),
+            "h3_parent": self.fixture.rev(f"{h3}^"),
+            "h3_tree": self.fixture.rev(f"{h3}^{{tree}}"),
+            "h2_tree": self.fixture.rev(f"{self.fixture.H2}^{{tree}}"),
+            "c_tree": self.fixture.rev(f"{self.fixture.C}^{{tree}}"),
+        }
+        self.assertNotEqual(self.fixture.C_TREE, self.fixture.H2_TREE)
+        self.assertEqual(self.fixture.object_type(self.fixture.C_TREE), "tree")
+        try:
+            self.fixture.sync_progression_identities(
+                {"PUBLISHED_H2_TREE": self.fixture.C_TREE}
+            )
+            self.fixture.sync_digest()
+            self.assertEqual(reference.read_bytes(), expected_reference)
+            self.assertEqual(contract.read_bytes(), expected_contract)
+            self.assertEqual(
+                [
+                    line
+                    for line in reference.read_bytes().splitlines(keepends=True)
+                    if re.fullmatch(rb"M 100(?:644|755) \S+\n", line)
+                ],
+                original_delta_rows,
+            )
+            self.assertEqual(
+                {
+                    "head": self.fixture.rev("HEAD"),
+                    "h3_parent": self.fixture.rev(f"{h3}^"),
+                    "h3_tree": self.fixture.rev(f"{h3}^{{tree}}"),
+                    "h2_tree": self.fixture.rev(f"{self.fixture.H2}^{{tree}}"),
+                    "c_tree": self.fixture.rev(f"{self.fixture.C}^{{tree}}"),
+                },
+                graph_before,
+            )
+            wrong_tree, wrong_tree_detail = self.fixture.load_progression()
+            self.assertIsNone(wrong_tree)
+            self.assertEqual(
+                wrong_tree_detail,
+                "security progression reference invalid: "
+                "published H2 tree disagrees",
+            )
+            wrong_tree_result, wrong_tree_payload = self.fixture.run_json(
+                "post-release-terminal-serialization-candidate",
+                copied_validator=True,
+            )
+            self.assertEqual(
+                wrong_tree_result.returncode,
+                1,
+                wrong_tree_result.stdout + wrong_tree_result.stderr,
+            )
+            self.assertEqual(wrong_tree_payload["status"], "error")
+            self.assertEqual(wrong_tree_payload["security_progression"], "INVALID")
+            self.assertEqual(
+                wrong_tree_payload["progression_contract_schema"], "INVALID"
+            )
+            self.assertEqual(
+                wrong_tree_payload["evidence_scope"],
+                "UNSUPPORTED_OR_CONFLICTING_CONTEXT",
+            )
+            wrong_tree_violations = [
+                violation
+                for violation in wrong_tree_payload["violations"]
+                if violation["rule"] == "CKRS020"
+            ]
+            self.assertEqual(len(wrong_tree_violations), 1)
+            self.assertIn(
+                "published H2 tree disagrees",
+                wrong_tree_violations[0]["message"],
+            )
+        finally:
+            contract.write_bytes(contract_original)
+            reference.write_bytes(reference_original)
+
+        self.assertEqual(contract.read_bytes(), contract_original)
+        self.assertEqual(reference.read_bytes(), reference_original)
+        self.assertEqual(
+            {
+                "head": self.fixture.rev("HEAD"),
+                "h3_parent": self.fixture.rev(f"{h3}^"),
+                "h3_tree": self.fixture.rev(f"{h3}^{{tree}}"),
+                "h2_tree": self.fixture.rev(f"{self.fixture.H2}^{{tree}}"),
+                "c_tree": self.fixture.rev(f"{self.fixture.C}^{{tree}}"),
+            },
+            graph_before,
+        )
+
+        restored_progression, restored_detail = self.fixture.load_progression()
+        self.assertIsNotNone(restored_progression, restored_detail)
+        restored, restored_payload = self.fixture.run_json(
+            "post-release-terminal-serialization-candidate",
+            copied_validator=True,
+        )
+        self.assertEqual(restored.returncode, 0, restored.stdout + restored.stderr)
+        self.assertEqual(restored_payload["status"], "ok")
+        self.assertEqual(
+            restored_payload["evidence_scope"],
+            "LOCAL_H2_SUCCESSOR_CANDIDATE",
+        )
+        self.assertNotEqual(
+            release_state_support.commit_tree(
+                self.fixture.root, self.fixture.H2
+            ),
+            self.fixture.C_TREE,
+        )
+        self.assertEqual(self.fixture.rev("HEAD"), h3)
+        self.assertEqual(self.fixture.rev(f"{h3}^"), self.fixture.H2)
+        self.assertEqual(self.fixture.rev(f"{h3}^{{tree}}"), h3_tree)
+
+    def test_v2_invalid_grammar_with_coherent_digest_reaches_grammar_gate(self) -> None:
+        _, contract, reference = self.fixture.documents()
+        contract_original = contract.read_bytes()
+        original = reference.read_bytes()
+
+        def reject(
+            name: str,
+            content: bytes,
+            expected_detail: str,
+            *,
+            synchronize_digest: bool = True,
+        ) -> None:
+            with self.subTest(grammar=name):
+                contract.write_bytes(contract_original)
+                reference.write_bytes(content)
+                if synchronize_digest:
+                    self.fixture.sync_digest()
+                progression, detail = self.fixture.load_progression()
+                self.assertIsNone(progression)
+                self.assertIn(expected_detail, detail or "")
+
+        lines = original.splitlines(keepends=True)
+        base_index = next(
+            index for index, line in enumerate(lines) if line.startswith(b"BASE_C: ")
+        )
+        tree_index = next(
+            index
+            for index, line in enumerate(lines)
+            if line.startswith(b"BASE_C_TREE: ")
+        )
+        swapped_fields = list(lines)
+        swapped_fields[base_index], swapped_fields[tree_index] = (
+            swapped_fields[tree_index],
+            swapped_fields[base_index],
+        )
+        duplicate_field = list(lines)
+        duplicate_field[tree_index] = duplicate_field[base_index]
+        missing_field = list(lines)
+        missing_field.pop(tree_index)
+        rows = [
+            line
+            for line in lines
+            if re.fullmatch(rb"M 100(?:644|755) \S+\n", line)
+        ]
+        self.assertEqual(len(rows), 9)
+        swapped_rows = original.replace(rows[0] + rows[1], rows[1] + rows[0], 1)
+        grammar_cases = (
+            ("field-order", b"".join(swapped_fields), "field order or grammar"),
+            ("duplicate-field", b"".join(duplicate_field), "field order or grammar"),
+            ("missing-field", b"".join(missing_field), "field or delta count"),
+            ("unknown-field", original.replace(b"BASE_C: ", b"UNKNOWN: ", 1), "field order or grammar"),
+            ("bad-count", original.replace(b"DELTA_COUNT: 9", b"DELTA_COUNT: 8", 1), "delta count"),
+            ("bad-status", original.replace(rows[0], b"X" + rows[0][1:], 1), "delta row grammar"),
+            ("bad-mode", original.replace(b" 100644 ", b" 100600 ", 1), "delta row grammar"),
+            ("unsafe-path", original.replace(rows[0], b"M 100644 ../TEST_FIXTURE_ONLY\n", 1), "non-canonical"),
+            ("duplicate-path", original.replace(rows[1], rows[0], 1), "duplicated or out of order"),
+            ("path-order", swapped_rows, "duplicated or out of order"),
+            ("wrong-path", original.replace(rows[0], b"M 100644 TEST_FIXTURE_ONLY-wrong\n", 1), "v2 delta inventory"),
+            ("unknown-schema", original.replace(b"SCHEMA: coldkeep-v1-security-toolchain-progression-reference/v2", b"SCHEMA: unknown/v2", 1), "reference schema"),
+            ("zero-repository-id", original.replace(b"REPOSITORY_ID: 1158711822", b"REPOSITORY_ID: 0", 1), "REPOSITORY_ID grammar"),
+            ("signed-pr-number", original.replace(b"PR_NUMBER: 123", b"PR_NUMBER: +123", 1), "PR_NUMBER grammar"),
+            ("whitespace-numeric", original.replace(b"DELTA_COUNT: 9", b"DELTA_COUNT:  9", 1), "field order or grammar"),
+            ("zero-object", original.replace(f"BASE_C: {self.fixture.C}".encode(), b"BASE_C: " + b"0" * 40, 1), "BASE_C grammar"),
+            ("unsupported-enum", original.replace(b"PURPOSE: FIXTURE_ISOLATION_AND_CLOSED_H2_SUCCESSOR_CONTRACT", b"PURPOSE: TEST_FIXTURE_ONLY", 1), "PURPOSE is unsupported"),
+            ("marker", original.replace(b"<!-- coldkeep-security-toolchain-progression-v2-reference:start -->", b"<!-- TEST_FIXTURE_ONLY-wrong -->", 1), "marker cardinality or order"),
+            ("duplicate-marker", original.replace(b"<!-- coldkeep-security-toolchain-progression-v2-reference:start -->", b"<!-- coldkeep-security-toolchain-progression-v2-reference:start -->\n<!-- coldkeep-security-toolchain-progression-v2-reference:start -->", 1), "marker cardinality or order"),
+            ("fence", original.replace(b"```text", b"```yaml", 1), "fence"),
+            ("bom", b"\xef\xbb\xbf" + original, "encoding or newline form"),
+            ("nul", original.replace(b"SCHEMA:", b"SCHEMA:\x00", 1), "encoding or newline form"),
+            ("crlf", original.replace(b"\n", b"\r\n", 1), "encoding or newline form"),
+            ("invalid-utf8", original[:-1] + b"\xff\n", "encoding is invalid"),
+            ("missing-terminal-lf", original[:-1], "exactly one terminal LF"),
+            ("extra-terminal-lf", original + b"\n", "exactly one terminal LF"),
+            ("over-limit", b"X" * 16385, "reference unavailable"),
+        )
+        for name, content, expected_detail in grammar_cases:
+            reject(name, content, expected_detail)
+        reject(
+            "digest-mismatch",
+            original.replace(b"DELTA_COUNT: 9", b"DELTA_COUNT: 8", 1),
+            "digest disagrees",
+            synchronize_digest=False,
+        )
+        contract.write_bytes(contract_original)
+        reference.write_bytes(original)
+
+    def test_v2_selection_partial_mixed_unknown_duplicate_no_fallback(self) -> None:
+        state, contract, reference = self.fixture.documents()
+        originals = (state.read_bytes(), contract.read_bytes(), reference.read_bytes())
+
+        def restore() -> None:
+            if reference.is_symlink() or reference.is_file():
+                reference.unlink()
+            elif reference.exists():
+                reference.rmdir()
+            state.write_bytes(originals[0])
+            contract.write_bytes(originals[1])
+            reference.write_bytes(originals[2])
+
+        def rejected(name: str, mutate: object, expected: str = "v2-invalid") -> None:
+            with self.subTest(selection=name):
+                restore()
+                mutate()
+                mode, progression, detail = self.fixture.select_progression()
+                self.assertEqual(mode, expected, detail)
+                self.assertIsNone(progression)
+                self.assertNotIn(mode, ("legacy", "progression"))
+
+        selection_line = (
+            b"SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA: "
+            b"coldkeep-v1-security-toolchain-progression-selection/v2\n"
+        )
+        pointer_line = (
+            b"SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE: "
+            + self.fixture.PATHS[2].encode()
+            + b"\n"
+        )
+        expectation_pattern = re.compile(
+            rb"(?ms)^<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->\n.*?^<!-- coldkeep-security-toolchain-progression-v2-expectations:end -->\n?"
+        )
+        start_marker = b"<!-- coldkeep-security-toolchain-progression-v2-reference:start -->"
+        cases = (
+            ("missing-schema", lambda: state.write_bytes(state.read_bytes().replace(selection_line, b"", 1))),
+            ("missing-pointer", lambda: state.write_bytes(state.read_bytes().replace(pointer_line, b"", 1))),
+            ("missing-expectations", lambda: contract.write_bytes(expectation_pattern.sub(b"", contract.read_bytes(), count=1))),
+            ("mixed-v1-v2", lambda: contract.write_bytes(contract.read_bytes() + b"\nSCHEMA: coldkeep-v1-security-toolchain-progression-expectations/v1\n")),
+            ("unknown-selection-schema", lambda: state.write_bytes(state.read_bytes().replace(b"coldkeep-v1-security-toolchain-progression-selection/v2", b"unknown/v2", 1))),
+            ("unknown-expectation-schema", lambda: contract.write_bytes(contract.read_bytes().replace(b"SCHEMA: coldkeep-v1-security-toolchain-progression-expectations/v2", b"SCHEMA: unknown/v2", 1))),
+            ("duplicate-schema", lambda: state.write_bytes(state.read_bytes().replace(selection_line, selection_line * 2, 1))),
+            ("duplicate-pointer", lambda: state.write_bytes(state.read_bytes().replace(pointer_line, pointer_line * 2, 1))),
+            ("duplicate-expectation-marker", lambda: contract.write_bytes(contract.read_bytes().replace(b"<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->", b"<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->\n<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->", 1))),
+            ("duplicate-reference-marker", lambda: (reference.write_bytes(reference.read_bytes().replace(start_marker, start_marker + b"\n" + start_marker, 1)), self.fixture.sync_digest())),
+            ("malformed-selected-v2", lambda: (reference.write_bytes(reference.read_bytes().replace(b"DELTA_COUNT: 9", b"DELTA_COUNT: 8", 1)), self.fixture.sync_digest())),
+            ("unknown-reference-schema", lambda: (reference.write_bytes(reference.read_bytes().replace(b"SCHEMA: coldkeep-v1-security-toolchain-progression-reference/v2", b"SCHEMA: unknown/v2", 1)), self.fixture.sync_digest())),
+        )
+        for name, mutation in cases:
+            rejected(name, mutation)
+
+        rejected("missing-reference", lambda: reference.unlink(), "v2-unavailable")
+        rejected("directory-reference", lambda: (reference.unlink(), reference.mkdir()), "v2-unavailable")
+        target = self.fixture.root / "TEST_FIXTURE_ONLY-v2-reference"
+
+        def unsafe_symlink() -> None:
+            target.write_bytes(reference.read_bytes())
+            reference.unlink()
+            reference.symlink_to(target)
+
+        rejected("symlink-reference", unsafe_symlink, "v2-unavailable")
+
+        restore()
+        state.write_bytes(
+            state.read_bytes().replace(selection_line, b"", 1).replace(pointer_line, b"", 1)
+        )
+        contract.write_bytes(expectation_pattern.sub(b"", contract.read_bytes(), count=1))
+        reference.unlink()
+        mode, progression, detail = self.fixture.select_progression()
+        self.assertEqual((mode, progression, detail), ("legacy", None, None))
+        restore()
+
+    def test_v2_wrong_missing_malformed_partial_repository_id_rejects(self) -> None:
+        h3 = self.fixture.make_h3()
+        push_event, push_environment = self.fixture.push_context(h3)
+        self.fixture.checkout_detached(h3)
+        self.assert_repository_id_matrix_rejected(
+            label="push",
+            state="post-release-terminal-serialization-candidate",
+            event=push_event,
+            environment=push_environment,
+        )
+
+        self.fixture.checkout_branch(
+            "release/v1.13.17-terminal-serialization", h3
+        )
+        pr_event, pr_environment = self.fixture.pr_context(h3, h3)
+        self.assert_repository_id_matrix_rejected(
+            label="direct-pr",
+            state="post-release-terminal-serialization-candidate",
+            event=pr_event,
+            environment=pr_environment,
+        )
+
+        main = self.fixture.synthetic_merge(h3)
+        self.fixture.checkout_detached(main)
+        main_event, main_environment = self.fixture.main_context(main)
+        self.assert_repository_id_matrix_rejected(
+            label="main",
+            state="post-release-terminal-serialization-main",
+            event=main_event,
+            environment=main_environment,
+        )
+
+    def test_v2_supported_explicit_push_pr_main_contexts(self) -> None:
+        h3 = self.fixture.make_h3()
+
+        def accepted(
+            payload: dict[str, object], state: str, scope: str
+        ) -> None:
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["state"], state)
+            self.assertEqual(payload["evidence_scope"], scope)
+            self.assertEqual(
+                payload["security_progression"],
+                "H2_SUCCESSOR_STRUCTURAL_ONLY",
+            )
+
+        completed, payload = self.fixture.run_json()
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        accepted(
+            payload,
+            "post-release-terminal-serialization-candidate",
+            "LOCAL_H2_SUCCESSOR_CANDIDATE",
+        )
+
+        _, push_environment = self.fixture.push_context(h3)
+        completed, payload = self.fixture.run_json(env=push_environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        accepted(
+            payload,
+            "post-release-terminal-serialization-candidate",
+            "GITHUB_H2_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY",
+        )
+
+        self.fixture.checkout_detached(h3)
+        bare, bare_payload = self.fixture.run_json()
+        self.assertNotEqual(bare.returncode, 0)
+        self.assertEqual(bare_payload["evidence_scope"], "UNAVAILABLE")
+
+        completed, payload = self.fixture.run_json(env=push_environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        accepted(
+            payload,
+            "post-release-terminal-serialization-candidate",
+            "GITHUB_H2_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY",
+        )
+
+        self.fixture.checkout_branch(
+            "release/v1.13.17-terminal-serialization", h3
+        )
+        _, direct_environment = self.fixture.pr_context(h3, h3)
+        completed, payload = self.fixture.run_json(env=direct_environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        accepted(
+            payload,
+            "post-release-terminal-serialization-candidate",
+            "GITHUB_H2_SUCCESSOR_PR_DIRECT_CONTEXT_CONSISTENCY",
+        )
+
+        synthetic = self.fixture.synthetic_merge(h3)
+        self.fixture.checkout_detached(synthetic)
+        _, synthetic_environment = self.fixture.pr_context(
+            h3, synthetic, merge_value="1" * 40
+        )
+        completed, payload = self.fixture.run_json(env=synthetic_environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        accepted(
+            payload,
+            "post-release-terminal-serialization-candidate",
+            "GITHUB_H2_SUCCESSOR_PR_SYNTHETIC_CONTEXT_CONSISTENCY",
+        )
+
+        self.fixture.checkout_branch("main", synthetic)
+        completed, payload = self.fixture.run_json()
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        accepted(
+            payload,
+            "post-release-terminal-serialization-main",
+            "LOCAL_H2_SUCCESSOR_MAIN_ARTIFACT_ONLY",
+        )
+
+        self.fixture.checkout_detached(synthetic)
+        _, main_environment = self.fixture.main_context(synthetic)
+        completed, payload = self.fixture.run_json(env=main_environment)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        accepted(
+            payload,
+            "post-release-terminal-serialization-main",
+            "GITHUB_H2_SUCCESSOR_MAIN_CONTEXT_CONSISTENCY",
+        )
+
+    def test_v2_diagnostic_v4_sources_statuses_and_human_json_parity(self) -> None:
+        progression = self.fixture.progression()
+        h3 = self.fixture.make_h3()
+
+        def assert_context_parity(
+            *,
+            expected_scope: str,
+            state: str = "auto",
+            environment: dict[str, str] | None = None,
+            expected_returncode: int = 0,
+            expected_rule: str | None = None,
+        ) -> dict[str, object]:
+            completed, context_payload = self.fixture.run_json(
+                state,
+                env=environment,
+                copied_validator=True,
+            )
+            self.assertEqual(
+                completed.returncode,
+                expected_returncode,
+                completed.stdout + completed.stderr,
+            )
+            self.assertEqual(context_payload["evidence_scope"], expected_scope)
+            human = self.fixture.run_human(
+                state,
+                env=environment,
+                copied_validator=True,
+            )
+            self.assertEqual(
+                human.returncode,
+                completed.returncode,
+                human.stdout + human.stderr,
+            )
+            parsed = self.assert_human_json_semantic_parity(
+                human, context_payload
+            )
+            if expected_rule is not None:
+                self.assertIn(expected_rule, parsed["rules"])
+            return context_payload
+
+        assert_context_parity(
+            expected_scope="LOCAL_H2_SUCCESSOR_CANDIDATE"
+        )
+        _, push_environment = self.fixture.push_context(h3)
+        assert_context_parity(
+            expected_scope="GITHUB_H2_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY",
+            environment=push_environment,
+        )
+        failed_push_environment = dict(push_environment)
+        failed_push_environment["GITHUB_REPOSITORY_ID"] = "1158711821"
+        assert_context_parity(
+            expected_scope="UNSUPPORTED_OR_CONFLICTING_CONTEXT",
+            state="post-release-terminal-serialization-candidate",
+            environment=failed_push_environment,
+            expected_returncode=1,
+            expected_rule="CKRS016",
+        )
+        missing = "f" * 40
+        descendant = self.fixture.raw_commit_tree(
+            self.fixture.rev(f"{h3}^{{tree}}"), h3
+        )
+        statuses = {
+            release_state_support.security_progression_status(
+                self.fixture.root, h3, None
+            ),
+            release_state_support.security_progression_status(
+                self.fixture.root, self.fixture.H1, progression
+            ),
+            release_state_support.security_progression_status(
+                self.fixture.root, self.fixture.H2, progression
+            ),
+            release_state_support.security_progression_status(
+                self.fixture.root, h3, progression
+            ),
+            release_state_support.security_progression_status(
+                self.fixture.root, descendant, progression
+            ),
+            release_state_support.security_progression_status(
+                self.fixture.root, missing, progression
+            ),
+        }
+        self.assertEqual(
+            statuses,
+            {
+                "NOT_SELECTED",
+                "HISTORICAL_H1_UNPATCHED",
+                "PUBLISHED_H2_STRUCTURAL_ONLY_ORIGINAL_CI_FAILED",
+                "H2_SUCCESSOR_STRUCTURAL_ONLY",
+                "INVALID",
+                "UNAVAILABLE",
+            },
+        )
+
+        _, environment = self.fixture.pr_context(h3, h3)
+        environment.update(
+            {
+                "GITHUB_RUN_ID": "123456",
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_JOB": "quality",
+                "GITHUB_WORKFLOW": "CI",
+            }
+        )
+        diagnostic = Path(self.fixture.temporary.name) / "v2-diagnostic.json"
+        completed, payload = self.fixture.run_json(
+            env=environment,
+            diagnostic=diagnostic,
+            copied_validator=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(
+            set(payload),
+            {
+                "status", "validator", "state", "artifact_state",
+                "active_version", "authorization_status",
+                "certification_status", "outstanding_obligations",
+                "evidence_scope", "security_progression", "security_result",
+                "violations", "error", "progression_contract_schema",
+            },
+        )
+        self.assertEqual(payload["security_progression"], "H2_SUCCESSOR_STRUCTURAL_ONLY")
+        self.assertEqual(
+            payload["progression_contract_schema"],
+            "coldkeep-v1-security-toolchain-progression-reference/v2",
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H2_SUCCESSOR_PR_DIRECT_CONTEXT_CONSISTENCY",
+        )
+        self.assertEqual(payload["authorization_status"], "NOT_EVALUATED_BY_VALIDATOR")
+        self.assertEqual(payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE")
+        self.assertEqual(payload["security_result"], "NOT_EVALUATED_BY_VALIDATOR")
+
+        record = json.loads(diagnostic.read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(record),
+            {
+                "schema", "created_at_utc", "validator", "attribution",
+                "event_snapshots", "evaluations", "capture",
+            },
+        )
+        self.assertEqual(record["schema"], "coldkeep-release-state-diagnostic/v4")
+        self.assertEqual(
+            set(record["validator"]),
+            {
+                "requested_state", "resolved_state", "result", "exit_code",
+                "rule_codes", "authorization_status", "certification_status",
+                "checkout_commit", "checkout_tree", "sources",
+                "security_progression", "security_result",
+                "progression_contract_schema",
+            },
+        )
+        self.assertEqual(record["validator"]["security_progression"], payload["security_progression"])
+        self.assertEqual(record["validator"]["security_result"], payload["security_result"])
+        self.assertEqual(record["validator"]["resolved_state"], payload["state"])
+        self.assertEqual(record["validator"]["authorization_status"], payload["authorization_status"])
+        self.assertEqual(record["validator"]["certification_status"], payload["certification_status"])
+        self.assertEqual(record["validator"]["progression_contract_schema"], payload["progression_contract_schema"])
+        sources = record["validator"]["sources"]
+        self.assertEqual(
+            [source["path"] for source in sources],
+            list(release_state_support.DiagnosticRecorder._SOURCE_PATHS),
+        )
+        self.assertEqual(len({source["path"] for source in sources}), 5)
+        for source in sources:
+            self.assertEqual(
+                set(source),
+                {
+                    "path", "loaded_path_match", "git_blob",
+                    "measured_git_blob", "measured_sha256",
+                    "matches_git_blob", "bytes",
+                },
+            )
+            self.assertIs(source["loaded_path_match"], True)
+            self.assertIs(source["matches_git_blob"], True)
+            self.assertEqual(source["git_blob"], source["measured_git_blob"])
+            self.assertRegex(source["measured_sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreater(source["bytes"], 0)
+        self.assertEqual(
+            set(record["attribution"]),
+            {"repository", "run_id", "run_attempt", "job", "workflow", "event_name"},
+        )
+        self.assertTrue(
+            all(
+                record["attribution"][key]["category"] == "validated"
+                for key in record["attribution"]
+            )
+        )
+        self.assertGreaterEqual(len(record["evaluations"]), 1)
+        self.assertTrue(all(evaluation["result"] == "PASS" for evaluation in record["evaluations"]))
+        self.assertIs(record["capture"]["complete"], True)
+        self.assertEqual(record["capture"]["incomplete_reasons"], [])
+        self.assertIs(record["capture"]["non_authorizing"], True)
+
+        human = self.fixture.run_human(env=environment, copied_validator=True)
+        self.assertEqual(human.returncode, completed.returncode, human.stdout + human.stderr)
+        self.assert_human_json_semantic_parity(human, payload)
+
+        synthetic = self.fixture.synthetic_merge(h3)
+        self.fixture.checkout_detached(synthetic)
+        _, synthetic_environment = self.fixture.pr_context(
+            h3, synthetic, merge_value="1" * 40
+        )
+        assert_context_parity(
+            expected_scope="GITHUB_H2_SUCCESSOR_PR_SYNTHETIC_CONTEXT_CONSISTENCY",
+            environment=synthetic_environment,
+        )
+        self.fixture.checkout_branch("main", synthetic)
+        assert_context_parity(
+            expected_scope="LOCAL_H2_SUCCESSOR_MAIN_ARTIFACT_ONLY"
+        )
+        self.fixture.checkout_detached(synthetic)
+        _, main_environment = self.fixture.main_context(synthetic)
+        assert_context_parity(
+            expected_scope="GITHUB_H2_SUCCESSOR_MAIN_CONTEXT_CONSISTENCY",
+            environment=main_environment,
+        )
+        self.fixture.checkout_branch(
+            "release/v1.13.17-terminal-serialization", h3
+        )
+
+        _, contract, reference = self.fixture.documents()
+        contract_original = contract.read_bytes()
+        reference_original = reference.read_bytes()
+        restored_graph = {
+            "head": self.fixture.rev("HEAD"),
+            "parent": self.fixture.rev(f"{h3}^"),
+            "tree": self.fixture.rev(f"{h3}^{{tree}}"),
+        }
+
+        def assert_restored_valid() -> None:
+            self.assertEqual(contract.read_bytes(), contract_original)
+            self.assertEqual(reference.read_bytes(), reference_original)
+            loaded, detail = self.fixture.load_progression()
+            self.assertIsNotNone(loaded, detail)
+            restored, restored_payload = self.fixture.run_json(
+                "post-release-terminal-serialization-candidate",
+                copied_validator=True,
+            )
+            self.assertEqual(
+                restored.returncode,
+                0,
+                restored.stdout + restored.stderr,
+            )
+            self.assertEqual(restored_payload["status"], "ok")
+            self.assertEqual(
+                restored_payload["evidence_scope"],
+                "LOCAL_H2_SUCCESSOR_CANDIDATE",
+            )
+            self.assertEqual(
+                restored_payload["authorization_status"],
+                "NOT_EVALUATED_BY_VALIDATOR",
+            )
+            self.assertEqual(
+                restored_payload["certification_status"],
+                "PENDING_EXTERNAL_EVIDENCE",
+            )
+            self.assertEqual(
+                {
+                    "head": self.fixture.rev("HEAD"),
+                    "parent": self.fixture.rev(f"{h3}^"),
+                    "tree": self.fixture.rev(f"{h3}^{{tree}}"),
+                },
+                restored_graph,
+            )
+
+        try:
+            mutated_reference = reference_original.replace(
+                b"DELTA_COUNT: 9", b"DELTA_COUNT: 8", 1
+            )
+            self.assertEqual(
+                reference_original.count(b"DELTA_COUNT: 9"), 1
+            )
+            reference.write_bytes(mutated_reference)
+            self.fixture.sync_digest()
+            invalid_diagnostic = (
+                Path(self.fixture.temporary.name) / "v2-invalid-diagnostic.json"
+            )
+            invalid, invalid_payload = self.fixture.run_json(
+                "post-release-terminal-serialization-candidate",
+                diagnostic=invalid_diagnostic,
+                copied_validator=True,
+            )
+            self.assertEqual(invalid.returncode, 1)
+            self.assertEqual(invalid_payload["status"], "error")
+            self.assertEqual(invalid_payload["security_progression"], "INVALID")
+            self.assertEqual(
+                invalid_payload["progression_contract_schema"], "INVALID"
+            )
+            self.assertEqual(
+                invalid_payload["evidence_scope"],
+                "UNSUPPORTED_OR_CONFLICTING_CONTEXT",
+            )
+            invalid_ckrs020 = [
+                violation["message"]
+                for violation in invalid_payload["violations"]
+                if violation["rule"] == "CKRS020"
+            ]
+            self.assertEqual(
+                invalid_ckrs020,
+                [
+                    "security progression reference invalid: "
+                    "delta count is invalid"
+                ],
+            )
+            invalid_human = self.fixture.run_human(
+                "post-release-terminal-serialization-candidate",
+                copied_validator=True,
+            )
+            self.assertEqual(invalid_human.returncode, invalid.returncode)
+            invalid_parsed = self.assert_human_json_semantic_parity(
+                invalid_human, invalid_payload
+            )
+            self.assertIn("CKRS020", invalid_parsed["rules"])
+            invalid_record = json.loads(
+                invalid_diagnostic.read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                invalid_record["schema"],
+                "coldkeep-release-state-diagnostic/v4",
+            )
+            self.assertEqual(len(invalid_record["validator"]["sources"]), 5)
+            self.assertIs(invalid_record["capture"]["complete"], False)
+            self.assertTrue(invalid_record["capture"]["incomplete_reasons"])
+        finally:
+            contract.write_bytes(contract_original)
+            reference.write_bytes(reference_original)
+
+        assert_restored_valid()
+
+        direct_environment = os.environ.copy()
+        for key in GITHUB_KEYS:
+            direct_environment.pop(key, None)
+        direct_environment.update(environment)
+        with mock.patch.dict(os.environ, direct_environment, clear=True):
+            evaluated = validate_release_state.validate(self.fixture.root, "auto")
+        self.assertEqual(evaluated.ordered(), [])
+        before_render = repr(evaluated)
+        human_output = io.StringIO()
+        json_output = io.StringIO()
+        render_sentinel = AssertionError("renderer attempted evaluation or I/O")
+        with (
+            mock.patch.object(
+                validate_release_state, "validate", side_effect=render_sentinel
+            ),
+            mock.patch.object(
+                validate_release_state,
+                "security_progression_selection",
+                side_effect=render_sentinel,
+            ),
+            mock.patch.object(
+                validate_release_state, "run_git", side_effect=render_sentinel
+            ),
+            mock.patch.object(
+                validate_release_state,
+                "github_context",
+                side_effect=render_sentinel,
+            ),
+            mock.patch.object(
+                validate_release_state,
+                "load_terminal_disposition",
+                side_effect=render_sentinel,
+            ),
+            mock.patch.object(
+                validate_release_state,
+                "load_security_toolchain_progression",
+                side_effect=render_sentinel,
+            ),
+            mock.patch.object(
+                release_state_support, "run_process", side_effect=render_sentinel
+            ),
+            mock.patch.object(Path, "read_text", side_effect=render_sentinel),
+            mock.patch.object(Path, "read_bytes", side_effect=render_sentinel),
+        ):
+            with redirect_stdout(human_output):
+                human_returncode = validate_release_state.emit(evaluated, False)
+            with redirect_stdout(json_output):
+                json_returncode = validate_release_state.emit(evaluated, True)
+        self.assertEqual(repr(evaluated), before_render)
+        self.assertEqual(human_returncode, 0)
+        self.assertEqual(json_returncode, 0)
+        direct_payload = json.loads(json_output.getvalue())
+        self.assert_human_json_semantic_parity(
+            ProcessResult([], human_returncode, human_output.getvalue(), ""),
+            direct_payload,
+        )
+        for key in (
+            "state",
+            "active_version",
+            "security_progression",
+            "security_result",
+            "progression_contract_schema",
+            "authorization_status",
+            "certification_status",
+            "evidence_scope",
+            "violations",
+        ):
+            self.assertEqual(direct_payload[key], payload[key])
+
+        try:
+            reference.unlink()
+            unavailable_diagnostic = (
+                Path(self.fixture.temporary.name) / "v2-unavailable-diagnostic.json"
+            )
+            unavailable, unavailable_payload = self.fixture.run_json(
+                "post-release-terminal-serialization-candidate",
+                diagnostic=unavailable_diagnostic,
+                copied_validator=True,
+            )
+            self.assertEqual(unavailable.returncode, 1)
+            self.assertEqual(unavailable_payload["status"], "error")
+            self.assertEqual(
+                unavailable_payload["security_progression"], "UNAVAILABLE"
+            )
+            self.assertEqual(
+                unavailable_payload["progression_contract_schema"],
+                "UNAVAILABLE",
+            )
+            self.assertEqual(
+                unavailable_payload["evidence_scope"],
+                "UNSUPPORTED_OR_CONFLICTING_CONTEXT",
+            )
+            unavailable_ckrs020 = [
+                violation["message"]
+                for violation in unavailable_payload["violations"]
+                if violation["rule"] == "CKRS020"
+            ]
+            self.assertEqual(
+                unavailable_ckrs020,
+                ["security progression reference unavailable: file is missing"],
+            )
+            unavailable_human = self.fixture.run_human(
+                "post-release-terminal-serialization-candidate",
+                copied_validator=True,
+            )
+            self.assertEqual(unavailable_human.returncode, unavailable.returncode)
+            unavailable_parsed = self.assert_human_json_semantic_parity(
+                unavailable_human, unavailable_payload
+            )
+            self.assertIn("CKRS020", unavailable_parsed["rules"])
+            unavailable_record = json.loads(
+                unavailable_diagnostic.read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                unavailable_record["schema"],
+                "coldkeep-release-state-diagnostic/v4",
+            )
+            reference_source = next(
+                source
+                for source in unavailable_record["validator"]["sources"]
+                if source["path"] == self.fixture.PATHS[2]
+            )
+            self.assertIsNone(reference_source["bytes"])
+            self.assertIs(unavailable_record["capture"]["complete"], False)
+            self.assertTrue(unavailable_record["capture"]["incomplete_reasons"])
+        finally:
+            contract.write_bytes(contract_original)
+            reference.write_bytes(reference_original)
+
+        assert_restored_valid()
 
 
 if __name__ == "__main__":

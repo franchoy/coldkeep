@@ -150,6 +150,23 @@ def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
     }
     for key, value in progression_values.items():
         replace_progression_identity(root, key, value)
+    fixture_git(
+        root,
+        "add",
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE.as_posix(),
+    )
+    fixture_git(root, "commit", "--quiet", "--allow-empty", "-m", "TEST_FIXTURE_ONLY published H2")
+    published_h2 = fixture_git(root, "rev-parse", "HEAD")
+    published_h2_tree = fixture_git(root, "rev-parse", "HEAD^{tree}")
+    h2_values = {
+        "PUBLISHED_H2": published_h2,
+        "PUBLISHED_H2_PARENT": historical_h1,
+        "PUBLISHED_H2_TREE": published_h2_tree,
+        "SUCCESSOR_PARENT": published_h2,
+    }
+    for key, value in h2_values.items():
+        replace_progression_identity(root, key, value)
     progression_reference = (
         root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
     ).read_bytes()
@@ -167,6 +184,7 @@ def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
         raise AssertionError("missing progression reference digest")
     contract.write_text(contract_text, encoding="utf-8")
     values.update(progression_values)
+    values.update(h2_values)
     return values
 
 
@@ -701,7 +719,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         state_path.write_text(state_original, encoding="utf-8")
 
         reference_path.write_bytes(
-            reference_original.replace(b"DELTA_COUNT: 25", b"DELTA_COUNT: 24", 1)
+            reference_original.replace(b"DELTA_COUNT: 9", b"DELTA_COUNT: 8", 1)
         )
         self.assert_governance_fails()
         reference_path.write_bytes(reference_original)
@@ -731,10 +749,9 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         def remove_pointer() -> None:
             state_path.write_text(
                 re.sub(
-                    r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE: .*\n",
+                    r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_(?:SCHEMA|REFERENCE): .*\n",
                     "",
                     originals["state"],
-                    count=1,
                 ),
                 encoding="utf-8",
             )
@@ -742,7 +759,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         def remove_expectation() -> None:
             contract_path.write_text(
                 re.sub(
-                    r"(?ms)^<!-- coldkeep-security-toolchain-progression-expectations:start -->\n.*?^<!-- coldkeep-security-toolchain-progression-expectations:end -->\n?",
+                    r"(?ms)^<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->\n.*?^<!-- coldkeep-security-toolchain-progression-v2-expectations:end -->\n?",
                     "",
                     originals["contract"],
                     count=1,
@@ -922,6 +939,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         )
         self.assert_governance_fails()
 
+
     def test_historical_stale_prose_remains_accepted(self) -> None:
         historical = self.root / governance.HISTORICAL_PROVIDER_FILE
         historical.write_text(
@@ -1087,6 +1105,73 @@ GOVERNANCE_TEST_MIRROR_FILES = (
     Path("SECURITY.md"),
     Path("docs/release/v1.13/README.md"),
 )
+
+
+class SecurityProgressionV2GovernanceTests(unittest.TestCase):
+    """Explicit governance coverage for the closed v2 progression selection."""
+
+    EXPECTED_PATHS = (
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        "docs/release/v1.13/v1.13.17-release-state.md",
+        "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md",
+        "docs/release/v1.13/v1.13.17-source-test-allowlist.md",
+        "scripts/release_state_support.py", "scripts/test_validate_governance.py",
+        "scripts/test_validate_release_state.py", "scripts/validate_governance.py",
+        "scripts/validate_release_state.py",
+    )
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        copy_current_governance_inputs(governance.ROOT, self.root)
+        self.identities = prepare_owned_terminal_graph(self.root)
+
+    def fixture_texts(self) -> dict[Path, str]:
+        paths = (
+            governance.CANONICAL_CURRENT_STATE_FILE,
+            Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+            governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE,
+        )
+        return {relative: (self.root / relative).read_text(encoding="utf-8") for relative in paths}
+
+    def test_v2_selection_reference_and_expectations_are_exact(self) -> None:
+        state, violations = governance.canonical_current_state(
+            self.fixture_texts()[governance.CANONICAL_CURRENT_STATE_FILE]
+        )
+        self.assertEqual(violations, [])
+        self.assertEqual(state["SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA"], "coldkeep-v1-security-toolchain-progression-selection/v2")
+        self.assertEqual(governance.validate_security_progression_contract(self.root, self.fixture_texts()), [])
+
+    def test_v2_reference_digest_and_closed_nine_path_inventory_match(self) -> None:
+        reference = (self.root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE).read_bytes()
+        contract = self.fixture_texts()[Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md")]
+        self.assertIn(f"EXPECTED_REFERENCE_SHA256: {hashlib.sha256(reference).hexdigest()}", contract)
+        rows = re.findall(r"(?m)^M (100644|100755) (\S+)$", reference.decode("utf-8"))
+        self.assertEqual(tuple(path for _, path in rows), self.EXPECTED_PATHS)
+        self.assertEqual(rows[7][0], "100755")
+
+    def test_v2_partial_mixed_unknown_and_duplicate_selection_rejects(self) -> None:
+        state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
+        original = state_path.read_text(encoding="utf-8")
+        replacements = (
+            "", "SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA: unknown/v2\n",
+            "SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA: coldkeep-v1-security-toolchain-progression-selection/v2\n" * 2,
+        )
+        for replacement in replacements:
+            with self.subTest(replacement=replacement):
+                state_path.write_text(re.sub(r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA: .*\n", replacement, original, count=1), encoding="utf-8")
+                self.assertNotEqual(governance.validate_security_progression_contract(self.root, self.fixture_texts()), [])
+        state_path.write_text(original, encoding="utf-8")
+
+    def test_v2_historical_absence_and_v1_object_compatibility_are_preserved(self) -> None:
+        source = governance.ROOT
+        state = fixture_git(source, "show", "HEAD:docs/release/v1.13/v1.13.17-release-state.md")
+        contract = fixture_git(source, "show", "HEAD:docs/release/v1.13/v1.13.17-release-state-validator-contract.md")
+        reference = fixture_git(source, "show", "HEAD:docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md")
+        self.assertNotIn("SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA:", state)
+        self.assertIn("coldkeep-v1-security-toolchain-progression-expectations/v1", contract)
+        self.assertIn("coldkeep-v1-security-toolchain-progression-reference/v1", reference)
 
 if __name__ == "__main__":
     unittest.main()
