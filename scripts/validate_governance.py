@@ -395,6 +395,48 @@ def validate_current_state_contract(texts: dict[Path, str]) -> list[str]:
     return violations
 
 
+def _path_material_present(root: Path, relative: Path) -> bool:
+    path = root / relative
+    return path.exists() or path.is_symlink()
+
+
+def _historical_terminal_violations(
+    state: dict[str, str],
+    expectation_present: bool,
+    reference_present: bool,
+) -> list[str]:
+    unexpected = bool(
+        expectation_present
+        or reference_present
+        or state.get("TERMINAL_DISPOSITION_REFERENCE")
+    )
+    if not unexpected:
+        return []
+    return [
+        f"{CANONICAL_CURRENT_STATE_FILE}: unexpected terminal disposition "
+        "material for historical vocabulary"
+    ]
+
+
+def _selected_terminal_violations(
+    root: Path,
+    contract_path: Path,
+    contract_text: str,
+    pointer: str | None,
+) -> list[str]:
+    contract = Document(root, contract_path.as_posix(), contract_text.splitlines())
+    disposition, detail = load_terminal_disposition(root, contract, pointer)
+    if detail:
+        return [f"{contract_path}: {detail}"]
+    if disposition is not None:
+        return []
+    message = (
+        f"{contract_path}: terminal disposition reference invalid: "
+        + "expectation block is missing"
+    )
+    return [message]
+
+
 def validate_terminal_disposition_contract(
     root: Path, texts: dict[Path, str]
 ) -> list[str]:
@@ -407,36 +449,71 @@ def validate_terminal_disposition_contract(
     if state_text is None or contract_text is None:
         return []
     state, _ = canonical_current_state(state_text)
-    terminal_selected = (
-        state.get("CURRENT_PHASE") == "NONE_TERMINAL_DISPOSITION_DECLARED"
-    )
     expectation_present = (
         "coldkeep-terminal-disposition-expectations:" in contract_text
     )
-    reference_path = TERMINAL_DISPOSITION_REFERENCE_FILE
-    reference_present = (root / reference_path).exists() or (
-        root / reference_path
-    ).is_symlink()
-    if not terminal_selected:
-        if expectation_present or reference_present or state.get(
-            "TERMINAL_DISPOSITION_REFERENCE"
-        ):
-            return [
-                f"{CANONICAL_CURRENT_STATE_FILE}: unexpected terminal disposition material for historical vocabulary"
-            ]
-        return []
-    contract = Document(root, contract_path.as_posix(), contract_text.splitlines())
-    disposition, detail = load_terminal_disposition(
-        root, contract, state.get("TERMINAL_DISPOSITION_REFERENCE")
+    reference_present = _path_material_present(
+        root, TERMINAL_DISPOSITION_REFERENCE_FILE
     )
-    if detail:
-        return [f"{contract_path}: {detail}"]
-    if disposition is None:
-        return [
-            f"{contract_path}: terminal disposition reference invalid: "
-            "expectation block is missing"
-        ]
-    return []
+    if state.get("CURRENT_PHASE") != "NONE_TERMINAL_DISPOSITION_DECLARED":
+        return _historical_terminal_violations(
+            state, expectation_present, reference_present
+        )
+    return _selected_terminal_violations(
+        root,
+        contract_path,
+        contract_text,
+        state.get("TERMINAL_DISPOSITION_REFERENCE"),
+    )
+
+
+def _progression_expectation_versions(contract_text: str) -> set[int]:
+    """Return every selected expectation schema version."""
+    return {
+        version
+        for version in (1, 2, 3)
+        if (
+            f"coldkeep-v1-security-toolchain-progression-expectations/v{version}"
+            in contract_text
+        )
+    }
+
+
+def _progression_selection_violation(
+    schema: str | None,
+    pointer: str | None,
+    expectation_versions: set[int],
+) -> str | None:
+    """Validate the atomic state/contract selection without loading its file."""
+    if schema:
+        supported = {
+            f"coldkeep-v1-security-toolchain-progression-selection/v{version}": version
+            for version in (2, 3)
+        }
+        version = supported.get(schema)
+        if version is None:
+            return "progression selection schema is unsupported"
+        if not pointer or expectation_versions != {version}:
+            return (
+                f"v{version} progression schema, pointer, expectations, and "
+                "reference must be selected together without other-version material"
+            )
+        return None
+    if not pointer or expectation_versions != {1}:
+        return (
+            "progression pointer, expectations, and reference must be "
+            "selected together"
+        )
+    return None
+
+
+def _progression_material_selected(
+    schema: str | None,
+    pointer: str | None,
+    expectation_versions: set[int],
+    reference_present: bool,
+) -> bool:
+    return bool(schema or pointer or expectation_versions or reference_present)
 
 
 def validate_security_progression_contract(
@@ -453,29 +530,20 @@ def validate_security_progression_contract(
     state, _ = canonical_current_state(state_text)
     schema = state.get("SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA")
     pointer = state.get("SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE")
-    v1_expectation_present = (
-        "coldkeep-security-toolchain-progression-expectations:" in contract_text
-    )
-    v2_expectation_present = (
-        "coldkeep-security-toolchain-progression-v2-expectations:" in contract_text
-    )
+    expectation_versions = _progression_expectation_versions(contract_text)
     reference_path = SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
-    reference_present = (root / reference_path).exists() or (
-        root / reference_path
-    ).is_symlink()
-    selected = bool(schema or pointer or v1_expectation_present or v2_expectation_present or reference_present)
+    reference_present = _path_material_present(root, reference_path)
+    selected = _progression_material_selected(
+        schema, pointer, expectation_versions, reference_present
+    )
     if not selected:
         return []
-    if schema:
-        if schema != "coldkeep-v1-security-toolchain-progression-selection/v2":
-            return [f"{CANONICAL_CURRENT_STATE_FILE}: progression selection schema is unsupported"]
-        if not pointer or not v2_expectation_present or v1_expectation_present:
-            return [
-                f"{CANONICAL_CURRENT_STATE_FILE}: v2 progression schema, pointer, expectations, and reference must be selected together without v1 material"
-            ]
-    elif not pointer or not v1_expectation_present or v2_expectation_present:
+    selection_violation = _progression_selection_violation(
+        schema, pointer, expectation_versions
+    )
+    if selection_violation:
         return [
-            f"{CANONICAL_CURRENT_STATE_FILE}: progression pointer, expectations, and reference must be selected together"
+            f"{CANONICAL_CURRENT_STATE_FILE}: {selection_violation}"
         ]
     contract = Document(root, contract_path.as_posix(), contract_text.splitlines())
     progression, detail = load_security_toolchain_progression(

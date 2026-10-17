@@ -3,11 +3,12 @@ import hashlib
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import validate_governance as governance
+from release_state_support import resolved_executable, run_process
 
 
 CURRENT_GOVERNANCE_INPUTS = tuple(dict.fromkeys(
@@ -50,13 +51,46 @@ def copy_current_governance_inputs(
 
 
 def fixture_git(root: Path, *args: str) -> str:
-    completed = subprocess.run(
-        [shutil.which("git") or "git", "-C", str(root), *args],
+    completed = run_process(
+        [resolved_executable("git"), *args],
+        cwd=root,
         check=True,
-        capture_output=True,
-        text=True,
+        timeout=30,
     )
     return completed.stdout.strip()
+
+
+class FixtureGitSafetyTests(unittest.TestCase):
+    """Keep fixture Git execution list-form, fixed, bounded, and rooted."""
+
+    def test_fixture_git_uses_resolved_executable_root_and_timeout(self) -> None:
+        root = Path("/TEST_FIXTURE_ONLY/root")
+        completed = mock.Mock(stdout=" result\n")
+        with (
+            mock.patch(
+                f"{__name__}.resolved_executable", return_value="/fixed/git"
+            ) as resolve,
+            mock.patch(f"{__name__}.run_process", return_value=completed) as run,
+        ):
+            self.assertEqual(fixture_git(root, "status", "--short"), "result")
+        resolve.assert_called_once_with("git")
+        run.assert_called_once_with(
+            ["/fixed/git", "status", "--short"],
+            cwd=root,
+            check=True,
+            timeout=30,
+        )
+
+    def test_fixture_git_preserves_runner_errors(self) -> None:
+        error = RuntimeError("TEST_FIXTURE_ONLY runner error")
+        with (
+            mock.patch(
+                f"{__name__}.resolved_executable", return_value="/fixed/git"
+            ),
+            mock.patch(f"{__name__}.run_process", side_effect=error),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "runner error"):
+                fixture_git(Path("/TEST_FIXTURE_ONLY/root"), "status")
 
 
 def replace_terminal_identity(root: Path, key: str, value: str) -> None:
@@ -104,8 +138,38 @@ def replace_progression_identity(root: Path, key: str, value: str) -> None:
         path.write_text(text, encoding="utf-8")
 
 
-def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
-    """Create M -> C and annotated A entirely inside the fixture object store."""
+def replace_progression_identities(root: Path, values: dict[str, str]) -> None:
+    for key, value in values.items():
+        replace_progression_identity(root, key, value)
+
+
+def synchronize_progression_digest(root: Path) -> None:
+    reference = (
+        root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
+    ).read_bytes()
+    contract = root / Path(
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+    )
+    contract_text, count = re.subn(
+        r"(?m)^EXPECTED_REFERENCE_SHA256: [0-9a-f]{64}$",
+        f"EXPECTED_REFERENCE_SHA256: {hashlib.sha256(reference).hexdigest()}",
+        contract.read_text(encoding="utf-8"),
+        count=1,
+    )
+    if count != 1:
+        raise AssertionError("missing progression reference digest")
+    contract.write_text(contract_text, encoding="utf-8")
+
+
+def commit_owned_graph_node(root: Path, subject: str) -> tuple[str, str]:
+    fixture_git(root, "commit", "--quiet", "--allow-empty", "-m", subject)
+    return (
+        fixture_git(root, "rev-parse", "HEAD"),
+        fixture_git(root, "rev-parse", "HEAD^{tree}"),
+    )
+
+
+def prepare_owned_publication_graph(root: Path) -> dict[str, str]:
     fixture_git(root, "init", "--quiet")
     fixture_git(root, "config", "user.name", "fixture")
     fixture_git(root, "config", "user.email", "fixture@example.invalid")
@@ -114,9 +178,9 @@ def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
     published = fixture_git(root, "rev-parse", "HEAD")
     fixture_git(root, "tag", "-a", "v1.13.17", "-m", "TEST_FIXTURE_ONLY", published)
     annotated_tag = fixture_git(root, "rev-parse", "refs/tags/v1.13.17")
-    fixture_git(root, "commit", "--quiet", "--allow-empty", "-m", "TEST_FIXTURE_ONLY accepted C")
-    accepted = fixture_git(root, "rev-parse", "HEAD")
-    accepted_tree = fixture_git(root, "rev-parse", "HEAD^{tree}")
+    accepted, accepted_tree = commit_owned_graph_node(
+        root, "TEST_FIXTURE_ONLY accepted C"
+    )
     values = {
         "ACCEPTED_C": accepted,
         "ACCEPTED_C_TREE": accepted_tree,
@@ -126,21 +190,23 @@ def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
     }
     for key, value in values.items():
         replace_terminal_identity(root, key, value)
+    return values
+
+
+def prepare_owned_h1_h2_graph(
+    root: Path, publication: dict[str, str]
+) -> dict[str, str]:
+    accepted = publication["ACCEPTED_C"]
+    accepted_tree = publication["ACCEPTED_C_TREE"]
     fixture_git(
         root,
         "add",
         "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
         governance.TERMINAL_DISPOSITION_REFERENCE_FILE.as_posix(),
     )
-    fixture_git(
-        root,
-        "commit",
-        "--quiet",
-        "-m",
-        "TEST_FIXTURE_ONLY historical H1",
+    historical_h1, historical_h1_tree = commit_owned_graph_node(
+        root, "TEST_FIXTURE_ONLY historical H1"
     )
-    historical_h1 = fixture_git(root, "rev-parse", "HEAD")
-    historical_h1_tree = fixture_git(root, "rev-parse", "HEAD^{tree}")
     progression_values = {
         "BASE_C": accepted,
         "BASE_C_TREE": accepted_tree,
@@ -148,44 +214,123 @@ def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
         "HISTORICAL_H1_PARENT": accepted,
         "HISTORICAL_H1_TREE": historical_h1_tree,
     }
-    for key, value in progression_values.items():
-        replace_progression_identity(root, key, value)
+    replace_progression_identities(root, progression_values)
     fixture_git(
         root,
         "add",
         "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
         governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE.as_posix(),
     )
-    fixture_git(root, "commit", "--quiet", "--allow-empty", "-m", "TEST_FIXTURE_ONLY published H2")
-    published_h2 = fixture_git(root, "rev-parse", "HEAD")
-    published_h2_tree = fixture_git(root, "rev-parse", "HEAD^{tree}")
+    published_h2, published_h2_tree = commit_owned_graph_node(
+        root, "TEST_FIXTURE_ONLY published H2"
+    )
     h2_values = {
         "PUBLISHED_H2": published_h2,
         "PUBLISHED_H2_PARENT": historical_h1,
         "PUBLISHED_H2_TREE": published_h2_tree,
         "SUCCESSOR_PARENT": published_h2,
     }
-    for key, value in h2_values.items():
-        replace_progression_identity(root, key, value)
-    progression_reference = (
+    replace_progression_identities(root, h2_values)
+    return progression_values | h2_values
+
+
+def prepare_owned_h3_anchor(
+    root: Path, progression: dict[str, str]
+) -> dict[str, str]:
+    reference_text = (
         root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
-    ).read_bytes()
-    progression_digest = hashlib.sha256(progression_reference).hexdigest()
-    contract = root / Path(
-        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+    ).read_text(encoding="utf-8")
+    if "progression-reference/v3" not in reference_text:
+        return {}
+    fixture_git(
+        root,
+        "add",
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE.as_posix(),
     )
-    contract_text, count = re.subn(
-        r"(?m)^EXPECTED_REFERENCE_SHA256: [0-9a-f]{64}$",
-        f"EXPECTED_REFERENCE_SHA256: {progression_digest}",
-        contract.read_text(encoding="utf-8"),
-        count=1,
+    published_h3, published_h3_tree = commit_owned_graph_node(
+        root, "TEST_FIXTURE_ONLY published H3"
     )
-    if count != 1:
-        raise AssertionError("missing progression reference digest")
-    contract.write_text(contract_text, encoding="utf-8")
-    values.update(progression_values)
-    values.update(h2_values)
+    h3_values = {
+        "PUBLISHED_H3": published_h3,
+        "PUBLISHED_H3_PARENT": progression["PUBLISHED_H2"],
+        "PUBLISHED_H3_TREE": published_h3_tree,
+        "SUCCESSOR_PARENT": published_h3,
+    }
+    replace_progression_identities(root, h3_values)
+    return h3_values
+
+
+def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
+    """Create M -> C -> H1 -> H2 [-> H3] in the fixture object store."""
+    values = prepare_owned_publication_graph(root)
+    progression = prepare_owned_h1_h2_graph(root, values)
+    values.update(progression)
+    values.update(prepare_owned_h3_anchor(root, progression))
+    synchronize_progression_digest(root)
     return values
+
+
+PROGRESSION_CONTRACT_FILE = Path(
+    "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+)
+
+
+def progression_fixture_texts(root: Path) -> dict[Path, str]:
+    paths = (
+        governance.CANONICAL_CURRENT_STATE_FILE,
+        PROGRESSION_CONTRACT_FILE,
+        governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE,
+    )
+    return {
+        relative: (root / relative).read_text(encoding="utf-8")
+        for relative in paths
+        if (root / relative).is_file() and not (root / relative).is_symlink()
+    }
+
+
+def without_progression_selectors(text: str) -> str:
+    return re.sub(
+        r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_(?:SCHEMA|REFERENCE): .*\n",
+        "",
+        text,
+    )
+
+
+def without_progression_expectations(text: str) -> str:
+    marker = (
+        r"coldkeep-security-toolchain-progression(?:-v[23])?"
+        + r"-expectations"
+    )
+    pattern = rf"(?ms)^<!-- {marker}:start -->\n.*?" + rf"^<!-- {marker}:end -->\n?"
+    return re.sub(pattern, "", text, count=1)
+
+
+def write_progression_material_case(
+    root: Path,
+    originals: dict[str, str | bytes],
+    *,
+    pointer: bool,
+    expectation: bool,
+    reference: bool,
+) -> None:
+    state = str(originals["state"])
+    contract = str(originals["contract"])
+    state_path = root / governance.CANONICAL_CURRENT_STATE_FILE
+    contract_path = root / PROGRESSION_CONTRACT_FILE
+    reference_path = root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
+    state_path.write_text(
+        state if pointer else without_progression_selectors(state),
+        encoding="utf-8",
+    )
+    contract_path.write_text(
+        contract if expectation else without_progression_expectations(contract),
+        encoding="utf-8",
+    )
+    if reference:
+        reference_path.write_bytes(bytes(originals["reference"]))
+    elif reference_path.exists() or reference_path.is_symlink():
+        reference_path.unlink()
 
 
 class ReleaseBodyValidatorTests(unittest.TestCase):
@@ -731,12 +876,34 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             violations,
         )
 
+    def assert_progression_material_case_rejected(
+        self,
+        originals: dict[str, str | bytes],
+        *,
+        pointer: bool,
+        expectation: bool,
+        reference: bool,
+    ) -> None:
+        write_progression_material_case(
+            self.root,
+            originals,
+            pointer=pointer,
+            expectation=expectation,
+            reference=reference,
+        )
+        violations = governance.validate_security_progression_contract(
+            self.root, progression_fixture_texts(self.root)
+        )
+        self.assertNotEqual(violations, [])
+        self.assertTrue(
+            any("selected together" in item for item in violations),
+            violations,
+        )
+
     def test_security_progression_selected_mixed_and_absent_matrix(self) -> None:
         """SP-GOV-03: all three selectors are atomic; total absence is historical."""
         state_path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
-        contract_path = self.root / Path(
-            "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
-        )
+        contract_path = self.root / PROGRESSION_CONTRACT_FILE
         reference_path = (
             self.root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
         )
@@ -745,42 +912,10 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             "contract": contract_path.read_text(encoding="utf-8"),
             "reference": reference_path.read_bytes(),
         }
-
-        def remove_pointer() -> None:
-            state_path.write_text(
-                re.sub(
-                    r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_(?:SCHEMA|REFERENCE): .*\n",
-                    "",
-                    originals["state"],
-                ),
-                encoding="utf-8",
-            )
-
-        def remove_expectation() -> None:
-            contract_path.write_text(
-                re.sub(
-                    r"(?ms)^<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->\n.*?^<!-- coldkeep-security-toolchain-progression-v2-expectations:end -->\n?",
-                    "",
-                    originals["contract"],
-                    count=1,
-                ),
-                encoding="utf-8",
-            )
-
-        def texts() -> dict[Path, str]:
-            result = {}
-            for relative in (
-                governance.CANONICAL_CURRENT_STATE_FILE,
-                Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
-                governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE,
-            ):
-                path = self.root / relative
-                if path.is_file() and not path.is_symlink():
-                    result[relative] = path.read_text(encoding="utf-8")
-            return result
-
         self.assertEqual(
-            governance.validate_security_progression_contract(self.root, texts()),
+            governance.validate_security_progression_contract(
+                self.root, progression_fixture_texts(self.root)
+            ),
             [],
         )
         for name, pointer, expectation, reference in (
@@ -791,32 +926,24 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             ("reference-only", False, False, True),
         ):
             with self.subTest(name=name):
-                state_path.write_text(originals["state"], encoding="utf-8")
-                contract_path.write_text(originals["contract"], encoding="utf-8")
-                reference_path.write_bytes(originals["reference"])
-                if not pointer:
-                    remove_pointer()
-                if not expectation:
-                    remove_expectation()
-                if not reference:
-                    reference_path.unlink()
-                violations = governance.validate_security_progression_contract(
-                    self.root, texts()
-                )
-                self.assertNotEqual(violations, [])
-                self.assertTrue(
-                    any("selected together" in item for item in violations),
-                    violations,
+                self.assert_progression_material_case_rejected(
+                    originals,
+                    pointer=pointer,
+                    expectation=expectation,
+                    reference=reference,
                 )
 
-        state_path.write_text(originals["state"], encoding="utf-8")
-        contract_path.write_text(originals["contract"], encoding="utf-8")
-        if reference_path.exists() or reference_path.is_symlink():
-            reference_path.unlink()
-        remove_pointer()
-        remove_expectation()
+        write_progression_material_case(
+            self.root,
+            originals,
+            pointer=False,
+            expectation=False,
+            reference=False,
+        )
         self.assertEqual(
-            governance.validate_security_progression_contract(self.root, texts()),
+            governance.validate_security_progression_contract(
+                self.root, progression_fixture_texts(self.root)
+            ),
             [],
         )
 
@@ -958,16 +1085,14 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             source = Path(directory) / "source"
             source.mkdir()
             copy_fixture_paths(governance.ROOT, source, pair)
-            git = shutil.which("git")
-            self.assertIsNotNone(git)
-            subprocess.run([git, "-C", str(source), "init"], check=True, capture_output=True)
+            fixture_git(source, "init")
             copies = []
             for index_state in ("untracked", "tracked"):
                 if index_state == "tracked":
-                    subprocess.run(
-                        [git, "-C", str(source), "add", *(item.as_posix() for item in pair)],
-                        check=True,
-                        capture_output=True,
+                    fixture_git(
+                        source,
+                        "add",
+                        *(item.as_posix() for item in pair),
                     )
                 destination = Path(directory) / index_state
                 copy_fixture_paths(source, destination, pair)
@@ -1119,12 +1244,25 @@ class SecurityProgressionV2GovernanceTests(unittest.TestCase):
         "scripts/test_validate_release_state.py", "scripts/validate_governance.py",
         "scripts/validate_release_state.py",
     )
+    PUBLISHED_H3_SOURCE = "07667f0bc1a1a089977a41a2bc56ee3ad15f00fd"
+    HISTORICAL_V1_SOURCE = "f1adb091d37ded75199f530a84477d44bebb36b7"
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         copy_current_governance_inputs(governance.ROOT, self.root)
+        for relative in (
+            governance.CANONICAL_CURRENT_STATE_FILE,
+            Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+            governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE,
+        ):
+            historical = fixture_git(
+                governance.ROOT,
+                "show",
+                f"{self.PUBLISHED_H3_SOURCE}:{relative.as_posix()}",
+            )
+            (self.root / relative).write_text(historical + "\n", encoding="utf-8")
         self.identities = prepare_owned_terminal_graph(self.root)
 
     def fixture_texts(self) -> dict[Path, str]:
@@ -1166,9 +1304,19 @@ class SecurityProgressionV2GovernanceTests(unittest.TestCase):
 
     def test_v2_historical_absence_and_v1_object_compatibility_are_preserved(self) -> None:
         source = governance.ROOT
-        state = fixture_git(source, "show", "HEAD:docs/release/v1.13/v1.13.17-release-state.md")
-        contract = fixture_git(source, "show", "HEAD:docs/release/v1.13/v1.13.17-release-state-validator-contract.md")
-        reference = fixture_git(source, "show", "HEAD:docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md")
+        state = fixture_git(source, "show", f"{self.HISTORICAL_V1_SOURCE}:docs/release/v1.13/v1.13.17-release-state.md")
+        contract_path = (
+            "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
+        )
+        reference_path = (
+            "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md"
+        )
+        contract = fixture_git(
+            source, "show", f"{self.HISTORICAL_V1_SOURCE}:{contract_path}"
+        )
+        reference = fixture_git(
+            source, "show", f"{self.HISTORICAL_V1_SOURCE}:{reference_path}"
+        )
         self.assertNotIn("SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA:", state)
         self.assertIn("coldkeep-v1-security-toolchain-progression-expectations/v1", contract)
         self.assertIn("coldkeep-v1-security-toolchain-progression-reference/v1", reference)

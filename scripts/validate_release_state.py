@@ -188,6 +188,98 @@ def active_docs(
     }
 
 
+def _preamble_values(
+    document: Optional[Document], names: tuple[str, ...]
+) -> dict[str, list[str]]:
+    """Collect exact named scalar rows before the first Markdown section."""
+    values: dict[str, list[str]] = {name: [] for name in names}
+    if document is None:
+        return values
+    for line in document.lines:
+        if line.startswith("## "):
+            break
+        match = re.fullmatch(r"([A-Z0-9_.-]+): (\S.*)", line)
+        if match and match.group(1) in values:
+            values[match.group(1)].append(match.group(2))
+    return values
+
+
+def _path_entry_present(path: Path) -> bool:
+    """Treat every existing or unsafe/unreadable directory entry as present."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _terminal_values_valid(values: dict[str, list[str]]) -> bool:
+    expected = {
+        "CURRENT_PHASE": "NONE_TERMINAL_DISPOSITION_DECLARED",
+        "V1_13_17_STATE": "TERMINAL_DISPOSITION_DECLARATION_PRESENT",
+        "V1_X_FULL_CLOSURE": "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
+        "EXTERNAL_TERMINAL_DISPOSITION": "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
+        "TRACKED_TERMINAL_SERIALIZATION": "DECLARATION_PRESENT_NON_AUTHORIZING",
+    }
+    return all(values[key] == [value] for key, value in expected.items())
+
+
+def _terminal_material(
+    root: Path,
+    version: str,
+    state_doc: Document,
+    contract_doc: Optional[Document],
+) -> tuple[dict[str, list[str]], bool, bool, bool]:
+    names = (
+        "CURRENT_PHASE", "V1_13_17_STATE", "V1_X_FULL_CLOSURE",
+        "EXTERNAL_TERMINAL_DISPOSITION", "TRACKED_TERMINAL_SERIALIZATION",
+        "TERMINAL_DISPOSITION_REFERENCE",
+    )
+    values = _preamble_values(state_doc, names)
+    expected_tokens = {
+        "NONE_TERMINAL_DISPOSITION_DECLARED",
+        "TERMINAL_DISPOSITION_DECLARATION_PRESENT",
+        "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
+        "DECLARATION_PRESENT_NON_AUTHORIZING",
+    }
+    terminal_tokens = bool(values["TERMINAL_DISPOSITION_REFERENCE"]) or any(
+        value in expected_tokens for found in values.values() for value in found
+    )
+    release_dir = version.rsplit(".", 1)[0]
+    reference = (
+        root
+        / f"docs/release/v{release_dir}/v{version}-terminal-disposition-reference.md"
+    )
+    marker = "<!-- coldkeep-terminal-disposition-expectations:start -->"
+    expectation_present = bool(contract_doc and marker in contract_doc.lines)
+    return (
+        values,
+        terminal_tokens,
+        expectation_present,
+        _path_entry_present(reference),
+    )
+
+
+def _load_selected_terminal(
+    root: Path,
+    version: str,
+    contract_doc: Optional[Document],
+    pointer: str,
+) -> tuple[str, Optional[TerminalDisposition], Optional[str]]:
+    disposition, detail = load_terminal_disposition(root, contract_doc, pointer)
+    if detail:
+        return "invalid", None, detail
+    if disposition is None:
+        detail = "terminal disposition reference invalid: expectation block is missing"
+        return "invalid", None, detail
+    if disposition.values["SOURCE_VERSION"] != version:
+        detail = "terminal disposition reference invalid: source version disagrees"
+        return "invalid", None, detail
+    return "terminal", disposition, None
+
+
 def terminal_disposition_selection(
     root: Path,
     version: str,
@@ -197,71 +289,130 @@ def terminal_disposition_selection(
     """Select legacy or exact terminal vocabulary without downgrade fallback."""
     if state_doc is None:
         return "legacy", None, None
-    preamble: list[str] = []
-    for line in state_doc.lines:
-        if line.startswith("## "):
-            break
-        preamble.append(line)
-    names = (
-        "CURRENT_PHASE", "V1_13_17_STATE", "V1_X_FULL_CLOSURE",
-        "EXTERNAL_TERMINAL_DISPOSITION", "TRACKED_TERMINAL_SERIALIZATION",
-        "TERMINAL_DISPOSITION_REFERENCE",
+    values, terminal_tokens, expectation_present, reference_present = (
+        _terminal_material(root, version, state_doc, contract_doc)
     )
-    values: dict[str, list[str]] = {name: [] for name in names}
-    for line in preamble:
-        match = re.fullmatch(r"([A-Z0-9_.-]+): (\S.*)", line)
-        if match and match.group(1) in values:
-            values[match.group(1)].append(match.group(2))
-    new_expected = {
-        "CURRENT_PHASE": "NONE_TERMINAL_DISPOSITION_DECLARED",
-        "V1_13_17_STATE": "TERMINAL_DISPOSITION_DECLARATION_PRESENT",
-        "V1_X_FULL_CLOSURE": "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
-        "EXTERNAL_TERMINAL_DISPOSITION": "ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED",
-        "TRACKED_TERMINAL_SERIALIZATION": "DECLARATION_PRESENT_NON_AUTHORIZING",
-    }
-    terminal_tokens = any(
-        value in new_expected.values()
-        for found in values.values()
-        for value in found
-    ) or bool(values["TERMINAL_DISPOSITION_REFERENCE"])
-    reference_path = (
-        f"docs/release/v{version.rsplit('.', 1)[0]}/"
-        f"v{version}-terminal-disposition-reference.md"
-    )
-    reference_present = False
-    try:
-        os.lstat(root / reference_path)
-        reference_present = True
-    except FileNotFoundError:
-        pass
-    except OSError:
-        reference_present = True
-    expectation_present = bool(
-        contract_doc
-        and any(
-            line == "<!-- coldkeep-terminal-disposition-expectations:start -->"
-            for line in contract_doc.lines
-        )
-    )
-    if terminal_tokens:
-        for key, expected in new_expected.items():
-            if values[key] != [expected]:
-                return "invalid", None, "terminal vocabulary is mixed, missing, duplicated, or unsupported"
-        if len(values["TERMINAL_DISPOSITION_REFERENCE"]) != 1:
-            return "invalid", None, "terminal disposition reference pointer is missing or duplicated"
-        disposition, detail = load_terminal_disposition(
-            root, contract_doc, values["TERMINAL_DISPOSITION_REFERENCE"][0]
-        )
-        if detail:
+    if not terminal_tokens:
+        if expectation_present or reference_present:
+            detail = "unexpected terminal disposition material for historical vocabulary"
             return "invalid", None, detail
-        if disposition is None:
-            return "invalid", None, "terminal disposition reference invalid: expectation block is missing"
-        if disposition.values["SOURCE_VERSION"] != version:
-            return "invalid", None, "terminal disposition reference invalid: source version disagrees"
-        return "terminal", disposition, None
-    if expectation_present or reference_present:
-        return "invalid", None, "unexpected terminal disposition material for historical vocabulary"
-    return "legacy", None, None
+        return "legacy", None, None
+    if not _terminal_values_valid(values):
+        detail = "terminal vocabulary is mixed, missing, duplicated, or unsupported"
+        return "invalid", None, detail
+    if len(values["TERMINAL_DISPOSITION_REFERENCE"]) != 1:
+        detail = "terminal disposition reference pointer is missing or duplicated"
+        return "invalid", None, detail
+    return _load_selected_terminal(
+        root,
+        version,
+        contract_doc,
+        values["TERMINAL_DISPOSITION_REFERENCE"][0],
+    )
+
+
+def _progression_expectation_versions(
+    contract_doc: Optional[Document],
+) -> set[int]:
+    if contract_doc is None:
+        return set()
+    versions = set()
+    markers = {
+        1: "coldkeep-v1-security-toolchain-progression-expectations/v1",
+        2: "coldkeep-v1-security-toolchain-progression-expectations/v2",
+        3: "coldkeep-v1-security-toolchain-progression-expectations/v3",
+    }
+    text = "\n".join(contract_doc.lines)
+    for version, schema in markers.items():
+        if schema in text:
+            versions.add(version)
+    return versions
+
+
+def _progression_reference_version(raw: Optional[bytes]) -> Optional[int]:
+    if raw is None:
+        return None
+    for version in (3, 2, 1):
+        schema = (
+            f"SCHEMA: coldkeep-v1-security-toolchain-progression-reference/v{version}\n"
+        ).encode("ascii")
+        if schema in raw:
+            return version
+    return None
+
+
+def _closed_progression_selection_error(version: int, detail: str) -> str:
+    return f"security progression reference invalid: v{version} {detail}"
+
+
+def _closed_progression_version(
+    schemas: list[str],
+    expectation_versions: set[int],
+    reference_version: Optional[int],
+) -> int:
+    if (
+        any(value.endswith("/v3") for value in schemas)
+        or 3 in expectation_versions
+        or reference_version == 3
+    ):
+        return 3
+    if schemas or 2 in expectation_versions or reference_version == 2:
+        return 2
+    return 0
+
+
+def _progression_selector_error(
+    closed_version: int,
+    schemas: list[str],
+    pointers: list[str],
+    expectation_versions: set[int],
+) -> Optional[str]:
+    if closed_version:
+        expected_schema = (
+            f"coldkeep-v1-security-toolchain-progression-selection/v{closed_version}"
+        )
+        if schemas != [expected_schema]:
+            return _closed_progression_selection_error(
+                closed_version,
+                "selection schema is missing, duplicated, or unsupported",
+            )
+        if len(pointers) != 1 or expectation_versions != {closed_version}:
+            return _closed_progression_selection_error(
+                closed_version,
+                "pointer, expectations, and reference must be selected together "
+                "without other-version material",
+            )
+        return None
+    if len(pointers) != 1 or expectation_versions != {1}:
+        return (
+            "security progression reference invalid: pointer, expectations, "
+            "and reference must be selected together"
+        )
+    return None
+
+
+def _loaded_progression_result(
+    root: Path,
+    version: str,
+    contract_doc: Optional[Document],
+    pointer: str,
+    loaded_reference: Optional[tuple[Optional[bytes], Optional[str]]],
+    closed_version: int,
+) -> tuple[str, Optional[SecurityToolchainProgression], Optional[str]]:
+    progression, detail = load_security_toolchain_progression(
+        root, contract_doc, pointer, loaded_reference
+    )
+    prefix = f"v{closed_version}-" if closed_version else ""
+    if detail:
+        state = "unavailable" if " reference unavailable:" in detail else "invalid"
+        return prefix + state, None, detail
+    if progression is None:
+        detail = "security progression reference invalid: progression is missing"
+        return prefix + "invalid", None, detail
+    if progression.values["SOURCE_VERSION"] != version:
+        detail = "security progression reference invalid: source version disagrees"
+        return prefix + "invalid", None, detail
+    return prefix + "progression", progression, None
 
 
 def security_progression_selection(
@@ -275,76 +426,43 @@ def security_progression_selection(
         f"docs/release/v{version.rsplit('.', 1)[0]}/"
         f"v{version}-security-toolchain-progression-reference.md"
     )
-    pointers: list[str] = []
-    schemas: list[str] = []
-    if state_doc is not None:
-        for line in state_doc.lines:
-            if line.startswith("## "):
-                break
-            if line.startswith("SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE:"):
-                pointers.append(line.partition(":")[2].strip())
-            if line.startswith("SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA:"):
-                schemas.append(line.partition(":")[2].strip())
-    v1_expectation_present = bool(
-        contract_doc
-        and "<!-- coldkeep-security-toolchain-progression-expectations:start -->"
-        in contract_doc.lines
+    selection = _preamble_values(
+        state_doc,
+        (
+            "SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE",
+            "SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA",
+        ),
     )
-    v2_expectation_present = bool(
-        contract_doc
-        and "<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->"
-        in contract_doc.lines
-    )
-    if contract_doc:
-        v1_expectation_present = v1_expectation_present or (
-            "SCHEMA: coldkeep-v1-security-toolchain-progression-expectations/v1"
-            in contract_doc.lines
-        )
-        v2_expectation_present = v2_expectation_present or (
-            "SCHEMA: coldkeep-v1-security-toolchain-progression-expectations/v2"
-            in contract_doc.lines
-        )
+    pointers = selection["SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE"]
+    schemas = selection["SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA"]
+    expectation_versions = _progression_expectation_versions(contract_doc)
     loaded_reference: Optional[tuple[Optional[bytes], Optional[str]]] = None
-    try:
-        os.lstat(root / reference_path)
-        reference_present = True
-    except FileNotFoundError:
-        reference_present = False
-    except OSError:
-        reference_present = True
+    reference_present = _path_entry_present(root / reference_path)
     if reference_present:
         loaded_reference = _safe_terminal_reference_bytes(
             root, reference_path, SECURITY_PROGRESSION_MAX_BYTES
         )
-    v2_selected = bool(schemas or v2_expectation_present)
-    if not v2_selected and loaded_reference is not None and loaded_reference[0] is not None:
-        v2_selected = b"SCHEMA: coldkeep-v1-security-toolchain-progression-reference/v2\n" in loaded_reference[0]
-    if not pointers and not schemas and not v1_expectation_present and not v2_expectation_present and not reference_present:
+    raw_reference = loaded_reference[0] if loaded_reference is not None else None
+    reference_version = _progression_reference_version(raw_reference)
+    if not pointers and not schemas and not expectation_versions and not reference_present:
         return "legacy", None, None
-    if v2_selected:
-        if schemas != ["coldkeep-v1-security-toolchain-progression-selection/v2"]:
-            return "v2-invalid", None, "security progression reference invalid: v2 selection schema is missing, duplicated, or unsupported"
-        if len(pointers) != 1 or not v2_expectation_present or v1_expectation_present:
-            return "v2-invalid", None, "security progression reference invalid: v2 pointer, expectations, and reference must be selected together without v1 material"
-    elif len(pointers) != 1 or not v1_expectation_present:
-        return (
-            "invalid",
-            None,
-            "security progression reference invalid: pointer, expectations, and reference must be selected together",
-        )
-    progression, detail = load_security_toolchain_progression(
-        root, contract_doc, pointers[0], loaded_reference
+    closed_version = _closed_progression_version(
+        schemas, expectation_versions, reference_version
+    )
+    detail = _progression_selector_error(
+        closed_version, schemas, pointers, expectation_versions
     )
     if detail:
-        mode = "unavailable" if " reference unavailable:" in detail else "invalid"
-        if v2_selected:
-            mode = f"v2-{mode}"
-        return mode, None, detail
-    if progression is None:
-        return "v2-invalid" if v2_selected else "invalid", None, "security progression reference invalid: progression is missing"
-    if progression.values["SOURCE_VERSION"] != version:
-        return "v2-invalid" if v2_selected else "invalid", None, "security progression reference invalid: source version disagrees"
-    return "v2-progression" if v2_selected else "progression", progression, None
+        prefix = f"v{closed_version}-" if closed_version else ""
+        return prefix + "invalid", None, detail
+    return _loaded_progression_result(
+        root,
+        version,
+        contract_doc,
+        pointers[0],
+        loaded_reference,
+        closed_version,
+    )
 
 
 def check_ckrs002(version: str, doc: Optional[Document], result: ValidationResult) -> None:
@@ -1285,16 +1403,17 @@ def validate(
             docs["contract"],
         )
     )
-    if progression_mode.startswith("v2-"):
+    if progression_mode.startswith(("v2-", "v3-")):
+        progression_version = progression_mode[1]
         result.diagnostic_schema = "coldkeep-release-state-diagnostic/v4"
         result.progression_contract_schema = (
-            "INVALID" if progression_mode == "v2-invalid" else
-            "UNAVAILABLE" if progression_mode == "v2-unavailable" else
-            "coldkeep-v1-security-toolchain-progression-reference/v2"
+            "INVALID" if progression_mode.endswith("-invalid") else
+            "UNAVAILABLE" if progression_mode.endswith("-unavailable") else
+            f"coldkeep-v1-security-toolchain-progression-reference/v{progression_version}"
         )
     if progression_detail:
         result.security_progression = (
-            "UNAVAILABLE" if progression_mode in ("unavailable", "v2-unavailable") else "INVALID"
+            "UNAVAILABLE" if progression_mode.endswith("unavailable") else "INVALID"
         )
         result.add(
             "CKRS020",
@@ -1409,8 +1528,8 @@ def validate(
         disposition_doc, disposition_load_error = (
             load_predecessor_disposition_document(root, disposition_path)
         )
-    progression_selectable = progression_mode not in (
-        "invalid", "unavailable", "v2-invalid", "v2-unavailable"
+    progression_selectable = not progression_mode.endswith(
+        ("invalid", "unavailable")
     )
     if requested_state == "auto" and terminal_mode != "invalid" and progression_selectable:
         state, context, evidence_scope = infer_state(

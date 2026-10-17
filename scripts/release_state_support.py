@@ -116,6 +116,41 @@ SECURITY_PROGRESSION_V2_REFERENCE_KEYS = (
     "NEW_TOOLCHAIN", "LANGUAGE_FLOOR", "PURPOSE", "DELTA_SCHEMA",
     "DELTA_COUNT",
 )
+SECURITY_PROGRESSION_V3_EXPECTATION_KEYS = (
+    "SCHEMA", "SELECTION_SCHEMA", "REFERENCE_PATH", "REFERENCE_MAX_BYTES",
+    "EXPECTED_REFERENCE_SHA256", "EXPECTED_REFERENCE_SCHEMA",
+    "EXPECTED_SOURCE_VERSION", "EXPECTED_CANONICAL_REPOSITORY",
+    "EXPECTED_REPOSITORY_ID", "EXPECTED_BRANCH_REF", "EXPECTED_BASE_REF",
+    "EXPECTED_PR_NUMBER", "EXPECTED_BASE_C", "EXPECTED_BASE_C_TREE",
+    "EXPECTED_HISTORICAL_H1", "EXPECTED_HISTORICAL_H1_PARENT",
+    "EXPECTED_HISTORICAL_H1_TREE", "EXPECTED_PUBLISHED_H2",
+    "EXPECTED_PUBLISHED_H2_PARENT", "EXPECTED_PUBLISHED_H2_TREE",
+    "EXPECTED_PUBLISHED_H2_CI_STATUS", "EXPECTED_PUBLISHED_H3",
+    "EXPECTED_PUBLISHED_H3_PARENT", "EXPECTED_PUBLISHED_H3_TREE",
+    "EXPECTED_PUBLISHED_H3_CI_STATUS", "EXPECTED_SUCCESSOR_PARENT",
+    "EXPECTED_SUCCESSOR_AUTHOR_NAME", "EXPECTED_SUCCESSOR_AUTHOR_EMAIL",
+    "EXPECTED_SUCCESSOR_AUTHOR_DATE", "EXPECTED_SUCCESSOR_COMMITTER_NAME",
+    "EXPECTED_SUCCESSOR_COMMITTER_EMAIL", "EXPECTED_SUCCESSOR_COMMITTER_DATE",
+    "EXPECTED_SUCCESSOR_SUBJECT",
+    "EXPECTED_OLD_TOOLCHAIN", "EXPECTED_NEW_TOOLCHAIN",
+    "EXPECTED_LANGUAGE_FLOOR", "EXPECTED_PURPOSE", "EXPECTED_DELTA_SCHEMA",
+    "EXPECTED_DELTA_COUNT", "EXPECTED_STATUS", "EXPECTED_VALIDATOR_EFFECT",
+    "EXPECTED_OWNER_AUTHORITY", "EXPECTED_SECURITY_RESULT",
+    "EXPECTED_PROVENANCE",
+)
+SECURITY_PROGRESSION_V3_REFERENCE_KEYS = (
+    "SCHEMA", "SOURCE_VERSION", "CANONICAL_REPOSITORY", "REPOSITORY_ID",
+    "BRANCH_REF", "BASE_REF", "PR_NUMBER", "BASE_C", "BASE_C_TREE",
+    "HISTORICAL_H1", "HISTORICAL_H1_PARENT", "HISTORICAL_H1_TREE",
+    "PUBLISHED_H2", "PUBLISHED_H2_PARENT", "PUBLISHED_H2_TREE",
+    "PUBLISHED_H2_CI_STATUS", "PUBLISHED_H3", "PUBLISHED_H3_PARENT",
+    "PUBLISHED_H3_TREE", "PUBLISHED_H3_CI_STATUS", "SUCCESSOR_PARENT",
+    "SUCCESSOR_AUTHOR_NAME", "SUCCESSOR_AUTHOR_EMAIL", "SUCCESSOR_AUTHOR_DATE",
+    "SUCCESSOR_COMMITTER_NAME", "SUCCESSOR_COMMITTER_EMAIL",
+    "SUCCESSOR_COMMITTER_DATE", "SUCCESSOR_SUBJECT",
+    "OLD_TOOLCHAIN", "NEW_TOOLCHAIN", "LANGUAGE_FLOOR", "PURPOSE",
+    "DELTA_SCHEMA", "DELTA_COUNT",
+)
 SECURITY_PROGRESSION_TRAILER_KEYS = (
     "STATUS", "VALIDATOR_EFFECT", "OWNER_AUTHORITY", "SECURITY_RESULT",
     "PROVENANCE",
@@ -131,6 +166,7 @@ SECURITY_PROGRESSION_V2_DELTA = (
     ("M", "100755", "scripts/validate_governance.py"),
     ("M", "100644", "scripts/validate_release_state.py"),
 )
+SECURITY_PROGRESSION_V3_DELTA = SECURITY_PROGRESSION_V2_DELTA
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 NONZERO_GIT_SHA = re.compile(r"^(?!0{40}$)[0-9a-f]{40}$")
 ProcessResult = subprocess.CompletedProcess[str]
@@ -1128,8 +1164,10 @@ def _security_progression_grammar(
     if schema not in (
         "coldkeep-v1-security-toolchain-progression-reference/v1",
         "coldkeep-v1-security-toolchain-progression-reference/v2",
+        "coldkeep-v1-security-toolchain-progression-reference/v3",
     ):
         return "reference schema is unsupported"
+    version = int(schema.rsplit("/v", 1)[1])
     if re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", values["SOURCE_VERSION"]) is None:
         return "source version grammar is invalid"
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", values["CANONICAL_REPOSITORY"]) is None:
@@ -1143,7 +1181,7 @@ def _security_progression_grammar(
     ):
         if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
             return f"{key} grammar is invalid"
-    if schema.endswith("/v2"):
+    if version >= 2:
         for key in (
             "PUBLISHED_H2", "PUBLISHED_H2_PARENT", "PUBLISHED_H2_TREE",
             "SUCCESSOR_PARENT",
@@ -1158,26 +1196,52 @@ def _security_progression_grammar(
         "LANGUAGE_FLOOR": "go1.25.0",
         "DELTA_SCHEMA": "STATUS MODE PATH",
     }
-    exact.update({
-        "PURPOSE": "FIXTURE_ISOLATION_AND_CLOSED_H2_SUCCESSOR_CONTRACT",
-        "PUBLISHED_H2_CI_STATUS": "ORIGINAL_BRANCH_AND_PR_CI_FAILED",
-        "STATUS": "STRUCTURAL_NON_AUTHORIZING_CLOSED_H2_SUCCESSOR_CONTRACT",
-        "VALIDATOR_EFFECT": "ONE_EXACT_DIRECT_H2_CHILD_DELTA_ONLY",
-        "OWNER_AUTHORITY": "NONE_SEPARATE_IMPLEMENTATION_AND_PUBLICATION_AUTHORIZATION_REQUIRED",
-        "SECURITY_RESULT": "H2_DATED_RESULTS_ONLY_SUCCESSOR_NOT_EVALUATED",
-        "PROVENANCE": "PHASE9AE_OWNER_ADOPTED_DESIGN_SPECIFICATION",
-    } if schema.endswith("/v2") else {
-        "PURPOSE": "GO-2026-6607_SAME_SERIES_TOOLCHAIN_AND_ONE_STEP_PROGRESSION",
-        "STATUS": "STRUCTURAL_NON_AUTHORIZING_UNEXECUTED_PROPOSAL",
-        "VALIDATOR_EFFECT": "ONE_EXACT_H1_CHILD_ONLY",
-        "OWNER_AUTHORITY": "NONE_REFERENCE_REQUIRES_INDEPENDENT_EXACT_DIFF_REVIEW",
-        "SECURITY_RESULT": "NOT_EXECUTED_NOT_REMEDIATED",
-        "PROVENANCE": "PHASE9V_MANIFEST_SHA256_254b72f12113f4f53ca73b40ae4c423e6a873ae98cf3ff02cbee1738440cdcb0",
-    })
+    if version == 3:
+        for key in (
+            "PUBLISHED_H3", "PUBLISHED_H3_PARENT", "PUBLISHED_H3_TREE",
+        ):
+            if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
+                return f"{key} grammar is invalid"
+        exact.update({
+            "PURPOSE": "QUALITY_REMEDIATION_AND_CLOSED_H3_SUCCESSOR_CONTRACT",
+            "PUBLISHED_H2_CI_STATUS": "ORIGINAL_BRANCH_AND_PR_CI_FAILED",
+            "PUBLISHED_H3_CI_STATUS": "ORIGINAL_BRANCH_AND_PR_QUALITY_AND_CODACY_FAILED",
+            "SUCCESSOR_AUTHOR_NAME": "franchoy",
+            "SUCCESSOR_AUTHOR_EMAIL": "franchoy@gmail.com",
+            "SUCCESSOR_AUTHOR_DATE": "2026-10-17T08:16:45+00:00",
+            "SUCCESSOR_COMMITTER_NAME": "franchoy",
+            "SUCCESSOR_COMMITTER_EMAIL": "franchoy@gmail.com",
+            "SUCCESSOR_COMMITTER_DATE": "2026-10-17T08:16:45+00:00",
+            "SUCCESSOR_SUBJECT": "fix(release): restore terminal quality gates and Codacy compliance",
+            "STATUS": "STRUCTURAL_NON_AUTHORIZING_CLOSED_H3_SUCCESSOR_CONTRACT",
+            "VALIDATOR_EFFECT": "ONE_EXACT_DIRECT_H3_CHILD_DELTA_ONLY",
+            "OWNER_AUTHORITY": "LOCAL_IMPLEMENTATION_ONLY_PUBLICATION_AND_MERGE_SEPARATELY_AUTHORIZED",
+            "SECURITY_RESULT": "H3_CODEQL_PASSED_CODACY_16_NEW_H4_NOT_EVALUATED",
+            "PROVENANCE": "OWNER_ADOPTED_H3_TO_H4_QUALITY_REMEDIATION_20261017",
+        })
+    elif version == 2:
+        exact.update({
+            "PURPOSE": "FIXTURE_ISOLATION_AND_CLOSED_H2_SUCCESSOR_CONTRACT",
+            "PUBLISHED_H2_CI_STATUS": "ORIGINAL_BRANCH_AND_PR_CI_FAILED",
+            "STATUS": "STRUCTURAL_NON_AUTHORIZING_CLOSED_H2_SUCCESSOR_CONTRACT",
+            "VALIDATOR_EFFECT": "ONE_EXACT_DIRECT_H2_CHILD_DELTA_ONLY",
+            "OWNER_AUTHORITY": "NONE_SEPARATE_IMPLEMENTATION_AND_PUBLICATION_AUTHORIZATION_REQUIRED",
+            "SECURITY_RESULT": "H2_DATED_RESULTS_ONLY_SUCCESSOR_NOT_EVALUATED",
+            "PROVENANCE": "PHASE9AE_OWNER_ADOPTED_DESIGN_SPECIFICATION",
+        })
+    else:
+        exact.update({
+            "PURPOSE": "GO-2026-6607_SAME_SERIES_TOOLCHAIN_AND_ONE_STEP_PROGRESSION",
+            "STATUS": "STRUCTURAL_NON_AUTHORIZING_UNEXECUTED_PROPOSAL",
+            "VALIDATOR_EFFECT": "ONE_EXACT_H1_CHILD_ONLY",
+            "OWNER_AUTHORITY": "NONE_REFERENCE_REQUIRES_INDEPENDENT_EXACT_DIFF_REVIEW",
+            "SECURITY_RESULT": "NOT_EXECUTED_NOT_REMEDIATED",
+            "PROVENANCE": "PHASE9V_MANIFEST_SHA256_254b72f12113f4f53ca73b40ae4c423e6a873ae98cf3ff02cbee1738440cdcb0",
+        })
     for key, expected in exact.items():
         if values[key] != expected:
             return f"{key} is unsupported"
-    expected_count = 9 if schema.endswith("/v2") else 25
+    expected_count = 9 if version >= 2 else 25
     if int(values["DELTA_COUNT"]) != len(delta) or len(delta) != expected_count:
         return "delta count is invalid"
     paths: list[str] = []
@@ -1197,11 +1261,11 @@ def _security_progression_grammar(
         paths.append(path)
     if paths != sorted(paths) or len(set(paths)) != len(paths):
         return "delta paths are duplicated or out of order"
-    expected_additions = 0 if schema.endswith("/v2") else 1
+    expected_additions = 0 if version >= 2 else 1
     if sum(1 for status_value, _, _ in delta if status_value == "A") != expected_additions:
         return "delta addition cardinality is invalid"
-    if schema.endswith("/v2") and delta != SECURITY_PROGRESSION_V2_DELTA:
-        return "v2 delta inventory is unsupported"
+    if version >= 2 and delta != SECURITY_PROGRESSION_V2_DELTA:
+        return f"v{version} delta inventory is unsupported"
     return None
 
 
@@ -1214,15 +1278,21 @@ def load_security_toolchain_progression(
     """Load and validate the exact digest-bound security progression record."""
     if contract is None:
         return None, "security progression reference invalid: expectation owner is missing"
-    v2 = "<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->" in contract.lines
-    expectation_keys = (
-        SECURITY_PROGRESSION_V2_EXPECTATION_KEYS if v2
-        else SECURITY_PROGRESSION_V1_EXPECTATION_KEYS
-    )
-    expectation_start = (
-        "<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->" if v2
-        else "<!-- coldkeep-security-toolchain-progression-expectations:start -->"
-    )
+    markers = {
+        3: "<!-- coldkeep-security-toolchain-progression-v3-expectations:start -->",
+        2: "<!-- coldkeep-security-toolchain-progression-v2-expectations:start -->",
+        1: "<!-- coldkeep-security-toolchain-progression-expectations:start -->",
+    }
+    selected_versions = [
+        version for version, marker in markers.items() if marker in contract.lines
+    ]
+    version = selected_versions[0] if len(selected_versions) == 1 else 1
+    expectation_keys = {
+        1: SECURITY_PROGRESSION_V1_EXPECTATION_KEYS,
+        2: SECURITY_PROGRESSION_V2_EXPECTATION_KEYS,
+        3: SECURITY_PROGRESSION_V3_EXPECTATION_KEYS,
+    }[version]
+    expectation_start = markers[version]
     expectation_end = expectation_start.replace(":start -->", ":end -->")
     expectations, detail = _ordered_marked_values(
         contract.lines, expectation_start, expectation_end, expectation_keys,
@@ -1230,12 +1300,13 @@ def load_security_toolchain_progression(
     if expectations is None:
         return None, f"security progression reference invalid: {detail or 'expectation block is missing'}"
     expected_expectation_schema = (
-        "coldkeep-v1-security-toolchain-progression-expectations/v2" if v2
-        else "coldkeep-v1-security-toolchain-progression-expectations/v1"
+        f"coldkeep-v1-security-toolchain-progression-expectations/v{version}"
     )
     if expectations["SCHEMA"] != expected_expectation_schema:
         return None, "security progression reference invalid: expectation schema is unsupported"
-    if v2 and expectations["SELECTION_SCHEMA"] != "coldkeep-v1-security-toolchain-progression-selection/v2":
+    if version >= 2 and expectations["SELECTION_SCHEMA"] != (
+        f"coldkeep-v1-security-toolchain-progression-selection/v{version}"
+    ):
         return None, "security progression reference invalid: selection schema is unsupported"
     if expectations["REFERENCE_MAX_BYTES"] != str(SECURITY_PROGRESSION_MAX_BYTES):
         return None, "security progression reference invalid: byte limit is unsupported"
@@ -1261,7 +1332,8 @@ def load_security_toolchain_progression(
     except UnicodeDecodeError:
         return None, "security progression reference invalid: encoding is invalid"
     start_marker = (
-        "<!-- coldkeep-security-toolchain-progression-v2-reference:start -->" if v2
+        f"<!-- coldkeep-security-toolchain-progression-v{version}-reference:start -->"
+        if version >= 2
         else "<!-- coldkeep-security-toolchain-progression-reference:start -->"
     )
     end_marker = start_marker.replace(":start -->", ":end -->")
@@ -1275,11 +1347,12 @@ def load_security_toolchain_progression(
     if lines[start + 1 : start + 2] != ["```text"] or lines[end - 1 : end] != ["```"]:
         return None, "security progression reference invalid: fence placement is invalid"
     body = lines[start + 2 : end - 1]
-    reference_keys = (
-        SECURITY_PROGRESSION_V2_REFERENCE_KEYS if v2
-        else SECURITY_PROGRESSION_V1_REFERENCE_KEYS
-    )
-    delta_count = 9 if v2 else 25
+    reference_keys = {
+        1: SECURITY_PROGRESSION_V1_REFERENCE_KEYS,
+        2: SECURITY_PROGRESSION_V2_REFERENCE_KEYS,
+        3: SECURITY_PROGRESSION_V3_REFERENCE_KEYS,
+    }[version]
+    delta_count = 9 if version >= 2 else 25
     required_body_length = (
         len(reference_keys) + delta_count
         + len(SECURITY_PROGRESSION_TRAILER_KEYS)
@@ -1341,7 +1414,7 @@ def load_security_toolchain_progression(
         return None, "security progression reference invalid: historical H1 parents disagree"
     if commit_tree(root, values["HISTORICAL_H1"]) != values["HISTORICAL_H1_TREE"]:
         return None, "security progression reference invalid: historical H1 tree disagrees"
-    if v2:
+    if version >= 2:
         for key, kind in (
             ("PUBLISHED_H2", "commit"), ("PUBLISHED_H2_PARENT", "commit"),
             ("PUBLISHED_H2_TREE", "tree"), ("SUCCESSOR_PARENT", "commit"),
@@ -1355,7 +1428,23 @@ def load_security_toolchain_progression(
             return None, "security progression reference invalid: published H2 parents disagree"
         if commit_tree(root, values["PUBLISHED_H2"]) != values["PUBLISHED_H2_TREE"]:
             return None, "security progression reference invalid: published H2 tree disagrees"
-        if values["SUCCESSOR_PARENT"] != values["PUBLISHED_H2"]:
+        if version == 2 and values["SUCCESSOR_PARENT"] != values["PUBLISHED_H2"]:
+            return None, "security progression reference invalid: successor parent anchor disagrees"
+    if version == 3:
+        for key, kind in (
+            ("PUBLISHED_H3", "commit"), ("PUBLISHED_H3_PARENT", "commit"),
+            ("PUBLISHED_H3_TREE", "tree"),
+        ):
+            object_detail = required_object(key, kind)
+            if object_detail:
+                return None, object_detail
+        if values["PUBLISHED_H3_PARENT"] != values["PUBLISHED_H2"]:
+            return None, "security progression reference invalid: published H3 parent anchor disagrees"
+        if commit_parents(root, values["PUBLISHED_H3"]) != [values["PUBLISHED_H2"]]:
+            return None, "security progression reference invalid: published H3 parents disagree"
+        if commit_tree(root, values["PUBLISHED_H3"]) != values["PUBLISHED_H3_TREE"]:
+            return None, "security progression reference invalid: published H3 tree disagrees"
+        if values["SUCCESSOR_PARENT"] != values["PUBLISHED_H3"]:
             return None, "security progression reference invalid: successor parent anchor disagrees"
     return SecurityToolchainProgression(expectations, values, frozen_delta), None
 
@@ -1399,6 +1488,7 @@ def run_process(
     cwd: Optional[Path] = None,
     env: Optional[dict[str, str]] = None,
     check: bool = False,
+    timeout: Optional[float] = None,
 ) -> ProcessResult:
     """Run reviewed list-form argv without shell interpretation."""
     return subprocess.run(
@@ -1410,6 +1500,7 @@ def run_process(
         stderr=subprocess.PIPE,
         check=check,
         shell=False,
+        timeout=timeout,
     )
 
 
@@ -2841,8 +2932,12 @@ def terminal_candidate_artifact(
     """Validate the fixed one-commit terminal serialization candidate."""
     if progression is not None:
         historical_h1 = progression.values["HISTORICAL_H1"]
-        if progression.values["SCHEMA"].endswith("/v2"):
-            return head == progression.values["PUBLISHED_H2"] or progressed_h2_artifact(
+        version = int(progression.values["SCHEMA"].rsplit("/v", 1)[1])
+        if version >= 2:
+            predecessor = progression.values[
+                "PUBLISHED_H3" if version == 3 else "PUBLISHED_H2"
+            ]
+            return head == predecessor or progressed_h2_artifact(
                 root, head, progression
             )
         return head == historical_h1 or progressed_h2_artifact(root, head, progression)
@@ -2869,18 +2964,55 @@ def _tree_inventory(root: Path, commit: str) -> Optional[dict[str, tuple[str, st
     return inventory
 
 
+def _successor_commit_identity_matches(
+    root: Path,
+    head: str,
+    progression: SecurityToolchainProgression,
+) -> bool:
+    """Bind v3's successor metadata without embedding its self-derived SHA."""
+    if not progression.values["SCHEMA"].endswith("/v3"):
+        return True
+    completed = run_git(
+        root,
+        [
+            "show", "-s",
+            "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%s",
+            head,
+        ],
+        allow_failure=True,
+    )
+    if completed.returncode:
+        return False
+    actual = completed.stdout.rstrip("\n").split("\0")
+    expected = [
+        progression.values[key]
+        for key in (
+            "SUCCESSOR_AUTHOR_NAME", "SUCCESSOR_AUTHOR_EMAIL",
+            "SUCCESSOR_AUTHOR_DATE", "SUCCESSOR_COMMITTER_NAME",
+            "SUCCESSOR_COMMITTER_EMAIL", "SUCCESSOR_COMMITTER_DATE",
+            "SUCCESSOR_SUBJECT",
+        )
+    ]
+    return actual == expected
+
+
 def progressed_h2_artifact(
     root: Path,
     head: str,
     progression: SecurityToolchainProgression,
 ) -> bool:
     """Require one exact child of the schema-selected predecessor and delta."""
-    predecessor = (
-        progression.values["PUBLISHED_H2"]
-        if progression.values["SCHEMA"].endswith("/v2")
-        else progression.values["HISTORICAL_H1"]
-    )
-    if head == predecessor or commit_parents(root, head) != [predecessor]:
+    version = int(progression.values["SCHEMA"].rsplit("/v", 1)[1])
+    predecessor = progression.values[
+        "PUBLISHED_H3" if version == 3
+        else "PUBLISHED_H2" if version == 2
+        else "HISTORICAL_H1"
+    ]
+    if (
+        head == predecessor
+        or commit_parents(root, head) != [predecessor]
+        or not _successor_commit_identity_matches(root, head, progression)
+    ):
         return False
     completed = run_git(
         root,
@@ -2933,11 +3065,17 @@ def security_progression_status(
     historical_h1 = progression.values["HISTORICAL_H1"]
     if head == historical_h1:
         return "HISTORICAL_H1_UNPATCHED"
-    v2 = progression.values["SCHEMA"].endswith("/v2")
-    if v2 and head == progression.values["PUBLISHED_H2"]:
+    version = int(progression.values["SCHEMA"].rsplit("/v", 1)[1])
+    if version >= 2 and head == progression.values["PUBLISHED_H2"]:
         return "PUBLISHED_H2_STRUCTURAL_ONLY_ORIGINAL_CI_FAILED"
+    if version == 3 and head == progression.values["PUBLISHED_H3"]:
+        return "PUBLISHED_H3_STRUCTURAL_ONLY_ORIGINAL_QUALITY_FAILED"
     if progressed_h2_artifact(root, head, progression):
-        return "H2_SUCCESSOR_STRUCTURAL_ONLY" if v2 else "PROGRESSED_H2_STRUCTURAL_ONLY"
+        return {
+            1: "PROGRESSED_H2_STRUCTURAL_ONLY",
+            2: "H2_SUCCESSOR_STRUCTURAL_ONLY",
+            3: "H3_SUCCESSOR_STRUCTURAL_ONLY",
+        }[version]
     parents = commit_parents(root, head)
     if (
         len(parents) == 2
@@ -2945,7 +3083,11 @@ def security_progression_status(
         and progressed_h2_artifact(root, parents[1], progression)
         and commit_tree(root, head) == commit_tree(root, parents[1])
     ):
-        return "H2_SUCCESSOR_STRUCTURAL_ONLY" if v2 else "PROGRESSED_H2_STRUCTURAL_ONLY"
+        return {
+            1: "PROGRESSED_H2_STRUCTURAL_ONLY",
+            2: "H2_SUCCESSOR_STRUCTURAL_ONLY",
+            3: "H3_SUCCESSOR_STRUCTURAL_ONLY",
+        }[version]
     available = run_git(
         root, ["cat-file", "-e", f"{head}^{{commit}}"], allow_failure=True
     ).returncode == 0
@@ -2968,12 +3110,16 @@ def strict_terminal_push_context(
     payload = _load_event(env["GITHUB_EVENT_PATH"]) if env["GITHUB_EVENT_PATH"] else None
     before = payload.get("before") if payload else None
     created = payload.get("created") if payload else None
-    expected_before = (
-        progression.values[
-            "PUBLISHED_H2" if progression.values["SCHEMA"].endswith("/v2")
+    if progression is None:
+        expected_before = accepted_c
+    else:
+        version_number = int(progression.values["SCHEMA"].rsplit("/v", 1)[1])
+        predecessor_key = (
+            "PUBLISHED_H3" if version_number == 3
+            else "PUBLISHED_H2" if version_number == 2
             else "HISTORICAL_H1"
-        ] if progression is not None else accepted_c
-    )
+        )
+        expected_before = progression.values[predecessor_key]
     expected_repository_id = (
         progression.values["REPOSITORY_ID"] if progression is not None else None
     )
@@ -3552,10 +3698,12 @@ def v1_context_scope(
             return None
         accepted_c = terminal_disposition.values["ACCEPTED_C"]
         terminal_branch = f"release/v{version}-terminal-serialization"
-        v2_progression = bool(
-            security_progression is not None
-            and security_progression.values["SCHEMA"].endswith("/v2")
+        progression_version = (
+            int(security_progression.values["SCHEMA"].rsplit("/v", 1)[1])
+            if security_progression is not None else 0
         )
+        closed_successor = progression_version >= 2
+        successor_name = "H3" if progression_version == 3 else "H2"
         if (
             not any_github
             and branch == terminal_branch
@@ -3563,12 +3711,12 @@ def v1_context_scope(
                 root, head, accepted_c, security_progression
             )
             and (
-                not v2_progression
+                not closed_successor
                 or progressed_h2_artifact(root, head, security_progression)
             )
         ):
             return (
-                "LOCAL_H2_SUCCESSOR_CANDIDATE" if v2_progression
+                f"LOCAL_{successor_name}_SUCCESSOR_CANDIDATE" if closed_successor
                 else "LOCAL_TERMINAL_SERIALIZATION_CANDIDATE"
             )
         if strict_terminal_push_context(
@@ -3576,7 +3724,8 @@ def v1_context_scope(
             declaration.canonical_repository, accepted_c, security_progression,
         ):
             return (
-                "GITHUB_H2_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY" if v2_progression
+                f"GITHUB_{successor_name}_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY"
+                if closed_successor
                 else "GITHUB_TERMINAL_SERIALIZATION_PUSH_CONTEXT_CONSISTENCY"
             )
         if strict_terminal_pr_context(
@@ -3584,14 +3733,14 @@ def v1_context_scope(
             declaration.canonical_repository, accepted_c,
             security_progression, diagnostic, diagnostic_site,
         ):
-            if v2_progression:
+            if closed_successor:
                 payload = _load_event(env["GITHUB_EVENT_PATH"])
                 pull_request = payload.get("pull_request") if payload else None
                 pr_head = _pr_ref_identity(pull_request.get("head")) if isinstance(pull_request, dict) else None
                 return (
-                    "GITHUB_H2_SUCCESSOR_PR_DIRECT_CONTEXT_CONSISTENCY"
+                    f"GITHUB_{successor_name}_SUCCESSOR_PR_DIRECT_CONTEXT_CONSISTENCY"
                     if pr_head is not None and head == pr_head[1]
-                    else "GITHUB_H2_SUCCESSOR_PR_SYNTHETIC_CONTEXT_CONSISTENCY"
+                    else f"GITHUB_{successor_name}_SUCCESSOR_PR_SYNTHETIC_CONTEXT_CONSISTENCY"
                 )
             return "GITHUB_TERMINAL_SERIALIZATION_PR_CONTEXT_CONSISTENCY"
         return None
@@ -3599,10 +3748,12 @@ def v1_context_scope(
         if terminal_disposition is None:
             return None
         accepted_c = terminal_disposition.values["ACCEPTED_C"]
-        v2_progression = bool(
-            security_progression is not None
-            and security_progression.values["SCHEMA"].endswith("/v2")
+        progression_version = (
+            int(security_progression.values["SCHEMA"].rsplit("/v", 1)[1])
+            if security_progression is not None else 0
         )
+        closed_successor = progression_version >= 2
+        successor_name = "H3" if progression_version == 3 else "H2"
         if (
             not any_github
             and branch == "main"
@@ -3611,7 +3762,8 @@ def v1_context_scope(
             )
         ):
             return (
-                "LOCAL_H2_SUCCESSOR_MAIN_ARTIFACT_ONLY" if v2_progression
+                f"LOCAL_{successor_name}_SUCCESSOR_MAIN_ARTIFACT_ONLY"
+                if closed_successor
                 else "LOCAL_TERMINAL_SERIALIZATION_MAIN_ARTIFACT_ONLY"
             )
         if strict_terminal_main_push_context(
@@ -3619,7 +3771,8 @@ def v1_context_scope(
             declaration.canonical_repository, accepted_c, security_progression,
         ):
             return (
-                "GITHUB_H2_SUCCESSOR_MAIN_CONTEXT_CONSISTENCY" if v2_progression
+                f"GITHUB_{successor_name}_SUCCESSOR_MAIN_CONTEXT_CONSISTENCY"
+                if closed_successor
                 else "GITHUB_TERMINAL_SERIALIZATION_MAIN_CONTEXT_CONSISTENCY"
             )
         return None
