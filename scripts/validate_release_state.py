@@ -34,6 +34,7 @@ from release_state_support import (
     current_train_section,
     exact_tag_matches_head,
     final_snapshot_artifact,
+    final_snapshot_context_status,
     field_from_lines,
     first_invalid_phase,
     git_context_matches,
@@ -1727,31 +1728,20 @@ def validate(
     result.outstanding_obligations = outstanding_obligations(state)
     result.evidence_scope = evidence_scope
     if final_snapshot is not None and not snapshot_detail:
-        complete = final_snapshot_artifact(
+        result.final_snapshot = final_snapshot_context_status(
             root,
-            context[0],
+            version,
+            state,
+            context,
+            github_context(),
             final_snapshot,
-            require_complete=True,
         )
-        subset = complete or final_snapshot_artifact(
-            root,
-            context[0],
-            final_snapshot,
-            require_complete=False,
-        )
-        result.final_snapshot = (
-            "CANDIDATE_COMPLETE_VALID"
-            if complete
-            else "CANDIDATE_SUBSET_VALID"
-            if subset
-            else "INVALID"
-        )
-        if not subset:
+        if result.final_snapshot == "INVALID":
             result.add(
                 "CKRS020",
                 ".git",
                 0,
-                "final snapshot artifact violates the exact baseline, merge-free ancestry, status, mode, or path contract",
+                "final snapshot artifact violates the exact role topology, baseline, ancestry, status, mode, or path contract",
             )
     if security_progression is not None and not progression_detail:
         progression_status = security_progression_status(

@@ -12025,13 +12025,8 @@ class FinalSnapshotPullRequestContextTests(unittest.TestCase):
             ),
             mock.patch.object(
                 release_state_support,
-                "final_snapshot_artifact",
-                return_value=True,
-            ),
-            mock.patch.object(
-                release_state_support,
-                "final_snapshot_pr_base_matches",
-                side_effect=(True, False),
+                "final_snapshot_pr_artifact_status",
+                side_effect=("PR_DIRECT_COMPLETE_VALID", None),
             ),
         ):
             accepted = release_state_support.v1_context_scope(
@@ -12054,6 +12049,469 @@ class FinalSnapshotPullRequestContextTests(unittest.TestCase):
             )
         self.assertEqual(accepted, "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY")
         self.assertIsNone(rejected)
+
+
+class FinalSnapshotRealGitContextTests(unittest.TestCase):
+    """Exercise final-snapshot roles against real, isolated Git objects."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.temporary.name) / "repository"
+        run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "clone",
+                "--no-checkout",
+                "--no-hardlinks",
+                str(FINAL_SNAPSHOT_TEST_ROOT),
+                str(cls.root),
+            ],
+            check=True,
+        )
+        git(cls.root, "config", "user.name", "Coldkeep fixture")
+        git(cls.root, "config", "user.email", "fixture@invalid.example")
+        cls.snapshot = load_final_snapshot_for_test()
+        cls.base = cls.snapshot.values["BASE_M"]
+        cls.candidate = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(FINAL_SNAPSHOT_TEST_ROOT),
+                "rev-parse",
+                "HEAD",
+            ],
+            check=True,
+        ).stdout.strip()
+        candidate_tree = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(cls.root),
+                "rev-parse",
+                f"{cls.candidate}^{{tree}}",
+            ],
+            check=True,
+        ).stdout.strip()
+        cls.synthetic = run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(cls.root),
+                "commit-tree",
+                candidate_tree,
+                "-p",
+                cls.base,
+                "-p",
+                cls.candidate,
+                "-m",
+                "TEST_FIXTURE_ONLY synthetic merge",
+            ],
+            check=True,
+        ).stdout.strip()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.temporary.cleanup()
+
+    def copy_validator(self) -> None:
+        for name in ("release_state_support.py", "validate_release_state.py"):
+            shutil.copy2(
+                FINAL_SNAPSHOT_TEST_ROOT / "scripts" / name,
+                self.root / "scripts" / name,
+            )
+
+    def checkout(self, commit: str, *, branch: str | None = None) -> None:
+        git(self.root, "checkout", "--force", "--detach", commit)
+        run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(self.root),
+                "tag",
+                "--delete",
+                "v1.13.18",
+            ]
+        )
+        if branch is not None:
+            git(self.root, "branch", "--force", branch, commit)
+            git(self.root, "checkout", "--force", branch)
+        self.copy_validator()
+
+    def commit_tree(self, tree: str, *parents: str) -> str:
+        command = [
+            resolved_executable("git"),
+            *FIXTURE_GIT_CONFIG,
+            "-C",
+            str(self.root),
+            "commit-tree",
+            tree,
+        ]
+        for parent in parents:
+            command.extend(("-p", parent))
+        command.extend(("-m", "TEST_FIXTURE_ONLY variant"))
+        return run_process(command, check=True).stdout.strip()
+
+    def pull_request_environment(
+        self,
+        checkout: str,
+        *,
+        base: str | None = None,
+        candidate: str | None = None,
+        head_repository: str = "franchoy/coldkeep",
+    ) -> dict[str, str]:
+        base = base or self.base
+        candidate = candidate or self.candidate
+        event_path = Path(self.temporary.name) / "pull-request.json"
+        event_path.write_text(
+            json.dumps(
+                {
+                    "number": 18,
+                    "repository": {"full_name": "franchoy/coldkeep"},
+                    "pull_request": {
+                        "base": {
+                            "ref": "main",
+                            "sha": base,
+                            "repo": {"full_name": "franchoy/coldkeep"},
+                        },
+                        "head": {
+                            "ref": "release/v1.13.18",
+                            "sha": candidate,
+                            "repo": {"full_name": head_repository},
+                        },
+                        "merge_commit_sha": checkout,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/pull/18/merge",
+            "GITHUB_REF_NAME": "18/merge",
+            "GITHUB_HEAD_REF": "release/v1.13.18",
+            "GITHUB_BASE_REF": "main",
+            "GITHUB_EVENT_PATH": str(event_path),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": checkout,
+        }
+
+    def tag_environment(self) -> dict[str, str]:
+        event_path = Path(self.temporary.name) / "tag.json"
+        event_path.write_text(
+            json.dumps(
+                {
+                    "ref": "refs/tags/v1.13.18",
+                    "before": "0" * 40,
+                    "after": self.synthetic,
+                    "created": True,
+                    "deleted": False,
+                    "forced": False,
+                    "repository": {"full_name": "franchoy/coldkeep"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/tags/v1.13.18",
+            "GITHUB_REF_NAME": "v1.13.18",
+            "GITHUB_REF_TYPE": "tag",
+            "GITHUB_EVENT_PATH": str(event_path),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": self.synthetic,
+        }
+
+    def run_json(
+        self,
+        state: str,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> tuple[ProcessResult, dict[str, object]]:
+        completed = run_validator_script(
+            self.root / "scripts" / "validate_release_state.py",
+            self.root,
+            "--state",
+            state,
+            "--json",
+            env=env,
+        )
+        return completed, json.loads(completed.stdout)
+
+    def assert_snapshot_invalid(
+        self,
+        checkout: str,
+        *,
+        state: str = "development",
+        env: dict[str, str] | None = None,
+        branch: str | None = None,
+    ) -> None:
+        self.checkout(checkout, branch=branch)
+        completed, payload = self.run_json(state, env=env)
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertEqual(payload["final_snapshot"], "INVALID")
+        self.assertIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+
+    def test_local_candidate_and_direct_pr_use_complete_candidate(self) -> None:
+        self.checkout(self.candidate, branch="release/v1.13.18")
+        local, local_payload = self.run_json("auto")
+        self.assertEqual(local.returncode, 0, local.stdout + local.stderr)
+        self.assertEqual(
+            local_payload["final_snapshot"], "CANDIDATE_COMPLETE_VALID"
+        )
+        self.assertEqual(local_payload["evidence_scope"], "LOCAL_RELEASE_BRANCH")
+
+        self.checkout(self.candidate)
+        direct, direct_payload = self.run_json(
+            "auto", env=self.pull_request_environment(self.candidate)
+        )
+        self.assertEqual(direct.returncode, 0, direct.stdout + direct.stderr)
+        self.assertEqual(
+            direct_payload["final_snapshot"], "PR_DIRECT_COMPLETE_VALID"
+        )
+        self.assertEqual(
+            direct_payload["evidence_scope"],
+            "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY",
+        )
+
+    def test_synthetic_pr_validates_payload_candidate_not_merge_commit(self) -> None:
+        self.checkout(self.synthetic)
+        completed, payload = self.run_json(
+            "auto",
+            env=self.pull_request_environment(self.synthetic),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(payload["final_snapshot"], "PR_SYNTHETIC_COMPLETE_VALID")
+        self.assertNotIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY"
+        )
+
+    def test_main_merge_has_role_aware_snapshot_status(self) -> None:
+        self.checkout(self.synthetic, branch="main")
+        _, payload = self.run_json("merged-pending-final-main-certification")
+        self.assertEqual(payload["final_snapshot"], "MAIN_MERGE_VALID")
+        self.assertNotIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+
+    def test_tagged_merge_has_role_aware_snapshot_status(self) -> None:
+        self.checkout(self.synthetic)
+        git(self.root, "tag", "--force", "-a", "v1.13.18", "-m", "fixture")
+        self.copy_validator()
+        _, payload = self.run_json("tagged", env=self.tag_environment())
+        self.assertEqual(payload["final_snapshot"], "TAGGED_MAIN_VALID")
+        self.assertNotIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+        self.assertNotIn(
+            "CKRS016", {item["rule"] for item in payload["violations"]}
+        )
+
+    def test_pr_wrong_base_head_repository_and_merge_shapes_fail_closed(self) -> None:
+        candidate_tree = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(self.root),
+                "rev-parse",
+                f"{self.candidate}^{{tree}}",
+            ],
+            check=True,
+        ).stdout.strip()
+        candidate_parent = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(self.root),
+                "rev-parse",
+                f"{self.candidate}^",
+            ],
+            check=True,
+        ).stdout.strip()
+        self.checkout(self.candidate, branch="fixture/wrong-tree")
+        readme = self.root / "README.md"
+        readme.write_text(
+            readme.read_text(encoding="utf-8") + "\nTEST_FIXTURE_ONLY\n",
+            encoding="utf-8",
+        )
+        git(self.root, "add", "README.md")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY wrong tree")
+        wrong_tree = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(self.root),
+                "rev-parse",
+                "HEAD^{tree}",
+            ],
+            check=True,
+        ).stdout.strip()
+        variants = {
+            "swapped-parents": self.commit_tree(
+                candidate_tree, self.candidate, self.base
+            ),
+            "extra-parent": self.commit_tree(
+                candidate_tree, self.base, self.candidate, candidate_parent
+            ),
+            "wrong-tree": self.commit_tree(
+                wrong_tree, self.base, self.candidate
+            ),
+        }
+        for label, checkout in variants.items():
+            with self.subTest(label=label):
+                self.assert_snapshot_invalid(
+                    checkout,
+                    env=self.pull_request_environment(checkout),
+                )
+
+        cases = {
+            "wrong-base": self.pull_request_environment(
+                self.synthetic, base=candidate_parent
+            ),
+            "wrong-head": self.pull_request_environment(
+                self.synthetic, candidate=candidate_parent
+            ),
+            "foreign-head": self.pull_request_environment(
+                self.synthetic, head_repository="fork/coldkeep"
+            ),
+        }
+        for label, env in cases.items():
+            with self.subTest(label=label):
+                self.assert_snapshot_invalid(self.synthetic, env=env)
+
+    def test_unmerged_candidate_cannot_masquerade_as_main_or_tag(self) -> None:
+        self.assert_snapshot_invalid(
+            self.candidate,
+            state="merged-pending-final-main-certification",
+            branch="main",
+        )
+        self.checkout(self.candidate)
+        git(self.root, "tag", "-a", "v1.13.18", "-m", "fixture")
+        self.copy_validator()
+        completed, payload = self.run_json("tagged")
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertEqual(payload["final_snapshot"], "INVALID")
+        self.assertIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+
+    def test_extra_path_and_wrong_mode_candidates_fail_closed(self) -> None:
+        self.checkout(self.candidate, branch="release/v1.13.18")
+        write(self.root, "TEST_FIXTURE_ONLY-extra", "unexpected\n")
+        git(self.root, "add", "TEST_FIXTURE_ONLY-extra")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY extra path")
+        extra = run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        self.assert_snapshot_invalid(
+            extra, branch="release/v1.13.18"
+        )
+
+        self.checkout(self.candidate, branch="release/v1.13.18")
+        validator = self.root / "scripts" / "validate_release_state.py"
+        validator.chmod(0o755)
+        git(self.root, "add", "scripts/validate_release_state.py")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY wrong mode")
+        wrong_mode = run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        self.assert_snapshot_invalid(
+            wrong_mode, branch="release/v1.13.18"
+        )
+
+    def test_wrong_tag_and_unsafe_tag_repository_state_fail_closed(self) -> None:
+        self.checkout(self.synthetic)
+        git(
+            self.root,
+            "tag",
+            "-a",
+            "v1.13.18",
+            self.candidate,
+            "-m",
+            "fixture wrong target",
+        )
+        self.copy_validator()
+        wrong_tag, wrong_tag_payload = self.run_json("tagged")
+        self.assertEqual(
+            wrong_tag.returncode, 1, wrong_tag.stdout + wrong_tag.stderr
+        )
+        self.assertIn(
+            "CKRS017",
+            {item["rule"] for item in wrong_tag_payload["violations"]},
+        )
+
+        git_dir = self.root / ".git"
+        source_objects = FINAL_SNAPSHOT_TEST_ROOT / ".git" / "objects"
+        cases = {
+            "shallow": (git_dir / "shallow", self.synthetic + "\n"),
+            "alternate": (
+                git_dir / "objects" / "info" / "alternates",
+                str(source_objects.resolve()) + "\n",
+            ),
+            "graft": (
+                git_dir / "info" / "grafts",
+                f"{self.synthetic} {self.base} {self.candidate}\n",
+            ),
+        }
+        for label, (path, content) in cases.items():
+            with self.subTest(label=label):
+                self.checkout(self.synthetic)
+                git(
+                    self.root,
+                    "tag",
+                    "-a",
+                    "v1.13.18",
+                    "-m",
+                    "fixture",
+                )
+                self.copy_validator()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                try:
+                    completed, payload = self.run_json(
+                        "tagged", env=self.tag_environment()
+                    )
+                    self.assertEqual(
+                        completed.returncode,
+                        1,
+                        completed.stdout + completed.stderr,
+                    )
+                    self.assertIn(
+                        "CKRS016",
+                        {item["rule"] for item in payload["violations"]},
+                    )
+                finally:
+                    path.unlink(missing_ok=True)
+
+        self.checkout(self.synthetic)
+        git(self.root, "tag", "-a", "v1.13.18", "-m", "fixture")
+        git(self.root, "replace", self.synthetic, self.candidate)
+        self.copy_validator()
+        try:
+            replaced, replaced_payload = self.run_json(
+                "tagged", env=self.tag_environment()
+            )
+            self.assertEqual(
+                replaced.returncode, 1, replaced.stdout + replaced.stderr
+            )
+            self.assertIn(
+                "CKRS016",
+                {item["rule"] for item in replaced_payload["violations"]},
+            )
+        finally:
+            git(self.root, "replace", "--delete", self.synthetic)
 
 
 class FinalSnapshotMainContextTests(unittest.TestCase):

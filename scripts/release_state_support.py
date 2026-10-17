@@ -3626,6 +3626,82 @@ def final_snapshot_pr_base_matches(
     )
 
 
+def final_snapshot_pr_artifact_status(
+    root: Path,
+    checkout: str,
+    env: dict[str, str],
+    snapshot: FinalSourceSnapshot,
+) -> Optional[str]:
+    """Validate the selected PR candidate and identify its checkout route."""
+    if not final_snapshot_pr_base_matches(env, snapshot):
+        return None
+    payload = _load_event(env.get("GITHUB_EVENT_PATH", ""))
+    pull_request = payload.get("pull_request") if payload else None
+    head = pull_request.get("head") if isinstance(pull_request, dict) else None
+    candidate = head.get("sha") if isinstance(head, dict) else None
+    if not isinstance(candidate, str) or not final_snapshot_artifact(
+        root,
+        candidate,
+        snapshot,
+        require_complete=True,
+    ):
+        return None
+    return (
+        "PR_DIRECT_COMPLETE_VALID"
+        if checkout == candidate
+        else "PR_SYNTHETIC_COMPLETE_VALID"
+    )
+
+
+def final_snapshot_context_status(
+    root: Path,
+    version: str,
+    state: str,
+    context: tuple[str, str, bool, bool, Optional[str]],
+    env: dict[str, str],
+    snapshot: FinalSourceSnapshot,
+) -> str:
+    """Return the structural snapshot status for the active artifact role."""
+    head, branch, _, _, _ = context
+    if state in ("development", "pre-release"):
+        if env.get("GITHUB_EVENT_NAME") == "pull_request":
+            if not strict_release_pr_context(
+                root,
+                version,
+                head,
+                env,
+                snapshot.values["CANONICAL_REPOSITORY"],
+                branch=branch,
+            ):
+                return "INVALID"
+            return final_snapshot_pr_artifact_status(
+                root, head, env, snapshot
+            ) or "INVALID"
+        complete = final_snapshot_artifact(
+            root, head, snapshot, require_complete=True
+        )
+        if complete:
+            return "CANDIDATE_COMPLETE_VALID"
+        if state == "development" and final_snapshot_artifact(
+            root, head, snapshot, require_complete=False
+        ):
+            return "CANDIDATE_SUBSET_VALID"
+        return "INVALID"
+    if state == "merged-pending-final-main-certification":
+        return (
+            "MAIN_MERGE_VALID"
+            if final_snapshot_main_artifact(root, head, snapshot)
+            else "INVALID"
+        )
+    if state in ("tagged-pending-tag-certification", "tagged"):
+        return (
+            "TAGGED_MAIN_VALID"
+            if final_snapshot_main_artifact(root, head, snapshot)
+            else "INVALID"
+        )
+    return "INVALID"
+
+
 def _successor_commit_identity_matches(
     root: Path,
     head: str,
@@ -4534,20 +4610,21 @@ def v1_context_scope(
         ):
             return "GITHUB_RELEASE_PUSH_CONTEXT_CONSISTENCY"
         if (
-            snapshot_ok
-            and strict_release_pr_context(
-            root,
-            version,
-            head,
-            env,
-            declaration.canonical_repository,
-            branch=branch,
-            diagnostic=diagnostic,
-            diagnostic_site=diagnostic_site,
+            strict_release_pr_context(
+                root,
+                version,
+                head,
+                env,
+                declaration.canonical_repository,
+                branch=branch,
+                diagnostic=diagnostic,
+                diagnostic_site=diagnostic_site,
             )
             and (
                 final_snapshot is None
-                or final_snapshot_pr_base_matches(env, final_snapshot)
+                or final_snapshot_pr_artifact_status(
+                    root, head, env, final_snapshot
+                ) is not None
             )
         ):
             return "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY"
