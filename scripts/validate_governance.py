@@ -1080,7 +1080,14 @@ def validate(root: Path = ROOT) -> list[str]:
         Path(".github/instructions/ci.instructions.md"): (
             "v1.13.17",
             "v1.13.16",
-            "Go 1.26.9",
+            *(
+                ("Go 1.26.9",)
+                if v18_selected
+                else (
+                    "v1.13.17 Recovery Boundary",
+                    "v1.13.16 failed-publication disposition",
+                )
+            ),
         ),
         Path("README.md"): (
             "v1.13.17",
