@@ -240,7 +240,10 @@ def prepare_owned_h3_anchor(
     reference_text = (
         root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
     ).read_text(encoding="utf-8")
-    if "progression-reference/v3" not in reference_text:
+    if not any(
+        marker in reference_text
+        for marker in ("progression-reference/v3", "progression-reference/v4")
+    ):
         return {}
     fixture_git(
         root,
@@ -261,12 +264,41 @@ def prepare_owned_h3_anchor(
     return h3_values
 
 
+def prepare_owned_h4_anchor(
+    root: Path, progression: dict[str, str]
+) -> dict[str, str]:
+    reference_text = (
+        root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
+    ).read_text(encoding="utf-8")
+    if "progression-reference/v4" not in reference_text:
+        return {}
+    fixture_git(
+        root,
+        "add",
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE.as_posix(),
+    )
+    published_h4, published_h4_tree = commit_owned_graph_node(
+        root, "TEST_FIXTURE_ONLY published H4"
+    )
+    h4_values = {
+        "PUBLISHED_H4": published_h4,
+        "PUBLISHED_H4_PARENT": progression["PUBLISHED_H3"],
+        "PUBLISHED_H4_TREE": published_h4_tree,
+        "SUCCESSOR_PARENT": published_h4,
+    }
+    replace_progression_identities(root, h4_values)
+    return h4_values
+
+
 def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
-    """Create M -> C -> H1 -> H2 [-> H3] in the fixture object store."""
+    """Create M -> C -> H1 -> H2 [-> H3 -> H4] in the object store."""
     values = prepare_owned_publication_graph(root)
     progression = prepare_owned_h1_h2_graph(root, values)
     values.update(progression)
-    values.update(prepare_owned_h3_anchor(root, progression))
+    h3 = prepare_owned_h3_anchor(root, progression)
+    values.update(h3)
+    values.update(prepare_owned_h4_anchor(root, progression | h3))
     synchronize_progression_digest(root)
     return values
 
@@ -299,7 +331,7 @@ def without_progression_selectors(text: str) -> str:
 
 def without_progression_expectations(text: str) -> str:
     marker = (
-        r"coldkeep-security-toolchain-progression(?:-v[23])?"
+        r"coldkeep-security-toolchain-progression(?:-v[234])?"
         + r"-expectations"
     )
     pattern = rf"(?ms)^<!-- {marker}:start -->\n.*?" + rf"^<!-- {marker}:end -->\n?"
@@ -314,6 +346,9 @@ def write_progression_material_case(
     expectation: bool,
     reference: bool,
 ) -> None:
+    reference_material = originals["reference"]
+    if not isinstance(reference_material, bytes):
+        raise TypeError("progression reference fixture must be bytes")
     state = str(originals["state"])
     contract = str(originals["contract"])
     state_path = root / governance.CANONICAL_CURRENT_STATE_FILE
@@ -328,7 +363,7 @@ def write_progression_material_case(
         encoding="utf-8",
     )
     if reference:
-        reference_path.write_bytes(bytes(originals["reference"]))
+        reference_path.write_bytes(reference_material)
     elif reference_path.exists() or reference_path.is_symlink():
         reference_path.unlink()
 
@@ -918,6 +953,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             ),
             [],
         )
+
         for name, pointer, expectation, reference in (
             ("expectation-and-reference", False, True, True),
             ("pointer-and-reference", True, False, True),
@@ -946,6 +982,19 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             ),
             [],
         )
+
+    def test_progression_fixture_reference_type_fails_closed(self) -> None:
+        """SP-GOV-04: fixture material requires bytes without coercion."""
+        with self.assertRaisesRegex(
+            TypeError, "progression reference fixture must be bytes"
+        ):
+            write_progression_material_case(
+                self.root,
+                {"state": "", "contract": "", "reference": "not-bytes"},
+                pointer=False,
+                expectation=False,
+                reference=False,
+            )
 
     def test_terminal_serialization_vocabulary_is_accepted(self) -> None:
         """TS-GOV-01: the exact canonical/eight-mirror terminal state is valid."""

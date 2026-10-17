@@ -414,7 +414,7 @@ def _historical_terminal_violations(
         return []
     return [
         f"{CANONICAL_CURRENT_STATE_FILE}: unexpected terminal disposition "
-        "material for historical vocabulary"
+        + "material for historical vocabulary"
     ]
 
 
@@ -471,7 +471,7 @@ def _progression_expectation_versions(contract_text: str) -> set[int]:
     """Return every selected expectation schema version."""
     return {
         version
-        for version in (1, 2, 3)
+        for version in (1, 2, 3, 4)
         if (
             f"coldkeep-v1-security-toolchain-progression-expectations/v{version}"
             in contract_text
@@ -488,7 +488,7 @@ def _progression_selection_violation(
     if schema:
         supported = {
             f"coldkeep-v1-security-toolchain-progression-selection/v{version}": version
-            for version in (2, 3)
+            for version in (2, 3, 4)
         }
         version = supported.get(schema)
         if version is None:

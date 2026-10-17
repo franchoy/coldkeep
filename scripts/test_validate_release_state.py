@@ -9138,6 +9138,7 @@ class _V2ProgressionFixture:
         "docs/release/v1.13/v1.13.17-terminal-disposition-reference.md"
     )
     PUBLISHED_H3_SOURCE = "07667f0bc1a1a089977a41a2bc56ee3ad15f00fd"
+    PUBLISHED_H4_SOURCE = "797f22b42f62636bf406081fb8544b0b5474595c"
 
     def __init__(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -9657,7 +9658,14 @@ class _V3ProgressionFixture(_V2ProgressionFixture):
         self.H3_TREE = self.rev(f"{self.H3}^{{tree}}")
         source = SCRIPT.parents[1]
         for relative in self.PATHS[:3]:
-            shutil.copy2(source / relative, self.root / relative)
+            content = run_process(
+                [
+                    resolved_executable("git"), "-C", str(source), "show",
+                    f"{self.PUBLISHED_H4_SOURCE}:{relative}",
+                ],
+                check=True,
+            ).stdout
+            (self.root / relative).write_text(content, encoding="utf-8")
         self.sync_terminal_identities()
         self.sync_progression_identities(
             {
@@ -9696,10 +9704,16 @@ class _V3ProgressionFixture(_V2ProgressionFixture):
         environment.update(
             {
                 "GIT_AUTHOR_NAME": progression.values["SUCCESSOR_AUTHOR_NAME"],
-                "GIT_AUTHOR_EMAIL": progression.values["SUCCESSOR_AUTHOR_EMAIL"],
+                "GIT_AUTHOR_EMAIL": progression.values[
+                    "SUCCESSOR_AUTHOR_EMAIL"
+                ],
                 "GIT_AUTHOR_DATE": progression.values["SUCCESSOR_AUTHOR_DATE"],
-                "GIT_COMMITTER_NAME": progression.values["SUCCESSOR_COMMITTER_NAME"],
-                "GIT_COMMITTER_EMAIL": progression.values["SUCCESSOR_COMMITTER_EMAIL"],
+                "GIT_COMMITTER_NAME": progression.values[
+                    "SUCCESSOR_COMMITTER_NAME"
+                ],
+                "GIT_COMMITTER_EMAIL": progression.values[
+                    "SUCCESSOR_COMMITTER_EMAIL"
+                ],
                 "GIT_COMMITTER_DATE": progression.values["SUCCESSOR_COMMITTER_DATE"],
             }
         )
@@ -9855,6 +9869,318 @@ class TerminalSerializationV3ContractTests(unittest.TestCase):
         )
         mode, _, detail = self.fixture.select_progression()
         self.assertEqual(mode, "v3-invalid")
+        self.assertIn("other-version material", detail or "")
+
+
+class _V4ProgressionFixture(_V3ProgressionFixture):
+    """Fixture-owned H4 anchor and one metadata-bound nine-path H5 child."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.H4 = super().make_h4()
+        self.H4_TREE = self.rev(f"{self.H4}^{{tree}}")
+        source = SCRIPT.parents[1]
+        for relative in self.PATHS[:3]:
+            shutil.copy2(source / relative, self.root / relative)
+        self.sync_terminal_identities()
+        self.sync_progression_identities(
+            {
+                "BASE_C": self.C,
+                "BASE_C_TREE": self.C_TREE,
+                "HISTORICAL_H1": self.H1,
+                "HISTORICAL_H1_PARENT": self.C,
+                "HISTORICAL_H1_TREE": self.H1_TREE,
+                "PUBLISHED_H2": self.H2,
+                "PUBLISHED_H2_PARENT": self.H1,
+                "PUBLISHED_H2_TREE": self.H2_TREE,
+                "PUBLISHED_H3": self.H3,
+                "PUBLISHED_H3_PARENT": self.H2,
+                "PUBLISHED_H3_TREE": self.H3_TREE,
+                "PUBLISHED_H4": self.H4,
+                "PUBLISHED_H4_PARENT": self.H3,
+                "PUBLISHED_H4_TREE": self.H4_TREE,
+                "SUCCESSOR_PARENT": self.H4,
+            }
+        )
+        self.sync_digest()
+
+    def metadata_commit_tree(
+        self,
+        tree: str,
+        parent: str,
+        *,
+        date: str | None = None,
+        subject: str | None = None,
+    ) -> str:
+        progression = self.progression()
+        commit_date = date or progression.values["SUCCESSOR_AUTHOR_DATE"]
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "GIT_AUTHOR_NAME": progression.values["SUCCESSOR_AUTHOR_NAME"],
+                "GIT_AUTHOR_EMAIL": progression.values[
+                    "SUCCESSOR_AUTHOR_EMAIL"
+                ],
+                "GIT_AUTHOR_DATE": commit_date,
+                "GIT_COMMITTER_NAME": progression.values[
+                    "SUCCESSOR_COMMITTER_NAME"
+                ],
+                "GIT_COMMITTER_EMAIL": progression.values[
+                    "SUCCESSOR_COMMITTER_EMAIL"
+                ],
+                "GIT_COMMITTER_DATE": commit_date,
+            }
+        )
+        return run_process(
+            [
+                resolved_executable("git"), *FIXTURE_GIT_CONFIG,
+                "-C", str(self.root), "commit-tree", tree, "-p", parent,
+                "-m", subject or progression.values["SUCCESSOR_SUBJECT"],
+            ],
+            env=environment,
+            check=True,
+        ).stdout.strip()
+
+    def make_h5(self) -> str:
+        dirty = set(self.PATHS[:3])
+        for relative in self.PATHS:
+            if relative in dirty:
+                continue
+            target = self.root / relative
+            marker = (
+                "# TEST_FIXTURE_ONLY v4 delta\n"
+                if target.suffix == ".py"
+                else "<!-- TEST_FIXTURE_ONLY v4 delta -->\n"
+            )
+            with target.open("a", encoding="utf-8") as stream:
+                stream.write(marker)
+        git(self.root, "add", *self.PATHS)
+        progression = self.progression()
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "GIT_AUTHOR_NAME": progression.values["SUCCESSOR_AUTHOR_NAME"],
+                "GIT_AUTHOR_EMAIL": progression.values[
+                    "SUCCESSOR_AUTHOR_EMAIL"
+                ],
+                "GIT_AUTHOR_DATE": progression.values["SUCCESSOR_AUTHOR_DATE"],
+                "GIT_COMMITTER_NAME": progression.values[
+                    "SUCCESSOR_COMMITTER_NAME"
+                ],
+                "GIT_COMMITTER_EMAIL": progression.values[
+                    "SUCCESSOR_COMMITTER_EMAIL"
+                ],
+                "GIT_COMMITTER_DATE": progression.values[
+                    "SUCCESSOR_COMMITTER_DATE"
+                ],
+            }
+        )
+        run_process(
+            [
+                resolved_executable("git"), *FIXTURE_GIT_CONFIG,
+                "-C", str(self.root), "commit", "--quiet", "-m",
+                progression.values["SUCCESSOR_SUBJECT"],
+            ],
+            env=environment,
+            check=True,
+        )
+        h5 = self.rev("HEAD")
+        changed = run_process(
+            [
+                resolved_executable("git"), *FIXTURE_GIT_CONFIG,
+                "-C", str(self.root), "diff-tree", "--no-commit-id",
+                "--name-status", "-r", self.H4, h5,
+            ],
+            check=True,
+        ).stdout.splitlines()
+        if changed != [f"M\t{relative}" for relative in self.PATHS]:
+            raise AssertionError(f"fixture H5 delta disagrees: {changed!r}")
+        return h5
+
+    def push_context(self, h5: str) -> tuple[Path, dict[str, str]]:
+        event, environment = super().push_context(h5)
+        body = json.loads(event.read_text(encoding="utf-8"))
+        body["before"] = self.H4
+        event.write_text(json.dumps(body), encoding="utf-8")
+        return event, environment
+
+
+class TerminalSerializationV4ContractTests(unittest.TestCase):
+    """Bound authorized H4-to-H5 topology, delta, identity, and contexts."""
+
+    def setUp(self) -> None:
+        self.fixture = _V4ProgressionFixture()
+        self.addCleanup(self.fixture.close)
+
+    def test_v4_exact_h4_and_h5_statuses_and_local_scope(self) -> None:
+        progression = self.fixture.progression()
+        self.assertEqual(
+            release_state_support.security_progression_status(
+                self.fixture.root, self.fixture.H4, progression
+            ),
+            "PUBLISHED_H4_STRUCTURAL_ONLY_ORIGINAL_QUALITY_FAILED",
+        )
+        h5 = self.fixture.make_h5()
+        self.assertEqual(self.fixture.rev(f"{h5}^"), self.fixture.H4)
+        self.assertTrue(
+            release_state_support.progressed_h2_artifact(
+                self.fixture.root, h5, progression
+            )
+        )
+        completed, payload = self.fixture.run_json()
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["security_progression"], "H4_SUCCESSOR_STRUCTURAL_ONLY"
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "LOCAL_H4_SUCCESSOR_CANDIDATE"
+        )
+
+    def test_v4_timestamp_renderings_preserve_instant_and_offset(self) -> None:
+        expected = (1792231826, "+0000")
+        self.assertEqual(
+            release_state_support._git_timestamp_identity(
+                "2026-10-17T10:10:26+00:00"
+            ),
+            expected,
+        )
+        self.assertEqual(
+            release_state_support._git_timestamp_identity(
+                "2026-10-17T10:10:26Z"
+            ),
+            expected,
+        )
+        self.assertEqual(
+            release_state_support._git_timestamp_identity(
+                "2026-10-17T12:10:26+02:00"
+            ),
+            (expected[0], "+0200"),
+        )
+        self.assertIsNone(
+            release_state_support._git_timestamp_identity("invalid")
+        )
+
+    def test_v4_push_pr_and_future_main_contexts(self) -> None:
+        h5 = self.fixture.make_h5()
+        _, push_environment = self.fixture.push_context(h5)
+        completed, payload = self.fixture.run_json(env=push_environment)
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H4_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY",
+        )
+        _, direct_environment = self.fixture.pr_context(h5, h5)
+        completed, payload = self.fixture.run_json(env=direct_environment)
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H4_SUCCESSOR_PR_DIRECT_CONTEXT_CONSISTENCY",
+        )
+        synthetic = self.fixture.synthetic_merge(h5)
+        self.fixture.checkout_detached(synthetic)
+        _, synthetic_environment = self.fixture.pr_context(h5, synthetic)
+        completed, payload = self.fixture.run_json(env=synthetic_environment)
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H4_SUCCESSOR_PR_SYNTHETIC_CONTEXT_CONSISTENCY",
+        )
+        self.fixture.checkout_branch("main", synthetic)
+        completed, payload = self.fixture.run_json()
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "LOCAL_H4_SUCCESSOR_MAIN_ARTIFACT_ONLY",
+        )
+        self.fixture.checkout_detached(synthetic)
+        _, main_environment = self.fixture.main_context(synthetic)
+        completed, payload = self.fixture.run_json(env=main_environment)
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H4_SUCCESSOR_MAIN_CONTEXT_CONSISTENCY",
+        )
+
+    def test_v4_h6_siblings_merges_identity_and_outside_delta_reject(
+        self,
+    ) -> None:
+        progression = self.fixture.progression()
+        h5 = self.fixture.make_h5()
+        h5_tree = self.fixture.rev(f"{h5}^{{tree}}")
+        outside_blob = self.fixture.hash_blob(b"TEST_FIXTURE_ONLY outside\n")
+        outside_tree = self.fixture.variant_tree(
+            h5,
+            (("TEST_FIXTURE_ONLY-outside", "100644", outside_blob),),
+        )
+        cases = {
+            "h6": self.fixture.raw_commit_tree(h5_tree, h5),
+            "metadata-distinct-sibling": self.fixture.raw_commit_tree(
+                h5_tree, self.fixture.H4
+            ),
+            "merge-child": self.fixture.raw_commit_tree(
+                h5_tree, self.fixture.H4, self.fixture.C
+            ),
+            "outside-delta": self.fixture.metadata_commit_tree(
+                outside_tree, self.fixture.H4
+            ),
+            "same-instant-wrong-offset": self.fixture.metadata_commit_tree(
+                h5_tree, self.fixture.H4, date="2026-10-17T12:10:26+02:00"
+            ),
+            "wrong-instant": self.fixture.metadata_commit_tree(
+                h5_tree, self.fixture.H4, date="2026-10-17T10:10:27+00:00"
+            ),
+            "wrong-subject": self.fixture.metadata_commit_tree(
+                h5_tree,
+                self.fixture.H4,
+                subject="TEST_FIXTURE_ONLY wrong subject",
+            ),
+        }
+        for name, candidate in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(
+                    release_state_support.security_progression_status(
+                        self.fixture.root, candidate, progression
+                    ),
+                    "INVALID",
+                )
+
+    def test_v4_selection_is_atomic_and_rejects_mixed_material(self) -> None:
+        state, contract, _ = self.fixture.documents()
+        original_state = state.read_text(encoding="utf-8")
+        original_contract = contract.read_text(encoding="utf-8")
+        state.write_text(
+            re.sub(
+                r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA: .*\n",
+                "",
+                original_state,
+                count=1,
+            ),
+            encoding="utf-8",
+        )
+        mode, _, detail = self.fixture.select_progression()
+        self.assertEqual(mode, "v4-invalid")
+        self.assertIn("selection schema", detail or "")
+        state.write_text(original_state, encoding="utf-8")
+        contract.write_text(
+            original_contract
+            + "\nSCHEMA: coldkeep-v1-security-toolchain-progression-"
+            + "expectations/v3\n",
+            encoding="utf-8",
+        )
+        mode, _, detail = self.fixture.select_progression()
+        self.assertEqual(mode, "v4-invalid")
         self.assertIn("other-version material", detail or "")
 
 

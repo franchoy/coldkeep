@@ -321,6 +321,7 @@ def _progression_expectation_versions(
         1: "coldkeep-v1-security-toolchain-progression-expectations/v1",
         2: "coldkeep-v1-security-toolchain-progression-expectations/v2",
         3: "coldkeep-v1-security-toolchain-progression-expectations/v3",
+        4: "coldkeep-v1-security-toolchain-progression-expectations/v4",
     }
     text = "\n".join(contract_doc.lines)
     for version, schema in markers.items():
@@ -332,7 +333,7 @@ def _progression_expectation_versions(
 def _progression_reference_version(raw: Optional[bytes]) -> Optional[int]:
     if raw is None:
         return None
-    for version in (3, 2, 1):
+    for version in (4, 3, 2, 1):
         schema = (
             f"SCHEMA: coldkeep-v1-security-toolchain-progression-reference/v{version}\n"
         ).encode("ascii")
@@ -350,6 +351,12 @@ def _closed_progression_version(
     expectation_versions: set[int],
     reference_version: Optional[int],
 ) -> int:
+    if (
+        any(value.endswith("/v4") for value in schemas)
+        or 4 in expectation_versions
+        or reference_version == 4
+    ):
+        return 4
     if (
         any(value.endswith("/v3") for value in schemas)
         or 3 in expectation_versions
@@ -436,12 +443,9 @@ def security_progression_selection(
     pointers = selection["SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE"]
     schemas = selection["SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA"]
     expectation_versions = _progression_expectation_versions(contract_doc)
-    loaded_reference: Optional[tuple[Optional[bytes], Optional[str]]] = None
-    reference_present = _path_entry_present(root / reference_path)
-    if reference_present:
-        loaded_reference = _safe_terminal_reference_bytes(
-            root, reference_path, SECURITY_PROGRESSION_MAX_BYTES
-        )
+    reference_present, loaded_reference = _progression_reference_material(
+        root, reference_path
+    )
     raw_reference = loaded_reference[0] if loaded_reference is not None else None
     reference_version = _progression_reference_version(raw_reference)
     if not pointers and not schemas and not expectation_versions and not reference_present:
@@ -462,6 +466,18 @@ def security_progression_selection(
         pointers[0],
         loaded_reference,
         closed_version,
+    )
+
+
+def _progression_reference_material(
+    root: Path,
+    reference_path: str,
+) -> tuple[bool, Optional[tuple[Optional[bytes], Optional[str]]]]:
+    """Return presence and one bounded load of the selected reference."""
+    if not _path_entry_present(root / reference_path):
+        return False, None
+    return True, _safe_terminal_reference_bytes(
+        root, reference_path, SECURITY_PROGRESSION_MAX_BYTES
     )
 
 
@@ -1403,7 +1419,7 @@ def validate(
             docs["contract"],
         )
     )
-    if progression_mode.startswith(("v2-", "v3-")):
+    if progression_mode.startswith(("v2-", "v3-", "v4-")):
         progression_version = progression_mode[1]
         result.diagnostic_schema = "coldkeep-release-state-diagnostic/v4"
         result.progression_contract_schema = (
