@@ -1066,6 +1066,11 @@ def validate(root: Path = ROOT) -> list[str]:
         Path("AGENTS.md"): (
             "never lose user data",
             "v1.13.17",
+            *(
+                ()
+                if v18_selected
+                else ("failed-publication predecessor", "v1.13.14")
+            ),
             "v1.13.15",
             "Do not implement v2",
             "phase's `PLAN` or `BUILD` mode",
@@ -1073,7 +1078,11 @@ def validate(root: Path = ROOT) -> list[str]:
             "GOTOOLCHAIN=local",
         ),
         Path(".github/copilot-instructions.md"): (
-            "v1.13.17",
+            *(
+                ("v1.13.17",)
+                if v18_selected
+                else ("v1.13.17 is the active Route C recovery successor",)
+            ),
             "v1.13.14 as immutable historical release state",
             "SQLite-first local productization belongs to v2.x",
         ),
@@ -1090,12 +1099,20 @@ def validate(root: Path = ROOT) -> list[str]:
             ),
         ),
         Path("README.md"): (
-            "v1.13.17",
+            *(
+                ("v1.13.17",)
+                if v18_selected
+                else ("v1.13.17 — Annotated-Tag Certification Recovery",)
+            ),
             "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
             "V2 implementation has not started",
         ),
         Path("SECURITY.md"): (
-            "v1.13.17",
+            *(
+                ("v1.13.17",)
+                if v18_selected
+                else ("v1.13.17 is the active Route C recovery successor",)
+            ),
             "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
             "V2 implementation has not started",
         ),

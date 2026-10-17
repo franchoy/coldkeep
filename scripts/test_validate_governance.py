@@ -24,6 +24,18 @@ CURRENT_GOVERNANCE_INPUTS = tuple(dict.fromkeys(
     )
 ))
 
+LEGACY_GOVERNANCE_BASE = "7ba439d6b1d0b18de69213897b247fb28f09b02c"
+LEGACY_GOVERNANCE_PROVIDER_PATHS = (
+    Path("AGENTS.md"),
+    Path(".github/copilot-instructions.md"),
+    Path(".github/instructions/ci.instructions.md"),
+    Path(".github/prompts/critical-path-coverage.prompt.md"),
+    Path(".github/prompts/regression-fix.prompt.md"),
+    Path("README.md"),
+    Path("SECURITY.md"),
+    Path("docs/release/v1.13/README.md"),
+)
+
 
 def copy_fixture_paths(
     source_root: Path,
@@ -46,8 +58,24 @@ def copy_fixture_paths(
 def copy_current_governance_inputs(
     source_root: Path,
     destination_root: Path,
+    *,
+    compatibility_base: str | None = None,
 ) -> None:
     copy_fixture_paths(source_root, destination_root, CURRENT_GOVERNANCE_INPUTS)
+    if compatibility_base is None:
+        return
+    for relative in LEGACY_GOVERNANCE_PROVIDER_PATHS:
+        historical = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(source_root),
+                "show",
+                f"{compatibility_base}:{relative.as_posix()}",
+            ],
+            check=True,
+        ).stdout
+        (destination_root / relative).write_text(historical, encoding="utf-8")
 
 
 def fixture_git(root: Path, *args: str) -> str:
@@ -862,7 +890,11 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        copy_current_governance_inputs(governance.ROOT, self.root)
+        copy_current_governance_inputs(
+            governance.ROOT,
+            self.root,
+            compatibility_base=LEGACY_GOVERNANCE_BASE,
+        )
         self.identities = prepare_owned_terminal_graph(self.root)
         fixture_mirror = governance_test_mirror_from_canonical(self.root)
         for relative in GOVERNANCE_TEST_MIRROR_FILES:
@@ -1305,16 +1337,7 @@ def governance_test_mirror_from_canonical(root: Path) -> str:
     )
 
 
-GOVERNANCE_TEST_MIRROR_FILES = (
-    Path("AGENTS.md"),
-    Path(".github/copilot-instructions.md"),
-    Path(".github/instructions/ci.instructions.md"),
-    Path(".github/prompts/critical-path-coverage.prompt.md"),
-    Path(".github/prompts/regression-fix.prompt.md"),
-    Path("README.md"),
-    Path("SECURITY.md"),
-    Path("docs/release/v1.13/README.md"),
-)
+GOVERNANCE_TEST_MIRROR_FILES = LEGACY_GOVERNANCE_PROVIDER_PATHS
 
 
 class SecurityProgressionV2GovernanceTests(unittest.TestCase):
@@ -1336,7 +1359,11 @@ class SecurityProgressionV2GovernanceTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        copy_current_governance_inputs(governance.ROOT, self.root)
+        copy_current_governance_inputs(
+            governance.ROOT,
+            self.root,
+            compatibility_base=LEGACY_GOVERNANCE_BASE,
+        )
         for relative in (
             governance.CANONICAL_CURRENT_STATE_FILE,
             Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
