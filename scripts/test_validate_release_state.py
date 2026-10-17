@@ -206,6 +206,7 @@ class FixtureGitWrapperTests(unittest.TestCase):
 
 
 SUCCESSOR_COMPATIBILITY_BASE = "3d32e1662fdc0de251fd87bc5af6a309fcf3b6a6"
+FINAL_SNAPSHOT_BASE = "7ba439d6b1d0b18de69213897b247fb28f09b02c"
 SUCCESSOR_HISTORICAL_PATHS = (
     Path("docs/release/v1.13/v1.13.17-release-state.md"),
     Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
@@ -7309,7 +7310,7 @@ class TerminalSerializationContractTests(unittest.TestCase):
                 blob = run_process(
                     [
                         resolved_executable("git"), "-C", str(source), "show",
-                        f"HEAD:{relative.as_posix()}",
+                        f"{FINAL_SNAPSHOT_BASE}:{relative.as_posix()}",
                     ],
                     check=True,
                 ).stdout
@@ -9188,7 +9189,7 @@ class _V2ProgressionFixture:
                 content = run_process(
                     [
                         resolved_executable("git"), "-C", str(source), "show",
-                        f"HEAD:{name}",
+                        f"{FINAL_SNAPSHOT_BASE}:{name}",
                     ],
                     check=True,
                 ).stdout
