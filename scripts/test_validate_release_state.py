@@ -9139,6 +9139,7 @@ class _V2ProgressionFixture:
     )
     PUBLISHED_H3_SOURCE = "07667f0bc1a1a089977a41a2bc56ee3ad15f00fd"
     PUBLISHED_H4_SOURCE = "797f22b42f62636bf406081fb8544b0b5474595c"
+    PUBLISHED_H5_SOURCE = "8ea4b56614f4e1be0986321b12042dfe4627fd4b"
 
     def __init__(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -9881,7 +9882,14 @@ class _V4ProgressionFixture(_V3ProgressionFixture):
         self.H4_TREE = self.rev(f"{self.H4}^{{tree}}")
         source = SCRIPT.parents[1]
         for relative in self.PATHS[:3]:
-            shutil.copy2(source / relative, self.root / relative)
+            content = run_process(
+                [
+                    resolved_executable("git"), "-C", str(source), "show",
+                    f"{self.PUBLISHED_H5_SOURCE}:{relative}",
+                ],
+                check=True,
+            ).stdout
+            (self.root / relative).write_text(content, encoding="utf-8")
         self.sync_terminal_identities()
         self.sync_progression_identities(
             {
@@ -10181,6 +10189,330 @@ class TerminalSerializationV4ContractTests(unittest.TestCase):
         )
         mode, _, detail = self.fixture.select_progression()
         self.assertEqual(mode, "v4-invalid")
+        self.assertIn("other-version material", detail or "")
+
+
+class _V5ProgressionFixture(_V4ProgressionFixture):
+    """Fixture-owned H5 anchor and one metadata-bound nine-path H6 child."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.H5 = super().make_h5()
+        self.H5_TREE = self.rev(f"{self.H5}^{{tree}}")
+        source = SCRIPT.parents[1]
+        for relative in self.PATHS[:3]:
+            shutil.copy2(source / relative, self.root / relative)
+        self.sync_terminal_identities()
+        self.sync_progression_identities(
+            {
+                "BASE_C": self.C,
+                "BASE_C_TREE": self.C_TREE,
+                "HISTORICAL_H1": self.H1,
+                "HISTORICAL_H1_PARENT": self.C,
+                "HISTORICAL_H1_TREE": self.H1_TREE,
+                "PUBLISHED_H2": self.H2,
+                "PUBLISHED_H2_PARENT": self.H1,
+                "PUBLISHED_H2_TREE": self.H2_TREE,
+                "PUBLISHED_H3": self.H3,
+                "PUBLISHED_H3_PARENT": self.H2,
+                "PUBLISHED_H3_TREE": self.H3_TREE,
+                "PUBLISHED_H4": self.H4,
+                "PUBLISHED_H4_PARENT": self.H3,
+                "PUBLISHED_H4_TREE": self.H4_TREE,
+                "PUBLISHED_H5": self.H5,
+                "PUBLISHED_H5_PARENT": self.H4,
+                "PUBLISHED_H5_TREE": self.H5_TREE,
+                "SUCCESSOR_PARENT": self.H5,
+            }
+        )
+        self.sync_digest()
+
+    def make_h6(self) -> str:
+        dirty = set(self.PATHS[:3])
+        for relative in self.PATHS:
+            if relative in dirty:
+                continue
+            target = self.root / relative
+            marker = (
+                "# TEST_FIXTURE_ONLY v5 delta\n"
+                if target.suffix == ".py"
+                else "<!-- TEST_FIXTURE_ONLY v5 delta -->\n"
+            )
+            with target.open("a", encoding="utf-8") as stream:
+                stream.write(marker)
+        git(self.root, "add", *self.PATHS)
+        progression = self.progression()
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "GIT_AUTHOR_NAME": progression.values["SUCCESSOR_AUTHOR_NAME"],
+                "GIT_AUTHOR_EMAIL": progression.values[
+                    "SUCCESSOR_AUTHOR_EMAIL"
+                ],
+                "GIT_AUTHOR_DATE": progression.values["SUCCESSOR_AUTHOR_DATE"],
+                "GIT_COMMITTER_NAME": progression.values[
+                    "SUCCESSOR_COMMITTER_NAME"
+                ],
+                "GIT_COMMITTER_EMAIL": progression.values[
+                    "SUCCESSOR_COMMITTER_EMAIL"
+                ],
+                "GIT_COMMITTER_DATE": progression.values[
+                    "SUCCESSOR_COMMITTER_DATE"
+                ],
+            }
+        )
+        run_process(
+            [
+                resolved_executable("git"), *FIXTURE_GIT_CONFIG,
+                "-C", str(self.root), "commit", "--quiet", "-m",
+                progression.values["SUCCESSOR_SUBJECT"],
+            ],
+            env=environment,
+            check=True,
+        )
+        h6 = self.rev("HEAD")
+        changed = run_process(
+            [
+                resolved_executable("git"), *FIXTURE_GIT_CONFIG,
+                "-C", str(self.root), "diff-tree", "--no-commit-id",
+                "--name-status", "-r", self.H5, h6,
+            ],
+            check=True,
+        ).stdout.splitlines()
+        if changed != [f"M\t{relative}" for relative in self.PATHS]:
+            raise AssertionError(f"fixture H6 delta disagrees: {changed!r}")
+        return h6
+
+    def push_context(self, h6: str) -> tuple[Path, dict[str, str]]:
+        event, environment = super().push_context(h6)
+        body = json.loads(event.read_text(encoding="utf-8"))
+        body["before"] = self.H5
+        event.write_text(json.dumps(body), encoding="utf-8")
+        return event, environment
+
+
+class TerminalSerializationV5ContractTests(unittest.TestCase):
+    """Bound authorized H5-to-H6 topology, delta, identity, and contexts."""
+
+    def setUp(self) -> None:
+        self.fixture = _V5ProgressionFixture()
+        self.addCleanup(self.fixture.close)
+
+    def test_closed_progression_version_preserves_v1_v5_precedence(
+        self,
+    ) -> None:
+        for version in (2, 3, 4, 5):
+            with self.subTest(version=version):
+                schema = (
+                    "coldkeep-v1-security-toolchain-progression-selection/"
+                    f"v{version}"
+                )
+                self.assertEqual(
+                    validate_release_state._closed_progression_version(
+                        [schema], {version}, version
+                    ),
+                    version,
+                )
+        self.assertEqual(
+            validate_release_state._closed_progression_version([], {1}, 1),
+            0,
+        )
+        unknown = "coldkeep-v1-security-toolchain-progression-selection/v99"
+        self.assertEqual(
+            validate_release_state._closed_progression_version(
+                [unknown], set(), None
+            ),
+            2,
+        )
+        self.assertIsNotNone(
+            validate_release_state._progression_selector_error(
+                2, [unknown], [self.fixture.PATHS[2]], set()
+            )
+        )
+        self.assertEqual(
+            validate_release_state._closed_progression_version(
+                [
+                    "coldkeep-v1-security-toolchain-progression-selection/v4",
+                    "coldkeep-v1-security-toolchain-progression-selection/v5",
+                ],
+                {4, 5},
+                4,
+            ),
+            5,
+        )
+
+    def test_v5_exact_h5_and_h6_statuses_and_local_scope(self) -> None:
+        progression = self.fixture.progression()
+        self.assertEqual(
+            release_state_support.security_progression_status(
+                self.fixture.root, self.fixture.H5, progression
+            ),
+            "PUBLISHED_H5_STRUCTURAL_ONLY_CI_CODEQL_PASSED_CODACY_1_NEW",
+        )
+        h6 = self.fixture.make_h6()
+        self.assertEqual(self.fixture.rev(f"{h6}^"), self.fixture.H5)
+        self.assertTrue(
+            release_state_support.progressed_h2_artifact(
+                self.fixture.root, h6, progression
+            )
+        )
+        completed, payload = self.fixture.run_json()
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["security_progression"], "H5_SUCCESSOR_STRUCTURAL_ONLY"
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "LOCAL_H5_SUCCESSOR_CANDIDATE"
+        )
+
+    def test_v5_timestamp_renderings_preserve_instant_and_offset(self) -> None:
+        expected = (1792236808, "+0000")
+        self.assertEqual(
+            release_state_support._git_timestamp_identity(
+                "2026-10-17T11:33:28+00:00"
+            ),
+            expected,
+        )
+        self.assertEqual(
+            release_state_support._git_timestamp_identity(
+                "2026-10-17T11:33:28Z"
+            ),
+            expected,
+        )
+        self.assertEqual(
+            release_state_support._git_timestamp_identity(
+                "2026-10-17T13:33:28+02:00"
+            ),
+            (expected[0], "+0200"),
+        )
+
+    def test_v5_push_pr_and_future_main_contexts(self) -> None:
+        h6 = self.fixture.make_h6()
+        _, push_environment = self.fixture.push_context(h6)
+        completed, payload = self.fixture.run_json(env=push_environment)
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H5_SUCCESSOR_PUSH_CONTEXT_CONSISTENCY",
+        )
+        _, direct_environment = self.fixture.pr_context(h6, h6)
+        completed, payload = self.fixture.run_json(env=direct_environment)
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H5_SUCCESSOR_PR_DIRECT_CONTEXT_CONSISTENCY",
+        )
+        synthetic = self.fixture.synthetic_merge(h6)
+        self.fixture.checkout_detached(synthetic)
+        _, synthetic_environment = self.fixture.pr_context(h6, synthetic)
+        completed, payload = self.fixture.run_json(env=synthetic_environment)
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H5_SUCCESSOR_PR_SYNTHETIC_CONTEXT_CONSISTENCY",
+        )
+        self.fixture.checkout_branch("main", synthetic)
+        completed, payload = self.fixture.run_json()
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "LOCAL_H5_SUCCESSOR_MAIN_ARTIFACT_ONLY"
+        )
+        self.fixture.checkout_detached(synthetic)
+        _, main_environment = self.fixture.main_context(synthetic)
+        completed, payload = self.fixture.run_json(env=main_environment)
+        self.assertEqual(
+            completed.returncode, 0, completed.stdout + completed.stderr
+        )
+        self.assertEqual(
+            payload["evidence_scope"],
+            "GITHUB_H5_SUCCESSOR_MAIN_CONTEXT_CONSISTENCY",
+        )
+
+    def test_v5_h7_siblings_merges_identity_types_and_outside_delta_reject(
+        self,
+    ) -> None:
+        progression = self.fixture.progression()
+        h6 = self.fixture.make_h6()
+        h6_tree = self.fixture.rev(f"{h6}^{{tree}}")
+        outside_blob = self.fixture.hash_blob(b"TEST_FIXTURE_ONLY outside\n")
+        outside_tree = self.fixture.variant_tree(
+            h6,
+            (("TEST_FIXTURE_ONLY-outside", "100644", outside_blob),),
+        )
+        wrong_type_tree = self.fixture.variant_tree(
+            h6,
+            ((self.fixture.PATHS[3], "120000", outside_blob),),
+        )
+        cases = {
+            "h7": self.fixture.raw_commit_tree(h6_tree, h6),
+            "metadata-distinct-sibling": self.fixture.metadata_commit_tree(
+                h6_tree, self.fixture.H4
+            ),
+            "merge-child": self.fixture.raw_commit_tree(
+                h6_tree, self.fixture.H5, self.fixture.C
+            ),
+            "outside-delta": self.fixture.metadata_commit_tree(
+                outside_tree, self.fixture.H5
+            ),
+            "wrong-source-type": self.fixture.metadata_commit_tree(
+                wrong_type_tree, self.fixture.H5
+            ),
+            "same-instant-wrong-offset": self.fixture.metadata_commit_tree(
+                h6_tree, self.fixture.H5, date="2026-10-17T13:33:28+02:00"
+            ),
+            "wrong-instant": self.fixture.metadata_commit_tree(
+                h6_tree, self.fixture.H5, date="2026-10-17T11:33:29+00:00"
+            ),
+            "wrong-subject": self.fixture.metadata_commit_tree(
+                h6_tree,
+                self.fixture.H5,
+                subject="TEST_FIXTURE_ONLY wrong subject",
+            ),
+        }
+        for name, candidate in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(
+                    release_state_support.security_progression_status(
+                        self.fixture.root, candidate, progression
+                    ),
+                    "INVALID",
+                )
+
+    def test_v5_selection_is_atomic_and_rejects_mixed_material(self) -> None:
+        state, contract, _ = self.fixture.documents()
+        original_state = state.read_text(encoding="utf-8")
+        original_contract = contract.read_text(encoding="utf-8")
+        state.write_text(
+            re.sub(
+                r"(?m)^SECURITY_TOOLCHAIN_PROGRESSION_SCHEMA: .*\n",
+                "",
+                original_state,
+                count=1,
+            ),
+            encoding="utf-8",
+        )
+        mode, _, detail = self.fixture.select_progression()
+        self.assertEqual(mode, "v5-invalid")
+        self.assertIn("selection schema", detail or "")
+        state.write_text(original_state, encoding="utf-8")
+        contract.write_text(
+            original_contract
+            + "\nSCHEMA: coldkeep-v1-security-toolchain-progression-"
+            + "expectations/v4\n",
+            encoding="utf-8",
+        )
+        mode, _, detail = self.fixture.select_progression()
+        self.assertEqual(mode, "v5-invalid")
         self.assertIn("other-version material", detail or "")
 
 

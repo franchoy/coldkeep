@@ -189,6 +189,48 @@ SECURITY_PROGRESSION_V4_REFERENCE_KEYS = (
     "SUCCESSOR_SUBJECT", "OLD_TOOLCHAIN", "NEW_TOOLCHAIN", "LANGUAGE_FLOOR",
     "PURPOSE", "DELTA_SCHEMA", "DELTA_COUNT",
 )
+SECURITY_PROGRESSION_V5_EXPECTATION_KEYS = (
+    "SCHEMA", "SELECTION_SCHEMA", "REFERENCE_PATH", "REFERENCE_MAX_BYTES",
+    "EXPECTED_REFERENCE_SHA256", "EXPECTED_REFERENCE_SCHEMA",
+    "EXPECTED_SOURCE_VERSION", "EXPECTED_CANONICAL_REPOSITORY",
+    "EXPECTED_REPOSITORY_ID", "EXPECTED_BRANCH_REF", "EXPECTED_BASE_REF",
+    "EXPECTED_PR_NUMBER", "EXPECTED_BASE_C", "EXPECTED_BASE_C_TREE",
+    "EXPECTED_HISTORICAL_H1", "EXPECTED_HISTORICAL_H1_PARENT",
+    "EXPECTED_HISTORICAL_H1_TREE", "EXPECTED_PUBLISHED_H2",
+    "EXPECTED_PUBLISHED_H2_PARENT", "EXPECTED_PUBLISHED_H2_TREE",
+    "EXPECTED_PUBLISHED_H2_CI_STATUS", "EXPECTED_PUBLISHED_H3",
+    "EXPECTED_PUBLISHED_H3_PARENT", "EXPECTED_PUBLISHED_H3_TREE",
+    "EXPECTED_PUBLISHED_H3_CI_STATUS", "EXPECTED_PUBLISHED_H4",
+    "EXPECTED_PUBLISHED_H4_PARENT", "EXPECTED_PUBLISHED_H4_TREE",
+    "EXPECTED_PUBLISHED_H4_CI_STATUS", "EXPECTED_PUBLISHED_H5",
+    "EXPECTED_PUBLISHED_H5_PARENT", "EXPECTED_PUBLISHED_H5_TREE",
+    "EXPECTED_PUBLISHED_H5_CI_STATUS", "EXPECTED_SUCCESSOR_PARENT",
+    "EXPECTED_SUCCESSOR_AUTHOR_NAME", "EXPECTED_SUCCESSOR_AUTHOR_EMAIL",
+    "EXPECTED_SUCCESSOR_AUTHOR_DATE", "EXPECTED_SUCCESSOR_COMMITTER_NAME",
+    "EXPECTED_SUCCESSOR_COMMITTER_EMAIL", "EXPECTED_SUCCESSOR_COMMITTER_DATE",
+    "EXPECTED_SUCCESSOR_SUBJECT",
+    "EXPECTED_OLD_TOOLCHAIN", "EXPECTED_NEW_TOOLCHAIN",
+    "EXPECTED_LANGUAGE_FLOOR", "EXPECTED_PURPOSE", "EXPECTED_DELTA_SCHEMA",
+    "EXPECTED_DELTA_COUNT", "EXPECTED_STATUS", "EXPECTED_VALIDATOR_EFFECT",
+    "EXPECTED_OWNER_AUTHORITY", "EXPECTED_SECURITY_RESULT",
+    "EXPECTED_PROVENANCE",
+)
+SECURITY_PROGRESSION_V5_REFERENCE_KEYS = (
+    "SCHEMA", "SOURCE_VERSION", "CANONICAL_REPOSITORY", "REPOSITORY_ID",
+    "BRANCH_REF", "BASE_REF", "PR_NUMBER", "BASE_C", "BASE_C_TREE",
+    "HISTORICAL_H1", "HISTORICAL_H1_PARENT", "HISTORICAL_H1_TREE",
+    "PUBLISHED_H2", "PUBLISHED_H2_PARENT", "PUBLISHED_H2_TREE",
+    "PUBLISHED_H2_CI_STATUS", "PUBLISHED_H3", "PUBLISHED_H3_PARENT",
+    "PUBLISHED_H3_TREE", "PUBLISHED_H3_CI_STATUS", "PUBLISHED_H4",
+    "PUBLISHED_H4_PARENT", "PUBLISHED_H4_TREE", "PUBLISHED_H4_CI_STATUS",
+    "PUBLISHED_H5", "PUBLISHED_H5_PARENT", "PUBLISHED_H5_TREE",
+    "PUBLISHED_H5_CI_STATUS", "SUCCESSOR_PARENT", "SUCCESSOR_AUTHOR_NAME",
+    "SUCCESSOR_AUTHOR_EMAIL", "SUCCESSOR_AUTHOR_DATE",
+    "SUCCESSOR_COMMITTER_NAME", "SUCCESSOR_COMMITTER_EMAIL",
+    "SUCCESSOR_COMMITTER_DATE", "SUCCESSOR_SUBJECT", "OLD_TOOLCHAIN",
+    "NEW_TOOLCHAIN", "LANGUAGE_FLOOR", "PURPOSE", "DELTA_SCHEMA",
+    "DELTA_COUNT",
+)
 SECURITY_PROGRESSION_TRAILER_KEYS = (
     "STATUS", "VALIDATOR_EFFECT", "OWNER_AUTHORITY", "SECURITY_RESULT",
     "PROVENANCE",
@@ -206,6 +248,7 @@ SECURITY_PROGRESSION_V2_DELTA = (
 )
 SECURITY_PROGRESSION_V3_DELTA = SECURITY_PROGRESSION_V2_DELTA
 SECURITY_PROGRESSION_V4_DELTA = SECURITY_PROGRESSION_V2_DELTA
+SECURITY_PROGRESSION_V5_DELTA = SECURITY_PROGRESSION_V2_DELTA
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 NONZERO_GIT_SHA = re.compile(r"^(?!0{40}$)[0-9a-f]{40}$")
 ProcessResult = subprocess.CompletedProcess[str]
@@ -1205,6 +1248,7 @@ def _security_progression_grammar(
         "coldkeep-v1-security-toolchain-progression-reference/v2",
         "coldkeep-v1-security-toolchain-progression-reference/v3",
         "coldkeep-v1-security-toolchain-progression-reference/v4",
+        "coldkeep-v1-security-toolchain-progression-reference/v5",
     ):
         return "reference schema is unsupported"
     version = int(schema.rsplit("/v", 1)[1])
@@ -1242,12 +1286,59 @@ def _security_progression_grammar(
         ):
             if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
                 return f"{key} grammar is invalid"
-    if version == 4:
+    if version >= 4:
         for key in (
             "PUBLISHED_H4", "PUBLISHED_H4_PARENT", "PUBLISHED_H4_TREE",
         ):
             if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
                 return f"{key} grammar is invalid"
+    if version == 5:
+        for key in (
+            "PUBLISHED_H5", "PUBLISHED_H5_PARENT", "PUBLISHED_H5_TREE",
+        ):
+            if NONZERO_GIT_SHA.fullmatch(values[key]) is None:
+                return f"{key} grammar is invalid"
+        exact.update({
+            "PURPOSE": (
+                "FINAL_CODACY_COMPLEXITY_REMEDIATION_AND_"
+                + "CLOSED_H5_SUCCESSOR_CONTRACT"
+            ),
+            "PUBLISHED_H2_CI_STATUS": "ORIGINAL_BRANCH_AND_PR_CI_FAILED",
+            "PUBLISHED_H3_CI_STATUS": (
+                "ORIGINAL_BRANCH_AND_PR_QUALITY_AND_CODACY_FAILED"
+            ),
+            "PUBLISHED_H4_CI_STATUS": (
+                "ORIGINAL_BRANCH_AND_PR_QUALITY_FAILED_CODEQL_PASSED_"
+                + "CODACY_3_NEW"
+            ),
+            "PUBLISHED_H5_CI_STATUS": (
+                "BRANCH_AND_PR_CI_AND_CODEQL_PASSED_CODACY_1_NEW"
+            ),
+            "SUCCESSOR_AUTHOR_NAME": "franchoy",
+            "SUCCESSOR_AUTHOR_EMAIL": "franchoy@gmail.com",
+            "SUCCESSOR_AUTHOR_DATE": "2026-10-17T11:33:28+00:00",
+            "SUCCESSOR_COMMITTER_NAME": "franchoy",
+            "SUCCESSOR_COMMITTER_EMAIL": "franchoy@gmail.com",
+            "SUCCESSOR_COMMITTER_DATE": "2026-10-17T11:33:28+00:00",
+            "SUCCESSOR_SUBJECT": (
+                "fix(release): clear final Codacy complexity finding"
+            ),
+            "STATUS": (
+                "STRUCTURAL_NON_AUTHORIZING_CLOSED_H5_SUCCESSOR_CONTRACT"
+            ),
+            "VALIDATOR_EFFECT": "ONE_EXACT_DIRECT_H5_CHILD_DELTA_ONLY",
+            "OWNER_AUTHORITY": (
+                "LOCAL_IMPLEMENTATION_ONLY_PUBLICATION_AND_MERGE_"
+                + "SEPARATELY_AUTHORIZED"
+            ),
+            "SECURITY_RESULT": (
+                "H5_CI_AND_CODEQL_PASSED_CODACY_1_NEW_H6_NOT_EVALUATED"
+            ),
+            "PROVENANCE": (
+                "OWNER_ADOPTED_H5_TO_H6_FINAL_CODACY_REMEDIATION_20261017"
+            ),
+        })
+    elif version == 4:
         exact.update({
             "PURPOSE": (
                 "GIT_IDENTITY_AND_QUALITY_REMEDIATION_AND_"
@@ -1364,6 +1455,10 @@ def load_security_toolchain_progression(
     if contract is None:
         return None, "security progression reference invalid: expectation owner is missing"
     markers = {
+        5: (
+            "<!-- coldkeep-security-toolchain-progression-v5-"
+            + "expectations:start -->"
+        ),
         4: (
             "<!-- coldkeep-security-toolchain-progression-v4-"
             + "expectations:start -->"
@@ -1381,6 +1476,7 @@ def load_security_toolchain_progression(
         2: SECURITY_PROGRESSION_V2_EXPECTATION_KEYS,
         3: SECURITY_PROGRESSION_V3_EXPECTATION_KEYS,
         4: SECURITY_PROGRESSION_V4_EXPECTATION_KEYS,
+        5: SECURITY_PROGRESSION_V5_EXPECTATION_KEYS,
     }[version]
     expectation_start = markers[version]
     expectation_end = expectation_start.replace(":start -->", ":end -->")
@@ -1442,6 +1538,7 @@ def load_security_toolchain_progression(
         2: SECURITY_PROGRESSION_V2_REFERENCE_KEYS,
         3: SECURITY_PROGRESSION_V3_REFERENCE_KEYS,
         4: SECURITY_PROGRESSION_V4_REFERENCE_KEYS,
+        5: SECURITY_PROGRESSION_V5_REFERENCE_KEYS,
     }[version]
     delta_count = 9 if version >= 2 else 25
     required_body_length = (
@@ -1543,7 +1640,7 @@ def load_security_toolchain_progression(
                 "security progression reference invalid: "
                 + "successor parent anchor disagrees"
             )
-    if version == 4:
+    if version >= 4:
         for key, kind in (
             ("PUBLISHED_H4", "commit"), ("PUBLISHED_H4_PARENT", "commit"),
             ("PUBLISHED_H4_TREE", "tree"),
@@ -1571,8 +1668,44 @@ def load_security_toolchain_progression(
                 "security progression reference invalid: "
                 + "published H4 tree disagrees"
             )
-        if values["SUCCESSOR_PARENT"] != values["PUBLISHED_H4"]:
-            return None, "security progression reference invalid: successor parent anchor disagrees"
+        if version == 4 and values["SUCCESSOR_PARENT"] != values["PUBLISHED_H4"]:
+            return None, (
+                "security progression reference invalid: "
+                + "successor parent anchor disagrees"
+            )
+    if version == 5:
+        for key, kind in (
+            ("PUBLISHED_H5", "commit"), ("PUBLISHED_H5_PARENT", "commit"),
+            ("PUBLISHED_H5_TREE", "tree"),
+        ):
+            object_detail = required_object(key, kind)
+            if object_detail:
+                return None, object_detail
+        if values["PUBLISHED_H5_PARENT"] != values["PUBLISHED_H4"]:
+            return None, (
+                "security progression reference invalid: "
+                + "published H5 parent anchor disagrees"
+            )
+        if commit_parents(root, values["PUBLISHED_H5"]) != [
+            values["PUBLISHED_H4"]
+        ]:
+            return None, (
+                "security progression reference invalid: "
+                + "published H5 parents disagree"
+            )
+        if (
+            commit_tree(root, values["PUBLISHED_H5"])
+            != values["PUBLISHED_H5_TREE"]
+        ):
+            return None, (
+                "security progression reference invalid: "
+                + "published H5 tree disagrees"
+            )
+        if values["SUCCESSOR_PARENT"] != values["PUBLISHED_H5"]:
+            return None, (
+                "security progression reference invalid: "
+                + "successor parent anchor disagrees"
+            )
     return SecurityToolchainProgression(expectations, values, frozen_delta), None
 
 
@@ -3187,6 +3320,7 @@ def _progression_predecessor_key(version: int) -> str:
         2: "PUBLISHED_H2",
         3: "PUBLISHED_H3",
         4: "PUBLISHED_H4",
+        5: "PUBLISHED_H5",
     }[version]
 
 
@@ -3260,14 +3394,17 @@ def security_progression_status(
         return "PUBLISHED_H2_STRUCTURAL_ONLY_ORIGINAL_CI_FAILED"
     if version >= 3 and head == progression.values["PUBLISHED_H3"]:
         return "PUBLISHED_H3_STRUCTURAL_ONLY_ORIGINAL_QUALITY_FAILED"
-    if version == 4 and head == progression.values["PUBLISHED_H4"]:
+    if version >= 4 and head == progression.values["PUBLISHED_H4"]:
         return "PUBLISHED_H4_STRUCTURAL_ONLY_ORIGINAL_QUALITY_FAILED"
+    if version >= 5 and head == progression.values["PUBLISHED_H5"]:
+        return "PUBLISHED_H5_STRUCTURAL_ONLY_CI_CODEQL_PASSED_CODACY_1_NEW"
     if progressed_h2_artifact(root, head, progression):
         return {
             1: "PROGRESSED_H2_STRUCTURAL_ONLY",
             2: "H2_SUCCESSOR_STRUCTURAL_ONLY",
             3: "H3_SUCCESSOR_STRUCTURAL_ONLY",
             4: "H4_SUCCESSOR_STRUCTURAL_ONLY",
+            5: "H5_SUCCESSOR_STRUCTURAL_ONLY",
         }[version]
     parents = commit_parents(root, head)
     if (
@@ -3281,6 +3418,7 @@ def security_progression_status(
             2: "H2_SUCCESSOR_STRUCTURAL_ONLY",
             3: "H3_SUCCESSOR_STRUCTURAL_ONLY",
             4: "H4_SUCCESSOR_STRUCTURAL_ONLY",
+            5: "H5_SUCCESSOR_STRUCTURAL_ONLY",
         }[version]
     available = run_git(
         root, ["cat-file", "-e", f"{head}^{{commit}}"], allow_failure=True
@@ -3893,7 +4031,7 @@ def v1_context_scope(
             if security_progression is not None else 0
         )
         closed_successor = progression_version >= 2
-        successor_name = {2: "H2", 3: "H3", 4: "H4"}.get(
+        successor_name = {2: "H2", 3: "H3", 4: "H4", 5: "H5"}.get(
             progression_version, "H2"
         )
         if (
@@ -3945,7 +4083,7 @@ def v1_context_scope(
             if security_progression is not None else 0
         )
         closed_successor = progression_version >= 2
-        successor_name = {2: "H2", 3: "H3", 4: "H4"}.get(
+        successor_name = {2: "H2", 3: "H3", 4: "H4", 5: "H5"}.get(
             progression_version, "H2"
         )
         if (

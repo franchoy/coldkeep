@@ -471,7 +471,7 @@ def _progression_expectation_versions(contract_text: str) -> set[int]:
     """Return every selected expectation schema version."""
     return {
         version
-        for version in (1, 2, 3, 4)
+        for version in (1, 2, 3, 4, 5)
         if (
             f"coldkeep-v1-security-toolchain-progression-expectations/v{version}"
             in contract_text
@@ -488,7 +488,7 @@ def _progression_selection_violation(
     if schema:
         supported = {
             f"coldkeep-v1-security-toolchain-progression-selection/v{version}": version
-            for version in (2, 3, 4)
+            for version in (2, 3, 4, 5)
         }
         version = supported.get(schema)
         if version is None:

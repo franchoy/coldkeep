@@ -322,6 +322,7 @@ def _progression_expectation_versions(
         2: "coldkeep-v1-security-toolchain-progression-expectations/v2",
         3: "coldkeep-v1-security-toolchain-progression-expectations/v3",
         4: "coldkeep-v1-security-toolchain-progression-expectations/v4",
+        5: "coldkeep-v1-security-toolchain-progression-expectations/v5",
     }
     text = "\n".join(contract_doc.lines)
     for version, schema in markers.items():
@@ -333,7 +334,7 @@ def _progression_expectation_versions(
 def _progression_reference_version(raw: Optional[bytes]) -> Optional[int]:
     if raw is None:
         return None
-    for version in (4, 3, 2, 1):
+    for version in (5, 4, 3, 2, 1):
         schema = (
             f"SCHEMA: coldkeep-v1-security-toolchain-progression-reference/v{version}\n"
         ).encode("ascii")
@@ -346,23 +347,31 @@ def _closed_progression_selection_error(version: int, detail: str) -> str:
     return f"security progression reference invalid: v{version} {detail}"
 
 
+def _closed_progression_claimed(
+    version: int,
+    schemas: list[str],
+    expectation_versions: set[int],
+    reference_version: Optional[int],
+) -> bool:
+    """Return whether any selector material claims one closed version."""
+    suffix = f"/v{version}"
+    return (
+        any(value.endswith(suffix) for value in schemas)
+        or version in expectation_versions
+        or reference_version == version
+    )
+
+
 def _closed_progression_version(
     schemas: list[str],
     expectation_versions: set[int],
     reference_version: Optional[int],
 ) -> int:
-    if (
-        any(value.endswith("/v4") for value in schemas)
-        or 4 in expectation_versions
-        or reference_version == 4
-    ):
-        return 4
-    if (
-        any(value.endswith("/v3") for value in schemas)
-        or 3 in expectation_versions
-        or reference_version == 3
-    ):
-        return 3
+    for version in (5, 4, 3):
+        if _closed_progression_claimed(
+            version, schemas, expectation_versions, reference_version
+        ):
+            return version
     if schemas or 2 in expectation_versions or reference_version == 2:
         return 2
     return 0
@@ -1419,7 +1428,7 @@ def validate(
             docs["contract"],
         )
     )
-    if progression_mode.startswith(("v2-", "v3-", "v4-")):
+    if progression_mode.startswith(("v2-", "v3-", "v4-", "v5-")):
         progression_version = progression_mode[1]
         result.diagnostic_schema = "coldkeep-release-state-diagnostic/v4"
         result.progression_contract_schema = (

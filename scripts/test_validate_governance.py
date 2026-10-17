@@ -242,7 +242,11 @@ def prepare_owned_h3_anchor(
     ).read_text(encoding="utf-8")
     if not any(
         marker in reference_text
-        for marker in ("progression-reference/v3", "progression-reference/v4")
+        for marker in (
+            "progression-reference/v3",
+            "progression-reference/v4",
+            "progression-reference/v5",
+        )
     ):
         return {}
     fixture_git(
@@ -270,7 +274,10 @@ def prepare_owned_h4_anchor(
     reference_text = (
         root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
     ).read_text(encoding="utf-8")
-    if "progression-reference/v4" not in reference_text:
+    if not any(
+        marker in reference_text
+        for marker in ("progression-reference/v4", "progression-reference/v5")
+    ):
         return {}
     fixture_git(
         root,
@@ -291,14 +298,43 @@ def prepare_owned_h4_anchor(
     return h4_values
 
 
+def prepare_owned_h5_anchor(
+    root: Path, progression: dict[str, str]
+) -> dict[str, str]:
+    reference_text = (
+        root / governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE
+    ).read_text(encoding="utf-8")
+    if "progression-reference/v5" not in reference_text:
+        return {}
+    fixture_git(
+        root,
+        "add",
+        "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
+        governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE.as_posix(),
+    )
+    published_h5, published_h5_tree = commit_owned_graph_node(
+        root, "TEST_FIXTURE_ONLY published H5"
+    )
+    h5_values = {
+        "PUBLISHED_H5": published_h5,
+        "PUBLISHED_H5_PARENT": progression["PUBLISHED_H4"],
+        "PUBLISHED_H5_TREE": published_h5_tree,
+        "SUCCESSOR_PARENT": published_h5,
+    }
+    replace_progression_identities(root, h5_values)
+    return h5_values
+
+
 def prepare_owned_terminal_graph(root: Path) -> dict[str, str]:
-    """Create M -> C -> H1 -> H2 [-> H3 -> H4] in the object store."""
+    """Create M -> C -> H1 -> H2 [-> H3 -> H4 -> H5] in the object store."""
     values = prepare_owned_publication_graph(root)
     progression = prepare_owned_h1_h2_graph(root, values)
     values.update(progression)
     h3 = prepare_owned_h3_anchor(root, progression)
     values.update(h3)
-    values.update(prepare_owned_h4_anchor(root, progression | h3))
+    h4 = prepare_owned_h4_anchor(root, progression | h3)
+    values.update(h4)
+    values.update(prepare_owned_h5_anchor(root, progression | h3 | h4))
     synchronize_progression_digest(root)
     return values
 
@@ -331,7 +367,7 @@ def without_progression_selectors(text: str) -> str:
 
 def without_progression_expectations(text: str) -> str:
     marker = (
-        r"coldkeep-security-toolchain-progression(?:-v[234])?"
+        r"coldkeep-security-toolchain-progression(?:-v[2345])?"
         + r"-expectations"
     )
     pattern = rf"(?ms)^<!-- {marker}:start -->\n.*?" + rf"^<!-- {marker}:end -->\n?"
