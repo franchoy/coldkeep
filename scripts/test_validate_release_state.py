@@ -11861,6 +11861,140 @@ def load_final_snapshot_for_test() -> release_state_support.FinalSourceSnapshot:
     return snapshot
 
 
+def final_snapshot_test_repository_is_safe(root: Path) -> bool:
+    """Reject Git administration that can change fixture object semantics."""
+    if any(
+        os.environ.get(name)
+        for name in (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_NAMESPACE",
+        )
+    ):
+        return False
+
+    def test_git(*args: str) -> ProcessResult:
+        return run_process(
+            [resolved_executable("git"), "-C", str(root), *args]
+        )
+
+    shallow = test_git("rev-parse", "--is-shallow-repository")
+    if shallow.returncode != 0 or shallow.stdout.strip() != "false":
+        return False
+    for relative in ("objects/info/alternates", "info/grafts"):
+        resolved = test_git("rev-parse", "--git-path", relative)
+        if resolved.returncode != 0 or not resolved.stdout.strip():
+            return False
+        path = Path(resolved.stdout.strip())
+        if not path.is_absolute():
+            path = root / path
+        if path.exists():
+            return False
+    replacements = test_git(
+        "for-each-ref", "--format=%(refname)", "refs/replace"
+    )
+    return replacements.returncode == 0 and not replacements.stdout.strip()
+
+
+def final_snapshot_candidate_from_runner_head_for_test(
+    root: Path,
+    runner_head: str,
+    snapshot: release_state_support.FinalSourceSnapshot,
+) -> str | None:
+    """Resolve R18 only from a complete candidate or exact `[M,R18]` merge."""
+    if not re.fullmatch(r"[0-9a-f]{40}", runner_head):
+        return None
+    resolved = run_process(
+        [
+            resolved_executable("git"),
+            "-C",
+            str(root),
+            "rev-parse",
+            "--verify",
+            f"{runner_head}^{{commit}}",
+        ]
+    )
+    if (
+        resolved.returncode != 0
+        or resolved.stdout.strip() != runner_head
+        or not final_snapshot_test_repository_is_safe(root)
+    ):
+        return None
+    if release_state_support.final_snapshot_artifact(
+        root, runner_head, snapshot, require_complete=True
+    ):
+        return runner_head
+    if not release_state_support.final_snapshot_main_artifact(
+        root, runner_head, snapshot
+    ):
+        return None
+    parents = release_state_support.commit_parents(root, runner_head)
+    return parents[1] if len(parents) == 2 else None
+
+
+def final_snapshot_candidate_for_test(
+    root: Path,
+    snapshot: release_state_support.FinalSourceSnapshot,
+) -> tuple[str, str]:
+    """Return validated `(runner HEAD, R18)` identities for portable tests."""
+    completed = run_process(
+        [
+            resolved_executable("git"),
+            "-C",
+            str(root),
+            "rev-parse",
+            "--verify",
+            "HEAD^{commit}",
+        ]
+    )
+    runner_head = completed.stdout.strip() if completed.returncode == 0 else ""
+    candidate = final_snapshot_candidate_from_runner_head_for_test(
+        root, runner_head, snapshot
+    )
+    if candidate is None:
+        raise AssertionError(
+            "runner HEAD is neither the complete R18 candidate nor its exact "
+            "supported [M,R18] merge"
+        )
+    return runner_head, candidate
+
+
+def clone_final_snapshot_repository_for_test(
+    destination: Path,
+    snapshot: release_state_support.FinalSourceSnapshot,
+) -> tuple[str, str]:
+    """Clone all runner objects without hardlinks and return validated roles."""
+    runner_head, candidate = final_snapshot_candidate_for_test(
+        FINAL_SNAPSHOT_TEST_ROOT, snapshot
+    )
+    run_process(
+        [
+            resolved_executable("git"),
+            *FIXTURE_GIT_CONFIG,
+            "clone",
+            "--no-checkout",
+            "--no-hardlinks",
+            str(FINAL_SNAPSHOT_TEST_ROOT),
+            str(destination),
+        ],
+        check=True,
+    )
+    for commit in (snapshot.values["BASE_M"], candidate, runner_head):
+        run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(destination),
+                "cat-file",
+                "-e",
+                f"{commit}^{{commit}}",
+            ],
+            check=True,
+        )
+    return runner_head, candidate
+
+
 class FinalSnapshotReferenceGovernanceTests(unittest.TestCase):
     def test_reference_and_expectations_load_atomically(self) -> None:
         snapshot = load_final_snapshot_for_test()
@@ -11921,17 +12055,19 @@ class FinalSnapshotSelectionTests(unittest.TestCase):
         self.assertIn("selection schema", detail or "")
 
     def test_selected_route_emits_diagnostic_v5_fields(self) -> None:
-        with mock.patch.dict(os.environ, {}, clear=True):
-            result = validate_release_state.validate(
-                FINAL_SNAPSHOT_TEST_ROOT, "auto"
+        snapshot = load_final_snapshot_for_test()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            _, candidate = clone_final_snapshot_repository_for_test(
+                root, snapshot
             )
+            git(root, "checkout", "--force", "-B", "release/v1.13.18", candidate)
+            with mock.patch.dict(os.environ, {}, clear=True):
+                result = validate_release_state.validate(root, "auto")
         self.assertEqual(
             result.diagnostic_schema, "coldkeep-release-state-diagnostic/v5"
         )
-        self.assertIn(
-            result.final_snapshot,
-            {"CANDIDATE_SUBSET_VALID", "CANDIDATE_COMPLETE_VALID"},
-        )
+        self.assertEqual(result.final_snapshot, "CANDIDATE_COMPLETE_VALID")
         output = io.StringIO()
         with redirect_stdout(output):
             status = validate_release_state.emit(result, True)
@@ -11967,20 +12103,13 @@ class FinalSnapshotDeltaContractTests(unittest.TestCase):
 
     def test_committed_complete_inventory_accepts_git_tree_order(self) -> None:
         snapshot = load_final_snapshot_for_test()
-        head = run_process(
-            [
-                resolved_executable("git"),
-                "-C",
-                str(FINAL_SNAPSHOT_TEST_ROOT),
-                "rev-parse",
-                "HEAD",
-            ],
-            check=True,
-        ).stdout.strip()
+        _, candidate = final_snapshot_candidate_for_test(
+            FINAL_SNAPSHOT_TEST_ROOT, snapshot
+        )
         self.assertTrue(
             release_state_support.final_snapshot_artifact(
                 FINAL_SNAPSHOT_TEST_ROOT,
-                head,
+                candidate,
                 snapshot,
                 require_complete=True,
             )
@@ -12058,32 +12187,13 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.temporary = tempfile.TemporaryDirectory()
         cls.root = Path(cls.temporary.name) / "repository"
-        run_process(
-            [
-                resolved_executable("git"),
-                *FIXTURE_GIT_CONFIG,
-                "clone",
-                "--no-checkout",
-                "--no-hardlinks",
-                str(FINAL_SNAPSHOT_TEST_ROOT),
-                str(cls.root),
-            ],
-            check=True,
+        cls.snapshot = load_final_snapshot_for_test()
+        cls.runner_head, cls.candidate = clone_final_snapshot_repository_for_test(
+            cls.root, cls.snapshot
         )
         git(cls.root, "config", "user.name", "Coldkeep fixture")
         git(cls.root, "config", "user.email", "fixture@invalid.example")
-        cls.snapshot = load_final_snapshot_for_test()
         cls.base = cls.snapshot.values["BASE_M"]
-        cls.candidate = run_process(
-            [
-                resolved_executable("git"),
-                "-C",
-                str(FINAL_SNAPSHOT_TEST_ROOT),
-                "rev-parse",
-                "HEAD",
-            ],
-            check=True,
-        ).stdout.strip()
         candidate_tree = run_process(
             [
                 resolved_executable("git"),
@@ -12165,29 +12275,32 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
     ) -> dict[str, str]:
         base = base or self.base
         candidate = candidate or self.candidate
-        event_path = Path(self.temporary.name) / "pull-request.json"
-        event_path.write_text(
-            json.dumps(
-                {
-                    "number": 18,
-                    "repository": {"full_name": "franchoy/coldkeep"},
-                    "pull_request": {
-                        "base": {
-                            "ref": "main",
-                            "sha": base,
-                            "repo": {"full_name": "franchoy/coldkeep"},
-                        },
-                        "head": {
-                            "ref": "release/v1.13.18",
-                            "sha": candidate,
-                            "repo": {"full_name": head_repository},
-                        },
-                        "merge_commit_sha": checkout,
+        payload = json.dumps(
+            {
+                "number": 18,
+                "repository": {"full_name": "franchoy/coldkeep"},
+                "pull_request": {
+                    "base": {
+                        "ref": "main",
+                        "sha": base,
+                        "repo": {"full_name": "franchoy/coldkeep"},
                     },
-                }
-            ),
-            encoding="utf-8",
+                    "head": {
+                        "ref": "release/v1.13.18",
+                        "sha": candidate,
+                        "repo": {"full_name": head_repository},
+                    },
+                    "merge_commit_sha": checkout,
+                },
+            },
+            sort_keys=True,
         )
+        payload_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        event_path = (
+            Path(self.temporary.name)
+            / f"pull-request-{payload_digest}.json"
+        )
+        event_path.write_text(payload, encoding="utf-8")
         return {
             "GITHUB_ACTIONS": "true",
             "GITHUB_EVENT_NAME": "pull_request",
@@ -12357,6 +12470,9 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
             check=True,
         ).stdout.strip()
         variants = {
+            "wrong-base": self.commit_tree(
+                candidate_tree, candidate_parent, self.candidate
+            ),
             "swapped-parents": self.commit_tree(
                 candidate_tree, self.candidate, self.base
             ),
@@ -12369,6 +12485,11 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
         }
         for label, checkout in variants.items():
             with self.subTest(label=label):
+                self.assertIsNone(
+                    final_snapshot_candidate_from_runner_head_for_test(
+                        self.root, checkout, self.snapshot
+                    )
+                )
                 self.assert_snapshot_invalid(
                     checkout,
                     env=self.pull_request_environment(checkout),
@@ -12381,13 +12502,25 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
             "wrong-head": self.pull_request_environment(
                 self.synthetic, candidate=candidate_parent
             ),
+            "missing-head": self.pull_request_environment(
+                self.synthetic, candidate="f" * 40
+            ),
             "foreign-head": self.pull_request_environment(
                 self.synthetic, head_repository="fork/coldkeep"
             ),
         }
+        wrong_event = self.pull_request_environment(self.synthetic)
+        wrong_event["GITHUB_EVENT_NAME"] = "push"
+        cases["wrong-event"] = wrong_event
         for label, env in cases.items():
             with self.subTest(label=label):
                 self.assert_snapshot_invalid(self.synthetic, env=env)
+
+        self.assertIsNone(
+            final_snapshot_candidate_from_runner_head_for_test(
+                self.root, "f" * 40, self.snapshot
+            )
+        )
 
     def test_unmerged_candidate_cannot_masquerade_as_main_or_tag(self) -> None:
         self.assert_snapshot_invalid(
@@ -12414,6 +12547,11 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
             [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
             check=True,
         ).stdout.strip()
+        self.assertIsNone(
+            final_snapshot_candidate_from_runner_head_for_test(
+                self.root, extra, self.snapshot
+            )
+        )
         self.assert_snapshot_invalid(
             extra, branch="release/v1.13.18"
         )
@@ -12427,6 +12565,11 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
             [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
             check=True,
         ).stdout.strip()
+        self.assertIsNone(
+            final_snapshot_candidate_from_runner_head_for_test(
+                self.root, wrong_mode, self.snapshot
+            )
+        )
         self.assert_snapshot_invalid(
             wrong_mode, branch="release/v1.13.18"
         )
@@ -12480,6 +12623,11 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
                 try:
+                    self.assertIsNone(
+                        final_snapshot_candidate_from_runner_head_for_test(
+                            self.root, self.synthetic, self.snapshot
+                        )
+                    )
                     completed, payload = self.run_json(
                         "tagged", env=self.tag_environment()
                     )
@@ -12500,6 +12648,11 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
         git(self.root, "replace", self.synthetic, self.candidate)
         self.copy_validator()
         try:
+            self.assertIsNone(
+                final_snapshot_candidate_from_runner_head_for_test(
+                    self.root, self.synthetic, self.snapshot
+                )
+            )
             replaced, replaced_payload = self.run_json(
                 "tagged", env=self.tag_environment()
             )
