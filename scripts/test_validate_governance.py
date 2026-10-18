@@ -1434,6 +1434,22 @@ class SecurityProgressionV2GovernanceTests(unittest.TestCase):
         self.assertIn("coldkeep-v1-security-toolchain-progression-reference/v1", reference)
 
 class FinalSnapshotGovernanceTests(unittest.TestCase):
+    @staticmethod
+    def phase_text(next_phase: int) -> str:
+        lines = []
+        for number in range(10):
+            status = (
+                "Complete"
+                if number < next_phase
+                else "Next"
+                if number == next_phase
+                else "Not started"
+            )
+            lines.extend(
+                (f"## Phase {number} — TEST_FIXTURE_ONLY", "", f"**Status:** {status}")
+            )
+        return "\n".join(lines) + "\n"
+
     def test_v18_canonical_state_and_mirrors_are_exact(self) -> None:
         canonical_path = governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
         state, violations = governance._v18_canonical_state(
@@ -1465,7 +1481,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
         relative = Path("AGENTS.md")
         text = (governance.ROOT / relative).read_text(encoding="utf-8")
         mutated = text.replace(
-            "CURRENT_PHASE: 3_NEXT", "CURRENT_PHASE: 4_NEXT", 1
+            "CURRENT_PHASE: 4_NEXT", "CURRENT_PHASE: 5_NEXT", 1
         )
         mirror, violations = governance._v18_mirror(relative, mutated)
         self.assertEqual(violations, [])
@@ -1475,6 +1491,89 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertNotEqual(mirror["CURRENT_PHASE"], canonical["CURRENT_PHASE"])
+
+    def test_v18_closed_phase_set_accepts_only_3_4_and_5_next(self) -> None:
+        state_path = governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
+        original = state_path.read_text(encoding="utf-8")
+        for number in governance.V18_ALLOWED_NEXT_PHASES:
+            with self.subTest(number=number):
+                candidate = re.sub(
+                    r"(?m)^CURRENT_PHASE: \S+$",
+                    f"CURRENT_PHASE: {number}_NEXT",
+                    original,
+                    count=1,
+                )
+                state, violations = governance._v18_canonical_state(candidate)
+                self.assertEqual(violations, [])
+                self.assertEqual(state["CURRENT_PHASE"], f"{number}_NEXT")
+                self.assertEqual(
+                    state["V1_13_18_STATE"],
+                    "ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE",
+                )
+                for relative in governance.CURRENT_STATE_MIRROR_FILES:
+                    mirror_text = re.sub(
+                        r"(?m)^CURRENT_PHASE: \S+$",
+                        f"CURRENT_PHASE: {number}_NEXT",
+                        (governance.ROOT / relative).read_text(encoding="utf-8"),
+                        count=1,
+                    )
+                    mirror, mirror_violations = governance._v18_mirror(
+                        relative, mirror_text
+                    )
+                    self.assertEqual(mirror_violations, [])
+                    self.assertEqual(
+                        {key: mirror[key] for key in governance.V18_MIRROR_KEYS},
+                        {key: state[key] for key in governance.V18_MIRROR_KEYS},
+                    )
+
+        invalid = re.sub(
+            r"(?m)^CURRENT_PHASE: \S+$",
+            "CURRENT_PHASE: 2_NEXT",
+            original,
+            count=1,
+        )
+        _, violations = governance._v18_canonical_state(invalid)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("outside the closed", violations[0])
+
+    def test_v18_phase_progression_matches_closed_current_phase(self) -> None:
+        for number in governance.V18_ALLOWED_NEXT_PHASES:
+            with self.subTest(number=number):
+                self.assertEqual(
+                    governance._v18_phase_progression_violations(
+                        self.phase_text(number), f"{number}_NEXT"
+                    ),
+                    [],
+                )
+
+    def test_v18_phase_progression_one_premise_failures_reject(self) -> None:
+        valid = self.phase_text(4)
+        cases = {
+            "canonical-mismatch": (valid, "5_NEXT"),
+            "duplicate-next": (
+                valid.replace(
+                    "## Phase 5 — TEST_FIXTURE_ONLY\n\n**Status:** Not started",
+                    "## Phase 5 — TEST_FIXTURE_ONLY\n\n**Status:** Next",
+                ),
+                "4_NEXT",
+            ),
+            "gap": (valid.replace("## Phase 6 ", "## Phase 10 "), "4_NEXT"),
+            "regression": (
+                valid.replace(
+                    "## Phase 2 — TEST_FIXTURE_ONLY\n\n**Status:** Complete",
+                    "## Phase 2 — TEST_FIXTURE_ONLY\n\n**Status:** Not started",
+                ),
+                "4_NEXT",
+            ),
+            "outside-closed-set": (self.phase_text(6), "6_NEXT"),
+        }
+        for label, (text, current_phase) in cases.items():
+            with self.subTest(label=label):
+                violations = governance._v18_phase_progression_violations(
+                    text, current_phase
+                )
+                self.assertEqual(len(violations), 1)
+                self.assertIn("phase progression must exactly match", violations[0])
 
     def test_historical_digest_mutation_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

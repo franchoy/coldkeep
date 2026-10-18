@@ -156,6 +156,7 @@ V18_CANONICAL_ONLY_KEYS = (
     "FINAL_SOURCE_SNAPSHOT_SCHEMA",
     "FINAL_SOURCE_SNAPSHOT_REFERENCE",
 )
+V18_ALLOWED_NEXT_PHASES = (3, 4, 5)
 V11317_FROZEN_SHA256 = {
     Path("docs/release/v1.13/v1.13.17-phase-list.md"): "0b37a14229792b2edd305cea086c743b2fee5c48494080ae1b67d431968bcb73",
     Path("docs/release/v1.13/v1.13.17-predecessor-disposition.md"): "60ccc892017cc48b9924284f08d97b32b186f169206d5d05ba3dea26fceabbc8",
@@ -828,7 +829,6 @@ def _v18_canonical_state(
     expected = {
         "SOURCE_VERSION": "1.13.18",
         "RELEASE_ROUTE": "FINAL_V1_SOURCE_SNAPSHOT",
-        "CURRENT_PHASE": "3_NEXT",
         "TRACKED_PUBLICATION_MATERIAL": "FROZEN",
         "V1_13_15_STATE": "PUBLISHED_STABLE_IMMUTABLE",
         "V1_13_16_STATE": "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
@@ -850,6 +850,15 @@ def _v18_canonical_state(
                 f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical {key}="
                 f"{state.get(key)!r} does not match {value!r}"
             )
+    allowed_phases = {
+        f"{number}_NEXT" for number in V18_ALLOWED_NEXT_PHASES
+    }
+    if state.get("CURRENT_PHASE") not in allowed_phases:
+        violations.append(
+            f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical CURRENT_PHASE="
+            f"{state.get('CURRENT_PHASE')!r} is outside the closed "
+            "3_NEXT/4_NEXT/5_NEXT lifecycle"
+        )
     digest = state.get("RELEASE_BODY_SHA256", "")
     if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         violations.append(
@@ -900,6 +909,43 @@ def _v18_mirror(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
     if extras:
         violations.append(f"{path}: current-state mirror has extra keys {extras}")
     return state, violations
+
+
+def _v18_phase_progression_violations(
+    text: str,
+    current_phase: str,
+) -> list[str]:
+    """Require one exact Phase 3, 4, or 5 Next progression."""
+    phase_rows = re.findall(
+        r"(?ms)^## Phase (\d+)\b.*?^\*\*Status:\*\*\s*(Complete|Next|Not started)\s*$",
+        text,
+    )
+    allowed = {
+        f"{number}_NEXT": number for number in V18_ALLOWED_NEXT_PHASES
+    }
+    expected_next = allowed.get(current_phase)
+    expected_rows = (
+        [
+            (
+                str(number),
+                "Complete"
+                if number < expected_next
+                else "Next"
+                if number == expected_next
+                else "Not started",
+            )
+            for number in range(10)
+        ]
+        if expected_next is not None
+        else []
+    )
+    if phase_rows == expected_rows:
+        return []
+    return [
+        f"{V18_PHASE_FILE}: phase progression must exactly match canonical "
+        f"CURRENT_PHASE={current_phase!r} within the closed "
+        "3_NEXT/4_NEXT/5_NEXT lifecycle"
+    ]
 
 
 def _validate_v11317_frozen(root: Path) -> list[str]:
@@ -1023,15 +1069,11 @@ def validate_v18_contract(root: Path, texts: dict[Path, str]) -> list[str]:
         elif snapshot is None:
             violations.append(f"{V18_CONTRACT_FILE}: final snapshot reference is missing")
     phase_text = loaded.get(V18_PHASE_FILE, "")
-    phase_rows = re.findall(
-        r"(?ms)^## Phase (\d+)\b.*?^\*\*Status:\*\*\s*(Complete|Next|Not started)\s*$",
-        phase_text,
-    )
-    next_phases = [number for number, status in phase_rows if status == "Next"]
-    if next_phases != ["3"] or state.get("CURRENT_PHASE") != "3_NEXT":
-        violations.append(
-            f"{V18_PHASE_FILE}: Phase 3 must be the unique Next phase"
+    violations.extend(
+        _v18_phase_progression_violations(
+            phase_text, state.get("CURRENT_PHASE", "")
         )
+    )
     violations.extend(_validate_v18_release_body(root, state))
     violations.extend(_validate_v11317_frozen(root))
     return violations

@@ -4,7 +4,7 @@
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -54,8 +54,10 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
-- v1.13.18 is the active local final-source-snapshot candidate; Phase 3
-  independent review is Next and no hosted/publication result is claimed.
+- v1.13.18 is the active local final-source-snapshot candidate; Phases 0-3 are
+  complete and Phase 4 hosted certification is Next, but the Stage A head
+  requires fresh independent exact-head review before any remote action. No
+  hosted/publication result is claimed.
 - v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
   The tracked descendant is a non-authorizing terminal-disposition declaration.
   Phase 9M established source-scoped qualified external closure at C; protected-

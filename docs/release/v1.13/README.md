@@ -78,7 +78,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -94,16 +94,18 @@ V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.18 is the active final-source-snapshot candidate. Phase 2 local
-implementation is complete and Phase 3 independent source review is next. No
-hosted result or publication is claimed. v1.13.17 remains immutable at M17/A17
-and GitHub Release `400460267`; Phase 9M and TS-READBACK-01 remain qualified
+v1.13.18 is the active final-source-snapshot candidate. Phases 0-3 are complete
+and Phase 4 hosted certification is Next. The Stage A head still requires
+fresh independent exact-head source review and read-only certification before
+any remote authorization. No hosted result or publication is claimed.
+v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
+and TS-READBACK-01 remain qualified
 historical anchors. Publication material is frozen. v1.13.16 is
 the immutable failed-publication predecessor; its tag certificate was withheld
 and no GitHub Release exists. The v1.13.17 successor-branch push and exact-N
-evidence are historical. The v1.13.18 candidate has not been pushed or
-independently accepted. No push, PR, merge, tag, Release change, cleanup, or v2
-work is authorized by this tracked state.
+evidence are historical. The v1.13.18 candidate has not been pushed. No push,
+PR, merge, tag, Release change, cleanup, or v2 work is authorized by this
+tracked state.
 
 Current authority is defined by the [scope](v1.13.18-scope.md),
 [phase list](v1.13.18-phase-list.md),

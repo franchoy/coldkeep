@@ -30,9 +30,11 @@ project, do not start here; start with [README.md](README.md).
 - Adds a separate fail-closed final-source-snapshot selector bound to exact M,
   the 33-path cumulative delta, frozen v1.13.17 history, and non-authorizing
   branch/PR/main/tag simulations.
-- Phase 2 local implementation is complete and Phase 3 independent source
-  review is Next. No hosted certification, merge, tag, Release, cleanup, or
-  owner publication acceptance is claimed.
+- Phases 0-3 are complete and Phase 4 hosted certification is Next. The Stage A
+  lifecycle correction supports the closed `3_NEXT`/`4_NEXT`/`5_NEXT` model,
+  but its new exact head still requires fresh independent source review and
+  read-only certification. No hosted certification, merge, tag, Release,
+  cleanup, or owner publication acceptance is claimed.
 
 ## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 

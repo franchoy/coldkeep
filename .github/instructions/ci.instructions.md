@@ -4,7 +4,7 @@
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -107,9 +107,11 @@ Do not add global coverage gates unless explicitly approved.
 
 ## v1.13.18 Final Snapshot Boundary
 
-v1.13.18 is an active local final-source-snapshot candidate with Phase 3
-independent review Next. It changes release identity and enforcement only,
-keeps Go 1.26.9, and claims no hosted certification or publication. v1.13.17
+v1.13.18 is an active local final-source-snapshot candidate with Phase 4
+hosted certification Next. The Stage A head still requires fresh independent
+exact-head review before any remote action. It changes release identity and
+enforcement only, keeps Go 1.26.9, and claims no hosted certification or
+publication. v1.13.17
 remains immutable at M17/A17 and Release `400460267`; its qualified Phase 9M
 and TS history is preserved. v1.13.16 is the immutable failed-publication
 predecessor; its public tag failed required certification and no GitHub

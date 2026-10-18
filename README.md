@@ -33,7 +33,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -50,8 +50,10 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 v1.13.18 — Final v1.x Source Snapshot and Closure Handoff is active locally.
-Phase 2 implementation is complete and Phase 3 independent source review is
-Next. It adds no product feature or format change and is not yet published.
+Phases 0-3 are complete and Phase 4 hosted certification is Next. The Stage A
+head still requires fresh independent exact-head source review and read-only
+certification before any remote authorization. It adds no product feature or
+format change and is not yet published.
 v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
 and TS-READBACK-01 retain their source-scoped qualification. v1.13.16 is the immutable
 failed-publication predecessor: annotated tag A16 exists, its required tag CI
@@ -72,7 +74,8 @@ requires a separate plan.
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
     RELEASE_STATE: DEVELOPMENT
-    PHASE_3: NEXT
+    PHASE_3: COMPLETE
+    PHASE_4: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

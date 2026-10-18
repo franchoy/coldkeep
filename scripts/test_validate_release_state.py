@@ -12075,8 +12075,172 @@ class FinalSnapshotSelectionTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(payload["final_snapshot"], result.final_snapshot)
         self.assertEqual(
+            payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
+        )
+        self.assertEqual(
             payload["final_snapshot_contract_schema"],
             "coldkeep-v1-final-source-snapshot-reference/v1",
+        )
+
+
+class FinalSnapshotLifecycleProgressionTests(unittest.TestCase):
+    BOUNDARIES = release_state_support.LifecycleBoundaries(5, 8, 9)
+    DECLARATION = release_state_support.LifecycleDeclaration(
+        "immutable-transition-v1", "franchoy/coldkeep"
+    )
+
+    @staticmethod
+    def ordered(next_phase: int) -> list[str]:
+        return [
+            "Complete"
+            if number < next_phase
+            else "Next"
+            if number == next_phase
+            else "Not started"
+            for number in range(10)
+        ]
+
+    def test_phase_3_4_5_role_truth_table(self) -> None:
+        expected = {
+            3: (True, False, False, False),
+            4: (True, False, False, False),
+            5: (False, True, True, True),
+        }
+        states = (
+            "development",
+            "pre-release",
+            "merged-pending-final-main-certification",
+            "tagged-pending-tag-certification",
+        )
+        for next_phase, outcomes in expected.items():
+            with self.subTest(next_phase=next_phase):
+                actual = tuple(
+                    release_state_support.lifecycle_progression_valid(
+                        state,
+                        self.ordered(next_phase),
+                        self.BOUNDARIES,
+                        self.DECLARATION,
+                    )
+                    for state in states
+                )
+                self.assertEqual(actual, outcomes)
+
+    def test_phase_5_candidate_vocabulary_is_structurally_valid(self) -> None:
+        gate = release_state_support.Document(
+            Path("/TEST_FIXTURE_ONLY"),
+            "docs/release/v1.13/v1.13.18-release-gate.md",
+            [
+                "# v1.13.18 Release Gate",
+                "",
+                "**Status:** Passed — pre-merge prerequisites complete",
+                "",
+                "## Final verdict",
+                "",
+                "HOSTED WAVE A RECORDED; EXACT-HEAD REFRESH REQUIRED; NO MERGE AUTHORITY",
+            ],
+        )
+        for state in (
+            "pre-release",
+            "merged-pending-final-main-certification",
+            "tagged-pending-tag-certification",
+        ):
+            with self.subTest(state=state):
+                self.assertTrue(
+                    release_state_support.candidate_gate_valid(
+                        gate,
+                        state,
+                        release_state_support.lifecycle_progression_valid(
+                            state,
+                            self.ordered(5),
+                            self.BOUNDARIES,
+                            self.DECLARATION,
+                        ),
+                        self.BOUNDARIES,
+                        self.DECLARATION,
+                    )
+                )
+        self.assertTrue(
+            release_state_support.changelog_entry_valid(
+                "1.13.18",
+                " - 2026-10-18 — Final v1.x Source Snapshot",
+                "1.13.18",
+                "pre-release",
+            )
+        )
+        self.assertTrue(
+            release_state_support.readme_current_state_valid(
+                "1.13.18",
+                "pre-release",
+                ["![Status](status-v1.13.18%20ready-blue)"],
+                "v1.13.18 is ready for exact-head hosted refresh",
+            )
+        )
+
+    def test_phase_5_vocabulary_one_premise_failures_reject(self) -> None:
+        gate_cases = {
+            "pending-verdict": [
+                "**Status:** Passed — pre-merge prerequisites complete",
+                "",
+                "## Final verdict",
+                "",
+                "PENDING EXACT-HEAD REFRESH",
+            ],
+            "wrong-status": [
+                "**Status:** Passed — pre-publication prerequisites complete",
+                "",
+                "## Final verdict",
+                "",
+                "NO MERGE AUTHORITY",
+            ],
+            "duplicate-status": [
+                "**Status:** Passed — pre-merge prerequisites complete",
+                "**Status:** Passed — pre-merge prerequisites complete",
+                "",
+                "## Final verdict",
+                "",
+                "NO MERGE AUTHORITY",
+            ],
+            "missing-verdict": [
+                "**Status:** Passed — pre-merge prerequisites complete",
+            ],
+        }
+        for label, lines in gate_cases.items():
+            with self.subTest(label=label):
+                gate = release_state_support.Document(
+                    Path("/TEST_FIXTURE_ONLY"), "gate.md", lines
+                )
+                self.assertFalse(
+                    release_state_support.candidate_gate_valid(
+                        gate,
+                        "pre-release",
+                        True,
+                        self.BOUNDARIES,
+                        self.DECLARATION,
+                    )
+                )
+        self.assertFalse(
+            release_state_support.changelog_entry_valid(
+                "1.13.18",
+                " - Unreleased — Final v1.x Source Snapshot",
+                "1.13.18",
+                "pre-release",
+            )
+        )
+        self.assertFalse(
+            release_state_support.changelog_entry_valid(
+                "1.13.18",
+                " - 2026-10-18 — Final v1.x Source Snapshot",
+                "1.13.18",
+                "development",
+            )
+        )
+        self.assertFalse(
+            release_state_support.readme_current_state_valid(
+                "1.13.18",
+                "pre-release",
+                ["![Status](status-v1.13.18%20active-blue)"],
+                "v1.13.18 is active",
+            )
         )
 
 

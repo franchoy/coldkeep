@@ -8,7 +8,7 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -24,10 +24,12 @@ V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-- `v1.13.18` is the active final v1.x source-snapshot candidate. Phase 2 local
-  implementation is complete and Phase 3 independent source review is Next.
-  The tracked state is structural and non-authorizing; it claims no hosted
-  certification, merge, tag, publication, cleanup, or owner acceptance.
+- `v1.13.18` is the active final v1.x source-snapshot candidate. Phases 0-3 are
+  complete and Phase 4 hosted certification is Next. The Stage A head still
+  requires fresh independent exact-head source review and read-only
+  certification before any remote authorization. The tracked state is
+  structural and non-authorizing; it claims no hosted certification, merge,
+  tag, publication, cleanup, or owner acceptance.
 - `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
   Phase 9M and TS-READBACK-01 remain source-scoped qualified historical facts,
   including their recorded failed-attempt qualifications.
@@ -88,7 +90,8 @@ The frozen v1 release-critical execution contract uses Go 1.26.9 with
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
     RELEASE_STATE: DEVELOPMENT
-    PHASE_3: NEXT
+    PHASE_3: COMPLETE
+    PHASE_4: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

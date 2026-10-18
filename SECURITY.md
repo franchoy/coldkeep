@@ -6,7 +6,7 @@
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -34,7 +34,9 @@ coordination. v1.13.15 is the published stable final planned v1.x release.
 Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
 attestation are immutable. v1.13.18 is an active local final-source-snapshot
-candidate with Phase 3 independent review Next and no publication claim.
+candidate with Phases 0-3 complete and Phase 4 hosted certification Next. The
+Stage A head still requires fresh independent exact-head review before any
+remote authorization and makes no publication claim.
 v1.13.17 remains published at immutable M17/A17 and GitHub Release `400460267`;
 its qualified Phase 9M and TS history remains unchanged. This state authorizes
 no remote or Release operation. v1.13.16 is the
