@@ -12014,6 +12014,34 @@ class FinalSnapshotReferenceGovernanceTests(unittest.TestCase):
 
 
 class FinalSnapshotSelectionTests(unittest.TestCase):
+    @staticmethod
+    def selected_documents() -> tuple[
+        release_state_support.Document, release_state_support.Document
+    ]:
+        state = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state.md",
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        return state, contract
+
+    @staticmethod
+    def replace_state_lines(
+        state: release_state_support.Document,
+        prefix: str,
+        replacement: list[str],
+    ) -> release_state_support.Document:
+        lines: list[str] = []
+        for line in state.lines:
+            if line.startswith(prefix):
+                lines.extend(replacement)
+            else:
+                lines.append(line)
+        return release_state_support.Document(state.root, state.path, lines)
+
     def test_exact_selector_is_selected(self) -> None:
         state = release_state_support.Document.load(
             FINAL_SNAPSHOT_TEST_ROOT,
@@ -12053,6 +12081,185 @@ class FinalSnapshotSelectionTests(unittest.TestCase):
         self.assertEqual(mode, "invalid")
         self.assertIsNone(snapshot)
         self.assertIn("selection schema", detail or "")
+
+    def test_absent_selector_distinguishes_legacy_and_required_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(
+                validate_release_state.final_snapshot_selection(
+                    root, "1.13.17", None, None
+                ),
+                ("legacy", None, None),
+            )
+            self.assertEqual(
+                validate_release_state.final_snapshot_selection(
+                    root, "1.13.18", None, None
+                ),
+                (
+                    "invalid",
+                    None,
+                    "final snapshot reference invalid: required selector "
+                    "material is missing",
+                ),
+            )
+
+    def test_schema_missing_duplicate_and_unknown_tuples_are_exact(self) -> None:
+        state, contract = self.selected_documents()
+        expected = (
+            "invalid",
+            None,
+            "final snapshot reference invalid: selection schema is missing, "
+            "duplicated, or unsupported",
+        )
+        cases = (
+            [],
+            [
+                "FINAL_SOURCE_SNAPSHOT_SCHEMA: "
+                "coldkeep-v1-final-source-snapshot-selection/v1",
+                "FINAL_SOURCE_SNAPSHOT_SCHEMA: "
+                "coldkeep-v1-final-source-snapshot-selection/v1",
+            ],
+            ["FINAL_SOURCE_SNAPSHOT_SCHEMA: TEST_FIXTURE_ONLY/v1"],
+        )
+        for replacement in cases:
+            with self.subTest(replacement=replacement):
+                candidate = self.replace_state_lines(
+                    state, "FINAL_SOURCE_SNAPSHOT_SCHEMA:", replacement
+                )
+                self.assertEqual(
+                    validate_release_state.final_snapshot_selection(
+                        FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", candidate, contract
+                    ),
+                    expected,
+                )
+
+    def test_pointer_expectation_and_reference_material_are_atomic(self) -> None:
+        state, contract = self.selected_documents()
+        expected = (
+            "invalid",
+            None,
+            "final snapshot reference invalid: selector, pointer, expectations, "
+            "and reference must be present together",
+        )
+        pointer_cases = (
+            [],
+            [
+                "FINAL_SOURCE_SNAPSHOT_REFERENCE: "
+                "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md",
+                "FINAL_SOURCE_SNAPSHOT_REFERENCE: "
+                "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md",
+            ],
+            ["FINAL_SOURCE_SNAPSHOT_REFERENCE: TEST_FIXTURE_ONLY.md"],
+        )
+        for replacement in pointer_cases:
+            with self.subTest(replacement=replacement):
+                candidate = self.replace_state_lines(
+                    state, "FINAL_SOURCE_SNAPSHOT_REFERENCE:", replacement
+                )
+                self.assertEqual(
+                    validate_release_state.final_snapshot_selection(
+                        FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", candidate, contract
+                    ),
+                    expected,
+                )
+        marker = "<!-- coldkeep-v1-final-source-snapshot-expectations:start -->"
+        no_expectations = release_state_support.Document(
+            contract.root,
+            contract.path,
+            [line for line in contract.lines if line != marker],
+        )
+        self.assertEqual(
+            validate_release_state.final_snapshot_selection(
+                FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", state, no_expectations
+            ),
+            expected,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(
+                validate_release_state.final_snapshot_selection(
+                    Path(temporary), "1.13.18", state, contract
+                ),
+                expected,
+            )
+
+    def test_unsupported_version_with_selected_material_has_no_fallback(self) -> None:
+        state, contract = self.selected_documents()
+        self.assertEqual(
+            validate_release_state.final_snapshot_selection(
+                FINAL_SNAPSHOT_TEST_ROOT, "1.13.17", state, contract
+            ),
+            (
+                "invalid",
+                None,
+                "final snapshot reference invalid: material is selected by an "
+                "unsupported source version",
+            ),
+        )
+
+    def test_selected_loader_outcomes_preserve_exact_mode_and_detail(self) -> None:
+        unavailable = "final snapshot reference unavailable: TEST_FIXTURE_ONLY"
+        invalid = "final snapshot reference invalid: TEST_FIXTURE_ONLY"
+        cases = (
+            ((None, unavailable), ("unavailable", None, unavailable)),
+            ((None, invalid), ("invalid", None, invalid)),
+            (
+                (None, None),
+                (
+                    "invalid",
+                    None,
+                    "final snapshot reference invalid: snapshot is missing",
+                ),
+            ),
+        )
+        for loader_result, expected in cases:
+            with self.subTest(loader_result=loader_result):
+                with mock.patch.object(
+                    validate_release_state,
+                    "load_final_source_snapshot",
+                    return_value=loader_result,
+                ):
+                    self.assertEqual(
+                        validate_release_state._load_selected_final_snapshot(
+                            Path("/TEST_FIXTURE_ONLY"), None, "reference.md"
+                        ),
+                        expected,
+                    )
+        snapshot = mock.sentinel.snapshot
+        with mock.patch.object(
+            validate_release_state,
+            "load_final_source_snapshot",
+            return_value=(snapshot, None),
+        ):
+            self.assertEqual(
+                validate_release_state._load_selected_final_snapshot(
+                    Path("/TEST_FIXTURE_ONLY"), None, "reference.md"
+                ),
+                ("snapshot", snapshot, None),
+            )
+
+    def test_symlink_reference_is_unavailable_without_legacy_fallback(self) -> None:
+        state, contract = self.selected_documents()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference = root / (
+                "docs/release/v1.13/"
+                "v1.13.18-final-source-snapshot-reference.md"
+            )
+            reference.parent.mkdir(parents=True)
+            reference.symlink_to(
+                FINAL_SNAPSHOT_TEST_ROOT
+                / "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+            )
+            mode, snapshot, detail = validate_release_state.final_snapshot_selection(
+                root, "1.13.18", state, contract
+            )
+        self.assertEqual(mode, "unavailable")
+        self.assertIsNone(snapshot)
+        self.assertEqual(
+            detail,
+            "final snapshot reference unavailable: file could not be safely "
+            "opened or read",
+        )
 
     def test_selected_route_emits_diagnostic_v5_fields(self) -> None:
         snapshot = load_final_snapshot_for_test()

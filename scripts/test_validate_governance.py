@@ -1479,30 +1479,54 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
 
     def test_v18_mirror_one_premise_mutation_fails(self) -> None:
         relative = Path("AGENTS.md")
-        text = (governance.ROOT / relative).read_text(encoding="utf-8")
-        mutated = text.replace(
-            "CURRENT_PHASE: 4_NEXT", "CURRENT_PHASE: 5_NEXT", 1
+        canonical_path = governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
+        canonical_text = canonical_path.read_text(encoding="utf-8")
+        canonical, canonical_violations = governance._v18_canonical_state(
+            canonical_text
         )
-        mirror, violations = governance._v18_mirror(relative, mutated)
-        self.assertEqual(violations, [])
-        canonical, _ = governance._v18_canonical_state(
-            (
-                governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
-            ).read_text(encoding="utf-8")
+        mirror_text = (governance.ROOT / relative).read_text(encoding="utf-8")
+        mirror, mirror_violations = governance._v18_mirror(relative, mirror_text)
+        self.assertEqual(canonical_violations, [])
+        self.assertEqual(mirror_violations, [])
+        self.assertEqual(mirror["CURRENT_PHASE"], canonical["CURRENT_PHASE"])
+        self.assertEqual(
+            len(re.findall(r"(?m)^CURRENT_PHASE: \S+$", mirror_text)), 1
         )
-        self.assertNotEqual(mirror["CURRENT_PHASE"], canonical["CURRENT_PHASE"])
+        alternate = next(
+            f"{number}_NEXT"
+            for number in governance.V18_ALLOWED_NEXT_PHASES
+            if f"{number}_NEXT" != canonical["CURRENT_PHASE"]
+        )
+        mutated, substitutions = re.subn(
+            rf"(?m)^CURRENT_PHASE: {re.escape(canonical['CURRENT_PHASE'])}$",
+            f"CURRENT_PHASE: {alternate}",
+            mirror_text,
+            count=1,
+        )
+        self.assertEqual(substitutions, 1)
+        self.assertNotEqual(mutated, mirror_text)
+        self.assertEqual(canonical_path.read_text(encoding="utf-8"), canonical_text)
+        mutated_mirror, mutated_violations = governance._v18_mirror(
+            relative, mutated
+        )
+        self.assertEqual(mutated_violations, [])
+        self.assertEqual(mutated_mirror["CURRENT_PHASE"], alternate)
+        self.assertNotEqual(
+            mutated_mirror["CURRENT_PHASE"], canonical["CURRENT_PHASE"]
+        )
 
     def test_v18_closed_phase_set_accepts_only_3_4_and_5_next(self) -> None:
         state_path = governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
         original = state_path.read_text(encoding="utf-8")
         for number in governance.V18_ALLOWED_NEXT_PHASES:
             with self.subTest(number=number):
-                candidate = re.sub(
+                candidate, canonical_substitutions = re.subn(
                     r"(?m)^CURRENT_PHASE: \S+$",
                     f"CURRENT_PHASE: {number}_NEXT",
                     original,
                     count=1,
                 )
+                self.assertEqual(canonical_substitutions, 1)
                 state, violations = governance._v18_canonical_state(candidate)
                 self.assertEqual(violations, [])
                 self.assertEqual(state["CURRENT_PHASE"], f"{number}_NEXT")
@@ -1511,12 +1535,13 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                     "ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE",
                 )
                 for relative in governance.CURRENT_STATE_MIRROR_FILES:
-                    mirror_text = re.sub(
+                    mirror_text, mirror_substitutions = re.subn(
                         r"(?m)^CURRENT_PHASE: \S+$",
                         f"CURRENT_PHASE: {number}_NEXT",
                         (governance.ROOT / relative).read_text(encoding="utf-8"),
                         count=1,
                     )
+                    self.assertEqual(mirror_substitutions, 1)
                     mirror, mirror_violations = governance._v18_mirror(
                         relative, mirror_text
                     )
@@ -1574,6 +1599,315 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                 )
                 self.assertEqual(len(violations), 1)
                 self.assertIn("phase progression must exactly match", violations[0])
+
+    def test_v18_canonical_preamble_errors_are_exact(self) -> None:
+        path = governance.V18_CANONICAL_CURRENT_STATE_FILE
+        original = (governance.ROOT / path).read_text(encoding="utf-8")
+        duplicate = original.replace(
+            "## Interpretation",
+            "```text\nTEST_FIXTURE_ONLY: duplicate\n```\n\n## Interpretation",
+            1,
+        )
+        cases = (
+            ("## Interpretation\n", 0),
+            (duplicate, 2),
+        )
+        for text, count in cases:
+            with self.subTest(count=count):
+                state, violations = governance._v18_canonical_state(text)
+                self.assertEqual(state, {})
+                self.assertEqual(
+                    violations,
+                    [
+                        f"{path}: canonical preamble requires exactly one "
+                        f"fenced text block, found {count}"
+                    ],
+                )
+
+    def test_v18_canonical_required_and_key_errors_are_ordered(self) -> None:
+        path = governance.V18_CANONICAL_CURRENT_STATE_FILE
+        original = (governance.ROOT / path).read_text(encoding="utf-8")
+        missing_source = original.replace("SOURCE_VERSION: 1.13.18\n", "", 1)
+        _, violations = governance._v18_canonical_state(missing_source)
+        self.assertEqual(
+            violations[:2],
+            [
+                f"{path}: canonical current-state block requires exactly one "
+                "SOURCE_VERSION, found 0",
+                f"{path}: canonical SOURCE_VERSION=None does not match '1.13.18'",
+            ],
+        )
+        duplicate_source = original.replace(
+            "SOURCE_VERSION: 1.13.18\n",
+            "SOURCE_VERSION: 1.13.18\nSOURCE_VERSION: 1.13.18\n",
+            1,
+        )
+        _, violations = governance._v18_canonical_state(duplicate_source)
+        self.assertEqual(
+            violations[:2],
+            [
+                f"{path}: canonical current-state block requires exactly one "
+                "SOURCE_VERSION, found 2",
+                f"{path}: canonical SOURCE_VERSION=None does not match '1.13.18'",
+            ],
+        )
+        extra = original.replace(
+            "CURRENT_PHASE: 4_NEXT\n",
+            "CURRENT_PHASE: 4_NEXT\nTEST_FIXTURE_ONLY: value\n",
+            1,
+        )
+        _, violations = governance._v18_canonical_state(extra)
+        self.assertEqual(
+            violations,
+            [f"{path}: canonical current-state block has extra keys ['TEST_FIXTURE_ONLY']"],
+        )
+        missing_finding = original.replace(
+            "CK-V11316-015: CLOSED_AT_V1.13.16_SOURCE_SCOPE\n", "", 1
+        )
+        _, violations = governance._v18_canonical_state(missing_finding)
+        self.assertEqual(
+            violations,
+            [f"{path}: canonical finding rows are missing ['CK-V11316-015']"],
+        )
+
+    def test_v18_phase_and_digest_errors_are_exact(self) -> None:
+        path = governance.V18_CANONICAL_CURRENT_STATE_FILE
+        original = (governance.ROOT / path).read_text(encoding="utf-8")
+        phase = original.replace("CURRENT_PHASE: 4_NEXT", "CURRENT_PHASE: 2_NEXT", 1)
+        _, violations = governance._v18_canonical_state(phase)
+        self.assertEqual(
+            violations,
+            [
+                f"{path}: canonical CURRENT_PHASE='2_NEXT' is outside the closed "
+                "3_NEXT/4_NEXT/5_NEXT lifecycle"
+            ],
+        )
+        digest = re.sub(
+            r"(?m)^RELEASE_BODY_SHA256: [0-9a-f]{64}$",
+            "RELEASE_BODY_SHA256: TEST_FIXTURE_ONLY",
+            original,
+            count=1,
+        )
+        _, violations = governance._v18_canonical_state(digest)
+        self.assertEqual(
+            violations,
+            [
+                f"{path}: FROZEN publication material requires a lowercase "
+                "SHA-256"
+            ],
+        )
+
+    def test_v18_mirror_delimiter_errors_are_exact(self) -> None:
+        relative = Path("AGENTS.md")
+        original = (governance.ROOT / relative).read_text(encoding="utf-8")
+        cases = (
+            (original.replace(governance.CURRENT_STATE_MIRROR_START, "", 1), 0, 1),
+            (
+                original.replace(
+                    governance.CURRENT_STATE_MIRROR_START,
+                    governance.CURRENT_STATE_MIRROR_START * 2,
+                    1,
+                ),
+                2,
+                1,
+            ),
+        )
+        for text, starts, ends in cases:
+            with self.subTest(starts=starts, ends=ends):
+                state, violations = governance._v18_mirror(relative, text)
+                self.assertEqual(state, {})
+                self.assertEqual(
+                    violations,
+                    [
+                        f"{relative}: requires exactly one current-state mirror, "
+                        f"found {starts} start and {ends} end delimiters"
+                    ],
+                )
+
+    def test_v18_release_body_path_types_fail_closed(self) -> None:
+        missing = (
+            f"{governance.V18_RELEASE_BODY}: required regular non-symlink file is missing"
+        )
+        checksum_missing = (
+            f"{governance.V18_RELEASE_BODY_CHECKSUM}: required regular "
+            "non-symlink file is missing"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            body = root / governance.V18_RELEASE_BODY
+            checksum = root / governance.V18_RELEASE_BODY_CHECKSUM
+            self.assertEqual(
+                governance._v18_release_body_path_violations(body, checksum),
+                [missing, checksum_missing],
+            )
+            body.mkdir(parents=True)
+            checksum.write_bytes(b"TEST_FIXTURE_ONLY\n")
+            self.assertEqual(
+                governance._v18_release_body_path_violations(body, checksum),
+                [missing],
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "body-target"
+            target.write_bytes(b"TEST_FIXTURE_ONLY\n")
+            body = root / governance.V18_RELEASE_BODY
+            body.parent.mkdir(parents=True)
+            body.symlink_to(target)
+            checksum = root / governance.V18_RELEASE_BODY_CHECKSUM
+            checksum.write_bytes(b"TEST_FIXTURE_ONLY\n")
+            self.assertEqual(
+                governance._v18_release_body_path_violations(body, checksum),
+                [missing],
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            body = root / governance.V18_RELEASE_BODY
+            body.parent.mkdir(parents=True)
+            body.write_bytes(b"TEST_FIXTURE_ONLY\n")
+            checksum = root / governance.V18_RELEASE_BODY_CHECKSUM
+            checksum.mkdir()
+            self.assertEqual(
+                governance._v18_release_body_path_violations(body, checksum),
+                [checksum_missing],
+            )
+
+    def test_v18_release_body_read_error_is_not_reclassified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            body = root / governance.V18_RELEASE_BODY
+            body.parent.mkdir(parents=True)
+            body.write_bytes(b"TEST_FIXTURE_ONLY\n")
+            checksum = root / governance.V18_RELEASE_BODY_CHECKSUM
+            checksum.write_bytes(b"TEST_FIXTURE_ONLY\n")
+            error = PermissionError("TEST_FIXTURE_ONLY read failure")
+            with mock.patch.object(Path, "read_bytes", side_effect=error):
+                with self.assertRaises(PermissionError) as raised:
+                    governance._validate_v18_release_body(root, {})
+            self.assertIs(raised.exception, error)
+
+    def test_v18_release_body_byte_shape_diagnostics_are_exact(self) -> None:
+        body = (governance.ROOT / governance.V18_RELEASE_BODY).read_bytes()
+        path = governance.V18_RELEASE_BODY
+        oversized = body[:-1] + (b"x" * 65536) + b"\n"
+        cases = (
+            (oversized, [f"{path}: body size must be 1..65536 bytes"]),
+            (b"\xef\xbb\xbf" + body, [f"{path}: encoding or newline form is invalid"]),
+            (body.replace(b"\n", b"\r\n", 1), [f"{path}: encoding or newline form is invalid"]),
+            (b"\x00" + body, [f"{path}: encoding or newline form is invalid"]),
+            (b"\xff" + body, [f"{path}: invalid UTF-8"]),
+            (body.rstrip(b"\n"), [f"{path}: exactly one terminal LF is required"]),
+            (body + b"\n", [f"{path}: exactly one terminal LF is required"]),
+            (body.replace(b"\n", b" \n", 1), [f"{path}: trailing whitespace is forbidden"]),
+        )
+        for candidate, expected in cases:
+            with self.subTest(expected=expected):
+                _, violations = governance._v18_release_body_shape(candidate)
+                self.assertEqual(violations, expected)
+
+    def test_v18_release_body_identity_diagnostics_are_ordered(self) -> None:
+        body = (governance.ROOT / governance.V18_RELEASE_BODY).read_bytes()
+        digest = hashlib.sha256(body).hexdigest()
+        checksum = f"{digest}  {governance.V18_RELEASE_BODY.as_posix()}\n".encode()
+        digest_error = (
+            f"{governance.V18_RELEASE_BODY}: digest does not match canonical "
+            "RELEASE_BODY_SHA256"
+        )
+        checksum_error = (
+            f"{governance.V18_RELEASE_BODY_CHECKSUM}: bytes do not match body "
+            "digest and exact path"
+        )
+        self.assertEqual(
+            governance._v18_release_body_identity(
+                body, checksum, {"RELEASE_BODY_SHA256": digest}
+            ),
+            [],
+        )
+        self.assertEqual(
+            governance._v18_release_body_identity(
+                body, b"TEST_FIXTURE_ONLY\n", {"RELEASE_BODY_SHA256": "0" * 64}
+            ),
+            [digest_error, checksum_error],
+        )
+
+    def test_v18_release_body_semantic_diagnostics_are_exact(self) -> None:
+        text = (governance.ROOT / governance.V18_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(governance._v18_release_body_semantics(text), [])
+        for marker in (
+            "v1.13.18", "v1.13.17", "v1.13.16", "v1.13.15",
+            "source-only", "no custom assets", "qualified",
+        ):
+            with self.subTest(marker=marker):
+                violations = governance._v18_release_body_semantics(
+                    text.replace(marker, "TEST_FIXTURE_ONLY")
+                )
+                self.assertEqual(
+                    violations,
+                    [f"{governance.V18_RELEASE_BODY}: missing semantic marker {marker!r}"],
+                )
+        for assertion, pattern in (
+            ("R18 is TEST_FIXTURE_ONLY", r"\bR18\s+(?:is|=)"),
+            ("M18 = TEST_FIXTURE_ONLY", r"\bM18\s+(?:is|=)"),
+            ("A18 is TEST_FIXTURE_ONLY", r"\bA18\s+(?:is|=)"),
+            ("publication is complete", r"publication (?:is )?complete"),
+            ("phase 10 is safe", r"phase 10 (?:is )?safe"),
+        ):
+            with self.subTest(assertion=assertion):
+                self.assertEqual(
+                    governance._v18_release_body_semantics(text + assertion + "\n"),
+                    [
+                        f"{governance.V18_RELEASE_BODY}: contains forbidden "
+                        f"future assertion {pattern!r}"
+                    ],
+                )
+
+    def test_v18_authority_missing_state_returns_before_downstream_checks(self) -> None:
+        expected = ["TEST_FIXTURE_ONLY: missing canonical state"]
+        with (
+            mock.patch.object(
+                governance, "_load_v18_authority_files", return_value=({}, expected)
+            ),
+            mock.patch.object(governance, "_v18_canonical_state") as canonical,
+            mock.patch.object(governance, "_validate_v18_release_body") as body,
+        ):
+            self.assertEqual(governance.validate_v18_contract(Path("/x"), {}), expected)
+        canonical.assert_not_called()
+        body.assert_not_called()
+
+    def test_v18_contract_aggregation_order_is_stable(self) -> None:
+        state = {"CURRENT_PHASE": "4_NEXT"}
+        loaded = {
+            governance.V18_CANONICAL_CURRENT_STATE_FILE: "TEST_FIXTURE_ONLY",
+            governance.V18_PHASE_FILE: "TEST_FIXTURE_ONLY",
+        }
+        with (
+            mock.patch.object(
+                governance, "_load_v18_authority_files", return_value=(loaded, ["load"])
+            ),
+            mock.patch.object(
+                governance, "_v18_canonical_state", return_value=(state, ["canonical"])
+            ),
+            mock.patch.object(
+                governance, "_v18_mirror_contract_violations", return_value=["mirrors"]
+            ),
+            mock.patch.object(
+                governance, "_v18_snapshot_contract_violations", return_value=["snapshot"]
+            ),
+            mock.patch.object(
+                governance, "_v18_phase_progression_violations", return_value=["phase"]
+            ),
+            mock.patch.object(
+                governance, "_validate_v18_release_body", return_value=["body"]
+            ),
+            mock.patch.object(
+                governance, "_validate_v11317_frozen", return_value=["history"]
+            ),
+        ):
+            self.assertEqual(
+                governance.validate_v18_contract(Path("/x"), {}),
+                ["load", "canonical", "mirrors", "snapshot", "phase", "body", "history"],
+            )
 
     def test_historical_digest_mutation_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

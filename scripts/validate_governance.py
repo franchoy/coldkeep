@@ -815,10 +815,11 @@ def _v18_canonical_state(
     preamble = re.split(r"(?m)^##\s+", text, maxsplit=1)[0]
     blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", preamble)
     if len(blocks) != 1:
-        return {}, [
+        message = (
             f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical preamble requires "
             f"exactly one fenced text block, found {len(blocks)}"
-        ]
+        )
+        return {}, [message]
     required = V18_MIRROR_KEYS + V18_CANONICAL_ONLY_KEYS
     state, violations = parse_state_lines(
         V18_CANONICAL_CURRENT_STATE_FILE,
@@ -826,6 +827,14 @@ def _v18_canonical_state(
         required,
         "canonical current-state block",
     )
+    violations.extend(_v18_fixed_value_violations(state))
+    violations.extend(_v18_phase_and_digest_violations(state))
+    violations.extend(_v18_canonical_key_violations(blocks[0], required))
+    return state, violations
+
+
+def _v18_fixed_value_violations(state: dict[str, str]) -> list[str]:
+    """Return ordered violations for fixed canonical v1.13.18 values."""
     expected = {
         "SOURCE_VERSION": "1.13.18",
         "RELEASE_ROUTE": "FINAL_V1_SOURCE_SNAPSHOT",
@@ -844,12 +853,19 @@ def _v18_canonical_state(
         "FINAL_SOURCE_SNAPSHOT_SCHEMA": "coldkeep-v1-final-source-snapshot-selection/v1",
         "FINAL_SOURCE_SNAPSHOT_REFERENCE": V18_REFERENCE_FILE.as_posix(),
     }
+    violations: list[str] = []
     for key, value in expected.items():
         if state.get(key) != value:
             violations.append(
                 f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical {key}="
                 f"{state.get(key)!r} does not match {value!r}"
             )
+    return violations
+
+
+def _v18_phase_and_digest_violations(state: dict[str, str]) -> list[str]:
+    """Validate the closed lifecycle phase and frozen-body digest shape."""
+    violations: list[str] = []
     allowed_phases = {
         f"{number}_NEXT" for number in V18_ALLOWED_NEXT_PHASES
     }
@@ -865,8 +881,16 @@ def _v18_canonical_state(
             f"{V18_CANONICAL_CURRENT_STATE_FILE}: FROZEN publication material "
             "requires a lowercase SHA-256"
         )
+    return violations
+
+
+def _v18_canonical_key_violations(
+    block: str, required: tuple[str, ...]
+) -> list[str]:
+    """Reject extra or absent finding keys after required-key parsing."""
+    violations: list[str] = []
     finding_keys = {f"CK-V11316-{number:03d}" for number in range(1, 16)}
-    present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", blocks[0]))
+    present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", block))
     allowed = set(required) | finding_keys
     extras = sorted(present - allowed)
     missing_findings = sorted(finding_keys - present)
@@ -880,7 +904,7 @@ def _v18_canonical_state(
             f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical finding rows are "
             f"missing {missing_findings}"
         )
-    return state, violations
+    return violations
 
 
 def _v18_mirror(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
@@ -888,10 +912,11 @@ def _v18_mirror(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
     starts = text.count(CURRENT_STATE_MIRROR_START)
     ends = text.count(CURRENT_STATE_MIRROR_END)
     if starts != 1 or ends != 1:
-        return {}, [
+        message = (
             f"{path}: requires exactly one current-state mirror, found "
             f"{starts} start and {ends} end delimiters"
-        ]
+        )
+        return {}, [message]
     body = text.split(CURRENT_STATE_MIRROR_START, 1)[1].split(
         CURRENT_STATE_MIRROR_END, 1
     )[0]
@@ -941,11 +966,12 @@ def _v18_phase_progression_violations(
     )
     if phase_rows == expected_rows:
         return []
-    return [
+    message = (
         f"{V18_PHASE_FILE}: phase progression must exactly match canonical "
         f"CURRENT_PHASE={current_phase!r} within the closed "
         "3_NEXT/4_NEXT/5_NEXT lifecycle"
-    ]
+    )
+    return [message]
 
 
 def _validate_v11317_frozen(root: Path) -> list[str]:
@@ -970,36 +996,75 @@ def _validate_v18_release_body(
     root: Path, state: dict[str, str]
 ) -> list[str]:
     """Validate the frozen source-only v1.13.18 release body pair."""
-    violations: list[str] = []
     body_path = root / V18_RELEASE_BODY
     checksum_path = root / V18_RELEASE_BODY_CHECKSUM
+    violations = _v18_release_body_path_violations(body_path, checksum_path)
+    if violations:
+        return violations
+    body = body_path.read_bytes()
+    checksum = checksum_path.read_bytes()
+    text, shape_violations = _v18_release_body_shape(body)
+    violations.extend(shape_violations)
+    violations.extend(_v18_release_body_identity(body, checksum, state))
+    violations.extend(_v18_release_body_semantics(text))
+    return violations
+
+
+def _v18_release_body_path_violations(
+    body_path: Path, checksum_path: Path
+) -> list[str]:
+    """Require the two regular non-symlink release-body inputs."""
+    violations: list[str] = []
     for relative, path in (
         (V18_RELEASE_BODY, body_path),
         (V18_RELEASE_BODY_CHECKSUM, checksum_path),
     ):
         if not path.is_file() or path.is_symlink():
             violations.append(f"{relative}: required regular non-symlink file is missing")
-    if violations:
-        return violations
-    body = body_path.read_bytes()
-    checksum = checksum_path.read_bytes()
-    digest = hashlib.sha256(body).hexdigest()
-    expected_checksum = (
-        f"{digest}  {V18_RELEASE_BODY.as_posix()}\n"
-    ).encode("ascii")
-    if not 1 <= len(body) <= 65536:
-        violations.append(f"{V18_RELEASE_BODY}: body size must be 1..65536 bytes")
-    if body.startswith(b"\xef\xbb\xbf") or b"\r" in body or b"\x00" in body:
-        violations.append(f"{V18_RELEASE_BODY}: encoding or newline form is invalid")
+    return violations
+
+
+def _v18_release_body_shape(body: bytes) -> tuple[str, list[str]]:
+    """Validate release-body bytes and return their decoded text."""
+    violations = _v18_release_body_encoding_violations(body)
     try:
         text = body.decode("utf-8")
     except UnicodeDecodeError:
         text = ""
         violations.append(f"{V18_RELEASE_BODY}: invalid UTF-8")
+    violations.extend(_v18_release_body_layout_violations(body))
+    return text, violations
+
+
+def _v18_release_body_encoding_violations(body: bytes) -> list[str]:
+    """Validate the bounded byte size and forbidden byte forms."""
+    violations: list[str] = []
+    if not 1 <= len(body) <= 65536:
+        violations.append(f"{V18_RELEASE_BODY}: body size must be 1..65536 bytes")
+    if body.startswith(b"\xef\xbb\xbf") or b"\r" in body or b"\x00" in body:
+        violations.append(f"{V18_RELEASE_BODY}: encoding or newline form is invalid")
+    return violations
+
+
+def _v18_release_body_layout_violations(body: bytes) -> list[str]:
+    """Validate terminal-newline and trailing-whitespace form."""
+    violations: list[str] = []
     if not body.endswith(b"\n") or body.endswith(b"\n\n"):
         violations.append(f"{V18_RELEASE_BODY}: exactly one terminal LF is required")
     if any(line.endswith((b" ", b"\t")) for line in body.splitlines()):
         violations.append(f"{V18_RELEASE_BODY}: trailing whitespace is forbidden")
+    return violations
+
+
+def _v18_release_body_identity(
+    body: bytes, checksum: bytes, state: dict[str, str]
+) -> list[str]:
+    """Bind body bytes to canonical state and the exact checksum file."""
+    violations: list[str] = []
+    digest = hashlib.sha256(body).hexdigest()
+    expected_checksum = (
+        f"{digest}  {V18_RELEASE_BODY.as_posix()}\n"
+    ).encode("ascii")
     if digest != state.get("RELEASE_BODY_SHA256"):
         violations.append(
             f"{V18_RELEASE_BODY}: digest does not match canonical RELEASE_BODY_SHA256"
@@ -1008,6 +1073,12 @@ def _validate_v18_release_body(
         violations.append(
             f"{V18_RELEASE_BODY_CHECKSUM}: bytes do not match body digest and exact path"
         )
+    return violations
+
+
+def _v18_release_body_semantics(text: str) -> list[str]:
+    """Require source-only semantics and reject future-state claims."""
+    violations: list[str] = []
     normalized = " ".join(text.lower().split())
     for marker in (
         "v1.13.18", "v1.13.17", "v1.13.16", "v1.13.15",
@@ -1030,6 +1101,29 @@ def _validate_v18_release_body(
 
 def validate_v18_contract(root: Path, texts: dict[Path, str]) -> list[str]:
     """Validate the isolated v1.13.18 authority and frozen history."""
+    loaded, violations = _load_v18_authority_files(root)
+    state_text = loaded.get(V18_CANONICAL_CURRENT_STATE_FILE)
+    if state_text is None:
+        return violations
+    state, state_violations = _v18_canonical_state(state_text)
+    violations.extend(state_violations)
+    violations.extend(_v18_mirror_contract_violations(texts, state))
+    violations.extend(_v18_snapshot_contract_violations(root, loaded, state))
+    phase_text = loaded.get(V18_PHASE_FILE, "")
+    violations.extend(
+        _v18_phase_progression_violations(
+            phase_text, state.get("CURRENT_PHASE", "")
+        )
+    )
+    violations.extend(_validate_v18_release_body(root, state))
+    violations.extend(_validate_v11317_frozen(root))
+    return violations
+
+
+def _load_v18_authority_files(
+    root: Path,
+) -> tuple[dict[Path, str], list[str]]:
+    """Load required Markdown authority after checking every required path."""
     violations: list[str] = []
     loaded: dict[Path, str] = {}
     for relative in V18_AUTHORITY_FILES:
@@ -1039,11 +1133,14 @@ def validate_v18_contract(root: Path, texts: dict[Path, str]) -> list[str]:
             continue
         if relative.suffix == ".md":
             loaded[relative] = path.read_text(encoding="utf-8")
-    state_text = loaded.get(V18_CANONICAL_CURRENT_STATE_FILE)
-    if state_text is None:
-        return violations
-    state, state_violations = _v18_canonical_state(state_text)
-    violations.extend(state_violations)
+    return loaded, violations
+
+
+def _v18_mirror_contract_violations(
+    texts: dict[Path, str], state: dict[str, str]
+) -> list[str]:
+    """Compare each available live mirror with the canonical state."""
+    violations: list[str] = []
     for relative in CURRENT_STATE_MIRROR_FILES:
         text = texts.get(relative)
         if text is None:
@@ -1056,6 +1153,14 @@ def validate_v18_contract(root: Path, texts: dict[Path, str]) -> list[str]:
                     f"{relative}: mirror {key}={mirror.get(key)!r} does not match "
                     f"canonical {state[key]!r}"
                 )
+    return violations
+
+
+def _v18_snapshot_contract_violations(
+    root: Path, loaded: dict[Path, str], state: dict[str, str]
+) -> list[str]:
+    """Load the selected final snapshot and preserve loader diagnostics."""
+    violations: list[str] = []
     contract_text = loaded.get(V18_CONTRACT_FILE)
     if contract_text is not None:
         contract = Document(
@@ -1068,14 +1173,6 @@ def validate_v18_contract(root: Path, texts: dict[Path, str]) -> list[str]:
             violations.append(f"{V18_CONTRACT_FILE}: {detail}")
         elif snapshot is None:
             violations.append(f"{V18_CONTRACT_FILE}: final snapshot reference is missing")
-    phase_text = loaded.get(V18_PHASE_FILE, "")
-    violations.extend(
-        _v18_phase_progression_violations(
-            phase_text, state.get("CURRENT_PHASE", "")
-        )
-    )
-    violations.extend(_validate_v18_release_body(root, state))
-    violations.extend(_validate_v11317_frozen(root))
     return violations
 
 

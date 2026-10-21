@@ -322,6 +322,32 @@ def final_snapshot_selection(
     contract_doc: Optional[Document],
 ) -> tuple[str, Optional[FinalSourceSnapshot], Optional[str]]:
     """Select the v1.13.18 snapshot contract without legacy fallback."""
+    reference_path, schemas, pointers, expectation_present, reference_present = (
+        _final_snapshot_material(root, version, state_doc, contract_doc)
+    )
+    claimed = bool(schemas or pointers or expectation_present or reference_present)
+    if not claimed:
+        return _unclaimed_final_snapshot_selection(version)
+    detail = _final_snapshot_selector_error(
+        version,
+        reference_path,
+        schemas,
+        pointers,
+        expectation_present,
+        reference_present,
+    )
+    if detail is not None:
+        return "invalid", None, detail
+    return _load_selected_final_snapshot(root, contract_doc, pointers[0])
+
+
+def _final_snapshot_material(
+    root: Path,
+    version: str,
+    state_doc: Optional[Document],
+    contract_doc: Optional[Document],
+) -> tuple[str, list[str], list[str], bool, bool]:
+    """Collect selector, expectation, and reference material atomically."""
     reference_path = (
         f"docs/release/v{version.rsplit('.', 1)[0]}/"
         f"v{version}-final-source-snapshot-reference.md"
@@ -335,34 +361,56 @@ def final_snapshot_selection(
     marker = "<!-- coldkeep-v1-final-source-snapshot-expectations:start -->"
     expectation_present = bool(contract_doc and marker in contract_doc.lines)
     reference_present = _path_entry_present(root / reference_path)
-    claimed = bool(schemas or pointers or expectation_present or reference_present)
-    if not claimed:
-        if version == "1.13.18":
-            return (
-                "invalid",
-                None,
-                "final snapshot reference invalid: required selector material is missing",
-            )
-        return "legacy", None, None
-    if version != "1.13.18":
+    return reference_path, schemas, pointers, expectation_present, reference_present
+
+
+def _unclaimed_final_snapshot_selection(
+    version: str,
+) -> tuple[str, Optional[FinalSourceSnapshot], Optional[str]]:
+    """Distinguish required v1.13.18 material from historical absence."""
+    if version == "1.13.18":
         return (
             "invalid",
             None,
-            "final snapshot reference invalid: material is selected by an unsupported source version",
+            "final snapshot reference invalid: required selector material is missing",
+        )
+    return "legacy", None, None
+
+
+def _final_snapshot_selector_error(
+    version: str,
+    reference_path: str,
+    schemas: list[str],
+    pointers: list[str],
+    expectation_present: bool,
+    reference_present: bool,
+) -> Optional[str]:
+    """Return the first selector-coherence error in established order."""
+    if version != "1.13.18":
+        return (
+            "final snapshot reference invalid: material is selected by an "
+            "unsupported source version"
         )
     if schemas != ["coldkeep-v1-final-source-snapshot-selection/v1"]:
         return (
-            "invalid",
-            None,
-            "final snapshot reference invalid: selection schema is missing, duplicated, or unsupported",
+            "final snapshot reference invalid: selection schema is missing, "
+            "duplicated, or unsupported"
         )
     if pointers != [reference_path] or not expectation_present or not reference_present:
         return (
-            "invalid",
-            None,
-            "final snapshot reference invalid: selector, pointer, expectations, and reference must be present together",
+            "final snapshot reference invalid: selector, pointer, expectations, "
+            "and reference must be present together"
         )
-    snapshot, detail = load_final_source_snapshot(root, contract_doc, pointers[0])
+    return None
+
+
+def _load_selected_final_snapshot(
+    root: Path,
+    contract_doc: Optional[Document],
+    pointer: str,
+) -> tuple[str, Optional[FinalSourceSnapshot], Optional[str]]:
+    """Load a coherent selector while preserving loader detail classification."""
+    snapshot, detail = load_final_source_snapshot(root, contract_doc, pointer)
     if detail:
         state = "unavailable" if " reference unavailable:" in detail else "invalid"
         return state, None, detail

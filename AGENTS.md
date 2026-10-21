@@ -56,6 +56,8 @@ V2_IMPLEMENTATION: NOT_STARTED
   `v1.13.17-*` release document byte. The four historical release branches and
   all their worktrees remain untouched. No push, PR, merge, tag, Release,
   workflow dispatch, cleanup, or v2 work is authorized.
+  If a genuine implementation need exceeds those 33 paths, STOP and obtain
+  separate explicit owner authority before changing any additional path.
 
 ## Correctness rules
 
@@ -83,6 +85,9 @@ The baseline repository-governance commands are:
 
 The frozen v1 release-critical execution contract uses Go 1.26.9 with
 `GOTOOLCHAIN=local`; the module language floor remains Go 1.25.
+
+Within the lifecycle summary below, `NEXT` means the next not-yet-completed
+lifecycle phase; it is descriptive and does not authorize work.
 
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
