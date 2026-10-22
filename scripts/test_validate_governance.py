@@ -1450,6 +1450,60 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             )
         return "\n".join(lines) + "\n"
 
+    def prepare_phase_fixture(
+        self,
+        source_root: Path,
+        root: Path,
+        fixture_paths: tuple[Path, ...],
+        expected_phase: str,
+    ) -> None:
+        copy_fixture_paths(source_root, root, fixture_paths)
+        for relative in fixture_paths:
+            fixture_path = root / relative
+            original = fixture_path.read_text(encoding="utf-8")
+            candidate, substitutions = re.subn(
+                r"(?m)^CURRENT_PHASE: \S+$",
+                f"CURRENT_PHASE: {expected_phase}",
+                original,
+                count=1,
+            )
+            self.assertEqual(substitutions, 1)
+            fixture_path.write_text(candidate, encoding="utf-8")
+        canonical_text = (
+            root / governance.V18_CANONICAL_CURRENT_STATE_FILE
+        ).read_text(encoding="utf-8")
+        canonical, canonical_violations = governance._v18_canonical_state(
+            canonical_text
+        )
+        self.assertEqual(canonical_violations, [])
+        self.assertEqual(canonical["CURRENT_PHASE"], expected_phase)
+        for relative in governance.CURRENT_STATE_MIRROR_FILES:
+            mirror, mirror_violations = governance._v18_mirror(
+                relative, (root / relative).read_text(encoding="utf-8")
+            )
+            self.assertEqual(mirror_violations, [])
+            self.assertEqual(mirror["CURRENT_PHASE"], expected_phase)
+            self.assertEqual(mirror["CURRENT_PHASE"], canonical["CURRENT_PHASE"])
+
+    def canonical_with_extra_fixture_key(self, path: Path, original: str) -> str:
+        canonical, canonical_violations = governance._v18_canonical_state(original)
+        self.assertEqual(canonical_violations, [])
+        current_phase = canonical["CURRENT_PHASE"]
+        phase_pattern = rf"(?m)^CURRENT_PHASE: {re.escape(current_phase)}$"
+        self.assertEqual(len(re.findall(phase_pattern, original)), 1)
+        extra, insertions = re.subn(
+            phase_pattern,
+            f"CURRENT_PHASE: {current_phase}\nTEST_FIXTURE_ONLY: value",
+            original,
+            count=1,
+        )
+        self.assertEqual(insertions, 1)
+        self.assertNotEqual(extra, original)
+        self.assertEqual(
+            (governance.ROOT / path).read_text(encoding="utf-8"), original
+        )
+        return extra
+
     def test_v18_canonical_state_and_mirrors_are_exact(self) -> None:
         canonical_path = governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE
         state, violations = governance._v18_canonical_state(
@@ -1513,6 +1567,9 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
         self.assertEqual(mutated_mirror["CURRENT_PHASE"], alternate)
         self.assertNotEqual(
             mutated_mirror["CURRENT_PHASE"], canonical["CURRENT_PHASE"]
+        )
+        self.assertEqual(
+            (governance.ROOT / relative).read_text(encoding="utf-8"), mirror_text
         )
 
     def test_v18_closed_phase_set_accepts_only_3_4_and_5_next(self) -> None:
@@ -1620,7 +1677,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                     violations,
                     [
                         f"{path}: canonical preamble requires exactly one "
-                        f"fenced text block, found {count}"
+                        + f"fenced text block, found {count}"
                     ],
                 )
 
@@ -1633,7 +1690,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             violations[:2],
             [
                 f"{path}: canonical current-state block requires exactly one "
-                "SOURCE_VERSION, found 0",
+                + "SOURCE_VERSION, found 0",
                 f"{path}: canonical SOURCE_VERSION=None does not match '1.13.18'",
             ],
         )
@@ -1647,15 +1704,11 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             violations[:2],
             [
                 f"{path}: canonical current-state block requires exactly one "
-                "SOURCE_VERSION, found 2",
+                + "SOURCE_VERSION, found 2",
                 f"{path}: canonical SOURCE_VERSION=None does not match '1.13.18'",
             ],
         )
-        extra = original.replace(
-            "CURRENT_PHASE: 4_NEXT\n",
-            "CURRENT_PHASE: 4_NEXT\nTEST_FIXTURE_ONLY: value\n",
-            1,
-        )
+        extra = self.canonical_with_extra_fixture_key(path, original)
         _, violations = governance._v18_canonical_state(extra)
         self.assertEqual(
             violations,
@@ -1673,29 +1726,81 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
     def test_v18_phase_and_digest_errors_are_exact(self) -> None:
         path = governance.V18_CANONICAL_CURRENT_STATE_FILE
         original = (governance.ROOT / path).read_text(encoding="utf-8")
-        phase = original.replace("CURRENT_PHASE: 4_NEXT", "CURRENT_PHASE: 2_NEXT", 1)
+        canonical, canonical_violations = governance._v18_canonical_state(original)
+        self.assertEqual(canonical_violations, [])
+        current_phase = canonical["CURRENT_PHASE"]
+        phase_pattern = rf"(?m)^CURRENT_PHASE: {re.escape(current_phase)}$"
+        self.assertEqual(len(re.findall(phase_pattern, original)), 1)
+        phase, phase_substitutions = re.subn(
+            phase_pattern, "CURRENT_PHASE: 2_NEXT", original, count=1
+        )
+        self.assertEqual(phase_substitutions, 1)
+        self.assertNotEqual(phase, original)
+        self.assertEqual(
+            (governance.ROOT / path).read_text(encoding="utf-8"), original
+        )
         _, violations = governance._v18_canonical_state(phase)
         self.assertEqual(
             violations,
             [
                 f"{path}: canonical CURRENT_PHASE='2_NEXT' is outside the closed "
-                "3_NEXT/4_NEXT/5_NEXT lifecycle"
+                + "3_NEXT/4_NEXT/5_NEXT lifecycle"
             ],
         )
-        digest = re.sub(
+        digest, digest_substitutions = re.subn(
             r"(?m)^RELEASE_BODY_SHA256: [0-9a-f]{64}$",
             "RELEASE_BODY_SHA256: TEST_FIXTURE_ONLY",
             original,
             count=1,
+        )
+        self.assertEqual(digest_substitutions, 1)
+        self.assertNotEqual(digest, original)
+        self.assertEqual(
+            (governance.ROOT / path).read_text(encoding="utf-8"), original
         )
         _, violations = governance._v18_canonical_state(digest)
         self.assertEqual(
             violations,
             [
                 f"{path}: FROZEN publication material requires a lowercase "
-                "SHA-256"
+                + "SHA-256"
             ],
         )
+
+    def test_v18_phase_portable_negative_controls_matrix(self) -> None:
+        source_root = governance.ROOT
+        fixture_paths = (
+            governance.V18_CANONICAL_CURRENT_STATE_FILE,
+            *governance.CURRENT_STATE_MIRROR_FILES,
+        )
+        source_bytes = {
+            relative: (source_root / relative).read_bytes()
+            for relative in fixture_paths
+        }
+        methods = (
+            "test_v18_mirror_one_premise_mutation_fails",
+            "test_v18_canonical_required_and_key_errors_are_ordered",
+            "test_v18_phase_and_digest_errors_are_exact",
+        )
+        for number in governance.V18_ALLOWED_NEXT_PHASES:
+            expected_phase = f"{number}_NEXT"
+            with self.subTest(starting_phase=expected_phase):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    self.prepare_phase_fixture(
+                        source_root, root, fixture_paths, expected_phase
+                    )
+                    with mock.patch.object(governance, "ROOT", root):
+                        for method in methods:
+                            with self.subTest(method=method):
+                                getattr(self, method)()
+                    self.assertEqual(
+                        {
+                            relative: (source_root / relative).read_bytes()
+                            for relative in fixture_paths
+                        },
+                        source_bytes,
+                    )
 
     def test_v18_mirror_delimiter_errors_are_exact(self) -> None:
         relative = Path("AGENTS.md")
@@ -1720,7 +1825,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                     violations,
                     [
                         f"{relative}: requires exactly one current-state mirror, "
-                        f"found {starts} start and {ends} end delimiters"
+                        + f"found {starts} start and {ends} end delimiters"
                     ],
                 )
 
@@ -1858,7 +1963,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                     governance._v18_release_body_semantics(text + assertion + "\n"),
                     [
                         f"{governance.V18_RELEASE_BODY}: contains forbidden "
-                        f"future assertion {pattern!r}"
+                        + f"future assertion {pattern!r}"
                     ],
                 )
 

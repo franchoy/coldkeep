@@ -12105,6 +12105,10 @@ class FinalSnapshotSelectionTests(unittest.TestCase):
 
     def test_schema_missing_duplicate_and_unknown_tuples_are_exact(self) -> None:
         state, contract = self.selected_documents()
+        schema_line = (
+            "FINAL_SOURCE_SNAPSHOT_SCHEMA: "
+            + "coldkeep-v1-final-source-snapshot-selection/v1"
+        )
         expected = (
             "invalid",
             None,
@@ -12113,12 +12117,7 @@ class FinalSnapshotSelectionTests(unittest.TestCase):
         )
         cases = (
             [],
-            [
-                "FINAL_SOURCE_SNAPSHOT_SCHEMA: "
-                "coldkeep-v1-final-source-snapshot-selection/v1",
-                "FINAL_SOURCE_SNAPSHOT_SCHEMA: "
-                "coldkeep-v1-final-source-snapshot-selection/v1",
-            ],
+            [schema_line, schema_line],
             ["FINAL_SOURCE_SNAPSHOT_SCHEMA: TEST_FIXTURE_ONLY/v1"],
         )
         for replacement in cases:
@@ -12135,6 +12134,10 @@ class FinalSnapshotSelectionTests(unittest.TestCase):
 
     def test_pointer_expectation_and_reference_material_are_atomic(self) -> None:
         state, contract = self.selected_documents()
+        pointer_line = (
+            "FINAL_SOURCE_SNAPSHOT_REFERENCE: "
+            + "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+        )
         expected = (
             "invalid",
             None,
@@ -12143,12 +12146,7 @@ class FinalSnapshotSelectionTests(unittest.TestCase):
         )
         pointer_cases = (
             [],
-            [
-                "FINAL_SOURCE_SNAPSHOT_REFERENCE: "
-                "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md",
-                "FINAL_SOURCE_SNAPSHOT_REFERENCE: "
-                "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md",
-            ],
+            [pointer_line, pointer_line],
             ["FINAL_SOURCE_SNAPSHOT_REFERENCE: TEST_FIXTURE_ONLY.md"],
         )
         for replacement in pointer_cases:
