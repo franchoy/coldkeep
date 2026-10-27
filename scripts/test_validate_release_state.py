@@ -11999,7 +11999,33 @@ class FinalSnapshotReferenceGovernanceTests(unittest.TestCase):
     def test_reference_and_expectations_load_atomically(self) -> None:
         snapshot = load_final_snapshot_for_test()
         self.assertEqual(snapshot.values["SOURCE_VERSION"], "1.13.18")
-        self.assertEqual(len(snapshot.delta), 33)
+        self.assertEqual(snapshot.values["TOOLCHAIN"], "go1.26.10")
+        self.assertEqual(len(snapshot.delta), 40)
+
+    def test_stale_reference_digest_is_rejected(self) -> None:
+        relative = Path(
+            "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            copy = root / relative
+            copy.parent.mkdir(parents=True)
+            original = (FINAL_SNAPSHOT_TEST_ROOT / relative).read_bytes()
+            self.assertEqual(original.count(b"TOOLCHAIN: go1.26.10"), 1)
+            mutated = original.replace(
+                b"TOOLCHAIN: go1.26.10", b"TOOLCHAIN: go1.26.9", 1
+            )
+            self.assertNotEqual(mutated, original)
+            copy.write_bytes(mutated)
+            snapshot, detail = release_state_support.load_final_source_snapshot(
+                root, contract, relative.as_posix()
+            )
+        self.assertIsNone(snapshot)
+        self.assertIn("digest disagrees", detail or "")
 
     def test_wrong_pointer_has_no_fallback(self) -> None:
         contract = release_state_support.Document.load(
@@ -12463,12 +12489,40 @@ class FinalSnapshotDeltaContractTests(unittest.TestCase):
 
     def test_one_wrong_status_is_rejected(self) -> None:
         snapshot = load_final_snapshot_for_test()
-        changed = list(snapshot.delta)
-        changed[0] = ("A", changed[0][1], changed[0][2])
+        first = snapshot.delta[0]
+        changed = (("A", first[1], first[2]),) + snapshot.delta[1:]
+        self.assertNotEqual(changed, snapshot.delta)
         detail = release_state_support._final_snapshot_grammar(
-            snapshot.values, tuple(changed)
+            snapshot.values, changed
         )
         self.assertEqual(detail, "delta inventory is unsupported")
+
+    def test_inventory_shape_mutations_are_rejected(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        first = snapshot.delta[0]
+        cases = {
+            "missing": snapshot.delta[1:],
+            "extra": snapshot.delta + (("M", "100644", "TEST_FIXTURE_ONLY"),),
+            "duplicate": snapshot.delta + (first,),
+            "wrong-mode": ((first[0], "100755", first[2]),) + snapshot.delta[1:],
+        }
+        for label, changed in cases.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(changed, snapshot.delta)
+                detail = release_state_support._final_snapshot_grammar(
+                    snapshot.values, tuple(changed)
+                )
+                self.assertEqual(detail, "delta inventory is unsupported")
+
+    def test_stale_toolchain_is_rejected(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        changed = dict(snapshot.values)
+        changed["TOOLCHAIN"] = "go1.26.9"
+        self.assertNotEqual(changed, snapshot.values)
+        self.assertEqual(
+            release_state_support._final_snapshot_grammar(changed, snapshot.delta),
+            "TOOLCHAIN is unsupported",
+        )
 
     def test_committed_complete_inventory_accepts_git_tree_order(self) -> None:
         snapshot = load_final_snapshot_for_test()

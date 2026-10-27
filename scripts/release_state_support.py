@@ -262,19 +262,25 @@ FINAL_SNAPSHOT_REFERENCE_KEYS = (
     "STATUS",
 )
 FINAL_SNAPSHOT_DELTA = (
+    ("M", "100644", ".devcontainer/Dockerfile"),
+    ("M", "100755", ".devcontainer/post-create.sh"),
     ("M", "100644", ".github/copilot-instructions.md"),
     ("M", "100644", ".github/instructions/ci.instructions.md"),
     ("M", "100644", ".github/prompts/critical-path-coverage.prompt.md"),
     ("M", "100644", ".github/prompts/regression-fix.prompt.md"),
+    ("M", "100644", ".github/workflows/benchmark-baseline.yml"),
     ("M", "100644", ".github/workflows/ci.yml"),
+    ("M", "100644", ".github/workflows/codeql.yml"),
     ("M", "100644", "AGENTS.md"),
     ("M", "100644", "CHANGELOG.md"),
     ("M", "100644", "CONTRIBUTING.md"),
+    ("M", "100644", "Dockerfile"),
     ("M", "100644", "PRE_RELEASE_CHECKLIST.md"),
     ("M", "100644", "README.md"),
     ("M", "100644", "SECURITY.md"),
     ("M", "100644", "docs/release/v1.13/README.md"),
     ("M", "100644", "docs/release/v1.13/v1.13.x-release-train.md"),
+    ("M", "100644", "go.mod"),
     ("M", "100644", "internal/version/version.go"),
     ("M", "100644", "internal/version/version_test.go"),
     ("M", "100755", "scripts/audit_ci_enforcement.sh"),
@@ -283,6 +289,7 @@ FINAL_SNAPSHOT_DELTA = (
     ("M", "100644", "scripts/test_validate_governance.py"),
     ("M", "100644", "scripts/test_validate_release_state.py"),
     ("M", "100755", "scripts/validate_governance.py"),
+    ("M", "100755", "scripts/validate_phase3_contracts.py"),
     ("M", "100644", "scripts/validate_release_state.py"),
     ("A", "100644", "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"),
     ("A", "100644", "docs/release/v1.13/v1.13.18-phase-list.md"),
@@ -1356,7 +1363,7 @@ def _final_snapshot_grammar(
         "BASE_REF": "refs/heads/main",
         "TAG_REF": "refs/tags/v1.13.18",
         "LANGUAGE_FLOOR": "go1.25.0",
-        "TOOLCHAIN": "go1.26.9",
+        "TOOLCHAIN": "go1.26.10",
         "GITHUB_RELEASE_ID": "400460267",
         "TS_ACCEPTANCE_STATUS": (
             "TS_READBACK_01_OWNER_ACCEPTED_PROTECTED_MAIN_"
@@ -1365,7 +1372,7 @@ def _final_snapshot_grammar(
         "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE": "NOT_SATISFIED",
         "RETROSPECTIVE_PROCEDURAL_EXCEPTION": "NOT_GRANTED",
         "DELTA_SCHEMA": "coldkeep-v1-final-source-snapshot-delta/v1",
-        "DELTA_COUNT": "33",
+        "DELTA_COUNT": "40",
         "STATUS": "STRUCTURAL_NON_AUTHORIZING",
     }
     for key, expected in exact.items():

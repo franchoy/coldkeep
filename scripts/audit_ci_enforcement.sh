@@ -1230,7 +1230,7 @@ check_local_workflow() {
     echo "[audit] ok: benchmark source validation has no broad failure suppression"
   fi
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'runs-on: ubuntu-24\.04' 'benchmark calibration pins the runner family' || check_status=1
-  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" "go-version: '1\\.26\\.9'" 'benchmark calibration pins the certified Go patch' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" "go-version: '1\\.26\\.10'" 'benchmark calibration pins the certified Go patch' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'benchmark calibration disables automatic toolchain switching' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+check-latest: false$' 'benchmark calibration disables latest-version resolution' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'benchmark calibration pins the PostgreSQL image digest' || check_status=1
@@ -1269,7 +1269,7 @@ check_local_workflow() {
     echo "[audit] ok: integrity matrix retains exactly two pre/post database observations"
   fi
   require_content_pattern "$benchmark_integrity_block" '--command-timeout-seconds 600' 'integrity matrix fixes the 600-second command timeout' || check_status=1
-  require_content_pattern "$benchmark_integrity_block" "go-version: '1\.26\.9'" 'integrity matrix pins the certified Go patch version' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" "go-version: '1\.26\.10'" 'integrity matrix pins the certified Go patch version' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'integrity matrix pins PostgreSQL by digest' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'if-no-files-found: error' 'integrity artifact rejects missing evidence' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'if: \$\{\{ always\(\) \}\}' 'integrity artifact finalization and upload always run' || check_status=1
@@ -1426,13 +1426,13 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CI workflow_dispatch trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
   ci_setup_go_count="$(grep -Ec 'uses: actions/setup-go@' "$WORKFLOW_FILE")"
-  ci_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.9'$" "$WORKFLOW_FILE")"
+  ci_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.10'$" "$WORKFLOW_FILE")"
   ci_check_latest_false_count="$(grep -Ec '^\s+check-latest: false$' "$WORKFLOW_FILE")"
   if [[ "$ci_setup_go_count" -eq 0 || "$ci_exact_go_count" -ne "$ci_setup_go_count" ]]; then
-    echo "[audit] ERROR: every required CI setup-go step must pin Go 1.26.9 exactly" >&2
+    echo "[audit] ERROR: every required CI setup-go step must pin Go 1.26.10 exactly" >&2
     check_status=1
   else
-    echo "[audit] ok: every required CI setup-go step pins Go 1.26.9 exactly"
+    echo "[audit] ok: every required CI setup-go step pins Go 1.26.10 exactly"
   fi
   if [[ "$ci_check_latest_false_count" -ne "$ci_setup_go_count" ]]; then
     echo "[audit] ERROR: every required CI setup-go step must disable latest-version resolution" >&2
@@ -1442,13 +1442,13 @@ check_local_workflow() {
   fi
   require_pattern "$WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'required CI disables automatic toolchain switching' || check_status=1
   codeql_setup_go_count="$(grep -Ec 'uses: actions/setup-go@' "$CODEQL_WORKFLOW_FILE")"
-  codeql_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.9'$" "$CODEQL_WORKFLOW_FILE")"
+  codeql_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.10'$" "$CODEQL_WORKFLOW_FILE")"
   codeql_check_latest_false_count="$(grep -Ec '^\s+check-latest: false$' "$CODEQL_WORKFLOW_FILE")"
   if [[ "$codeql_setup_go_count" -eq 0 || "$codeql_exact_go_count" -ne "$codeql_setup_go_count" || "$codeql_check_latest_false_count" -ne "$codeql_setup_go_count" ]]; then
-    echo "[audit] ERROR: CodeQL setup-go must pin Go 1.26.9 and disable latest-version resolution" >&2
+    echo "[audit] ERROR: CodeQL setup-go must pin Go 1.26.10 and disable latest-version resolution" >&2
     check_status=1
   else
-    echo "[audit] ok: CodeQL setup-go pins Go 1.26.9 without latest-version resolution"
+    echo "[audit] ok: CodeQL setup-go pins Go 1.26.10 without latest-version resolution"
   fi
   require_pattern "$CODEQL_WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'CodeQL disables automatic toolchain switching' || check_status=1
   upload_v5_count=$(grep -c 'actions/upload-artifact@v5' "$WORKFLOW_FILE" || true)
@@ -1765,12 +1765,12 @@ check_local_workflow() {
   product_container_block="$(extract_job_block product-container)"
   devcontainer_block="$(extract_job_block devcontainer)"
   require_content_pattern "$source_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'source installation covers Linux, macOS, and Windows' || check_status=1
-  require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.9'" 'source installation pins Go 1.26.9' || check_status=1
+  require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.10'" 'source installation pins Go 1.26.10' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" "coldkeep version 1\.13\.18" 'source installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'remote candidate installation covers Linux, macOS, and Windows' || check_status=1
-  require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.9'" 'remote candidate installation pins Go 1.26.9' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.10'" 'remote candidate installation pins Go 1.26.10' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'cache:\s*false' 'remote candidate installation does not require checkout-backed Go caching' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'EVENT_REF_TYPE:\s*\$\{\{ github\.ref_type \}\}' 'remote candidate installation detects tag events explicitly' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'EVENT_REF_NAME:\s*\$\{\{ github\.ref_name \}\}' 'remote candidate installation retains the triggering ref name' || check_status=1
@@ -1821,8 +1821,8 @@ check_local_workflow() {
   # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'go install "\$module/cmd/coldkeep@\$env:CANDIDATE_QUERY"' 'Windows public installation uses the selected candidate query' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.18" 'remote candidate installation proves binary identity' || check_status=1
-  require_content_literal "$remote_candidate_install_block" "head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.9\$'" 'Unix remote candidate installation proves binary compiler identity' || check_status=1
-  require_content_literal "$remote_candidate_install_block" "-notmatch ': go1\\.26\\.9\$') { throw 'binary Go toolchain identity mismatch' }" 'Windows remote candidate installation proves binary compiler identity' || check_status=1
+  require_content_literal "$remote_candidate_install_block" "head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.10\$'" 'Unix remote candidate installation proves binary compiler identity' || check_status=1
+  require_content_literal "$remote_candidate_install_block" "-notmatch ': go1\\.26\\.10\$') { throw 'binary Go toolchain identity mismatch' }" 'Windows remote candidate installation proves binary compiler identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'grep -F .*resolved_version.*binary-build-info\.txt' 'Unix remote installation proves module build metadata' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'installed module build identity mismatch' 'Windows remote installation proves module build metadata' || check_status=1
   if grep -Eq 'actions/checkout|continue-on-error|\|\| true' <<<"$remote_candidate_install_block"; then

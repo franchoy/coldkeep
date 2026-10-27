@@ -1531,6 +1531,77 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             governance._validate_v18_release_body(governance.ROOT, state), []
         )
 
+    def test_v18_security_pins_and_authority_wording_are_current(self) -> None:
+        authority = (governance.ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        marker = (
+            "obtain separate explicit owner authorization before changing any "
+            "additional"
+        )
+        self.assertEqual(
+            governance.require_markers(Path("AGENTS.md"), authority, (marker,)), []
+        )
+        mutated = authority.replace(marker, "TEST_FIXTURE_ONLY", 1)
+        self.assertNotEqual(mutated, authority)
+        self.assertNotEqual(
+            governance.require_markers(Path("AGENTS.md"), mutated, (marker,)), []
+        )
+
+        expected_digest = (
+            "sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af"
+        )
+        for relative in (Path("Dockerfile"), Path(".devcontainer/Dockerfile")):
+            text = (governance.ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn(f"golang:1.26.10-bookworm@{expected_digest}", text)
+
+    def test_v18_container_pin_mutations_fail_the_real_contract(self) -> None:
+        paths = (
+            Path("scripts/validate_phase3_contracts.py"),
+            Path("Dockerfile"),
+            Path(".devcontainer/Dockerfile"),
+            Path("docker-compose.yml"),
+            Path(".devcontainer/docker-compose.yml"),
+            Path(".devcontainer/post-create.sh"),
+            Path(".env.example"),
+            Path(".dockerignore"),
+            Path(".devcontainer/devcontainer.json"),
+        )
+        cases = (
+            (Path("Dockerfile"), "632dff7351799a5a", "032dff7351799a5a"),
+            (
+                Path(".devcontainer/Dockerfile"),
+                "632dff7351799a5a",
+                "032dff7351799a5a",
+            ),
+            (
+                Path("scripts/validate_phase3_contracts.py"),
+                '"product builder": (dockerfile, rf"golang:1\\.26\\.10-bookworm',
+                '"product builder": (dockerfile, rf"golang:1\\.26\\.9-bookworm',
+            ),
+            (
+                Path("scripts/validate_phase3_contracts.py"),
+                '"development base": (dev_dockerfile, rf"golang:1\\.26\\.10-bookworm',
+                '"development base": (dev_dockerfile, rf"golang:1\\.26\\.9-bookworm',
+            ),
+        )
+        for relative, old, new in cases:
+            with self.subTest(relative=relative):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    copy_fixture_paths(governance.ROOT, root, paths)
+                    target = root / relative
+                    original = target.read_text(encoding="utf-8")
+                    self.assertEqual(original.count(old), 1)
+                    mutated = original.replace(old, new, 1)
+                    self.assertNotEqual(mutated, original)
+                    target.write_text(mutated, encoding="utf-8")
+                    completed = run_process(
+                        [
+                            resolved_executable("python3"),
+                            str(root / "scripts/validate_phase3_contracts.py"),
+                        ]
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+
     def test_v18_mirror_one_premise_mutation_fails(self) -> None:
         relative = Path("AGENTS.md")
         canonical_path = governance.ROOT / governance.V18_CANONICAL_CURRENT_STATE_FILE

@@ -108,15 +108,19 @@ Do not add global coverage gates unless explicitly approved.
 ## v1.13.18 Final Snapshot Boundary
 
 v1.13.18 is an active local final-source-snapshot candidate with Phase 4
-hosted certification Next. The Stage A head still requires fresh independent
-exact-head review before any remote action. It changes release identity and
-enforcement only, keeps Go 1.26.9, and claims no hosted certification or
-publication. v1.13.17
+hosted certification pending. Candidate C's earlier hosted wave passed CI and
+CodeQL but did not clear Codacy; exact E's separate hosted wave failed the
+reachable-vulnerability jobs and retained three Codacy findings. This bounded
+successor updates the release-critical toolchain from the Go 1.26.9 state on M
+to Go 1.26.10 and corrects those findings without changing product behavior or
+dependencies. It still requires independent exact-head review and later fresh
+hosted certification, and claims no operational adoption or publication. v1.13.17
 remains immutable at M17/A17 and Release `400460267`; its qualified Phase 9M
 and TS history is preserved. v1.13.16 is the immutable failed-publication
 predecessor; its public tag failed required certification and no GitHub
 Release exists. v1.13.15 remains published stable and immutable. Follow the
-v1.13.18 10-phase plan and exact 33-path boundary, and do not
+v1.13.18 10-phase plan, exact 40-path cumulative boundary, and narrower
+33-path correction manifest, and do not
 use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;

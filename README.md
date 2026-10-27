@@ -50,10 +50,10 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 v1.13.18 — Final v1.x Source Snapshot and Closure Handoff is active locally.
-Phases 0-3 are complete and Phase 4 hosted certification is Next. The Stage A
-head still requires fresh independent exact-head source review and read-only
-certification before any remote authorization. It adds no product feature or
-format change and is not yet published.
+Phases 0-3 are complete and Phase 4 hosted certification is Next. The current
+Go 1.26.10 corrective head still requires fresh independent exact-head source
+review before any operational adoption or remote authorization. It adds no
+product feature or format change and is not yet published.
 v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
 and TS-READBACK-01 retain their source-scoped qualification. v1.13.16 is the immutable
 failed-publication predecessor: annotated tag A16 exists, its required tag CI
@@ -400,10 +400,10 @@ support from source availability.
 Those statements describe the published v1.13.15 artifact. A `toolchain`
 suggestion does not select the compiler used by `go install package@version`.
 
-For the current checkout and the proposed v1.13.17 H2 security progression,
-install Go 1.26.9 and a native C compiler first. The `go 1.25` module directive
-remains the language floor; exact Go 1.26.9 with `GOTOOLCHAIN=local` is the
-active build and scan baseline. Normal v1.x CLI operation remains
+Protected main M retains the historical Go 1.26.9 integration. For the current
+v1.13.18 corrective checkout, install Go 1.26.10 and a native C compiler first.
+The `go 1.25` module directive remains the language floor; exact Go 1.26.10
+with `GOTOOLCHAIN=local` is the active build and scan baseline. Normal v1.x CLI operation remains
 PostgreSQL-backed; SQLite-first local productization belongs to v2.x.
 
 ### Host binary with PostgreSQL
@@ -411,7 +411,7 @@ PostgreSQL-backed; SQLite-first local productization belongs to v2.x.
 ```bash
 # 1) Verify the certified toolchain and build before invoking Coldkeep
 export GOTOOLCHAIN=local
-go version # must report go1.26.9
+go version # must report go1.26.10
 go build -o coldkeep ./cmd/coldkeep
 
 # 2) Initialize fresh development key material (.env)

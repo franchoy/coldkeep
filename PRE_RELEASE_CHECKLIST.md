@@ -79,8 +79,11 @@ promotes a section into the active gate for a special release.
 
 Install these before claiming CI parity locally:
 
-- Go 1.26.9 exactly for v1.13.18 final-source-snapshot certification. The module language floor
+- Go 1.26.10 exactly for v1.13.18 final-source-snapshot certification. The module language floor
   remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
+- Retain fixed-toolchain identity and both detailed and blocking
+  `govulncheck@v1.7.0` outputs, including reachability and database metadata;
+  GO-2026-6809 must not affect the selected standard library.
 - `docker compose`.
 - PostgreSQL client tools, including `psql`.
 - `jq`.

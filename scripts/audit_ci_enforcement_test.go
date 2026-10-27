@@ -144,42 +144,42 @@ func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T
 		{
 			name: "Unix binary compiler restored to old patch",
 			mutate: func(value string) string {
-				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.9$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'`, 1)
+				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.10$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'`, 1)
 			},
 			wantMessage: "Unix remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Unix binary compiler wildcard",
 			mutate: func(value string) string {
-				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.9$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.x$'`, 1)
+				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.10$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.x$'`, 1)
 			},
 			wantMessage: "Unix remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Unix binary compiler proof removed",
 			mutate: func(value string) string {
-				return strings.Replace(value, "          head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.9$'\n", "", 1)
+				return strings.Replace(value, "          head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.10$'\n", "", 1)
 			},
 			wantMessage: "Unix remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Windows binary compiler restored to old patch",
 			mutate: func(value string) string {
-				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.9$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }`, 1)
+				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.10$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }`, 1)
 			},
 			wantMessage: "Windows remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Windows binary compiler wildcard",
 			mutate: func(value string) string {
-				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.9$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.x$') { throw 'binary Go toolchain identity mismatch' }`, 1)
+				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.10$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.x$') { throw 'binary Go toolchain identity mismatch' }`, 1)
 			},
 			wantMessage: "Windows remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Windows binary compiler proof removed",
 			mutate: func(value string) string {
-				return strings.Replace(value, "          if ($buildInfo[0] -notmatch ': go1\\.26\\.9$') { throw 'binary Go toolchain identity mismatch' }\n", "", 1)
+				return strings.Replace(value, "          if ($buildInfo[0] -notmatch ': go1\\.26\\.10$') { throw 'binary Go toolchain identity mismatch' }\n", "", 1)
 			},
 			wantMessage: "Windows remote candidate installation proves binary compiler identity",
 		},
@@ -188,8 +188,8 @@ func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T
 			mutate: func(value string) string {
 				return strings.Replace(
 					value,
-					"    steps:\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.9'\n          check-latest: false\n          cache: false",
-					"    steps:\n      - uses: actions/checkout@v6\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.9'\n          check-latest: false\n          cache: false",
+					"    steps:\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.10'\n          check-latest: false\n          cache: false",
+					"    steps:\n      - uses: actions/checkout@v6\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.10'\n          check-latest: false\n          cache: false",
 					1,
 				)
 			},
@@ -418,13 +418,20 @@ func TestAuditCIEnforcementRequiresCertifiedToolchainEverywhere(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 
-	mutated := strings.Replace(workflow, "go-version: '1.26.9'", "go-version: '1.26.x'", 1)
-	if mutated == workflow {
-		t.Fatal("certified CI toolchain fixture not found")
-	}
-	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
-	if !strings.Contains(stderr, "every required CI setup-go step must pin Go 1.26.9 exactly") {
-		t.Fatalf("expected exact CI toolchain failure, got:\n%s", stderr)
+	for name, replacement := range map[string]string{
+		"floating patch": "go-version: '1.26.x'",
+		"stale patch":    "go-version: '1.26.9'",
+	} {
+		t.Run(name, func(t *testing.T) {
+			mutated := strings.Replace(workflow, "go-version: '1.26.10'", replacement, 1)
+			if mutated == workflow {
+				t.Fatal("certified CI toolchain fixture not found")
+			}
+			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
+			if !strings.Contains(stderr, "every required CI setup-go step must pin Go 1.26.10 exactly") {
+				t.Fatalf("expected exact CI toolchain failure, got:\n%s", stderr)
+			}
+		})
 	}
 }
 
@@ -481,7 +488,7 @@ func TestAuditCIEnforcementRequiresPinnedBenchmarkCalibrationToolchain(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mutated := strings.Replace(baselineWorkflow, "go-version: '1.26.9'", tt.replacement, 1)
+			mutated := strings.Replace(baselineWorkflow, "go-version: '1.26.10'", tt.replacement, 1)
 			if mutated == baselineWorkflow {
 				t.Fatal("benchmark calibration toolchain fixture was not mutated")
 			}
@@ -531,7 +538,7 @@ func mutateBenchmarkIntegrityGoVersion(t *testing.T, workflow, replacement strin
 	}
 	end := start + 1 + endRelative
 	block := workflow[start:end]
-	mutatedBlock := strings.Replace(block, "go-version: '1.26.9'", replacement, 1)
+	mutatedBlock := strings.Replace(block, "go-version: '1.26.10'", replacement, 1)
 	if mutatedBlock == block {
 		t.Fatal("benchmark-integrity toolchain fixture was not mutated")
 	}
@@ -2987,7 +2994,7 @@ func runCK015SyntheticWrapperCase(t *testing.T, name, kind, profile, body string
 	writeExecutableFixture(t, filepath.Join(stubDir, "go"), `#!/usr/bin/env bash
 set -eu
 if [ "$#" -eq 1 ] && [ "$1" = version ]; then
-  printf '%s\n' 'go version go1.26.9 linux/amd64'
+  printf '%s\n' 'go version go1.26.10 linux/amd64'
   exit 0
 fi
 if [ "$#" -ne 9 ] || [ "$1" != test ] || [ "$2" != -race ] || [ "$3" != -count=1 ] || [ "$4" != -p=1 ] || [ "$5" != -parallel=1 ] || [ "$6" != -json ] || [ "$7" != ./internal/storage ] || [ "$8" != -run ]; then

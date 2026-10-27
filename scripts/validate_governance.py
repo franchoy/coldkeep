@@ -1215,6 +1215,14 @@ def validate(root: Path = ROOT) -> list[str]:
             "phase's `PLAN` or `BUILD` mode",
             "python3 scripts/validate_governance.py",
             "GOTOOLCHAIN=local",
+            *(
+                (
+                    "obtain separate explicit owner authorization before "
+                    "changing any additional",
+                )
+                if v18_selected
+                else ()
+            ),
         ),
         Path(".github/copilot-instructions.md"): (
             *(
@@ -1229,7 +1237,7 @@ def validate(root: Path = ROOT) -> list[str]:
             "v1.13.17",
             "v1.13.16",
             *(
-                ("Go 1.26.9",)
+                ("Go 1.26.10",)
                 if v18_selected
                 else (
                     "v1.13.17 Recovery Boundary",

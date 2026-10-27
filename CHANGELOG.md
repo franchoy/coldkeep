@@ -25,16 +25,19 @@ project, do not start here; start with [README.md](README.md).
 - Versions the accepted final v1.x protected-main source as an exceptional
   source-only snapshot; it adds no product feature, schema, storage/repository
   format, dependency, or default-behavior change.
-- Retains the Go 1.25.0 language floor and Go 1.26.9 toolchain while advancing
-  only the application version and release/CI identity to 1.13.18.
+- Retains the Go 1.25.0 language floor and application version 1.13.18 while
+  updating the release-critical toolchain uniformly from Go 1.26.9 to 1.26.10
+  for GO-2026-6809, without changing module dependencies or product behavior.
 - Adds a separate fail-closed final-source-snapshot selector bound to exact M,
-  the 33-path cumulative delta, frozen v1.13.17 history, and non-authorizing
+  the exact 40-path cumulative delta, frozen v1.13.17 history, and non-authorizing
   branch/PR/main/tag simulations.
-- Phases 0-3 are complete and Phase 4 hosted certification is Next. The Stage A
-  lifecycle correction supports the closed `3_NEXT`/`4_NEXT`/`5_NEXT` model,
-  but its new exact head still requires fresh independent source review and
-  read-only certification. No hosted certification, merge, tag, Release,
-  cleanup, or owner publication acceptance is claimed.
+- Candidate C's first hosted wave passed CI and CodeQL but did not clear Codacy;
+  exact E's later wave failed its vulnerability jobs and retained three Codacy
+  findings. The isolated E child combines the fixed toolchain with bounded
+  Agentlinter wording corrections while keeping the closed
+  `3_NEXT`/`4_NEXT`/`5_NEXT` model at `4_NEXT`. It still requires independent
+  exact-head review and fresh hosted certification. No operational adoption,
+  merge, tag, Release, cleanup, or owner publication acceptance is claimed.
 
 ## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 

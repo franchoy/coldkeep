@@ -95,16 +95,19 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 v1.13.18 is the active final-source-snapshot candidate. Phases 0-3 are complete
-and Phase 4 hosted certification is Next. The Stage A head still requires
-fresh independent exact-head source review and read-only certification before
-any remote authorization. No hosted result or publication is claimed.
+and Phase 4 hosted certification remains pending. Candidate C's earlier wave
+passed CI and CodeQL but retained Codacy findings; exact E's separate wave
+failed the reachable-vulnerability jobs and retained three Codacy findings.
+The Go 1.26.10 corrective successor still requires independent exact-head
+review and later fresh hosted certification. No operational adoption or
+publication is claimed.
 v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
 and TS-READBACK-01 remain qualified
 historical anchors. Publication material is frozen. v1.13.16 is
 the immutable failed-publication predecessor; its tag certificate was withheld
 and no GitHub Release exists. The v1.13.17 successor-branch push and exact-N
-evidence are historical. The v1.13.18 candidate has not been pushed. No push,
-PR, merge, tag, Release change, cleanup, or v2 work is authorized by this
+evidence are historical. The operational release branch and PR remain at E.
+No push, PR write, merge, tag, Release change, cleanup, or v2 work is authorized by this
 tracked state.
 
 Current authority is defined by the [scope](v1.13.18-scope.md),

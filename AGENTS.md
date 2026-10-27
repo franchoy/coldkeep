@@ -25,9 +25,10 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 - `v1.13.18` is the active final v1.x source-snapshot candidate. Phases 0-3 are
-  complete and Phase 4 hosted certification is Next. The Stage A head still
-  requires fresh independent exact-head source review and read-only
-  certification before any remote authorization. The tracked state is
+  complete and Phase 4 hosted certification is the next pending phase. The
+  current corrective successor still requires fresh independent exact-head
+  source review before any operational adoption or remote authorization. The
+  tracked state is
   structural and non-authorizing; it claims no hosted certification, merge,
   tag, publication, cleanup, or owner acceptance.
 - `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
@@ -44,20 +45,21 @@ V2_IMPLEMENTATION: NOT_STARTED
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The v1.13.18 scope, 10-phase list, validation checklist, exact 33-path
-  allowlist, release state, snapshot reference, and release gate under
+- The v1.13.18 scope, 10-phase list, validation checklist, exact 40-path
+  cumulative allowlist, release state, snapshot reference, and release gate under
   `docs/release/v1.13/` are binding current authority.
 - Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
   boundary.
 - The `immutable-transition-v1` projections and predecessor disposition are
   structural only. They do not certify hosted operations or authorize a push,
   PR, merge, tag, publication, closure, or v2 implementation.
-- Phase 2 may modify only the exact 33 paths and must preserve every
-  `v1.13.17-*` release document byte. The four historical release branches and
-  all their worktrees remain untouched. No push, PR, merge, tag, Release,
-  workflow dispatch, cleanup, or v2 work is authorized.
-  If a genuine implementation need exceeds those 33 paths, STOP and obtain
-  separate explicit owner authority before changing any additional path.
+- The Go 1.26.10 and Agentlinter correction may modify only the exact 33 paths
+  named by its adopted manifest, producing the exact 40-path cumulative delta
+  from M, and must preserve every `v1.13.17-*` release document byte; stop and
+  obtain separate explicit owner authorization before changing any additional
+  path. The four historical release branches and all their worktrees remain
+  untouched. No push, PR, merge, tag, Release, workflow dispatch, cleanup, or
+  v2 work is authorized.
 
 ## Correctness rules
 
@@ -78,16 +80,16 @@ evidence as passing.
 
 The baseline repository-governance commands are:
 
-- `python3 scripts/validate_release_state.py --state pre-release --json`
+- `python3 scripts/validate_release_state.py --state auto --json`
 - `python3 scripts/validate_governance.py`
 - `python3 -m unittest discover -s scripts -p 'test_*.py' -v`
 - `bash scripts/audit_ci_enforcement.sh --local-only`
 
-The frozen v1 release-critical execution contract uses Go 1.26.9 with
+The frozen v1 release-critical execution contract uses Go 1.26.10 with
 `GOTOOLCHAIN=local`; the module language floor remains Go 1.25.
 
-Within the lifecycle summary below, `NEXT` means the next not-yet-completed
-lifecycle phase; it is descriptive and does not authorize work.
+Within the lifecycle summary below, the phase marker identifies the first
+not-yet-completed lifecycle phase; it is descriptive and does not authorize work.
 
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
