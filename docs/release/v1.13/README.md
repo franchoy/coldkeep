@@ -95,7 +95,7 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 v1.13.18 is the active final-source-snapshot candidate. Phases 0-3 are complete
-and Phase 4 hosted certification remains pending. Candidate C's earlier wave
+and Phase 4 hosted certification is Next. Candidate C's earlier wave
 passed CI and CodeQL but retained Codacy findings; exact E's separate wave
 failed the reachable-vulnerability jobs and retained three Codacy findings.
 The Go 1.26.10 corrective successor still requires independent exact-head
