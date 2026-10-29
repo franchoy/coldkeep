@@ -55,7 +55,7 @@ V2_IMPLEMENTATION: NOT_STARTED
   PR, merge, tag, publication, closure, or v2 implementation.
 - The Go 1.26.10 and Agentlinter correction may modify only the exact 33 paths
   named by its adopted manifest, producing the exact 40-path cumulative delta
-  from M, and must preserve every `v1.13.17-*` release document byte; stop and
+  from M, and must preserve every `v1.13.17-*` release document byte; stop, escalate and
   obtain separate explicit owner authorization before changing any additional
   path. The four historical release branches and all their worktrees remain
   untouched. No push, PR, merge, tag, Release, workflow dispatch, cleanup, or
@@ -88,8 +88,8 @@ The baseline repository-governance commands are:
 The frozen v1 release-critical execution contract uses Go 1.26.10 with
 `GOTOOLCHAIN=local`; the module language floor remains Go 1.25.
 
-Within the lifecycle summary below, the phase marker identifies the first
-not-yet-completed lifecycle phase; it is descriptive and does not authorize work.
+NEXT: the first not-yet-completed lifecycle phase in the summary below.
+This phase marker is descriptive and does not authorize work.
 
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
