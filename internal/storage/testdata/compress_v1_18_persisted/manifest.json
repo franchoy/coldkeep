@@ -1,0 +1,72 @@
+{
+  "schema": "coldkeep.compress-old-writer-fixture.v1",
+  "writer_commit": "550374d40d102bb5cbb5184799ef9b03fdaeefac",
+  "go_version": "go1.26.10",
+  "compress_version": "v1.18.0",
+  "compress_module_sum": "h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=",
+  "aes_key_hex": "abababababababababababababababababababababababababababababababab",
+  "catalog": "catalog.db",
+  "containers": "containers",
+  "files": [
+    {
+      "name": "plain-level-1",
+      "file_id": 1,
+      "file_hash": "a6d3b71be5e2f6d4f5af9ee22df1f137d9a5b287c9ef8fec694c790bd7d6ef15",
+      "payload_sha256": "a6d3b71be5e2f6d4f5af9ee22df1f137d9a5b287c9ef8fec694c790bd7d6ef15",
+      "payload_size": 262144,
+      "storage_codec": "none",
+      "compression_codec": "zstd",
+      "compression_level": 1
+    },
+    {
+      "name": "plain-level-3",
+      "file_id": 2,
+      "file_hash": "72a2cec3f49d2bbc869f89cec21a15df16cf1b8450b637c834022e0eedb4ed1c",
+      "payload_sha256": "72a2cec3f49d2bbc869f89cec21a15df16cf1b8450b637c834022e0eedb4ed1c",
+      "payload_size": 262144,
+      "storage_codec": "none",
+      "compression_codec": "zstd",
+      "compression_level": 3
+    },
+    {
+      "name": "plain-level-9",
+      "file_id": 3,
+      "file_hash": "2568d50be63c6a77a7d2b50e5f7de442e93450791082ba07b8beef91a85e724b",
+      "payload_sha256": "2568d50be63c6a77a7d2b50e5f7de442e93450791082ba07b8beef91a85e724b",
+      "payload_size": 262144,
+      "storage_codec": "none",
+      "compression_codec": "zstd",
+      "compression_level": 9
+    },
+    {
+      "name": "aes-gcm-level-1",
+      "file_id": 4,
+      "file_hash": "d392915bb0c990749a6632df1bf90f8ca7d33a10e11ece1507151a6109723959",
+      "payload_sha256": "d392915bb0c990749a6632df1bf90f8ca7d33a10e11ece1507151a6109723959",
+      "payload_size": 540672,
+      "storage_codec": "aes-gcm",
+      "compression_codec": "zstd",
+      "compression_level": 1
+    },
+    {
+      "name": "aes-gcm-level-3",
+      "file_id": 5,
+      "file_hash": "71758b6543ad69778cdf62f35cd15ed32d7c39c5d5e649ba87d6e79e99272f7e",
+      "payload_sha256": "71758b6543ad69778cdf62f35cd15ed32d7c39c5d5e649ba87d6e79e99272f7e",
+      "payload_size": 540672,
+      "storage_codec": "aes-gcm",
+      "compression_codec": "zstd",
+      "compression_level": 3
+    },
+    {
+      "name": "aes-gcm-level-9",
+      "file_id": 6,
+      "file_hash": "a6eeb35db4b9eb3782fb249986ebe0bc8878b711a5fa03bf6ee414d30b7b7a89",
+      "payload_sha256": "a6eeb35db4b9eb3782fb249986ebe0bc8878b711a5fa03bf6ee414d30b7b7a89",
+      "payload_size": 540672,
+      "storage_codec": "aes-gcm",
+      "compression_codec": "zstd",
+      "compression_level": 9
+    }
+  ]
+}

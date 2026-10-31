@@ -24,20 +24,24 @@ project, do not start here; start with [README.md](README.md).
 
 - Versions the accepted final v1.x protected-main source as an exceptional
   source-only snapshot; it adds no product feature, schema, storage/repository
-  format, dependency, or default-behavior change.
+  format, or default-behavior change. Its sole dependency delta is the exact
+  reviewed `github.com/klauspost/compress` v1.18.0-to-v1.20.2 correction with
+  paired sums, compatibility tests, and persisted fixtures.
 - Retains the Go 1.25.0 language floor and application version 1.13.18 while
   updating the release-critical toolchain uniformly from Go 1.26.9 to 1.26.10
-  for GO-2026-6809, without changing module dependencies or product behavior.
+  for GO-2026-6809, without changing product behavior.
 - Adds a separate fail-closed final-source-snapshot selector bound to exact M,
-  the exact 40-path cumulative delta, frozen v1.13.17 history, and non-authorizing
-  branch/PR/main/tag simulations.
+  the exact 51-path cumulative delta, all 12 technical modes/Git blobs, frozen
+  v1.13.17 history, and non-authorizing branch/PR/main/tag simulations.
 - Candidate C's first hosted wave passed CI and CodeQL but did not clear Codacy;
   exact E's later wave failed its vulnerability jobs and retained three Codacy
   findings. The isolated E child combines the fixed toolchain with bounded
-  Agentlinter wording corrections while keeping the closed
+  Agentlinter wording corrections. The governance-integrated candidate adds the
+  closed C1 ordinary component while keeping the closed
   `3_NEXT`/`4_NEXT`/`5_NEXT` model at `4_NEXT`. It still requires independent
-  exact-head review and fresh hosted certification. No operational adoption,
-  merge, tag, Release, cleanup, or owner publication acceptance is claimed.
+  exact-tree review, deferred advisory-specific verification, and fresh hosted
+  certification. No operational adoption, merge, tag, Release, cleanup, or
+  owner publication acceptance is claimed.
 
 ## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 

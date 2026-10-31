@@ -248,7 +248,10 @@ FINAL_SNAPSHOT_EXPECTATION_KEYS = (
     "EXPECTED_TS_ACCEPTANCE_STATUS", "EXPECTED_TS_ACCEPTANCE_SHA256",
     "EXPECTED_ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE",
     "EXPECTED_RETROSPECTIVE_PROCEDURAL_EXCEPTION",
-    "EXPECTED_DELTA_SCHEMA", "EXPECTED_DELTA_COUNT", "EXPECTED_STATUS",
+    "EXPECTED_DELTA_SCHEMA", "EXPECTED_DELTA_COUNT",
+    "EXPECTED_TECHNICAL_COMPONENT_SCHEMA",
+    "EXPECTED_TECHNICAL_COMPONENT_COUNT",
+    "EXPECTED_TECHNICAL_COMPONENT_SHA256", "EXPECTED_STATUS",
     "EXPECTED_VALIDATOR_EFFECT",
 )
 FINAL_SNAPSHOT_REFERENCE_KEYS = (
@@ -259,7 +262,8 @@ FINAL_SNAPSHOT_REFERENCE_KEYS = (
     "TS_ACCEPTANCE_SHA256",
     "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE",
     "RETROSPECTIVE_PROCEDURAL_EXCEPTION", "DELTA_SCHEMA", "DELTA_COUNT",
-    "STATUS",
+    "TECHNICAL_COMPONENT_SCHEMA", "TECHNICAL_COMPONENT_COUNT",
+    "TECHNICAL_COMPONENT_SHA256", "STATUS",
 )
 FINAL_SNAPSHOT_DELTA = (
     ("M", "100644", ".devcontainer/Dockerfile"),
@@ -281,6 +285,17 @@ FINAL_SNAPSHOT_DELTA = (
     ("M", "100644", "docs/release/v1.13/README.md"),
     ("M", "100644", "docs/release/v1.13/v1.13.x-release-train.md"),
     ("M", "100644", "go.mod"),
+    ("M", "100644", "go.sum"),
+    ("M", "100644", "internal/fsx/secureinstall/install_linux_test.go"),
+    ("A", "100644", "internal/storage/compress_dependency_compat_test.go"),
+    ("M", "100644", "internal/storage/store_compression_feature_gate_test.go"),
+    ("A", "100644", "internal/storage/testdata/compress_v1_18_fixture_generator/main.go"),
+    ("A", "100644", "internal/storage/testdata/compress_v1_18_persisted/catalog.db"),
+    ("A", "100644", "internal/storage/testdata/compress_v1_18_persisted/containers/container_1793435772583270848_62910933088749334.bin"),
+    ("A", "100644", "internal/storage/testdata/compress_v1_18_persisted/manifest.json"),
+    ("A", "100644", "internal/storage/testdata/compress_v1_18_supplemental/catalog.db"),
+    ("A", "100644", "internal/storage/testdata/compress_v1_18_supplemental/containers/container_1793438959614749875_30289991014867281.bin"),
+    ("A", "100644", "internal/storage/testdata/compress_v1_18_supplemental/manifest.json"),
     ("M", "100644", "internal/version/version.go"),
     ("M", "100644", "internal/version/version_test.go"),
     ("M", "100755", "scripts/audit_ci_enforcement.sh"),
@@ -302,6 +317,23 @@ FINAL_SNAPSHOT_DELTA = (
     ("A", "100644", "docs/release/v1.13/v1.13.18-scope.md"),
     ("A", "100644", "docs/release/v1.13/v1.13.18-source-test-allowlist.md"),
     ("A", "100644", "docs/release/v1.13/v1.13.18-validation-checklist.md"),
+)
+FINAL_SNAPSHOT_TECHNICAL_BLOBS = (
+    ("100644", "df7f8bc786765a1deb67474173115726fad3691f", "go.mod"),
+    ("100644", "708e6bbceeb03f68006731f3f5874f0d1d66b8ec", "go.sum"),
+    ("100644", "855e06d0b7f7e41f28dd018722f5fc75456d77e6", "internal/fsx/secureinstall/install_linux_test.go"),
+    ("100644", "e70b8f6df41d8021122ca8718838650733e3064d", "internal/storage/compress_dependency_compat_test.go"),
+    ("100644", "daaefbb7f3fc46000097538664fbfc1698506a66", "internal/storage/store_compression_feature_gate_test.go"),
+    ("100644", "1a4dcfa031f5ca53399c3629f3e43e8fd54e0505", "internal/storage/testdata/compress_v1_18_fixture_generator/main.go"),
+    ("100644", "6b7633b023c6a7901e859fe7562f6a6657035ad8", "internal/storage/testdata/compress_v1_18_persisted/catalog.db"),
+    ("100644", "d04fc4a78454e830b8dc58525db8b315c0126554", "internal/storage/testdata/compress_v1_18_persisted/containers/container_1793435772583270848_62910933088749334.bin"),
+    ("100644", "5f115eb2d59efbda5ba6a69b7164691a99d40a5a", "internal/storage/testdata/compress_v1_18_persisted/manifest.json"),
+    ("100644", "c605762aa0aa33f17b7be817531738d1f6a08bfd", "internal/storage/testdata/compress_v1_18_supplemental/catalog.db"),
+    ("100644", "a77ab6db3c0afd0ff2e2dc6fc8dc5bf29d89fdcf", "internal/storage/testdata/compress_v1_18_supplemental/containers/container_1793438959614749875_30289991014867281.bin"),
+    ("100644", "c84785242dca6d7189f83db8af2801b77906ebef", "internal/storage/testdata/compress_v1_18_supplemental/manifest.json"),
+)
+FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256 = (
+    "e5518db09c8db79e8c327d415a450f602935ee16d78b6661517d76cf83a4b3e6"
 )
 SECURITY_PROGRESSION_V2_DELTA = (
     ("M", "100644", "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
@@ -1113,6 +1145,7 @@ class FinalSourceSnapshot:
     expectations: dict[str, str]
     values: dict[str, str]
     delta: tuple[tuple[str, str, str], ...]
+    technical_blobs: tuple[tuple[str, str, str], ...]
 
 
 def _ordered_marked_values(
@@ -1352,6 +1385,7 @@ def load_terminal_disposition(
 def _final_snapshot_grammar(
     values: dict[str, str],
     delta: tuple[tuple[str, str, str], ...],
+    technical_blobs: tuple[tuple[str, str, str], ...],
 ) -> Optional[str]:
     """Validate the closed scalar and delta grammar for v1.13.18."""
     exact = {
@@ -1372,7 +1406,12 @@ def _final_snapshot_grammar(
         "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE": "NOT_SATISFIED",
         "RETROSPECTIVE_PROCEDURAL_EXCEPTION": "NOT_GRANTED",
         "DELTA_SCHEMA": "coldkeep-v1-final-source-snapshot-delta/v1",
-        "DELTA_COUNT": "40",
+        "DELTA_COUNT": "51",
+        "TECHNICAL_COMPONENT_SCHEMA": (
+            "coldkeep-v1-final-source-snapshot-technical-blobs/v1"
+        ),
+        "TECHNICAL_COMPONENT_COUNT": "12",
+        "TECHNICAL_COMPONENT_SHA256": FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256,
         "STATUS": "STRUCTURAL_NON_AUTHORIZING",
     }
     for key, expected in exact.items():
@@ -1413,6 +1452,23 @@ def _final_snapshot_grammar(
             or any(part in ("", ".", "..") for part in relative.parts)
         ):
             return "delta path is non-canonical"
+    if technical_blobs != FINAL_SNAPSHOT_TECHNICAL_BLOBS:
+        return "technical component inventory is unsupported"
+    if len(technical_blobs) != int(values["TECHNICAL_COMPONENT_COUNT"]):
+        return "technical component count is invalid"
+    technical_serialization = "".join(
+        f"{mode} {blob} {path}\n" for mode, blob, path in technical_blobs
+    ).encode("utf-8")
+    if (
+        hashlib.sha256(technical_serialization).hexdigest()
+        != values["TECHNICAL_COMPONENT_SHA256"]
+    ):
+        return "technical component digest is invalid"
+    technical_paths = [path for _, _, path in technical_blobs]
+    if len(technical_paths) != len(set(technical_paths)):
+        return "technical component paths are duplicated"
+    if not set(technical_paths).issubset(paths):
+        return "technical component paths are outside the delta"
     return None
 
 
@@ -1489,7 +1545,51 @@ def load_final_source_snapshot(
             return None, "final snapshot reference invalid: delta row grammar is invalid"
         delta.append((match.group(1), match.group(2), match.group(3)))
     frozen_delta = tuple(delta)
-    grammar_detail = _final_snapshot_grammar(values, frozen_delta)
+    technical_start = (
+        "<!-- coldkeep-v1-final-source-snapshot-technical-blobs:start -->"
+    )
+    technical_end = (
+        "<!-- coldkeep-v1-final-source-snapshot-technical-blobs:end -->"
+    )
+    technical_starts = [
+        index for index, line in enumerate(lines) if line == technical_start
+    ]
+    technical_ends = [
+        index for index, line in enumerate(lines) if line == technical_end
+    ]
+    if (
+        len(technical_starts) != 1
+        or len(technical_ends) != 1
+        or technical_starts[0] >= technical_ends[0]
+    ):
+        return None, (
+            "final snapshot reference invalid: technical component marker "
+            "cardinality or order is invalid"
+        )
+    technical_start_index = technical_starts[0]
+    technical_end_index = technical_ends[0]
+    if (
+        lines[technical_start_index + 1 : technical_start_index + 2]
+        != ["```text"]
+        or lines[technical_end_index - 1 : technical_end_index] != ["```"]
+    ):
+        return None, (
+            "final snapshot reference invalid: technical component fence "
+            "placement is invalid"
+        )
+    technical_blobs: list[tuple[str, str, str]] = []
+    for line in lines[technical_start_index + 2 : technical_end_index - 1]:
+        match = re.fullmatch(r"(100644|100755) ([0-9a-f]{40}) (\S+)", line)
+        if match is None:
+            return None, (
+                "final snapshot reference invalid: technical component row "
+                "grammar is invalid"
+            )
+        technical_blobs.append((match.group(1), match.group(2), match.group(3)))
+    frozen_technical_blobs = tuple(technical_blobs)
+    grammar_detail = _final_snapshot_grammar(
+        values, frozen_delta, frozen_technical_blobs
+    )
     if grammar_detail:
         return None, f"final snapshot reference invalid: {grammar_detail}"
     for key in FINAL_SNAPSHOT_REFERENCE_KEYS:
@@ -1539,7 +1639,9 @@ def load_final_source_snapshot(
         or [line[5:] for line in headers if line.startswith("type ")] != ["commit"]
     ):
         return None, "final snapshot reference invalid: historical tag direct target disagrees"
-    return FinalSourceSnapshot(expectations, values, frozen_delta), None
+    return FinalSourceSnapshot(
+        expectations, values, frozen_delta, frozen_technical_blobs
+    ), None
 
 
 def _security_progression_grammar(
@@ -3529,6 +3631,26 @@ def _tree_inventory(root: Path, commit: str) -> Optional[dict[str, tuple[str, st
     return inventory
 
 
+def _tree_blob_inventory(root: Path, commit: str) -> Optional[dict[str, str]]:
+    """Return path to Git blob ID from one recursively listed commit tree."""
+    completed = run_git(root, ["ls-tree", "-r", "-z", commit], allow_failure=True)
+    if completed.returncode:
+        return None
+    inventory: dict[str, str] = {}
+    for record in completed.stdout.split("\0"):
+        if not record:
+            continue
+        match = re.fullmatch(r"[0-7]{6} ([a-z]+) ([0-9a-f]{40})\t(.+)", record)
+        if (
+            match is None
+            or match.group(1) != "blob"
+            or match.group(3) in inventory
+        ):
+            return None
+        inventory[match.group(3)] = match.group(2)
+    return inventory
+
+
 def final_snapshot_artifact(
     root: Path,
     head: str,
@@ -3584,7 +3706,8 @@ def final_snapshot_artifact(
         return False
     old_inventory = _tree_inventory(root, base)
     new_inventory = _tree_inventory(root, head)
-    if old_inventory is None or new_inventory is None:
+    new_blobs = _tree_blob_inventory(root, head)
+    if old_inventory is None or new_inventory is None or new_blobs is None:
         return False
     expected_by_path = {
         path: (status, mode) for status, mode, path in snapshot.delta
@@ -3596,6 +3719,13 @@ def final_snapshot_artifact(
         if expected_status == "M" and old_inventory.get(path) != (mode, "blob"):
             return False
         if expected_status == "A" and path in old_inventory:
+            return False
+    actual_paths = {path for _, path in actual}
+    for mode, blob, path in snapshot.technical_blobs:
+        if path in actual_paths and (
+            new_inventory.get(path) != (mode, "blob")
+            or new_blobs.get(path) != blob
+        ):
             return False
     return True
 

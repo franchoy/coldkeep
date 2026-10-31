@@ -2013,10 +2013,19 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
         for marker in (
             "v1.13.18", "v1.13.17", "v1.13.16", "v1.13.15",
             "source-only", "no custom assets", "qualified",
+            "github.com/klauspost/compress", "v1.20.2",
+            "advisory-specific verification", "deferred",
         ):
             with self.subTest(marker=marker):
+                mutated, substitutions = re.subn(
+                    re.escape(marker),
+                    "TEST_FIXTURE_ONLY",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                self.assertGreater(substitutions, 0)
                 violations = governance._v18_release_body_semantics(
-                    text.replace(marker, "TEST_FIXTURE_ONLY")
+                    mutated
                 )
                 self.assertEqual(
                     violations,

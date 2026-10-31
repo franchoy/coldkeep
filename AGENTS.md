@@ -26,11 +26,14 @@ V2_IMPLEMENTATION: NOT_STARTED
 
 - `v1.13.18` is the active final v1.x source-snapshot candidate. Phases 0-3 are
   complete and Phase 4 hosted certification is the next pending phase. The
-  current corrective successor still requires fresh independent exact-head
-  source review before any operational adoption or remote authorization. The
-  tracked state is
-  structural and non-authorizing; it claims no hosted certification, merge,
-  tag, publication, cleanup, or owner acceptance.
+  current governance-integrated successor combines Go 1.26.10 with the exact
+  accepted `github.com/klauspost/compress v1.20.2` ordinary component. C1's
+  ordinary preparation is closed component evidence; advisory-specific
+  verification remains deferred and is not waived. The exact combined tree
+  still requires fresh independent integration review before any operational
+  adoption or remote authorization. The tracked state is structural and
+  non-authorizing; it claims no hosted certification, merge, tag, publication,
+  cleanup, or owner acceptance.
 - `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
   Phase 9M and TS-READBACK-01 remain source-scoped qualified historical facts,
   including their recorded failed-attempt qualifications.
@@ -45,7 +48,7 @@ V2_IMPLEMENTATION: NOT_STARTED
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The v1.13.18 scope, 10-phase list, validation checklist, exact 40-path
+- The v1.13.18 scope, 10-phase list, validation checklist, exact 51-path
   cumulative allowlist, release state, snapshot reference, and release gate under
   `docs/release/v1.13/` are binding current authority.
 - Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
@@ -53,13 +56,15 @@ V2_IMPLEMENTATION: NOT_STARTED
 - The `immutable-transition-v1` projections and predecessor disposition are
   structural only. They do not certify hosted operations or authorize a push,
   PR, merge, tag, publication, closure, or v2 implementation.
-- The Go 1.26.10 and Agentlinter correction may modify only the exact 33 paths
-  named by its adopted manifest, producing the exact 40-path cumulative delta
-  from M, and must preserve every `v1.13.17-*` release document byte; stop, escalate and
+- The integrated candidate must produce the exact 51-path cumulative delta from
+  M and preserve the exact 12 technical component modes and Git blobs selected
+  by the snapshot reference. The only dependency exception is compress v1.20.2
+  with its exact sums, tests, generator, and persisted fixtures. It must
+  preserve every `v1.13.17-*` release document byte; stop, escalate and
   obtain separate explicit owner authorization before changing any additional
-  path. The four historical release branches and all their worktrees remain
-  untouched. No push, PR, merge, tag, Release, workflow dispatch, cleanup, or
-  v2 work is authorized.
+  path or technical byte. The four historical release branches and all their
+  worktrees remain untouched. No push, PR, merge, tag, Release, workflow
+  dispatch, cleanup, or v2 work is authorized.
 
 ## Correctness rules
 

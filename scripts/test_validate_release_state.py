@@ -12000,7 +12000,12 @@ class FinalSnapshotReferenceGovernanceTests(unittest.TestCase):
         snapshot = load_final_snapshot_for_test()
         self.assertEqual(snapshot.values["SOURCE_VERSION"], "1.13.18")
         self.assertEqual(snapshot.values["TOOLCHAIN"], "go1.26.10")
-        self.assertEqual(len(snapshot.delta), 40)
+        self.assertEqual(len(snapshot.delta), 51)
+        self.assertEqual(len(snapshot.technical_blobs), 12)
+        self.assertEqual(
+            snapshot.values["TECHNICAL_COMPONENT_SHA256"],
+            release_state_support.FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256,
+        )
 
     def test_stale_reference_digest_is_rejected(self) -> None:
         relative = Path(
@@ -12493,7 +12498,7 @@ class FinalSnapshotDeltaContractTests(unittest.TestCase):
         changed = (("A", first[1], first[2]),) + snapshot.delta[1:]
         self.assertNotEqual(changed, snapshot.delta)
         detail = release_state_support._final_snapshot_grammar(
-            snapshot.values, changed
+            snapshot.values, changed, snapshot.technical_blobs
         )
         self.assertEqual(detail, "delta inventory is unsupported")
 
@@ -12510,7 +12515,7 @@ class FinalSnapshotDeltaContractTests(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertNotEqual(changed, snapshot.delta)
                 detail = release_state_support._final_snapshot_grammar(
-                    snapshot.values, tuple(changed)
+                    snapshot.values, tuple(changed), snapshot.technical_blobs
                 )
                 self.assertEqual(detail, "delta inventory is unsupported")
 
@@ -12520,9 +12525,35 @@ class FinalSnapshotDeltaContractTests(unittest.TestCase):
         changed["TOOLCHAIN"] = "go1.26.9"
         self.assertNotEqual(changed, snapshot.values)
         self.assertEqual(
-            release_state_support._final_snapshot_grammar(changed, snapshot.delta),
+            release_state_support._final_snapshot_grammar(
+                changed, snapshot.delta, snapshot.technical_blobs
+            ),
             "TOOLCHAIN is unsupported",
         )
+
+    def test_technical_component_shape_mutations_are_rejected(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        first = snapshot.technical_blobs[0]
+        wrong_blob = "0" * 40
+        self.assertNotEqual(first[1], wrong_blob)
+        cases = {
+            "missing": snapshot.technical_blobs[1:],
+            "extra": snapshot.technical_blobs
+            + (("100644", wrong_blob, "TEST_FIXTURE_ONLY"),),
+            "duplicate": snapshot.technical_blobs + (first,),
+            "wrong-mode": (("100755", first[1], first[2]),)
+            + snapshot.technical_blobs[1:],
+            "wrong-blob": ((first[0], wrong_blob, first[2]),)
+            + snapshot.technical_blobs[1:],
+        }
+        for label, changed in cases.items():
+            with self.subTest(label=label):
+                detail = release_state_support._final_snapshot_grammar(
+                    snapshot.values, snapshot.delta, tuple(changed)
+                )
+                self.assertEqual(
+                    detail, "technical component inventory is unsupported"
+                )
 
     def test_committed_complete_inventory_accepts_git_tree_order(self) -> None:
         snapshot = load_final_snapshot_for_test()
@@ -12996,6 +13027,79 @@ class FinalSnapshotRealGitContextTests(unittest.TestCase):
         self.assert_snapshot_invalid(
             wrong_mode, branch="release/v1.13.18"
         )
+
+        self.checkout(self.candidate, branch="release/v1.13.18")
+        module_sum = self.root / "go.sum"
+        module_sum.unlink()
+        module_sum.symlink_to("go.mod")
+        git(self.root, "add", "go.sum")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY symlink")
+        symlink = run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        self.assertIsNone(
+            final_snapshot_candidate_from_runner_head_for_test(
+                self.root, symlink, self.snapshot
+            )
+        )
+        self.assert_snapshot_invalid(
+            symlink, branch="release/v1.13.18"
+        )
+
+    def test_dependency_and_checksum_drift_fail_closed(self) -> None:
+        cases = (
+            (
+                "other-compress-target",
+                "go.mod",
+                "github.com/klauspost/compress v1.20.2",
+                "github.com/klauspost/compress v1.20.3",
+            ),
+            (
+                "unrelated-dependency",
+                "go.mod",
+                "github.com/lib/pq v1.11.2",
+                "github.com/lib/pq v1.11.3",
+            ),
+            (
+                "replacement-directive",
+                "go.mod",
+                "require golang.org/x/sys v0.44.0\n",
+                "require golang.org/x/sys v0.44.0\n\n"
+                "replace github.com/klauspost/compress => "
+                "github.com/klauspost/compress v1.20.2\n",
+            ),
+            (
+                "checksum-drift",
+                "go.sum",
+                "h1:v5tiZvm1KGLyg5d5oXdXe3lsSPrbEUiKoXGia//I7Qo=",
+                "h1:05tiZvm1KGLyg5d5oXdXe3lsSPrbEUiKoXGia//I7Qo=",
+            ),
+        )
+        for label, relative, old, new in cases:
+            with self.subTest(label=label):
+                self.checkout(self.candidate, branch="release/v1.13.18")
+                target = self.root / relative
+                original = target.read_text(encoding="utf-8")
+                self.assertEqual(original.count(old), 1)
+                target.write_text(original.replace(old, new, 1), encoding="utf-8")
+                git(self.root, "add", relative)
+                git(self.root, "commit", "-m", f"TEST_FIXTURE_ONLY {label}")
+                changed = run_process(
+                    [
+                        resolved_executable("git"), "-C", str(self.root),
+                        "rev-parse", "HEAD",
+                    ],
+                    check=True,
+                ).stdout.strip()
+                self.assertIsNone(
+                    final_snapshot_candidate_from_runner_head_for_test(
+                        self.root, changed, self.snapshot
+                    )
+                )
+                self.assert_snapshot_invalid(
+                    changed, branch="release/v1.13.18"
+                )
 
     def test_wrong_tag_and_unsafe_tag_repository_state_fail_closed(self) -> None:
         self.checkout(self.synthetic)
