@@ -99,9 +99,13 @@ and Phase 4 hosted certification is Next. Candidate C's earlier wave passed CI
 and CodeQL but retained Codacy findings; exact E's separate wave failed the
 reachable-vulnerability jobs and retained three Codacy findings. The
 governance-integrated successor combines Go 1.26.10 with the exact accepted
-compress v1.20.2 ordinary component. It still requires independent exact-tree
-review, deferred advisory-specific verification, and later fresh hosted
-certification. No operational adoption or publication is claimed.
+compress v1.20.2 ordinary component. Bounded Route A direct verification on
+exact K/C2 completed all seven defined rows and was independently accepted,
+bound to evidence SHA-256
+`52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
+The coordinated reconciliation successor, its full local gates, independent
+exact-tree review, and later fresh hosted certification remain pending. No
+operational adoption or publication is claimed.
 v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
 and TS-READBACK-01 remain qualified
 historical anchors. Publication material is frozen. v1.13.16 is

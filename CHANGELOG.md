@@ -38,10 +38,14 @@ project, do not start here; start with [README.md](README.md).
   findings. The isolated E child combines the fixed toolchain with bounded
   Agentlinter wording corrections. The governance-integrated candidate adds the
   closed C1 ordinary component while keeping the closed
-  `3_NEXT`/`4_NEXT`/`5_NEXT` model at `4_NEXT`. It still requires independent
-  exact-tree review, deferred advisory-specific verification, and fresh hosted
-  certification. No operational adoption, merge, tag, Release, cleanup, or
-  owner publication acceptance is claimed.
+  `3_NEXT`/`4_NEXT`/`5_NEXT` model at `4_NEXT`. Bounded Route A verification on
+  exact K/C2 completed all seven defined rows and was independently accepted,
+  with evidence SHA-256
+  `52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
+  The coordinated reconciliation successor, its full local gates, independent
+  exact-tree review, and fresh hosted certification remain pending. No
+  operational adoption, merge, tag, Release, cleanup, or owner publication
+  acceptance is claimed.
 
 ## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 

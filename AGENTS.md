@@ -28,12 +28,16 @@ V2_IMPLEMENTATION: NOT_STARTED
   complete and Phase 4 hosted certification is the next pending phase. The
   current governance-integrated successor combines Go 1.26.10 with the exact
   accepted `github.com/klauspost/compress v1.20.2` ordinary component. C1's
-  ordinary preparation is closed component evidence; advisory-specific
-  verification remains deferred and is not waived. The exact combined tree
-  still requires fresh independent integration review before any operational
-  adoption or remote authorization. The tracked state is structural and
-  non-authorizing; it claims no hosted certification, merge, tag, publication,
-  cleanup, or owner acceptance.
+  ordinary preparation is closed component evidence. Bounded Route A direct
+  verification subsequently completed on K
+  `c69d678349edae59b1ee1d582fc2dbfd372ec133`, tree C2
+  `804f61238191e6dd93a3e85b27f291c95e84b14e`, and all seven defined rows were
+  independently accepted. The result is bound to evidence SHA-256
+  `52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
+  It does not certify the reconciled successor, hosted checks, merge, tag,
+  publication, cleanup, or owner acceptance. The coordinated local successor,
+  its full local gates, and fresh independent exact-tree review remain required
+  before operational adoption or remote authorization.
 - `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
   Phase 9M and TS-READBACK-01 remain source-scoped qualified historical facts,
   including their recorded failed-attempt qualifications.

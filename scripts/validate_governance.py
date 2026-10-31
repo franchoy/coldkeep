@@ -1077,14 +1077,39 @@ def _v18_release_body_identity(
 
 
 def _v18_release_body_semantics(text: str) -> list[str]:
-    """Require source-only semantics and reject future-state claims."""
+    """Require accepted Route A/source-only semantics and reject overclaims."""
     violations: list[str] = []
     normalized = " ".join(text.lower().split())
     for marker in (
         "v1.13.18", "v1.13.17", "v1.13.16", "v1.13.15",
         "source-only", "no custom assets", "qualified",
         "github.com/klauspost/compress", "v1.20.2",
-        "advisory-specific verification", "deferred",
+        "route a direct advisory-specific verification completed on 2026-10-31",
+        "all seven defined rows passed",
+        "c69d678349edae59b1ee1d582fc2dbfd372ec133",
+        "804f61238191e6dd93a3e85b27f291c95e84b14e",
+        "coldkeep_v1.13.18_route_a_owner_execution_evidence.zip",
+        "52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed",
+        "go 1.26.10 linux/amd64",
+        "disposable candidate copy",
+        "a separate verifier copy was retained for identity and preservation checks",
+        "one temporary test-only harness was added to each copy",
+        "a1 and a2 exercised coldkeep's public decompression path with a 4 mib expected-output setting",
+        "fixed huffman guard rejected the input",
+        "errdecompressionfailed",
+        "does not establish execution of the deeper fse path",
+        "a3 and a4 exercised coldkeep's bounded path with a 64 kib setting",
+        "errcompressionsizemismatch",
+        "legitimate decoder window limit",
+        "do not claim that the same huffman guard was reached",
+        "a5 and a6 were supplemental component checks",
+        "a7 passed the existing coldkeep output-overflow regression",
+        "coverage is limited to these seven defined rows",
+        "does not establish exhaustive advisory coverage",
+        "an exploitability conclusion",
+        "a general resource-usage guarantee",
+        "component checks are not coldkeep integration coverage",
+        "does not certify hosted checks",
     ):
         if marker not in normalized:
             violations.append(
@@ -1093,6 +1118,55 @@ def _v18_release_body_semantics(text: str) -> list[str]:
     for pattern in (
         r"\bR18\s+(?:is|=)", r"\bM18\s+(?:is|=)", r"\bA18\s+(?:is|=)",
         r"publication (?:is )?complete", r"phase 10 (?:is )?safe",
+        r"(?<!earlier )(?<!prior )(?<!historical )\b"
+        r"(?:(?:route a )?(?:direct(?: advisory-specific)?|advisory-specific) "
+        r"verification|advisory testing) (?:remains|is|was) (?:explicitly )?"
+        r"(?:deferred|not run|waived|incomplete)\b",
+        r"(?<!earlier )(?<!prior )(?<!historical )\broute a "
+        r"(?:remains|is|was) (?:deferred|not run|waived|incomplete)\b",
+        r"\ba(?:1|2)(?:\s+and\s+a[12])?\b[^.\n]{0,160}"
+        r"\b(?:reached|executed|exercised|established)\b[^.\n]{0,80}"
+        r"\b(?:deeper\s+)?fse\b",
+        r"\ba(?:3|4)(?:\s+and\s+a[34])?\b[^.\n]{0,160}"
+        r"\b(?:reached|executed|exercised|established)\b[^.\n]{0,80}"
+        r"\bhuffman guard\b",
+        r"\b(?:a(?:5|6)(?:\s+and\s+a[56])?|(?:supplemental )?component checks?)"
+        r"\s+(?:are|were|establish(?:es|ed)?|provide(?:s|d)?)\s+"
+        r"(?:coldkeep )?integration coverage\b",
+        r"\b(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
+        r"the seven defined rows|(?:all )?seven (?:defined )?rows) "
+        r"(?:establish(?:es|ed)?|provides?) exhaustive advisory coverage\b",
+        r"\b(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
+        r"the seven defined rows|(?:all )?seven (?:defined )?rows) "
+        r"(?:establish(?:es|ed)?|proves?) (?:an? )?"
+        r"exploitability (?:conclusion|result)\b",
+        r"\b(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
+        r"the seven defined rows|(?:all )?seven (?:defined )?rows) "
+        r"(?:establish(?:es|ed)?|provides?) (?:a )?"
+        r"general resource-usage guarantee\b",
+        r"\b(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
+        r"the seven defined rows|(?:all )?seven (?:defined )?rows) "
+        r"(?:certifies|certified|establishes) "
+        r"(?:hosted checks|windows|protected integration|tag creation|"
+        r"publication|owner acceptance)\b",
+        r"\ba(?:1|2)(?:\s+and\s+a[12])?\b[^.\n]{0,120}"
+        r"\b(?:returned|retained|produced|reported)\b[^.\n]{0,80}"
+        r"\berrcompressionsizemismatch\b",
+        r"\ba(?:3|4)(?:\s+and\s+a[34])?\b[^.\n]{0,120}"
+        r"\b(?:returned|retained|produced|reported)\b[^.\n]{0,80}"
+        r"\berrdecompressionfailed\b",
+        r"\ba(?:1|2)(?:\s+and\s+a[12])?\b[^.\n]{0,80}"
+        r"\b(?:used|uses|had|applied|ran with)\b[^.\n]{0,40}\b64 kib\b",
+        r"\ba(?:3|4)(?:\s+and\s+a[34])?\b[^.\n]{0,80}"
+        r"\b(?:used|uses|had|applied|ran with)\b[^.\n]{0,40}\b4 mib\b",
+        r"\bsource commit\s+`?(?!c69d678349edae59b1ee1d582fc2dbfd372ec133\b)"
+        r"[0-9a-f]{40}\b",
+        r"\btree\s+`?(?!804f61238191e6dd93a3e85b27f291c95e84b14e\b)"
+        r"[0-9a-f]{40}\b",
+        r"\bevidence sha-256\s+`?"
+        r"(?!52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed\b)"
+        r"[0-9a-f]{64}\b",
+        r"\bgo 1[.]26[.]10\s+(?!linux/amd64\b)[a-z0-9]+/[a-z0-9]+\b",
     ):
         if re.search(pattern, text, re.IGNORECASE):
             violations.append(

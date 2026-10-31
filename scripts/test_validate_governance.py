@@ -2014,7 +2014,6 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             "v1.13.18", "v1.13.17", "v1.13.16", "v1.13.15",
             "source-only", "no custom assets", "qualified",
             "github.com/klauspost/compress", "v1.20.2",
-            "advisory-specific verification", "deferred",
         ):
             with self.subTest(marker=marker):
                 mutated, substitutions = re.subn(
@@ -2027,9 +2026,17 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                 violations = governance._v18_release_body_semantics(
                     mutated
                 )
+                expected = [
+                    f"{governance.V18_RELEASE_BODY}: missing semantic marker {marker!r}"
+                ]
+                if marker == "v1.13.18":
+                    expected.append(
+                        f"{governance.V18_RELEASE_BODY}: missing semantic marker "
+                        + "'coldkeep_v1.13.18_route_a_owner_execution_evidence.zip'"
+                    )
                 self.assertEqual(
                     violations,
-                    [f"{governance.V18_RELEASE_BODY}: missing semantic marker {marker!r}"],
+                    expected,
                 )
         for assertion, pattern in (
             ("R18 is TEST_FIXTURE_ONLY", r"\bR18\s+(?:is|=)"),
@@ -2046,6 +2053,141 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                         + f"future assertion {pattern!r}"
                     ],
                 )
+
+    def test_v18_release_body_route_a_required_markers_fail_closed(self) -> None:
+        text = (governance.ROOT / governance.V18_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "route a direct advisory-specific verification completed on 2026-10-31",
+            "all seven defined rows passed",
+            "c69d678349edae59b1ee1d582fc2dbfd372ec133",
+            "804f61238191e6dd93a3e85b27f291c95e84b14e",
+            "coldkeep_v1.13.18_route_a_owner_execution_evidence.zip",
+            "52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed",
+            "go 1.26.10 linux/amd64",
+            "disposable candidate copy",
+            "a separate verifier copy was retained for identity and preservation checks",
+            "one temporary test-only harness was added to each copy",
+            "a1 and a2 exercised coldkeep's public decompression path with a 4 mib expected-output setting",
+            "fixed huffman guard rejected the input",
+            "errdecompressionfailed",
+            "does not establish execution of the deeper fse path",
+            "a3 and a4 exercised coldkeep's bounded path with a 64 kib setting",
+            "errcompressionsizemismatch",
+            "legitimate decoder window limit",
+            "do not claim that the same huffman guard was reached",
+            "a5 and a6 were supplemental component checks",
+            "a7 passed the existing coldkeep output-overflow regression",
+            "coverage is limited to these seven defined rows",
+            "does not establish exhaustive advisory coverage",
+            "an exploitability conclusion",
+            "a general resource-usage guarantee",
+            "component checks are not coldkeep integration coverage",
+            "does not certify hosted checks",
+        ):
+            with self.subTest(marker=marker):
+                flexible_marker = r"\s+".join(
+                    re.escape(part) for part in marker.split()
+                )
+                mutated, substitutions = re.subn(
+                    flexible_marker,
+                    "TEST_FIXTURE_ONLY",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                self.assertGreater(substitutions, 0)
+                self.assertEqual(
+                    governance._v18_release_body_semantics(mutated),
+                    [
+                        f"{governance.V18_RELEASE_BODY}: missing semantic "
+                        + f"marker {marker!r}"
+                    ],
+                )
+
+    def test_v18_release_body_rejects_route_a_coverage_overclaims(self) -> None:
+        text = (governance.ROOT / governance.V18_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
+        cases = (
+            "A1 and A2 reached deeper FSE.",
+            "A2 reached deeper FSE.",
+            "A3 and A4 reached the Huffman guard.",
+            "A4 reached the Huffman guard.",
+            "Component checks are Coldkeep integration coverage.",
+            "A5 establishes Coldkeep integration coverage.",
+            "A6 provides integration coverage.",
+            "Route A establishes exhaustive advisory coverage.",
+            "The seven defined rows establish exhaustive advisory coverage.",
+            "Direct verification proves an exploitability conclusion.",
+            "The seven defined rows provide a general resource-usage guarantee.",
+            "This verification certifies hosted checks.",
+            "Direct verification certifies Windows.",
+            "This direct result certifies publication.",
+            "A1 returned ErrCompressionSizeMismatch.",
+            "A4 returned ErrDecompressionFailed.",
+            "A2 used a 64 KiB bound.",
+            "A3 used a 4 MiB expected-output setting.",
+            "The source commit `0000000000000000000000000000000000000000` "
+            "supplied these results.",
+            "The tree `0000000000000000000000000000000000000000` supplied "
+            "these results.",
+            "The evidence SHA-256 "
+            "`0000000000000000000000000000000000000000000000000000000000000000` "
+            "is authoritative.",
+            "The run used Go 1.26.10 windows/amd64.",
+        )
+        prefix = (
+            f"{governance.V18_RELEASE_BODY}: contains forbidden future assertion "
+        )
+        for assertion in cases:
+            with self.subTest(assertion=assertion):
+                violations = governance._v18_release_body_semantics(
+                    text + assertion + "\n"
+                )
+                self.assertEqual(len(violations), 1)
+                self.assertTrue(violations[0].startswith(prefix))
+        for supported_negative in (
+            "A1 did not use a 64 KiB bound.",
+            "A3 did not use a 4 MiB expected-output setting.",
+            "A5 did not establish Coldkeep integration coverage.",
+        ):
+            with self.subTest(supported_negative=supported_negative):
+                self.assertEqual(
+                    governance._v18_release_body_semantics(
+                        text + supported_negative + "\n"
+                    ),
+                    [],
+                )
+
+    def test_v18_release_body_rejects_stale_route_a_status(self) -> None:
+        text = (governance.ROOT / governance.V18_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
+        cases = (
+            "Direct verification remains deferred.",
+            "Direct verification was not run.",
+            "Direct advisory-specific verification is waived.",
+            "Advisory-specific verification remains deferred.",
+            "Advisory testing remains deferred.",
+            "Route A is incomplete.",
+        )
+        prefix = (
+            f"{governance.V18_RELEASE_BODY}: contains forbidden future assertion "
+        )
+        for assertion in cases:
+            with self.subTest(assertion=assertion):
+                violations = governance._v18_release_body_semantics(
+                    text + assertion + "\n"
+                )
+                self.assertEqual(len(violations), 1)
+                self.assertTrue(violations[0].startswith(prefix))
+        self.assertEqual(
+            governance._v18_release_body_semantics(
+                text + "An earlier direct verification was incomplete.\n"
+            ),
+            [],
+        )
 
     def test_v18_authority_missing_state_returns_before_downstream_checks(self) -> None:
         expected = ["TEST_FIXTURE_ONLY: missing canonical state"]
