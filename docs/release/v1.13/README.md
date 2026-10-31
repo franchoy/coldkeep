@@ -103,15 +103,19 @@ compress v1.20.2 ordinary component. Bounded Route A direct verification on
 exact K/C2 completed all seven defined rows and was independently accepted,
 bound to evidence SHA-256
 `52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
-The coordinated reconciliation successor, its full local gates, independent
-exact-tree review, and later fresh hosted certification remain pending. No
-operational adoption or publication is claimed.
+Q passed its local gates and independent exact-tree review and was adopted
+and pushed. Its natural Wave A failed the push PostgreSQL cleanup contract
+and retained 21 Added Codacy issues; PR CI and both CodeQL contexts passed.
+The bounded recovery successor requires its own local, independent, and hosted
+certification. No Stage B, protected integration, or publication is claimed.
 v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
 and TS-READBACK-01 remain qualified
 historical anchors. Publication material is frozen. v1.13.16 is
 the immutable failed-publication predecessor; its tag certificate was withheld
 and no GitHub Release exists. The v1.13.17 successor-branch push and exact-N
-evidence are historical. The operational release branch and PR remain at H.
+evidence are historical. The last accepted Wave A readback binds the
+operational release branch and PR #124 to Q
+`dbd64d8faedef20ebe4198c7e019eb73e0a24e7f`; it does not certify a later head.
 No push, PR write, merge, tag, Release change, cleanup, or v2 work is authorized by this
 tracked state.
 

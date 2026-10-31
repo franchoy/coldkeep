@@ -287,6 +287,7 @@ FINAL_SNAPSHOT_DELTA = (
     ("M", "100644", "go.mod"),
     ("M", "100644", "go.sum"),
     ("M", "100644", "internal/fsx/secureinstall/install_linux_test.go"),
+    ("M", "100644", "internal/maintenance/gc_test.go"),
     ("A", "100644", "internal/storage/compress_dependency_compat_test.go"),
     ("M", "100644", "internal/storage/store_compression_feature_gate_test.go"),
     ("A", "100644", "internal/storage/testdata/compress_v1_18_fixture_generator/main.go"),
@@ -322,9 +323,10 @@ FINAL_SNAPSHOT_TECHNICAL_BLOBS = (
     ("100644", "df7f8bc786765a1deb67474173115726fad3691f", "go.mod"),
     ("100644", "708e6bbceeb03f68006731f3f5874f0d1d66b8ec", "go.sum"),
     ("100644", "855e06d0b7f7e41f28dd018722f5fc75456d77e6", "internal/fsx/secureinstall/install_linux_test.go"),
-    ("100644", "e70b8f6df41d8021122ca8718838650733e3064d", "internal/storage/compress_dependency_compat_test.go"),
+    ("100644", "212d7ebe3c676896f33f991d46e4267d70803c7c", "internal/maintenance/gc_test.go"),
+    ("100644", "dc451652ecbd80ced5566573e828845485e27866", "internal/storage/compress_dependency_compat_test.go"),
     ("100644", "daaefbb7f3fc46000097538664fbfc1698506a66", "internal/storage/store_compression_feature_gate_test.go"),
-    ("100644", "1a4dcfa031f5ca53399c3629f3e43e8fd54e0505", "internal/storage/testdata/compress_v1_18_fixture_generator/main.go"),
+    ("100644", "37c749b9113a0cfaaaab4e3eade46fcdcb41a13a", "internal/storage/testdata/compress_v1_18_fixture_generator/main.go"),
     ("100644", "6b7633b023c6a7901e859fe7562f6a6657035ad8", "internal/storage/testdata/compress_v1_18_persisted/catalog.db"),
     ("100644", "d04fc4a78454e830b8dc58525db8b315c0126554", "internal/storage/testdata/compress_v1_18_persisted/containers/container_1793435772583270848_62910933088749334.bin"),
     ("100644", "5f115eb2d59efbda5ba6a69b7164691a99d40a5a", "internal/storage/testdata/compress_v1_18_persisted/manifest.json"),
@@ -333,7 +335,7 @@ FINAL_SNAPSHOT_TECHNICAL_BLOBS = (
     ("100644", "c84785242dca6d7189f83db8af2801b77906ebef", "internal/storage/testdata/compress_v1_18_supplemental/manifest.json"),
 )
 FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256 = (
-    "e5518db09c8db79e8c327d415a450f602935ee16d78b6661517d76cf83a4b3e6"
+    "a2eecf45167225f5e2f3b9bf263e615ceeb0289eed5f5d0765e7bf28a47657f1"
 )
 SECURITY_PROGRESSION_V2_DELTA = (
     ("M", "100644", "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
@@ -1406,11 +1408,11 @@ def _final_snapshot_grammar(
         "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE": "NOT_SATISFIED",
         "RETROSPECTIVE_PROCEDURAL_EXCEPTION": "NOT_GRANTED",
         "DELTA_SCHEMA": "coldkeep-v1-final-source-snapshot-delta/v1",
-        "DELTA_COUNT": "51",
+        "DELTA_COUNT": "52",
         "TECHNICAL_COMPONENT_SCHEMA": (
             "coldkeep-v1-final-source-snapshot-technical-blobs/v1"
         ),
-        "TECHNICAL_COMPONENT_COUNT": "12",
+        "TECHNICAL_COMPONENT_COUNT": "13",
         "TECHNICAL_COMPONENT_SHA256": FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256,
         "STATUS": "STRUCTURAL_NON_AUTHORIZING",
     }

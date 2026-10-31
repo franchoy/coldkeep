@@ -1076,14 +1076,18 @@ def _v18_release_body_identity(
     return violations
 
 
-def _v18_release_body_semantics(text: str) -> list[str]:
-    """Require accepted Route A/source-only semantics and reject overclaims."""
-    violations: list[str] = []
-    normalized = " ".join(text.lower().split())
-    for marker in (
-        "v1.13.18", "v1.13.17", "v1.13.16", "v1.13.15",
-        "source-only", "no custom assets", "qualified",
-        "github.com/klauspost/compress", "v1.20.2",
+def _v18_release_body_markers() -> tuple[str, ...]:
+    """Keep the required evidence vocabulary separate from claim matching."""
+    return (
+        "v1.13.18",
+        "v1.13.17",
+        "v1.13.16",
+        "v1.13.15",
+        "source-only",
+        "no custom assets",
+        "qualified",
+        "github.com/klauspost/compress",
+        "v1.20.2",
         "route a direct advisory-specific verification completed on 2026-10-31",
         "all seven defined rows passed",
         "c69d678349edae59b1ee1d582fc2dbfd372ec133",
@@ -1110,39 +1114,12 @@ def _v18_release_body_semantics(text: str) -> list[str]:
         "a general resource-usage guarantee",
         "component checks are not coldkeep integration coverage",
         "does not certify hosted checks",
-    ):
-        if marker not in normalized:
-            violations.append(
-                f"{V18_RELEASE_BODY}: missing semantic marker {marker!r}"
-            )
-    # Matching uses the same folded whitespace as marker checks: wrapping a
-    # Markdown paragraph cannot change whether it makes a forbidden claim.
-    for pattern in (
-        r"\bR18\s+(?:is|=)", r"\bM18\s+(?:is|=)", r"\bA18\s+(?:is|=)",
-        r"publication (?:is )?complete", r"phase 10 (?:is )?safe",
-    ):
-        if re.search(pattern, normalized, re.IGNORECASE):
-            violations.append(
-                f"{V18_RELEASE_BODY}: contains forbidden future assertion {pattern!r}"
-            )
+    )
 
-    # Consume history with its assertion so matching cannot restart inside
-    # "earlier Route A direct verification" at the unqualified word "direct".
-    history = r"\b(?P<historical>(?:earlier|prior|historical)\s+)?"
-    verb = (
-        r"\s+(?:(?:has|have|had)\s+)?"
-        r"(?P<negated>(?:(?:did|does|do)\s+)?not\s+|never\s+)?"
-    )
-    # A match must not borrow its object from a later contrasting clause.
-    within_clause = r"(?:(?!\b(?:and|but|however|yet|a[1-7])\b)[^.;!?])"
-    direct_subject = (
-        r"(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
-        r"the seven defined rows|(?:all )?seven (?:defined )?rows)"
-    )
-    component_subject = (
-        r"(?:a(?:5|6)(?:\s+and\s+a[56])?|(?:supplemental )?component checks?)"
-    )
-    for pattern in (
+
+def _v18_status_and_path_claims(history: str, within_clause: str) -> tuple[str, ...]:
+    """Describe stale status and unsupported decoder-path assertions."""
+    return (
         history
         + r"(?:(?:route a )?(?:direct(?: advisory-specific)?|advisory-specific) "
         r"verification|advisory testing) (?:remains|is|was) (?:explicitly )?"
@@ -1157,6 +1134,23 @@ def _v18_release_body_semantics(text: str) -> list[str]:
         + r"(?P<row_prefix>" + within_clause + r"{0,160}?)\b"
         + r"(?:reach(?:ed)?|execute[sd]?|exercise[sd]?|establish(?:es|ed)?)\b"
         + within_clause + r"{0,80}\bhuffman guard\b",
+    )
+
+
+def _v18_coverage_claims(history: str) -> tuple[str, ...]:
+    """Describe component, coverage, and lifecycle overclaims."""
+    verb = (
+        r"\s+(?:(?:has|have|had)\s+)?"
+        r"(?P<negated>(?:(?:did|does|do)\s+)?not\s+|never\s+)?"
+    )
+    direct_subject = (
+        r"(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
+        r"the seven defined rows|(?:all )?seven (?:defined )?rows)"
+    )
+    component_subject = (
+        r"(?:a(?:5|6)(?:\s+and\s+a[56])?|(?:supplemental )?component checks?)"
+    )
+    return (
         history + component_subject
         + r"\s+(?:are|were)\s+(?P<negated>not\s+|never\s+)?"
         r"(?:coldkeep )?integration coverage\b",
@@ -1175,6 +1169,12 @@ def _v18_release_body_semantics(text: str) -> list[str]:
         + r"(?:certif(?:y|ies|ied)|establish(?:es|ed)?) "
         r"(?:hosted checks|windows|protected integration|tag creation|"
         r"publication|owner acceptance)\b",
+    )
+
+
+def _v18_row_result_claims(history: str, within_clause: str) -> tuple[str, ...]:
+    """Describe swapped row errors and output bounds."""
+    return (
         history + r"a(?:1|2)(?:\s+and\s+a[12])?\b"
         + r"(?P<row_prefix>" + within_clause + r"{0,120}?)\b"
         + r"(?:return(?:s|ed)?|retain(?:s|ed)?|produce[sd]?|report(?:s|ed)?)\b"
@@ -1191,6 +1191,12 @@ def _v18_release_body_semantics(text: str) -> list[str]:
         + r"(?P<row_prefix>" + within_clause + r"{0,80}?)\b"
         + r"(?:use[sd]?|had|applied|apply|ran with|run with)\b"
         + within_clause + r"{0,40}\b4 mib\b",
+    )
+
+
+def _v18_identity_claims() -> tuple[str, ...]:
+    """Reject contradictory source, evidence, or platform identities."""
+    return (
         r"\bsource commit\s+`?(?!c69d678349edae59b1ee1d582fc2dbfd372ec133\b)"
         r"[0-9a-f]{40}\b",
         r"\btree\s+`?(?!804f61238191e6dd93a3e85b27f291c95e84b14e\b)"
@@ -1199,18 +1205,55 @@ def _v18_release_body_semantics(text: str) -> list[str]:
         r"(?!52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed\b)"
         r"[0-9a-f]{64}\b",
         r"\bgo 1[.]26[.]10\s+(?!linux/amd64\b)[a-z0-9]+/[a-z0-9]+\b",
-    ):
-        # Exempt only this qualified assertion. A later positive assertion in
-        # the same sentence still has to be examined.
-        matches = re.finditer(pattern, normalized, re.IGNORECASE)
-        if any(
-            not (match.groupdict().get("historical") or match.groupdict().get("negated"))
-            and not re.search(
-                r"\b(?:not|never)\s+$",
-                match.groupdict().get("row_prefix") or "",
+    )
+
+
+def _v18_release_body_claim_patterns() -> tuple[str, ...]:
+    """Preserve the diagnostic order of the accepted semantic guard."""
+    # Consume history with its assertion, and keep objects in their clause.
+    history = r"\b(?P<historical>(?:earlier|prior|historical)\s+)?"
+    within_clause = r"(?:(?!\b(?:and|but|however|yet|a[1-7])\b)[^.;!?])"
+    return (
+        *_v18_status_and_path_claims(history, within_clause),
+        *_v18_coverage_claims(history),
+        *_v18_row_result_claims(history, within_clause),
+        *_v18_identity_claims(),
+    )
+
+
+def _v18_has_unqualified_claim(pattern: str, normalized: str) -> bool:
+    """Exempt only the matched qualified assertion, never a later claim."""
+    matches = re.finditer(pattern, normalized, re.IGNORECASE)
+    return any(
+        not (match.groupdict().get("historical") or match.groupdict().get("negated"))
+        and not re.search(
+            r"\b(?:not|never)\s+$",
+            match.groupdict().get("row_prefix") or "",
+        )
+        for match in matches
+    )
+
+
+def _v18_release_body_semantics(text: str) -> list[str]:
+    """Require accepted Route A/source-only semantics and reject overclaims."""
+    violations: list[str] = []
+    normalized = " ".join(text.lower().split())
+    for marker in _v18_release_body_markers():
+        if marker not in normalized:
+            violations.append(
+                f"{V18_RELEASE_BODY}: missing semantic marker {marker!r}"
             )
-            for match in matches
-        ):
+    # Fold whitespace so Markdown wrapping cannot change claim recognition.
+    for pattern in (
+        r"\bR18\s+(?:is|=)", r"\bM18\s+(?:is|=)", r"\bA18\s+(?:is|=)",
+        r"publication (?:is )?complete", r"phase 10 (?:is )?safe",
+    ):
+        if re.search(pattern, normalized, re.IGNORECASE):
+            violations.append(
+                f"{V18_RELEASE_BODY}: contains forbidden future assertion {pattern!r}"
+            )
+    for pattern in _v18_release_body_claim_patterns():
+        if _v18_has_unqualified_claim(pattern, normalized):
             violations.append(
                 f"{V18_RELEASE_BODY}: contains forbidden future assertion {pattern!r}"
             )

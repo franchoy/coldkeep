@@ -12000,8 +12000,8 @@ class FinalSnapshotReferenceGovernanceTests(unittest.TestCase):
         snapshot = load_final_snapshot_for_test()
         self.assertEqual(snapshot.values["SOURCE_VERSION"], "1.13.18")
         self.assertEqual(snapshot.values["TOOLCHAIN"], "go1.26.10")
-        self.assertEqual(len(snapshot.delta), 51)
-        self.assertEqual(len(snapshot.technical_blobs), 12)
+        self.assertEqual(len(snapshot.delta), 52)
+        self.assertEqual(len(snapshot.technical_blobs), 13)
         self.assertEqual(
             snapshot.values["TECHNICAL_COMPONENT_SHA256"],
             release_state_support.FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256,

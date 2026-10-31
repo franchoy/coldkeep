@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -46,18 +47,38 @@ type oldCompressFixtureManifest struct {
 // v1.18.0. The fixture contains only deterministic benign payloads. It covers
 // packed zstd blocks at levels 1, 3, and 9 in both plaintext and AES-GCM modes.
 func TestCompressV118PersistedRepositoryRestoresWithCurrentReader(t *testing.T) {
+	fixture := openCompatibilityRoot(t, "testdata/compress_v1_18_persisted")
+	manifest := readOldCompressManifest(t, fixture)
+	working := openCompatibilityRoot(t, t.TempDir())
+	copyCompatibilityFile(t, fixture, working, manifest.Catalog)
+	dbconn := openCompatibilityCatalog(t, working)
+	t.Setenv("COLDKEEP_KEY", manifest.AESKeyHex)
+	containersDir := filepath.Join(fixture.Name(), manifest.Containers)
+	for _, fixtureFile := range manifest.Files {
+		fixtureFile := fixtureFile
+		t.Run(fixtureFile.Name, func(t *testing.T) {
+			restored := restoreCompatibilityFile(t, dbconn, fixtureFile.FileID, containersDir)
+			assertCompatibilityPayload(t, restored, fixtureFile.PayloadSize, fixtureFile.PayloadSHA256, fixtureFile.FileHash)
+			assertOldWriterTransforms(t, dbconn, fixtureFile)
+			if err := verifypkg.VerifyFileStandardWithContainersDir(dbconn, int(fixtureFile.FileID), containersDir); err != nil {
+				t.Fatalf("verify old-writer file: %v", err)
+			}
+		})
+	}
+	if err := verifypkg.VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
+		t.Fatalf("verify old-writer repository: %v", err)
+	}
+}
+
+func readOldCompressManifest(t *testing.T, fixture *os.Root) oldCompressFixtureManifest {
+	t.Helper()
 	const (
 		fixtureSchema      = "coldkeep.compress-old-writer-fixture.v1"
 		writerCommit       = "550374d40d102bb5cbb5184799ef9b03fdaeefac"
 		oldCompressVersion = "v1.18.0"
 		oldCompressSum     = "h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo="
 	)
-
-	fixtureDir := filepath.Join("testdata", "compress_v1_18_persisted")
-	manifestBytes, err := os.ReadFile(filepath.Join(fixtureDir, "manifest.json"))
-	if err != nil {
-		t.Fatalf("read old-writer manifest: %v", err)
-	}
+	manifestBytes := readCompatibilityFile(t, fixture, "manifest.json")
 	var manifest oldCompressFixtureManifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatalf("parse old-writer manifest: %v", err)
@@ -71,11 +92,13 @@ func TestCompressV118PersistedRepositoryRestoresWithCurrentReader(t *testing.T) 
 	if len(manifest.Files) != 6 {
 		t.Fatalf("old-writer fixture file count: got %d want 6", len(manifest.Files))
 	}
+	assertCompatibilityLocations(t, manifest.Catalog, manifest.Containers)
+	return manifest
+}
 
-	workingDir := t.TempDir()
-	catalogPath := filepath.Join(workingDir, "catalog.db")
-	copyTestFile(t, filepath.Join(fixtureDir, manifest.Catalog), catalogPath)
-	dbconn, err := sql.Open("sqlite3", catalogPath)
+func openCompatibilityCatalog(t *testing.T, working *os.Root) *sql.DB {
+	t.Helper()
+	dbconn, err := sql.Open("sqlite3", filepath.Join(working.Name(), "catalog.db"))
 	if err != nil {
 		t.Fatalf("open copied old-writer catalog: %v", err)
 	}
@@ -83,36 +106,25 @@ func TestCompressV118PersistedRepositoryRestoresWithCurrentReader(t *testing.T) 
 	if err := db.RunMigrations(dbconn); err != nil {
 		t.Fatalf("open old-writer catalog with current migrations: %v", err)
 	}
+	return dbconn
+}
 
-	t.Setenv("COLDKEEP_KEY", manifest.AESKeyHex)
-	containersDir := filepath.Join(fixtureDir, manifest.Containers)
-	for _, fixtureFile := range manifest.Files {
-		fixtureFile := fixtureFile
-		t.Run(fixtureFile.Name, func(t *testing.T) {
-			outputPath := filepath.Join(workingDir, fixtureFile.Name+".restored")
-			if _, err := restoreFileWithDBAndDir(dbconn, fixtureFile.FileID, outputPath, containersDir, RestoreOptions{}); err != nil {
-				t.Fatalf("restore old-writer file %d: %v", fixtureFile.FileID, err)
-			}
-			restored, err := os.ReadFile(outputPath)
-			if err != nil {
-				t.Fatalf("read restored output: %v", err)
-			}
-			if len(restored) != fixtureFile.PayloadSize {
-				t.Fatalf("restored size: got %d want %d", len(restored), fixtureFile.PayloadSize)
-			}
-			sum := sha256.Sum256(restored)
-			gotSHA := hex.EncodeToString(sum[:])
-			if gotSHA != fixtureFile.PayloadSHA256 || gotSHA != fixtureFile.FileHash {
-				t.Fatalf("restored identity: got %s payload=%s file=%s", gotSHA, fixtureFile.PayloadSHA256, fixtureFile.FileHash)
-			}
-			assertOldWriterTransforms(t, dbconn, fixtureFile)
-			if err := verifypkg.VerifyFileStandardWithContainersDir(dbconn, int(fixtureFile.FileID), containersDir); err != nil {
-				t.Fatalf("verify old-writer file: %v", err)
-			}
-		})
+func restoreCompatibilityFile(t *testing.T, dbconn *sql.DB, fileID int64, containersDir string) []byte {
+	t.Helper()
+	output := openCompatibilityRoot(t, t.TempDir())
+	outputPath := filepath.Join(output.Name(), "restored.bin")
+	if _, err := restoreFileWithDBAndDir(dbconn, fileID, outputPath, containersDir, RestoreOptions{}); err != nil {
+		t.Fatalf("restore compatibility file %d: %v", fileID, err)
 	}
-	if err := verifypkg.VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
-		t.Fatalf("verify old-writer repository: %v", err)
+	return readCompatibilityFile(t, output, "restored.bin")
+}
+
+func assertCompatibilityPayload(t *testing.T, restored []byte, size int, payloadSHA, fileHash string) {
+	t.Helper()
+	sum := sha256.Sum256(restored)
+	gotSHA := hex.EncodeToString(sum[:])
+	if len(restored) != size || gotSHA != payloadSHA || gotSHA != fileHash {
+		t.Fatalf("restored identity: size=%d/%d sha=%s payload=%s file=%s", len(restored), size, gotSHA, payloadSHA, fileHash)
 	}
 }
 
@@ -138,17 +150,7 @@ func assertOldWriterTransforms(t *testing.T, dbconn *sql.DB, fixtureFile oldComp
 			t.Fatalf("scan old-writer transforms: %v", err)
 		}
 		count++
-		if storageCodec != fixtureFile.StorageCodec || compressionCodec != fixtureFile.CompressionCodec || compressionLevel != fixtureFile.CompressionLevel {
-			t.Fatalf(
-				"old-writer transforms: got storage=%q compression=%q level=%d want storage=%q compression=%q level=%d",
-				storageCodec,
-				compressionCodec,
-				compressionLevel,
-				fixtureFile.StorageCodec,
-				fixtureFile.CompressionCodec,
-				fixtureFile.CompressionLevel,
-			)
-		}
+		assertOldWriterTransform(t, fixtureFile, storageCodec, compressionCodec, compressionLevel)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate old-writer transforms: %v", err)
@@ -158,14 +160,45 @@ func assertOldWriterTransforms(t *testing.T, dbconn *sql.DB, fixtureFile oldComp
 	}
 }
 
-func copyTestFile(t *testing.T, source, destination string) {
+func assertOldWriterTransform(t *testing.T, fixtureFile oldCompressFixtureFile, storageCodec, compressionCodec string, compressionLevel int) {
 	t.Helper()
-	payload, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatalf("read fixture file %s: %v", source, err)
+	if storageCodec != fixtureFile.StorageCodec || compressionCodec != fixtureFile.CompressionCodec || compressionLevel != fixtureFile.CompressionLevel {
+		t.Fatalf("old-writer transforms: got storage=%q compression=%q level=%d want storage=%q compression=%q level=%d",
+			storageCodec, compressionCodec, compressionLevel,
+			fixtureFile.StorageCodec, fixtureFile.CompressionCodec, fixtureFile.CompressionLevel)
 	}
-	if err := os.WriteFile(destination, payload, 0o600); err != nil {
-		t.Fatalf("copy fixture file %s: %v", source, err)
+}
+
+func openCompatibilityRoot(t *testing.T, name string) *os.Root {
+	t.Helper()
+	root, err := os.OpenRoot(name)
+	if err != nil {
+		t.Fatalf("open compatibility root %s: %v", name, err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	return root
+}
+
+func readCompatibilityFile(t *testing.T, root *os.Root, name string) []byte {
+	t.Helper()
+	payload, err := root.ReadFile(name)
+	if err != nil {
+		t.Fatalf("read compatibility file %s: %v", name, err)
+	}
+	return payload
+}
+
+func copyCompatibilityFile(t *testing.T, source, destination *os.Root, name string) {
+	t.Helper()
+	if err := destination.WriteFile(name, readCompatibilityFile(t, source, name), 0o600); err != nil {
+		t.Fatalf("copy compatibility file %s: %v", name, err)
+	}
+}
+
+func assertCompatibilityLocations(t *testing.T, catalog, containers string) {
+	t.Helper()
+	if catalog != "catalog.db" || containers != "containers" {
+		t.Fatalf("unexpected compatibility locations: catalog=%q containers=%q", catalog, containers)
 	}
 }
 
@@ -203,18 +236,39 @@ type supplementalCompressManifest struct {
 // old-writer/new-reader matrix omitted by the original six-case fixture. The
 // fixture was written and closed by exact H before this candidate opens it.
 func TestCompressV118SupplementalRepositoryWithCurrentReader(t *testing.T) {
+	fixture := openCompatibilityRoot(t, "testdata/compress_v1_18_supplemental")
+	manifest := readSupplementalCompressManifest(t, fixture)
+	working := openCompatibilityRoot(t, t.TempDir())
+	copyCompatibilityFile(t, fixture, working, manifest.Catalog)
+	copyCompatibilityContainers(t, fixture, working)
+	dbconn := openCompatibilityCatalog(t, working)
+	containersDir := filepath.Join(working.Name(), manifest.Containers)
+	t.Setenv("COLDKEEP_KEY", manifest.AESKeyHex)
+	filesByID := make(map[string]supplementalCompressFile, len(manifest.Files))
+	for _, fixtureFile := range manifest.Files {
+		fixtureFile := fixtureFile
+		filesByID[fixtureFile.CaseID] = fixtureFile
+		t.Run("restore-"+fixtureFile.CaseID, func(t *testing.T) {
+			assertSupplementalRestore(t, dbconn, containersDir, fixtureFile)
+		})
+	}
+	if err := verifypkg.VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
+		t.Fatalf("verify supplemental old-writer repository: %v", err)
+	}
+	repeated := filesByID["compressible-zstd-plain-l1"]
+	context := assertCompatibilityReuse(t, dbconn, containersDir, repeated)
+	assertCompatibilityNewWrite(t, context, repeated.FileID)
+}
+
+func readSupplementalCompressManifest(t *testing.T, fixture *os.Root) supplementalCompressManifest {
+	t.Helper()
 	const (
 		fixtureSchema      = "coldkeep.compress-old-writer-fixture.v2"
 		writerCommit       = "550374d40d102bb5cbb5184799ef9b03fdaeefac"
 		oldCompressVersion = "v1.18.0"
 		oldCompressSum     = "h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo="
 	)
-
-	fixtureDir := filepath.Join("testdata", "compress_v1_18_supplemental")
-	manifestBytes, err := os.ReadFile(filepath.Join(fixtureDir, "manifest.json"))
-	if err != nil {
-		t.Fatalf("read supplemental manifest: %v", err)
-	}
+	manifestBytes := readCompatibilityFile(t, fixture, "manifest.json")
 	var manifest supplementalCompressManifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatalf("parse supplemental manifest: %v", err)
@@ -224,67 +278,47 @@ func TestCompressV118SupplementalRepositoryWithCurrentReader(t *testing.T) {
 		t.Fatalf("unexpected supplemental writer identity: schema=%q commit=%q compress=%q sum=%q", manifest.Schema, manifest.WriterCommit, manifest.CompressVersion, manifest.CompressModuleSum)
 	}
 	assertSupplementalManifestMatrix(t, manifest.Files)
+	assertCompatibilityLocations(t, manifest.Catalog, manifest.Containers)
+	return manifest
+}
 
-	workingRepo := filepath.Join(t.TempDir(), "old-writer-repository")
-	if err := os.MkdirAll(workingRepo, 0o700); err != nil {
-		t.Fatalf("create working repository: %v", err)
+func assertSupplementalRestore(t *testing.T, dbconn *sql.DB, containersDir string, fixtureFile supplementalCompressFile) {
+	t.Helper()
+	restored := restoreCompatibilityFile(t, dbconn, fixtureFile.FileID, containersDir)
+	assertCompatibilityPayload(t, restored, fixtureFile.PayloadSize, fixtureFile.PayloadSHA256, fixtureFile.FileHash)
+	actualTransforms, actualBlockCount := readSupplementalTransforms(t, dbconn, fixtureFile.FileID)
+	if !reflect.DeepEqual(actualTransforms, fixtureFile.Transforms) || actualBlockCount != fixtureFile.PackedBlocks {
+		t.Fatalf("persisted transforms: got=%+v blocks=%d want=%+v blocks=%d", actualTransforms, actualBlockCount, fixtureFile.Transforms, fixtureFile.PackedBlocks)
 	}
-	catalogPath := filepath.Join(workingRepo, manifest.Catalog)
-	copyTestFile(t, filepath.Join(fixtureDir, manifest.Catalog), catalogPath)
-	containersDir := filepath.Join(workingRepo, manifest.Containers)
-	copyTestDirectory(t, filepath.Join(fixtureDir, manifest.Containers), containersDir)
+	if err := verifypkg.VerifyFileStandardWithContainersDir(dbconn, int(fixtureFile.FileID), containersDir); err != nil {
+		t.Fatalf("verify supplemental old-writer file: %v", err)
+	}
+}
 
-	dbconn, err := sql.Open("sqlite3", catalogPath)
-	if err != nil {
-		t.Fatalf("open supplemental catalog: %v", err)
-	}
-	t.Cleanup(func() { _ = dbconn.Close() })
-	if err := db.RunMigrations(dbconn); err != nil {
-		t.Fatalf("open supplemental catalog with current migrations: %v", err)
-	}
-	t.Setenv("COLDKEEP_KEY", manifest.AESKeyHex)
+type compatibilityRowCounts struct {
+	logicalRefs int
+	chunks      int
+	blocks      int
+	refs        int
+}
 
-	filesByID := make(map[string]supplementalCompressFile, len(manifest.Files))
-	for _, fixtureFile := range manifest.Files {
-		fixtureFile := fixtureFile
-		filesByID[fixtureFile.CaseID] = fixtureFile
-		t.Run("restore-"+fixtureFile.CaseID, func(t *testing.T) {
-			outputPath := filepath.Join(t.TempDir(), fixtureFile.CaseID+".restored")
-			if _, err := restoreFileWithDBAndDir(dbconn, fixtureFile.FileID, outputPath, containersDir, RestoreOptions{}); err != nil {
-				t.Fatalf("restore supplemental file %d: %v", fixtureFile.FileID, err)
-			}
-			restored, err := os.ReadFile(outputPath)
-			if err != nil {
-				t.Fatalf("read restored output: %v", err)
-			}
-			sum := sha256.Sum256(restored)
-			gotSHA := hex.EncodeToString(sum[:])
-			if len(restored) != fixtureFile.PayloadSize || gotSHA != fixtureFile.PayloadSHA256 || gotSHA != fixtureFile.FileHash {
-				t.Fatalf("restored identity: size=%d/%d sha=%s payload=%s file=%s", len(restored), fixtureFile.PayloadSize, gotSHA, fixtureFile.PayloadSHA256, fixtureFile.FileHash)
-			}
-			actualTransforms, actualBlockCount := readSupplementalTransforms(t, dbconn, fixtureFile.FileID)
-			if !reflect.DeepEqual(actualTransforms, fixtureFile.Transforms) || actualBlockCount != fixtureFile.PackedBlocks {
-				t.Fatalf("persisted transforms: got=%+v blocks=%d want=%+v blocks=%d", actualTransforms, actualBlockCount, fixtureFile.Transforms, fixtureFile.PackedBlocks)
-			}
-			if err := verifypkg.VerifyFileStandardWithContainersDir(dbconn, int(fixtureFile.FileID), containersDir); err != nil {
-				t.Fatalf("verify supplemental old-writer file: %v", err)
-			}
-		})
+func readCompatibilityRowCounts(t *testing.T, dbconn *sql.DB, fileID int64) compatibilityRowCounts {
+	t.Helper()
+	var counts compatibilityRowCounts
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, fileID).Scan(&counts.logicalRefs); err != nil {
+		t.Fatalf("read repeated logical refcount: %v", err)
 	}
-	if err := verifypkg.VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
-		t.Fatalf("verify supplemental old-writer repository: %v", err)
-	}
+	countCompatibilityRows(t, dbconn, &counts.chunks, &counts.blocks, &counts.refs)
+	return counts
+}
 
-	repeated := filesByID["compressible-zstd-plain-l1"]
+func assertCompatibilityReuse(t *testing.T, dbconn *sql.DB, containersDir string, repeated supplementalCompressFile) StorageContext {
+	t.Helper()
 	repeatedPayload := compatibilityRepeatedPayload(repeated.CaseID, repeated.PayloadSize)
 	if got := sha256.Sum256(repeatedPayload); hex.EncodeToString(got[:]) != repeated.PayloadSHA256 {
 		t.Fatalf("recreated repeated payload identity mismatch")
 	}
-	var logicalRefBefore, chunkRowsBefore, blockRowsBefore, refsRowsBefore int
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, repeated.FileID).Scan(&logicalRefBefore); err != nil {
-		t.Fatalf("read repeated logical refcount: %v", err)
-	}
-	countCompatibilityRows(t, dbconn, &chunkRowsBefore, &blockRowsBefore, &refsRowsBefore)
+	before := readCompatibilityRowCounts(t, dbconn, repeated.FileID)
 	context := StorageContext{
 		DB:           dbconn,
 		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
@@ -302,15 +336,21 @@ func TestCompressV118SupplementalRepositoryWithCurrentReader(t *testing.T) {
 	if !repeatResult.AlreadyStored || repeatResult.FileID != repeated.FileID || repeatResult.FileHash != repeated.FileHash {
 		t.Fatalf("candidate repeat identity: %+v want file_id=%d hash=%s already_stored", repeatResult, repeated.FileID, repeated.FileHash)
 	}
-	var logicalRefAfter, chunkRowsAfter, blockRowsAfter, refsRowsAfter int
-	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, repeated.FileID).Scan(&logicalRefAfter); err != nil {
-		t.Fatalf("read repeated logical refcount after reuse: %v", err)
-	}
-	countCompatibilityRows(t, dbconn, &chunkRowsAfter, &blockRowsAfter, &refsRowsAfter)
-	if logicalRefAfter != logicalRefBefore+1 || chunkRowsAfter != chunkRowsBefore || blockRowsAfter != blockRowsBefore || refsRowsAfter != refsRowsBefore {
-		t.Fatalf("candidate reuse accounting: logical_refs=%d/%d chunks=%d/%d blocks=%d/%d refs=%d/%d", logicalRefBefore, logicalRefAfter, chunkRowsBefore, chunkRowsAfter, blockRowsBefore, blockRowsAfter, refsRowsBefore, refsRowsAfter)
-	}
+	after := readCompatibilityRowCounts(t, dbconn, repeated.FileID)
+	assertCompatibilityReuseCounts(t, before, after)
+	return context
+}
 
+func assertCompatibilityReuseCounts(t *testing.T, before, after compatibilityRowCounts) {
+	t.Helper()
+	if after.logicalRefs != before.logicalRefs+1 || after.chunks != before.chunks || after.blocks != before.blocks || after.refs != before.refs {
+		t.Fatalf("candidate reuse accounting: logical_refs=%d/%d chunks=%d/%d blocks=%d/%d refs=%d/%d", before.logicalRefs, after.logicalRefs, before.chunks, after.chunks, before.blocks, after.blocks, before.refs, after.refs)
+	}
+}
+
+func assertCompatibilityNewWrite(t *testing.T, context StorageContext, repeatedFileID int64) {
+	t.Helper()
+	dbconn, containersDir := context.DB, context.ContainerDir
 	setRepositoryCompressionForTest(t, dbconn, "zstd", 3)
 	newPayload := compatibilityRepeatedPayload("candidate-v1.20.2-new-write", 384<<10)
 	newPath := filepath.Join(t.TempDir(), "candidate-new.bin")
@@ -324,15 +364,11 @@ func TestCompressV118SupplementalRepositoryWithCurrentReader(t *testing.T) {
 	if newResult.AlreadyStored {
 		t.Fatal("candidate new input unexpectedly reported already stored")
 	}
-	newOutput := filepath.Join(t.TempDir(), "candidate-new.restored")
-	if _, err := restoreFileWithDBAndDir(dbconn, newResult.FileID, newOutput, containersDir, RestoreOptions{}); err != nil {
-		t.Fatalf("restore candidate new write: %v", err)
+	gotNew := restoreCompatibilityFile(t, dbconn, newResult.FileID, containersDir)
+	if !bytes.Equal(gotNew, newPayload) {
+		t.Fatal("candidate new-write roundtrip: restored bytes differ")
 	}
-	gotNew, err := os.ReadFile(newOutput)
-	if err != nil || !bytes.Equal(gotNew, newPayload) {
-		t.Fatalf("candidate new-write roundtrip: read_err=%v equal=%t", err, bytes.Equal(gotNew, newPayload))
-	}
-	if err := verifypkg.VerifyFileStandardWithContainersDir(dbconn, int(repeated.FileID), containersDir); err != nil {
+	if err := verifypkg.VerifyFileStandardWithContainersDir(dbconn, int(repeatedFileID), containersDir); err != nil {
 		t.Fatalf("verify reused old file after candidate writes: %v", err)
 	}
 	if err := verifypkg.VerifyFileStandardWithContainersDir(dbconn, int(newResult.FileID), containersDir); err != nil {
@@ -378,15 +414,17 @@ func TestCompressUpgradeGenuineLegacyOnlyReadPath(t *testing.T) {
 	}
 }
 
+type supplementalCompressExpectation struct {
+	size       int
+	kind       string
+	blocks     int
+	transforms []supplementalCompressTransform
+}
+
 func assertSupplementalManifestMatrix(t *testing.T, files []supplementalCompressFile) {
 	t.Helper()
 	level1, level3, level9 := 1, 3, 9
-	want := map[string]struct {
-		size       int
-		kind       string
-		blocks     int
-		transforms []supplementalCompressTransform
-	}{
+	want := map[string]supplementalCompressExpectation{
 		"empty-none-plain":           {0, "empty", 0, nil},
 		"tiny-zstd-plain-l1":         {4, "literal", 1, []supplementalCompressTransform{{"none", "none", nil, 1}}},
 		"small-none-aes":             {4 << 10, "deterministic-noise", 1, []supplementalCompressTransform{{"aes-gcm", "none", nil, 1}}},
@@ -405,9 +443,14 @@ func assertSupplementalManifestMatrix(t *testing.T, files []supplementalCompress
 			t.Fatalf("unexpected or duplicate supplemental case %q", file.CaseID)
 		}
 		seen[file.CaseID] = true
-		if file.PayloadSize != expected.size || file.PayloadKind != expected.kind || file.PackedBlocks != expected.blocks || !reflect.DeepEqual(file.Transforms, expected.transforms) {
-			t.Fatalf("supplemental case %q: got size=%d kind=%q blocks=%d transforms=%+v want size=%d kind=%q blocks=%d transforms=%+v", file.CaseID, file.PayloadSize, file.PayloadKind, file.PackedBlocks, file.Transforms, expected.size, expected.kind, expected.blocks, expected.transforms)
-		}
+		assertSupplementalCase(t, file, expected)
+	}
+}
+
+func assertSupplementalCase(t *testing.T, file supplementalCompressFile, expected supplementalCompressExpectation) {
+	t.Helper()
+	if file.PayloadSize != expected.size || file.PayloadKind != expected.kind || file.PackedBlocks != expected.blocks || !reflect.DeepEqual(file.Transforms, expected.transforms) {
+		t.Fatalf("supplemental case %q: got size=%d kind=%q blocks=%d transforms=%+v want size=%d kind=%q blocks=%d transforms=%+v", file.CaseID, file.PayloadSize, file.PayloadKind, file.PackedBlocks, file.Transforms, expected.size, expected.kind, expected.blocks, expected.transforms)
 	}
 }
 
@@ -469,19 +512,31 @@ func countCompatibilityRows(t *testing.T, dbconn *sql.DB, chunks, blocksCount, r
 	}
 }
 
-func copyTestDirectory(t *testing.T, source, destination string) {
+func copyCompatibilityContainers(t *testing.T, source, destination *os.Root) {
 	t.Helper()
-	if err := os.MkdirAll(destination, 0o700); err != nil {
+	if err := destination.Mkdir("containers", 0o700); err != nil {
 		t.Fatalf("create fixture copy directory: %v", err)
 	}
-	entries, err := os.ReadDir(source)
+	sourceContainers := openCompatibilitySubroot(t, source, "containers")
+	destinationContainers := openCompatibilitySubroot(t, destination, "containers")
+	entries, err := fs.ReadDir(sourceContainers.FS(), ".")
 	if err != nil {
-		t.Fatalf("read fixture directory %s: %v", source, err)
+		t.Fatalf("read fixture containers: %v", err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			t.Fatalf("unexpected non-regular fixture entry %s", entry.Name())
 		}
-		copyTestFile(t, filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name()))
+		copyCompatibilityFile(t, sourceContainers, destinationContainers, entry.Name())
 	}
+}
+
+func openCompatibilitySubroot(t *testing.T, root *os.Root, name string) *os.Root {
+	t.Helper()
+	subroot, err := root.OpenRoot(name)
+	if err != nil {
+		t.Fatalf("open compatibility subdirectory %s: %v", name, err)
+	}
+	t.Cleanup(func() { _ = subroot.Close() })
+	return subroot
 }

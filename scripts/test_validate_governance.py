@@ -2147,6 +2147,11 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                 )
                 self.assertEqual(len(violations), 1)
                 self.assertTrue(violations[0].startswith(prefix))
+
+    def test_v18_release_body_accepts_supported_row_negations(self) -> None:
+        text = (governance.ROOT / governance.V18_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
         for supported_negative in (
             "A1 did not use a 64 KiB bound.",
             "A3 did not use a 4 MiB expected-output setting.",

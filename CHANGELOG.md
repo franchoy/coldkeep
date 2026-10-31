@@ -31,7 +31,8 @@ project, do not start here; start with [README.md](README.md).
   updating the release-critical toolchain uniformly from Go 1.26.9 to 1.26.10
   for GO-2026-6809, without changing product behavior.
 - Adds a separate fail-closed final-source-snapshot selector bound to exact M,
-  the exact 51-path cumulative delta, all 12 technical modes/Git blobs, frozen
+  the selected exact 52-path cumulative delta, all 13 technical modes/Git
+  blobs, frozen
   v1.13.17 history, and non-authorizing branch/PR/main/tag simulations.
 - Candidate C's first hosted wave passed CI and CodeQL but did not clear Codacy;
   exact E's later wave failed its vulnerability jobs and retained three Codacy
@@ -42,10 +43,13 @@ project, do not start here; start with [README.md](README.md).
   exact K/C2 completed all seven defined rows and was independently accepted,
   with evidence SHA-256
   `52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
-  The coordinated reconciliation successor, its full local gates, independent
-  exact-tree review, and fresh hosted certification remain pending. No
-  operational adoption, merge, tag, Release, cleanup, or owner publication
-  acceptance is claimed.
+  Q passed local and independent review, was adopted and pushed, then failed
+  its natural Wave A push PostgreSQL cleanup contract and retained 21 Added
+  Codacy issues. PR CI and both CodeQL contexts passed. The bounded recovery
+  refactors only test/tool code and release validation, adds a deadline-bounded
+  test observation, and updates the exact scope bindings. Its own full local
+  gates, independent review, and hosted certification remain required. No
+  merge, tag, Release, cleanup, or owner publication acceptance is claimed.
 
 ## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 

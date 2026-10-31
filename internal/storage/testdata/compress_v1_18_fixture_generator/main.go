@@ -1,8 +1,10 @@
 // Command compress_v1_18_fixture_generator creates a benign persisted
 // repository using the dependency version in the checked-out module.
 //
-// It is retained with the fixture so the old-writer provenance can be audited.
-// The generated fixture contains deterministic test data only.
+// The accepted persisted fixtures and original exact-H generation evidence are
+// immutable. This maintained source includes later refactors; it is not the
+// byte-identical generator used for that historical run. Any new use requires
+// its own source-bound provenance review. The payloads are deterministic test data.
 package main
 
 import (
@@ -60,9 +62,42 @@ type fixtureManifest struct {
 	Files             []fixtureFile `json:"files"`
 }
 
+type fixtureCase struct {
+	id          string
+	payloadKind string
+	payload     []byte
+	codec       blocks.Codec
+	compression string
+	level       int
+}
+
 func main() {
+	outDir := requiredOutputDirectory()
+	version, sum := compressBuildIdentity()
+	if version != oldVersion {
+		fatalf("generator requires github.com/klauspost/compress %s, got %s", oldVersion, version)
+	}
+	output := createFixtureRoot(outDir)
+	defer func() { _ = output.Close() }()
+	inputDir, err := os.MkdirTemp("", "coldkeep-compress-v1-18-fixture-inputs-")
+	if err != nil {
+		fatalf("create temporary inputs: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(inputDir) }()
+	ctx := openFixtureRepository(output)
+	manifest := newFixtureManifest(version, sum)
+	for _, tc := range fixtureCases() {
+		manifest.Files = append(manifest.Files, storeFixtureCase(ctx, inputDir, tc))
+	}
+	if err := ctx.Close(); err != nil {
+		fatalf("close fixture repository: %v", err)
+	}
+	writeFixtureManifest(output, manifest)
+}
+
+func requiredOutputDirectory() string {
 	if len(os.Args) != 2 {
-		fatalf("usage: %s OUTPUT_DIRECTORY", os.Args[0])
+		fatalf("usage: %s OUTPUT_DIRECTORY (parent must exist)", os.Args[0])
 	}
 	outDir, err := filepath.Abs(os.Args[1])
 	if err != nil {
@@ -71,23 +106,33 @@ func main() {
 	if _, err := os.Lstat(outDir); !os.IsNotExist(err) {
 		fatalf("output path must not exist: %s", outDir)
 	}
+	return outDir
+}
 
-	version, sum := compressBuildIdentity()
-	if version != oldVersion {
-		fatalf("generator requires github.com/klauspost/compress %s, got %s", oldVersion, version)
-	}
-
-	containersDir := filepath.Join(outDir, "containers")
-	if err := os.MkdirAll(containersDir, 0o755); err != nil {
-		fatalf("create fixture directories: %v", err)
-	}
-	inputDir, err := os.MkdirTemp("", "coldkeep-compress-v1-18-fixture-inputs-")
+func createFixtureRoot(outDir string) *os.Root {
+	// Anchor creation in an existing parent; reserve the requested directory
+	// atomically and give only its owner traversal and read/write permission.
+	parent, err := os.OpenRoot(filepath.Dir(outDir))
 	if err != nil {
-		fatalf("create temporary inputs: %v", err)
+		fatalf("open output parent: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(inputDir) }()
+	defer func() { _ = parent.Close() }()
+	name := filepath.Base(outDir)
+	if err := parent.Mkdir(name, 0o700); err != nil {
+		fatalf("create fixture root: %v", err)
+	}
+	output, err := parent.OpenRoot(name)
+	if err != nil {
+		fatalf("open fixture root: %v", err)
+	}
+	if err := output.Mkdir("containers", 0o700); err != nil {
+		fatalf("create fixture containers: %v", err)
+	}
+	return output
+}
 
-	catalogPath := filepath.Join(outDir, "catalog.db")
+func openFixtureRepository(output *os.Root) storage.StorageContext {
+	catalogPath := filepath.Join(output.Name(), "catalog.db")
 	dbconn, err := sql.Open("sqlite3", catalogPath)
 	if err != nil {
 		fatalf("open fixture catalog: %v", err)
@@ -95,7 +140,7 @@ func main() {
 	if err := db.RunMigrations(dbconn); err != nil {
 		fatalf("migrate fixture catalog: %v", err)
 	}
-
+	containersDir := filepath.Join(output.Name(), "containers")
 	ctx := storage.StorageContext{
 		DB:           dbconn,
 		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
@@ -104,15 +149,11 @@ func main() {
 	if err := os.Setenv("COLDKEEP_KEY", testKeyHex); err != nil {
 		fatalf("set fixture encryption key: %v", err)
 	}
+	return ctx
+}
 
-	cases := []struct {
-		id          string
-		payloadKind string
-		payload     []byte
-		codec       blocks.Codec
-		compression string
-		level       int
-	}{
+func fixtureCases() []fixtureCase {
+	return []fixtureCase{
 		{id: "empty-none-plain", payloadKind: "empty", payload: []byte{}, codec: blocks.CodecPlain, compression: "none"},
 		{id: "tiny-zstd-plain-l1", payloadKind: "literal", payload: []byte("tiny"), codec: blocks.CodecPlain, compression: "zstd", level: 1},
 		{id: "small-none-aes", payloadKind: "deterministic-noise", payload: deterministicNoise(4 << 10), codec: blocks.CodecAESGCM, compression: "none"},
@@ -122,7 +163,13 @@ func main() {
 		{id: "multi-packed-zstd-plain-l3", payloadKind: "structured-compressible", payload: structuredCompressiblePayload(3 << 20), codec: blocks.CodecPlain, compression: "zstd", level: 3},
 	}
 
-	manifest := fixtureManifest{
+}
+
+// WriterCommit below names the expected historical writer for this template;
+// it is not a runtime attestation. A future generation must independently prove
+// that source binding or revise the manifest claim before its output is accepted.
+func newFixtureManifest(version, sum string) fixtureManifest {
+	return fixtureManifest{
 		Schema:            fixtureSchema,
 		WriterCommit:      "550374d40d102bb5cbb5184799ef9b03fdaeefac",
 		GoVersion:         runtime.Version(),
@@ -133,44 +180,44 @@ func main() {
 		Containers:        "containers",
 	}
 
-	for _, tc := range cases {
-		if err := setCompression(dbconn, tc.compression, tc.level); err != nil {
-			fatalf("configure %s: %v", tc.id, err)
-		}
-		inputPath := filepath.Join(inputDir, tc.id+".bin")
-		if err := os.WriteFile(inputPath, tc.payload, 0o600); err != nil {
-			fatalf("write %s input: %v", tc.id, err)
-		}
-		result, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inputPath, tc.codec)
-		if err != nil {
-			fatalf("store %s: %v", tc.id, err)
-		}
-		transforms, packedBlocks, err := storedTransforms(dbconn, result.FileID)
-		if err != nil {
-			fatalf("inspect %s transforms: %v", tc.id, err)
-		}
-		sum := sha256.Sum256(tc.payload)
-		manifest.Files = append(manifest.Files, fixtureFile{
-			CaseID:        tc.id,
-			PayloadKind:   tc.payloadKind,
-			FileID:        result.FileID,
-			FileHash:      result.FileHash,
-			PayloadSHA256: hex.EncodeToString(sum[:]),
-			PayloadSize:   len(tc.payload),
-			PackedBlocks:  packedBlocks,
-			Transforms:    transforms,
-		})
-	}
+}
 
-	if err := ctx.Close(); err != nil {
-		fatalf("close fixture repository: %v", err)
+func storeFixtureCase(ctx storage.StorageContext, inputDir string, tc fixtureCase) fixtureFile {
+	if err := setCompression(ctx.DB, tc.compression, tc.level); err != nil {
+		fatalf("configure %s: %v", tc.id, err)
 	}
+	inputPath := filepath.Join(inputDir, tc.id+".bin")
+	if err := os.WriteFile(inputPath, tc.payload, 0o600); err != nil {
+		fatalf("write %s input: %v", tc.id, err)
+	}
+	result, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inputPath, tc.codec)
+	if err != nil {
+		fatalf("store %s: %v", tc.id, err)
+	}
+	transforms, packedBlocks, err := storedTransforms(ctx.DB, result.FileID)
+	if err != nil {
+		fatalf("inspect %s transforms: %v", tc.id, err)
+	}
+	sum := sha256.Sum256(tc.payload)
+	return fixtureFile{
+		CaseID:        tc.id,
+		PayloadKind:   tc.payloadKind,
+		FileID:        result.FileID,
+		FileHash:      result.FileHash,
+		PayloadSHA256: hex.EncodeToString(sum[:]),
+		PayloadSize:   len(tc.payload),
+		PackedBlocks:  packedBlocks,
+		Transforms:    transforms,
+	}
+}
+
+func writeFixtureManifest(output *os.Root, manifest fixtureManifest) {
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		fatalf("encode manifest: %v", err)
 	}
 	manifestBytes = append(manifestBytes, '\n')
-	if err := os.WriteFile(filepath.Join(outDir, "manifest.json"), manifestBytes, 0o644); err != nil {
+	if err := output.WriteFile("manifest.json", manifestBytes, 0o600); err != nil {
 		fatalf("write manifest: %v", err)
 	}
 }

@@ -32,12 +32,15 @@ V2_IMPLEMENTATION: NOT_STARTED
   verification subsequently completed on K
   `c69d678349edae59b1ee1d582fc2dbfd372ec133`, tree C2
   `804f61238191e6dd93a3e85b27f291c95e84b14e`, and all seven defined rows were
-  independently accepted. The result is bound to evidence SHA-256
+  independently accepted. Secure Hash Algorithm (SHA) identifies the digest
+  family; the result is bound to evidence SHA-256
   `52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
   It does not certify the reconciled successor, hosted checks, merge, tag,
-  publication, cleanup, or owner acceptance. The coordinated local successor,
-  its full local gates, and fresh independent exact-tree review remain required
-  before operational adoption or remote authorization.
+  publication, cleanup, or owner acceptance. Q passed local and independent
+  review and was adopted and pushed, but its natural Wave A retained the push
+  PostgreSQL cleanup failure and 21 Added Codacy issues. The bounded recovery
+  requires its own full local gates, independent exact-tree review, and fresh
+  hosted evidence before any later release stage.
 - `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
   Phase 9M and TS-READBACK-01 remain source-scoped qualified historical facts,
   including their recorded failed-attempt qualifications.
@@ -52,7 +55,7 @@ V2_IMPLEMENTATION: NOT_STARTED
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The v1.13.18 scope, 10-phase list, validation checklist, exact 51-path
+- The v1.13.18 scope, 10-phase list, validation checklist, exact 52-path
   cumulative allowlist, release state, snapshot reference, and release gate under
   `docs/release/v1.13/` are binding current authority.
 - Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
@@ -60,10 +63,13 @@ V2_IMPLEMENTATION: NOT_STARTED
 - The `immutable-transition-v1` projections and predecessor disposition are
   structural only. They do not certify hosted operations or authorize a push,
   PR, merge, tag, publication, closure, or v2 implementation.
-- The integrated candidate must produce the exact 51-path cumulative delta from
-  M and preserve the exact 12 technical component modes and Git blobs selected
+- The integrated candidate must produce the exact 52-path cumulative delta from
+  M and preserve the exact 13 technical component modes and Git blobs selected
   by the snapshot reference. The only dependency exception is compress v1.20.2
-  with its exact sums, tests, generator, and persisted fixtures. It must
+  with its exact sums and persisted fixtures. The bounded Wave A recovery
+  renews only the compatibility-test and generator blobs and adds the exact
+  PostgreSQL observer-test blob; ten prior technical tuples stay unchanged.
+  Its test/tool changes require fresh local and hosted evidence. It must
   preserve every `v1.13.17-*` release document byte; stop, escalate and
   obtain separate explicit owner authorization before changing any additional
   path or technical byte. The four historical release branches and all their
