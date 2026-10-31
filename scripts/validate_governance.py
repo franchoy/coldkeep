@@ -10,6 +10,7 @@ import sys
 
 from release_state_support import (
     Document,
+    load_final_source_snapshot,
     load_security_toolchain_progression,
     load_terminal_disposition,
 )
@@ -103,6 +104,74 @@ CANONICAL_ONLY_STATE_KEYS = (
 )
 CURRENT_STATE_MIRROR_START = "<!-- coldkeep-current-state:start -->"
 CURRENT_STATE_MIRROR_END = "<!-- coldkeep-current-state:end -->"
+
+V18_CANONICAL_CURRENT_STATE_FILE = Path(
+    "docs/release/v1.13/v1.13.18-release-state.md"
+)
+V18_CONTRACT_FILE = Path(
+    "docs/release/v1.13/v1.13.18-release-state-validator-contract.md"
+)
+V18_REFERENCE_FILE = Path(
+    "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+)
+V18_PHASE_FILE = Path("docs/release/v1.13/v1.13.18-phase-list.md")
+V18_RELEASE_BODY = Path("docs/release/v1.13/v1.13.18-release-body.md")
+V18_RELEASE_BODY_CHECKSUM = Path(
+    "docs/release/v1.13/v1.13.18-release-body.sha256"
+)
+V18_AUTHORITY_FILES = tuple(
+    Path(f"docs/release/v1.13/v1.13.18-{suffix}.md")
+    for suffix in (
+        "final-source-snapshot-reference",
+        "phase-list",
+        "release-body",
+        "release-gate",
+        "release-state-validator-contract",
+        "release-state",
+        "release-train-reconciliation",
+        "scope",
+        "source-test-allowlist",
+        "validation-checklist",
+    )
+) + (V18_RELEASE_BODY_CHECKSUM,)
+V18_MIRROR_KEYS = (
+    "SOURCE_VERSION",
+    "RELEASE_ROUTE",
+    "CURRENT_PHASE",
+    "TRACKED_PUBLICATION_MATERIAL",
+    "V1_13_15_STATE",
+    "V1_13_16_STATE",
+    "V1_13_17_STATE",
+    "V1_13_18_STATE",
+    "CK-V11316-007",
+    "FINDINGS_CONFIRMED",
+    "FINDINGS_CLOSED",
+    "V1_X_TECHNICAL_CORRECTNESS",
+    "V1_X_FULL_CLOSURE",
+    "V1_13_18_PUBLICATION",
+    "V2_IMPLEMENTATION",
+)
+V18_CANONICAL_ONLY_KEYS = (
+    "RELEASE_BODY_SHA256",
+    "FINAL_SOURCE_SNAPSHOT_SCHEMA",
+    "FINAL_SOURCE_SNAPSHOT_REFERENCE",
+)
+V18_ALLOWED_NEXT_PHASES = (3, 4, 5)
+V11317_FROZEN_SHA256 = {
+    Path("docs/release/v1.13/v1.13.17-phase-list.md"): "0b37a14229792b2edd305cea086c743b2fee5c48494080ae1b67d431968bcb73",
+    Path("docs/release/v1.13/v1.13.17-predecessor-disposition.md"): "60ccc892017cc48b9924284f08d97b32b186f169206d5d05ba3dea26fceabbc8",
+    Path("docs/release/v1.13/v1.13.17-release-body.md"): "374cc16207ba5569701f38a303a07906aa64f0afd47dcf4f2455fb25434f7302",
+    Path("docs/release/v1.13/v1.13.17-release-body.sha256"): "8c313d242a82ed7dd76d6c0b72ae182ec5d30889790894d4defcd3e8e5d5f789",
+    Path("docs/release/v1.13/v1.13.17-release-gate.md"): "328c97263c4a68dc542beaabab1dea389c24b8ab17b1a549091baeb3c1e5ae97",
+    Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"): "4c2e5f1b1af9d5e535099bdadc3e8f0101791d3a625825b4fc35ad950d3dfdfc",
+    Path("docs/release/v1.13/v1.13.17-release-state.md"): "735ed9ea28b0cd8d73c4b83fbf9e32bdacbdabc33e899f904a050c70553c1ec7",
+    Path("docs/release/v1.13/v1.13.17-release-train-reconciliation.md"): "44df5d0b5173b14cef8cf5bc85633d395d97a4f156bdc396f755e3849800b36a",
+    Path("docs/release/v1.13/v1.13.17-scope.md"): "2f818a1c053a1be89cecd5e45fb49a69664cb21027c3cd4f5033dc8a0b37bb36",
+    Path("docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md"): "5e44f67721ef919048364b021ade92c32a36cc2bb870cc2a0b7a39aef41cc06f",
+    Path("docs/release/v1.13/v1.13.17-source-test-allowlist.md"): "f14becb0c5145ccff801a63cb1fa01407ba3db92dda1772ef4ba9c4762ee27cd",
+    Path("docs/release/v1.13/v1.13.17-terminal-disposition-reference.md"): "640460b681215dd645690f15500fb8ca2c08b5bc122d69acdf591d61a7fefc64",
+    Path("docs/release/v1.13/v1.13.17-validation-checklist.md"): "c8326f65e18e7e922ddee1ad442240097e6b40ed01e45f982d7e3153dafd1acd",
+}
 
 
 def classify_path(path: Path) -> str:
@@ -722,8 +791,394 @@ def validate_release_body(root: Path = ROOT) -> list[str]:
     return violations
 
 
+def _v18_selected(root: Path) -> bool:
+    """Return whether the repository declares the isolated v1.13.18 route."""
+    version_path = root / "internal/version/version.go"
+    state_path = root / V18_CANONICAL_CURRENT_STATE_FILE
+    if not version_path.is_file() or version_path.is_symlink():
+        return False
+    try:
+        version_text = version_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return False
+    return bool(
+        state_path.is_file()
+        and not state_path.is_symlink()
+        and re.search(r"(?m)^\s*Patch\s*=\s*18\s*$", version_text)
+    )
+
+
+def _v18_canonical_state(
+    text: str,
+) -> tuple[dict[str, str], list[str]]:
+    """Parse the exact v1.13.18 canonical current-state vocabulary."""
+    preamble = re.split(r"(?m)^##\s+", text, maxsplit=1)[0]
+    blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", preamble)
+    if len(blocks) != 1:
+        message = (
+            f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical preamble requires "
+            f"exactly one fenced text block, found {len(blocks)}"
+        )
+        return {}, [message]
+    required = V18_MIRROR_KEYS + V18_CANONICAL_ONLY_KEYS
+    state, violations = parse_state_lines(
+        V18_CANONICAL_CURRENT_STATE_FILE,
+        blocks[0],
+        required,
+        "canonical current-state block",
+    )
+    violations.extend(_v18_fixed_value_violations(state))
+    violations.extend(_v18_phase_and_digest_violations(state))
+    violations.extend(_v18_canonical_key_violations(blocks[0], required))
+    return state, violations
+
+
+def _v18_fixed_value_violations(state: dict[str, str]) -> list[str]:
+    """Return ordered violations for fixed canonical v1.13.18 values."""
+    expected = {
+        "SOURCE_VERSION": "1.13.18",
+        "RELEASE_ROUTE": "FINAL_V1_SOURCE_SNAPSHOT",
+        "TRACKED_PUBLICATION_MATERIAL": "FROZEN",
+        "V1_13_15_STATE": "PUBLISHED_STABLE_IMMUTABLE",
+        "V1_13_16_STATE": "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
+        "V1_13_17_STATE": "PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED",
+        "V1_13_18_STATE": "ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE",
+        "CK-V11316-007": "CLOSED_AT_V1.13.16_SOURCE_SCOPE",
+        "FINDINGS_CONFIRMED": "15",
+        "FINDINGS_CLOSED": "15/15",
+        "V1_X_TECHNICAL_CORRECTNESS": "ESTABLISHED",
+        "V1_X_FULL_CLOSURE": "ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED",
+        "V1_13_18_PUBLICATION": "NOT_PUBLISHED",
+        "V2_IMPLEMENTATION": "NOT_STARTED",
+        "FINAL_SOURCE_SNAPSHOT_SCHEMA": "coldkeep-v1-final-source-snapshot-selection/v1",
+        "FINAL_SOURCE_SNAPSHOT_REFERENCE": V18_REFERENCE_FILE.as_posix(),
+    }
+    violations: list[str] = []
+    for key, value in expected.items():
+        if state.get(key) != value:
+            violations.append(
+                f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical {key}="
+                f"{state.get(key)!r} does not match {value!r}"
+            )
+    return violations
+
+
+def _v18_phase_and_digest_violations(state: dict[str, str]) -> list[str]:
+    """Validate the closed lifecycle phase and frozen-body digest shape."""
+    violations: list[str] = []
+    allowed_phases = {
+        f"{number}_NEXT" for number in V18_ALLOWED_NEXT_PHASES
+    }
+    if state.get("CURRENT_PHASE") not in allowed_phases:
+        violations.append(
+            f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical CURRENT_PHASE="
+            f"{state.get('CURRENT_PHASE')!r} is outside the closed "
+            "3_NEXT/4_NEXT/5_NEXT lifecycle"
+        )
+    digest = state.get("RELEASE_BODY_SHA256", "")
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        violations.append(
+            f"{V18_CANONICAL_CURRENT_STATE_FILE}: FROZEN publication material "
+            "requires a lowercase SHA-256"
+        )
+    return violations
+
+
+def _v18_canonical_key_violations(
+    block: str, required: tuple[str, ...]
+) -> list[str]:
+    """Reject extra or absent finding keys after required-key parsing."""
+    violations: list[str] = []
+    finding_keys = {f"CK-V11316-{number:03d}" for number in range(1, 16)}
+    present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", block))
+    allowed = set(required) | finding_keys
+    extras = sorted(present - allowed)
+    missing_findings = sorted(finding_keys - present)
+    if extras:
+        violations.append(
+            f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical current-state block "
+            f"has extra keys {extras}"
+        )
+    if missing_findings:
+        violations.append(
+            f"{V18_CANONICAL_CURRENT_STATE_FILE}: canonical finding rows are "
+            f"missing {missing_findings}"
+        )
+    return violations
+
+
+def _v18_mirror(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
+    """Parse one exact v1.13.18 live-state mirror."""
+    starts = text.count(CURRENT_STATE_MIRROR_START)
+    ends = text.count(CURRENT_STATE_MIRROR_END)
+    if starts != 1 or ends != 1:
+        message = (
+            f"{path}: requires exactly one current-state mirror, found "
+            f"{starts} start and {ends} end delimiters"
+        )
+        return {}, [message]
+    body = text.split(CURRENT_STATE_MIRROR_START, 1)[1].split(
+        CURRENT_STATE_MIRROR_END, 1
+    )[0]
+    blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", body)
+    if len(blocks) != 1:
+        return {}, [
+            f"{path}: current-state mirror requires exactly one fenced text block, "
+            f"found {len(blocks)}"
+        ]
+    state, violations = parse_state_lines(
+        path, blocks[0], V18_MIRROR_KEYS, "current-state mirror"
+    )
+    present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", blocks[0]))
+    extras = sorted(present - set(V18_MIRROR_KEYS))
+    if extras:
+        violations.append(f"{path}: current-state mirror has extra keys {extras}")
+    return state, violations
+
+
+def _v18_phase_progression_violations(
+    text: str,
+    current_phase: str,
+) -> list[str]:
+    """Require one exact Phase 3, 4, or 5 Next progression."""
+    phase_rows = re.findall(
+        r"(?ms)^## Phase (\d+)\b.*?^\*\*Status:\*\*\s*(Complete|Next|Not started)\s*$",
+        text,
+    )
+    allowed = {
+        f"{number}_NEXT": number for number in V18_ALLOWED_NEXT_PHASES
+    }
+    expected_next = allowed.get(current_phase)
+    expected_rows = (
+        [
+            (
+                str(number),
+                "Complete"
+                if number < expected_next
+                else "Next"
+                if number == expected_next
+                else "Not started",
+            )
+            for number in range(10)
+        ]
+        if expected_next is not None
+        else []
+    )
+    if phase_rows == expected_rows:
+        return []
+    message = (
+        f"{V18_PHASE_FILE}: phase progression must exactly match canonical "
+        f"CURRENT_PHASE={current_phase!r} within the closed "
+        "3_NEXT/4_NEXT/5_NEXT lifecycle"
+    )
+    return [message]
+
+
+def _validate_v11317_frozen(root: Path) -> list[str]:
+    """Require the Phase 0/1 historical v1.13.17 byte identities."""
+    violations: list[str] = []
+    for relative, expected in V11317_FROZEN_SHA256.items():
+        path = root / relative
+        if not path.is_file() or path.is_symlink():
+            violations.append(
+                f"{relative}: frozen historical regular file is missing"
+            )
+            continue
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            violations.append(
+                f"{relative}: frozen historical SHA-256 {actual} does not match {expected}"
+            )
+    return violations
+
+
+def _validate_v18_release_body(
+    root: Path, state: dict[str, str]
+) -> list[str]:
+    """Validate the frozen source-only v1.13.18 release body pair."""
+    body_path = root / V18_RELEASE_BODY
+    checksum_path = root / V18_RELEASE_BODY_CHECKSUM
+    violations = _v18_release_body_path_violations(body_path, checksum_path)
+    if violations:
+        return violations
+    body = body_path.read_bytes()
+    checksum = checksum_path.read_bytes()
+    text, shape_violations = _v18_release_body_shape(body)
+    violations.extend(shape_violations)
+    violations.extend(_v18_release_body_identity(body, checksum, state))
+    violations.extend(_v18_release_body_semantics(text))
+    return violations
+
+
+def _v18_release_body_path_violations(
+    body_path: Path, checksum_path: Path
+) -> list[str]:
+    """Require the two regular non-symlink release-body inputs."""
+    violations: list[str] = []
+    for relative, path in (
+        (V18_RELEASE_BODY, body_path),
+        (V18_RELEASE_BODY_CHECKSUM, checksum_path),
+    ):
+        if not path.is_file() or path.is_symlink():
+            violations.append(f"{relative}: required regular non-symlink file is missing")
+    return violations
+
+
+def _v18_release_body_shape(body: bytes) -> tuple[str, list[str]]:
+    """Validate release-body bytes and return their decoded text."""
+    violations = _v18_release_body_encoding_violations(body)
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        text = ""
+        violations.append(f"{V18_RELEASE_BODY}: invalid UTF-8")
+    violations.extend(_v18_release_body_layout_violations(body))
+    return text, violations
+
+
+def _v18_release_body_encoding_violations(body: bytes) -> list[str]:
+    """Validate the bounded byte size and forbidden byte forms."""
+    violations: list[str] = []
+    if not 1 <= len(body) <= 65536:
+        violations.append(f"{V18_RELEASE_BODY}: body size must be 1..65536 bytes")
+    if body.startswith(b"\xef\xbb\xbf") or b"\r" in body or b"\x00" in body:
+        violations.append(f"{V18_RELEASE_BODY}: encoding or newline form is invalid")
+    return violations
+
+
+def _v18_release_body_layout_violations(body: bytes) -> list[str]:
+    """Validate terminal-newline and trailing-whitespace form."""
+    violations: list[str] = []
+    if not body.endswith(b"\n") or body.endswith(b"\n\n"):
+        violations.append(f"{V18_RELEASE_BODY}: exactly one terminal LF is required")
+    if any(line.endswith((b" ", b"\t")) for line in body.splitlines()):
+        violations.append(f"{V18_RELEASE_BODY}: trailing whitespace is forbidden")
+    return violations
+
+
+def _v18_release_body_identity(
+    body: bytes, checksum: bytes, state: dict[str, str]
+) -> list[str]:
+    """Bind body bytes to canonical state and the exact checksum file."""
+    violations: list[str] = []
+    digest = hashlib.sha256(body).hexdigest()
+    expected_checksum = (
+        f"{digest}  {V18_RELEASE_BODY.as_posix()}\n"
+    ).encode("ascii")
+    if digest != state.get("RELEASE_BODY_SHA256"):
+        violations.append(
+            f"{V18_RELEASE_BODY}: digest does not match canonical RELEASE_BODY_SHA256"
+        )
+    if checksum != expected_checksum:
+        violations.append(
+            f"{V18_RELEASE_BODY_CHECKSUM}: bytes do not match body digest and exact path"
+        )
+    return violations
+
+
+def _v18_release_body_semantics(text: str) -> list[str]:
+    """Require source-only semantics and reject future-state claims."""
+    violations: list[str] = []
+    normalized = " ".join(text.lower().split())
+    for marker in (
+        "v1.13.18", "v1.13.17", "v1.13.16", "v1.13.15",
+        "source-only", "no custom assets", "qualified",
+    ):
+        if marker not in normalized:
+            violations.append(
+                f"{V18_RELEASE_BODY}: missing semantic marker {marker!r}"
+            )
+    for pattern in (
+        r"\bR18\s+(?:is|=)", r"\bM18\s+(?:is|=)", r"\bA18\s+(?:is|=)",
+        r"publication (?:is )?complete", r"phase 10 (?:is )?safe",
+    ):
+        if re.search(pattern, text, re.IGNORECASE):
+            violations.append(
+                f"{V18_RELEASE_BODY}: contains forbidden future assertion {pattern!r}"
+            )
+    return violations
+
+
+def validate_v18_contract(root: Path, texts: dict[Path, str]) -> list[str]:
+    """Validate the isolated v1.13.18 authority and frozen history."""
+    loaded, violations = _load_v18_authority_files(root)
+    state_text = loaded.get(V18_CANONICAL_CURRENT_STATE_FILE)
+    if state_text is None:
+        return violations
+    state, state_violations = _v18_canonical_state(state_text)
+    violations.extend(state_violations)
+    violations.extend(_v18_mirror_contract_violations(texts, state))
+    violations.extend(_v18_snapshot_contract_violations(root, loaded, state))
+    phase_text = loaded.get(V18_PHASE_FILE, "")
+    violations.extend(
+        _v18_phase_progression_violations(
+            phase_text, state.get("CURRENT_PHASE", "")
+        )
+    )
+    violations.extend(_validate_v18_release_body(root, state))
+    violations.extend(_validate_v11317_frozen(root))
+    return violations
+
+
+def _load_v18_authority_files(
+    root: Path,
+) -> tuple[dict[Path, str], list[str]]:
+    """Load required Markdown authority after checking every required path."""
+    violations: list[str] = []
+    loaded: dict[Path, str] = {}
+    for relative in V18_AUTHORITY_FILES:
+        path = root / relative
+        if not path.is_file() or path.is_symlink():
+            violations.append(f"{relative}: required regular non-symlink file is missing")
+            continue
+        if relative.suffix == ".md":
+            loaded[relative] = path.read_text(encoding="utf-8")
+    return loaded, violations
+
+
+def _v18_mirror_contract_violations(
+    texts: dict[Path, str], state: dict[str, str]
+) -> list[str]:
+    """Compare each available live mirror with the canonical state."""
+    violations: list[str] = []
+    for relative in CURRENT_STATE_MIRROR_FILES:
+        text = texts.get(relative)
+        if text is None:
+            continue
+        mirror, mirror_violations = _v18_mirror(relative, text)
+        violations.extend(mirror_violations)
+        for key in V18_MIRROR_KEYS:
+            if key in state and mirror.get(key) != state[key]:
+                violations.append(
+                    f"{relative}: mirror {key}={mirror.get(key)!r} does not match "
+                    f"canonical {state[key]!r}"
+                )
+    return violations
+
+
+def _v18_snapshot_contract_violations(
+    root: Path, loaded: dict[Path, str], state: dict[str, str]
+) -> list[str]:
+    """Load the selected final snapshot and preserve loader diagnostics."""
+    violations: list[str] = []
+    contract_text = loaded.get(V18_CONTRACT_FILE)
+    if contract_text is not None:
+        contract = Document(
+            root, V18_CONTRACT_FILE.as_posix(), contract_text.splitlines()
+        )
+        snapshot, detail = load_final_source_snapshot(
+            root, contract, state.get("FINAL_SOURCE_SNAPSHOT_REFERENCE")
+        )
+        if detail:
+            violations.append(f"{V18_CONTRACT_FILE}: {detail}")
+        elif snapshot is None:
+            violations.append(f"{V18_CONTRACT_FILE}: final snapshot reference is missing")
+    return violations
+
+
 def validate(root: Path = ROOT) -> list[str]:
     violations = validate_release_body(root)
+    v18_selected = _v18_selected(root)
     files = ACTIVE_PROVIDER_FILES + CURRENT_AUTHORITY_FILES + (HISTORICAL_PROVIDER_FILE,)
     texts: dict[Path, str] = {}
     for relative in files:
@@ -739,38 +1194,72 @@ def validate(root: Path = ROOT) -> list[str]:
         if relative in texts:
             violations.extend(active_text_violations(relative, texts[relative]))
 
-    violations.extend(validate_current_state_contract(texts))
-    violations.extend(validate_terminal_disposition_contract(root, texts))
-    violations.extend(validate_security_progression_contract(root, texts))
+    if v18_selected:
+        violations.extend(validate_v18_contract(root, texts))
+    else:
+        violations.extend(validate_current_state_contract(texts))
+        violations.extend(validate_terminal_disposition_contract(root, texts))
+        violations.extend(validate_security_progression_contract(root, texts))
 
     marker_contracts = {
         Path("AGENTS.md"): (
             "never lose user data",
             "v1.13.17",
-            "failed-publication predecessor",
+            *(
+                ()
+                if v18_selected
+                else ("failed-publication predecessor", "v1.13.14")
+            ),
             "v1.13.15",
-            "v1.13.14",
             "Do not implement v2",
             "phase's `PLAN` or `BUILD` mode",
             "python3 scripts/validate_governance.py",
             "GOTOOLCHAIN=local",
+            *(
+                (
+                    "obtain separate explicit owner authorization before "
+                    "changing any additional",
+                )
+                if v18_selected
+                else ()
+            ),
         ),
         Path(".github/copilot-instructions.md"): (
-            "v1.13.17 is the active Route C recovery successor",
+            *(
+                ("v1.13.17",)
+                if v18_selected
+                else ("v1.13.17 is the active Route C recovery successor",)
+            ),
             "v1.13.14 as immutable historical release state",
             "SQLite-first local productization belongs to v2.x",
         ),
         Path(".github/instructions/ci.instructions.md"): (
-            "v1.13.17 Recovery Boundary",
-            "v1.13.16 failed-publication disposition",
+            "v1.13.17",
+            "v1.13.16",
+            *(
+                ("Go 1.26.10",)
+                if v18_selected
+                else (
+                    "v1.13.17 Recovery Boundary",
+                    "v1.13.16 failed-publication disposition",
+                )
+            ),
         ),
         Path("README.md"): (
-            "v1.13.17 — Annotated-Tag Certification Recovery",
+            *(
+                ("v1.13.17",)
+                if v18_selected
+                else ("v1.13.17 — Annotated-Tag Certification Recovery",)
+            ),
             "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
             "V2 implementation has not started",
         ),
         Path("SECURITY.md"): (
-            "v1.13.17 is the active Route C recovery successor",
+            *(
+                ("v1.13.17",)
+                if v18_selected
+                else ("v1.13.17 is the active Route C recovery successor",)
+            ),
             "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
             "V2 implementation has not started",
         ),

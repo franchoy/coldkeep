@@ -79,8 +79,11 @@ promotes a section into the active gate for a special release.
 
 Install these before claiming CI parity locally:
 
-- Go 1.26.9 exactly for v1.13.17 security-progression certification. The module language floor
+- Go 1.26.10 exactly for v1.13.18 final-source-snapshot certification. The module language floor
   remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
+- Retain fixed-toolchain identity and both detailed and blocking
+  `govulncheck@v1.7.0` outputs, including reachability and database metadata;
+  GO-2026-6809 must not affect the selected standard library.
 - `docker compose`.
 - PostgreSQL client tools, including `psql`.
 - `jq`.
@@ -117,7 +120,7 @@ Current release-gate sections:
 Historical v1.9 note:
 
 - For historical v1.9 sign-off, sections 1-11 and 15-18 were the active
-  blockers. They are not the current v1.13.17 lifecycle authority.
+  blockers. They are not the current v1.13.18 lifecycle authority.
 - Historical template sections (12-14) are archived reference material only.
 - Unchecked boxes in sections 12-14 are intentional historical state and are
   not current blockers unless a release manager explicitly promotes one into
@@ -295,7 +298,7 @@ python3 scripts/validate_release_state.py --state auto
 
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.17"
+expected_version="1.13.18"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -323,7 +326,7 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.17 in both human and JSON modes.
+Expected: the built CLI reports exactly 1.13.18 in both human and JSON modes.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and

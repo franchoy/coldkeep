@@ -93,7 +93,7 @@ jobs:
         if: ${{ inputs.mode == 'calibration' || matrix.replicate == 1 }}
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           check-latest: false
           cache: false
 

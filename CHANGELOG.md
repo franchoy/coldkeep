@@ -20,6 +20,25 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.18 - Unreleased — Final v1.x Source Snapshot and Closure Handoff
+
+- Versions the accepted final v1.x protected-main source as an exceptional
+  source-only snapshot; it adds no product feature, schema, storage/repository
+  format, dependency, or default-behavior change.
+- Retains the Go 1.25.0 language floor and application version 1.13.18 while
+  updating the release-critical toolchain uniformly from Go 1.26.9 to 1.26.10
+  for GO-2026-6809, without changing module dependencies or product behavior.
+- Adds a separate fail-closed final-source-snapshot selector bound to exact M,
+  the exact 40-path cumulative delta, frozen v1.13.17 history, and non-authorizing
+  branch/PR/main/tag simulations.
+- Candidate C's first hosted wave passed CI and CodeQL but did not clear Codacy;
+  exact E's later wave failed its vulnerability jobs and retained three Codacy
+  findings. The isolated E child combines the fixed toolchain with bounded
+  Agentlinter wording corrections while keeping the closed
+  `3_NEXT`/`4_NEXT`/`5_NEXT` model at `4_NEXT`. It still requires independent
+  exact-head review and fresh hosted certification. No operational adoption,
+  merge, tag, Release, cleanup, or owner publication acceptance is claimed.
+
 ## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 
 - Starts the Route C recovery successor from the exact v1.13.16 merge commit.

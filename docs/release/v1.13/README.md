@@ -76,33 +76,46 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.17
-RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
+SOURCE_VERSION: 1.13.18
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
+V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+V1_13_18_PUBLICATION: NOT_PUBLISHED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
-The tracked descendant is a non-authorizing terminal-disposition declaration.
-Phase 9M established source-scoped qualified external closure at C; protected-
-main serialization and effectiveness readback remain separate. Publication
-material is frozen. v1.13.16 is
+v1.13.18 is the active final-source-snapshot candidate. Phases 0-3 are complete
+and Phase 4 hosted certification is Next. Candidate C's earlier wave
+passed CI and CodeQL but retained Codacy findings; exact E's separate wave
+failed the reachable-vulnerability jobs and retained three Codacy findings.
+The Go 1.26.10 corrective successor still requires independent exact-head
+review and later fresh hosted certification. No operational adoption or
+publication is claimed.
+v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
+and TS-READBACK-01 remain qualified
+historical anchors. Publication material is frozen. v1.13.16 is
 the immutable failed-publication predecessor; its tag certificate was withheld
-and no GitHub Release exists. The original successor-branch push and its
-exact-N evidence are historical; this serialization candidate has not been pushed or
-independently accepted. No further push, PR, merge, tag, Release change, or
-closure is authorized by this tracked state.
+and no GitHub Release exists. The v1.13.17 successor-branch push and exact-N
+evidence are historical. The operational release branch and PR remain at E.
+No push, PR write, merge, tag, Release change, cleanup, or v2 work is authorized by this
+tracked state.
+
+Current authority is defined by the [scope](v1.13.18-scope.md),
+[phase list](v1.13.18-phase-list.md),
+[validation checklist](v1.13.18-validation-checklist.md),
+[release-state contract](v1.13.18-release-state-validator-contract.md),
+[canonical state](v1.13.18-release-state.md), and
+[final-source-snapshot reference](v1.13.18-final-source-snapshot-reference.md).
 
 ## Historical v1.13.16 authority narrative
 

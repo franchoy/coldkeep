@@ -206,9 +206,15 @@ class FixtureGitWrapperTests(unittest.TestCase):
 
 
 SUCCESSOR_COMPATIBILITY_BASE = "3d32e1662fdc0de251fd87bc5af6a309fcf3b6a6"
+FINAL_SNAPSHOT_BASE = "7ba439d6b1d0b18de69213897b247fb28f09b02c"
 SUCCESSOR_HISTORICAL_PATHS = (
     Path("docs/release/v1.13/v1.13.17-release-state.md"),
     Path("docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+    Path("internal/version/version.go"),
+    Path("internal/version/version_test.go"),
+    Path("CHANGELOG.md"),
+    Path("CONTRIBUTING.md"),
+    Path("PRE_RELEASE_CHECKLIST.md"),
     Path("AGENTS.md"),
     Path("README.md"),
     Path("SECURITY.md"),
@@ -216,7 +222,9 @@ SUCCESSOR_HISTORICAL_PATHS = (
     Path(".github/instructions/ci.instructions.md"),
     Path(".github/prompts/critical-path-coverage.prompt.md"),
     Path(".github/prompts/regression-fix.prompt.md"),
+    Path(".github/workflows/ci.yml"),
     Path("docs/release/v1.13/README.md"),
+    Path("docs/release/v1.13/v1.13.x-release-train.md"),
 )
 SUCCESSOR_TERMINAL_ONLY_PATHS = (
     validate_governance.TERMINAL_DISPOSITION_REFERENCE_FILE,
@@ -244,6 +252,7 @@ def copy_successor_fixture_source(
         if source.exists() or source.is_symlink():
             paths.add(relative)
     paths.difference_update(SUCCESSOR_TERMINAL_ONLY_PATHS)
+    paths.difference_update(validate_governance.V18_AUTHORITY_FILES)
     for relative in sorted(paths):
         source = source_root / relative
         destination = destination_root / relative
@@ -7289,6 +7298,7 @@ class TerminalSerializationContractTests(unittest.TestCase):
             check=True,
         ).stdout.split("\0")
         inventory = {Path(item) for item in committed if item}
+        inventory.difference_update(validate_governance.V18_AUTHORITY_FILES)
         inventory.update(Path(item) for item in self.TERMINAL_DOCS)
         for relative in sorted(inventory):
             source_path = source / relative
@@ -7296,7 +7306,17 @@ class TerminalSerializationContractTests(unittest.TestCase):
                 raise FileNotFoundError(f"terminal fixture input is unavailable: {relative}")
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, target, follow_symlinks=False)
+            if relative in SUCCESSOR_HISTORICAL_PATHS:
+                blob = run_process(
+                    [
+                        resolved_executable("git"), "-C", str(source), "show",
+                        f"{FINAL_SNAPSHOT_BASE}:{relative.as_posix()}",
+                    ],
+                    check=True,
+                ).stdout
+                target.write_text(blob, encoding="utf-8")
+            else:
+                shutil.copy2(source_path, target, follow_symlinks=False)
         # The existing progression methods are immutable historical-v1 tests.
         # Source their three inputs from exact H2, never the current checkout.
         for relative in (
@@ -9161,6 +9181,15 @@ class _V2ProgressionFixture:
                     [
                         resolved_executable("git"), "-C", str(source), "show",
                         f"{self.PUBLISHED_H3_SOURCE}:{name}",
+                    ],
+                    check=True,
+                ).stdout
+                target.write_text(content, encoding="utf-8")
+            elif relative in SUCCESSOR_HISTORICAL_PATHS:
+                content = run_process(
+                    [
+                        resolved_executable("git"), "-C", str(source), "show",
+                        f"{FINAL_SNAPSHOT_BASE}:{name}",
                     ],
                     check=True,
                 ).stdout
@@ -11809,6 +11838,1355 @@ class TerminalSerializationV2ContractTests(unittest.TestCase):
             reference.write_bytes(reference_original)
 
         assert_restored_valid()
+
+
+FINAL_SNAPSHOT_TEST_ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_final_snapshot_for_test() -> release_state_support.FinalSourceSnapshot:
+    contract_path = (
+        "docs/release/v1.13/v1.13.18-release-state-validator-contract.md"
+    )
+    reference_path = (
+        "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+    )
+    contract = release_state_support.Document.load(
+        FINAL_SNAPSHOT_TEST_ROOT, contract_path
+    )
+    snapshot, detail = release_state_support.load_final_source_snapshot(
+        FINAL_SNAPSHOT_TEST_ROOT, contract, reference_path
+    )
+    if detail or snapshot is None:
+        raise AssertionError(detail or "snapshot was not loaded")
+    return snapshot
+
+
+def final_snapshot_test_repository_is_safe(root: Path) -> bool:
+    """Reject Git administration that can change fixture object semantics."""
+    if any(
+        os.environ.get(name)
+        for name in (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_NAMESPACE",
+        )
+    ):
+        return False
+
+    def test_git(*args: str) -> ProcessResult:
+        return run_process(
+            [resolved_executable("git"), "-C", str(root), *args]
+        )
+
+    shallow = test_git("rev-parse", "--is-shallow-repository")
+    if shallow.returncode != 0 or shallow.stdout.strip() != "false":
+        return False
+    for relative in ("objects/info/alternates", "info/grafts"):
+        resolved = test_git("rev-parse", "--git-path", relative)
+        if resolved.returncode != 0 or not resolved.stdout.strip():
+            return False
+        path = Path(resolved.stdout.strip())
+        if not path.is_absolute():
+            path = root / path
+        if path.exists():
+            return False
+    replacements = test_git(
+        "for-each-ref", "--format=%(refname)", "refs/replace"
+    )
+    return replacements.returncode == 0 and not replacements.stdout.strip()
+
+
+def final_snapshot_candidate_from_runner_head_for_test(
+    root: Path,
+    runner_head: str,
+    snapshot: release_state_support.FinalSourceSnapshot,
+) -> str | None:
+    """Resolve R18 only from a complete candidate or exact `[M,R18]` merge."""
+    if not re.fullmatch(r"[0-9a-f]{40}", runner_head):
+        return None
+    resolved = run_process(
+        [
+            resolved_executable("git"),
+            "-C",
+            str(root),
+            "rev-parse",
+            "--verify",
+            f"{runner_head}^{{commit}}",
+        ]
+    )
+    if (
+        resolved.returncode != 0
+        or resolved.stdout.strip() != runner_head
+        or not final_snapshot_test_repository_is_safe(root)
+    ):
+        return None
+    if release_state_support.final_snapshot_artifact(
+        root, runner_head, snapshot, require_complete=True
+    ):
+        return runner_head
+    if not release_state_support.final_snapshot_main_artifact(
+        root, runner_head, snapshot
+    ):
+        return None
+    parents = release_state_support.commit_parents(root, runner_head)
+    return parents[1] if len(parents) == 2 else None
+
+
+def final_snapshot_candidate_for_test(
+    root: Path,
+    snapshot: release_state_support.FinalSourceSnapshot,
+) -> tuple[str, str]:
+    """Return validated `(runner HEAD, R18)` identities for portable tests."""
+    completed = run_process(
+        [
+            resolved_executable("git"),
+            "-C",
+            str(root),
+            "rev-parse",
+            "--verify",
+            "HEAD^{commit}",
+        ]
+    )
+    runner_head = completed.stdout.strip() if completed.returncode == 0 else ""
+    candidate = final_snapshot_candidate_from_runner_head_for_test(
+        root, runner_head, snapshot
+    )
+    if candidate is None:
+        raise AssertionError(
+            "runner HEAD is neither the complete R18 candidate nor its exact "
+            "supported [M,R18] merge"
+        )
+    return runner_head, candidate
+
+
+def clone_final_snapshot_repository_for_test(
+    destination: Path,
+    snapshot: release_state_support.FinalSourceSnapshot,
+) -> tuple[str, str]:
+    """Clone all runner objects without hardlinks and return validated roles."""
+    runner_head, candidate = final_snapshot_candidate_for_test(
+        FINAL_SNAPSHOT_TEST_ROOT, snapshot
+    )
+    run_process(
+        [
+            resolved_executable("git"),
+            *FIXTURE_GIT_CONFIG,
+            "clone",
+            "--no-checkout",
+            "--no-hardlinks",
+            str(FINAL_SNAPSHOT_TEST_ROOT),
+            str(destination),
+        ],
+        check=True,
+    )
+    for commit in (snapshot.values["BASE_M"], candidate, runner_head):
+        run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(destination),
+                "cat-file",
+                "-e",
+                f"{commit}^{{commit}}",
+            ],
+            check=True,
+        )
+    return runner_head, candidate
+
+
+class FinalSnapshotReferenceGovernanceTests(unittest.TestCase):
+    def test_reference_and_expectations_load_atomically(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        self.assertEqual(snapshot.values["SOURCE_VERSION"], "1.13.18")
+        self.assertEqual(snapshot.values["TOOLCHAIN"], "go1.26.10")
+        self.assertEqual(len(snapshot.delta), 40)
+
+    def test_stale_reference_digest_is_rejected(self) -> None:
+        relative = Path(
+            "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            copy = root / relative
+            copy.parent.mkdir(parents=True)
+            original = (FINAL_SNAPSHOT_TEST_ROOT / relative).read_bytes()
+            self.assertEqual(original.count(b"TOOLCHAIN: go1.26.10"), 1)
+            mutated = original.replace(
+                b"TOOLCHAIN: go1.26.10", b"TOOLCHAIN: go1.26.9", 1
+            )
+            self.assertNotEqual(mutated, original)
+            copy.write_bytes(mutated)
+            snapshot, detail = release_state_support.load_final_source_snapshot(
+                root, contract, relative.as_posix()
+            )
+        self.assertIsNone(snapshot)
+        self.assertIn("digest disagrees", detail or "")
+
+    def test_wrong_pointer_has_no_fallback(self) -> None:
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        snapshot, detail = release_state_support.load_final_source_snapshot(
+            FINAL_SNAPSHOT_TEST_ROOT, contract, "wrong.md"
+        )
+        self.assertIsNone(snapshot)
+        self.assertIn("pointer disagrees", detail or "")
+
+
+class FinalSnapshotSelectionTests(unittest.TestCase):
+    @staticmethod
+    def selected_documents() -> tuple[
+        release_state_support.Document, release_state_support.Document
+    ]:
+        state = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state.md",
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        return state, contract
+
+    @staticmethod
+    def replace_state_lines(
+        state: release_state_support.Document,
+        prefix: str,
+        replacement: list[str],
+    ) -> release_state_support.Document:
+        lines: list[str] = []
+        for line in state.lines:
+            if line.startswith(prefix):
+                lines.extend(replacement)
+            else:
+                lines.append(line)
+        return release_state_support.Document(state.root, state.path, lines)
+
+    def test_exact_selector_is_selected(self) -> None:
+        state = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state.md",
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        mode, snapshot, detail = validate_release_state.final_snapshot_selection(
+            FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", state, contract
+        )
+        self.assertEqual((mode, detail), ("snapshot", None))
+        self.assertIsNotNone(snapshot)
+
+    def test_partial_selector_fails_closed(self) -> None:
+        state = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state.md",
+        )
+        state = release_state_support.Document(
+            state.root,
+            state.path,
+            [
+                line
+                for line in state.lines
+                if not line.startswith("FINAL_SOURCE_SNAPSHOT_SCHEMA:")
+            ],
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        mode, snapshot, detail = validate_release_state.final_snapshot_selection(
+            FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", state, contract
+        )
+        self.assertEqual(mode, "invalid")
+        self.assertIsNone(snapshot)
+        self.assertIn("selection schema", detail or "")
+
+    def test_absent_selector_distinguishes_legacy_and_required_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(
+                validate_release_state.final_snapshot_selection(
+                    root, "1.13.17", None, None
+                ),
+                ("legacy", None, None),
+            )
+            self.assertEqual(
+                validate_release_state.final_snapshot_selection(
+                    root, "1.13.18", None, None
+                ),
+                (
+                    "invalid",
+                    None,
+                    "final snapshot reference invalid: required selector "
+                    "material is missing",
+                ),
+            )
+
+    def test_schema_missing_duplicate_and_unknown_tuples_are_exact(self) -> None:
+        state, contract = self.selected_documents()
+        schema_line = (
+            "FINAL_SOURCE_SNAPSHOT_SCHEMA: "
+            + "coldkeep-v1-final-source-snapshot-selection/v1"
+        )
+        expected = (
+            "invalid",
+            None,
+            "final snapshot reference invalid: selection schema is missing, "
+            "duplicated, or unsupported",
+        )
+        cases = (
+            [],
+            [schema_line, schema_line],
+            ["FINAL_SOURCE_SNAPSHOT_SCHEMA: TEST_FIXTURE_ONLY/v1"],
+        )
+        for replacement in cases:
+            with self.subTest(replacement=replacement):
+                candidate = self.replace_state_lines(
+                    state, "FINAL_SOURCE_SNAPSHOT_SCHEMA:", replacement
+                )
+                self.assertEqual(
+                    validate_release_state.final_snapshot_selection(
+                        FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", candidate, contract
+                    ),
+                    expected,
+                )
+
+    def test_pointer_expectation_and_reference_material_are_atomic(self) -> None:
+        state, contract = self.selected_documents()
+        pointer_line = (
+            "FINAL_SOURCE_SNAPSHOT_REFERENCE: "
+            + "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+        )
+        expected = (
+            "invalid",
+            None,
+            "final snapshot reference invalid: selector, pointer, expectations, "
+            "and reference must be present together",
+        )
+        pointer_cases = (
+            [],
+            [pointer_line, pointer_line],
+            ["FINAL_SOURCE_SNAPSHOT_REFERENCE: TEST_FIXTURE_ONLY.md"],
+        )
+        for replacement in pointer_cases:
+            with self.subTest(replacement=replacement):
+                candidate = self.replace_state_lines(
+                    state, "FINAL_SOURCE_SNAPSHOT_REFERENCE:", replacement
+                )
+                self.assertEqual(
+                    validate_release_state.final_snapshot_selection(
+                        FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", candidate, contract
+                    ),
+                    expected,
+                )
+        marker = "<!-- coldkeep-v1-final-source-snapshot-expectations:start -->"
+        no_expectations = release_state_support.Document(
+            contract.root,
+            contract.path,
+            [line for line in contract.lines if line != marker],
+        )
+        self.assertEqual(
+            validate_release_state.final_snapshot_selection(
+                FINAL_SNAPSHOT_TEST_ROOT, "1.13.18", state, no_expectations
+            ),
+            expected,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(
+                validate_release_state.final_snapshot_selection(
+                    Path(temporary), "1.13.18", state, contract
+                ),
+                expected,
+            )
+
+    def test_unsupported_version_with_selected_material_has_no_fallback(self) -> None:
+        state, contract = self.selected_documents()
+        self.assertEqual(
+            validate_release_state.final_snapshot_selection(
+                FINAL_SNAPSHOT_TEST_ROOT, "1.13.17", state, contract
+            ),
+            (
+                "invalid",
+                None,
+                "final snapshot reference invalid: material is selected by an "
+                "unsupported source version",
+            ),
+        )
+
+    def test_selected_loader_outcomes_preserve_exact_mode_and_detail(self) -> None:
+        unavailable = "final snapshot reference unavailable: TEST_FIXTURE_ONLY"
+        invalid = "final snapshot reference invalid: TEST_FIXTURE_ONLY"
+        cases = (
+            ((None, unavailable), ("unavailable", None, unavailable)),
+            ((None, invalid), ("invalid", None, invalid)),
+            (
+                (None, None),
+                (
+                    "invalid",
+                    None,
+                    "final snapshot reference invalid: snapshot is missing",
+                ),
+            ),
+        )
+        for loader_result, expected in cases:
+            with self.subTest(loader_result=loader_result):
+                with mock.patch.object(
+                    validate_release_state,
+                    "load_final_source_snapshot",
+                    return_value=loader_result,
+                ):
+                    self.assertEqual(
+                        validate_release_state._load_selected_final_snapshot(
+                            Path("/TEST_FIXTURE_ONLY"), None, "reference.md"
+                        ),
+                        expected,
+                    )
+        snapshot = mock.sentinel.snapshot
+        with mock.patch.object(
+            validate_release_state,
+            "load_final_source_snapshot",
+            return_value=(snapshot, None),
+        ):
+            self.assertEqual(
+                validate_release_state._load_selected_final_snapshot(
+                    Path("/TEST_FIXTURE_ONLY"), None, "reference.md"
+                ),
+                ("snapshot", snapshot, None),
+            )
+
+    def test_symlink_reference_is_unavailable_without_legacy_fallback(self) -> None:
+        state, contract = self.selected_documents()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference = root / (
+                "docs/release/v1.13/"
+                "v1.13.18-final-source-snapshot-reference.md"
+            )
+            reference.parent.mkdir(parents=True)
+            reference.symlink_to(
+                FINAL_SNAPSHOT_TEST_ROOT
+                / "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"
+            )
+            mode, snapshot, detail = validate_release_state.final_snapshot_selection(
+                root, "1.13.18", state, contract
+            )
+        self.assertEqual(mode, "unavailable")
+        self.assertIsNone(snapshot)
+        self.assertEqual(
+            detail,
+            "final snapshot reference unavailable: file could not be safely "
+            "opened or read",
+        )
+
+    def test_selected_route_emits_diagnostic_v5_fields(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            _, candidate = clone_final_snapshot_repository_for_test(
+                root, snapshot
+            )
+            git(root, "checkout", "--force", "-B", "release/v1.13.18", candidate)
+            with mock.patch.dict(os.environ, {}, clear=True):
+                result = validate_release_state.validate(root, "auto")
+        self.assertEqual(
+            result.diagnostic_schema, "coldkeep-release-state-diagnostic/v5"
+        )
+        self.assertEqual(result.final_snapshot, "CANDIDATE_COMPLETE_VALID")
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = validate_release_state.emit(result, True)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["final_snapshot"], result.final_snapshot)
+        self.assertEqual(
+            payload["certification_status"], "PENDING_EXTERNAL_EVIDENCE"
+        )
+        self.assertEqual(
+            payload["final_snapshot_contract_schema"],
+            "coldkeep-v1-final-source-snapshot-reference/v1",
+        )
+
+
+class FinalSnapshotLifecycleProgressionTests(unittest.TestCase):
+    BOUNDARIES = release_state_support.LifecycleBoundaries(5, 8, 9)
+    DECLARATION = release_state_support.LifecycleDeclaration(
+        "immutable-transition-v1", "franchoy/coldkeep"
+    )
+
+    @staticmethod
+    def ordered(next_phase: int) -> list[str]:
+        return [
+            "Complete"
+            if number < next_phase
+            else "Next"
+            if number == next_phase
+            else "Not started"
+            for number in range(10)
+        ]
+
+    def test_phase_3_4_5_role_truth_table(self) -> None:
+        expected = {
+            3: (True, False, False, False),
+            4: (True, False, False, False),
+            5: (False, True, True, True),
+        }
+        states = (
+            "development",
+            "pre-release",
+            "merged-pending-final-main-certification",
+            "tagged-pending-tag-certification",
+        )
+        for next_phase, outcomes in expected.items():
+            with self.subTest(next_phase=next_phase):
+                actual = tuple(
+                    release_state_support.lifecycle_progression_valid(
+                        state,
+                        self.ordered(next_phase),
+                        self.BOUNDARIES,
+                        self.DECLARATION,
+                    )
+                    for state in states
+                )
+                self.assertEqual(actual, outcomes)
+
+    def test_phase_5_candidate_vocabulary_is_structurally_valid(self) -> None:
+        gate = release_state_support.Document(
+            Path("/TEST_FIXTURE_ONLY"),
+            "docs/release/v1.13/v1.13.18-release-gate.md",
+            [
+                "# v1.13.18 Release Gate",
+                "",
+                "**Status:** Passed — pre-merge prerequisites complete",
+                "",
+                "## Final verdict",
+                "",
+                "HOSTED WAVE A RECORDED; EXACT-HEAD REFRESH REQUIRED; NO MERGE AUTHORITY",
+            ],
+        )
+        for state in (
+            "pre-release",
+            "merged-pending-final-main-certification",
+            "tagged-pending-tag-certification",
+        ):
+            with self.subTest(state=state):
+                self.assertTrue(
+                    release_state_support.candidate_gate_valid(
+                        gate,
+                        state,
+                        release_state_support.lifecycle_progression_valid(
+                            state,
+                            self.ordered(5),
+                            self.BOUNDARIES,
+                            self.DECLARATION,
+                        ),
+                        self.BOUNDARIES,
+                        self.DECLARATION,
+                    )
+                )
+        self.assertTrue(
+            release_state_support.changelog_entry_valid(
+                "1.13.18",
+                " - 2026-10-18 — Final v1.x Source Snapshot",
+                "1.13.18",
+                "pre-release",
+            )
+        )
+        self.assertTrue(
+            release_state_support.readme_current_state_valid(
+                "1.13.18",
+                "pre-release",
+                ["![Status](status-v1.13.18%20ready-blue)"],
+                "v1.13.18 is ready for exact-head hosted refresh",
+            )
+        )
+
+    def test_phase_5_vocabulary_one_premise_failures_reject(self) -> None:
+        gate_cases = {
+            "pending-verdict": [
+                "**Status:** Passed — pre-merge prerequisites complete",
+                "",
+                "## Final verdict",
+                "",
+                "PENDING EXACT-HEAD REFRESH",
+            ],
+            "wrong-status": [
+                "**Status:** Passed — pre-publication prerequisites complete",
+                "",
+                "## Final verdict",
+                "",
+                "NO MERGE AUTHORITY",
+            ],
+            "duplicate-status": [
+                "**Status:** Passed — pre-merge prerequisites complete",
+                "**Status:** Passed — pre-merge prerequisites complete",
+                "",
+                "## Final verdict",
+                "",
+                "NO MERGE AUTHORITY",
+            ],
+            "missing-verdict": [
+                "**Status:** Passed — pre-merge prerequisites complete",
+            ],
+        }
+        for label, lines in gate_cases.items():
+            with self.subTest(label=label):
+                gate = release_state_support.Document(
+                    Path("/TEST_FIXTURE_ONLY"), "gate.md", lines
+                )
+                self.assertFalse(
+                    release_state_support.candidate_gate_valid(
+                        gate,
+                        "pre-release",
+                        True,
+                        self.BOUNDARIES,
+                        self.DECLARATION,
+                    )
+                )
+        self.assertFalse(
+            release_state_support.changelog_entry_valid(
+                "1.13.18",
+                " - Unreleased — Final v1.x Source Snapshot",
+                "1.13.18",
+                "pre-release",
+            )
+        )
+        self.assertFalse(
+            release_state_support.changelog_entry_valid(
+                "1.13.18",
+                " - 2026-10-18 — Final v1.x Source Snapshot",
+                "1.13.18",
+                "development",
+            )
+        )
+        self.assertFalse(
+            release_state_support.readme_current_state_valid(
+                "1.13.18",
+                "pre-release",
+                ["![Status](status-v1.13.18%20active-blue)"],
+                "v1.13.18 is active",
+            )
+        )
+
+
+class FinalSnapshotDeltaContractTests(unittest.TestCase):
+    def test_baseline_is_a_valid_development_subset(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        self.assertTrue(
+            release_state_support.final_snapshot_artifact(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                snapshot.values["BASE_M"],
+                snapshot,
+                require_complete=False,
+            )
+        )
+
+    def test_one_wrong_status_is_rejected(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        first = snapshot.delta[0]
+        changed = (("A", first[1], first[2]),) + snapshot.delta[1:]
+        self.assertNotEqual(changed, snapshot.delta)
+        detail = release_state_support._final_snapshot_grammar(
+            snapshot.values, changed
+        )
+        self.assertEqual(detail, "delta inventory is unsupported")
+
+    def test_inventory_shape_mutations_are_rejected(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        first = snapshot.delta[0]
+        cases = {
+            "missing": snapshot.delta[1:],
+            "extra": snapshot.delta + (("M", "100644", "TEST_FIXTURE_ONLY"),),
+            "duplicate": snapshot.delta + (first,),
+            "wrong-mode": ((first[0], "100755", first[2]),) + snapshot.delta[1:],
+        }
+        for label, changed in cases.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(changed, snapshot.delta)
+                detail = release_state_support._final_snapshot_grammar(
+                    snapshot.values, tuple(changed)
+                )
+                self.assertEqual(detail, "delta inventory is unsupported")
+
+    def test_stale_toolchain_is_rejected(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        changed = dict(snapshot.values)
+        changed["TOOLCHAIN"] = "go1.26.9"
+        self.assertNotEqual(changed, snapshot.values)
+        self.assertEqual(
+            release_state_support._final_snapshot_grammar(changed, snapshot.delta),
+            "TOOLCHAIN is unsupported",
+        )
+
+    def test_committed_complete_inventory_accepts_git_tree_order(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        _, candidate = final_snapshot_candidate_for_test(
+            FINAL_SNAPSHOT_TEST_ROOT, snapshot
+        )
+        self.assertTrue(
+            release_state_support.final_snapshot_artifact(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                candidate,
+                snapshot,
+                require_complete=True,
+            )
+        )
+
+
+class FinalSnapshotReleasePushContextTests(unittest.TestCase):
+    def test_local_release_branch_is_bounded_by_snapshot(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        declaration = release_state_support.LifecycleDeclaration(
+            "immutable-transition-v1", "franchoy/coldkeep"
+        )
+        context = (
+            snapshot.values["BASE_M"], "release/v1.13.18", False, False, None
+        )
+        env = {key: "" for key in release_state_support.github_context()}
+        scope = release_state_support.v1_context_scope(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "1.13.18",
+            "development",
+            context,
+            env,
+            declaration,
+            final_snapshot=snapshot,
+        )
+        self.assertEqual(scope, "LOCAL_RELEASE_BRANCH")
+
+
+class FinalSnapshotPullRequestContextTests(unittest.TestCase):
+    def test_pr_requires_exact_m_base(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        declaration = release_state_support.LifecycleDeclaration(
+            "immutable-transition-v1", "franchoy/coldkeep"
+        )
+        context = (snapshot.values["BASE_M"], "", False, False, None)
+        env = {key: "TEST" for key in release_state_support.github_context()}
+        with (
+            mock.patch.object(
+                release_state_support,
+                "strict_release_pr_context",
+                return_value=True,
+            ),
+            mock.patch.object(
+                release_state_support,
+                "final_snapshot_pr_artifact_status",
+                side_effect=("PR_DIRECT_COMPLETE_VALID", None),
+            ),
+        ):
+            accepted = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "development",
+                context,
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+            rejected = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "development",
+                context,
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+        self.assertEqual(accepted, "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY")
+        self.assertIsNone(rejected)
+
+
+class FinalSnapshotRealGitContextTests(unittest.TestCase):
+    """Exercise final-snapshot roles against real, isolated Git objects."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.temporary.name) / "repository"
+        cls.snapshot = load_final_snapshot_for_test()
+        cls.runner_head, cls.candidate = clone_final_snapshot_repository_for_test(
+            cls.root, cls.snapshot
+        )
+        git(cls.root, "config", "user.name", "Coldkeep fixture")
+        git(cls.root, "config", "user.email", "fixture@invalid.example")
+        cls.base = cls.snapshot.values["BASE_M"]
+        candidate_tree = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(cls.root),
+                "rev-parse",
+                f"{cls.candidate}^{{tree}}",
+            ],
+            check=True,
+        ).stdout.strip()
+        cls.synthetic = run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(cls.root),
+                "commit-tree",
+                candidate_tree,
+                "-p",
+                cls.base,
+                "-p",
+                cls.candidate,
+                "-m",
+                "TEST_FIXTURE_ONLY synthetic merge",
+            ],
+            check=True,
+        ).stdout.strip()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.temporary.cleanup()
+
+    def copy_validator(self) -> None:
+        for name in ("release_state_support.py", "validate_release_state.py"):
+            shutil.copy2(
+                FINAL_SNAPSHOT_TEST_ROOT / "scripts" / name,
+                self.root / "scripts" / name,
+            )
+
+    def checkout(self, commit: str, *, branch: str | None = None) -> None:
+        git(self.root, "checkout", "--force", "--detach", commit)
+        run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(self.root),
+                "tag",
+                "--delete",
+                "v1.13.18",
+            ]
+        )
+        if branch is not None:
+            git(self.root, "branch", "--force", branch, commit)
+            git(self.root, "checkout", "--force", branch)
+        self.copy_validator()
+
+    def commit_tree(self, tree: str, *parents: str) -> str:
+        command = [
+            resolved_executable("git"),
+            *FIXTURE_GIT_CONFIG,
+            "-C",
+            str(self.root),
+            "commit-tree",
+            tree,
+        ]
+        for parent in parents:
+            command.extend(("-p", parent))
+        command.extend(("-m", "TEST_FIXTURE_ONLY variant"))
+        return run_process(command, check=True).stdout.strip()
+
+    def pull_request_environment(
+        self,
+        checkout: str,
+        *,
+        base: str | None = None,
+        candidate: str | None = None,
+        head_repository: str = "franchoy/coldkeep",
+    ) -> dict[str, str]:
+        base = base or self.base
+        candidate = candidate or self.candidate
+        payload = json.dumps(
+            {
+                "number": 18,
+                "repository": {"full_name": "franchoy/coldkeep"},
+                "pull_request": {
+                    "base": {
+                        "ref": "main",
+                        "sha": base,
+                        "repo": {"full_name": "franchoy/coldkeep"},
+                    },
+                    "head": {
+                        "ref": "release/v1.13.18",
+                        "sha": candidate,
+                        "repo": {"full_name": head_repository},
+                    },
+                    "merge_commit_sha": checkout,
+                },
+            },
+            sort_keys=True,
+        )
+        payload_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        event_path = (
+            Path(self.temporary.name)
+            / f"pull-request-{payload_digest}.json"
+        )
+        event_path.write_text(payload, encoding="utf-8")
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/pull/18/merge",
+            "GITHUB_REF_NAME": "18/merge",
+            "GITHUB_HEAD_REF": "release/v1.13.18",
+            "GITHUB_BASE_REF": "main",
+            "GITHUB_EVENT_PATH": str(event_path),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": checkout,
+        }
+
+    def tag_environment(self) -> dict[str, str]:
+        event_path = Path(self.temporary.name) / "tag.json"
+        event_path.write_text(
+            json.dumps(
+                {
+                    "ref": "refs/tags/v1.13.18",
+                    "before": "0" * 40,
+                    "after": self.synthetic,
+                    "created": True,
+                    "deleted": False,
+                    "forced": False,
+                    "repository": {"full_name": "franchoy/coldkeep"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/tags/v1.13.18",
+            "GITHUB_REF_NAME": "v1.13.18",
+            "GITHUB_REF_TYPE": "tag",
+            "GITHUB_EVENT_PATH": str(event_path),
+            "GITHUB_REPOSITORY": "franchoy/coldkeep",
+            "GITHUB_SHA": self.synthetic,
+        }
+
+    def run_json(
+        self,
+        state: str,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> tuple[ProcessResult, dict[str, object]]:
+        completed = run_validator_script(
+            self.root / "scripts" / "validate_release_state.py",
+            self.root,
+            "--state",
+            state,
+            "--json",
+            env=env,
+        )
+        return completed, json.loads(completed.stdout)
+
+    def assert_snapshot_invalid(
+        self,
+        checkout: str,
+        *,
+        state: str = "development",
+        env: dict[str, str] | None = None,
+        branch: str | None = None,
+    ) -> None:
+        self.checkout(checkout, branch=branch)
+        completed, payload = self.run_json(state, env=env)
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertEqual(payload["final_snapshot"], "INVALID")
+        self.assertIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+
+    def test_local_candidate_and_direct_pr_use_complete_candidate(self) -> None:
+        self.checkout(self.candidate, branch="release/v1.13.18")
+        local, local_payload = self.run_json("auto")
+        self.assertEqual(local.returncode, 0, local.stdout + local.stderr)
+        self.assertEqual(
+            local_payload["final_snapshot"], "CANDIDATE_COMPLETE_VALID"
+        )
+        self.assertEqual(local_payload["evidence_scope"], "LOCAL_RELEASE_BRANCH")
+
+        self.checkout(self.candidate)
+        direct, direct_payload = self.run_json(
+            "auto", env=self.pull_request_environment(self.candidate)
+        )
+        self.assertEqual(direct.returncode, 0, direct.stdout + direct.stderr)
+        self.assertEqual(
+            direct_payload["final_snapshot"], "PR_DIRECT_COMPLETE_VALID"
+        )
+        self.assertEqual(
+            direct_payload["evidence_scope"],
+            "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY",
+        )
+
+    def test_synthetic_pr_validates_payload_candidate_not_merge_commit(self) -> None:
+        self.checkout(self.synthetic)
+        completed, payload = self.run_json(
+            "auto",
+            env=self.pull_request_environment(self.synthetic),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(payload["final_snapshot"], "PR_SYNTHETIC_COMPLETE_VALID")
+        self.assertNotIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+        self.assertEqual(
+            payload["evidence_scope"], "GITHUB_PR_EVENT_CONTEXT_CONSISTENCY"
+        )
+
+    def test_main_merge_has_role_aware_snapshot_status(self) -> None:
+        self.checkout(self.synthetic, branch="main")
+        _, payload = self.run_json("merged-pending-final-main-certification")
+        self.assertEqual(payload["final_snapshot"], "MAIN_MERGE_VALID")
+        self.assertNotIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+
+    def test_tagged_merge_has_role_aware_snapshot_status(self) -> None:
+        self.checkout(self.synthetic)
+        git(self.root, "tag", "--force", "-a", "v1.13.18", "-m", "fixture")
+        self.copy_validator()
+        _, payload = self.run_json("tagged", env=self.tag_environment())
+        self.assertEqual(payload["final_snapshot"], "TAGGED_MAIN_VALID")
+        self.assertNotIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+        self.assertNotIn(
+            "CKRS016", {item["rule"] for item in payload["violations"]}
+        )
+
+    def test_pr_wrong_base_head_repository_and_merge_shapes_fail_closed(self) -> None:
+        candidate_tree = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(self.root),
+                "rev-parse",
+                f"{self.candidate}^{{tree}}",
+            ],
+            check=True,
+        ).stdout.strip()
+        candidate_parent = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(self.root),
+                "rev-parse",
+                f"{self.candidate}^",
+            ],
+            check=True,
+        ).stdout.strip()
+        self.checkout(self.candidate, branch="fixture/wrong-tree")
+        readme = self.root / "README.md"
+        readme.write_text(
+            readme.read_text(encoding="utf-8") + "\nTEST_FIXTURE_ONLY\n",
+            encoding="utf-8",
+        )
+        git(self.root, "add", "README.md")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY wrong tree")
+        wrong_tree = run_process(
+            [
+                resolved_executable("git"),
+                "-C",
+                str(self.root),
+                "rev-parse",
+                "HEAD^{tree}",
+            ],
+            check=True,
+        ).stdout.strip()
+        variants = {
+            "wrong-base": self.commit_tree(
+                candidate_tree, candidate_parent, self.candidate
+            ),
+            "swapped-parents": self.commit_tree(
+                candidate_tree, self.candidate, self.base
+            ),
+            "extra-parent": self.commit_tree(
+                candidate_tree, self.base, self.candidate, candidate_parent
+            ),
+            "wrong-tree": self.commit_tree(
+                wrong_tree, self.base, self.candidate
+            ),
+        }
+        for label, checkout in variants.items():
+            with self.subTest(label=label):
+                self.assertIsNone(
+                    final_snapshot_candidate_from_runner_head_for_test(
+                        self.root, checkout, self.snapshot
+                    )
+                )
+                self.assert_snapshot_invalid(
+                    checkout,
+                    env=self.pull_request_environment(checkout),
+                )
+
+        cases = {
+            "wrong-base": self.pull_request_environment(
+                self.synthetic, base=candidate_parent
+            ),
+            "wrong-head": self.pull_request_environment(
+                self.synthetic, candidate=candidate_parent
+            ),
+            "missing-head": self.pull_request_environment(
+                self.synthetic, candidate="f" * 40
+            ),
+            "foreign-head": self.pull_request_environment(
+                self.synthetic, head_repository="fork/coldkeep"
+            ),
+        }
+        wrong_event = self.pull_request_environment(self.synthetic)
+        wrong_event["GITHUB_EVENT_NAME"] = "push"
+        cases["wrong-event"] = wrong_event
+        for label, env in cases.items():
+            with self.subTest(label=label):
+                self.assert_snapshot_invalid(self.synthetic, env=env)
+
+        self.assertIsNone(
+            final_snapshot_candidate_from_runner_head_for_test(
+                self.root, "f" * 40, self.snapshot
+            )
+        )
+
+    def test_unmerged_candidate_cannot_masquerade_as_main_or_tag(self) -> None:
+        self.assert_snapshot_invalid(
+            self.candidate,
+            state="merged-pending-final-main-certification",
+            branch="main",
+        )
+        self.checkout(self.candidate)
+        git(self.root, "tag", "-a", "v1.13.18", "-m", "fixture")
+        self.copy_validator()
+        completed, payload = self.run_json("tagged")
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertEqual(payload["final_snapshot"], "INVALID")
+        self.assertIn(
+            "CKRS020", {item["rule"] for item in payload["violations"]}
+        )
+
+    def test_extra_path_and_wrong_mode_candidates_fail_closed(self) -> None:
+        self.checkout(self.candidate, branch="release/v1.13.18")
+        write(self.root, "TEST_FIXTURE_ONLY-extra", "unexpected\n")
+        git(self.root, "add", "TEST_FIXTURE_ONLY-extra")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY extra path")
+        extra = run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        self.assertIsNone(
+            final_snapshot_candidate_from_runner_head_for_test(
+                self.root, extra, self.snapshot
+            )
+        )
+        self.assert_snapshot_invalid(
+            extra, branch="release/v1.13.18"
+        )
+
+        self.checkout(self.candidate, branch="release/v1.13.18")
+        validator = self.root / "scripts" / "validate_release_state.py"
+        validator.chmod(0o755)
+        git(self.root, "add", "scripts/validate_release_state.py")
+        git(self.root, "commit", "-m", "TEST_FIXTURE_ONLY wrong mode")
+        wrong_mode = run_process(
+            [resolved_executable("git"), "-C", str(self.root), "rev-parse", "HEAD"],
+            check=True,
+        ).stdout.strip()
+        self.assertIsNone(
+            final_snapshot_candidate_from_runner_head_for_test(
+                self.root, wrong_mode, self.snapshot
+            )
+        )
+        self.assert_snapshot_invalid(
+            wrong_mode, branch="release/v1.13.18"
+        )
+
+    def test_wrong_tag_and_unsafe_tag_repository_state_fail_closed(self) -> None:
+        self.checkout(self.synthetic)
+        git(
+            self.root,
+            "tag",
+            "-a",
+            "v1.13.18",
+            self.candidate,
+            "-m",
+            "fixture wrong target",
+        )
+        self.copy_validator()
+        wrong_tag, wrong_tag_payload = self.run_json("tagged")
+        self.assertEqual(
+            wrong_tag.returncode, 1, wrong_tag.stdout + wrong_tag.stderr
+        )
+        self.assertIn(
+            "CKRS017",
+            {item["rule"] for item in wrong_tag_payload["violations"]},
+        )
+
+        git_dir = self.root / ".git"
+        source_objects = FINAL_SNAPSHOT_TEST_ROOT / ".git" / "objects"
+        cases = {
+            "shallow": (git_dir / "shallow", self.synthetic + "\n"),
+            "alternate": (
+                git_dir / "objects" / "info" / "alternates",
+                str(source_objects.resolve()) + "\n",
+            ),
+            "graft": (
+                git_dir / "info" / "grafts",
+                f"{self.synthetic} {self.base} {self.candidate}\n",
+            ),
+        }
+        for label, (path, content) in cases.items():
+            with self.subTest(label=label):
+                self.checkout(self.synthetic)
+                git(
+                    self.root,
+                    "tag",
+                    "-a",
+                    "v1.13.18",
+                    "-m",
+                    "fixture",
+                )
+                self.copy_validator()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                try:
+                    self.assertIsNone(
+                        final_snapshot_candidate_from_runner_head_for_test(
+                            self.root, self.synthetic, self.snapshot
+                        )
+                    )
+                    completed, payload = self.run_json(
+                        "tagged", env=self.tag_environment()
+                    )
+                    self.assertEqual(
+                        completed.returncode,
+                        1,
+                        completed.stdout + completed.stderr,
+                    )
+                    self.assertIn(
+                        "CKRS016",
+                        {item["rule"] for item in payload["violations"]},
+                    )
+                finally:
+                    path.unlink(missing_ok=True)
+
+        self.checkout(self.synthetic)
+        git(self.root, "tag", "-a", "v1.13.18", "-m", "fixture")
+        git(self.root, "replace", self.synthetic, self.candidate)
+        self.copy_validator()
+        try:
+            self.assertIsNone(
+                final_snapshot_candidate_from_runner_head_for_test(
+                    self.root, self.synthetic, self.snapshot
+                )
+            )
+            replaced, replaced_payload = self.run_json(
+                "tagged", env=self.tag_environment()
+            )
+            self.assertEqual(
+                replaced.returncode, 1, replaced.stdout + replaced.stderr
+            )
+            self.assertIn(
+                "CKRS016",
+                {item["rule"] for item in replaced_payload["violations"]},
+            )
+        finally:
+            git(self.root, "replace", "--delete", self.synthetic)
+
+
+class FinalSnapshotMainContextTests(unittest.TestCase):
+    def test_main_requires_exact_snapshot_merge_artifact(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        declaration = release_state_support.LifecycleDeclaration(
+            "immutable-transition-v1", "franchoy/coldkeep"
+        )
+        context = ("f" * 40, "main", False, False, None)
+        env = {key: "" for key in release_state_support.github_context()}
+        with (
+            mock.patch.object(
+                release_state_support, "normal_merge_artifact", return_value=True
+            ),
+            mock.patch.object(
+                release_state_support,
+                "final_snapshot_main_artifact",
+                side_effect=(True, False),
+            ),
+        ):
+            accepted = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "merged-pending-final-main-certification",
+                context,
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+            rejected = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "merged-pending-final-main-certification",
+                context,
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+        self.assertEqual(accepted, "LOCAL_ARTIFACT_ONLY")
+        self.assertIsNone(rejected)
+
+
+class FinalSnapshotTagSimulationTests(unittest.TestCase):
+    def test_tag_simulation_requires_snapshot_main_artifact(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        declaration = release_state_support.LifecycleDeclaration(
+            "immutable-transition-v1", "franchoy/coldkeep"
+        )
+        env = {key: "" for key in release_state_support.github_context()}
+        with mock.patch.object(
+            release_state_support,
+            "final_snapshot_main_artifact",
+            return_value=True,
+        ):
+            scope = release_state_support.v1_context_scope(
+                FINAL_SNAPSHOT_TEST_ROOT,
+                "1.13.18",
+                "tagged",
+                ("f" * 40, "", True, True, "f" * 40),
+                env,
+                declaration,
+                final_snapshot=snapshot,
+            )
+        self.assertEqual(scope, "LOCAL_TAG_ARTIFACT_ONLY")
+
+
+class FinalSnapshotAuthorityBoundaryTests(unittest.TestCase):
+    def test_reference_is_explicitly_non_authorizing(self) -> None:
+        snapshot = load_final_snapshot_for_test()
+        self.assertEqual(snapshot.values["STATUS"], "STRUCTURAL_NON_AUTHORIZING")
+        self.assertEqual(
+            snapshot.expectations["EXPECTED_VALIDATOR_EFFECT"],
+            "STRUCTURAL_ONLY_NO_PROVIDER_OR_OWNER_AUTHORITY",
+        )
+
+
+class HistoricalV11317ImmutabilityTests(unittest.TestCase):
+    def test_every_frozen_release_document_matches_phase01_digest(self) -> None:
+        self.assertEqual(validate_governance._validate_v11317_frozen(
+            FINAL_SNAPSHOT_TEST_ROOT
+        ), [])
+
+
+class FinalSnapshotErroneousContextTests(unittest.TestCase):
+    def test_wrong_source_version_cannot_select_snapshot(self) -> None:
+        state = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state.md",
+        )
+        contract = release_state_support.Document.load(
+            FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+        )
+        mode, snapshot, detail = validate_release_state.final_snapshot_selection(
+            FINAL_SNAPSHOT_TEST_ROOT, "1.13.19", state, contract
+        )
+        self.assertEqual(mode, "invalid")
+        self.assertIsNone(snapshot)
+        self.assertIn("unsupported source version", detail or "")
 
 
 if __name__ == "__main__":

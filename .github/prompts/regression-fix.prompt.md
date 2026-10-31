@@ -2,20 +2,21 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.17
-RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
+SOURCE_VERSION: 1.13.18
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
+V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+V1_13_18_PUBLICATION: NOT_PUBLISHED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -53,6 +54,10 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
+- v1.13.18 is the active local final-source-snapshot candidate; Phases 0-3 are
+  complete and Phase 4 hosted certification is Next, but the Stage A head
+  requires fresh independent exact-head review before any remote action. No
+  hosted/publication result is claimed.
 - v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
   The tracked descendant is a non-authorizing terminal-disposition declaration.
   Phase 9M established source-scoped qualified external closure at C; protected-

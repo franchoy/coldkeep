@@ -2,20 +2,21 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.17
-RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
+SOURCE_VERSION: 1.13.18
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
+V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+V1_13_18_PUBLICATION: NOT_PUBLISHED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -23,13 +24,12 @@ Coldkeep is a correctness-first cold storage engine. The primary invariant is: n
 
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
 
-v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
-The tracked descendant is a non-authorizing terminal-disposition declaration.
-The earlier marker `v1.13.17 is the active Route C recovery successor` is
-retained only as historical pre-publication wording; it is not current state.
-Phase 9M established source-scoped qualified external closure at C. Protected-
-main serialization and effectiveness readback remain separate; this state
-does not certify or authorize later operations. v1.13.16 is the
+v1.13.18 is the active final v1.x source-snapshot candidate. Phases 0-3 are
+complete, Phase 4 hosted certification is Next, and the new Stage A commit
+still requires fresh independent exact-head review before any remote action.
+No hosted result or publication is claimed. v1.13.17 remains published and
+immutable at M17/A17 and GitHub Release `400460267`; Phase 9M and
+TS-READBACK-01 remain qualified historical anchors. v1.13.16 is the
 immutable failed-publication predecessor: its
 public tag failed required certification, no GitHub Release exists, and no
 publication or closure is authorized. v1.13.15 remains
@@ -64,7 +64,7 @@ SQLite-first local productization belongs to v2.x.
 Do not remove PostgreSQL compatibility.
 Do not introduce SQLite-only assumptions into engine or catalog contracts.
 
-The root `AGENTS.md` and v1.13.17 10-phase controls are authoritative. Follow
+The root `AGENTS.md` and v1.13.18 10-phase controls are authoritative. Follow
 the exact phase mode and allowlist; do not perform an out-of-phase repair.
 Stop on scope expansion, unexpected dependency movement, release-identity
 drift, or newly discovered private security impact.
@@ -72,7 +72,8 @@ drift, or newly discovered private security impact.
 V2 planning review is authorized. V2 implementation has not started and
 requires a separate plan and explicit authorization. Do not introduce broad
 refactors, dependency movement, schema/format changes, or unplanned product
-work during v1.13.17.
+work during v1.13.18. Preserve every v1.13.17 release document and the four
+historical release branches/worktrees unchanged.
 
 Codacy is signal, not authority.
 Do not chase style-only or generic maintainability warnings at the expense of correctness.
