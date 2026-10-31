@@ -1115,50 +1115,82 @@ def _v18_release_body_semantics(text: str) -> list[str]:
             violations.append(
                 f"{V18_RELEASE_BODY}: missing semantic marker {marker!r}"
             )
+    # Matching uses the same folded whitespace as marker checks: wrapping a
+    # Markdown paragraph cannot change whether it makes a forbidden claim.
     for pattern in (
         r"\bR18\s+(?:is|=)", r"\bM18\s+(?:is|=)", r"\bA18\s+(?:is|=)",
         r"publication (?:is )?complete", r"phase 10 (?:is )?safe",
-        r"(?<!earlier )(?<!prior )(?<!historical )\b"
-        r"(?:(?:route a )?(?:direct(?: advisory-specific)?|advisory-specific) "
+    ):
+        if re.search(pattern, normalized, re.IGNORECASE):
+            violations.append(
+                f"{V18_RELEASE_BODY}: contains forbidden future assertion {pattern!r}"
+            )
+
+    # Consume history with its assertion so matching cannot restart inside
+    # "earlier Route A direct verification" at the unqualified word "direct".
+    history = r"\b(?P<historical>(?:earlier|prior|historical)\s+)?"
+    verb = (
+        r"\s+(?:(?:has|have|had)\s+)?"
+        r"(?P<negated>(?:(?:did|does|do)\s+)?not\s+|never\s+)?"
+    )
+    # A match must not borrow its object from a later contrasting clause.
+    within_clause = r"(?:(?!\b(?:and|but|however|yet|a[1-7])\b)[^.;!?])"
+    direct_subject = (
+        r"(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
+        r"the seven defined rows|(?:all )?seven (?:defined )?rows)"
+    )
+    component_subject = (
+        r"(?:a(?:5|6)(?:\s+and\s+a[56])?|(?:supplemental )?component checks?)"
+    )
+    for pattern in (
+        history
+        + r"(?:(?:route a )?(?:direct(?: advisory-specific)?|advisory-specific) "
         r"verification|advisory testing) (?:remains|is|was) (?:explicitly )?"
-        r"(?:deferred|not run|waived|incomplete)\b",
-        r"(?<!earlier )(?<!prior )(?<!historical )\broute a "
-        r"(?:remains|is|was) (?:deferred|not run|waived|incomplete)\b",
-        r"\ba(?:1|2)(?:\s+and\s+a[12])?\b[^.\n]{0,160}"
-        r"\b(?:reached|executed|exercised|established)\b[^.\n]{0,80}"
-        r"\b(?:deeper\s+)?fse\b",
-        r"\ba(?:3|4)(?:\s+and\s+a[34])?\b[^.\n]{0,160}"
-        r"\b(?:reached|executed|exercised|established)\b[^.\n]{0,80}"
-        r"\bhuffman guard\b",
-        r"\b(?:a(?:5|6)(?:\s+and\s+a[56])?|(?:supplemental )?component checks?)"
-        r"\s+(?:are|were|establish(?:es|ed)?|provide(?:s|d)?)\s+"
+        r"(?P<negated>not |no longer )?(?:deferred|not run|waived|incomplete)\b",
+        history + r"route a (?:remains|is|was) "
+        r"(?P<negated>not |no longer )?(?:deferred|not run|waived|incomplete)\b",
+        history + r"a(?:1|2)(?:\s+and\s+a[12])?\b"
+        + r"(?P<row_prefix>" + within_clause + r"{0,160}?)\b"
+        + r"(?:reach(?:ed)?|execute[sd]?|exercise[sd]?|establish(?:es|ed)?)\b"
+        + within_clause + r"{0,80}\b(?:deeper\s+)?fse\b",
+        history + r"a(?:3|4)(?:\s+and\s+a[34])?\b"
+        + r"(?P<row_prefix>" + within_clause + r"{0,160}?)\b"
+        + r"(?:reach(?:ed)?|execute[sd]?|exercise[sd]?|establish(?:es|ed)?)\b"
+        + within_clause + r"{0,80}\bhuffman guard\b",
+        history + component_subject
+        + r"\s+(?:are|were)\s+(?P<negated>not\s+|never\s+)?"
         r"(?:coldkeep )?integration coverage\b",
-        r"\b(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
-        r"the seven defined rows|(?:all )?seven (?:defined )?rows) "
-        r"(?:establish(?:es|ed)?|provides?) exhaustive advisory coverage\b",
-        r"\b(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
-        r"the seven defined rows|(?:all )?seven (?:defined )?rows) "
-        r"(?:establish(?:es|ed)?|proves?) (?:an? )?"
+        history + component_subject + verb
+        + r"(?:establish(?:es|ed)?|provide[sd]?)\s+"
+        r"(?:coldkeep )?integration coverage\b",
+        history + direct_subject + verb
+        + r"(?:establish(?:es|ed)?|provide[sd]?) exhaustive advisory coverage\b",
+        history + direct_subject + verb
+        + r"(?:establish(?:es|ed)?|prove[sd]?) (?:an? )?"
         r"exploitability (?:conclusion|result)\b",
-        r"\b(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
-        r"the seven defined rows|(?:all )?seven (?:defined )?rows) "
-        r"(?:establish(?:es|ed)?|provides?) (?:a )?"
+        history + direct_subject + verb
+        + r"(?:establish(?:es|ed)?|provide[sd]?) (?:a )?"
         r"general resource-usage guarantee\b",
-        r"\b(?:route a|(?:this |direct )?(?:direct )?(?:result|verification)|"
-        r"the seven defined rows|(?:all )?seven (?:defined )?rows) "
-        r"(?:certifies|certified|establishes) "
+        history + direct_subject + verb
+        + r"(?:certif(?:y|ies|ied)|establish(?:es|ed)?) "
         r"(?:hosted checks|windows|protected integration|tag creation|"
         r"publication|owner acceptance)\b",
-        r"\ba(?:1|2)(?:\s+and\s+a[12])?\b[^.\n]{0,120}"
-        r"\b(?:returned|retained|produced|reported)\b[^.\n]{0,80}"
-        r"\berrcompressionsizemismatch\b",
-        r"\ba(?:3|4)(?:\s+and\s+a[34])?\b[^.\n]{0,120}"
-        r"\b(?:returned|retained|produced|reported)\b[^.\n]{0,80}"
-        r"\berrdecompressionfailed\b",
-        r"\ba(?:1|2)(?:\s+and\s+a[12])?\b[^.\n]{0,80}"
-        r"\b(?:used|uses|had|applied|ran with)\b[^.\n]{0,40}\b64 kib\b",
-        r"\ba(?:3|4)(?:\s+and\s+a[34])?\b[^.\n]{0,80}"
-        r"\b(?:used|uses|had|applied|ran with)\b[^.\n]{0,40}\b4 mib\b",
+        history + r"a(?:1|2)(?:\s+and\s+a[12])?\b"
+        + r"(?P<row_prefix>" + within_clause + r"{0,120}?)\b"
+        + r"(?:return(?:s|ed)?|retain(?:s|ed)?|produce[sd]?|report(?:s|ed)?)\b"
+        + within_clause + r"{0,80}\berrcompressionsizemismatch\b",
+        history + r"a(?:3|4)(?:\s+and\s+a[34])?\b"
+        + r"(?P<row_prefix>" + within_clause + r"{0,120}?)\b"
+        + r"(?:return(?:s|ed)?|retain(?:s|ed)?|produce[sd]?|report(?:s|ed)?)\b"
+        + within_clause + r"{0,80}\berrdecompressionfailed\b",
+        history + r"a(?:1|2)(?:\s+and\s+a[12])?\b"
+        + r"(?P<row_prefix>" + within_clause + r"{0,80}?)\b"
+        + r"(?:use[sd]?|had|applied|apply|ran with|run with)\b"
+        + within_clause + r"{0,40}\b64 kib\b",
+        history + r"a(?:3|4)(?:\s+and\s+a[34])?\b"
+        + r"(?P<row_prefix>" + within_clause + r"{0,80}?)\b"
+        + r"(?:use[sd]?|had|applied|apply|ran with|run with)\b"
+        + within_clause + r"{0,40}\b4 mib\b",
         r"\bsource commit\s+`?(?!c69d678349edae59b1ee1d582fc2dbfd372ec133\b)"
         r"[0-9a-f]{40}\b",
         r"\btree\s+`?(?!804f61238191e6dd93a3e85b27f291c95e84b14e\b)"
@@ -1168,7 +1200,17 @@ def _v18_release_body_semantics(text: str) -> list[str]:
         r"[0-9a-f]{64}\b",
         r"\bgo 1[.]26[.]10\s+(?!linux/amd64\b)[a-z0-9]+/[a-z0-9]+\b",
     ):
-        if re.search(pattern, text, re.IGNORECASE):
+        # Exempt only this qualified assertion. A later positive assertion in
+        # the same sentence still has to be examined.
+        matches = re.finditer(pattern, normalized, re.IGNORECASE)
+        if any(
+            not (match.groupdict().get("historical") or match.groupdict().get("negated"))
+            and not re.search(
+                r"\b(?:not|never)\s+$",
+                match.groupdict().get("row_prefix") or "",
+            )
+            for match in matches
+        ):
             violations.append(
                 f"{V18_RELEASE_BODY}: contains forbidden future assertion {pattern!r}"
             )

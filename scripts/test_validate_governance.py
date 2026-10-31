@@ -2189,6 +2189,93 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             [],
         )
 
+    def test_v18_release_body_rejects_wrapped_current_assertions(self) -> None:
+        text = (governance.ROOT / governance.V18_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
+        for assertion in (
+            "Direct verification remains deferred.",
+            "Direct verification was not run.",
+            "Direct advisory-specific verification is waived.",
+            "Route A is incomplete.",
+            "A1 reached deeper FSE.",
+            "A1's public path reached deeper FSE.",
+            "A1 actually reached deeper FSE.",
+            "A1 successfully reached deeper FSE.",
+            "A3's bounded path reached the Huffman guard.",
+            "A3 successfully reached the Huffman guard.",
+            "A4 reached the Huffman guard.",
+            "A5 establishes Coldkeep integration coverage.",
+            "Direct verification certifies hosted checks.",
+            "A2 returned ErrCompressionSizeMismatch.",
+            "A1 public decoding returned ErrCompressionSizeMismatch.",
+            "A3 bounded decoding returned ErrDecompressionFailed.",
+            "A1 deliberately used 64 KiB.",
+            "A3 deliberately used 4 MiB.",
+            "A3 used a 4 MiB expected-output setting.",
+        ):
+            with self.subTest(assertion=assertion):
+                wrapped = assertion.replace(" ", "\n")
+                violations = governance._v18_release_body_semantics(
+                    text + wrapped + "\n"
+                )
+                self.assertEqual(len(violations), 1)
+                self.assertIn("contains forbidden future assertion", violations[0])
+
+    def test_v18_release_body_accepts_local_negation_and_history(self) -> None:
+        text = (governance.ROOT / governance.V18_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
+        for assertion in (
+            "A1 has not reached deeper FSE.",
+            "A1's public path has not reached deeper FSE.",
+            "A1 public decoding has not returned ErrCompressionSizeMismatch.",
+            "A3 bounded decoding has not returned ErrDecompressionFailed.",
+            "A1 deliberately has not used 64 KiB.",
+            "A3 deliberately has not used 4 MiB.",
+            "A2 never reached deeper FSE.",
+            "A3 never reached the Huffman guard.",
+            "A4 did not reach the Huffman guard.",
+            "A1 has not returned ErrCompressionSizeMismatch.",
+            "A3 has not used a 4 MiB bound.",
+            "Component checks are not Coldkeep integration coverage.",
+            "Direct verification does not certify hosted checks.",
+            "Direct verification is not deferred.",
+            "An earlier Route A direct verification was incomplete.",
+            "An earlier direct advisory-specific verification was incomplete.",
+            "Prior Route A verification was incomplete.",
+        ):
+            for candidate in (assertion, assertion.replace(" ", "\n")):
+                with self.subTest(assertion=candidate):
+                    self.assertEqual(
+                        governance._v18_release_body_semantics(text + candidate + "\n"),
+                        [],
+                    )
+
+    def test_v18_release_body_qualified_clause_does_not_hide_current_claim(self) -> None:
+        text = (governance.ROOT / governance.V18_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
+        for assertion in (
+            "A1 has not reached deeper FSE, but A2 reached deeper FSE.",
+            "A1 has not reached the fixed guard, but A2 reached deeper FSE.",
+            "A1 has not reached the fixed guard and A2 reached deeper FSE.",
+            "A1's public path has not reached the fixed guard, A2's public path reached deeper FSE.",
+            "A3 never reached the Huffman guard; A4 reached the Huffman guard.",
+            "A1 has not returned the window error, but A2 returned ErrCompressionSizeMismatch.",
+            "An earlier Route A direct verification was incomplete; direct verification is incomplete.",
+            "An earlier direct advisory-specific verification was incomplete, but direct verification remains deferred.",
+            "Direct verification does not certify Windows, but direct verification certifies hosted checks.",
+            "Component checks are not Coldkeep integration coverage; A5 establishes Coldkeep integration coverage.",
+        ):
+            for candidate in (assertion, assertion.replace(" ", "\n")):
+                with self.subTest(assertion=candidate):
+                    violations = governance._v18_release_body_semantics(
+                        text + candidate + "\n"
+                    )
+                    self.assertEqual(len(violations), 1)
+                    self.assertIn("contains forbidden future assertion", violations[0])
+
     def test_v18_authority_missing_state_returns_before_downstream_checks(self) -> None:
         expected = ["TEST_FIXTURE_ONLY: missing canonical state"]
         with (
