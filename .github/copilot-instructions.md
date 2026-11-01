@@ -4,7 +4,7 @@
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -24,10 +24,11 @@ Coldkeep is a correctness-first cold storage engine. The primary invariant is: n
 
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
 
-v1.13.18 is the active final v1.x source-snapshot candidate. Phases 0-3 are
-complete, Phase 4 hosted certification is Next, and the new Stage A commit
-still requires fresh independent exact-head review before any remote action.
-No hosted result or publication is claimed. v1.13.17 remains published and
+v1.13.18 is the active final v1.x source-snapshot candidate. Phases 0-4 are
+complete on the accepted recovery Wave A source S; Phase 5 protected
+integration is Next. This metadata-only Stage B head requires fresh local
+review and exact-head Wave B before protected integration. S-scoped success
+does not certify this later head, main, a tag or publication. v1.13.17 remains published and
 immutable at M17/A17 and GitHub Release `400460267`; Phase 9M and
 TS-READBACK-01 remain qualified historical anchors. v1.13.16 is the
 immutable failed-publication predecessor: its

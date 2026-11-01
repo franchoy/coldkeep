@@ -4,7 +4,7 @@
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -107,21 +107,23 @@ Do not add global coverage gates unless explicitly approved.
 
 ## v1.13.18 Final Snapshot Boundary
 
-v1.13.18 is an active local final-source-snapshot candidate with Phase 4
-hosted certification pending. Candidate C's earlier hosted wave passed CI and
-CodeQL but did not clear Codacy; exact E's separate hosted wave failed the
-reachable-vulnerability jobs and retained three Codacy findings. This bounded
-successor updates the release-critical toolchain from the Go 1.26.9 state on M
-to Go 1.26.10 and corrects those findings without changing product behavior or
-dependencies. It still requires independent exact-head review and later fresh
-hosted certification, and claims no operational adoption or publication. v1.13.17
-remains immutable at M17/A17 and Release `400460267`; its qualified Phase 9M
-and TS history is preserved. v1.13.16 is the immutable failed-publication
-predecessor; its public tag failed required certification and no GitHub
-Release exists. v1.13.15 remains published stable and immutable. Follow the
-v1.13.18 10-phase plan, exact 40-path cumulative boundary, and narrower
-33-path correction manifest, and do not
-use CI work to introduce:
+v1.13.18 is the active final-source-snapshot candidate at the metadata-only
+Stage B boundary. Recovery Wave A on S passed its required local,
+real-PostgreSQL and natural hosted gates; Phases 0-4 are Complete and Phase 5
+protected integration is Next. The Stage B head still requires fresh local
+review and exact-head Wave B. Neither S's checks nor this structural state
+certifies a later head, protected main, a tag or publication.
+
+The candidate uses Go 1.26.10 and the accepted compress v1.20.2 component,
+with exactly 52 cumulative paths and 13 selected technical tuples. Stage B
+changes release metadata only and preserves all technical bytes, dependencies,
+fixtures, workflows and scanner policy. Candidate C, exact E and Q retain
+their recorded failed requirements; their history is not rewritten.
+v1.13.17 remains immutable at M17/A17 and Release `400460267`, including its
+qualified Phase 9M and TS history. v1.13.16 remains the immutable
+failed-publication predecessor, and v1.13.15 remains published stable.
+Follow the v1.13.18 10-phase plan, exact 52-path cumulative boundary and
+current narrower operation manifest. Do not use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;

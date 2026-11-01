@@ -8,7 +8,7 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -24,8 +24,10 @@ V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-- `v1.13.18` is the active final v1.x source-snapshot candidate. Phases 0-3 are
-  complete and Phase 4 hosted certification is the next pending phase. The
+- `v1.13.18` is the active final v1.x source-snapshot candidate. Phases 0-4 are
+  complete on the accepted recovery Wave A source; Phase 5 protected
+  integration is Next. This metadata-only Stage B head requires fresh local
+  review and exact-head Wave B before any protected integration. The
   current governance-integrated successor combines Go 1.26.10 with the exact
   accepted `github.com/klauspost/compress v1.20.2` ordinary component. C1's
   ordinary preparation is closed component evidence. Bounded Route A direct
@@ -38,9 +40,15 @@ V2_IMPLEMENTATION: NOT_STARTED
   It does not certify the reconciled successor, hosted checks, merge, tag,
   publication, cleanup, or owner acceptance. Q passed local and independent
   review and was adopted and pushed, but its natural Wave A retained the push
-  PostgreSQL cleanup failure and 21 Added Codacy issues. The bounded recovery
-  requires its own full local gates, independent exact-tree review, and fresh
-  hosted evidence before any later release stage.
+  PostgreSQL cleanup failure and 21 Added Codacy issues. Recovery successor S
+  `0a6250f173ae4b72cbb8e3f00bf2ea34a20c10e9`, tree
+  `8c8249bb35b53310d640aead19aec41a1bdacb47`, subsequently passed its
+  local, real-PostgreSQL, independent and natural hosted Wave A gates. That
+  acceptance is bound to the recovery handoff SHA-256
+  `ae22ec4e9a79f01db223a797d7876c2dd7b358dab1bc1543d86039e17e9ff3f2`.
+  It does not certify this later metadata head, protected main, a tag,
+  publication or owner acceptance. Historical failures and qualifications
+  remain retained.
 - `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
   Phase 9M and TS-READBACK-01 remain source-scoped qualified historical facts,
   including their recorded failed-attempt qualifications.
@@ -111,9 +119,10 @@ This phase marker is descriptive and does not authorize work.
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
-    RELEASE_STATE: DEVELOPMENT
+    RELEASE_STATE: PRE_RELEASE
     PHASE_3: COMPLETE
-    PHASE_4: NEXT
+    PHASE_4: COMPLETE
+    PHASE_5: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

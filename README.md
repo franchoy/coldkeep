@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.18%20active-blue)
+![Status](https://img.shields.io/badge/status-v1.13.18%20ready-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -33,7 +33,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -49,11 +49,14 @@ V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.18 — Final v1.x Source Snapshot and Closure Handoff is active locally.
-Phases 0-3 are complete and Phase 4 hosted certification is Next. The current
-Go 1.26.10 corrective head still requires fresh independent exact-head source
-review before any operational adoption or remote authorization. It adds no
-product feature or format change and is not yet published.
+v1.13.18 — Final v1.x Source Snapshot and Closure Handoff is ready for
+Stage B exact-head certification and remains unpublished.
+Recovery Wave A on S `0a6250f173ae4b72cbb8e3f00bf2ea34a20c10e9` is
+accepted; Phases 0-4 are Complete and Phase 5 protected integration is Next.
+This metadata-only Stage B head preserves the accepted Go 1.26.10 and
+compress v1.20.2 technical component. It requires fresh local review and
+exact-head Wave B before integration; S-scoped results do not certify a later
+head, protected main, a tag or publication. No product feature or format changes.
 v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
 and TS-READBACK-01 retain their source-scoped qualification. v1.13.16 is the immutable
 failed-publication predecessor: annotated tag A16 exists, its required tag CI
@@ -73,9 +76,10 @@ requires a separate plan.
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
-    RELEASE_STATE: DEVELOPMENT
+    RELEASE_STATE: PRE_RELEASE
     PHASE_3: COMPLETE
-    PHASE_4: NEXT
+    PHASE_4: COMPLETE
+    PHASE_5: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED

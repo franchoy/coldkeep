@@ -78,7 +78,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 ```text
 SOURCE_VERSION: 1.13.18
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -94,8 +94,10 @@ V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.18 is the active final-source-snapshot candidate. Phases 0-3 are complete
-and Phase 4 hosted certification is Next. Candidate C's earlier wave passed CI
+v1.13.18 is ready for Stage B exact-head certification as the active
+final-source-snapshot candidate. Phases 0-4 are Complete on the accepted
+recovery Wave A source S; Phase 5 protected integration is Next.
+Candidate C's earlier wave passed CI
 and CodeQL but retained Codacy findings; exact E's separate wave failed the
 reachable-vulnerability jobs and retained three Codacy findings. The
 governance-integrated successor combines Go 1.26.10 with the exact accepted
@@ -106,16 +108,21 @@ bound to evidence SHA-256
 Q passed its local gates and independent exact-tree review and was adopted
 and pushed. Its natural Wave A failed the push PostgreSQL cleanup contract
 and retained 21 Added Codacy issues; PR CI and both CodeQL contexts passed.
-The bounded recovery successor requires its own local, independent, and hosted
-certification. No Stage B, protected integration, or publication is claimed.
+Recovery successor S `0a6250f173ae4b72cbb8e3f00bf2ea34a20c10e9`
+subsequently passed local, real-PostgreSQL and independent review plus both
+natural CI and CodeQL contexts and completed Codacy Added 0. Its accepted
+handoff is bound to SHA-256
+`ae22ec4e9a79f01db223a797d7876c2dd7b358dab1bc1543d86039e17e9ff3f2`.
+This metadata-only Stage B head still requires fresh local review and exact-head
+Wave B; no protected integration, tag, publication or owner acceptance is claimed.
 v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
 and TS-READBACK-01 remain qualified
 historical anchors. Publication material is frozen. v1.13.16 is
 the immutable failed-publication predecessor; its tag certificate was withheld
 and no GitHub Release exists. The v1.13.17 successor-branch push and exact-N
-evidence are historical. The last accepted Wave A readback binds the
-operational release branch and PR #124 to Q
-`dbd64d8faedef20ebe4198c7e019eb73e0a24e7f`; it does not certify a later head.
+evidence are historical. The accepted recovery Wave A readback binds the
+operational release branch and PR #124 to S
+`0a6250f173ae4b72cbb8e3f00bf2ea34a20c10e9`; it does not certify a later head.
 No push, PR write, merge, tag, Release change, cleanup, or v2 work is authorized by this
 tracked state.
 
