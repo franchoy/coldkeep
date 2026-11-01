@@ -27,7 +27,7 @@ Correctness, determinism, crash safety, GC safety, restore safety, verification 
 
 v1.13.19 is the active finite tag-certification recovery candidate based on
 exact M18. Phases 0-2 are Complete and Phase 3 independent local acceptance is
-Next. Its exact 33-path recovery boundary preserves all product/dependency
+Next. Its exact 34-path recovery boundary preserves all product/dependency
 bytes, 13 technical tuples, and frozen v1.13.17/v1.13.18 documents. v1.13.18
 remains a public-tag certification NONPASS with no GitHub Release; do not move
 A18, erase its failed run, conflate the workspace NONPASS with the isolated

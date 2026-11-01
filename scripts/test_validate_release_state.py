@@ -13450,7 +13450,7 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
         self.assertEqual(
             spec.diagnostic_schema, "coldkeep-release-state-diagnostic/v6"
         )
-        self.assertEqual(len(spec.delta), 33)
+        self.assertEqual(len(spec.delta), 34)
         self.assertEqual(len(spec.technical_blobs), 13)
         self.assertEqual(len(spec.frozen_blobs), 24)
         self.assertTrue(spec.require_baseline_technical)
@@ -13531,7 +13531,7 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
         self.assertEqual(
             snapshot.diagnostic_schema, "coldkeep-release-state-diagnostic/v6"
         )
-        self.assertEqual(len(snapshot.delta), 33)
+        self.assertEqual(len(snapshot.delta), 34)
         self.assertEqual(len(snapshot.frozen_blobs), 24)
 
         state = release_state_support.Document.load(

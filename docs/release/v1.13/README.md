@@ -97,7 +97,7 @@ V2_IMPLEMENTATION: NOT_STARTED
 
 v1.13.19 is the active finite tag-certification recovery candidate based on
 exact M18. Phases 0-2 are Complete; Phase 3 independent local acceptance is Next.
-Its 33-path delta contains only the reviewed disposable-fixture repair,
+Its 34-path delta contains only the reviewed disposable-fixture repair,
 strict version/install anchors, finite contract and tests, current mirrors,
 and new v1.13.19 records. Go 1.26.10, compress v1.20.2, product/dependency
 bytes, all 13 technical tuples, and frozen v1.13.17/v1.13.18 documents remain

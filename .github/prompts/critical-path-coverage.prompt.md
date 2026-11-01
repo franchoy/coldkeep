@@ -118,7 +118,7 @@ reviewed fixture fix and strict lifecycle tests must preserve production
 CKRS017, A18/A17, all product/dependency bytes, 13 technical tuples, and frozen
 v1.13.17/v1.13.18 documents. v1.13.18 remains a public-tag certification
 NONPASS with no GitHub Release; its passing bounded evidence does not certify
-the new source. Follow the 10-phase plan, exact 33-path boundary, phase mode,
+the new source. Follow the 10-phase plan, exact 34-path boundary, phase mode,
 and allowlist:
 
 - do not implement v2 or SQLite-first product-default behavior;

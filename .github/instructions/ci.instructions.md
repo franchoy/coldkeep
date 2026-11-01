@@ -110,7 +110,7 @@ Do not add global coverage gates unless explicitly approved.
 
 v1.13.19 is the active finite recovery candidate based on exact M18. Phases
 0-2 are Complete and Phase 3 independent local acceptance is Next. The exact
-33-path delta changes only the reviewed fixture isolation, version/install
+34-path delta changes only the reviewed fixture isolation, version/install
 anchors, finite validators/tests, current authority, and new recovery records.
 It preserves Go 1.26.10, compress v1.20.2, every product/dependency byte, all
 13 technical tuples, and frozen v1.13.17/v1.13.18 documents.
@@ -119,7 +119,7 @@ v1.13.18 remains a genuine public-tag certification failure with no GitHub
 Release. Do not rerun or relabel its failed gate, move A18, infer a writer for
 the workspace fixture reappearance, or substitute its passing CodeQL/install
 dimensions for new-source evidence. Follow the v1.13.19 10-phase plan and
-exact 33-path boundary. Do not use CI work to introduce:
+exact 34-path boundary. Do not use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;

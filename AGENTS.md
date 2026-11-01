@@ -30,7 +30,7 @@ V2_IMPLEMENTATION: NOT_STARTED
   acceptance is Next. Its only runtime-visible change is application version
   1.13.19. The reviewed fixture repair removes only the active snapshot tag
   from a newly created disposable test clone; production CKRS017 remains
-  strict. The exact 33-path M18-relative delta, 13 inherited technical tuples,
+  strict. The exact 34-path M18-relative delta, 13 inherited technical tuples,
   and frozen v1.13.17/v1.13.18 documents are binding.
 - `v1.13.18` remains an immutable public annotated tag at A18/M18 whose
   required natural tag CI failed. Passing CodeQL, installations and other
@@ -57,7 +57,7 @@ V2_IMPLEMENTATION: NOT_STARTED
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The v1.13.19 scope, 10-phase list, validation checklist, exact 33-path
+- The v1.13.19 scope, 10-phase list, validation checklist, exact 34-path
   recovery allowlist, release state, snapshot reference, predecessor
   disposition, and release gate under `docs/release/v1.13/` are binding current
   authority. All v1.13.18 documents remain frozen historical bytes.
@@ -67,7 +67,7 @@ V2_IMPLEMENTATION: NOT_STARTED
   structural only. They do not certify hosted operations or authorize a push,
   PR, merge, tag, publication, closure, or v2 implementation.
 - The candidate must descend from exact M18 through a merge-free range and
-  produce the complete 33-row delta. Every other M18 path, all 13 technical
+  produce the complete 34-row delta. Every other M18 path, all 13 technical
   modes/blobs, all 24 frozen v1.13.17/v1.13.18 documents, compress v1.20.2,
   module sums, persisted fixtures, and product behavior remain unchanged.
   Stop and obtain separate owner authorization before changing another path or

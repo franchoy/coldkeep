@@ -57,7 +57,7 @@ Identify and state:
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
 - v1.13.19 is the active finite tag-certification recovery candidate. Phases
   0-2 are Complete and Phase 3 independent local acceptance is Next. Keep
-  changes within its exact 33-path boundary and preserve every product,
+  changes within its exact 34-path boundary and preserve every product,
   dependency, technical, and frozen historical byte outside it.
 - v1.13.18 remains a public-tag certification NONPASS with no GitHub Release.
   Do not move A18, erase the failed run, conflate the workspace NONPASS with

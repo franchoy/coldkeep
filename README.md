@@ -52,7 +52,7 @@ V2_IMPLEMENTATION: NOT_STARTED
 
 v1.13.19 — Final v1.x Tag-Certification Recovery is in private local
 preparation. Phases 0-2 are Complete and Phase 3 independent local acceptance
-is Next. It is a finite 33-path child of exact M18 that preserves Go 1.26.10,
+is Next. It is a finite 34-path child of exact M18 that preserves Go 1.26.10,
 compress v1.20.2, all product/dependency bytes, 13 technical tuples, and the
 frozen v1.13.17/v1.13.18 release records. No product feature or format changes.
 

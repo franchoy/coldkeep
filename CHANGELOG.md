@@ -37,7 +37,7 @@ checks, publication, public readback, and owner acceptance remain pending.
   isolated `/tmp` complete 281-test PASS, and the unidentified writer of the
   reappearing fixture reference as distinct facts.
 - Advances only the reported application/install expectation to 1.13.19 and
-  adds a finite v2 snapshot selector based on exact M18, an exact 33-path
+  adds a finite v2 snapshot selector based on exact M18, an exact 34-path
   recovery delta, protected `[M18,candidate]` topology, and one-level future
   annotated v1.13.19 tag rules.
 - Freezes every v1.13.17/v1.13.18 release document, all 13 technical tuples,
