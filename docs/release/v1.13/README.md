@@ -78,7 +78,7 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -96,7 +96,8 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 v1.13.19 is the active finite tag-certification recovery candidate based on
-exact M18. Phases 0-2 are Complete; Phase 3 independent local acceptance is Next.
+exact M18. Phases 0-3 are Complete after qualified independent local review;
+Phase 4 release-branch and PR hosted certification is Next.
 Its 34-path delta contains only the reviewed disposable-fixture repair,
 strict version/install anchors, finite contract and tests, current mirrors,
 and new v1.13.19 records. Go 1.26.10, compress v1.20.2, product/dependency
@@ -106,8 +107,9 @@ unchanged. Route A remains accepted at its original K/C2 scope.
 v1.13.18 remains an immutable public annotated-tag certification NONPASS with
 no GitHub Release. Its natural CI failure, passing CodeQL and installations,
 workspace fixture-suite NONPASS, isolated `/tmp` PASS, and unidentified writer
-qualification are all preserved. No push, PR write, merge, tag, Release,
-cleanup, or v2 work is authorized by this tracked local state.
+qualification are all preserved. This tracked state grants no provider
+authority. Phase 4 actions depend on a separate exact-source continuation;
+merge, tag, Release, cleanup, and v2 remain later boundaries.
 
 Current authority is defined by the [scope](v1.13.19-scope.md),
 [phase list](v1.13.19-phase-list.md),

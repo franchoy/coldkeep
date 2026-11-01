@@ -2404,7 +2404,19 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
         )
         self.assertEqual(violations, [])
         self.assertEqual(state["SOURCE_VERSION"], "1.13.19")
-        self.assertEqual(state["CURRENT_PHASE"], "3_NEXT")
+        self.assertIn(
+            state["CURRENT_PHASE"],
+            {f"{number}_NEXT" for number in governance.V19_ALLOWED_NEXT_PHASES},
+        )
+        self.assertEqual(
+            governance._v19_phase_progression_violations(
+                (governance.ROOT / governance.V19_PHASE_FILE).read_text(
+                    encoding="utf-8"
+                ),
+                state["CURRENT_PHASE"],
+            ),
+            [],
+        )
         self.assertEqual(
             state["V1_13_18_STATE"],
             "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
@@ -2500,6 +2512,124 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
                     ),
                     [],
                 )
+
+    def test_v19_current_state_test_accepts_each_coherent_supported_phase(self) -> None:
+        source_root = governance.ROOT
+        paths = (
+            governance.V19_CANONICAL_CURRENT_STATE_FILE,
+            *governance.CURRENT_STATE_MIRROR_FILES,
+        )
+        for next_phase in (3, 4, 5):
+            with self.subTest(next_phase=next_phase), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for relative in paths:
+                    text = (source_root / relative).read_text(encoding="utf-8")
+                    text = re.sub(
+                        r"(?m)^CURRENT_PHASE: \S+$",
+                        f"CURRENT_PHASE: {next_phase}_NEXT",
+                        text,
+                    )
+                    target = root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(text, encoding="utf-8")
+                (root / governance.V19_PHASE_FILE).write_text(
+                    self.phase_text(next_phase), encoding="utf-8"
+                )
+                with mock.patch.object(governance, "ROOT", root):
+                    self.test_v19_active_state_and_all_mirrors_are_exact()
+                # A coherent phase must not pass when the actual phase list
+                # or any active mirror describes a different transition.
+                (root / governance.V19_PHASE_FILE).write_text(
+                    self.phase_text(4 if next_phase == 3 else 3), encoding="utf-8"
+                )
+                with mock.patch.object(governance, "ROOT", root):
+                    with self.assertRaises(AssertionError):
+                        self.test_v19_active_state_and_all_mirrors_are_exact()
+                (root / governance.V19_PHASE_FILE).write_text(
+                    self.phase_text(next_phase), encoding="utf-8"
+                )
+                agents = root / "AGENTS.md"
+                agents.write_text(
+                    agents.read_text(encoding="utf-8").replace(
+                        f"CURRENT_PHASE: {next_phase}_NEXT",
+                        "CURRENT_PHASE: 9_COMPLETE",
+                    ),
+                    encoding="utf-8",
+                )
+                with mock.patch.object(governance, "ROOT", root):
+                    with self.assertRaises(AssertionError):
+                        self.test_v19_active_state_and_all_mirrors_are_exact()
+
+    def test_v19_live_summaries_reject_wrong_missing_and_duplicate_fields(self) -> None:
+        cases = (
+            ("3_NEXT", "DEVELOPMENT", "NEXT", "NOT_STARTED", "NOT_STARTED"),
+            ("4_NEXT", "DEVELOPMENT", "COMPLETE", "NEXT", "NOT_STARTED"),
+            ("5_NEXT", "PRE_RELEASE", "COMPLETE", "COMPLETE", "NEXT"),
+        )
+        for phase, lifecycle, third, fourth, fifth in cases:
+            with self.subTest(phase=phase):
+                summary = (
+                    f"    RELEASE_STATE: {lifecycle}\n"
+                    f"    PHASE_3: {third}\n"
+                    f"    PHASE_4: {fourth}\n"
+                    f"    PHASE_5: {fifth}\n"
+                )
+                texts = {Path("AGENTS.md"): summary, Path("README.md"): summary}
+                self.assertEqual(
+                    governance._v19_phase_summary_violations(texts, phase), []
+                )
+                invalid = (
+                    summary.replace(f"RELEASE_STATE: {lifecycle}", "RELEASE_STATE: PUBLISHED"),
+                    summary.replace(f"PHASE_3: {third}", "PHASE_3: UNKNOWN"),
+                    summary.replace(f"    PHASE_4: {fourth}\n", ""),
+                    summary + f"    PHASE_5: {fifth}\n",
+                )
+                for changed in invalid:
+                    with self.subTest(changed=changed):
+                        violations = governance._v19_phase_summary_violations(
+                            {**texts, Path("AGENTS.md"): changed}, phase
+                        )
+                        self.assertEqual(len(violations), 1)
+                        self.assertIn("AGENTS.md: live lifecycle summary", violations[0])
+                self.assertNotEqual(
+                    governance._v19_phase_summary_violations(
+                        {Path("AGENTS.md"): summary, Path("README.md"): ""}, phase
+                    ),
+                    [],
+                )
+
+    def test_v19_checklist_commands_follow_phase_without_consuming_future_sections(self) -> None:
+        for phase, explicit in (
+            ("3_NEXT", "development"),
+            ("4_NEXT", "development"),
+            ("5_NEXT", "pre-release"),
+        ):
+            with self.subTest(phase=phase):
+                command = "python3 scripts/validate_release_state.py --state"
+                active = (
+                    "## Candidate-local gates\n\n"
+                    f"- `{command} auto --json`\n"
+                    f"- `{command} {explicit} --json`\n"
+                )
+                text = active + (
+                    "\n## External phases\n\n"
+                    f"Future transitions use `{command} pre-release --json`.\n"
+                )
+                self.assertEqual(
+                    governance._v19_candidate_command_violations(text, phase), []
+                )
+                wrong = "pre-release" if explicit == "development" else "development"
+                for changed in (
+                    active.replace(f"{explicit} --json", f"{wrong} --json"),
+                    active.replace(f"- `{command} {explicit} --json`\n", ""),
+                    active + f"- `{command} {explicit} --json`\n",
+                    active + "\n" + active,
+                    active.replace("## Candidate-local gates", "## Historical gates"),
+                ):
+                    with self.subTest(changed=changed):
+                        self.assertNotEqual(
+                            governance._v19_candidate_command_violations(changed, phase), []
+                        )
 
     def test_v18_and_v17_document_sets_remain_frozen(self) -> None:
         self.assertEqual(governance._validate_v11318_frozen(governance.ROOT), [])

@@ -8,7 +8,7 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -26,8 +26,9 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 - `v1.13.19` is the active finite tag-certification recovery candidate based
-  on exact M18. Phases 0-2 are Complete and Phase 3 independent local
-  acceptance is Next. Its only runtime-visible change is application version
+  on exact M18. Phases 0-3 are Complete after independent local review with
+  retained qualifications; Phase 4 release-branch and PR hosted certification
+  is Next. Its only runtime-visible change is application version
   1.13.19. The reviewed fixture repair removes only the active snapshot tag
   from a newly created disposable test clone; production CKRS017 remains
   strict. The exact 34-path M18-relative delta, 13 inherited technical tuples,
@@ -72,8 +73,10 @@ V2_IMPLEMENTATION: NOT_STARTED
   module sums, persisted fixtures, and product behavior remain unchanged.
   Stop and obtain separate owner authorization before changing another path or
   technical byte. Historical branches/worktrees remain untouched. This local
-  phase authorizes no canonical adoption, push, PR, merge, tag, Release,
-  workflow action, cleanup, or v2 work.
+  declaration grants no provider authority. Any Phase 4 adoption, push, or PR
+  action requires the separately reviewed exact-source continuation and its
+  passing predicates. Merge, tag, Release, workflow intervention, cleanup, and
+  v2 work remain outside that boundary.
 
 ## Correctness rules
 
@@ -105,15 +108,17 @@ The frozen v1 release-critical execution contract uses Go 1.26.10 with
 NEXT: the first not-yet-completed lifecycle phase in the summary below.
 This phase marker is descriptive and does not authorize work.
 
+Current v1.13.19 lifecycle summary
+
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_19: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
-    RELEASE_STATE: PRE_RELEASE
+    RELEASE_STATE: DEVELOPMENT
     PHASE_3: COMPLETE
-    PHASE_4: NOT_STARTED
+    PHASE_4: NEXT
     PHASE_5: NOT_STARTED
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15

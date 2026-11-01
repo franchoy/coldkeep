@@ -22,10 +22,11 @@ project, do not start here; start with [README.md](README.md).
 
 ## v1.13.19 - Unreleased — Final v1.x Tag-Certification Recovery
 
-This date records private local recovery preparation, not publication.
-v1.13.19 remains `NOT_PUBLISHED`; independent review, canonical adoption,
-hosted candidate checks, protected merge, main certification, tag-native
-checks, publication, public readback, and owner acceptance remain pending.
+This entry records local recovery and qualified independent review, not
+publication. v1.13.19 remains `NOT_PUBLISHED`; canonical adoption and hosted
+candidate checks are the next boundary. Protected merge, main certification,
+tag-native checks, publication, public readback, and owner acceptance remain
+pending.
 
 - Preserves public annotated v1.13.18 tag A18 and exact M18 after its required
   natural tag CI failed; no v1.13.18 GitHub Release exists. Passing CodeQL,
@@ -42,8 +43,8 @@ checks, publication, public readback, and owner acceptance remain pending.
   annotated v1.13.19 tag rules.
 - Freezes every v1.13.17/v1.13.18 release document, all 13 technical tuples,
   Go 1.26.10, compress v1.20.2, module sums, fixtures, product behavior, and
-  accepted Route A K/C2 scope. Phases 0-2 are Complete and Phase 3 independent
-  local acceptance is Next; Phases 4-9 are Not started.
+  accepted Route A K/C2 scope. Phases 0-3 are Complete after qualified
+  independent local review; Phase 4 is Next and Phases 5-9 are Not started.
 
 ## v1.13.18 - 2026-11-01 [failed-publication-predecessor] — Final v1.x Source Snapshot and Closure Handoff
 

@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.19%20local%20review-blue)
+![Status](https://img.shields.io/badge/status-v1.13.19%20candidate%20checks%20next-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -33,7 +33,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -50,9 +50,9 @@ V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.19 — Final v1.x Tag-Certification Recovery is in private local
-preparation. Phases 0-2 are Complete and Phase 3 independent local acceptance
-is Next. It is a finite 34-path child of exact M18 that preserves Go 1.26.10,
+v1.13.19 — Final v1.x Tag-Certification Recovery has completed independent
+local review with retained qualifications. Phases 0-3 are Complete; Phase 4
+release-branch and PR hosted certification is Next. It is a finite 34-path child of exact M18 that preserves Go 1.26.10,
 compress v1.20.2, all product/dependency bytes, 13 technical tuples, and the
 frozen v1.13.17/v1.13.18 release records. No product feature or format changes.
 
@@ -71,14 +71,16 @@ source-install instructions therefore continue to target v1.13.15.
 V2 planning review is authorized. V2 implementation has not started and
 requires a separate plan.
 
+Current v1.13.19 lifecycle summary
+
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_19: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
-    RELEASE_STATE: PRE_RELEASE
+    RELEASE_STATE: DEVELOPMENT
     PHASE_3: COMPLETE
-    PHASE_4: NOT_STARTED
+    PHASE_4: NEXT
     PHASE_5: NOT_STARTED
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15

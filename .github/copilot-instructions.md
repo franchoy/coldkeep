@@ -4,7 +4,7 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -26,8 +26,8 @@ Coldkeep is a correctness-first cold storage engine. The primary invariant is: n
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
 
 v1.13.19 is the active finite tag-certification recovery candidate based on
-exact M18. Phases 0-2 are Complete and Phase 3 independent local acceptance is
-Next. Its exact 34-path recovery boundary preserves all product/dependency
+exact M18. Phases 0-3 are Complete after qualified independent local review;
+Phase 4 release-branch and PR hosted certification is Next. Its exact 34-path recovery boundary preserves all product/dependency
 bytes, 13 technical tuples, and frozen v1.13.17/v1.13.18 documents. v1.13.18
 remains a public-tag certification NONPASS with no GitHub Release; do not move
 A18, erase its failed run, conflate the workspace NONPASS with the isolated

@@ -4,7 +4,7 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 3_NEXT
+CURRENT_PHASE: 4_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -113,7 +113,8 @@ When proposing coverage, provide:
 ## Active v1.13.19 recovery boundaries
 
 v1.13.19 is a finite source recovery with no product-coverage expansion.
-Phases 0-2 are Complete and Phase 3 independent local acceptance is Next. The
+Phases 0-3 are Complete after qualified independent local review; Phase 4
+release-branch and PR hosted certification is Next. The
 reviewed fixture fix and strict lifecycle tests must preserve production
 CKRS017, A18/A17, all product/dependency bytes, 13 technical tuples, and frozen
 v1.13.17/v1.13.18 documents. v1.13.18 remains a public-tag certification

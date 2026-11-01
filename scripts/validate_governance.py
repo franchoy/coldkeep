@@ -1563,6 +1563,74 @@ def _v19_phase_progression_violations(text: str, current_phase: str) -> list[str
     ]
 
 
+def _v19_phase_summary_violations(
+    texts: dict[Path, str], current_phase: str
+) -> list[str]:
+    """Keep the short live summaries consistent with the canonical phase."""
+    next_phase = {
+        f"{number}_NEXT": number for number in V19_ALLOWED_NEXT_PHASES
+    }.get(current_phase)
+    if next_phase is None:
+        return []  # The canonical-state validator reports unsupported phases.
+    expected = [
+        ("RELEASE_STATE", "PRE_RELEASE" if next_phase == 5 else "DEVELOPMENT"),
+        *(
+            (
+                f"PHASE_{number}",
+                "COMPLETE"
+                if number < next_phase
+                else "NEXT"
+                if number == next_phase
+                else "NOT_STARTED",
+            )
+            for number in (3, 4, 5)
+        ),
+    ]
+    violations: list[str] = []
+    for relative in (Path("AGENTS.md"), Path("README.md")):
+        text = texts.get(relative, "")
+        actual = re.findall(
+            r"(?m)^[ \t]*(RELEASE_STATE|PHASE_[345]):[ \t]*(\S+)[ \t]*$",
+            text,
+        )
+        if actual != expected:
+            violations.append(
+                f"{relative}: live lifecycle summary must match canonical "
+                f"CURRENT_PHASE={current_phase!r}: expected {expected!r}, "
+                f"found {actual!r}"
+            )
+    return violations
+
+
+def _v19_candidate_command_violations(text: str, current_phase: str) -> list[str]:
+    """Require the active checklist command for the declared candidate phase."""
+    expected_state = {
+        "3_NEXT": "development",
+        "4_NEXT": "development",
+        "5_NEXT": "pre-release",
+    }.get(current_phase)
+    if expected_state is None:
+        return []  # The canonical-state validator reports unsupported phases.
+    headings = re.findall(r"(?m)^## Candidate-local gates[ \t]*$", text)
+    if len(headings) != 1:
+        return [
+            "docs/release/v1.13/v1.13.19-validation-checklist.md: requires "
+            f"exactly one Candidate-local gates section, found {len(headings)}"
+        ]
+    section = markdown_section(text, "## Candidate-local gates")
+    actual = re.findall(
+        r"`python3 scripts/validate_release_state\.py --state ([a-z-]+) --json`",
+        section,
+    )
+    if actual == ["auto", expected_state]:
+        return []
+    return [
+        "docs/release/v1.13/v1.13.19-validation-checklist.md: candidate-local "
+        f"release-state commands must be auto and {expected_state} for "
+        f"CURRENT_PHASE={current_phase!r}; found {actual!r}"
+    ]
+
+
 def _validate_frozen_paths(
     root: Path, expected_files: dict[Path, str], label: str
 ) -> list[str]:
@@ -1776,6 +1844,17 @@ def validate_v19_contract(root: Path, texts: dict[Path, str]) -> list[str]:
     violations.extend(
         _v19_phase_progression_violations(
             loaded.get(V19_PHASE_FILE, ""), state.get("CURRENT_PHASE", "")
+        )
+    )
+    violations.extend(
+        _v19_phase_summary_violations(texts, state.get("CURRENT_PHASE", ""))
+    )
+    violations.extend(
+        _v19_candidate_command_violations(
+            loaded.get(
+                Path("docs/release/v1.13/v1.13.19-validation-checklist.md"), ""
+            ),
+            state.get("CURRENT_PHASE", ""),
         )
     )
     violations.extend(_validate_v19_release_body(root, state))
