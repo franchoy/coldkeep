@@ -337,6 +337,166 @@ FINAL_SNAPSHOT_TECHNICAL_BLOBS = (
 FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256 = (
     "a2eecf45167225f5e2f3b9bf263e615ceeb0289eed5f5d0765e7bf28a47657f1"
 )
+
+# The recovery route is deliberately finite.  These rows are the complete
+# M18-relative candidate shape; adding a path requires a reviewed source
+# change here and in the authenticated reference document.
+V11319_FINAL_SNAPSHOT_DELTA = (
+    ("M", "100644", ".github/copilot-instructions.md"),
+    ("M", "100644", ".github/instructions/ci.instructions.md"),
+    ("M", "100644", ".github/prompts/critical-path-coverage.prompt.md"),
+    ("M", "100644", ".github/prompts/regression-fix.prompt.md"),
+    ("M", "100644", ".github/workflows/ci.yml"),
+    ("M", "100644", "AGENTS.md"),
+    ("M", "100644", "CHANGELOG.md"),
+    ("M", "100644", "CONTRIBUTING.md"),
+    ("M", "100644", "PRE_RELEASE_CHECKLIST.md"),
+    ("M", "100644", "README.md"),
+    ("M", "100644", "SECURITY.md"),
+    ("M", "100644", "docs/release/v1.13/README.md"),
+    ("M", "100644", "docs/release/v1.13/v1.13.x-release-train.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-final-source-snapshot-reference.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-phase-list.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-predecessor-disposition.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-release-body.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-release-body.sha256"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-release-gate.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-release-state-validator-contract.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-release-state.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-release-train-reconciliation.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-scope.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-source-test-allowlist.md"),
+    ("A", "100644", "docs/release/v1.13/v1.13.19-validation-checklist.md"),
+    ("M", "100644", "internal/version/version.go"),
+    ("M", "100644", "internal/version/version_test.go"),
+    ("M", "100644", "scripts/audit_ci_enforcement_test.go"),
+    ("M", "100644", "scripts/release_state_support.py"),
+    ("M", "100644", "scripts/test_validate_governance.py"),
+    ("M", "100644", "scripts/test_validate_release_state.py"),
+    ("M", "100755", "scripts/validate_governance.py"),
+    ("M", "100644", "scripts/validate_release_state.py"),
+)
+
+# Exact historical source bytes that the v1.13.19 recovery may describe but
+# must never rewrite.  The tuples are Git mode/blob/path, so checking them is
+# independent of filesystem timestamps and checkout permissions.
+V11319_FROZEN_DOCUMENT_BLOBS = (
+    ("100644", "50827db4cf9469a157a73083331254c1f9fd13e9", "docs/release/v1.13/v1.13.17-phase-list.md"),
+    ("100644", "28a9b9fd27276d0cd88fb35106e64f3f02e0f8e7", "docs/release/v1.13/v1.13.17-predecessor-disposition.md"),
+    ("100644", "98883ba5a88eae89f8062887b9beeb17778cc73d", "docs/release/v1.13/v1.13.17-release-body.md"),
+    ("100644", "d3d83f1e5c61ec8f5bd9628daaab4041d3b9387e", "docs/release/v1.13/v1.13.17-release-body.sha256"),
+    ("100644", "0ae704d282c27c5ee01ea84add6cc38a3956e714", "docs/release/v1.13/v1.13.17-release-gate.md"),
+    ("100644", "f7481769947a7c91edff812f2a6fda110e89e6e7", "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
+    ("100644", "03c865e7f6b7b52e2faac6947ea837a7b3d02e92", "docs/release/v1.13/v1.13.17-release-state.md"),
+    ("100644", "a1d10346e0020c8b5fac074d08faba8debebf8f6", "docs/release/v1.13/v1.13.17-release-train-reconciliation.md"),
+    ("100644", "61910dff875919433a85c8850ffd588af347212c", "docs/release/v1.13/v1.13.17-scope.md"),
+    ("100644", "1dbb402ead53b21150c007732d7aba78b2f34774", "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md"),
+    ("100644", "7f59206a66e4031aa7e6821fa220ec2bcdc011a2", "docs/release/v1.13/v1.13.17-source-test-allowlist.md"),
+    ("100644", "dd8c3e6c3d753c7885dba44ae33f5911a82b7220", "docs/release/v1.13/v1.13.17-terminal-disposition-reference.md"),
+    ("100644", "f3f408d9b15c4b63fbd2cabcc6a8d9c4a0a9e763", "docs/release/v1.13/v1.13.17-validation-checklist.md"),
+    ("100644", "c6281d28aa0a904e107288157036b3e1f5600ce1", "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"),
+    ("100644", "ae02925ec96886a370e41df7023f1660c44ae617", "docs/release/v1.13/v1.13.18-phase-list.md"),
+    ("100644", "89e091157af1d35435e737726917e09c0299aff3", "docs/release/v1.13/v1.13.18-release-body.md"),
+    ("100644", "a9cb195c5c2db3256691e446a56c53d98ff30e7b", "docs/release/v1.13/v1.13.18-release-body.sha256"),
+    ("100644", "f90e01de7938c81719b510b4a9e3cb1dd012ebb9", "docs/release/v1.13/v1.13.18-release-gate.md"),
+    ("100644", "8b1194586ddb3dde55355e5d5977fd36a1b4ef3c", "docs/release/v1.13/v1.13.18-release-state-validator-contract.md"),
+    ("100644", "c838cfc8db4a45b8a3a224ae057e902c694d39e6", "docs/release/v1.13/v1.13.18-release-state.md"),
+    ("100644", "485721747bac9498fe41406edcc362bf3b2e480b", "docs/release/v1.13/v1.13.18-release-train-reconciliation.md"),
+    ("100644", "b2e0ed837c526181cc53ff61999493090b1f3360", "docs/release/v1.13/v1.13.18-scope.md"),
+    ("100644", "c990808dbdb34dd4824884f378aeed30eee817d5", "docs/release/v1.13/v1.13.18-source-test-allowlist.md"),
+    ("100644", "5ca3941de15d81f234183adbae8e722dd93e697f", "docs/release/v1.13/v1.13.18-validation-checklist.md"),
+)
+
+
+@dataclass(frozen=True)
+class FinalSnapshotSpec:
+    """One closed, source-defined final-snapshot contract."""
+
+    source_version: str
+    selection_schema: str
+    expectations_schema: str
+    reference_schema: str
+    diagnostic_schema: str
+    exact_values: tuple[tuple[str, str], ...]
+    delta: tuple[tuple[str, str, str], ...]
+    technical_blobs: tuple[tuple[str, str, str], ...]
+    frozen_blobs: tuple[tuple[str, str, str], ...]
+    required_tags: tuple[tuple[str, str, str], ...]
+    require_baseline_technical: bool
+
+
+_COMMON_FINAL_SNAPSHOT_VALUES = (
+    ("CANONICAL_REPOSITORY", "franchoy/coldkeep"),
+    ("REPOSITORY_ID", "1158711822"),
+    ("BASE_REF", "refs/heads/main"),
+    ("LANGUAGE_FLOOR", "go1.25.0"),
+    ("TOOLCHAIN", "go1.26.10"),
+    ("PUBLISHED_M17", "f6aee8850c410b18b0871796bf1b9064b8d1f871"),
+    ("ANNOTATED_TAG_A17", "c7b24506b07d622d22f7da47643b38c3e39862ca"),
+    ("GITHUB_RELEASE_ID", "400460267"),
+    ("TS_ACCEPTANCE_STATUS", "TS_READBACK_01_OWNER_ACCEPTED_PROTECTED_MAIN_EFFECTIVE_QUALIFIED_AT_M"),
+    ("TS_ACCEPTANCE_SHA256", "697a9c02ea1db45a00c07219518f7959d05a333b3a169b859352857135597e5a"),
+    ("ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE", "NOT_SATISFIED"),
+    ("RETROSPECTIVE_PROCEDURAL_EXCEPTION", "NOT_GRANTED"),
+    ("TECHNICAL_COMPONENT_SCHEMA", "coldkeep-v1-final-source-snapshot-technical-blobs/v1"),
+    ("TECHNICAL_COMPONENT_COUNT", "13"),
+    ("TECHNICAL_COMPONENT_SHA256", FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256),
+    ("STATUS", "STRUCTURAL_NON_AUTHORIZING"),
+)
+
+FINAL_SNAPSHOT_SPECS = {
+    "1.13.18": FinalSnapshotSpec(
+        source_version="1.13.18",
+        selection_schema="coldkeep-v1-final-source-snapshot-selection/v1",
+        expectations_schema="coldkeep-v1-final-source-snapshot-expectations/v1",
+        reference_schema="coldkeep-v1-final-source-snapshot-reference/v1",
+        diagnostic_schema="coldkeep-release-state-diagnostic/v5",
+        exact_values=(
+            ("SCHEMA", "coldkeep-v1-final-source-snapshot-reference/v1"),
+            ("SOURCE_VERSION", "1.13.18"),
+            *_COMMON_FINAL_SNAPSHOT_VALUES,
+            ("BRANCH_REF", "refs/heads/release/v1.13.18"),
+            ("TAG_REF", "refs/tags/v1.13.18"),
+            ("BASE_M", "7ba439d6b1d0b18de69213897b247fb28f09b02c"),
+            ("BASE_M_TREE", "7b02badfb615fdf2fc739f1fb0a8e75ae56a22f6"),
+            ("BASE_M_PARENTS", "3d32e1662fdc0de251fd87bc5af6a309fcf3b6a6,d9439354d1806db3833c872a3a9ffc2e781cf95a"),
+            ("DELTA_SCHEMA", "coldkeep-v1-final-source-snapshot-delta/v1"),
+            ("DELTA_COUNT", "52"),
+        ),
+        delta=FINAL_SNAPSHOT_DELTA,
+        technical_blobs=FINAL_SNAPSHOT_TECHNICAL_BLOBS,
+        frozen_blobs=(),
+        required_tags=(("refs/tags/v1.13.17", "c7b24506b07d622d22f7da47643b38c3e39862ca", "f6aee8850c410b18b0871796bf1b9064b8d1f871"),),
+        require_baseline_technical=False,
+    ),
+    "1.13.19": FinalSnapshotSpec(
+        source_version="1.13.19",
+        selection_schema="coldkeep-v1-final-source-snapshot-selection/v2",
+        expectations_schema="coldkeep-v1-final-source-snapshot-expectations/v2",
+        reference_schema="coldkeep-v1-final-source-snapshot-reference/v2",
+        diagnostic_schema="coldkeep-release-state-diagnostic/v6",
+        exact_values=(
+            ("SCHEMA", "coldkeep-v1-final-source-snapshot-reference/v2"),
+            ("SOURCE_VERSION", "1.13.19"),
+            *_COMMON_FINAL_SNAPSHOT_VALUES,
+            ("BRANCH_REF", "refs/heads/release/v1.13.19"),
+            ("TAG_REF", "refs/tags/v1.13.19"),
+            ("BASE_M", "ad82794064c31b337949f0aa47c7639ca2f1d9c2"),
+            ("BASE_M_TREE", "0342c2f845a9e6e2f9b7c235fbf3004b271e43c4"),
+            ("BASE_M_PARENTS", "7ba439d6b1d0b18de69213897b247fb28f09b02c,fe4ce3b599ae0c649ded4ad7d1cdf43f93199844"),
+            ("DELTA_SCHEMA", "coldkeep-v1-final-source-snapshot-delta/v2"),
+            ("DELTA_COUNT", "33"),
+        ),
+        delta=V11319_FINAL_SNAPSHOT_DELTA,
+        technical_blobs=FINAL_SNAPSHOT_TECHNICAL_BLOBS,
+        frozen_blobs=V11319_FROZEN_DOCUMENT_BLOBS,
+        required_tags=(
+            ("refs/tags/v1.13.17", "c7b24506b07d622d22f7da47643b38c3e39862ca", "f6aee8850c410b18b0871796bf1b9064b8d1f871"),
+            ("refs/tags/v1.13.18", "e03ede234275ced07b21a00ee9e4bfc539af9446", "ad82794064c31b337949f0aa47c7639ca2f1d9c2"),
+        ),
+        require_baseline_technical=True,
+    ),
+}
 SECURITY_PROGRESSION_V2_DELTA = (
     ("M", "100644", "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"),
     ("M", "100644", "docs/release/v1.13/v1.13.17-release-state.md"),
@@ -402,6 +562,7 @@ class InternalError(Exception):
 DIAGNOSTIC_SCHEMA = "coldkeep-release-state-diagnostic/v3"
 DIAGNOSTIC_SCHEMA_V4 = "coldkeep-release-state-diagnostic/v4"
 DIAGNOSTIC_SCHEMA_V5 = "coldkeep-release-state-diagnostic/v5"
+DIAGNOSTIC_SCHEMA_V6 = "coldkeep-release-state-diagnostic/v6"
 DIAGNOSTIC_RESULTS = {"PASS", "FAIL", "NOT_EVALUATED", "UNAVAILABLE"}
 PR_PREDICATES = (
     ("pr.env.actions", "environment", "GITHUB_ACTIONS equals true"),
@@ -549,13 +710,22 @@ class DiagnosticRecorder:
         "docs/release/v1.13/v1.13.17-release-state-validator-contract.md",
         "docs/release/v1.13/v1.13.17-security-toolchain-progression-reference.md",
     )
-    _FINAL_SNAPSHOT_SOURCE_PATHS = (
-        "scripts/release_state_support.py",
-        "scripts/validate_release_state.py",
-        "docs/release/v1.13/v1.13.18-release-state.md",
-        "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
-        "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md",
-    )
+    _FINAL_SNAPSHOT_SOURCE_PATHS = {
+        "1.13.18": (
+            "scripts/release_state_support.py",
+            "scripts/validate_release_state.py",
+            "docs/release/v1.13/v1.13.18-release-state.md",
+            "docs/release/v1.13/v1.13.18-release-state-validator-contract.md",
+            "docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md",
+        ),
+        "1.13.19": (
+            "scripts/release_state_support.py",
+            "scripts/validate_release_state.py",
+            "docs/release/v1.13/v1.13.19-release-state.md",
+            "docs/release/v1.13/v1.13.19-release-state-validator-contract.md",
+            "docs/release/v1.13/v1.13.19-final-source-snapshot-reference.md",
+        ),
+    }
 
     def __init__(self, requested_state: str, environment: dict[str, str]) -> None:
         self.requested_state = requested_state
@@ -600,8 +770,20 @@ class DiagnosticRecorder:
             version_source = (root / "internal/version/version.go").read_text(
                 encoding="utf-8"
             )
-            if re.search(r"(?m)^\s*Patch\s*=\s*18\s*$", version_source):
-                self.source_paths = self._FINAL_SNAPSHOT_SOURCE_PATHS
+            version_match = re.search(
+                r"(?m)^\s*Major\s*=\s*(\d+)\s*$.*?"
+                r"^\s*Minor\s*=\s*(\d+)\s*$.*?"
+                r"^\s*Patch\s*=\s*(\d+)\s*$",
+                version_source,
+                re.DOTALL,
+            )
+            source_version = (
+                ".".join(version_match.groups()) if version_match else None
+            )
+            if source_version in self._FINAL_SNAPSHOT_SOURCE_PATHS:
+                self.source_paths = self._FINAL_SNAPSHOT_SOURCE_PATHS[
+                    source_version
+                ]
                 self.source_records = [
                     {
                         "path": relative,
@@ -933,7 +1115,7 @@ class DiagnosticRecorder:
         }
         if diagnostic_schema == DIAGNOSTIC_SCHEMA_V4:
             document["validator"]["progression_contract_schema"] = progression_contract_schema
-        if diagnostic_schema == DIAGNOSTIC_SCHEMA_V5:
+        if diagnostic_schema in (DIAGNOSTIC_SCHEMA_V5, DIAGNOSTIC_SCHEMA_V6):
             document["validator"]["final_snapshot"] = final_snapshot
             document["validator"]["final_snapshot_contract_schema"] = (
                 final_snapshot_contract_schema
@@ -1148,6 +1330,10 @@ class FinalSourceSnapshot:
     values: dict[str, str]
     delta: tuple[tuple[str, str, str], ...]
     technical_blobs: tuple[tuple[str, str, str], ...]
+    frozen_blobs: tuple[tuple[str, str, str], ...]
+    required_tags: tuple[tuple[str, str, str], ...]
+    diagnostic_schema: str
+    require_baseline_technical: bool
 
 
 def _ordered_marked_values(
@@ -1389,34 +1575,11 @@ def _final_snapshot_grammar(
     delta: tuple[tuple[str, str, str], ...],
     technical_blobs: tuple[tuple[str, str, str], ...],
 ) -> Optional[str]:
-    """Validate the closed scalar and delta grammar for v1.13.18."""
-    exact = {
-        "SCHEMA": "coldkeep-v1-final-source-snapshot-reference/v1",
-        "SOURCE_VERSION": "1.13.18",
-        "CANONICAL_REPOSITORY": "franchoy/coldkeep",
-        "REPOSITORY_ID": "1158711822",
-        "BRANCH_REF": "refs/heads/release/v1.13.18",
-        "BASE_REF": "refs/heads/main",
-        "TAG_REF": "refs/tags/v1.13.18",
-        "LANGUAGE_FLOOR": "go1.25.0",
-        "TOOLCHAIN": "go1.26.10",
-        "GITHUB_RELEASE_ID": "400460267",
-        "TS_ACCEPTANCE_STATUS": (
-            "TS_READBACK_01_OWNER_ACCEPTED_PROTECTED_MAIN_"
-            "EFFECTIVE_QUALIFIED_AT_M"
-        ),
-        "ORIGINAL_ATTEMPT_ONLY_ALL_SUCCESS_CERTIFICATE": "NOT_SATISFIED",
-        "RETROSPECTIVE_PROCEDURAL_EXCEPTION": "NOT_GRANTED",
-        "DELTA_SCHEMA": "coldkeep-v1-final-source-snapshot-delta/v1",
-        "DELTA_COUNT": "52",
-        "TECHNICAL_COMPONENT_SCHEMA": (
-            "coldkeep-v1-final-source-snapshot-technical-blobs/v1"
-        ),
-        "TECHNICAL_COMPONENT_COUNT": "13",
-        "TECHNICAL_COMPONENT_SHA256": FINAL_SNAPSHOT_TECHNICAL_COMPONENT_SHA256,
-        "STATUS": "STRUCTURAL_NON_AUTHORIZING",
-    }
-    for key, expected in exact.items():
+    """Validate one of the two closed final-snapshot grammars."""
+    spec = FINAL_SNAPSHOT_SPECS.get(values.get("SOURCE_VERSION", ""))
+    if spec is None:
+        return "SOURCE_VERSION is unsupported"
+    for key, expected in spec.exact_values:
         if values[key] != expected:
             return f"{key} is unsupported"
     for key in (
@@ -1433,7 +1596,7 @@ def _final_snapshot_grammar(
         return "BASE_M_PARENTS grammar is invalid"
     if re.fullmatch(r"[0-9a-f]{64}", values["TS_ACCEPTANCE_SHA256"]) is None:
         return "TS_ACCEPTANCE_SHA256 grammar is invalid"
-    if delta != FINAL_SNAPSHOT_DELTA:
+    if delta != spec.delta:
         return "delta inventory is unsupported"
     if len(delta) != int(values["DELTA_COUNT"]):
         return "delta count is invalid"
@@ -1454,7 +1617,7 @@ def _final_snapshot_grammar(
             or any(part in ("", ".", "..") for part in relative.parts)
         ):
             return "delta path is non-canonical"
-    if technical_blobs != FINAL_SNAPSHOT_TECHNICAL_BLOBS:
+    if technical_blobs != spec.technical_blobs:
         return "technical component inventory is unsupported"
     if len(technical_blobs) != int(values["TECHNICAL_COMPONENT_COUNT"]):
         return "technical component count is invalid"
@@ -1469,7 +1632,10 @@ def _final_snapshot_grammar(
     technical_paths = [path for _, _, path in technical_blobs]
     if len(technical_paths) != len(set(technical_paths)):
         return "technical component paths are duplicated"
-    if not set(technical_paths).issubset(paths):
+    if spec.require_baseline_technical:
+        if not set(technical_paths).isdisjoint(paths):
+            return "inherited technical component paths are changed by the delta"
+    elif not set(technical_paths).issubset(paths):
         return "technical component paths are outside the delta"
     return None
 
@@ -1492,9 +1658,12 @@ def load_final_source_snapshot(
             "final snapshot reference invalid: "
             + (detail or "expectation block is missing")
         )
-    if expectations["SCHEMA"] != "coldkeep-v1-final-source-snapshot-expectations/v1":
+    spec = FINAL_SNAPSHOT_SPECS.get(expectations["EXPECTED_SOURCE_VERSION"])
+    if spec is None:
+        return None, "final snapshot reference invalid: source version is unsupported"
+    if expectations["SCHEMA"] != spec.expectations_schema:
         return None, "final snapshot reference invalid: expectation schema is unsupported"
-    if expectations["SELECTION_SCHEMA"] != "coldkeep-v1-final-source-snapshot-selection/v1":
+    if expectations["SELECTION_SCHEMA"] != spec.selection_schema:
         return None, "final snapshot reference invalid: selection schema is unsupported"
     if expectations["REFERENCE_MAX_BYTES"] != str(FINAL_SNAPSHOT_MAX_BYTES):
         return None, "final snapshot reference invalid: byte limit is unsupported"
@@ -1624,25 +1793,43 @@ def load_final_source_snapshot(
         return None, "final snapshot reference invalid: BASE_M tree disagrees"
     if commit_parents(root, values["BASE_M"]) != values["BASE_M_PARENTS"].split(","):
         return None, "final snapshot reference invalid: BASE_M parents disagree"
-    tag_ref = run_git(
-        root, ["show-ref", "--verify", "--hash", "refs/tags/v1.13.17"],
-        allow_failure=True,
-    )
-    if tag_ref.returncode or tag_ref.stdout.strip() != values["ANNOTATED_TAG_A17"]:
-        return None, "final snapshot reference invalid: historical annotated tag ref disagrees"
-    tag_body = run_git(
-        root, ["cat-file", "-p", values["ANNOTATED_TAG_A17"]],
-        allow_failure=True,
-    )
-    headers = tag_body.stdout.split("\n\n", 1)[0].splitlines() if not tag_body.returncode else []
-    if (
-        [line[7:] for line in headers if line.startswith("object ")]
-        != [values["PUBLISHED_M17"]]
-        or [line[5:] for line in headers if line.startswith("type ")] != ["commit"]
-    ):
-        return None, "final snapshot reference invalid: historical tag direct target disagrees"
+    for ref, tag_oid, direct_target in spec.required_tags:
+        tag_ref = run_git(
+            root, ["show-ref", "--verify", "--hash", ref], allow_failure=True
+        )
+        if tag_ref.returncode or tag_ref.stdout.strip() != tag_oid:
+            return None, (
+                "final snapshot reference invalid: historical annotated tag "
+                f"ref disagrees ({ref})"
+            )
+        tag_type = run_git(root, ["cat-file", "-t", tag_oid], allow_failure=True)
+        tag_body = run_git(root, ["cat-file", "-p", tag_oid], allow_failure=True)
+        headers = (
+            tag_body.stdout.split("\n\n", 1)[0].splitlines()
+            if not tag_body.returncode
+            else []
+        )
+        if (
+            tag_type.returncode
+            or tag_type.stdout.strip() != "tag"
+            or [line[7:] for line in headers if line.startswith("object ")]
+            != [direct_target]
+            or [line[5:] for line in headers if line.startswith("type ")]
+            != ["commit"]
+        ):
+            return None, (
+                "final snapshot reference invalid: historical tag direct "
+                f"target disagrees ({ref})"
+            )
     return FinalSourceSnapshot(
-        expectations, values, frozen_delta, frozen_technical_blobs
+        expectations=expectations,
+        values=values,
+        delta=frozen_delta,
+        technical_blobs=frozen_technical_blobs,
+        frozen_blobs=spec.frozen_blobs,
+        required_tags=spec.required_tags,
+        diagnostic_schema=spec.diagnostic_schema,
+        require_baseline_technical=spec.require_baseline_technical,
     ), None
 
 
@@ -3708,8 +3895,14 @@ def final_snapshot_artifact(
         return False
     old_inventory = _tree_inventory(root, base)
     new_inventory = _tree_inventory(root, head)
+    old_blobs = _tree_blob_inventory(root, base)
     new_blobs = _tree_blob_inventory(root, head)
-    if old_inventory is None or new_inventory is None or new_blobs is None:
+    if (
+        old_inventory is None
+        or new_inventory is None
+        or old_blobs is None
+        or new_blobs is None
+    ):
         return False
     expected_by_path = {
         path: (status, mode) for status, mode, path in snapshot.delta
@@ -3724,8 +3917,24 @@ def final_snapshot_artifact(
             return False
     actual_paths = {path for _, path in actual}
     for mode, blob, path in snapshot.technical_blobs:
-        if path in actual_paths and (
+        if snapshot.require_baseline_technical:
+            if (
+                old_inventory.get(path) != (mode, "blob")
+                or old_blobs.get(path) != blob
+                or new_inventory.get(path) != (mode, "blob")
+                or new_blobs.get(path) != blob
+            ):
+                return False
+        elif path in actual_paths and (
             new_inventory.get(path) != (mode, "blob")
+            or new_blobs.get(path) != blob
+        ):
+            return False
+    for mode, blob, path in snapshot.frozen_blobs:
+        if (
+            old_inventory.get(path) != (mode, "blob")
+            or old_blobs.get(path) != blob
+            or new_inventory.get(path) != (mode, "blob")
             or new_blobs.get(path) != blob
         ):
             return False

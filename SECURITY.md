@@ -4,20 +4,21 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.18
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 5_NEXT
+SOURCE_VERSION: 1.13.19
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
+CURRENT_PHASE: 3_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_18_PUBLICATION: NOT_PUBLISHED
+V1_13_19_PUBLICATION: NOT_PUBLISHED
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
@@ -33,17 +34,17 @@ documented bounds, and cooperative same-host/local-filesystem repository
 coordination. v1.13.15 is the published stable final planned v1.x release.
 Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
-attestation are immutable. v1.13.18 is an active final-source-snapshot
-candidate with accepted recovery Wave A on S. Phases 0-4 are Complete and
-Phase 5 protected integration is Next. This metadata-only Stage B head
-requires fresh local review and exact-head Wave B before integration. These
-source-scoped results do not certify later source, protected main, a tag or
-publication, and are not a claim of zero total repository issues.
-v1.13.17 remains published at immutable M17/A17 and GitHub Release `400460267`;
-its qualified Phase 9M and TS history remains unchanged. This state authorizes
-no remote or Release operation. v1.13.16 is the
-immutable failed-publication predecessor: its public annotated tag failed
-required certification and no GitHub Release exists.
+attestation are immutable. v1.13.19 is the active finite tag-certification
+recovery candidate based on exact M18. Phases 0-2 are Complete and Phase 3
+independent local acceptance is Next. It changes no product, storage, schema,
+catalog, GC, restore, compression, dependency, or security-policy behavior.
+v1.13.18 remains a public annotated-tag certification NONPASS with no GitHub
+Release; A18/M18 and the failed natural CI remain immutable. These bounded
+results do not certify later source, protected main, a tag or publication and
+are not a claim of zero total repository issues. v1.13.17 remains published at
+immutable M17/A17 and Release `400460267`; v1.13.16 remains an immutable
+failed-publication predecessor. This state authorizes no remote or Release
+operation.
 Planned v1 feature and architecture work remains closed and frozen. Existing
 security and crash-consistency limitations below are unchanged.
 

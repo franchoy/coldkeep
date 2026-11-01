@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.18%20ready-blue)
+![Status](https://img.shields.io/badge/status-v1.13.19%20local%20review-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -31,37 +31,36 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.18
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 5_NEXT
+SOURCE_VERSION: 1.13.19
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
+CURRENT_PHASE: 3_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_18_PUBLICATION: NOT_PUBLISHED
+V1_13_19_PUBLICATION: NOT_PUBLISHED
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.18 — Final v1.x Source Snapshot and Closure Handoff is ready for
-Stage B exact-head certification and remains unpublished.
-Recovery Wave A on S `0a6250f173ae4b72cbb8e3f00bf2ea34a20c10e9` is
-accepted; Phases 0-4 are Complete and Phase 5 protected integration is Next.
-This metadata-only Stage B head preserves the accepted Go 1.26.10 and
-compress v1.20.2 technical component. It requires fresh local review and
-exact-head Wave B before integration; S-scoped results do not certify a later
-head, protected main, a tag or publication. No product feature or format changes.
-v1.13.17 remains immutable at M17/A17 and GitHub Release `400460267`; Phase 9M
-and TS-READBACK-01 retain their source-scoped qualification. v1.13.16 is the immutable
-failed-publication predecessor: annotated tag A16 exists, its required tag CI
-failed, the tag certificate was withheld, no GitHub Release exists, and
-publication and Phase 19 remain unauthorized.
+v1.13.19 — Final v1.x Tag-Certification Recovery is in private local
+preparation. Phases 0-2 are Complete and Phase 3 independent local acceptance
+is Next. It is a finite 33-path child of exact M18 that preserves Go 1.26.10,
+compress v1.20.2, all product/dependency bytes, 13 technical tuples, and the
+frozen v1.13.17/v1.13.18 release records. No product feature or format changes.
+
+v1.13.18 remains a public annotated-tag certification NONPASS with no GitHub
+Release. A18/M18 and the failed natural CI remain immutable; passing CodeQL,
+installations, and accepted Route A evidence retain their bounded scopes but do
+not certify v1.13.19. v1.13.17 remains immutable at M17/A17 and Release
+`400460267`; v1.13.16 remains an immutable failed-publication predecessor.
 
 The latest published stable release remains v1.13.15. Its annotated tag object
 `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
@@ -75,17 +74,18 @@ requires a separate plan.
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-    V1_13_18: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+    V1_13_18: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+    V1_13_19: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
     RELEASE_STATE: PRE_RELEASE
     PHASE_3: COMPLETE
-    PHASE_4: COMPLETE
-    PHASE_5: NEXT
+    PHASE_4: NOT_STARTED
+    PHASE_5: NOT_STARTED
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED
     V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
     V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-    V1_13_18_PUBLICATION: NOT_PUBLISHED
+    V1_13_19_PUBLICATION: NOT_PUBLISHED
     V2_IMPLEMENTATION: NOT_STARTED
 
 ## Historical release-state narrative through v1.13.14
@@ -405,7 +405,7 @@ Those statements describe the published v1.13.15 artifact. A `toolchain`
 suggestion does not select the compiler used by `go install package@version`.
 
 Protected main M retains the historical Go 1.26.9 integration. For the current
-v1.13.18 corrective checkout, install Go 1.26.10 and a native C compiler first.
+v1.13.19 recovery checkout, install Go 1.26.10 and a native C compiler first.
 The `go 1.25` module directive remains the language floor; exact Go 1.26.10
 with `GOTOOLCHAIN=local` is the active build and scan baseline. Normal v1.x CLI operation remains
 PostgreSQL-backed; SQLite-first local productization belongs to v2.x.

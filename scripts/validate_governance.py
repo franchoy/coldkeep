@@ -157,6 +157,76 @@ V18_CANONICAL_ONLY_KEYS = (
     "FINAL_SOURCE_SNAPSHOT_REFERENCE",
 )
 V18_ALLOWED_NEXT_PHASES = (3, 4, 5)
+V19_CANONICAL_CURRENT_STATE_FILE = Path(
+    "docs/release/v1.13/v1.13.19-release-state.md"
+)
+V19_CONTRACT_FILE = Path(
+    "docs/release/v1.13/v1.13.19-release-state-validator-contract.md"
+)
+V19_REFERENCE_FILE = Path(
+    "docs/release/v1.13/v1.13.19-final-source-snapshot-reference.md"
+)
+V19_PHASE_FILE = Path("docs/release/v1.13/v1.13.19-phase-list.md")
+V19_RELEASE_BODY = Path("docs/release/v1.13/v1.13.19-release-body.md")
+V19_RELEASE_BODY_CHECKSUM = Path(
+    "docs/release/v1.13/v1.13.19-release-body.sha256"
+)
+V19_PREDECESSOR_DISPOSITION = Path(
+    "docs/release/v1.13/v1.13.19-predecessor-disposition.md"
+)
+V19_AUTHORITY_FILES = tuple(
+    Path(f"docs/release/v1.13/v1.13.19-{suffix}.md")
+    for suffix in (
+        "final-source-snapshot-reference",
+        "phase-list",
+        "predecessor-disposition",
+        "release-body",
+        "release-gate",
+        "release-state-validator-contract",
+        "release-state",
+        "release-train-reconciliation",
+        "scope",
+        "source-test-allowlist",
+        "validation-checklist",
+    )
+) + (V19_RELEASE_BODY_CHECKSUM,)
+V19_MIRROR_KEYS = (
+    "SOURCE_VERSION",
+    "RELEASE_ROUTE",
+    "CURRENT_PHASE",
+    "TRACKED_PUBLICATION_MATERIAL",
+    "V1_13_15_STATE",
+    "V1_13_16_STATE",
+    "V1_13_17_STATE",
+    "V1_13_18_STATE",
+    "V1_13_19_STATE",
+    "CK-V11316-007",
+    "FINDINGS_CONFIRMED",
+    "FINDINGS_CLOSED",
+    "V1_X_TECHNICAL_CORRECTNESS",
+    "V1_X_FULL_CLOSURE",
+    "V1_13_19_PUBLICATION",
+    "V2_IMPLEMENTATION",
+)
+V19_CANONICAL_ONLY_KEYS = (
+    "RELEASE_BODY_SHA256",
+    "FINAL_SOURCE_SNAPSHOT_SCHEMA",
+    "FINAL_SOURCE_SNAPSHOT_REFERENCE",
+)
+V19_ALLOWED_NEXT_PHASES = (3, 4, 5)
+V11318_FROZEN_SHA256 = {
+    Path("docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"): "783ff0c449d0038e04312957b812416c02def1cb8b92603484d9c3fc9ec21fdd",
+    Path("docs/release/v1.13/v1.13.18-phase-list.md"): "a189bd10c7d9555583134da96b7fee7f934357c64dcd474ba4adf3dba7da6f74",
+    Path("docs/release/v1.13/v1.13.18-release-body.md"): "fac5632051773caedab5c30a052a1779c296736d5dc6ec6b621ab47f669b138c",
+    Path("docs/release/v1.13/v1.13.18-release-body.sha256"): "88aab8307622fa62f1a295cd8d780e4153abe02b0d79e980465ab7257541ac63",
+    Path("docs/release/v1.13/v1.13.18-release-gate.md"): "32cc9b678e213d95e2b4512a1207d3eeb4e4d225cf7dbe071573e480a9d92fb2",
+    Path("docs/release/v1.13/v1.13.18-release-state-validator-contract.md"): "9ba14a8d9fa2e97f5fae7de1ac8723f4990f66403f8c980c5b7a37e825441c5b",
+    Path("docs/release/v1.13/v1.13.18-release-state.md"): "d1fe9c8a91259b29c2d84fafe2db4cc8b85c65fa7ba023310485b63b501ac5cb",
+    Path("docs/release/v1.13/v1.13.18-release-train-reconciliation.md"): "297475e9d33ebdf9ec1277de784d0fc1449e03b633e59a27a79dd70456ac1b18",
+    Path("docs/release/v1.13/v1.13.18-scope.md"): "4e356b3a70314a972a128e3a8c506bfd8c4333db374283f26ad4b28b2c3e1cba",
+    Path("docs/release/v1.13/v1.13.18-source-test-allowlist.md"): "4c48175ef8ac2b524bc59385ef2b6e0549b9398bd22b25b7de12a41d5749c08b",
+    Path("docs/release/v1.13/v1.13.18-validation-checklist.md"): "e0959b0401b946772ed6a377fd8feadef91dc6b142074d5139f354b84774a108",
+}
 V11317_FROZEN_SHA256 = {
     Path("docs/release/v1.13/v1.13.17-phase-list.md"): "0b37a14229792b2edd305cea086c743b2fee5c48494080ae1b67d431968bcb73",
     Path("docs/release/v1.13/v1.13.17-predecessor-disposition.md"): "60ccc892017cc48b9924284f08d97b32b186f169206d5d05ba3dea26fceabbc8",
@@ -808,6 +878,31 @@ def _v18_selected(root: Path) -> bool:
     )
 
 
+def _declared_patch(root: Path) -> int | None:
+    """Return the one literal source patch value, or None if it is ambiguous."""
+    version_path = root / "internal/version/version.go"
+    if not version_path.is_file() or version_path.is_symlink():
+        return None
+    try:
+        version_text = version_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+    matches = re.findall(r"(?m)^\s*Patch\s*=\s*([0-9]+)\s*$", version_text)
+    if len(matches) != 1:
+        return None
+    return int(matches[0])
+
+
+def _v19_selected(root: Path) -> bool:
+    """Return whether source and canonical state select the finite v1.13.19 route."""
+    state_path = root / V19_CANONICAL_CURRENT_STATE_FILE
+    return bool(
+        _declared_patch(root) == 19
+        and state_path.is_file()
+        and not state_path.is_symlink()
+    )
+
+
 def _v18_canonical_state(
     text: str,
 ) -> tuple[dict[str, str], list[str]]:
@@ -1337,8 +1432,365 @@ def _v18_snapshot_contract_violations(
     return violations
 
 
+def _v19_canonical_state(text: str) -> tuple[dict[str, str], list[str]]:
+    """Parse the exact active v1.13.19 recovery-state vocabulary."""
+    preamble = re.split(r"(?m)^##\s+", text, maxsplit=1)[0]
+    blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", preamble)
+    if len(blocks) != 1:
+        return {}, [
+            f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical preamble requires "
+            f"exactly one fenced text block, found {len(blocks)}"
+        ]
+    required = V19_MIRROR_KEYS + V19_CANONICAL_ONLY_KEYS
+    state, violations = parse_state_lines(
+        V19_CANONICAL_CURRENT_STATE_FILE,
+        blocks[0],
+        required,
+        "canonical current-state block",
+    )
+    expected = {
+        "SOURCE_VERSION": "1.13.19",
+        "RELEASE_ROUTE": "FINAL_V1_SOURCE_SNAPSHOT_RECOVERY",
+        "TRACKED_PUBLICATION_MATERIAL": "FROZEN",
+        "V1_13_15_STATE": "PUBLISHED_STABLE_IMMUTABLE",
+        "V1_13_16_STATE": "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
+        "V1_13_17_STATE": "PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED",
+        "V1_13_18_STATE": "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
+        "V1_13_19_STATE": "ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE",
+        "CK-V11316-007": "CLOSED_AT_V1.13.16_SOURCE_SCOPE",
+        "FINDINGS_CONFIRMED": "15",
+        "FINDINGS_CLOSED": "15/15",
+        "V1_X_TECHNICAL_CORRECTNESS": "ESTABLISHED",
+        "V1_X_FULL_CLOSURE": "ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED",
+        "V1_13_19_PUBLICATION": "NOT_PUBLISHED",
+        "V2_IMPLEMENTATION": "NOT_STARTED",
+        "FINAL_SOURCE_SNAPSHOT_SCHEMA": "coldkeep-v1-final-source-snapshot-selection/v2",
+        "FINAL_SOURCE_SNAPSHOT_REFERENCE": V19_REFERENCE_FILE.as_posix(),
+    }
+    for key, value in expected.items():
+        if state.get(key) != value:
+            violations.append(
+                f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical {key}="
+                f"{state.get(key)!r} does not match {value!r}"
+            )
+    allowed_phases = {f"{number}_NEXT" for number in V19_ALLOWED_NEXT_PHASES}
+    if state.get("CURRENT_PHASE") not in allowed_phases:
+        violations.append(
+            f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical CURRENT_PHASE="
+            f"{state.get('CURRENT_PHASE')!r} is outside the closed "
+            "3_NEXT/4_NEXT/5_NEXT recovery lifecycle"
+        )
+    if re.fullmatch(r"[0-9a-f]{64}", state.get("RELEASE_BODY_SHA256", "")) is None:
+        violations.append(
+            f"{V19_CANONICAL_CURRENT_STATE_FILE}: FROZEN publication material "
+            "requires a lowercase SHA-256"
+        )
+    finding_keys = {f"CK-V11316-{number:03d}" for number in range(1, 16)}
+    present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", blocks[0]))
+    extras = sorted(present - (set(required) | finding_keys))
+    missing_findings = sorted(finding_keys - present)
+    if extras:
+        violations.append(
+            f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical current-state block "
+            f"has extra keys {extras}"
+        )
+    if missing_findings:
+        violations.append(
+            f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical finding rows are "
+            f"missing {missing_findings}"
+        )
+    return state, violations
+
+
+def _v19_mirror(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
+    """Parse one active v1.13.19 current-state mirror."""
+    starts = text.count(CURRENT_STATE_MIRROR_START)
+    ends = text.count(CURRENT_STATE_MIRROR_END)
+    if starts != 1 or ends != 1:
+        return {}, [
+            f"{path}: requires exactly one current-state mirror, found "
+            f"{starts} start and {ends} end delimiters"
+        ]
+    body = text.split(CURRENT_STATE_MIRROR_START, 1)[1].split(
+        CURRENT_STATE_MIRROR_END, 1
+    )[0]
+    blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", body)
+    if len(blocks) != 1:
+        return {}, [
+            f"{path}: current-state mirror requires exactly one fenced text block, "
+            f"found {len(blocks)}"
+        ]
+    state, violations = parse_state_lines(
+        path, blocks[0], V19_MIRROR_KEYS, "current-state mirror"
+    )
+    present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", blocks[0]))
+    extras = sorted(present - set(V19_MIRROR_KEYS))
+    if extras:
+        violations.append(f"{path}: current-state mirror has extra keys {extras}")
+    return state, violations
+
+
+def _v19_phase_progression_violations(text: str, current_phase: str) -> list[str]:
+    """Require exact Phase 0..9 progression for the finite recovery route."""
+    phase_rows = re.findall(
+        r"(?ms)^## Phase (\d+)\b.*?^\*\*Status:\*\*\s*(Complete|Next|Not started)\s*$",
+        text,
+    )
+    expected_next = {
+        f"{number}_NEXT": number for number in V19_ALLOWED_NEXT_PHASES
+    }.get(current_phase)
+    expected_rows = (
+        [
+            (
+                str(number),
+                "Complete"
+                if number < expected_next
+                else "Next"
+                if number == expected_next
+                else "Not started",
+            )
+            for number in range(10)
+        ]
+        if expected_next is not None
+        else []
+    )
+    if phase_rows == expected_rows:
+        return []
+    return [
+        f"{V19_PHASE_FILE}: phase progression must exactly match canonical "
+        f"CURRENT_PHASE={current_phase!r} within the closed "
+        "3_NEXT/4_NEXT/5_NEXT recovery lifecycle"
+    ]
+
+
+def _validate_frozen_paths(
+    root: Path, expected_files: dict[Path, str], label: str
+) -> list[str]:
+    """Require exact regular historical bytes for one frozen document set."""
+    violations: list[str] = []
+    for relative, expected in expected_files.items():
+        path = root / relative
+        if not path.is_file() or path.is_symlink():
+            violations.append(f"{relative}: frozen {label} regular file is missing")
+            continue
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            violations.append(
+                f"{relative}: frozen {label} SHA-256 {actual} does not match {expected}"
+            )
+    return violations
+
+
+def _validate_v11318_frozen(root: Path) -> list[str]:
+    """Require all eleven v1.13.18 checkpoint documents byte-for-byte."""
+    return _validate_frozen_paths(root, V11318_FROZEN_SHA256, "v1.13.18 historical")
+
+
+def _v19_release_body_path_violations(
+    body_path: Path, checksum_path: Path
+) -> list[str]:
+    violations: list[str] = []
+    for relative, path in (
+        (V19_RELEASE_BODY, body_path),
+        (V19_RELEASE_BODY_CHECKSUM, checksum_path),
+    ):
+        if not path.is_file() or path.is_symlink():
+            violations.append(f"{relative}: required regular non-symlink file is missing")
+    return violations
+
+
+def _v19_release_body_semantics(text: str) -> list[str]:
+    """Require truthful recovery history and reject premature success claims."""
+    normalized = " ".join(text.lower().split())
+    markers = (
+        "v1.13.19",
+        "v1.13.18",
+        "source-only",
+        "no custom assets",
+        "no github release",
+        "e03ede234275ced07b21a00ee9e4bfc539af9446",
+        "ad82794064c31b337949f0aa47c7639ca2f1d9c2",
+        "41330297821",
+        "41330297820",
+        "ckrs017",
+        "disposable fixture",
+        "writer remains unidentified",
+        "route a",
+    )
+    violations: list[str] = []
+    for marker in markers:
+        if marker not in normalized:
+            violations.append(f"{V19_RELEASE_BODY}: missing semantic marker {marker!r}")
+    required_claims = (
+        (
+            "failed v1.13.18 tag certification",
+            r"(?:tag certification failed|tag ci run `?41330297821`? failed)",
+        ),
+        (
+            "workspace NONPASS",
+            r"(?:workspace.{0,80}nonpass|nonpass.{0,80}workspace)",
+        ),
+        (
+            "isolated /tmp PASS",
+            r"(?:isolated `?/tmp`?.{0,100}pass|pass(?:ed)?.{0,100}isolated `?/tmp`?)",
+        ),
+        (
+            "pending external evidence",
+            r"(?:pending_external_evidence|retain their separate exact-source gates|does not.{0,100}hosted certification)",
+        ),
+    )
+    for label, pattern in required_claims:
+        if re.search(pattern, normalized, re.IGNORECASE) is None:
+            violations.append(
+                f"{V19_RELEASE_BODY}: missing semantic claim {label!r}"
+            )
+    forbidden = (
+        r"v1[.]13[.]18.{0,100}(?:tag certification|tag ci).{0,40}(?:passed|succeeded|successful)",
+        r"v1[.]13[.]18.{0,100}github release.{0,40}(?:published|exists|created)",
+        r"(?:moved|deleted|recreated).{0,50}(?:v1[.]13[.]18|a18)",
+        r"(?:v1[.]13[.]18|a18).{0,50}(?:was|is|has been) (?:moved|deleted|recreated)",
+        r"writer (?:was|is|has been) (?:identified|known)",
+        r"(?:all|every) (?:workspace|environment).{0,40}(?:passed|succeeded)",
+        r"ckrs017 (?:was|is) exported (?:by|in|from) (?:the )?(?:hosted|original tag)",
+        r"v1[.]13[.]19.{0,120}(?:hosted checks|tag certification|publication|owner acceptance).{0,50}(?:passed|complete|established)",
+    )
+    for pattern in forbidden:
+        if re.search(pattern, normalized, re.IGNORECASE):
+            violations.append(
+                f"{V19_RELEASE_BODY}: contains forbidden recovery assertion {pattern!r}"
+            )
+    return violations
+
+
+def _validate_v19_release_body(
+    root: Path, state: dict[str, str]
+) -> list[str]:
+    body_path = root / V19_RELEASE_BODY
+    checksum_path = root / V19_RELEASE_BODY_CHECKSUM
+    violations = _v19_release_body_path_violations(body_path, checksum_path)
+    if violations:
+        return violations
+    body = body_path.read_bytes()
+    checksum = checksum_path.read_bytes()
+    text, shape_violations = _v18_release_body_shape(body)
+    violations.extend(
+        violation.replace(str(V18_RELEASE_BODY), str(V19_RELEASE_BODY))
+        for violation in shape_violations
+    )
+    digest = hashlib.sha256(body).hexdigest()
+    if digest != state.get("RELEASE_BODY_SHA256"):
+        violations.append(
+            f"{V19_RELEASE_BODY}: digest does not match canonical RELEASE_BODY_SHA256"
+        )
+    expected_checksum = (
+        f"{digest}  {V19_RELEASE_BODY.as_posix()}\n"
+    ).encode("ascii")
+    if checksum != expected_checksum:
+        violations.append(
+            f"{V19_RELEASE_BODY_CHECKSUM}: bytes do not match body digest and exact path"
+        )
+    violations.extend(_v19_release_body_semantics(text))
+    return violations
+
+
+def _v19_predecessor_disposition_violations(text: str) -> list[str]:
+    """Bind the failed public v1.13.18 tag without granting provider authority."""
+    normalized = " ".join(text.lower().split())
+    markers = (
+        "v1.13.19",
+        "v1.13.18",
+        "e03ede234275ced07b21a00ee9e4bfc539af9446",
+        "ad82794064c31b337949f0aa47c7639ca2f1d9c2",
+        "0342c2f845a9e6e2f9b7c235fbf3004b271e43c4",
+        "41330297821",
+        "41330297820",
+        "failure",
+        "non-authorizing",
+    )
+    violations = [
+        f"{V19_PREDECESSOR_DISPOSITION}: missing predecessor marker {marker!r}"
+        for marker in markers
+        if marker not in normalized
+    ]
+    claims = (
+        ("no GitHub Release", r"(?:no github release|github release.{0,30}absent)"),
+        ("tag preserved", r"(?:tag is preserved|tag remains.{0,30}preserved)"),
+        ("writer unidentified", r"writer (?:was |remains )?not identified|writer remains unidentified"),
+    )
+    for label, pattern in claims:
+        if re.search(pattern, normalized, re.IGNORECASE) is None:
+            violations.append(
+                f"{V19_PREDECESSOR_DISPOSITION}: missing predecessor claim {label!r}"
+            )
+    return violations
+
+
+def _load_v19_authority_files(
+    root: Path,
+) -> tuple[dict[Path, str], list[str]]:
+    violations: list[str] = []
+    loaded: dict[Path, str] = {}
+    for relative in V19_AUTHORITY_FILES:
+        path = root / relative
+        if not path.is_file() or path.is_symlink():
+            violations.append(f"{relative}: required regular non-symlink file is missing")
+            continue
+        if relative.suffix == ".md":
+            try:
+                loaded[relative] = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                violations.append(f"{relative}: invalid UTF-8")
+    return loaded, violations
+
+
+def validate_v19_contract(root: Path, texts: dict[Path, str]) -> list[str]:
+    """Validate the finite v1.13.19 recovery and frozen predecessor history."""
+    loaded, violations = _load_v19_authority_files(root)
+    state_text = loaded.get(V19_CANONICAL_CURRENT_STATE_FILE)
+    if state_text is None:
+        return violations
+    state, state_violations = _v19_canonical_state(state_text)
+    violations.extend(state_violations)
+    for relative in CURRENT_STATE_MIRROR_FILES:
+        text = texts.get(relative)
+        if text is None:
+            continue
+        mirror, mirror_violations = _v19_mirror(relative, text)
+        violations.extend(mirror_violations)
+        for key in V19_MIRROR_KEYS:
+            if key in state and mirror.get(key) != state[key]:
+                violations.append(
+                    f"{relative}: mirror {key}={mirror.get(key)!r} does not match "
+                    f"canonical {state[key]!r}"
+                )
+    contract_text = loaded.get(V19_CONTRACT_FILE)
+    if contract_text is not None:
+        contract = Document(root, V19_CONTRACT_FILE.as_posix(), contract_text.splitlines())
+        snapshot, detail = load_final_source_snapshot(
+            root, contract, state.get("FINAL_SOURCE_SNAPSHOT_REFERENCE")
+        )
+        if detail:
+            violations.append(f"{V19_CONTRACT_FILE}: {detail}")
+        elif snapshot is None:
+            violations.append(f"{V19_CONTRACT_FILE}: final snapshot reference is missing")
+    violations.extend(
+        _v19_phase_progression_violations(
+            loaded.get(V19_PHASE_FILE, ""), state.get("CURRENT_PHASE", "")
+        )
+    )
+    violations.extend(_validate_v19_release_body(root, state))
+    predecessor = loaded.get(V19_PREDECESSOR_DISPOSITION)
+    if predecessor is not None:
+        violations.extend(_v19_predecessor_disposition_violations(predecessor))
+    violations.extend(_validate_v11318_frozen(root))
+    violations.extend(_validate_v11317_frozen(root))
+    return violations
+
+
 def validate(root: Path = ROOT) -> list[str]:
     violations = validate_release_body(root)
+    patch = _declared_patch(root)
+    v19_selected = _v19_selected(root)
     v18_selected = _v18_selected(root)
     files = ACTIVE_PROVIDER_FILES + CURRENT_AUTHORITY_FILES + (HISTORICAL_PROVIDER_FILE,)
     texts: dict[Path, str] = {}
@@ -1355,8 +1807,20 @@ def validate(root: Path = ROOT) -> list[str]:
         if relative in texts:
             violations.extend(active_text_violations(relative, texts[relative]))
 
-    if v18_selected:
+    if v19_selected:
+        violations.extend(validate_v19_contract(root, texts))
+    elif patch == 19:
+        violations.append(
+            "internal/version/version.go: Patch=19 requires the finite "
+            f"{V19_CANONICAL_CURRENT_STATE_FILE} route"
+        )
+    elif v18_selected:
         violations.extend(validate_v18_contract(root, texts))
+    elif patch == 18:
+        violations.append(
+            "internal/version/version.go: Patch=18 requires the finite "
+            f"{V18_CANONICAL_CURRENT_STATE_FILE} route"
+        )
     else:
         violations.extend(validate_current_state_contract(texts))
         violations.extend(validate_terminal_disposition_contract(root, texts))
@@ -1368,9 +1832,10 @@ def validate(root: Path = ROOT) -> list[str]:
             "v1.13.17",
             *(
                 ()
-                if v18_selected
+                if v18_selected or v19_selected
                 else ("failed-publication predecessor", "v1.13.14")
             ),
+            *(("v1.13.19", "v1.13.18") if v19_selected else ()),
             "v1.13.15",
             "Do not implement v2",
             "phase's `PLAN` or `BUILD` mode",
@@ -1387,7 +1852,9 @@ def validate(root: Path = ROOT) -> list[str]:
         ),
         Path(".github/copilot-instructions.md"): (
             *(
-                ("v1.13.17",)
+                ("SOURCE_VERSION: 1.13.19", "V1_13_18_STATE:")
+                if v19_selected
+                else ("v1.13.17",)
                 if v18_selected
                 else ("v1.13.17 is the active Route C recovery successor",)
             ),
@@ -1398,7 +1865,9 @@ def validate(root: Path = ROOT) -> list[str]:
             "v1.13.17",
             "v1.13.16",
             *(
-                ("Go 1.26.10",)
+                ("SOURCE_VERSION: 1.13.19", "V1_13_18_STATE:", "Go 1.26.10")
+                if v19_selected
+                else ("Go 1.26.10",)
                 if v18_selected
                 else (
                     "v1.13.17 Recovery Boundary",
@@ -1408,7 +1877,9 @@ def validate(root: Path = ROOT) -> list[str]:
         ),
         Path("README.md"): (
             *(
-                ("v1.13.17",)
+                ("SOURCE_VERSION: 1.13.19", "V1_13_18_STATE:")
+                if v19_selected
+                else ("v1.13.17",)
                 if v18_selected
                 else ("v1.13.17 — Annotated-Tag Certification Recovery",)
             ),
@@ -1417,7 +1888,9 @@ def validate(root: Path = ROOT) -> list[str]:
         ),
         Path("SECURITY.md"): (
             *(
-                ("v1.13.17",)
+                ("SOURCE_VERSION: 1.13.19", "V1_13_18_STATE:")
+                if v19_selected
+                else ("v1.13.17",)
                 if v18_selected
                 else ("v1.13.17 is the active Route C recovery successor",)
             ),
@@ -1434,6 +1907,7 @@ def validate(root: Path = ROOT) -> list[str]:
             "Older v1.x documents",
             "historical and superseded",
             "v1.13.17",
+            *(("SOURCE_VERSION: 1.13.19", "V1_13_18_STATE:") if v19_selected else ()),
             "V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED",
         ),
     }

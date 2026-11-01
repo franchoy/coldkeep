@@ -2,20 +2,21 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.18
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 5_NEXT
+SOURCE_VERSION: 1.13.19
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
+CURRENT_PHASE: 3_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_18_PUBLICATION: NOT_PUBLISHED
+V1_13_19_PUBLICATION: NOT_PUBLISHED
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
@@ -54,11 +55,13 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
-- v1.13.18 is the active final-source-snapshot candidate. Recovery Wave A
-  on S is accepted; Phases 0-4 are Complete and Phase 5 protected integration
-  is Next. The metadata-only Stage B head requires fresh local review and
-  exact-head Wave B before integration. S-scoped success does not certify
-  this later head, main, a tag or publication.
+- v1.13.19 is the active finite tag-certification recovery candidate. Phases
+  0-2 are Complete and Phase 3 independent local acceptance is Next. Keep
+  changes within its exact 33-path boundary and preserve every product,
+  dependency, technical, and frozen historical byte outside it.
+- v1.13.18 remains a public-tag certification NONPASS with no GitHub Release.
+  Do not move A18, erase the failed run, conflate the workspace NONPASS with
+  the isolated `/tmp` PASS, or infer a writer for the reappearing fixture.
 - v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
   The tracked descendant is a non-authorizing terminal-disposition declaration.
   Phase 9M established source-scoped qualified external closure at C; protected-

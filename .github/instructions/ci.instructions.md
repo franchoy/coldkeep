@@ -2,20 +2,21 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.18
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
-CURRENT_PHASE: 5_NEXT
+SOURCE_VERSION: 1.13.19
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
+CURRENT_PHASE: 3_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_18_PUBLICATION: NOT_PUBLISHED
+V1_13_19_PUBLICATION: NOT_PUBLISHED
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
@@ -105,25 +106,20 @@ Critical-path coverage should focus on:
 
 Do not add global coverage gates unless explicitly approved.
 
-## v1.13.18 Final Snapshot Boundary
+## v1.13.19 Tag-Certification Recovery Boundary
 
-v1.13.18 is the active final-source-snapshot candidate at the metadata-only
-Stage B boundary. Recovery Wave A on S passed its required local,
-real-PostgreSQL and natural hosted gates; Phases 0-4 are Complete and Phase 5
-protected integration is Next. The Stage B head still requires fresh local
-review and exact-head Wave B. Neither S's checks nor this structural state
-certifies a later head, protected main, a tag or publication.
+v1.13.19 is the active finite recovery candidate based on exact M18. Phases
+0-2 are Complete and Phase 3 independent local acceptance is Next. The exact
+33-path delta changes only the reviewed fixture isolation, version/install
+anchors, finite validators/tests, current authority, and new recovery records.
+It preserves Go 1.26.10, compress v1.20.2, every product/dependency byte, all
+13 technical tuples, and frozen v1.13.17/v1.13.18 documents.
 
-The candidate uses Go 1.26.10 and the accepted compress v1.20.2 component,
-with exactly 52 cumulative paths and 13 selected technical tuples. Stage B
-changes release metadata only and preserves all technical bytes, dependencies,
-fixtures, workflows and scanner policy. Candidate C, exact E and Q retain
-their recorded failed requirements; their history is not rewritten.
-v1.13.17 remains immutable at M17/A17 and Release `400460267`, including its
-qualified Phase 9M and TS history. v1.13.16 remains the immutable
-failed-publication predecessor, and v1.13.15 remains published stable.
-Follow the v1.13.18 10-phase plan, exact 52-path cumulative boundary and
-current narrower operation manifest. Do not use CI work to introduce:
+v1.13.18 remains a genuine public-tag certification failure with no GitHub
+Release. Do not rerun or relabel its failed gate, move A18, infer a writer for
+the workspace fixture reappearance, or substitute its passing CodeQL/install
+dimensions for new-source evidence. Follow the v1.13.19 10-phase plan and
+exact 33-path boundary. Do not use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;

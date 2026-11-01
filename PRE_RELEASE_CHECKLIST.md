@@ -79,7 +79,7 @@ promotes a section into the active gate for a special release.
 
 Install these before claiming CI parity locally:
 
-- Go 1.26.10 exactly for v1.13.18 final-source-snapshot certification. The module language floor
+- Go 1.26.10 exactly for v1.13.19 tag-certification recovery. The module language floor
   remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
 - Retain fixed-toolchain identity and both detailed and blocking
   `govulncheck@v1.7.0` outputs, including reachability and database metadata;
@@ -120,7 +120,7 @@ Current release-gate sections:
 Historical v1.9 note:
 
 - For historical v1.9 sign-off, sections 1-11 and 15-18 were the active
-  blockers. They are not the current v1.13.18 lifecycle authority.
+  blockers. They are not the current v1.13.19 lifecycle authority.
 - Historical template sections (12-14) are archived reference material only.
 - Unchecked boxes in sections 12-14 are intentional historical state and are
   not current blockers unless a release manager explicitly promotes one into
@@ -292,13 +292,17 @@ scripts/validate_release_linearity.sh --repo-root "$PWD"
 # The fixture suite is valid from any branch. The real repository check is
 # release-lifecycle aware: run it from the active release branch, a main
 # candidate, or an annotated tag checkout. Neither command performs network calls.
+# For v1.13.19, also run these commands in a fresh private detached synthetic
+# [M18,candidate] checkout with an annotated TEST_FIXTURE_ONLY v1.13.19 tag.
+# Preserve A18/A17 and the actual workspace-NONPASS versus isolated-/tmp-PASS
+# qualification; do not infer a writer for reappearing fixture state.
 python3 scripts/test_validate_release_state.py
 python3 -m unittest discover -s scripts -p 'test_*.py' -v
 python3 scripts/validate_release_state.py --state auto
 
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.18"
+expected_version="1.13.19"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -326,7 +330,7 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.18 in both human and JSON modes.
+Expected: the built CLI reports exactly 1.13.19 in both human and JSON modes.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and

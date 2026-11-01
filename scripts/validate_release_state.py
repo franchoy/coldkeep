@@ -15,6 +15,7 @@ from release_state_support import (
     CHANGELOG_HEADING,
     DiagnosticRecorder,
     Document,
+    FINAL_SNAPSHOT_SPECS,
     FinalSourceSnapshot,
     InternalError,
     LifecycleBoundaries,
@@ -321,7 +322,7 @@ def final_snapshot_selection(
     state_doc: Optional[Document],
     contract_doc: Optional[Document],
 ) -> tuple[str, Optional[FinalSourceSnapshot], Optional[str]]:
-    """Select the v1.13.18 snapshot contract without legacy fallback."""
+    """Select one explicit final-snapshot contract without legacy fallback."""
     reference_path, schemas, pointers, expectation_present, reference_present = (
         _final_snapshot_material(root, version, state_doc, contract_doc)
     )
@@ -338,7 +339,9 @@ def final_snapshot_selection(
     )
     if detail is not None:
         return "invalid", None, detail
-    return _load_selected_final_snapshot(root, contract_doc, pointers[0])
+    return _load_selected_final_snapshot(
+        root, version, contract_doc, pointers[0]
+    )
 
 
 def _final_snapshot_material(
@@ -367,8 +370,8 @@ def _final_snapshot_material(
 def _unclaimed_final_snapshot_selection(
     version: str,
 ) -> tuple[str, Optional[FinalSourceSnapshot], Optional[str]]:
-    """Distinguish required v1.13.18 material from historical absence."""
-    if version == "1.13.18":
+    """Distinguish required finite snapshot material from historical absence."""
+    if version in FINAL_SNAPSHOT_SPECS:
         return (
             "invalid",
             None,
@@ -386,12 +389,13 @@ def _final_snapshot_selector_error(
     reference_present: bool,
 ) -> Optional[str]:
     """Return the first selector-coherence error in established order."""
-    if version != "1.13.18":
+    spec = FINAL_SNAPSHOT_SPECS.get(version)
+    if spec is None:
         return (
             "final snapshot reference invalid: material is selected by an "
             "unsupported source version"
         )
-    if schemas != ["coldkeep-v1-final-source-snapshot-selection/v1"]:
+    if schemas != [spec.selection_schema]:
         return (
             "final snapshot reference invalid: selection schema is missing, "
             "duplicated, or unsupported"
@@ -406,6 +410,7 @@ def _final_snapshot_selector_error(
 
 def _load_selected_final_snapshot(
     root: Path,
+    version: str,
     contract_doc: Optional[Document],
     pointer: str,
 ) -> tuple[str, Optional[FinalSourceSnapshot], Optional[str]]:
@@ -416,6 +421,12 @@ def _load_selected_final_snapshot(
         return state, None, detail
     if snapshot is None:
         return "invalid", None, "final snapshot reference invalid: snapshot is missing"
+    if snapshot.values["SOURCE_VERSION"] != version:
+        return (
+            "invalid",
+            None,
+            "final snapshot reference invalid: source version disagrees",
+        )
     return "snapshot", snapshot, None
 
 
@@ -1557,13 +1568,20 @@ def validate(
         docs["contract"],
     )
     if snapshot_mode != "legacy":
-        result.diagnostic_schema = "coldkeep-release-state-diagnostic/v5"
+        snapshot_spec = FINAL_SNAPSHOT_SPECS.get(version)
+        result.diagnostic_schema = (
+            snapshot_spec.diagnostic_schema
+            if snapshot_spec is not None
+            else "coldkeep-release-state-diagnostic/v5"
+        )
         result.final_snapshot_contract_schema = (
             "INVALID"
             if snapshot_mode == "invalid"
             else "UNAVAILABLE"
             if snapshot_mode == "unavailable"
-            else "coldkeep-v1-final-source-snapshot-reference/v1"
+            else final_snapshot.values["SCHEMA"]
+            if final_snapshot is not None
+            else "INVALID"
         )
     if snapshot_detail:
         result.final_snapshot = (
@@ -1882,7 +1900,10 @@ def _contract_human_suffix(result: ValidationResult) -> str:
     selected = ""
     if result.diagnostic_schema == "coldkeep-release-state-diagnostic/v4":
         selected = f" progression_contract_schema={result.progression_contract_schema}"
-    elif result.diagnostic_schema == "coldkeep-release-state-diagnostic/v5":
+    elif result.diagnostic_schema in (
+        "coldkeep-release-state-diagnostic/v5",
+        "coldkeep-release-state-diagnostic/v6",
+    ):
         selected = (
             f" final_snapshot={result.final_snapshot}"
             f" final_snapshot_contract_schema={result.final_snapshot_contract_schema}"
@@ -1916,7 +1937,10 @@ def emit(result: ValidationResult, as_json: bool) -> int:
         }
         if result.diagnostic_schema == "coldkeep-release-state-diagnostic/v4":
             payload["progression_contract_schema"] = result.progression_contract_schema
-        if result.diagnostic_schema == "coldkeep-release-state-diagnostic/v5":
+        if result.diagnostic_schema in (
+            "coldkeep-release-state-diagnostic/v5",
+            "coldkeep-release-state-diagnostic/v6",
+        ):
             payload["final_snapshot"] = result.final_snapshot
             payload["final_snapshot_contract_schema"] = result.final_snapshot_contract_schema
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
