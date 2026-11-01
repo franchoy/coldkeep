@@ -13626,7 +13626,7 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
                 release_state_support.commit_parents(
                     ACTIVE_FINAL_SNAPSHOT_TEST_ROOT, runner
                 ),
-                (snapshot.values["BASE_M"], candidate),
+                [snapshot.values["BASE_M"], candidate],
             )
         self.assertTrue(
             release_state_support.final_snapshot_artifact(
