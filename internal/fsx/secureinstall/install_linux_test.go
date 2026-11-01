@@ -4,6 +4,7 @@ package secureinstall
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -178,10 +179,11 @@ func TestLinuxMetadataTargetsRetainedPublishedObject(t *testing.T) {
 }
 
 type linuxRetainedMetadataFixture struct {
-	destination string
-	moved       string
-	mode        os.FileMode
-	mtime       time.Time
+	destination     string
+	moved           string
+	mode            os.FileMode
+	replacementMode os.FileMode
+	mtime           time.Time
 }
 
 func beginLinuxRetainedMetadataProof(t *testing.T) (linuxRetainedMetadataFixture, *Pending) {
@@ -189,12 +191,28 @@ func beginLinuxRetainedMetadataProof(t *testing.T) (linuxRetainedMetadataFixture
 	root := t.TempDir()
 	destination := filepath.Join(root, "restored.bin")
 	moved := filepath.Join(root, "retained-object.bin")
+	replacementMode := os.FileMode(0o644)
 	original := linuxOps
 	linuxOps.beforeMetadata = func() error {
 		if err := os.Rename(destination, moved); err != nil {
 			return err
 		}
-		return os.WriteFile(destination, []byte("path replacement"), 0o666)
+		if err := os.WriteFile(destination, []byte("path replacement"), replacementMode); err != nil {
+			return err
+		}
+		// Make the fixture independent of the process umask, then prove the
+		// replacement differs from the metadata target before metadata runs.
+		if err := os.Chmod(destination, replacementMode); err != nil {
+			return err
+		}
+		info, err := os.Stat(destination)
+		if err != nil {
+			return err
+		}
+		if info.Mode().Perm() != replacementMode {
+			return fmt.Errorf("replacement mode before metadata=%o want=%o", info.Mode().Perm(), replacementMode)
+		}
+		return nil
 	}
 	t.Cleanup(func() { linuxOps = original })
 	mode := os.FileMode(0o600)
@@ -214,7 +232,13 @@ func beginLinuxRetainedMetadataProof(t *testing.T) (linuxRetainedMetadataFixture
 	if err := pending.SyncAndCloseWriter(); err != nil {
 		t.Fatal(err)
 	}
-	return linuxRetainedMetadataFixture{destination: destination, moved: moved, mode: mode, mtime: mtime}, pending
+	return linuxRetainedMetadataFixture{
+		destination:     destination,
+		moved:           moved,
+		mode:            mode,
+		replacementMode: replacementMode,
+		mtime:           mtime,
+	}, pending
 }
 
 func requireLinuxRetainedMetadata(t *testing.T, fixture linuxRetainedMetadataFixture) {
@@ -230,8 +254,8 @@ func requireLinuxRetainedMetadata(t *testing.T, fixture linuxRetainedMetadataFix
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replacementInfo.Mode().Perm() == fixture.mode {
-		t.Fatalf("pathname replacement unexpectedly received retained-object mode %o", fixture.mode)
+	if replacementInfo.Mode().Perm() != fixture.replacementMode {
+		t.Fatalf("pathname replacement mode=%o want=%o", replacementInfo.Mode().Perm(), fixture.replacementMode)
 	}
 }
 

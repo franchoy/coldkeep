@@ -1,0 +1,124 @@
+{
+  "schema": "coldkeep.compress-old-writer-fixture.v2",
+  "writer_commit": "550374d40d102bb5cbb5184799ef9b03fdaeefac",
+  "go_version": "go1.26.10",
+  "compress_version": "v1.18.0",
+  "compress_module_sum": "h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=",
+  "aes_key_hex": "abababababababababababababababababababababababababababababababab",
+  "catalog": "catalog.db",
+  "containers": "containers",
+  "files": [
+    {
+      "case_id": "empty-none-plain",
+      "payload_kind": "empty",
+      "file_id": 1,
+      "file_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "payload_size": 0,
+      "packed_blocks": 0,
+      "transforms": null
+    },
+    {
+      "case_id": "tiny-zstd-plain-l1",
+      "payload_kind": "literal",
+      "file_id": 2,
+      "file_hash": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+      "payload_sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+      "payload_size": 4,
+      "packed_blocks": 1,
+      "transforms": [
+        {
+          "storage_codec": "none",
+          "compression_codec": "none",
+          "compression_level": null,
+          "block_count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "small-none-aes",
+      "payload_kind": "deterministic-noise",
+      "file_id": 3,
+      "file_hash": "6b1d4bfe25f0144686cade6a6f77f222e6ef929b949a9d688e418d56dd3af609",
+      "payload_sha256": "6b1d4bfe25f0144686cade6a6f77f222e6ef929b949a9d688e418d56dd3af609",
+      "payload_size": 4096,
+      "packed_blocks": 1,
+      "transforms": [
+        {
+          "storage_codec": "aes-gcm",
+          "compression_codec": "none",
+          "compression_level": null,
+          "block_count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "compressible-zstd-plain-l1",
+      "payload_kind": "repeated-text",
+      "file_id": 4,
+      "file_hash": "4d18e266c17e7efc1617632a2dca08f75923711c9ef814cea1265df797286f09",
+      "payload_sha256": "4d18e266c17e7efc1617632a2dca08f75923711c9ef814cea1265df797286f09",
+      "payload_size": 262144,
+      "packed_blocks": 1,
+      "transforms": [
+        {
+          "storage_codec": "none",
+          "compression_codec": "zstd",
+          "compression_level": 1,
+          "block_count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "incompressible-zstd-aes-l3",
+      "payload_kind": "deterministic-noise",
+      "file_id": 5,
+      "file_hash": "3c7762a35e19754d73dfe53ef5d929c51974c32368bd59a6d725fa5da5777be3",
+      "payload_sha256": "3c7762a35e19754d73dfe53ef5d929c51974c32368bd59a6d725fa5da5777be3",
+      "payload_size": 262144,
+      "packed_blocks": 1,
+      "transforms": [
+        {
+          "storage_codec": "aes-gcm",
+          "compression_codec": "none",
+          "compression_level": null,
+          "block_count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "compressible-zstd-aes-l9",
+      "payload_kind": "repeated-text",
+      "file_id": 6,
+      "file_hash": "9617b1c61f17f60cc0f63c915fca166a8335af0c173e1efe25211cc351e656a9",
+      "payload_sha256": "9617b1c61f17f60cc0f63c915fca166a8335af0c173e1efe25211cc351e656a9",
+      "payload_size": 262144,
+      "packed_blocks": 1,
+      "transforms": [
+        {
+          "storage_codec": "aes-gcm",
+          "compression_codec": "zstd",
+          "compression_level": 9,
+          "block_count": 1
+        }
+      ]
+    },
+    {
+      "case_id": "multi-packed-zstd-plain-l3",
+      "payload_kind": "structured-compressible",
+      "file_id": 7,
+      "file_hash": "a9abaef479fd8a58bda0527e7f927d37233017152ed9db1760817800c3c41236",
+      "payload_sha256": "a9abaef479fd8a58bda0527e7f927d37233017152ed9db1760817800c3c41236",
+      "payload_size": 3145728,
+      "packed_blocks": 3,
+      "transforms": [
+        {
+          "storage_codec": "none",
+          "compression_codec": "zstd",
+          "compression_level": 3,
+          "block_count": 3
+        }
+      ]
+    }
+  ]
+}

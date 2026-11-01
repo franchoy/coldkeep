@@ -2,20 +2,21 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.17
-RECOVERY_ROUTE: C_SUCCESSOR_VERSION
-CURRENT_PHASE: NONE_TERMINAL_DISPOSITION_DECLARED
+SOURCE_VERSION: 1.13.18
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: TERMINAL_DISPOSITION_DECLARATION_PRESENT
+V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
+V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-EXTERNAL_TERMINAL_DISPOSITION: ESTABLISHED_AT_C_SOURCE_SCOPED_QUALIFIED
-TRACKED_TERMINAL_SERIALIZATION: DECLARATION_PRESENT_NON_AUTHORIZING
+V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
+V1_13_18_PUBLICATION: NOT_PUBLISHED
+V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -104,19 +105,25 @@ Critical-path coverage should focus on:
 
 Do not add global coverage gates unless explicitly approved.
 
-## v1.13.17 Recovery Boundary
+## v1.13.18 Final Snapshot Boundary
 
-v1.13.17 is published at immutable M17/A17 and GitHub Release `400460267`.
-Its tracked descendant is a non-authorizing terminal-disposition declaration.
-Phase 9M established source-scoped qualified external closure at C; protected-
-main serialization and effectiveness readback remain separate. This state does
-not certify its own checks or authorize a push, PR, merge, tag, Release change,
-or closure. v1.13.16 is the immutable failed-publication
-predecessor; its public tag failed required certification and no GitHub
-Release exists. v1.13.15 remains published stable and immutable. Use
-terminal-serialization validation on its exact branch, follow the 10-phase plan
-and exact phase mode, and do not
-use CI work to introduce:
+v1.13.18 is the active final-source-snapshot candidate at the metadata-only
+Stage B boundary. Recovery Wave A on S passed its required local,
+real-PostgreSQL and natural hosted gates; Phases 0-4 are Complete and Phase 5
+protected integration is Next. The Stage B head still requires fresh local
+review and exact-head Wave B. Neither S's checks nor this structural state
+certifies a later head, protected main, a tag or publication.
+
+The candidate uses Go 1.26.10 and the accepted compress v1.20.2 component,
+with exactly 52 cumulative paths and 13 selected technical tuples. Stage B
+changes release metadata only and preserves all technical bytes, dependencies,
+fixtures, workflows and scanner policy. Candidate C, exact E and Q retain
+their recorded failed requirements; their history is not rewritten.
+v1.13.17 remains immutable at M17/A17 and Release `400460267`, including its
+qualified Phase 9M and TS history. v1.13.16 remains the immutable
+failed-publication predecessor, and v1.13.15 remains published stable.
+Follow the v1.13.18 10-phase plan, exact 52-path cumulative boundary and
+current narrower operation manifest. Do not use CI work to introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;

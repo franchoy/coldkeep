@@ -20,6 +20,58 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.13.18 - 2026-11-01 — Final v1.x Source Snapshot and Closure Handoff
+
+This date records the Stage B candidate declaration; it is not a publication
+date. v1.13.18 remains `NOT_PUBLISHED`. Fresh exact-head Wave B, protected
+integration and main validation, tag certification, publication, and owner
+acceptance remain pending.
+
+- Versions the accepted final v1.x protected-main source as an exceptional
+  source-only snapshot; it adds no product feature, schema, storage/repository
+  format, or default-behavior change. Its sole dependency delta is the exact
+  reviewed `github.com/klauspost/compress` v1.18.0-to-v1.20.2 correction with
+  paired sums, compatibility tests, and persisted fixtures.
+- Retains the Go 1.25.0 language floor and application version 1.13.18 while
+  updating the release-critical toolchain uniformly from Go 1.26.9 to 1.26.10
+  for GO-2026-6809, without changing product behavior.
+- Adds a separate fail-closed final-source-snapshot selector bound to exact M,
+  the selected exact 52-path cumulative delta, all 13 technical modes/Git
+  blobs, frozen
+  v1.13.17 history, and non-authorizing branch/PR/main/tag simulations.
+- Candidate C's first hosted wave passed CI and CodeQL but did not clear Codacy;
+  exact E's later wave failed its vulnerability jobs and retained three Codacy
+  findings. The isolated E child combines the fixed toolchain with bounded
+  Agentlinter wording corrections. The governance-integrated candidate adds the
+  closed C1 ordinary component while keeping the closed
+  `3_NEXT`/`4_NEXT`/`5_NEXT` model, then at `4_NEXT`. Bounded Route A verification
+  on exact K/C2 completed all seven defined rows and was independently accepted,
+  with evidence SHA-256
+  `52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
+  Q passed local and independent review, was adopted and pushed, then failed
+  its natural Wave A push PostgreSQL cleanup contract and retained 21 Added
+  Codacy issues. PR CI and both CodeQL contexts passed. The bounded recovery
+  refactors only test/tool code and release validation, adds a deadline-bounded
+  test observation, and updates the exact scope bindings.
+- Recovery S `0a6250f173ae4b72cbb8e3f00bf2ea34a20c10e9`, tree
+  `8c8249bb35b53310d640aead19aec41a1bdacb47`, passed its own local gates,
+  independent review, and natural Wave A under handoff SHA-256
+  `ae22ec4e9a79f01db223a797d7876c2dd7b358dab1bc1543d86039e17e9ff3f2`.
+  Both 36-job CI contexts, both CodeQL contexts, the separate CodeQL/GHAS
+  check, and completed zero-Added Codacy passed: 82 captured successful
+  exact-S checks. The recorded advisory benchmark timing warnings and all
+  earlier failed waves remain qualifications; no unrestricted performance or
+  repository-wide zero-issue claim is made.
+- Records metadata-only Stage B at `5_NEXT`: Phases 0-4 Complete, Phase 5
+  protected integration Next, and Phases 6-9 Not started. The 52-path boundary,
+  all 13 technical tuples, dependencies, workflows, executable code, frozen
+  body/checksum, reference, and allowlist remain unchanged. The new metadata
+  head requires its own full local gates, independent review, and fresh
+  natural push/PR Wave B before protected merge; R18 remains symbolic until
+  that exact head and Wave B are accepted. Publication remains `NOT_PUBLISHED`
+  and v2 remains `NOT_STARTED`. No merge, tag, Release, cleanup, or owner
+  publication acceptance is claimed.
+
 ## v1.13.17 - 2026-09-27 — Annotated-Tag Certification Recovery
 
 - Starts the Route C recovery successor from the exact v1.13.16 merge commit.

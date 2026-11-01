@@ -10,7 +10,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parent.parent
-GO_INDEX = "sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c"
+GO_INDEX = "sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af"
 POSTGRES_INDEX = "sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825"
 ALPINE_INDEX = "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
 
@@ -37,8 +37,8 @@ dockerignore = read(".dockerignore")
 devcontainer = json.loads(read(".devcontainer/devcontainer.json"))
 
 required_images = {
-    "product builder": (dockerfile, rf"golang:1\.26\.9-bookworm@{GO_INDEX}"),
-    "development base": (dev_dockerfile, rf"golang:1\.26\.9-bookworm@{GO_INDEX}"),
+    "product builder": (dockerfile, rf"golang:1\.26\.10-bookworm@{GO_INDEX}"),
+    "development base": (dev_dockerfile, rf"golang:1\.26\.10-bookworm@{GO_INDEX}"),
     "product runtime": (dockerfile, rf"alpine:3\.22\.5@{ALPINE_INDEX}"),
     "product postgres": (product_compose, rf"postgres:16\.15-bookworm@{POSTGRES_INDEX}"),
     "development postgres": (dev_compose, rf"postgres:16\.15-bookworm@{POSTGRES_INDEX}"),
@@ -64,7 +64,7 @@ for required_ignore in (".git", ".env", "storage"):
         fail(f"Docker build context must exclude {required_ignore}")
 if devcontainer.get("postCreateCommand") != "bash .devcontainer/post-create.sh":
     fail("devcontainer post-create command drift")
-if "GOTOOLCHAIN=local" not in dockerfile or "go1.26.9" not in post_create:
+if "GOTOOLCHAIN=local" not in dockerfile or "go1.26.10" not in post_create:
     fail("exact local Go toolchain enforcement is missing")
 if "git config --global --get-all safe.directory" not in post_create:
     fail("post-create bootstrap is not guarded for idempotency")

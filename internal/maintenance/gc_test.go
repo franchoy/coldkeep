@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"os"
 	"path/filepath"
@@ -457,20 +458,42 @@ func TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession(t *testing.T)
 				t.Fatal("unlock failure did not observe the owning backend PID")
 			}
 
-			var remaining int
-			if err := observer.QueryRowContext(context.Background(), `
-				SELECT COUNT(*) FROM pg_stat_activity WHERE pid = $1
-			`, discardedPID).Scan(&remaining); err != nil {
-				t.Fatalf("observe discarded advisory session: %v", err)
-			}
-			if remaining != 0 {
-				t.Fatalf("advisory session PID %d remained active after cleanup failure", discardedPID)
+			// Client-side discard does not acknowledge server-side session exit.
+			// Observe teardown with a finite deadline before checking lock reuse.
+			observeCtx, observeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err = waitForDiscardedGCAdvisorySession(observeCtx, observer, discardedPID)
+			observeCancel()
+			if err != nil {
+				t.Fatal(err)
 			}
 			if locked := tryGCAdvisoryLockOnConn(t, observer); !locked {
 				t.Fatal("independent session could not acquire advisory lock after failed cleanup discard")
 			}
 			unlockGCAdvisoryLockOnConn(t, observer)
 		})
+	}
+}
+
+func waitForDiscardedGCAdvisorySession(ctx context.Context, observer *sql.Conn, pid int) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		var remaining int
+		if err := observer.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM pg_stat_activity WHERE pid = $1
+		`, pid).Scan(&remaining); err != nil {
+			return fmt.Errorf("observe discarded advisory session PID %d: %w", pid, err)
+		}
+		if remaining == 0 {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("advisory session PID %d remained present after cleanup failure: %w", pid, ctx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 
