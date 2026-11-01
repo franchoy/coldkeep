@@ -11987,7 +11987,7 @@ def final_snapshot_candidate_from_runner_head_for_test(
     runner_head: str,
     snapshot: release_state_support.FinalSourceSnapshot,
 ) -> str | None:
-    """Resolve R18 only from a complete candidate or exact `[M,R18]` merge."""
+    """Resolve the selected candidate from itself or its exact merge."""
     if not re.fullmatch(r"[0-9a-f]{40}", runner_head):
         return None
     resolved = run_process(
@@ -12022,7 +12022,7 @@ def final_snapshot_candidate_for_test(
     root: Path,
     snapshot: release_state_support.FinalSourceSnapshot,
 ) -> tuple[str, str]:
-    """Return validated `(runner HEAD, R18)` identities for portable tests."""
+    """Return validated `(runner HEAD, candidate)` identities for tests."""
     completed = run_process(
         [
             resolved_executable("git"),
@@ -12039,8 +12039,8 @@ def final_snapshot_candidate_for_test(
     )
     if candidate is None:
         raise AssertionError(
-            "runner HEAD is neither the complete R18 candidate nor its exact "
-            "supported [M,R18] merge"
+            "runner HEAD is neither the complete selected candidate nor its "
+            "exact supported merge"
         )
     return runner_head, candidate
 
@@ -13616,7 +13616,18 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
         runner, candidate = final_snapshot_candidate_for_test(
             ACTIVE_FINAL_SNAPSHOT_TEST_ROOT, snapshot
         )
-        self.assertEqual(runner, candidate)
+        if runner != candidate:
+            self.assertTrue(
+                release_state_support.final_snapshot_main_artifact(
+                    ACTIVE_FINAL_SNAPSHOT_TEST_ROOT, runner, snapshot
+                )
+            )
+            self.assertEqual(
+                release_state_support.commit_parents(
+                    ACTIVE_FINAL_SNAPSHOT_TEST_ROOT, runner
+                ),
+                (snapshot.values["BASE_M"], candidate),
+            )
         self.assertTrue(
             release_state_support.final_snapshot_artifact(
                 ACTIVE_FINAL_SNAPSHOT_TEST_ROOT,
