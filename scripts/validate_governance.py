@@ -1432,22 +1432,9 @@ def _v18_snapshot_contract_violations(
     return violations
 
 
-def _v19_canonical_state(text: str) -> tuple[dict[str, str], list[str]]:
-    """Parse the exact active v1.13.19 recovery-state vocabulary."""
-    preamble = re.split(r"(?m)^##\s+", text, maxsplit=1)[0]
-    blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", preamble)
-    if len(blocks) != 1:
-        return {}, [
-            f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical preamble requires "
-            f"exactly one fenced text block, found {len(blocks)}"
-        ]
-    required = V19_MIRROR_KEYS + V19_CANONICAL_ONLY_KEYS
-    state, violations = parse_state_lines(
-        V19_CANONICAL_CURRENT_STATE_FILE,
-        blocks[0],
-        required,
-        "canonical current-state block",
-    )
+def _v19_canonical_value_violations(state: dict[str, str]) -> list[str]:
+    """Check the finite canonical values without changing diagnostics."""
+    violations: list[str] = []
     expected = {
         "SOURCE_VERSION": "1.13.19",
         "RELEASE_ROUTE": "FINAL_V1_SOURCE_SNAPSHOT_RECOVERY",
@@ -1473,20 +1460,16 @@ def _v19_canonical_state(text: str) -> tuple[dict[str, str], list[str]]:
                 f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical {key}="
                 f"{state.get(key)!r} does not match {value!r}"
             )
-    allowed_phases = {f"{number}_NEXT" for number in V19_ALLOWED_NEXT_PHASES}
-    if state.get("CURRENT_PHASE") not in allowed_phases:
-        violations.append(
-            f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical CURRENT_PHASE="
-            f"{state.get('CURRENT_PHASE')!r} is outside the closed "
-            "3_NEXT/4_NEXT/5_NEXT recovery lifecycle"
-        )
-    if re.fullmatch(r"[0-9a-f]{64}", state.get("RELEASE_BODY_SHA256", "")) is None:
-        violations.append(
-            f"{V19_CANONICAL_CURRENT_STATE_FILE}: FROZEN publication material "
-            "requires a lowercase SHA-256"
-        )
+    return violations
+
+
+def _v19_canonical_key_violations(
+    block: str, required: tuple[str, ...]
+) -> list[str]:
+    """Reject extra keys and missing historical finding rows."""
+    violations: list[str] = []
     finding_keys = {f"CK-V11316-{number:03d}" for number in range(1, 16)}
-    present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", blocks[0]))
+    present = set(re.findall(r"(?m)^([A-Za-z0-9_.-]+):", block))
     extras = sorted(present - (set(required) | finding_keys))
     missing_findings = sorted(finding_keys - present)
     if extras:
@@ -1499,6 +1482,40 @@ def _v19_canonical_state(text: str) -> tuple[dict[str, str], list[str]]:
             f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical finding rows are "
             f"missing {missing_findings}"
         )
+    return violations
+
+
+def _v19_canonical_state(text: str) -> tuple[dict[str, str], list[str]]:
+    """Parse the exact active v1.13.19 recovery-state vocabulary."""
+    preamble = re.split(r"(?m)^##\s+", text, maxsplit=1)[0]
+    blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", preamble)
+    if len(blocks) != 1:
+        message = (
+            f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical preamble requires "
+            f"exactly one fenced text block, found {len(blocks)}"
+        )
+        return {}, [message]
+    required = V19_MIRROR_KEYS + V19_CANONICAL_ONLY_KEYS
+    state, violations = parse_state_lines(
+        V19_CANONICAL_CURRENT_STATE_FILE,
+        blocks[0],
+        required,
+        "canonical current-state block",
+    )
+    violations.extend(_v19_canonical_value_violations(state))
+    allowed_phases = {f"{number}_NEXT" for number in V19_ALLOWED_NEXT_PHASES}
+    if state.get("CURRENT_PHASE") not in allowed_phases:
+        violations.append(
+            f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical CURRENT_PHASE="
+            f"{state.get('CURRENT_PHASE')!r} is outside the closed "
+            "3_NEXT/4_NEXT/5_NEXT recovery lifecycle"
+        )
+    if re.fullmatch(r"[0-9a-f]{64}", state.get("RELEASE_BODY_SHA256", "")) is None:
+        violations.append(
+            f"{V19_CANONICAL_CURRENT_STATE_FILE}: FROZEN publication material "
+            "requires a lowercase SHA-256"
+        )
+    violations.extend(_v19_canonical_key_violations(blocks[0], required))
     return state, violations
 
 
@@ -1507,19 +1524,21 @@ def _v19_mirror(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
     starts = text.count(CURRENT_STATE_MIRROR_START)
     ends = text.count(CURRENT_STATE_MIRROR_END)
     if starts != 1 or ends != 1:
-        return {}, [
+        message = (
             f"{path}: requires exactly one current-state mirror, found "
             f"{starts} start and {ends} end delimiters"
-        ]
+        )
+        return {}, [message]
     body = text.split(CURRENT_STATE_MIRROR_START, 1)[1].split(
         CURRENT_STATE_MIRROR_END, 1
     )[0]
     blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", body)
     if len(blocks) != 1:
-        return {}, [
+        message = (
             f"{path}: current-state mirror requires exactly one fenced text block, "
             f"found {len(blocks)}"
-        ]
+        )
+        return {}, [message]
     state, violations = parse_state_lines(
         path, blocks[0], V19_MIRROR_KEYS, "current-state mirror"
     )
@@ -1556,23 +1575,17 @@ def _v19_phase_progression_violations(text: str, current_phase: str) -> list[str
     )
     if phase_rows == expected_rows:
         return []
-    return [
+    message = (
         f"{V19_PHASE_FILE}: phase progression must exactly match canonical "
         f"CURRENT_PHASE={current_phase!r} within the closed "
         "3_NEXT/4_NEXT/5_NEXT recovery lifecycle"
-    ]
+    )
+    return [message]
 
 
-def _v19_phase_summary_violations(
-    texts: dict[Path, str], current_phase: str
-) -> list[str]:
-    """Keep the short live summaries consistent with the canonical phase."""
-    next_phase = {
-        f"{number}_NEXT": number for number in V19_ALLOWED_NEXT_PHASES
-    }.get(current_phase)
-    if next_phase is None:
-        return []  # The canonical-state validator reports unsupported phases.
-    expected = [
+def _v19_phase_summary_rows(next_phase: int) -> list[tuple[str, str]]:
+    """Build the exact lifecycle and phase rows for a supported phase."""
+    return [
         ("RELEASE_STATE", "PRE_RELEASE" if next_phase == 5 else "DEVELOPMENT"),
         *(
             (
@@ -1586,6 +1599,18 @@ def _v19_phase_summary_violations(
             for number in (3, 4, 5)
         ),
     ]
+
+
+def _v19_phase_summary_violations(
+    texts: dict[Path, str], current_phase: str
+) -> list[str]:
+    """Keep the short live summaries consistent with the canonical phase."""
+    next_phase = {
+        f"{number}_NEXT": number for number in V19_ALLOWED_NEXT_PHASES
+    }.get(current_phase)
+    if next_phase is None:
+        return []  # The canonical-state validator reports unsupported phases.
+    expected = _v19_phase_summary_rows(next_phase)
     violations: list[str] = []
     for relative in (Path("AGENTS.md"), Path("README.md")):
         text = texts.get(relative, "")
@@ -1613,10 +1638,11 @@ def _v19_candidate_command_violations(text: str, current_phase: str) -> list[str
         return []  # The canonical-state validator reports unsupported phases.
     headings = re.findall(r"(?m)^## Candidate-local gates[ \t]*$", text)
     if len(headings) != 1:
-        return [
+        message = (
             "docs/release/v1.13/v1.13.19-validation-checklist.md: requires "
             f"exactly one Candidate-local gates section, found {len(headings)}"
-        ]
+        )
+        return [message]
     section = markdown_section(text, "## Candidate-local gates")
     actual = re.findall(
         r"`python3 scripts/validate_release_state\.py --state ([a-z-]+) --json`",
@@ -1624,11 +1650,12 @@ def _v19_candidate_command_violations(text: str, current_phase: str) -> list[str
     )
     if actual == ["auto", expected_state]:
         return []
-    return [
+    message = (
         "docs/release/v1.13/v1.13.19-validation-checklist.md: candidate-local "
         f"release-state commands must be auto and {expected_state} for "
         f"CURRENT_PHASE={current_phase!r}; found {actual!r}"
-    ]
+    )
+    return [message]
 
 
 def _validate_frozen_paths(
@@ -1667,28 +1694,9 @@ def _v19_release_body_path_violations(
     return violations
 
 
-def _v19_release_body_semantics(text: str) -> list[str]:
-    """Require truthful recovery history and reject premature success claims."""
-    normalized = " ".join(text.lower().split())
-    markers = (
-        "v1.13.19",
-        "v1.13.18",
-        "source-only",
-        "no custom assets",
-        "no github release",
-        "e03ede234275ced07b21a00ee9e4bfc539af9446",
-        "ad82794064c31b337949f0aa47c7639ca2f1d9c2",
-        "41330297821",
-        "41330297820",
-        "ckrs017",
-        "disposable fixture",
-        "writer remains unidentified",
-        "route a",
-    )
+def _v19_release_body_claim_violations(normalized: str) -> list[str]:
+    """Require bounded recovery claims and reject premature success."""
     violations: list[str] = []
-    for marker in markers:
-        if marker not in normalized:
-            violations.append(f"{V19_RELEASE_BODY}: missing semantic marker {marker!r}")
     required_claims = (
         (
             "failed v1.13.18 tag certification",
@@ -1727,6 +1735,32 @@ def _v19_release_body_semantics(text: str) -> list[str]:
             violations.append(
                 f"{V19_RELEASE_BODY}: contains forbidden recovery assertion {pattern!r}"
             )
+    return violations
+
+
+def _v19_release_body_semantics(text: str) -> list[str]:
+    """Require truthful recovery history and reject premature success claims."""
+    normalized = " ".join(text.lower().split())
+    markers = (
+        "v1.13.19",
+        "v1.13.18",
+        "source-only",
+        "no custom assets",
+        "no github release",
+        "e03ede234275ced07b21a00ee9e4bfc539af9446",
+        "ad82794064c31b337949f0aa47c7639ca2f1d9c2",
+        "41330297821",
+        "41330297820",
+        "ckrs017",
+        "disposable fixture",
+        "writer remains unidentified",
+        "route a",
+    )
+    violations: list[str] = []
+    for marker in markers:
+        if marker not in normalized:
+            violations.append(f"{V19_RELEASE_BODY}: missing semantic marker {marker!r}")
+    violations.extend(_v19_release_body_claim_violations(normalized))
     return violations
 
 
@@ -1811,14 +1845,11 @@ def _load_v19_authority_files(
     return loaded, violations
 
 
-def validate_v19_contract(root: Path, texts: dict[Path, str]) -> list[str]:
-    """Validate the finite v1.13.19 recovery and frozen predecessor history."""
-    loaded, violations = _load_v19_authority_files(root)
-    state_text = loaded.get(V19_CANONICAL_CURRENT_STATE_FILE)
-    if state_text is None:
-        return violations
-    state, state_violations = _v19_canonical_state(state_text)
-    violations.extend(state_violations)
+def _v19_mirror_contract_violations(
+    texts: dict[Path, str], state: dict[str, str]
+) -> list[str]:
+    """Compare each available mirror with the active canonical state."""
+    violations: list[str] = []
     for relative in CURRENT_STATE_MIRROR_FILES:
         text = texts.get(relative)
         if text is None:
@@ -1831,6 +1862,14 @@ def validate_v19_contract(root: Path, texts: dict[Path, str]) -> list[str]:
                     f"{relative}: mirror {key}={mirror.get(key)!r} does not match "
                     f"canonical {state[key]!r}"
                 )
+    return violations
+
+
+def _v19_snapshot_contract_violations(
+    root: Path, loaded: dict[Path, str], state: dict[str, str]
+) -> list[str]:
+    """Load the selected snapshot and preserve loader diagnostics."""
+    violations: list[str] = []
     contract_text = loaded.get(V19_CONTRACT_FILE)
     if contract_text is not None:
         contract = Document(root, V19_CONTRACT_FILE.as_posix(), contract_text.splitlines())
@@ -1841,6 +1880,19 @@ def validate_v19_contract(root: Path, texts: dict[Path, str]) -> list[str]:
             violations.append(f"{V19_CONTRACT_FILE}: {detail}")
         elif snapshot is None:
             violations.append(f"{V19_CONTRACT_FILE}: final snapshot reference is missing")
+    return violations
+
+
+def validate_v19_contract(root: Path, texts: dict[Path, str]) -> list[str]:
+    """Validate the finite v1.13.19 recovery and frozen predecessor history."""
+    loaded, violations = _load_v19_authority_files(root)
+    state_text = loaded.get(V19_CANONICAL_CURRENT_STATE_FILE)
+    if state_text is None:
+        return violations
+    state, state_violations = _v19_canonical_state(state_text)
+    violations.extend(state_violations)
+    violations.extend(_v19_mirror_contract_violations(texts, state))
+    violations.extend(_v19_snapshot_contract_violations(root, loaded, state))
     violations.extend(
         _v19_phase_progression_violations(
             loaded.get(V19_PHASE_FILE, ""), state.get("CURRENT_PHASE", "")

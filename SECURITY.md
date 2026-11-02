@@ -38,7 +38,8 @@ attestation are immutable. v1.13.19 is the active finite tag-certification
 recovery candidate based on exact M18. Phases 0-3 are Complete after qualified
 independent local review; Phase 4 release-branch and PR hosted certification
 is Next. It changes no product, storage, schema,
-catalog, GC, restore, compression, dependency, or security-policy behavior.
+catalog, garbage collection (GC), restore, compression, dependency, or
+security-policy behavior.
 v1.13.18 remains a public annotated-tag certification NONPASS with no GitHub
 Release; A18/M18 and the failed natural CI remain immutable. These bounded
 results do not certify later source, protected main, a tag or publication and

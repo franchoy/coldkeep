@@ -37,11 +37,13 @@ V2_IMPLEMENTATION: NOT_STARTED
   required natural tag CI failed. Passing CodeQL, installations and other
   bounded dimensions do not certify it, and no v1.13.18 GitHub Release exists.
   Preserve the failed run, the shared-workspace 281-test NONPASS, the isolated
-  `/tmp` PASS, and the unidentified writer qualification. Do not move or
+  `/tmp` PASS (successful test result), and the unidentified writer
+  qualification. Do not move or
   recreate A18.
 - Bounded Route A direct verification remains accepted on K
   `c69d678349edae59b1ee1d582fc2dbfd372ec133`, tree C2
-  `804f61238191e6dd93a3e85b27f291c95e84b14e`, under evidence SHA-256
+  `804f61238191e6dd93a3e85b27f291c95e84b14e`, under evidence
+  SHA-256 (SHA: Secure Hash Algorithm)
   `52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
   Its seven-row scope is not rerun or broadened by v1.13.19.
 - `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
@@ -68,7 +70,9 @@ V2_IMPLEMENTATION: NOT_STARTED
   structural only. They do not certify hosted operations or authorize a push,
   PR, merge, tag, publication, closure, or v2 implementation.
 - The candidate must descend from exact M18 through a merge-free range and
-  produce the complete 34-row delta. Every other M18 path, all 13 technical
+  produce the complete 34-row delta. If either check fails, stop and escalate
+  the evidence to the owner; adoption remains blocked while either check fails.
+  Every other M18 path, all 13 technical
   modes/blobs, all 24 frozen v1.13.17/v1.13.18 documents, compress v1.20.2,
   module sums, persisted fixtures, and product behavior remain unchanged.
   Stop and obtain separate owner authorization before changing another path or
