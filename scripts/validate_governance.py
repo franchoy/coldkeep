@@ -174,11 +174,15 @@ V19_RELEASE_BODY_CHECKSUM = Path(
 V19_PREDECESSOR_DISPOSITION = Path(
     "docs/release/v1.13/v1.13.19-predecessor-disposition.md"
 )
+V19_POST_PUBLICATION_CLOSURE = Path(
+    "docs/release/v1.13/v1.13.19-post-publication-closure.md"
+)
 V19_AUTHORITY_FILES = tuple(
     Path(f"docs/release/v1.13/v1.13.19-{suffix}.md")
     for suffix in (
         "final-source-snapshot-reference",
         "phase-list",
+        "post-publication-closure",
         "predecessor-disposition",
         "release-body",
         "release-gate",
@@ -194,6 +198,7 @@ V19_MIRROR_KEYS = (
     "SOURCE_VERSION",
     "RELEASE_ROUTE",
     "CURRENT_PHASE",
+    "RELEASE_STATE",
     "TRACKED_PUBLICATION_MATERIAL",
     "V1_13_15_STATE",
     "V1_13_16_STATE",
@@ -206,6 +211,7 @@ V19_MIRROR_KEYS = (
     "V1_X_TECHNICAL_CORRECTNESS",
     "V1_X_FULL_CLOSURE",
     "V1_13_19_PUBLICATION",
+    "V1_X",
     "V2_IMPLEMENTATION",
 )
 V19_CANONICAL_ONLY_KEYS = (
@@ -213,7 +219,7 @@ V19_CANONICAL_ONLY_KEYS = (
     "FINAL_SOURCE_SNAPSHOT_SCHEMA",
     "FINAL_SOURCE_SNAPSHOT_REFERENCE",
 )
-V19_ALLOWED_NEXT_PHASES = (3, 4, 5)
+V19_TERMINAL_PHASE = "NONE_POST_RELEASE_CLOSED"
 V11318_FROZEN_SHA256 = {
     Path("docs/release/v1.13/v1.13.18-final-source-snapshot-reference.md"): "783ff0c449d0038e04312957b812416c02def1cb8b92603484d9c3fc9ec21fdd",
     Path("docs/release/v1.13/v1.13.18-phase-list.md"): "a189bd10c7d9555583134da96b7fee7f934357c64dcd474ba4adf3dba7da6f74",
@@ -1433,23 +1439,25 @@ def _v18_snapshot_contract_violations(
 
 
 def _v19_canonical_value_violations(state: dict[str, str]) -> list[str]:
-    """Check the finite canonical values without changing diagnostics."""
+    """Check the final post-publication canonical values."""
     violations: list[str] = []
     expected = {
         "SOURCE_VERSION": "1.13.19",
         "RELEASE_ROUTE": "FINAL_V1_SOURCE_SNAPSHOT_RECOVERY",
+        "RELEASE_STATE": "POST_RELEASE_CLOSED",
         "TRACKED_PUBLICATION_MATERIAL": "FROZEN",
         "V1_13_15_STATE": "PUBLISHED_STABLE_IMMUTABLE",
         "V1_13_16_STATE": "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
         "V1_13_17_STATE": "PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED",
         "V1_13_18_STATE": "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
-        "V1_13_19_STATE": "ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE",
+        "V1_13_19_STATE": "PUBLISHED_STABLE_IMMUTABLE_LATEST",
         "CK-V11316-007": "CLOSED_AT_V1.13.16_SOURCE_SCOPE",
         "FINDINGS_CONFIRMED": "15",
         "FINDINGS_CLOSED": "15/15",
         "V1_X_TECHNICAL_CORRECTNESS": "ESTABLISHED",
-        "V1_X_FULL_CLOSURE": "ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED",
-        "V1_13_19_PUBLICATION": "NOT_PUBLISHED",
+        "V1_X_FULL_CLOSURE": "COMPLETE_EFFECTIVE",
+        "V1_13_19_PUBLICATION": "COMPLETE",
+        "V1_X": "CLOSED_AND_FROZEN",
         "V2_IMPLEMENTATION": "NOT_STARTED",
         "FINAL_SOURCE_SNAPSHOT_SCHEMA": "coldkeep-v1-final-source-snapshot-selection/v2",
         "FINAL_SOURCE_SNAPSHOT_REFERENCE": V19_REFERENCE_FILE.as_posix(),
@@ -1486,7 +1494,7 @@ def _v19_canonical_key_violations(
 
 
 def _v19_canonical_state(text: str) -> tuple[dict[str, str], list[str]]:
-    """Parse the exact active v1.13.19 recovery-state vocabulary."""
+    """Parse the exact terminal v1.13.19 post-publication vocabulary."""
     preamble = re.split(r"(?m)^##\s+", text, maxsplit=1)[0]
     blocks = re.findall(r"(?ms)^```text\s*\n(.*?)^```\s*$", preamble)
     if len(blocks) != 1:
@@ -1503,12 +1511,11 @@ def _v19_canonical_state(text: str) -> tuple[dict[str, str], list[str]]:
         "canonical current-state block",
     )
     violations.extend(_v19_canonical_value_violations(state))
-    allowed_phases = {f"{number}_NEXT" for number in V19_ALLOWED_NEXT_PHASES}
-    if state.get("CURRENT_PHASE") not in allowed_phases:
+    if state.get("CURRENT_PHASE") != V19_TERMINAL_PHASE:
         violations.append(
             f"{V19_CANONICAL_CURRENT_STATE_FILE}: canonical CURRENT_PHASE="
-            f"{state.get('CURRENT_PHASE')!r} is outside the closed "
-            "3_NEXT/4_NEXT/5_NEXT recovery lifecycle"
+            f"{state.get('CURRENT_PHASE')!r} does not match terminal "
+            f"{V19_TERMINAL_PHASE!r}"
         )
     if re.fullmatch(r"[0-9a-f]{64}", state.get("RELEASE_BODY_SHA256", "")) is None:
         violations.append(
@@ -1520,7 +1527,7 @@ def _v19_canonical_state(text: str) -> tuple[dict[str, str], list[str]]:
 
 
 def _v19_mirror(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
-    """Parse one active v1.13.19 current-state mirror."""
+    """Parse one terminal v1.13.19 current-state mirror."""
     starts = text.count(CURRENT_STATE_MIRROR_START)
     ends = text.count(CURRENT_STATE_MIRROR_END)
     if starts != 1 or ends != 1:
@@ -1550,54 +1557,34 @@ def _v19_mirror(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
 
 
 def _v19_phase_progression_violations(text: str, current_phase: str) -> list[str]:
-    """Require exact Phase 0..9 progression for the finite recovery route."""
+    """Require every finite v1.13.19 phase to be complete."""
     phase_rows = re.findall(
         r"(?ms)^## Phase (\d+)\b.*?^\*\*Status:\*\*\s*(Complete|Next|Not started)\s*$",
         text,
     )
-    expected_next = {
-        f"{number}_NEXT": number for number in V19_ALLOWED_NEXT_PHASES
-    }.get(current_phase)
     expected_rows = (
-        [
-            (
-                str(number),
-                "Complete"
-                if number < expected_next
-                else "Next"
-                if number == expected_next
-                else "Not started",
-            )
-            for number in range(10)
-        ]
-        if expected_next is not None
+        [(str(number), "Complete") for number in range(10)]
+        if current_phase == V19_TERMINAL_PHASE
         else []
     )
     if phase_rows == expected_rows:
         return []
     message = (
         f"{V19_PHASE_FILE}: phase progression must exactly match canonical "
-        f"CURRENT_PHASE={current_phase!r} within the closed "
-        "3_NEXT/4_NEXT/5_NEXT recovery lifecycle"
+        f"CURRENT_PHASE={current_phase!r} with Phases 0-9 Complete"
     )
     return [message]
 
 
-def _v19_phase_summary_rows(next_phase: int) -> list[tuple[str, str]]:
-    """Build the exact lifecycle and phase rows for a supported phase."""
+def _v19_phase_summary_rows() -> list[tuple[str, str]]:
+    """Build the exact terminal lifecycle summary rows."""
     return [
-        ("RELEASE_STATE", "PRE_RELEASE" if next_phase == 5 else "DEVELOPMENT"),
-        *(
-            (
-                f"PHASE_{number}",
-                "COMPLETE"
-                if number < next_phase
-                else "NEXT"
-                if number == next_phase
-                else "NOT_STARTED",
-            )
-            for number in (3, 4, 5)
-        ),
+        ("RELEASE_STATE", "POST_RELEASE_CLOSED"),
+        ("CURRENT_PHASE", V19_TERMINAL_PHASE),
+        ("V1_X_FULL_CLOSURE", "COMPLETE_EFFECTIVE"),
+        ("V1_13_19_PUBLICATION", "COMPLETE"),
+        ("V1_X", "CLOSED_AND_FROZEN"),
+        ("V2_IMPLEMENTATION", "NOT_STARTED"),
     ]
 
 
@@ -1605,18 +1592,20 @@ def _v19_phase_summary_violations(
     texts: dict[Path, str], current_phase: str
 ) -> list[str]:
     """Keep the short live summaries consistent with the canonical phase."""
-    next_phase = {
-        f"{number}_NEXT": number for number in V19_ALLOWED_NEXT_PHASES
-    }.get(current_phase)
-    if next_phase is None:
+    if current_phase != V19_TERMINAL_PHASE:
         return []  # The canonical-state validator reports unsupported phases.
-    expected = _v19_phase_summary_rows(next_phase)
+    expected = _v19_phase_summary_rows()
     violations: list[str] = []
     for relative in (Path("AGENTS.md"), Path("README.md")):
         text = texts.get(relative, "")
+        marker = "Current v1.13.19 lifecycle summary"
+        sections = text.split(marker)
+        summary = sections[1] if len(sections) == 2 else ""
+        summary = re.split(r"(?m)^##\s+", summary, maxsplit=1)[0]
         actual = re.findall(
-            r"(?m)^[ \t]*(RELEASE_STATE|PHASE_[345]):[ \t]*(\S+)[ \t]*$",
-            text,
+            r"(?m)^[ \t]*(RELEASE_STATE|CURRENT_PHASE|V1_X_FULL_CLOSURE|"
+            r"V1_13_19_PUBLICATION|V1_X|V2_IMPLEMENTATION):[ \t]*(\S+)[ \t]*$",
+            summary,
         )
         if actual != expected:
             violations.append(
@@ -1628,31 +1617,26 @@ def _v19_phase_summary_violations(
 
 
 def _v19_candidate_command_violations(text: str, current_phase: str) -> list[str]:
-    """Require the active checklist command for the declared candidate phase."""
-    expected_state = {
-        "3_NEXT": "development",
-        "4_NEXT": "development",
-        "5_NEXT": "pre-release",
-    }.get(current_phase)
-    if expected_state is None:
+    """Require automatic and explicit terminal validation commands."""
+    if current_phase != V19_TERMINAL_PHASE:
         return []  # The canonical-state validator reports unsupported phases.
-    headings = re.findall(r"(?m)^## Candidate-local gates[ \t]*$", text)
+    headings = re.findall(r"(?m)^## Terminal closure local gates[ \t]*$", text)
     if len(headings) != 1:
         message = (
             "docs/release/v1.13/v1.13.19-validation-checklist.md: requires "
-            f"exactly one Candidate-local gates section, found {len(headings)}"
+            f"exactly one Terminal closure local gates section, found {len(headings)}"
         )
         return [message]
-    section = markdown_section(text, "## Candidate-local gates")
+    section = markdown_section(text, "## Terminal closure local gates")
     actual = re.findall(
         r"`python3 scripts/validate_release_state\.py --state ([a-z-]+) --json`",
         section,
     )
-    if actual == ["auto", expected_state]:
+    if actual == ["auto", "post-release-closed"]:
         return []
     message = (
-        "docs/release/v1.13/v1.13.19-validation-checklist.md: candidate-local "
-        f"release-state commands must be auto and {expected_state} for "
+        "docs/release/v1.13/v1.13.19-validation-checklist.md: terminal-state "
+        "release-state commands must be auto and post-release-closed for "
         f"CURRENT_PHASE={current_phase!r}; found {actual!r}"
     )
     return [message]
@@ -1827,6 +1811,96 @@ def _v19_predecessor_disposition_violations(text: str) -> list[str]:
     return violations
 
 
+V19_POST_PUBLICATION_CLOSURE_MARKERS = (
+    "released_source_d19: d3581602aee2599547564322fe083baae1d52063",
+    "released_source_tree_t19: 96b2840cb9da9714705bb6c2998f46b7ed3e78ee",
+    "annotated_tag_a19: 60b6878114f936b295c415605e8af31def2aba5a",
+    "a19_direct_target: d3581602aee2599547564322fe083baae1d52063",
+    "github_release_id: 431395975",
+    "github_release_tag: v1.13.19",
+    "github_release_name: coldkeep v1.13.19 — final v1.x tag-certification recovery",
+    "41422511098",
+    "41422511135",
+    "e03ede234275ced07b21a00ee9e4bfc539af9446",
+    "v1.13.18",
+    "v1.13.16",
+    "v2_implementation: not_started",
+)
+
+V19_POST_PUBLICATION_CLOSURE_CLAIMS = (
+    (
+        "published stable immutable latest",
+        r"v1_13_19_state:\s*published_stable_immutable_latest",
+    ),
+    (
+        "natural original-attempt certification",
+        r"(?:natural.{0,80}original.{0,40}attempt.{0,100}(?:passed|successful)|(?:passed|successful).{0,80}natural.{0,80}original.{0,40}attempt)",
+    ),
+    (
+        "CI original attempt",
+        r"41422511098.{0,100}attempt[:\s_]*1.{0,100}(?:36/36|pass_36_of_36)",
+    ),
+    (
+        "CodeQL original attempt",
+        r"41422511135.{0,100}attempt[:\s_]*1.{0,100}(?:4/4|pass_4_of_4)",
+    ),
+    (
+        "public readback",
+        r"public.{0,80}(?:archive|module).{0,160}(?:executable|version).{0,160}(?:passed|successful|complete)",
+    ),
+    (
+        "external owner acceptance",
+        r"(?:external|independent).{0,60}owner acceptance.{0,40}(?:granted|accepted)",
+    ),
+    (
+        "v1.X complete and frozen",
+        r"v1[.]x.{0,100}(?:complete|closed).{0,80}frozen",
+    ),
+    (
+        "v1.13.16 historical NONPASS",
+        r"v1[.]13[.]16.{0,100}(?:nonpass|failed(?: tag-)?certification|certification failure)",
+    ),
+    (
+        "v1.13.18 historical NONPASS",
+        r"v1[.]13[.]18.{0,100}(?:nonpass|failed(?: tag-)?certification|certification failure)",
+    ),
+    (
+        "v1.13.18 Release absence",
+        r"v1[.]13[.]18.{0,80}(?:no github release|github release.{0,30}absent)",
+    ),
+    (
+        "zero custom assets",
+        r"(?:(?:zero|no) custom assets|github_release_custom_assets:\s*0)",
+    ),
+)
+
+V19_POST_PUBLICATION_CLOSURE_FORBIDDEN = (
+    r"v1[.]13[.]18.{0,100}(?:tag certification|certification).{0,50}(?:passed|successful)",
+    r"v1[.]13[.]18.{0,100}github release.{0,50}(?:published|created|exists)",
+)
+
+
+def _v19_post_publication_closure_violations(text: str) -> list[str]:
+    """Bind the immutable publication and terminal owner-accepted closure."""
+    normalized = " ".join(text.lower().split())
+    violations = [
+        f"{V19_POST_PUBLICATION_CLOSURE}: missing closure marker {marker!r}"
+        for marker in V19_POST_PUBLICATION_CLOSURE_MARKERS
+        if marker not in normalized
+    ]
+    for label, pattern in V19_POST_PUBLICATION_CLOSURE_CLAIMS:
+        if re.search(pattern, normalized, re.IGNORECASE) is None:
+            violations.append(
+                f"{V19_POST_PUBLICATION_CLOSURE}: missing closure claim {label!r}"
+            )
+    for pattern in V19_POST_PUBLICATION_CLOSURE_FORBIDDEN:
+        if re.search(pattern, normalized, re.IGNORECASE):
+            violations.append(
+                f"{V19_POST_PUBLICATION_CLOSURE}: contains forbidden closure assertion {pattern!r}"
+            )
+    return violations
+
+
 def _load_v19_authority_files(
     root: Path,
 ) -> tuple[dict[Path, str], list[str]]:
@@ -1913,6 +1987,9 @@ def validate_v19_contract(root: Path, texts: dict[Path, str]) -> list[str]:
     predecessor = loaded.get(V19_PREDECESSOR_DISPOSITION)
     if predecessor is not None:
         violations.extend(_v19_predecessor_disposition_violations(predecessor))
+    closure = loaded.get(V19_POST_PUBLICATION_CLOSURE)
+    if closure is not None:
+        violations.extend(_v19_post_publication_closure_violations(closure))
     violations.extend(_validate_v11318_frozen(root))
     violations.extend(_validate_v11317_frozen(root))
     return violations

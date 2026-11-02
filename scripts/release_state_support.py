@@ -31,6 +31,9 @@ PREDECESSOR_DECLARATION = re.compile(
 )
 SUPPORTED_LIFECYCLE_DECLARATION = "immutable-transition-v1"
 SUPPORTED_PREDECESSOR_DECLARATION = "failed-publication-predecessor-v1"
+V11319_RELEASE_COMMIT = "d3581602aee2599547564322fe083baae1d52063"
+V11319_RELEASE_TREE = "96b2840cb9da9714705bb6c2998f46b7ed3e78ee"
+V11319_ANNOTATED_TAG = "60b6878114f936b295c415605e8af31def2aba5a"
 PREDECESSOR_DISPOSITION_KEYS = (
     "SCHEMA", "SUCCESSOR_VERSION", "PREDECESSOR_VERSION",
     "CANONICAL_REPOSITORY", "PREDECESSOR_REF", "TAG_OBJECT",
@@ -2882,6 +2885,8 @@ def lifecycle_progression_valid(
     ordered: list[str],
     boundaries: Optional[LifecycleBoundaries],
     declaration: Optional[LifecycleDeclaration] = None,
+    *,
+    allow_immutable_post_release_closed: bool = False,
 ) -> bool:
     """Validate legacy or boundary-aware phase progression for one state."""
     complete = bool(ordered) and all(value == "Complete" for value in ordered)
@@ -2929,7 +2934,9 @@ def lifecycle_progression_valid(
     ):
         return bool(declaration and complete)
     if state == "post-release-closed":
-        return declaration is None and complete
+        return complete and (
+            declaration is None or allow_immutable_post_release_closed
+        )
     return False
 
 
@@ -4048,7 +4055,68 @@ def final_snapshot_context_status(
             if final_snapshot_main_artifact(root, head, snapshot)
             else "INVALID"
         )
+    if state in (
+        "post-release-pending-closure",
+        "post-release-closure-candidate",
+        "post-release-closed",
+    ):
+        return (
+            "POST_RELEASE_CLOSURE_VALID"
+            if v11319_post_release_closure_artifact(
+                root, version, head, context, snapshot
+            )
+            else "INVALID"
+        )
     return "INVALID"
+
+
+def v11319_post_release_closure_artifact(
+    root: Path,
+    version: str,
+    head: str,
+    context: tuple[str, str, bool, bool, Optional[str]],
+    snapshot: FinalSourceSnapshot,
+) -> bool:
+    """Validate the exact immutable A19/D19 ancestor of one closure descendant."""
+    if (
+        version != "1.13.19"
+        or snapshot.values.get("SOURCE_VERSION") != version
+        or context[0] != head
+    ):
+        return False
+    tag_ref = run_git(
+        root,
+        ["show-ref", "--verify", "--hash", "refs/tags/v1.13.19"],
+        allow_failure=True,
+    )
+    if tag_ref.returncode or tag_ref.stdout.strip() != V11319_ANNOTATED_TAG:
+        return False
+    tag_type = run_git(
+        root, ["cat-file", "-t", V11319_ANNOTATED_TAG], allow_failure=True
+    )
+    tag_body = run_git(
+        root, ["cat-file", "-p", V11319_ANNOTATED_TAG], allow_failure=True
+    )
+    headers = (
+        tag_body.stdout.split("\n\n", 1)[0].splitlines()
+        if tag_body.returncode == 0
+        else []
+    )
+    if (
+        tag_type.returncode
+        or tag_type.stdout.strip() != "tag"
+        or [line[7:] for line in headers if line.startswith("object ")]
+        != [V11319_RELEASE_COMMIT]
+        or [line[5:] for line in headers if line.startswith("type ")]
+        != ["commit"]
+        or context[2:] != (True, True, V11319_RELEASE_COMMIT)
+        or commit_tree(root, V11319_RELEASE_COMMIT) != V11319_RELEASE_TREE
+        or not final_snapshot_main_artifact(
+            root, V11319_RELEASE_COMMIT, snapshot
+        )
+    ):
+        return False
+    return strict_git_ancestor(root, V11319_RELEASE_COMMIT, head)
 
 
 def _successor_commit_identity_matches(
@@ -5037,6 +5105,7 @@ def v1_context_scope(
     if state in (
         "post-release-pending-closure",
         "post-release-closure-candidate",
+        "post-release-closed",
     ):
         if not any_github and branch in ("main", release_branch, closure_branch):
             return "LOCAL_CLOSURE_ARTIFACT_ONLY"

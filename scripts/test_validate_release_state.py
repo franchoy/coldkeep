@@ -12021,8 +12021,10 @@ def final_snapshot_candidate_from_runner_head_for_test(
 def final_snapshot_candidate_for_test(
     root: Path,
     snapshot: release_state_support.FinalSourceSnapshot,
+    *,
+    runner_revision: str = "HEAD",
 ) -> tuple[str, str]:
-    """Return validated `(runner HEAD, candidate)` identities for tests."""
+    """Return validated `(runner revision, candidate)` identities for tests."""
     completed = run_process(
         [
             resolved_executable("git"),
@@ -12030,7 +12032,7 @@ def final_snapshot_candidate_for_test(
             str(root),
             "rev-parse",
             "--verify",
-            "HEAD^{commit}",
+            f"{runner_revision}^{{commit}}",
         ]
     )
     runner_head = completed.stdout.strip() if completed.returncode == 0 else ""
@@ -12050,11 +12052,12 @@ def clone_final_snapshot_repository_for_test(
     snapshot: release_state_support.FinalSourceSnapshot,
     *,
     source_root: Path | None = None,
+    runner_revision: str = "HEAD",
 ) -> tuple[str, str]:
     """Clone validated objects and isolate the active tag for fixture setup."""
     source_root = source_root or FINAL_SNAPSHOT_TEST_ROOT
     runner_head, candidate = final_snapshot_candidate_for_test(
-        source_root, snapshot
+        source_root, snapshot, runner_revision=runner_revision
     )
     run_process(
         [
@@ -13614,7 +13617,9 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
     def test_active_candidate_binds_complete_recovery_shape(self) -> None:
         snapshot = load_v11319_snapshot_for_test()
         runner, candidate = final_snapshot_candidate_for_test(
-            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT, snapshot
+            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT,
+            snapshot,
+            runner_revision=release_state_support.V11319_RELEASE_COMMIT,
         )
         if runner != candidate:
             self.assertTrue(
@@ -13702,6 +13707,7 @@ class V11319LifecycleRoleTests(unittest.TestCase):
             cls.root,
             cls.snapshot,
             source_root=ACTIVE_FINAL_SNAPSHOT_TEST_ROOT,
+            runner_revision=release_state_support.V11319_RELEASE_COMMIT,
         )
         cls.base = cls.snapshot.values["BASE_M"]
         git(cls.root, "config", "user.name", "Coldkeep fixture")
@@ -13966,6 +13972,197 @@ class V11319LifecycleRoleTests(unittest.TestCase):
                         "TEST_FIXTURE_ONLY nested",
                     )
                 self.assertIsNone(self.scope("tagged", self.tag_environment()))
+
+
+class V11319PostPublicationClosureTests(unittest.TestCase):
+    """Bind terminal inference to exact immutable A19/D19 ancestry."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="coldkeep-v19-final-closure-"
+        )
+        self.root = Path(self.temporary.name) / "repository"
+        run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "clone",
+                "--no-local",
+                "--no-hardlinks",
+                str(ACTIVE_FINAL_SNAPSHOT_TEST_ROOT),
+                str(self.root),
+            ],
+            check=True,
+        )
+        git(self.root, "remote", "remove", "origin")
+        git(self.root, "config", "user.name", "Coldkeep fixture")
+        git(self.root, "config", "user.email", "fixture@invalid.example")
+        git(
+            self.root,
+            "checkout",
+            "-B",
+            "release/v1.13.19-post-publication-closure",
+            release_state_support.V11319_RELEASE_COMMIT,
+        )
+        git(
+            self.root,
+            "commit",
+            "--allow-empty",
+            "-m",
+            "TEST_FIXTURE_ONLY v1.13.19 final closure",
+        )
+        self.snapshot = load_v11319_snapshot_for_test()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def context(self) -> tuple[str, str, bool, bool, str | None]:
+        return validate_release_state.git_context(self.root, "1.13.19")
+
+    def phase_document(self) -> release_state_support.Document:
+        lines: list[str] = []
+        for number in range(10):
+            lines.extend(
+                [
+                    f"## Phase {number} — TEST_FIXTURE_ONLY",
+                    "",
+                    "**Status:** Complete",
+                ]
+            )
+        return release_state_support.Document(
+            self.root, "TEST_FIXTURE_ONLY-phase-list.md", lines
+        )
+
+    def test_exact_a19_d19_closure_descendant_is_terminal(self) -> None:
+        context = self.context()
+        head = context[0]
+        self.assertTrue(
+            release_state_support.v11319_post_release_closure_artifact(
+                self.root, "1.13.19", head, context, self.snapshot
+            )
+        )
+        self.assertEqual(
+            release_state_support.final_snapshot_context_status(
+                self.root,
+                "1.13.19",
+                "post-release-closed",
+                context,
+                {},
+                self.snapshot,
+            ),
+            "POST_RELEASE_CLOSURE_VALID",
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            state, inferred_context, scope = validate_release_state.infer_state(
+                self.root,
+                "1.13.19",
+                self.phase_document(),
+                release_state_support.LifecycleBoundaries(5, 8, 9),
+                release_state_support.LifecycleDeclaration(
+                    "immutable-transition-v1", "franchoy/coldkeep"
+                ),
+                final_snapshot=self.snapshot,
+                final_repository_closed=True,
+            )
+        self.assertEqual(state, "post-release-closed")
+        self.assertEqual(inferred_context, context)
+        self.assertEqual(scope, "LOCAL_CLOSURE_ARTIFACT_ONLY")
+        self.assertTrue(
+            release_state_support.lifecycle_progression_valid(
+                state,
+                ["Complete"] * 10,
+                release_state_support.LifecycleBoundaries(5, 8, 9),
+                release_state_support.LifecycleDeclaration(
+                    "immutable-transition-v1", "franchoy/coldkeep"
+                ),
+                allow_immutable_post_release_closed=True,
+            )
+        )
+
+    def test_wrong_tag_object_and_nonancestor_closure_reject(self) -> None:
+        git(self.root, "tag", "--delete", "v1.13.19")
+        git(
+            self.root,
+            "tag",
+            "-a",
+            "v1.13.19",
+            release_state_support.V11319_RELEASE_COMMIT,
+            "-m",
+            "TEST_FIXTURE_ONLY wrong A19",
+        )
+        wrong_tag_context = self.context()
+        self.assertFalse(
+            release_state_support.v11319_post_release_closure_artifact(
+                self.root,
+                "1.13.19",
+                wrong_tag_context[0],
+                wrong_tag_context,
+                self.snapshot,
+            )
+        )
+
+        git(
+            self.root,
+            "update-ref",
+            "refs/tags/v1.13.19",
+            release_state_support.V11319_ANNOTATED_TAG,
+        )
+        unrelated = run_process(
+            [
+                resolved_executable("git"),
+                *FIXTURE_GIT_CONFIG,
+                "-C",
+                str(self.root),
+                "commit-tree",
+                release_state_support.V11319_RELEASE_TREE,
+                "-m",
+                "TEST_FIXTURE_ONLY unrelated closure",
+            ],
+            check=True,
+        ).stdout.strip()
+        git(self.root, "checkout", "--detach", unrelated)
+        nonancestor_context = self.context()
+        self.assertFalse(
+            release_state_support.v11319_post_release_closure_artifact(
+                self.root,
+                "1.13.19",
+                unrelated,
+                nonancestor_context,
+                self.snapshot,
+            )
+        )
+
+    def test_terminal_selector_is_exact_and_v19_only(self) -> None:
+        state = release_state_support.Document.load(
+            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT,
+            "docs/release/v1.13/v1.13.19-release-state.md",
+        )
+        self.assertTrue(
+            validate_release_state.v11319_post_release_closed_selected(
+                "1.13.19", state, self.snapshot
+            )
+        )
+        stale = release_state_support.Document(
+            state.root,
+            state.path,
+            [
+                line.replace(
+                    "V1_13_19_PUBLICATION: COMPLETE",
+                    "V1_13_19_PUBLICATION: NOT_PUBLISHED",
+                )
+                for line in state.lines
+            ],
+        )
+        self.assertFalse(
+            validate_release_state.v11319_post_release_closed_selected(
+                "1.13.19", stale, self.snapshot
+            )
+        )
+        self.assertFalse(
+            validate_release_state.v11319_post_release_closed_selected(
+                "1.13.17", state, self.snapshot
+            )
+        )
 
 
 class FinalSnapshotErroneousContextTests(unittest.TestCase):

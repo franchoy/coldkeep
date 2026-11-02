@@ -8,32 +8,31 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
+RELEASE_STATE: POST_RELEASE_CLOSED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
 V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
+V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_19_PUBLICATION: NOT_PUBLISHED
+V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+V1_13_19_PUBLICATION: COMPLETE
+V1_X: CLOSED_AND_FROZEN
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-- `v1.13.19` is the active finite tag-certification recovery candidate based
-  on exact M18. Phases 0-4 are Complete after independent acceptance of
-  recovery Wave A with retained qualifications; Phase 5 protected integration
-  is Next. This metadata successor requires its own exact-source Wave B
-  before integration. Its only runtime-visible change is application version
-  1.13.19. The reviewed fixture repair removes only the active snapshot tag
-  from a newly created disposable test clone; production CKRS017 remains
-  strict. The exact 34-path M18-relative delta, 13 inherited technical tuples,
-  and frozen v1.13.17/v1.13.18 documents are binding.
+- `v1.13.19` is published, stable, immutable, and latest. Protected integration
+  completed at frozen D19; annotated A19 directly targets D19, and immutable
+  source-only GitHub Release `431395975` is the latest Release. The canonical
+  closure record binds the accepted natural CI and CodeQL runs; both passed on
+  attempt 1. Public archive/module/executable readback passed and independent
+  owner acceptance was granted. V1.x is complete and frozen.
 - `v1.13.18` remains an immutable public annotated tag at A18/M18 whose
   required natural tag CI failed. Passing CodeQL, installations and other
   bounded dimensions do not certify it, and no v1.13.18 GitHub Release exists.
@@ -53,35 +52,27 @@ V2_IMPLEMENTATION: NOT_STARTED
 - `v1.13.16` is the immutable failed-publication predecessor: its public
   annotated tag failed required certification, no GitHub Release exists, and
   publication and Phase 19 remain unauthorized.
-- `v1.13.15` remains published stable, immutable, and the final planned v1.x
-  release. Planned v1 feature and architecture work stays closed and frozen.
+- `v1.13.15` remains published, immutable, and the final planned v1.x product
+  baseline. Planned v1 feature and architecture work stays closed and frozen.
 - `v1.13.14` is immutable historical release state. Do not edit its release
   evidence or mutate its tag or GitHub release.
 - Do not implement v2. V2 planning review is authorized, but implementation
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The v1.13.19 scope, 10-phase list, validation checklist, exact 34-path
-  recovery allowlist, release state, snapshot reference, predecessor
-  disposition, and release gate under `docs/release/v1.13/` are binding current
-  authority. All v1.13.18 documents remain frozen historical bytes.
-- Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
-  boundary.
-- The `immutable-transition-v1` projections and predecessor disposition are
-  structural only. They do not certify hosted operations or authorize a push,
-  PR, merge, tag, publication, closure, or v2 implementation.
-- The candidate must descend from exact M18 through a merge-free range and
-  produce the complete 34-row delta. If either check fails, stop and escalate
-  the evidence to the owner; adoption remains blocked while either check fails.
-  Every other M18 path, all 13 technical
-  modes/blobs, all 24 frozen v1.13.17/v1.13.18 documents, compress v1.20.2,
-  module sums, persisted fixtures, and product behavior remain unchanged.
-  Stop and obtain separate owner authorization before changing another path or
-  technical byte. Historical branches/worktrees remain untouched. This local
-  declaration grants no provider authority. Any metadata-successor adoption,
-  push, or PR action requires the separately reviewed continuation and its
-  passing predicates. Merge, tag, Release, workflow intervention, cleanup, and
-  v2 work remain outside that boundary.
+- The v1.13.19 post-publication closure record is current lifecycle authority.
+  The scope, phase list, validation checklist, recovery allowlist, release
+  state, snapshot reference, predecessor disposition, and release gate under
+  `docs/release/v1.13/` remain immutable historical evidence of the completed
+  train. All v1.13.17/v1.13.18 documents remain frozen historical bytes.
+- No v1 product/runtime phase remains. Future critical v1 maintenance, tag or
+  Release mutation, workflow intervention, and all v2 implementation require
+  separate explicit authority. Preserve all product/dependency bytes, formats,
+  schemas, persisted fixtures, and public behavior unless that later authority
+  expressly changes them.
+- Planning mode (PLAN) and build mode (BUILD) are lifecycle modes. Respect
+  each phase's `PLAN` or `BUILD` mode in any separately authorized future
+  maintenance or v2 plan; this closure creates no active phase.
 
 ## Correctness rules
 
@@ -95,8 +86,8 @@ V2_IMPLEMENTATION: NOT_STARTED
 
 ## Validation
 
-Use the canonical commands in `PRE_RELEASE_CHECKLIST.md` and the active
-v1.13.19 validation checklist. At minimum, run focused tests for the changed
+Use the canonical commands in `PRE_RELEASE_CHECKLIST.md` and the applicable
+post-release governance contract. At minimum, run focused tests for the changed
 area before the broader applicable gate. Do not represent unavailable hosted
 evidence as passing.
 
@@ -110,8 +101,8 @@ The baseline repository-governance commands are:
 The frozen v1 release-critical execution contract uses Go 1.26.10 with
 `GOTOOLCHAIN=local`; the module language floor remains Go 1.25.
 
-NEXT: the first not-yet-completed lifecycle phase in the summary below.
-This phase marker is descriptive and does not authorize work.
+No v1.x lifecycle phase remains. `CURRENT_PHASE: NONE_POST_RELEASE_CLOSED`
+does not authorize v2 or new v1 product work.
 
 Current v1.13.19 lifecycle summary
 
@@ -120,17 +111,16 @@ Current v1.13.19 lifecycle summary
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-    V1_13_19: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
-    RELEASE_STATE: PRE_RELEASE
-    PHASE_3: COMPLETE
-    PHASE_4: COMPLETE
-    PHASE_5: NEXT
+    V1_13_19: PUBLISHED_STABLE_IMMUTABLE_LATEST
+    RELEASE_STATE: POST_RELEASE_CLOSED
+    CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED
     V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-    V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-    V1_13_19_PUBLICATION: NOT_PUBLISHED
+    V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+    V1_13_19_PUBLICATION: COMPLETE
+    V1_X: CLOSED_AND_FROZEN
     V2_PLANNING_REVIEW: AUTHORIZED
     V2_IMPLEMENTATION: NOT_STARTED
     V2_IMPLEMENTATION_AUTHORIZATION: REQUIRES_SEPARATE_PLAN

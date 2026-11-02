@@ -78,29 +78,34 @@ All v1.13.0 phases stay on `release/v1.13.0` until the full release gate is gree
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
+RELEASE_STATE: POST_RELEASE_CLOSED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
 V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
+V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_19_PUBLICATION: NOT_PUBLISHED
+V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+V1_13_19_PUBLICATION: COMPLETE
+V1_X: CLOSED_AND_FROZEN
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.19 is the active finite tag-certification recovery candidate based on
-exact M18. Phases 0-4 are Complete after qualified independent acceptance of
-recovery Wave A; Phase 5 protected integration is Next. The metadata successor
-is ready for its own exact-source Wave B, which remains required before
-integration.
-Its 34-path delta contains only the reviewed disposable-fixture repair,
+v1.13.19 is published, stable, immutable, and latest. Protected integration
+completed at D19 `d3581602aee2599547564322fe083baae1d52063`; annotated A19
+`60b6878114f936b295c415605e8af31def2aba5a` directly targets D19, and immutable
+source-only GitHub Release `431395975` is latest. Natural tag CI
+`41422511098` passed 36/36 jobs on attempt 1 and CodeQL `41422511135` passed
+4/4 jobs on attempt 1. Public archive/module/executable readback passed and
+independent owner acceptance was granted. V1.x product/runtime development is
+complete and frozen. Its completed 34-path recovery delta contains only the
+reviewed disposable-fixture repair,
 strict version/install anchors, finite contract and tests, current mirrors,
 and new v1.13.19 records. Go 1.26.10, compress v1.20.2, product/dependency
 bytes, all 13 technical tuples, and frozen v1.13.17/v1.13.18 documents remain
@@ -109,12 +114,13 @@ unchanged. Route A remains accepted at its original K/C2 scope.
 v1.13.18 remains an immutable public annotated-tag certification NONPASS with
 no GitHub Release. Its natural CI failure, passing CodeQL and installations,
 workspace fixture-suite NONPASS, isolated `/tmp` PASS, and unidentified writer
-qualification are all preserved. This tracked state grants no provider
-authority. Metadata-successor adoption and Wave B depend on a separate
-exact-source continuation; merge, tag, Release, cleanup, and v2 retain their
-separate authorization boundaries.
+qualification are all preserved. Those results are not the v1.13.19
+certificate. No new tag, Release, v1 product change, or v2 implementation is
+authorized by the repository closure.
 
-Current authority is defined by the [scope](v1.13.19-scope.md),
+Current lifecycle authority is the
+[post-publication closure](v1.13.19-post-publication-closure.md). The completed
+train remains evidenced by the [scope](v1.13.19-scope.md),
 [phase list](v1.13.19-phase-list.md),
 [validation checklist](v1.13.19-validation-checklist.md),
 [release-state contract](v1.13.19-release-state-validator-contract.md),

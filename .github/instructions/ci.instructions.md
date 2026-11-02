@@ -4,19 +4,21 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
+RELEASE_STATE: POST_RELEASE_CLOSED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
 V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
+V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_19_PUBLICATION: NOT_PUBLISHED
+V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+V1_13_19_PUBLICATION: COMPLETE
+V1_X: CLOSED_AND_FROZEN
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
@@ -106,29 +108,32 @@ Critical-path coverage should focus on:
 
 Do not add global coverage gates unless explicitly approved.
 
-## v1.13.19 Tag-Certification Recovery Boundary
+## Frozen v1.13.19 Boundary
 
-v1.13.19 is the active finite recovery candidate based on exact M18. Phases
-0-4 are Complete after qualified independent acceptance of recovery Wave A;
-Phase 5 protected integration is Next. The metadata successor requires its
-own exact-source Wave B before integration. The exact
-34-path delta changes only the reviewed fixture isolation, version/install
-anchors, finite validators/tests, current authority, and new recovery records.
-It preserves Go 1.26.10, compress v1.20.2, every product/dependency byte, all
-13 technical tuples, and frozen v1.13.17/v1.13.18 documents.
+v1.13.19 is published, stable, immutable, and latest at D19
+`d3581602aee2599547564322fe083baae1d52063`, annotated A19
+`60b6878114f936b295c415605e8af31def2aba5a`, and source-only GitHub Release
+`431395975`. Natural tag CI and CodeQL passed on attempt 1, public readback
+passed, and independent owner acceptance was granted. V1.x product/runtime
+development is complete and frozen. The completed exact 34-path recovery
+delta changed only the reviewed fixture isolation, version/install anchors,
+finite validators/tests, current authority, and recovery records. It preserves
+Go 1.26.10, compress v1.20.2, every product/dependency byte, all 13 technical
+tuples, and frozen v1.13.17/v1.13.18 documents.
 
 v1.13.18 remains a genuine public-tag certification failure with no GitHub
 Release. Do not rerun or relabel its failed gate, move A18, infer a writer for
 the workspace fixture reappearance, or substitute its passing CodeQL/install
-dimensions for new-source evidence. Follow the v1.13.19 10-phase plan and
-exact 34-path boundary. Do not use CI work to introduce:
+dimensions for v1.13.19 evidence. The completed v1.13.19 10-phase plan and
+exact 34-path boundary remain historical authority. Do not use CI work to
+introduce:
 
 - v2 implementation or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;
 - product features;
 - broad refactors;
 - unassigned dependency or toolchain movement;
-- required gates outside the active phase allowlist.
+- unplanned gates or lifecycle work without separate authority.
 
 Treat v1.13.14 and v1.13.15 release evidence, and the v1.13.16
 failed-publication disposition, as immutable historical state.
