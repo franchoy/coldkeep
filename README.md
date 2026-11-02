@@ -388,36 +388,30 @@ Not a fit (v1.x scope):
 
 A small samples directory is included for local testing.
 
-### Historical v1.13.15 source-only distribution contract
+### Current v1.13.19 source-only distribution
 
-Coldkeep v1.13.15 is distributed as source only; the GitHub release does not
-provide prebuilt executables. The supported installation families are Linux,
+Coldkeep v1.13.19 is distributed as source only; the GitHub Release does not
+provide prebuilt executables. The certified installation families are Linux,
 macOS, and Windows with:
 
-- Go 1.26.7 explicitly installed;
+- Go 1.26.10 explicitly installed;
 - `GOTOOLCHAIN=local`; and
 - a native C compiler supported by that Go installation.
 
-The module language floor remains Go 1.25. The `toolchain go1.26.7` directive
-is useful when Coldkeep is the main module, but it is not relied upon to select
-Go 1.26.7 for a version-qualified command. After publication, the certified
-remote form is:
+The module language floor remains Go 1.25. For a version-qualified installation,
+use the certified v1.13.19 source:
 
 ```bash
-GOTOOLCHAIN=local go install github.com/franchoy/coldkeep/cmd/coldkeep@v1.13.15
+GOTOOLCHAIN=local go install github.com/franchoy/coldkeep/cmd/coldkeep@v1.13.19
 ```
 
-Run that command with Go 1.26.7; do not infer broader platform or architecture
-support from source availability.
-
-Those statements describe the published v1.13.15 artifact. A `toolchain`
-suggestion does not select the compiler used by `go install package@version`.
-
-Protected main M retains the historical Go 1.26.9 integration. For the current
-v1.13.19 recovery checkout, install Go 1.26.10 and a native C compiler first.
-The `go 1.25` module directive remains the language floor; exact Go 1.26.10
-with `GOTOOLCHAIN=local` is the active build and scan baseline. Normal v1.x CLI operation remains
+Run that command with Go 1.26.10; do not infer broader platform or architecture
+support from source availability. Normal v1.x CLI operation remains
 PostgreSQL-backed; SQLite-first local productization belongs to v2.x.
+
+Historical note: v1.13.15 used the earlier Go 1.26.7 source-install contract.
+That release remains immutable historical state; new installations should use
+v1.13.19 and Go 1.26.10.
 
 ### Host binary with PostgreSQL
 
