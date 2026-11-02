@@ -34,10 +34,10 @@ The current v1 architecture includes a reusable headless Engine, a neutral
 Catalog boundary, a thin CLI, supported SQLite and PostgreSQL backends within
 documented bounds, and cooperative same-host/local-filesystem repository
 coordination. v1.13.15 remains the immutable final planned v1.x product
-baseline. v1.13.19 is the latest stable release: D19
-`d3581602aee2599547564322fe083baae1d52063`, directly targeted by annotated A19
-`60b6878114f936b295c415605e8af31def2aba5a`, is published through immutable
-source-only GitHub Release `431395975`. Natural tag CI and CodeQL passed on
+baseline. v1.13.19 is the latest stable release: frozen D19, directly targeted
+by annotated A19, is published through immutable source-only GitHub Release
+`431395975`. The canonical closure record binds the exact source and tag
+identities. Natural tag CI and CodeQL passed on
 their original attempts; public readback passed and independent owner
 acceptance was granted. V1.x product/runtime development is complete and
 frozen. The recovery and this repository closure change no product, storage,

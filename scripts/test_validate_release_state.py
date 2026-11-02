@@ -12021,8 +12021,10 @@ def final_snapshot_candidate_from_runner_head_for_test(
 def final_snapshot_candidate_for_test(
     root: Path,
     snapshot: release_state_support.FinalSourceSnapshot,
+    *,
+    runner_revision: str = "HEAD",
 ) -> tuple[str, str]:
-    """Return validated `(runner HEAD, candidate)` identities for tests."""
+    """Return validated `(runner revision, candidate)` identities for tests."""
     completed = run_process(
         [
             resolved_executable("git"),
@@ -12030,7 +12032,7 @@ def final_snapshot_candidate_for_test(
             str(root),
             "rev-parse",
             "--verify",
-            "HEAD^{commit}",
+            f"{runner_revision}^{{commit}}",
         ]
     )
     runner_head = completed.stdout.strip() if completed.returncode == 0 else ""
@@ -12050,11 +12052,12 @@ def clone_final_snapshot_repository_for_test(
     snapshot: release_state_support.FinalSourceSnapshot,
     *,
     source_root: Path | None = None,
+    runner_revision: str = "HEAD",
 ) -> tuple[str, str]:
     """Clone validated objects and isolate the active tag for fixture setup."""
     source_root = source_root or FINAL_SNAPSHOT_TEST_ROOT
     runner_head, candidate = final_snapshot_candidate_for_test(
-        source_root, snapshot
+        source_root, snapshot, runner_revision=runner_revision
     )
     run_process(
         [
@@ -13614,7 +13617,9 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
     def test_active_candidate_binds_complete_recovery_shape(self) -> None:
         snapshot = load_v11319_snapshot_for_test()
         runner, candidate = final_snapshot_candidate_for_test(
-            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT, snapshot
+            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT,
+            snapshot,
+            runner_revision=release_state_support.V11319_RELEASE_COMMIT,
         )
         if runner != candidate:
             self.assertTrue(
@@ -13702,6 +13707,7 @@ class V11319LifecycleRoleTests(unittest.TestCase):
             cls.root,
             cls.snapshot,
             source_root=ACTIVE_FINAL_SNAPSHOT_TEST_ROOT,
+            runner_revision=release_state_support.V11319_RELEASE_COMMIT,
         )
         cls.base = cls.snapshot.values["BASE_M"]
         git(cls.root, "config", "user.name", "Coldkeep fixture")
@@ -14046,17 +14052,18 @@ class V11319PostPublicationClosureTests(unittest.TestCase):
             ),
             "POST_RELEASE_CLOSURE_VALID",
         )
-        state, inferred_context, scope = validate_release_state.infer_state(
-            self.root,
-            "1.13.19",
-            self.phase_document(),
-            release_state_support.LifecycleBoundaries(5, 8, 9),
-            release_state_support.LifecycleDeclaration(
-                "immutable-transition-v1", "franchoy/coldkeep"
-            ),
-            final_snapshot=self.snapshot,
-            final_repository_closed=True,
-        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            state, inferred_context, scope = validate_release_state.infer_state(
+                self.root,
+                "1.13.19",
+                self.phase_document(),
+                release_state_support.LifecycleBoundaries(5, 8, 9),
+                release_state_support.LifecycleDeclaration(
+                    "immutable-transition-v1", "franchoy/coldkeep"
+                ),
+                final_snapshot=self.snapshot,
+                final_repository_closed=True,
+            )
         self.assertEqual(state, "post-release-closed")
         self.assertEqual(inferred_context, context)
         self.assertEqual(scope, "LOCAL_CLOSURE_ARTIFACT_ONLY")

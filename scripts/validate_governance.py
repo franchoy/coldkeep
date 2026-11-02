@@ -1811,85 +1811,89 @@ def _v19_predecessor_disposition_violations(text: str) -> list[str]:
     return violations
 
 
+V19_POST_PUBLICATION_CLOSURE_MARKERS = (
+    "released_source_d19: d3581602aee2599547564322fe083baae1d52063",
+    "released_source_tree_t19: 96b2840cb9da9714705bb6c2998f46b7ed3e78ee",
+    "annotated_tag_a19: 60b6878114f936b295c415605e8af31def2aba5a",
+    "a19_direct_target: d3581602aee2599547564322fe083baae1d52063",
+    "github_release_id: 431395975",
+    "github_release_tag: v1.13.19",
+    "github_release_name: coldkeep v1.13.19 — final v1.x tag-certification recovery",
+    "41422511098",
+    "41422511135",
+    "e03ede234275ced07b21a00ee9e4bfc539af9446",
+    "v1.13.18",
+    "v1.13.16",
+    "v2_implementation: not_started",
+)
+
+V19_POST_PUBLICATION_CLOSURE_CLAIMS = (
+    (
+        "published stable immutable latest",
+        r"v1_13_19_state:\s*published_stable_immutable_latest",
+    ),
+    (
+        "natural original-attempt certification",
+        r"(?:natural.{0,80}original.{0,40}attempt.{0,100}(?:passed|successful)|(?:passed|successful).{0,80}natural.{0,80}original.{0,40}attempt)",
+    ),
+    (
+        "CI original attempt",
+        r"41422511098.{0,100}attempt[:\s_]*1.{0,100}(?:36/36|pass_36_of_36)",
+    ),
+    (
+        "CodeQL original attempt",
+        r"41422511135.{0,100}attempt[:\s_]*1.{0,100}(?:4/4|pass_4_of_4)",
+    ),
+    (
+        "public readback",
+        r"public.{0,80}(?:archive|module).{0,160}(?:executable|version).{0,160}(?:passed|successful|complete)",
+    ),
+    (
+        "external owner acceptance",
+        r"(?:external|independent).{0,60}owner acceptance.{0,40}(?:granted|accepted)",
+    ),
+    (
+        "v1.X complete and frozen",
+        r"v1[.]x.{0,100}(?:complete|closed).{0,80}frozen",
+    ),
+    (
+        "v1.13.16 historical NONPASS",
+        r"v1[.]13[.]16.{0,100}(?:nonpass|failed(?: tag-)?certification|certification failure)",
+    ),
+    (
+        "v1.13.18 historical NONPASS",
+        r"v1[.]13[.]18.{0,100}(?:nonpass|failed(?: tag-)?certification|certification failure)",
+    ),
+    (
+        "v1.13.18 Release absence",
+        r"v1[.]13[.]18.{0,80}(?:no github release|github release.{0,30}absent)",
+    ),
+    (
+        "zero custom assets",
+        r"(?:(?:zero|no) custom assets|github_release_custom_assets:\s*0)",
+    ),
+)
+
+V19_POST_PUBLICATION_CLOSURE_FORBIDDEN = (
+    r"v1[.]13[.]18.{0,100}(?:tag certification|certification).{0,50}(?:passed|successful)",
+    r"v1[.]13[.]18.{0,100}github release.{0,50}(?:published|created|exists)",
+)
+
+
 def _v19_post_publication_closure_violations(text: str) -> list[str]:
     """Bind the immutable publication and terminal owner-accepted closure."""
     normalized = " ".join(text.lower().split())
-    markers = (
-        "released_source_d19: d3581602aee2599547564322fe083baae1d52063",
-        "released_source_tree_t19: 96b2840cb9da9714705bb6c2998f46b7ed3e78ee",
-        "annotated_tag_a19: 60b6878114f936b295c415605e8af31def2aba5a",
-        "a19_direct_target: d3581602aee2599547564322fe083baae1d52063",
-        "github_release_id: 431395975",
-        "github_release_tag: v1.13.19",
-        "github_release_name: coldkeep v1.13.19 — final v1.x tag-certification recovery",
-        "41422511098",
-        "41422511135",
-        "e03ede234275ced07b21a00ee9e4bfc539af9446",
-        "v1.13.18",
-        "v1.13.16",
-        "v2_implementation: not_started",
-    )
     violations = [
         f"{V19_POST_PUBLICATION_CLOSURE}: missing closure marker {marker!r}"
-        for marker in markers
+        for marker in V19_POST_PUBLICATION_CLOSURE_MARKERS
         if marker not in normalized
     ]
-    claims = (
-        (
-            "published stable immutable latest",
-            r"v1_13_19_state:\s*published_stable_immutable_latest",
-        ),
-        (
-            "natural original-attempt certification",
-            r"(?:natural.{0,80}original.{0,40}attempt.{0,100}(?:passed|successful)|(?:passed|successful).{0,80}natural.{0,80}original.{0,40}attempt)",
-        ),
-        (
-            "CI original attempt",
-            r"41422511098.{0,100}attempt[:\s_]*1.{0,100}(?:36/36|pass_36_of_36)",
-        ),
-        (
-            "CodeQL original attempt",
-            r"41422511135.{0,100}attempt[:\s_]*1.{0,100}(?:4/4|pass_4_of_4)",
-        ),
-        (
-            "public readback",
-            r"public.{0,80}(?:archive|module).{0,160}(?:executable|version).{0,160}(?:passed|successful|complete)",
-        ),
-        (
-            "external owner acceptance",
-            r"(?:external|independent).{0,60}owner acceptance.{0,40}(?:granted|accepted)",
-        ),
-        (
-            "v1.X complete and frozen",
-            r"v1[.]x.{0,100}(?:complete|closed).{0,80}frozen",
-        ),
-        (
-            "v1.13.16 historical NONPASS",
-            r"v1[.]13[.]16.{0,100}(?:nonpass|failed(?: tag-)?certification|certification failure)",
-        ),
-        (
-            "v1.13.18 historical NONPASS",
-            r"v1[.]13[.]18.{0,100}(?:nonpass|failed(?: tag-)?certification|certification failure)",
-        ),
-        (
-            "v1.13.18 Release absence",
-            r"v1[.]13[.]18.{0,80}(?:no github release|github release.{0,30}absent)",
-        ),
-        (
-            "zero custom assets",
-            r"(?:(?:zero|no) custom assets|github_release_custom_assets:\s*0)",
-        ),
-    )
-    for label, pattern in claims:
+    for label, pattern in V19_POST_PUBLICATION_CLOSURE_CLAIMS:
         if re.search(pattern, normalized, re.IGNORECASE) is None:
             violations.append(
                 f"{V19_POST_PUBLICATION_CLOSURE}: missing closure claim {label!r}"
             )
-    forbidden = (
-        r"v1[.]13[.]18.{0,100}(?:tag certification|certification).{0,50}(?:passed|successful)",
-        r"v1[.]13[.]18.{0,100}github release.{0,50}(?:published|created|exists)",
-    )
-    for pattern in forbidden:
+    for pattern in V19_POST_PUBLICATION_CLOSURE_FORBIDDEN:
         if re.search(pattern, normalized, re.IGNORECASE):
             violations.append(
                 f"{V19_POST_PUBLICATION_CLOSURE}: contains forbidden closure assertion {pattern!r}"

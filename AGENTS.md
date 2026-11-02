@@ -28,13 +28,11 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 - `v1.13.19` is published, stable, immutable, and latest. Protected integration
-  completed at D19 `d3581602aee2599547564322fe083baae1d52063`; annotated A19
-  `60b6878114f936b295c415605e8af31def2aba5a` directly targets D19, and
-  immutable source-only GitHub Release `431395975` is the latest Release.
-  Natural tag CI `41422511098` passed 36/36 jobs on attempt 1 and CodeQL
-  `41422511135` passed 4/4 jobs on attempt 1. Public archive/module/executable
-  readback passed and independent owner acceptance was granted. V1.x is
-  complete and frozen.
+  completed at frozen D19; annotated A19 directly targets D19, and immutable
+  source-only GitHub Release `431395975` is the latest Release. The canonical
+  closure record binds the accepted natural CI and CodeQL runs; both passed on
+  attempt 1. Public archive/module/executable readback passed and independent
+  owner acceptance was granted. V1.x is complete and frozen.
 - `v1.13.18` remains an immutable public annotated tag at A18/M18 whose
   required natural tag CI failed. Passing CodeQL, installations and other
   bounded dimensions do not certify it, and no v1.13.18 GitHub Release exists.
@@ -72,8 +70,9 @@ V2_IMPLEMENTATION: NOT_STARTED
   separate explicit authority. Preserve all product/dependency bytes, formats,
   schemas, persisted fixtures, and public behavior unless that later authority
   expressly changes them.
-- Respect each phase's `PLAN` or `BUILD` mode in any separately authorized
-  future maintenance or v2 plan; this closure creates no active phase.
+- Planning mode (`PLAN`) and build mode (`BUILD`) are lifecycle modes. Respect
+  each phase's `PLAN` or `BUILD` mode in any separately authorized future
+  maintenance or v2 plan; this closure creates no active phase.
 
 ## Correctness rules
 
