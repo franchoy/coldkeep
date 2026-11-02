@@ -70,7 +70,7 @@ V2_IMPLEMENTATION: NOT_STARTED
   separate explicit authority. Preserve all product/dependency bytes, formats,
   schemas, persisted fixtures, and public behavior unless that later authority
   expressly changes them.
-- Planning mode (`PLAN`) and build mode (`BUILD`) are lifecycle modes. Respect
+- Planning mode (PLAN) and build mode (BUILD) are lifecycle modes. Respect
   each phase's `PLAN` or `BUILD` mode in any separately authorized future
   maintenance or v2 plan; this closure creates no active phase.
 
