@@ -6,7 +6,7 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -35,9 +35,10 @@ coordination. v1.13.15 is the published stable final planned v1.x release.
 Annotated tag `v1.13.15` peels to immutable product baseline
 `6a2417e8189631b018779c2fd24fc559ed761f3f`; its source-only release and
 attestation are immutable. v1.13.19 is the active finite tag-certification
-recovery candidate based on exact M18. Phases 0-3 are Complete after qualified
-independent local review; Phase 4 release-branch and PR hosted certification
-is Next. It changes no product, storage, schema,
+recovery candidate based on exact M18. Phases 0-4 are Complete after qualified
+independent acceptance of recovery Wave A; Phase 5 protected integration is
+Next. The metadata successor requires its own exact-source Wave B before
+integration. It changes no product, storage, schema,
 catalog, garbage collection (GC), restore, compression, dependency, or
 security-policy behavior.
 v1.13.18 remains a public annotated-tag certification NONPASS with no GitHub

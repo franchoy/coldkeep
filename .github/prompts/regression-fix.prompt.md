@@ -4,7 +4,7 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -56,8 +56,9 @@ Identify and state:
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
 - v1.13.19 is the active finite tag-certification recovery candidate. Phases
-  0-3 are Complete after qualified independent local review; Phase 4 release-
-  branch and PR hosted certification is Next. Keep
+  0-4 are Complete after qualified independent acceptance of recovery Wave A;
+  Phase 5 protected integration is Next. The metadata successor requires its
+  own exact-source Wave B before integration. Keep
   changes within its exact 34-path boundary and preserve every product,
   dependency, technical, and frozen historical byte outside it.
 - v1.13.18 remains a public-tag certification NONPASS with no GitHub Release.

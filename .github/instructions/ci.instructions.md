@@ -4,7 +4,7 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -109,8 +109,9 @@ Do not add global coverage gates unless explicitly approved.
 ## v1.13.19 Tag-Certification Recovery Boundary
 
 v1.13.19 is the active finite recovery candidate based on exact M18. Phases
-0-3 are Complete after qualified independent local review; Phase 4 release-
-branch and PR hosted certification is Next. The exact
+0-4 are Complete after qualified independent acceptance of recovery Wave A;
+Phase 5 protected integration is Next. The metadata successor requires its
+own exact-source Wave B before integration. The exact
 34-path delta changes only the reviewed fixture isolation, version/install
 anchors, finite validators/tests, current authority, and new recovery records.
 It preserves Go 1.26.10, compress v1.20.2, every product/dependency byte, all

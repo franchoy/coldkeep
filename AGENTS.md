@@ -8,7 +8,7 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 4_NEXT
+CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
@@ -26,9 +26,10 @@ V2_IMPLEMENTATION: NOT_STARTED
 <!-- coldkeep-current-state:end -->
 
 - `v1.13.19` is the active finite tag-certification recovery candidate based
-  on exact M18. Phases 0-3 are Complete after independent local review with
-  retained qualifications; Phase 4 release-branch and PR hosted certification
-  is Next. Its only runtime-visible change is application version
+  on exact M18. Phases 0-4 are Complete after independent acceptance of
+  recovery Wave A with retained qualifications; Phase 5 protected integration
+  is Next. This metadata successor requires its own exact-source Wave B
+  before integration. Its only runtime-visible change is application version
   1.13.19. The reviewed fixture repair removes only the active snapshot tag
   from a newly created disposable test clone; production CKRS017 remains
   strict. The exact 34-path M18-relative delta, 13 inherited technical tuples,
@@ -77,8 +78,8 @@ V2_IMPLEMENTATION: NOT_STARTED
   module sums, persisted fixtures, and product behavior remain unchanged.
   Stop and obtain separate owner authorization before changing another path or
   technical byte. Historical branches/worktrees remain untouched. This local
-  declaration grants no provider authority. Any Phase 4 adoption, push, or PR
-  action requires the separately reviewed exact-source continuation and its
+  declaration grants no provider authority. Any metadata-successor adoption,
+  push, or PR action requires the separately reviewed continuation and its
   passing predicates. Merge, tag, Release, workflow intervention, cleanup, and
   v2 work remain outside that boundary.
 
@@ -120,10 +121,10 @@ Current v1.13.19 lifecycle summary
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_19: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
-    RELEASE_STATE: DEVELOPMENT
+    RELEASE_STATE: PRE_RELEASE
     PHASE_3: COMPLETE
-    PHASE_4: NEXT
-    PHASE_5: NOT_STARTED
+    PHASE_4: COMPLETE
+    PHASE_5: NEXT
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED
