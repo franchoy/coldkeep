@@ -21,7 +21,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.13.19%20protected%20integration%20next-blue)
+![Status](https://img.shields.io/badge/status-v1.13.19%20stable%20v1.x%20closed-blue)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
@@ -33,43 +33,48 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
+RELEASE_STATE: POST_RELEASE_CLOSED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
 V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
+V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_19_PUBLICATION: NOT_PUBLISHED
+V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+V1_13_19_PUBLICATION: COMPLETE
+V1_X: CLOSED_AND_FROZEN
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.19 — Final v1.x Tag-Certification Recovery has completed independent
-acceptance of recovery Wave A with retained qualifications. Phases 0-4 are
-Complete; Phase 5 protected integration is Next. The metadata successor is
-ready for its own exact-source Wave B, which remains required before
-integration. It remains a finite
-34-path descendant of exact M18 that preserves Go 1.26.10,
-compress v1.20.2, all product/dependency bytes, 13 technical tuples, and the
-frozen v1.13.17/v1.13.18 release records. No product feature or format changes.
+v1.13.19 — Final v1.x Tag-Certification Recovery is the latest stable release.
+Protected integration completed at D19
+`d3581602aee2599547564322fe083baae1d52063`; annotated A19
+`60b6878114f936b295c415605e8af31def2aba5a` directly targets D19, and immutable
+source-only GitHub Release `431395975` is stable and latest. Natural tag CI run
+`41422511098` passed 36/36 jobs on attempt 1 and CodeQL run `41422511135`
+passed 4/4 jobs on attempt 1. Public archive, module, and executable readback
+passed, and independent owner acceptance was granted. V1.x product/runtime
+development is complete and frozen. The released source remains the finite
+34-path descendant of exact M18 that preserves Go 1.26.10, compress v1.20.2,
+all product/dependency bytes, 13 technical tuples, and the frozen
+v1.13.17/v1.13.18 release records. It adds no product feature or format change.
 
 v1.13.18 remains a public annotated-tag certification NONPASS with no GitHub
 Release. A18/M18 and the failed natural CI remain immutable; passing CodeQL,
-installations, and accepted Route A evidence retain their bounded scopes but do
-not certify v1.13.19. v1.13.17 remains immutable at M17/A17 and Release
+installations, and accepted Route A evidence retain their bounded scopes but
+are not the v1.13.19 certificate. v1.13.17 remains immutable at M17/A17 and Release
 `400460267`; v1.13.16 remains an immutable failed-publication predecessor.
 
-The latest published stable release remains v1.13.15. Its annotated tag object
-`38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to immutable product
-baseline `6a2417e8189631b018779c2fd24fc559ed761f3f`; release `378768097`, canonical
-body, checksum, and attestation remain immutable. Published installation and
-source-install instructions therefore continue to target v1.13.15.
+v1.13.15 remains the immutable final planned v1.x product baseline. Its
+annotated tag object `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to
+`6a2417e8189631b018779c2fd24fc559ed761f3f`, and Release `378768097`, canonical
+body, checksum, and attestation remain immutable historical identities.
 
 V2 planning review is authorized. V2 implementation has not started and
 requires a separate plan.
@@ -80,17 +85,16 @@ Current v1.13.19 lifecycle summary
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
     V1_13_18: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-    V1_13_19: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
-    RELEASE_STATE: PRE_RELEASE
-    PHASE_3: COMPLETE
-    PHASE_4: COMPLETE
-    PHASE_5: NEXT
+    V1_13_19: PUBLISHED_STABLE_IMMUTABLE_LATEST
+    RELEASE_STATE: POST_RELEASE_CLOSED
+    CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
     FINDINGS_CONFIRMED: 15
     FINDINGS_CLOSED: 15/15
     CK_V11316_007: CLOSED
     V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-    V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-    V1_13_19_PUBLICATION: NOT_PUBLISHED
+    V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+    V1_13_19_PUBLICATION: COMPLETE
+    V1_X: CLOSED_AND_FROZEN
     V2_IMPLEMENTATION: NOT_STARTED
 
 ## Historical release-state narrative through v1.13.14

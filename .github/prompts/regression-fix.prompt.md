@@ -4,19 +4,21 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
+RELEASE_STATE: POST_RELEASE_CLOSED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
 V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
+V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_19_PUBLICATION: NOT_PUBLISHED
+V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+V1_13_19_PUBLICATION: COMPLETE
+V1_X: CLOSED_AND_FROZEN
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
@@ -55,12 +57,13 @@ Identify and state:
 - Do not introduce unrelated cleanup.
 - Do not change public behavior unless required to fix the bug.
 - Do not change CLI output, JSON shape, or exit-code behavior unless the bug is specifically about those contracts.
-- v1.13.19 is the active finite tag-certification recovery candidate. Phases
-  0-4 are Complete after qualified independent acceptance of recovery Wave A;
-  Phase 5 protected integration is Next. The metadata successor requires its
-  own exact-source Wave B before integration. Keep
-  changes within its exact 34-path boundary and preserve every product,
-  dependency, technical, and frozen historical byte outside it.
+- v1.13.19 is published, stable, immutable, and latest at D19
+  `d3581602aee2599547564322fe083baae1d52063`, annotated A19
+  `60b6878114f936b295c415605e8af31def2aba5a`, and source-only GitHub Release
+  `431395975`. Natural tag CI and CodeQL passed on attempt 1, public readback
+  passed, and owner acceptance was granted. V1.x product/runtime development
+  is complete and frozen. The completed exact 34-path recovery boundary
+  preserves every product, dependency, technical, and frozen historical byte.
 - v1.13.18 remains a public-tag certification NONPASS with no GitHub Release.
   Do not move A18, erase the failed run, conflate the workspace NONPASS with
   the isolated `/tmp` PASS, or infer a writer for the reappearing fixture.
@@ -69,15 +72,15 @@ Identify and state:
   Phase 9M established source-scoped qualified external closure at C; protected-
   main serialization and effectiveness readback remain separate. This state
   does not certify or authorize later operations. v1.13.16 is the
-  immutable failed-publication predecessor. Follow the successor's 10-phase
-  plan and exact phase mode.
+  immutable failed-publication predecessor. The successor's completed 10-phase
+  plan remains historical evidence.
 - v1.13.15 remains published stable and immutable; planned v1 feature and
   architecture work remains closed and frozen.
 - Do not implement v2 or SQLite-first product-default behavior without a
   separate implementation plan.
 - Do not change public APIs, schemas, storage formats, or repository formats.
-- Keep changes within the active phase's exact plan and allowlist; do not make
-  an out-of-phase repair.
+- New v1 product/runtime work requires separate explicit authority; keep any
+  authorized repair within its exact plan and allowlist.
 - Do not remove PostgreSQL compatibility.
 - Do not introduce SQLite-only assumptions into engine or catalog contracts.
 - Do not close issue-tracker or remediation-matrix rows unless explicitly asked.

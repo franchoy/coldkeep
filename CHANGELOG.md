@@ -20,14 +20,17 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.19 - 2026-11-02 [pre-release] — Final v1.x Tag-Certification Recovery
+## v1.13.19 - 2026-11-02 — Final v1.x Tag-Certification Recovery
 
-The date records the structural pre-release candidate declaration.
-This entry records accepted recovery Wave A and its metadata reconciliation,
-not publication. v1.13.19 remains `NOT_PUBLISHED`; the metadata successor
-requires its own natural Wave B before protected integration. Main
-certification, tag-native checks, publication, public readback, and owner
-acceptance remain pending.
+Protected integration completed at D19
+`d3581602aee2599547564322fe083baae1d52063`, main certification completed, and
+annotated A19 `60b6878114f936b295c415605e8af31def2aba5a` directly targets D19.
+Natural tag CI run `41422511098` passed 36/36 jobs on attempt 1 and CodeQL run
+`41422511135` passed 4/4 jobs on attempt 1. Immutable source-only GitHub
+Release `431395975` was published as stable and latest with zero custom assets.
+Public archive, module, and executable readback passed, independent owner
+acceptance was granted, and v1.x product/runtime development is closed and
+frozen.
 
 - Preserves public annotated v1.13.18 tag A18 and exact M18 after its required
   natural tag CI failed; no v1.13.18 GitHub Release exists. Passing CodeQL,
@@ -44,13 +47,13 @@ acceptance remain pending.
   annotated v1.13.19 tag rules.
 - Freezes every v1.13.17/v1.13.18 release document, all 13 technical tuples,
   Go 1.26.10, compress v1.20.2, module sums, fixtures, product behavior, and
-  accepted Route A K/C2 scope. Phases 0-4 are Complete after qualified
-  independent acceptance of recovery Wave A; Phase 5 protected integration
-  is Next and Phases 6-9 are Not started.
+  accepted Route A K/C2 scope. The finite recovery phases and protected
+  integration completed before the natural tag certificate and publication.
 - Retains the earlier 15-Added Codacy NONPASS and records the separately
   accepted recovery source with Added=0. This metadata successor changes no
   code, tests, workflow, publication body, dependency, or technical byte and
-  receives no inherited hosted certificate.
+  received no inherited hosted certificate; exact v1.13.19 later passed its
+  own natural certification.
 
 ## v1.13.18 - 2026-11-01 [failed-publication-predecessor] — Final v1.x Source Snapshot and Closure Handoff
 

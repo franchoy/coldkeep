@@ -344,6 +344,39 @@ def final_snapshot_selection(
     )
 
 
+def v11319_post_release_closed_selected(
+    version: str,
+    state_doc: Optional[Document],
+    final_snapshot: Optional[FinalSourceSnapshot],
+) -> bool:
+    """Select the exact terminal vocabulary without affecting older routes."""
+    if version != "1.13.19" or state_doc is None or final_snapshot is None:
+        return False
+    names = (
+        "CURRENT_PHASE",
+        "RELEASE_STATE",
+        "V1_13_19_STATE",
+        "V1_X_FULL_CLOSURE",
+        "V1_13_19_PUBLICATION",
+        "V1_X",
+        "V2_IMPLEMENTATION",
+    )
+    expected = {
+        "CURRENT_PHASE": "NONE_POST_RELEASE_CLOSED",
+        "RELEASE_STATE": "POST_RELEASE_CLOSED",
+        "V1_13_19_STATE": "PUBLISHED_STABLE_IMMUTABLE_LATEST",
+        "V1_X_FULL_CLOSURE": "COMPLETE_EFFECTIVE",
+        "V1_13_19_PUBLICATION": "COMPLETE",
+        "V1_X": "CLOSED_AND_FROZEN",
+        "V2_IMPLEMENTATION": "NOT_STARTED",
+    }
+    values = _preamble_values(state_doc, names)
+    return (
+        final_snapshot.values.get("SOURCE_VERSION") == version
+        and all(values[name] == [value] for name, value in expected.items())
+    )
+
+
 def _final_snapshot_material(
     root: Path,
     version: str,
@@ -1007,6 +1040,7 @@ def check_ckrs013(
     boundaries: Optional[LifecycleBoundaries],
     declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
+    allow_immutable_post_release_closed: bool = False,
 ) -> None:
     invalid_phase = first_invalid_phase(phase_numbers, phase_states)
     ordered = [phase_states.get(number, ("missing", 0))[0] for number in phase_numbers]
@@ -1016,7 +1050,11 @@ def check_ckrs013(
         result.add("CKRS013", phase_doc.path, line, message)
         return
     if state and not lifecycle_progression_valid(
-        state, ordered, boundaries, declaration
+        state,
+        ordered,
+        boundaries,
+        declaration,
+        allow_immutable_post_release_closed=allow_immutable_post_release_closed,
     ):
         model = "immutable-transition-v1" if declaration else "boundary-aware" if boundaries else "legacy"
         message = (
@@ -1074,6 +1112,7 @@ def check_ckrs012_014(
     boundaries: Optional[LifecycleBoundaries],
     declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
+    allow_immutable_post_release_closed: bool = False,
 ) -> list[tuple[int, int, list[str]]]:
     phase_doc, checklist_doc = docs["phase_list"], docs["phase_checklist"]
     if not phase_doc or not checklist_doc:
@@ -1089,6 +1128,7 @@ def check_ckrs012_014(
         boundaries,
         declaration,
         result,
+        allow_immutable_post_release_closed,
     )
     check_phase_status_parity(
         phase_numbers,
@@ -1141,6 +1181,7 @@ def infer_state(
     terminal_disposition: Optional[TerminalDisposition] = None,
     security_progression: Optional[SecurityToolchainProgression] = None,
     final_snapshot: Optional[FinalSourceSnapshot] = None,
+    final_repository_closed: bool = False,
 ) -> tuple[
     str,
     tuple[str, str, bool, bool, Optional[str]],
@@ -1223,7 +1264,9 @@ def infer_state(
         and post_release_context
     ):
         state = (
-            "post-release-closure-candidate"
+            "post-release-closed"
+            if final_repository_closed and phases_complete(phase_doc)
+            else "post-release-closure-candidate"
             if declaration and phases_complete(phase_doc)
             else "post-release-closed"
             if phases_complete(phase_doc)
@@ -1434,6 +1477,7 @@ def check_ckrs018(
     boundaries: Optional[LifecycleBoundaries],
     declaration: Optional[LifecycleDeclaration],
     result: ValidationResult,
+    allow_immutable_post_release_closed: bool = False,
 ) -> None:
     directory, stem = release_paths(version)
     path = f"{directory}/{stem}-release-gate.md"
@@ -1447,7 +1491,11 @@ def check_ckrs018(
             for number in phase_numbers
         ]
     progression_valid = lifecycle_progression_valid(
-        state, ordered, boundaries, declaration
+        state,
+        ordered,
+        boundaries,
+        declaration,
+        allow_immutable_post_release_closed=allow_immutable_post_release_closed,
     )
     if state == "development":
         if gate is not None and passed_gate(gate):
@@ -1566,6 +1614,9 @@ def validate(
         version,
         docs["canonical_state"],
         docs["contract"],
+    )
+    final_repository_closed = v11319_post_release_closed_selected(
+        version, docs["canonical_state"], final_snapshot
     )
     if snapshot_mode != "legacy":
         snapshot_spec = FINAL_SNAPSHOT_SPECS.get(version)
@@ -1748,6 +1799,7 @@ def validate(
             terminal_disposition,
             security_progression,
             final_snapshot,
+            final_repository_closed,
         )
     elif requested_state == "auto" and snapshot_mode in ("invalid", "unavailable"):
         context = git_context(root, version)
@@ -1835,7 +1887,11 @@ def validate(
             0,
             f"{state} requires immutable-transition-v1",
         )
-    if state == "post-release-closed" and declaration is not None:
+    if (
+        state == "post-release-closed"
+        and declaration is not None
+        and not final_repository_closed
+    ):
         result.add(
             "CKRS019",
             docs["contract"].path if docs["contract"] else "",
@@ -1868,7 +1924,14 @@ def validate(
             result,
         )
     check_ckrs011(previous, docs["readme"], docs["release_readme"], docs["train"], result)
-    check_ckrs012_014(docs, state, boundaries, declaration, result)
+    check_ckrs012_014(
+        docs,
+        state,
+        boundaries,
+        declaration,
+        result,
+        final_repository_closed,
+    )
     check_ckrs015(root, docs["phase_list"], result)
     check_ckrs016(
         root,
@@ -1891,6 +1954,7 @@ def validate(
         boundaries,
         declaration,
         result,
+        final_repository_closed,
     )
     return result
 

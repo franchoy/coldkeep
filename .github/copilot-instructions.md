@@ -4,19 +4,21 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
+RELEASE_STATE: POST_RELEASE_CLOSED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
 V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
+V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_19_PUBLICATION: NOT_PUBLISHED
+V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+V1_13_19_PUBLICATION: COMPLETE
+V1_X: CLOSED_AND_FROZEN
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
@@ -25,12 +27,14 @@ Coldkeep is a correctness-first cold storage engine. The primary invariant is: n
 
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
 
-v1.13.19 is the active finite tag-certification recovery candidate based on
-exact M18. Phases 0-4 are Complete after qualified independent acceptance of
-recovery Wave A; Phase 5 protected integration is Next. The metadata successor
-requires its own exact-source Wave B before integration. Its exact 34-path
-recovery boundary preserves all product/dependency
-bytes, 13 technical tuples, and frozen v1.13.17/v1.13.18 documents. v1.13.18
+v1.13.19 is published, stable, immutable, and latest at D19
+`d3581602aee2599547564322fe083baae1d52063`, annotated A19
+`60b6878114f936b295c415605e8af31def2aba5a`, and source-only GitHub Release
+`431395975`. Natural tag CI and CodeQL passed on attempt 1, public readback
+passed, and independent owner acceptance was granted. V1.x product/runtime
+development is complete and frozen. The completed 34-path recovery boundary
+preserves all product/dependency bytes, 13 technical tuples, and frozen
+v1.13.17/v1.13.18 documents. v1.13.18
 remains a public-tag certification NONPASS with no GitHub Release; do not move
 A18, erase its failed run, conflate the workspace NONPASS with the isolated
 `/tmp` PASS, or infer a writer. v1.13.17 remains published and immutable at
@@ -65,16 +69,17 @@ SQLite-first local productization belongs to v2.x.
 Do not remove PostgreSQL compatibility.
 Do not introduce SQLite-only assumptions into engine or catalog contracts.
 
-The root `AGENTS.md` and v1.13.19 10-phase controls are authoritative. Follow
-the exact phase mode and allowlist; do not perform an out-of-phase repair.
-Stop on scope expansion, unexpected dependency movement, release-identity
-drift, or newly discovered private security impact.
+The root `AGENTS.md` and v1.13.19 post-publication closure are current
+authority. The completed 10-phase controls remain historical evidence. Do not
+start new v1 product work or mutate a tag or Release without separate explicit
+authority. Stop on scope expansion, unexpected dependency movement,
+release-identity drift, or newly discovered private security impact.
 
 V2 planning review is authorized. V2 implementation has not started and
 requires a separate plan and explicit authorization. Do not introduce broad
 refactors, dependency movement, schema/format changes, or unplanned product
-work during v1.13.19. Preserve every v1.13.17 and v1.13.18 release document
-and all historical release branches/worktrees unchanged.
+work. Preserve every v1.13.17 and v1.13.18 release document and all retained
+historical evidence unchanged.
 
 Codacy is signal, not authority.
 Do not chase style-only or generic maintainability warnings at the expense of correctness.

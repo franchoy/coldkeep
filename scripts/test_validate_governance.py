@@ -2379,15 +2379,14 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
 
 
 class V11319RecoveryGovernanceTests(unittest.TestCase):
-    """Finite active-route and frozen-predecessor checks for v1.13.19."""
+    """Terminal publication and frozen-predecessor checks for v1.13.19."""
 
     @staticmethod
-    def phase_text(next_phase: int) -> str:
+    def phase_text(next_phase: int | None = None) -> str:
         lines: list[str] = []
         for number in range(10):
             status = (
-                "Complete"
-                if number < next_phase
+                "Complete" if next_phase is None or number < next_phase
                 else "Next"
                 if number == next_phase
                 else "Not started"
@@ -2404,10 +2403,7 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
         )
         self.assertEqual(violations, [])
         self.assertEqual(state["SOURCE_VERSION"], "1.13.19")
-        self.assertIn(
-            state["CURRENT_PHASE"],
-            {f"{number}_NEXT" for number in governance.V19_ALLOWED_NEXT_PHASES},
-        )
+        self.assertEqual(state["CURRENT_PHASE"], governance.V19_TERMINAL_PHASE)
         self.assertEqual(
             governance._v19_phase_progression_violations(
                 (governance.ROOT / governance.V19_PHASE_FILE).read_text(
@@ -2421,7 +2417,12 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
             state["V1_13_18_STATE"],
             "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
         )
-        self.assertEqual(state["V1_13_19_PUBLICATION"], "NOT_PUBLISHED")
+        self.assertEqual(state["V1_13_19_PUBLICATION"], "COMPLETE")
+        self.assertEqual(
+            state["V1_13_19_STATE"], "PUBLISHED_STABLE_IMMUTABLE_LATEST"
+        )
+        self.assertEqual(state["V1_X_FULL_CLOSURE"], "COMPLETE_EFFECTIVE")
+        self.assertEqual(state["V1_X"], "CLOSED_AND_FROZEN")
         for relative in governance.CURRENT_STATE_MIRROR_FILES:
             mirror, mirror_violations = governance._v19_mirror(
                 relative,
@@ -2495,141 +2496,123 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
                 _, violations = governance._v19_canonical_state(candidate)
                 self.assertNotEqual(violations, [])
 
-    def test_v19_phase_progression_is_closed_to_3_4_5_next(self) -> None:
-        for number in governance.V19_ALLOWED_NEXT_PHASES:
-            with self.subTest(number=number):
-                self.assertEqual(
-                    governance._v19_phase_progression_violations(
-                        self.phase_text(number), f"{number}_NEXT"
-                    ),
-                    [],
-                )
-        for phase in ("2_NEXT", "6_NEXT", "9_COMPLETE"):
-            with self.subTest(phase=phase):
-                self.assertNotEqual(
-                    governance._v19_phase_progression_violations(
-                        self.phase_text(3), phase
-                    ),
-                    [],
-                )
-
-    def test_v19_current_state_test_accepts_each_coherent_supported_phase(self) -> None:
-        source_root = governance.ROOT
-        paths = (
-            governance.V19_CANONICAL_CURRENT_STATE_FILE,
-            *governance.CURRENT_STATE_MIRROR_FILES,
+    def test_v19_phase_progression_requires_all_complete(self) -> None:
+        self.assertEqual(
+            governance._v19_phase_progression_violations(
+                self.phase_text(), governance.V19_TERMINAL_PHASE
+            ),
+            [],
         )
-        for next_phase in (3, 4, 5):
-            with self.subTest(next_phase=next_phase), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                for relative in paths:
-                    text = (source_root / relative).read_text(encoding="utf-8")
-                    text = re.sub(
-                        r"(?m)^CURRENT_PHASE: \S+$",
-                        f"CURRENT_PHASE: {next_phase}_NEXT",
-                        text,
-                    )
-                    target = root / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(text, encoding="utf-8")
-                (root / governance.V19_PHASE_FILE).write_text(
-                    self.phase_text(next_phase), encoding="utf-8"
-                )
-                with mock.patch.object(governance, "ROOT", root):
-                    self.test_v19_active_state_and_all_mirrors_are_exact()
-                # A coherent phase must not pass when the actual phase list
-                # or any active mirror describes a different transition.
-                (root / governance.V19_PHASE_FILE).write_text(
-                    self.phase_text(4 if next_phase == 3 else 3), encoding="utf-8"
-                )
-                with mock.patch.object(governance, "ROOT", root):
-                    with self.assertRaises(AssertionError):
-                        self.test_v19_active_state_and_all_mirrors_are_exact()
-                (root / governance.V19_PHASE_FILE).write_text(
-                    self.phase_text(next_phase), encoding="utf-8"
-                )
-                agents = root / "AGENTS.md"
-                agents.write_text(
-                    agents.read_text(encoding="utf-8").replace(
-                        f"CURRENT_PHASE: {next_phase}_NEXT",
-                        "CURRENT_PHASE: 9_COMPLETE",
-                    ),
-                    encoding="utf-8",
-                )
-                with mock.patch.object(governance, "ROOT", root):
-                    with self.assertRaises(AssertionError):
-                        self.test_v19_active_state_and_all_mirrors_are_exact()
-
-    def test_v19_live_summaries_reject_wrong_missing_and_duplicate_fields(self) -> None:
-        cases = (
-            ("3_NEXT", "DEVELOPMENT", "NEXT", "NOT_STARTED", "NOT_STARTED"),
-            ("4_NEXT", "DEVELOPMENT", "COMPLETE", "NEXT", "NOT_STARTED"),
-            ("5_NEXT", "PRE_RELEASE", "COMPLETE", "COMPLETE", "NEXT"),
-        )
-        for phase, lifecycle, third, fourth, fifth in cases:
-            with self.subTest(phase=phase):
-                summary = (
-                    f"    RELEASE_STATE: {lifecycle}\n"
-                    f"    PHASE_3: {third}\n"
-                    f"    PHASE_4: {fourth}\n"
-                    f"    PHASE_5: {fifth}\n"
-                )
-                texts = {Path("AGENTS.md"): summary, Path("README.md"): summary}
-                self.assertEqual(
-                    governance._v19_phase_summary_violations(texts, phase), []
-                )
-                invalid = (
-                    summary.replace(f"RELEASE_STATE: {lifecycle}", "RELEASE_STATE: PUBLISHED"),
-                    summary.replace(f"PHASE_3: {third}", "PHASE_3: UNKNOWN"),
-                    summary.replace(f"    PHASE_4: {fourth}\n", ""),
-                    summary + f"    PHASE_5: {fifth}\n",
-                )
-                for changed in invalid:
-                    with self.subTest(changed=changed):
-                        violations = governance._v19_phase_summary_violations(
-                            {**texts, Path("AGENTS.md"): changed}, phase
-                        )
-                        self.assertEqual(len(violations), 1)
-                        self.assertIn("AGENTS.md: live lifecycle summary", violations[0])
-                self.assertNotEqual(
-                    governance._v19_phase_summary_violations(
-                        {Path("AGENTS.md"): summary, Path("README.md"): ""}, phase
-                    ),
-                    [],
-                )
-
-    def test_v19_checklist_commands_follow_phase_without_consuming_future_sections(self) -> None:
-        for phase, explicit in (
-            ("3_NEXT", "development"),
-            ("4_NEXT", "development"),
-            ("5_NEXT", "pre-release"),
+        for phase_text, phase in (
+            (self.phase_text(5), governance.V19_TERMINAL_PHASE),
+            (self.phase_text(), "5_NEXT"),
+            (self.phase_text(), "9_COMPLETE"),
         ):
             with self.subTest(phase=phase):
-                command = "python3 scripts/validate_release_state.py --state"
-                active = (
-                    "## Candidate-local gates\n\n"
-                    f"- `{command} auto --json`\n"
-                    f"- `{command} {explicit} --json`\n"
+                self.assertNotEqual(
+                    governance._v19_phase_progression_violations(
+                        phase_text, phase
+                    ),
+                    [],
                 )
-                text = active + (
-                    "\n## External phases\n\n"
-                    f"Future transitions use `{command} pre-release --json`.\n"
+
+    def test_v19_stale_candidate_state_and_mirror_reject(self) -> None:
+        state_path = governance.ROOT / governance.V19_CANONICAL_CURRENT_STATE_FILE
+        canonical_text = state_path.read_text(encoding="utf-8")
+        for old, new in (
+            ("CURRENT_PHASE: NONE_POST_RELEASE_CLOSED", "CURRENT_PHASE: 5_NEXT"),
+            (
+                "V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST",
+                "V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE",
+            ),
+            ("V1_13_19_PUBLICATION: COMPLETE", "V1_13_19_PUBLICATION: NOT_PUBLISHED"),
+        ):
+            with self.subTest(old=old):
+                _, violations = governance._v19_canonical_state(
+                    canonical_text.replace(old, new, 1)
                 )
-                self.assertEqual(
-                    governance._v19_candidate_command_violations(text, phase), []
+                self.assertNotEqual(violations, [])
+
+        canonical, violations = governance._v19_canonical_state(canonical_text)
+        self.assertEqual(violations, [])
+        texts = {
+            relative: (governance.ROOT / relative).read_text(encoding="utf-8")
+            for relative in governance.CURRENT_STATE_MIRROR_FILES
+        }
+        texts[Path("AGENTS.md")] = texts[Path("AGENTS.md")].replace(
+            "CURRENT_PHASE: NONE_POST_RELEASE_CLOSED",
+            "CURRENT_PHASE: 5_NEXT",
+            1,
+        )
+        mirror_violations = governance._v19_mirror_contract_violations(
+            texts, canonical
+        )
+        self.assertTrue(
+            any("mirror CURRENT_PHASE='5_NEXT'" in item for item in mirror_violations),
+            mirror_violations,
+        )
+
+    def test_v19_live_summaries_reject_wrong_missing_and_duplicate_fields(self) -> None:
+        phase = governance.V19_TERMINAL_PHASE
+        summary = (
+            "Current v1.13.19 lifecycle summary\n\n"
+            "    RELEASE_STATE: POST_RELEASE_CLOSED\n"
+            "    CURRENT_PHASE: NONE_POST_RELEASE_CLOSED\n"
+            "    V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE\n"
+            "    V1_13_19_PUBLICATION: COMPLETE\n"
+            "    V1_X: CLOSED_AND_FROZEN\n"
+            "    V2_IMPLEMENTATION: NOT_STARTED\n"
+        )
+        texts = {Path("AGENTS.md"): summary, Path("README.md"): summary}
+        self.assertEqual(
+            governance._v19_phase_summary_violations(texts, phase), []
+        )
+        invalid = (
+            summary.replace("POST_RELEASE_CLOSED", "PRE_RELEASE"),
+            summary.replace("CURRENT_PHASE: NONE_POST_RELEASE_CLOSED", "CURRENT_PHASE: 5_NEXT"),
+            summary.replace("    V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE\n", ""),
+            summary + "    V2_IMPLEMENTATION: NOT_STARTED\n",
+        )
+        for changed in invalid:
+            with self.subTest(changed=changed):
+                violations = governance._v19_phase_summary_violations(
+                    {**texts, Path("AGENTS.md"): changed}, phase
                 )
-                wrong = "pre-release" if explicit == "development" else "development"
-                for changed in (
-                    active.replace(f"{explicit} --json", f"{wrong} --json"),
-                    active.replace(f"- `{command} {explicit} --json`\n", ""),
-                    active + f"- `{command} {explicit} --json`\n",
-                    active + "\n" + active,
-                    active.replace("## Candidate-local gates", "## Historical gates"),
-                ):
-                    with self.subTest(changed=changed):
-                        self.assertNotEqual(
-                            governance._v19_candidate_command_violations(changed, phase), []
-                        )
+                self.assertEqual(len(violations), 1)
+                self.assertIn("AGENTS.md: live lifecycle summary", violations[0])
+        self.assertNotEqual(
+            governance._v19_phase_summary_violations(
+                {Path("AGENTS.md"): summary, Path("README.md"): ""}, phase
+            ),
+            [],
+        )
+
+    def test_v19_checklist_commands_are_exactly_terminal(self) -> None:
+        phase = governance.V19_TERMINAL_PHASE
+        command = "python3 scripts/validate_release_state.py --state"
+        active = (
+            "## Terminal closure local gates\n\n"
+            f"- `{command} auto --json`\n"
+            f"- `{command} post-release-closed --json`\n"
+        )
+        text = active + (
+            "\n## Historical commands\n\n"
+            f"Historical candidates used `{command} pre-release --json`.\n"
+        )
+        self.assertEqual(
+            governance._v19_candidate_command_violations(text, phase), []
+        )
+        for changed in (
+            active.replace("post-release-closed --json", "pre-release --json"),
+            active.replace(f"- `{command} post-release-closed --json`\n", ""),
+            active + f"- `{command} post-release-closed --json`\n",
+            active + "\n" + active,
+            active.replace("## Terminal closure local gates", "## Candidate-local gates"),
+        ):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(
+                    governance._v19_candidate_command_violations(changed, phase), []
+                )
 
     def test_v18_and_v17_document_sets_remain_frozen(self) -> None:
         self.assertEqual(governance._validate_v11318_frozen(governance.ROOT), [])
@@ -2703,6 +2686,27 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
         self.assertEqual(
             governance._v19_predecessor_disposition_violations(text), []
         )
+
+    def test_v19_post_publication_closure_is_complete_and_bounded(self) -> None:
+        text = (
+            governance.ROOT / governance.V19_POST_PUBLICATION_CLOSURE
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            governance._v19_post_publication_closure_violations(text), []
+        )
+        for mutation in (
+            text.replace(
+                "d3581602aee2599547564322fe083baae1d52063",
+                "0" * 40,
+                1,
+            ),
+            text + "\nv1.13.18 tag certification passed successfully.\n",
+            text.replace("V2_IMPLEMENTATION: NOT_STARTED", "V2_IMPLEMENTATION: STARTED", 1),
+        ):
+            with self.subTest(mutation_sha=hashlib.sha256(mutation.encode()).hexdigest()):
+                self.assertNotEqual(
+                    governance._v19_post_publication_closure_violations(mutation), []
+                )
 
     def test_v19_contract_aggregation_is_clean_on_the_real_candidate(self) -> None:
         texts = {

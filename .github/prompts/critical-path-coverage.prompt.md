@@ -4,19 +4,21 @@
 ```text
 SOURCE_VERSION: 1.13.19
 RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: 5_NEXT
+CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
+RELEASE_STATE: POST_RELEASE_CLOSED
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
 V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
+V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_19_PUBLICATION: NOT_PUBLISHED
+V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
+V1_13_19_PUBLICATION: COMPLETE
+V1_X: CLOSED_AND_FROZEN
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
@@ -110,18 +112,21 @@ When proposing coverage, provide:
 - whether it is release-blocking or advisory;
 - scope risks.
 
-## Active v1.13.19 recovery boundaries
+## Frozen v1.13.19 boundaries
 
-v1.13.19 is a finite source recovery with no product-coverage expansion.
-Phases 0-4 are Complete after qualified independent acceptance of recovery
-Wave A; Phase 5 protected integration is Next. The metadata successor requires
-its own exact-source Wave B before integration. The
-reviewed fixture fix and strict lifecycle tests must preserve production
+v1.13.19 is published, stable, immutable, and latest at D19
+`d3581602aee2599547564322fe083baae1d52063`, annotated A19
+`60b6878114f936b295c415605e8af31def2aba5a`, and source-only GitHub Release
+`431395975`. Natural tag CI and CodeQL passed on attempt 1, public readback
+passed, and owner acceptance was granted. V1.x product/runtime development is
+complete and frozen. The completed finite source recovery made no
+product-coverage expansion. Its reviewed fixture fix and strict lifecycle
+tests preserve production
 CKRS017, A18/A17, all product/dependency bytes, 13 technical tuples, and frozen
 v1.13.17/v1.13.18 documents. v1.13.18 remains a public-tag certification
 NONPASS with no GitHub Release; its passing bounded evidence does not certify
-the new source. Follow the 10-phase plan, exact 34-path boundary, phase mode,
-and allowlist:
+the v1.13.19 certificate. The completed 10-phase plan and exact 34-path
+boundary remain historical evidence:
 
 - do not implement v2 or SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;
