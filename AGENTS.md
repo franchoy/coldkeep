@@ -6,49 +6,47 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.18
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT
+SOURCE_VERSION: 1.13.19
+RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
 CURRENT_PHASE: 5_NEXT
 TRACKED_PUBLICATION_MATERIAL: FROZEN
 V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
 V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
 V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+V1_13_19_STATE: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
 CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
 FINDINGS_CONFIRMED: 15
 FINDINGS_CLOSED: 15/15
 V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
 V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-V1_13_18_PUBLICATION: NOT_PUBLISHED
+V1_13_19_PUBLICATION: NOT_PUBLISHED
 V2_IMPLEMENTATION: NOT_STARTED
 ```
 <!-- coldkeep-current-state:end -->
 
-- `v1.13.18` is the active final v1.x source-snapshot candidate. Phases 0-4 are
-  complete on the accepted recovery Wave A source; Phase 5 protected
-  integration is Next. This metadata-only Stage B head requires fresh local
-  review and exact-head Wave B before any protected integration. The
-  current governance-integrated successor combines Go 1.26.10 with the exact
-  accepted `github.com/klauspost/compress v1.20.2` ordinary component. C1's
-  ordinary preparation is closed component evidence. Bounded Route A direct
-  verification subsequently completed on K
+- `v1.13.19` is the active finite tag-certification recovery candidate based
+  on exact M18. Phases 0-4 are Complete after independent acceptance of
+  recovery Wave A with retained qualifications; Phase 5 protected integration
+  is Next. This metadata successor requires its own exact-source Wave B
+  before integration. Its only runtime-visible change is application version
+  1.13.19. The reviewed fixture repair removes only the active snapshot tag
+  from a newly created disposable test clone; production CKRS017 remains
+  strict. The exact 34-path M18-relative delta, 13 inherited technical tuples,
+  and frozen v1.13.17/v1.13.18 documents are binding.
+- `v1.13.18` remains an immutable public annotated tag at A18/M18 whose
+  required natural tag CI failed. Passing CodeQL, installations and other
+  bounded dimensions do not certify it, and no v1.13.18 GitHub Release exists.
+  Preserve the failed run, the shared-workspace 281-test NONPASS, the isolated
+  `/tmp` PASS (successful test result), and the unidentified writer
+  qualification. Do not move or
+  recreate A18.
+- Bounded Route A direct verification remains accepted on K
   `c69d678349edae59b1ee1d582fc2dbfd372ec133`, tree C2
-  `804f61238191e6dd93a3e85b27f291c95e84b14e`, and all seven defined rows were
-  independently accepted. Secure Hash Algorithm (SHA) identifies the digest
-  family; the result is bound to evidence SHA-256
+  `804f61238191e6dd93a3e85b27f291c95e84b14e`, under evidence
+  SHA-256 (SHA: Secure Hash Algorithm)
   `52b0e04990d07f130a85cf6c8dd7ba81eeff834a863e6542df1a298d865b27ed`.
-  It does not certify the reconciled successor, hosted checks, merge, tag,
-  publication, cleanup, or owner acceptance. Q passed local and independent
-  review and was adopted and pushed, but its natural Wave A retained the push
-  PostgreSQL cleanup failure and 21 Added Codacy issues. Recovery successor S
-  `0a6250f173ae4b72cbb8e3f00bf2ea34a20c10e9`, tree
-  `8c8249bb35b53310d640aead19aec41a1bdacb47`, subsequently passed its
-  local, real-PostgreSQL, independent and natural hosted Wave A gates. That
-  acceptance is bound to the recovery handoff SHA-256
-  `ae22ec4e9a79f01db223a797d7876c2dd7b358dab1bc1543d86039e17e9ff3f2`.
-  It does not certify this later metadata head, protected main, a tag,
-  publication or owner acceptance. Historical failures and qualifications
-  remain retained.
+  Its seven-row scope is not rerun or broadened by v1.13.19.
 - `v1.13.17` is published at immutable M17/A17 and GitHub Release `400460267`.
   Phase 9M and TS-READBACK-01 remain source-scoped qualified historical facts,
   including their recorded failed-attempt qualifications.
@@ -63,26 +61,27 @@ V2_IMPLEMENTATION: NOT_STARTED
   requires a separate plan and explicit authorization.
 - Do not introduce SQLite-first product defaults or perform broad refactors
   without the separately authorized future phase that owns them.
-- The v1.13.18 scope, 10-phase list, validation checklist, exact 52-path
-  cumulative allowlist, release state, snapshot reference, and release gate under
-  `docs/release/v1.13/` are binding current authority.
+- The v1.13.19 scope, 10-phase list, validation checklist, exact 34-path
+  recovery allowlist, release state, snapshot reference, predecessor
+  disposition, and release gate under `docs/release/v1.13/` are binding current
+  authority. All v1.13.18 documents remain frozen historical bytes.
 - Respect each phase's `PLAN` or `BUILD` mode and stop at its authorization
   boundary.
 - The `immutable-transition-v1` projections and predecessor disposition are
   structural only. They do not certify hosted operations or authorize a push,
   PR, merge, tag, publication, closure, or v2 implementation.
-- The integrated candidate must produce the exact 52-path cumulative delta from
-  M and preserve the exact 13 technical component modes and Git blobs selected
-  by the snapshot reference. The only dependency exception is compress v1.20.2
-  with its exact sums and persisted fixtures. The bounded Wave A recovery
-  renews only the compatibility-test and generator blobs and adds the exact
-  PostgreSQL observer-test blob; ten prior technical tuples stay unchanged.
-  Its test/tool changes require fresh local and hosted evidence. It must
-  preserve every `v1.13.17-*` release document byte; stop, escalate and
-  obtain separate explicit owner authorization before changing any additional
-  path or technical byte. The four historical release branches and all their
-  worktrees remain untouched. No push, PR, merge, tag, Release, workflow
-  dispatch, cleanup, or v2 work is authorized.
+- The candidate must descend from exact M18 through a merge-free range and
+  produce the complete 34-row delta. If either check fails, stop and escalate
+  the evidence to the owner; adoption remains blocked while either check fails.
+  Every other M18 path, all 13 technical
+  modes/blobs, all 24 frozen v1.13.17/v1.13.18 documents, compress v1.20.2,
+  module sums, persisted fixtures, and product behavior remain unchanged.
+  Stop and obtain separate owner authorization before changing another path or
+  technical byte. Historical branches/worktrees remain untouched. This local
+  declaration grants no provider authority. Any metadata-successor adoption,
+  push, or PR action requires the separately reviewed continuation and its
+  passing predicates. Merge, tag, Release, workflow intervention, cleanup, and
+  v2 work remain outside that boundary.
 
 ## Correctness rules
 
@@ -97,7 +96,7 @@ V2_IMPLEMENTATION: NOT_STARTED
 ## Validation
 
 Use the canonical commands in `PRE_RELEASE_CHECKLIST.md` and the active
-v1.13.18 validation checklist. At minimum, run focused tests for the changed
+v1.13.19 validation checklist. At minimum, run focused tests for the changed
 area before the broader applicable gate. Do not represent unavailable hosted
 evidence as passing.
 
@@ -114,11 +113,14 @@ The frozen v1 release-critical execution contract uses Go 1.26.10 with
 NEXT: the first not-yet-completed lifecycle phase in the summary below.
 This phase marker is descriptive and does not authorize work.
 
+Current v1.13.19 lifecycle summary
+
     V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
     V1_13_15_IS_FINAL_PLANNED_V1_RELEASE: YES
     V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
     V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-    V1_13_18: ACTIVE_FINAL_SOURCE_SNAPSHOT_CANDIDATE
+    V1_13_18: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
+    V1_13_19: ACTIVE_TAG_CERTIFICATION_RECOVERY_CANDIDATE
     RELEASE_STATE: PRE_RELEASE
     PHASE_3: COMPLETE
     PHASE_4: COMPLETE
@@ -128,7 +130,7 @@ This phase marker is descriptive and does not authorize work.
     CK_V11316_007: CLOSED
     V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
     V1_X_FULL_CLOSURE: ESTABLISHED_AT_M_PROTECTED_MAIN_EFFECTIVE_QUALIFIED
-    V1_13_18_PUBLICATION: NOT_PUBLISHED
+    V1_13_19_PUBLICATION: NOT_PUBLISHED
     V2_PLANNING_REVIEW: AUTHORIZED
     V2_IMPLEMENTATION: NOT_STARTED
     V2_IMPLEMENTATION_AUTHORIZATION: REQUIRES_SEPARATE_PLAN

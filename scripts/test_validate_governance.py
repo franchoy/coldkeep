@@ -35,6 +35,8 @@ LEGACY_GOVERNANCE_PROVIDER_PATHS = (
     Path("SECURITY.md"),
     Path("docs/release/v1.13/README.md"),
 )
+HISTORICAL_V18_SOURCE = "ad82794064c31b337949f0aa47c7639ca2f1d9c2"
+HISTORICAL_V18_REPOSITORY = governance.ROOT
 
 
 def copy_fixture_paths(
@@ -86,6 +88,30 @@ def fixture_git(root: Path, *args: str) -> str:
         timeout=30,
     )
     return completed.stdout.strip()
+
+
+def historical_v18_text(relative: Path) -> str:
+    """Read v1.13.18 mirrors from M18, never from a later active HEAD."""
+    local = governance.ROOT / relative
+    if local.is_file():
+        text = local.read_text(encoding="utf-8")
+        if (
+            relative not in governance.CURRENT_STATE_MIRROR_FILES
+            or "SOURCE_VERSION: 1.13.18" in text
+        ):
+            return text
+    completed = run_process(
+        [
+            resolved_executable("git"),
+            "-C",
+            str(HISTORICAL_V18_REPOSITORY),
+            "show",
+            f"{HISTORICAL_V18_SOURCE}:{relative.as_posix()}",
+        ],
+        check=True,
+        timeout=30,
+    )
+    return completed.stdout
 
 
 class FixtureGitSafetyTests(unittest.TestCase):
@@ -1458,6 +1484,12 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
         expected_phase: str,
     ) -> None:
         copy_fixture_paths(source_root, root, fixture_paths)
+        for relative in governance.CURRENT_STATE_MIRROR_FILES:
+            if relative not in fixture_paths:
+                continue
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(historical_v18_text(relative), encoding="utf-8")
         for relative in fixture_paths:
             fixture_path = root / relative
             original = fixture_path.read_text(encoding="utf-8")
@@ -1513,7 +1545,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
         for relative in governance.CURRENT_STATE_MIRROR_FILES:
             mirror, mirror_violations = governance._v18_mirror(
                 relative,
-                (governance.ROOT / relative).read_text(encoding="utf-8"),
+                historical_v18_text(relative),
             )
             self.assertEqual(mirror_violations, [])
             self.assertEqual(
@@ -1532,7 +1564,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
         )
 
     def test_v18_security_pins_and_authority_wording_are_current(self) -> None:
-        authority = (governance.ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        authority = historical_v18_text(Path("AGENTS.md"))
         marker = (
             "obtain separate explicit owner authorization before changing any "
             "additional"
@@ -1609,7 +1641,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
         canonical, canonical_violations = governance._v18_canonical_state(
             canonical_text
         )
-        mirror_text = (governance.ROOT / relative).read_text(encoding="utf-8")
+        mirror_text = historical_v18_text(relative)
         mirror, mirror_violations = governance._v18_mirror(relative, mirror_text)
         self.assertEqual(canonical_violations, [])
         self.assertEqual(mirror_violations, [])
@@ -1640,7 +1672,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             mutated_mirror["CURRENT_PHASE"], canonical["CURRENT_PHASE"]
         )
         self.assertEqual(
-            (governance.ROOT / relative).read_text(encoding="utf-8"), mirror_text
+            historical_v18_text(relative), mirror_text
         )
 
     def test_v18_closed_phase_set_accepts_only_3_4_and_5_next(self) -> None:
@@ -1666,7 +1698,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                     mirror_text, mirror_substitutions = re.subn(
                         r"(?m)^CURRENT_PHASE: \S+$",
                         f"CURRENT_PHASE: {number}_NEXT",
-                        (governance.ROOT / relative).read_text(encoding="utf-8"),
+                        historical_v18_text(relative),
                         count=1,
                     )
                     self.assertEqual(mirror_substitutions, 1)
@@ -1845,7 +1877,9 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             *governance.CURRENT_STATE_MIRROR_FILES,
         )
         source_bytes = {
-            relative: (source_root / relative).read_bytes()
+            relative: historical_v18_text(relative).encode("utf-8")
+            if relative in governance.CURRENT_STATE_MIRROR_FILES
+            else (source_root / relative).read_bytes()
             for relative in fixture_paths
         }
         methods = (
@@ -1867,7 +1901,9 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
                                 getattr(self, method)()
                     self.assertEqual(
                         {
-                            relative: (source_root / relative).read_bytes()
+                            relative: historical_v18_text(relative).encode("utf-8")
+                            if relative in governance.CURRENT_STATE_MIRROR_FILES
+                            else (source_root / relative).read_bytes()
                             for relative in fixture_paths
                         },
                         source_bytes,
@@ -1875,7 +1911,7 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
 
     def test_v18_mirror_delimiter_errors_are_exact(self) -> None:
         relative = Path("AGENTS.md")
-        original = (governance.ROOT / relative).read_text(encoding="utf-8")
+        original = historical_v18_text(relative)
         cases = (
             (original.replace(governance.CURRENT_STATE_MIRROR_START, "", 1), 0, 1),
             (
@@ -2340,6 +2376,340 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             violations = governance._validate_v11317_frozen(root)
             self.assertEqual(len(violations), 1)
             self.assertIn("frozen historical SHA-256", violations[0])
+
+
+class V11319RecoveryGovernanceTests(unittest.TestCase):
+    """Finite active-route and frozen-predecessor checks for v1.13.19."""
+
+    @staticmethod
+    def phase_text(next_phase: int) -> str:
+        lines: list[str] = []
+        for number in range(10):
+            status = (
+                "Complete"
+                if number < next_phase
+                else "Next"
+                if number == next_phase
+                else "Not started"
+            )
+            lines.extend(
+                (f"## Phase {number} — TEST_FIXTURE_ONLY", "", f"**Status:** {status}")
+            )
+        return "\n".join(lines) + "\n"
+
+    def test_v19_active_state_and_all_mirrors_are_exact(self) -> None:
+        state_path = governance.ROOT / governance.V19_CANONICAL_CURRENT_STATE_FILE
+        state, violations = governance._v19_canonical_state(
+            state_path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(violations, [])
+        self.assertEqual(state["SOURCE_VERSION"], "1.13.19")
+        self.assertIn(
+            state["CURRENT_PHASE"],
+            {f"{number}_NEXT" for number in governance.V19_ALLOWED_NEXT_PHASES},
+        )
+        self.assertEqual(
+            governance._v19_phase_progression_violations(
+                (governance.ROOT / governance.V19_PHASE_FILE).read_text(
+                    encoding="utf-8"
+                ),
+                state["CURRENT_PHASE"],
+            ),
+            [],
+        )
+        self.assertEqual(
+            state["V1_13_18_STATE"],
+            "PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE",
+        )
+        self.assertEqual(state["V1_13_19_PUBLICATION"], "NOT_PUBLISHED")
+        for relative in governance.CURRENT_STATE_MIRROR_FILES:
+            mirror, mirror_violations = governance._v19_mirror(
+                relative,
+                (governance.ROOT / relative).read_text(encoding="utf-8"),
+            )
+            self.assertEqual(mirror_violations, [])
+            self.assertEqual(
+                {key: mirror[key] for key in governance.V19_MIRROR_KEYS},
+                {key: state[key] for key in governance.V19_MIRROR_KEYS},
+            )
+
+    def test_v19_selection_requires_patch_and_regular_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            version = root / "internal/version/version.go"
+            version.parent.mkdir(parents=True)
+            version.write_text(
+                "package version\n\nconst (\n    Patch = 19\n)\n",
+                encoding="utf-8",
+            )
+            state = root / governance.V19_CANONICAL_CURRENT_STATE_FILE
+            state.parent.mkdir(parents=True)
+            state.write_text("TEST_FIXTURE_ONLY\n", encoding="utf-8")
+            self.assertTrue(governance._v19_selected(root))
+            version.write_text(
+                "package version\n\nconst (\n    Patch = 18\n)\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(governance._v19_selected(root))
+            version.write_text(
+                "package version\n\nconst (\n Patch = 19\n Patch = 19\n)\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(governance._v19_selected(root))
+            version.write_text(
+                "package version\n\nconst (\n    Patch = 19\n)\n",
+                encoding="utf-8",
+            )
+            state.unlink()
+            state.symlink_to(version)
+            self.assertFalse(governance._v19_selected(root))
+
+    def test_v19_selector_missing_duplicate_unknown_and_v18_mixed_reject(self) -> None:
+        path = governance.ROOT / governance.V19_CANONICAL_CURRENT_STATE_FILE
+        original = path.read_text(encoding="utf-8")
+        cases = (
+            original.replace(
+                "FINAL_SOURCE_SNAPSHOT_SCHEMA: coldkeep-v1-final-source-snapshot-selection/v2\n",
+                "",
+                1,
+            ),
+            original.replace(
+                "FINAL_SOURCE_SNAPSHOT_SCHEMA: coldkeep-v1-final-source-snapshot-selection/v2\n",
+                "FINAL_SOURCE_SNAPSHOT_SCHEMA: unknown/v2\n",
+                1,
+            ),
+            original.replace(
+                "FINAL_SOURCE_SNAPSHOT_SCHEMA: coldkeep-v1-final-source-snapshot-selection/v2\n",
+                "FINAL_SOURCE_SNAPSHOT_SCHEMA: coldkeep-v1-final-source-snapshot-selection/v2\n"
+                "FINAL_SOURCE_SNAPSHOT_SCHEMA: coldkeep-v1-final-source-snapshot-selection/v2\n",
+                1,
+            ),
+            original.replace(
+                "coldkeep-v1-final-source-snapshot-selection/v2",
+                "coldkeep-v1-final-source-snapshot-selection/v1",
+                1,
+            ),
+        )
+        for candidate in cases:
+            with self.subTest(candidate_sha=hashlib.sha256(candidate.encode()).hexdigest()):
+                _, violations = governance._v19_canonical_state(candidate)
+                self.assertNotEqual(violations, [])
+
+    def test_v19_phase_progression_is_closed_to_3_4_5_next(self) -> None:
+        for number in governance.V19_ALLOWED_NEXT_PHASES:
+            with self.subTest(number=number):
+                self.assertEqual(
+                    governance._v19_phase_progression_violations(
+                        self.phase_text(number), f"{number}_NEXT"
+                    ),
+                    [],
+                )
+        for phase in ("2_NEXT", "6_NEXT", "9_COMPLETE"):
+            with self.subTest(phase=phase):
+                self.assertNotEqual(
+                    governance._v19_phase_progression_violations(
+                        self.phase_text(3), phase
+                    ),
+                    [],
+                )
+
+    def test_v19_current_state_test_accepts_each_coherent_supported_phase(self) -> None:
+        source_root = governance.ROOT
+        paths = (
+            governance.V19_CANONICAL_CURRENT_STATE_FILE,
+            *governance.CURRENT_STATE_MIRROR_FILES,
+        )
+        for next_phase in (3, 4, 5):
+            with self.subTest(next_phase=next_phase), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for relative in paths:
+                    text = (source_root / relative).read_text(encoding="utf-8")
+                    text = re.sub(
+                        r"(?m)^CURRENT_PHASE: \S+$",
+                        f"CURRENT_PHASE: {next_phase}_NEXT",
+                        text,
+                    )
+                    target = root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(text, encoding="utf-8")
+                (root / governance.V19_PHASE_FILE).write_text(
+                    self.phase_text(next_phase), encoding="utf-8"
+                )
+                with mock.patch.object(governance, "ROOT", root):
+                    self.test_v19_active_state_and_all_mirrors_are_exact()
+                # A coherent phase must not pass when the actual phase list
+                # or any active mirror describes a different transition.
+                (root / governance.V19_PHASE_FILE).write_text(
+                    self.phase_text(4 if next_phase == 3 else 3), encoding="utf-8"
+                )
+                with mock.patch.object(governance, "ROOT", root):
+                    with self.assertRaises(AssertionError):
+                        self.test_v19_active_state_and_all_mirrors_are_exact()
+                (root / governance.V19_PHASE_FILE).write_text(
+                    self.phase_text(next_phase), encoding="utf-8"
+                )
+                agents = root / "AGENTS.md"
+                agents.write_text(
+                    agents.read_text(encoding="utf-8").replace(
+                        f"CURRENT_PHASE: {next_phase}_NEXT",
+                        "CURRENT_PHASE: 9_COMPLETE",
+                    ),
+                    encoding="utf-8",
+                )
+                with mock.patch.object(governance, "ROOT", root):
+                    with self.assertRaises(AssertionError):
+                        self.test_v19_active_state_and_all_mirrors_are_exact()
+
+    def test_v19_live_summaries_reject_wrong_missing_and_duplicate_fields(self) -> None:
+        cases = (
+            ("3_NEXT", "DEVELOPMENT", "NEXT", "NOT_STARTED", "NOT_STARTED"),
+            ("4_NEXT", "DEVELOPMENT", "COMPLETE", "NEXT", "NOT_STARTED"),
+            ("5_NEXT", "PRE_RELEASE", "COMPLETE", "COMPLETE", "NEXT"),
+        )
+        for phase, lifecycle, third, fourth, fifth in cases:
+            with self.subTest(phase=phase):
+                summary = (
+                    f"    RELEASE_STATE: {lifecycle}\n"
+                    f"    PHASE_3: {third}\n"
+                    f"    PHASE_4: {fourth}\n"
+                    f"    PHASE_5: {fifth}\n"
+                )
+                texts = {Path("AGENTS.md"): summary, Path("README.md"): summary}
+                self.assertEqual(
+                    governance._v19_phase_summary_violations(texts, phase), []
+                )
+                invalid = (
+                    summary.replace(f"RELEASE_STATE: {lifecycle}", "RELEASE_STATE: PUBLISHED"),
+                    summary.replace(f"PHASE_3: {third}", "PHASE_3: UNKNOWN"),
+                    summary.replace(f"    PHASE_4: {fourth}\n", ""),
+                    summary + f"    PHASE_5: {fifth}\n",
+                )
+                for changed in invalid:
+                    with self.subTest(changed=changed):
+                        violations = governance._v19_phase_summary_violations(
+                            {**texts, Path("AGENTS.md"): changed}, phase
+                        )
+                        self.assertEqual(len(violations), 1)
+                        self.assertIn("AGENTS.md: live lifecycle summary", violations[0])
+                self.assertNotEqual(
+                    governance._v19_phase_summary_violations(
+                        {Path("AGENTS.md"): summary, Path("README.md"): ""}, phase
+                    ),
+                    [],
+                )
+
+    def test_v19_checklist_commands_follow_phase_without_consuming_future_sections(self) -> None:
+        for phase, explicit in (
+            ("3_NEXT", "development"),
+            ("4_NEXT", "development"),
+            ("5_NEXT", "pre-release"),
+        ):
+            with self.subTest(phase=phase):
+                command = "python3 scripts/validate_release_state.py --state"
+                active = (
+                    "## Candidate-local gates\n\n"
+                    f"- `{command} auto --json`\n"
+                    f"- `{command} {explicit} --json`\n"
+                )
+                text = active + (
+                    "\n## External phases\n\n"
+                    f"Future transitions use `{command} pre-release --json`.\n"
+                )
+                self.assertEqual(
+                    governance._v19_candidate_command_violations(text, phase), []
+                )
+                wrong = "pre-release" if explicit == "development" else "development"
+                for changed in (
+                    active.replace(f"{explicit} --json", f"{wrong} --json"),
+                    active.replace(f"- `{command} {explicit} --json`\n", ""),
+                    active + f"- `{command} {explicit} --json`\n",
+                    active + "\n" + active,
+                    active.replace("## Candidate-local gates", "## Historical gates"),
+                ):
+                    with self.subTest(changed=changed):
+                        self.assertNotEqual(
+                            governance._v19_candidate_command_violations(changed, phase), []
+                        )
+
+    def test_v18_and_v17_document_sets_remain_frozen(self) -> None:
+        self.assertEqual(governance._validate_v11318_frozen(governance.ROOT), [])
+        self.assertEqual(governance._validate_v11317_frozen(governance.ROOT), [])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for expected_files in (
+                governance.V11318_FROZEN_SHA256,
+                governance.V11317_FROZEN_SHA256,
+            ):
+                for relative in expected_files:
+                    destination = root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(governance.ROOT / relative, destination)
+            target = root / next(iter(governance.V11318_FROZEN_SHA256))
+            target.write_bytes(target.read_bytes() + b"TEST_FIXTURE_ONLY\n")
+            violations = governance._validate_v11318_frozen(root)
+            self.assertEqual(len(violations), 1)
+            self.assertIn("frozen v1.13.18 historical SHA-256", violations[0])
+
+    def test_historical_v18_mirror_is_loaded_from_exact_m18(self) -> None:
+        live = (governance.ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        historical = historical_v18_text(Path("AGENTS.md"))
+        self.assertIn("SOURCE_VERSION: 1.13.19", live)
+        self.assertIn("SOURCE_VERSION: 1.13.18", historical)
+        self.assertNotEqual(live, historical)
+        state, violations = governance._v18_mirror(Path("AGENTS.md"), historical)
+        self.assertEqual(violations, [])
+        self.assertEqual(state["SOURCE_VERSION"], "1.13.18")
+        self.assertEqual(
+            fixture_git(HISTORICAL_V18_REPOSITORY, "rev-parse", f"{HISTORICAL_V18_SOURCE}^{{tree}}"),
+            "0342c2f845a9e6e2f9b7c235fbf3004b271e43c4",
+        )
+
+    def test_v19_release_body_checksum_and_semantics_are_canonical(self) -> None:
+        state, state_violations = governance._v19_canonical_state(
+            (governance.ROOT / governance.V19_CANONICAL_CURRENT_STATE_FILE).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(state_violations, [])
+        self.assertEqual(
+            governance._validate_v19_release_body(governance.ROOT, state), []
+        )
+
+    def test_v19_release_body_rejects_recovery_overclaims(self) -> None:
+        body = (governance.ROOT / governance.V19_RELEASE_BODY).read_text(
+            encoding="utf-8"
+        )
+        claims = (
+            "v1.13.18 tag certification passed successfully.",
+            "v1.13.18 GitHub Release was published.",
+            "A18 was recreated.",
+            "The writer was identified.",
+            "Every workspace passed.",
+            "CKRS017 was exported by the hosted original tag run.",
+            "v1.13.19 publication is complete and owner acceptance established.",
+        )
+        for claim in claims:
+            with self.subTest(claim=claim):
+                violations = governance._v19_release_body_semantics(body + claim + "\n")
+                self.assertTrue(
+                    any("forbidden recovery assertion" in item for item in violations),
+                    violations,
+                )
+
+    def test_v19_predecessor_disposition_is_complete(self) -> None:
+        text = (
+            governance.ROOT / governance.V19_PREDECESSOR_DISPOSITION
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            governance._v19_predecessor_disposition_violations(text), []
+        )
+
+    def test_v19_contract_aggregation_is_clean_on_the_real_candidate(self) -> None:
+        texts = {
+            relative: (governance.ROOT / relative).read_text(encoding="utf-8")
+            for relative in governance.CURRENT_STATE_MIRROR_FILES
+        }
+        self.assertEqual(governance.validate_v19_contract(governance.ROOT, texts), [])
 
 
 if __name__ == "__main__":

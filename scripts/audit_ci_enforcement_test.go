@@ -246,14 +246,14 @@ func TestAuditCIEnforcementRejectsStaleApplicationVersion(t *testing.T) {
 		{
 			name:     "source-install",
 			next:     "remote-candidate-install",
-			anchor:   "coldkeep version 1.13.18",
+			anchor:   "coldkeep version 1.13.19",
 			expected: "coldkeep version 1.13.17",
 			message:  "source installation proves binary identity",
 		},
 		{
 			name:     "remote-candidate-install",
 			next:     "product-container",
-			anchor:   "coldkeep version 1.13.18",
+			anchor:   "coldkeep version 1.13.19",
 			expected: "coldkeep version 1.13.17",
 			message:  "remote candidate installation proves binary identity",
 		},

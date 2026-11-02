@@ -20,12 +20,44 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.13.18 - 2026-11-01 — Final v1.x Source Snapshot and Closure Handoff
+## v1.13.19 - 2026-11-02 [pre-release] — Final v1.x Tag-Certification Recovery
 
-This date records the Stage B candidate declaration; it is not a publication
-date. v1.13.18 remains `NOT_PUBLISHED`. Fresh exact-head Wave B, protected
-integration and main validation, tag certification, publication, and owner
+The date records the structural pre-release candidate declaration.
+This entry records accepted recovery Wave A and its metadata reconciliation,
+not publication. v1.13.19 remains `NOT_PUBLISHED`; the metadata successor
+requires its own natural Wave B before protected integration. Main
+certification, tag-native checks, publication, public readback, and owner
 acceptance remain pending.
+
+- Preserves public annotated v1.13.18 tag A18 and exact M18 after its required
+  natural tag CI failed; no v1.13.18 GitHub Release exists. Passing CodeQL,
+  installations, and accepted Route A evidence retain their bounded scopes.
+- Applies the independently reviewed one-file fixture correction: only a newly
+  created disposable pre-release fixture loses its inherited active snapshot
+  tag. A18/A17, donor/source refs, and production CKRS017 remain intact.
+- Preserves the shared-workspace complete 281-test NONPASS, the unchanged
+  isolated `/tmp` complete 281-test PASS, and the unidentified writer of the
+  reappearing fixture reference as distinct facts.
+- Advances only the reported application/install expectation to 1.13.19 and
+  adds a finite v2 snapshot selector based on exact M18, an exact 34-path
+  recovery delta, protected `[M18,candidate]` topology, and one-level future
+  annotated v1.13.19 tag rules.
+- Freezes every v1.13.17/v1.13.18 release document, all 13 technical tuples,
+  Go 1.26.10, compress v1.20.2, module sums, fixtures, product behavior, and
+  accepted Route A K/C2 scope. Phases 0-4 are Complete after qualified
+  independent acceptance of recovery Wave A; Phase 5 protected integration
+  is Next and Phases 6-9 are Not started.
+- Retains the earlier 15-Added Codacy NONPASS and records the separately
+  accepted recovery source with Added=0. This metadata successor changes no
+  code, tests, workflow, publication body, dependency, or technical byte and
+  receives no inherited hosted certificate.
+
+## v1.13.18 - 2026-11-01 [failed-publication-predecessor] — Final v1.x Source Snapshot and Closure Handoff
+
+This date records the Stage B candidate declaration, not a GitHub Release
+publication date. Subsequent protected integration produced M18 and public
+annotated A18, but required natural tag CI failed and no v1.13.18 GitHub
+Release was created. That immutable NONPASS is preserved by v1.13.19.
 
 - Versions the accepted final v1.x protected-main source as an exceptional
   source-only snapshot; it adds no product feature, schema, storage/repository
