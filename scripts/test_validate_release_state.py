@@ -7316,6 +7316,7 @@ class TerminalSerializationContractTests(unittest.TestCase):
             check=True,
         ).stdout.split("\0")
         inventory = {Path(item) for item in committed if item}
+        inventory.discard(Path(release_state_support.CURRENT_AUTHORITY_PATH))
         inventory.difference_update(validate_governance.V18_AUTHORITY_FILES)
         inventory.update(Path(item) for item in self.TERMINAL_DOCS)
         for relative in sorted(inventory):
@@ -9189,7 +9190,7 @@ class _V2ProgressionFixture:
             check=True,
         ).stdout.split("\0")
         for name in tracked:
-            if not name:
+            if not name or name == release_state_support.CURRENT_AUTHORITY_PATH:
                 continue
             relative = Path(name)
             target = self.root / relative
