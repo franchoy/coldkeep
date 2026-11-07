@@ -44,6 +44,14 @@ none of which introduce new guarantee IDs.
 
 ## Scope
 
+Action 2.01 adds the [product fixture oracle](testdata/product-fixtures/README.md)
+and source-linked [compatibility ledger](docs/release/v2.0/baseline-compatibility.md).
+`TestProductFixtures` runs 23 declared restore/refusal/known-limit cases on copied
+SQLite fixtures; the evidence runner requires named non-skipped execution and
+matching content hashes. Ordinary Linux quality CI runs the current reader with
+the race detector. Exact D19 execution supplies the bounded historical baseline;
+this adds no platform/product qualification claim or runtime behavior.
+
 - Target: single-node trust model for v1.0 core plus maintained v1.x
   interface, observability, block-abstraction, same-host coordination, and
   integrity-hardening contracts

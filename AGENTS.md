@@ -9,7 +9,7 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 0
+CURRENT_PHASE: 2.01
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE
@@ -17,12 +17,14 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 0 is authorized in BUILD mode by the adopted 7 November
-2026 charter at `docs/release/v2.0/README.md`; `docs/release/current.json` is
-current authority. Scope: governance, module/import/version identity, affected
-evidence consumers and handoff only. Latest stable remains v1.13.19. Frozen
-`docs/release/v1*/` records retain their historical meanings and bytes.
-Do not implement daemon/storage/schema/migration/recovery features in Phase 0.
+Active v2.0 Phase 1A / action 2.01 is authorized in BUILD mode by the accepted
+7 November 2026 instruction and `docs/release/v2.0/README.md`;
+`docs/release/current.json` is current authority. Scope: baseline/compatibility
+ledger, version domains, executable fixtures, product contracts, profile
+statuses, result glossary and applicable evidence. Latest stable remains
+v1.13.19; frozen `docs/release/v1*/` records retain their historical bytes.
+Do not implement passive opening, daemon/UI, storage/schema, capture, migration
+or recovery-export/import features in 2.01. Actions 2.02 and 2.03 are separate.
 No push, PR publication, merge, tag, release or deployment is authorized.
 Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
@@ -38,7 +40,7 @@ Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
 ## Validation and handoffs
 
-Use the bounded Phase 0 validation profile in `docs/release/v2.0/README.md`
+Use the bounded action 2.01 validation profile in `docs/release/v2.0/README.md`
 and `PRE_RELEASE_CHECKLIST.md`. Run focused checks before applicable broader
 gates. Missing hosted or platform evidence is not a pass. The baseline commands:
 
@@ -60,4 +62,4 @@ gate. Do not change account settings or permanent global configuration.
 Respect each phase's `PLAN` or `BUILD` mode. Stop on scope expansion, unexpected
 dependency movement or newly discovered private security impact. The adopted
 v2 identity transition is authorized, not unexpected release drift. Future
-product gates remain incomplete; Phase 0 grants no later phase authority.
+product gates remain incomplete; action 2.01 grants no later action authority.

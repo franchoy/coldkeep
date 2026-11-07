@@ -3,6 +3,15 @@
 This document defines what coldkeep guarantees across versions, especially for
 chunker evolution and restore behavior.
 
+Active v2 action 2.01 freezes a source-linked
+[baseline and version-domain ledger](docs/release/v2.0/baseline-compatibility.md),
+[product/profile/result contract](docs/release/v2.0/product-contract.md) and
+[executable fixture oracle](testdata/product-fixtures/README.md). Existing v1
+guarantees below remain bounded by their original scope. Application 2.0.0-dev.0
+and the `/v2` Go module do not change schema 17 or payload formats. Fixture
+evidence includes expected refusals and known name/format-metadata limitations;
+it does not certify v2 adoption, passive opening or recovery export.
+
 It complements:
 
 - README.md for the operator-facing guarantee summary

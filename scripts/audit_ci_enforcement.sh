@@ -1456,11 +1456,11 @@ check_local_workflow() {
   upload_v5_count=$(grep -c 'actions/upload-artifact@v5' "$WORKFLOW_FILE" || true)
   upload_v6_count=$(grep -c 'actions/upload-artifact@v6' "$WORKFLOW_FILE" || true)
   upload_v7_count=$(grep -c 'actions/upload-artifact@v7' "$WORKFLOW_FILE" || true)
-  if [[ "$upload_v7_count" -ne 6 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
-    echo "[audit] ERROR: required CI expects exactly six upload-artifact@v7 uses and zero v5/v6 uses" >&2
+  if [[ "$upload_v7_count" -ne 7 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
+    echo "[audit] ERROR: required CI expects exactly seven upload-artifact@v7 uses and zero v5/v6 uses" >&2
     check_status=1
   else
-    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly six times"
+    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly seven times"
   fi
   quality_block="$(extract_job_block quality)"
   if [[ -z "$quality_block" ]]; then
@@ -1472,6 +1472,7 @@ check_local_workflow() {
     quality_aes_gcm_block="$(extract_step_block_from_content "$quality_block" "Test packages (aes-gcm codec)")"
     validator_test_block="$(extract_step_block_from_content "$quality_block" "Test release-state validator")"
     python_suite_block="$(extract_step_block_from_content "$quality_block" "Run complete Python validation suite")"
+    product_fixture_block="$(extract_step_block_from_content "$quality_block" "Run product baseline fixtures")"
     validator_real_block="$(extract_step_block_from_content "$quality_block" "Validate repository release state")"
     require_content_pattern "$quality_checkout_block" '^        uses: actions/checkout@v6$' 'quality checkout uses actions/checkout@v6' || check_status=1
     require_content_pattern "$quality_checkout_block" '^          fetch-depth: 0$' 'quality checkout fetch-depth is 0' || check_status=1
@@ -1479,6 +1480,12 @@ check_local_workflow() {
     require_content_pattern "$validator_test_block" '^        run: python3 scripts/test_validate_release_state\.py$' 'release-state validator test command' || check_status=1
     require_content_pattern "$python_suite_block" '^      - name: Run complete Python validation suite$' 'complete Python validation suite step' || check_status=1
     require_content_pattern "$python_suite_block" "^        run: python3 -m unittest discover -s scripts -p 'test_\\*\\.py' -v$" 'canonical complete Python validation command' || check_status=1
+    # shellcheck disable=SC2016 # Match the literal runner variable in the workflow command.
+    require_content_literal "$product_fixture_block" '        run: python3 scripts/run_product_fixtures.py --reader current --output "$RUNNER_TEMP/product-fixtures"' 'ordinary CI executes the product fixture oracle' || check_status=1
+    if grep -Eq 'continue-on-error|^[[:space:]]+if:' <<<"$product_fixture_block"; then
+      echo "[audit] ERROR: product fixture oracle must be unconditional and blocking" >&2
+      check_status=1
+    fi
     require_content_pattern "$validator_real_block" '^      - name: Validate repository release state$' 'release-state validator real-state step' || check_status=1
     require_content_pattern "$validator_real_block" 'python3 scripts/validate_release_state\.py --state auto' 'release-state validator real-state command' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/heads/release/' 'release-state validator release branch condition' || check_status=1

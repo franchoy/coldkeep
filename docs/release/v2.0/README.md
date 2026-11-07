@@ -1,10 +1,11 @@
 # Coldkeep v2.0 active charter
 
 Adopted 7 November 2026 (Europe/Madrid), under instruction edition 1.0.
-V2 implementation is active under the bounded Phase 0 BUILD authorization.
+V2 implementation is active under the bounded Phase 1A / action 2.01 BUILD
+instruction accepted after the Phase 0 guard correction.
 The single machine-readable phase/state authority is
-[../current.json](../current.json). Phase 0 is complete as a local development
-candidate; every product gate remains incomplete. See [the original result](phase0-result.md)
+[../current.json](../current.json), now selecting `phase: "2.01"`. Phase 0 is
+complete and accepted; every product gate remains incomplete. See [the original result](phase0-result.md)
 and [the later guard-correction record](phase0-followup-result.md).
 Latest published stable is **v1.13.19**, independently recorded in the frozen
 [v1 closure](../v1.13/v1.13.19-post-publication-closure.md).
@@ -29,14 +30,18 @@ backend and encryption. Capture is best-effort per-file observation, not an
 atomic application snapshot. Existing crash-consistency and plaintext metadata
 limitations remain; keys are independently required for encrypted recovery.
 
-## Phase 0 scope and validation
+## Action 2.01 scope and validation
 
-Establish active authority and matching provider instructions; explicit
-family/version/state dispatch with a preserved historical-v1 route; root Go
-module `github.com/franchoy/coldkeep/v2`; complete prerelease identity; current
-package/evidence consumers; and the next bounded fixture/recovery handoff.
-No daemon, schema, storage, capture, migration or recovery-export implementation
-is authorized in this phase. No user repository is migrated. Push, PR, merge,
+Complete the [baseline/compatibility and version-domain ledger](baseline-compatibility.md),
+[fixture manifest/harness](../../../testdata/product-fixtures/README.md),
+[product contract, profile table and result glossary](product-contract.md), and
+applicable evidence. Preserve the completed Phase 0 record, explicit historical-v1
+route, `/v2` module, 2.0.0-dev.0 identity and corrected preservation guards.
+The accepted entry is `eb9ddebfe7d6d2c24f7b84052b08b1facfe953cb`; it does not
+replace the original frozen-v1 historical base in current.json.
+No passive-opening, daemon/UI, schema, storage, capture, migration or recovery
+export/import implementation is authorized in 2.01. No user repository is
+migrated. Actions 2.02 and 2.03 are separate runs. Push, PR, merge,
 tags, releases and deployment are outside this local candidate run.
 
 Use pinned Go 1.26.10 with `GOTOOLCHAIN=local`, language floor 1.25.0 and unchanged
@@ -46,19 +51,26 @@ dependencies. Required local evidence:
 - `python3 scripts/validate_governance.py`
 - `python3 -m unittest discover -s scripts -p 'test_*.py' -v`
 - `bash scripts/audit_ci_enforcement.sh --local-only`
-- Strict version/dispatch negative cases, historical-v1 fixtures, complete
-  module build/test compilation, version/CLI/architecture checks, actual `/v2`
-  required-test events and rejection of missing/skipped/legacy package evidence.
+- Focused explicit-phase authority regressions; unknown/conflicting scopes and
+  release/publication claims fail. Phase 0 tests stay bound to phase 0.
+- `python3 scripts/run_product_fixtures.py --reader baseline --output <new-dir>`
+  and `--reader current` with a separate new directory. Exact D19 and current
+  readers must execute every fixture and match its restore/refusal/known-limit
+  oracle; skipped or missing cases are not a pass. Retain raw results.
+- Build, new fixture race checks, affected historical-reader regressions and CI
+  gate mutation tests. Ordinary Linux CI runs current fixtures; no product code
+  or dependency changed. Reuse prior unrelated runtime evidence explicitly.
 - `go vet ./...`, formatting, shell syntax, validation-matrix and row-writer
-  guards. Run affected Go regressions in disposable PostgreSQL/storage, never
-  a user catalog. Compile tests with `go test -c`, not TestMain execution.
+  guards. The new harness uses copied SQLite catalogs/payloads without TestMain;
+  other database checks require disposable environments, never a user catalog.
 - Frozen v1 path/byte digest and scope inspection; no dependency drift.
 
-This bounded profile adapts PRE_RELEASE_CHECKLIST applicability for Phase 0.
+This bounded profile adapts PRE_RELEASE_CHECKLIST applicability for action 2.01.
 Existing hosted gates remain enforced. Full release, platform, stress,
 benchmark and publication qualification stays with its owning action; an
 unrun gate is never a pass. Exit requires these applicable checks, coherent
-identity/authority/evidence, historical preservation and a concrete next slice.
+identity/authority/evidence, all original 2.01 deliverables, preserved baseline
+bytes and a concrete next 2.03 slice. Completion does not qualify the product.
 
 Historical validation uses `--authority historical-v1 --repo-root <frozen-v1-checkout>`
 on both validators. The root must contain its historical source and authority;
@@ -90,13 +102,14 @@ Action 2.02 proves packaging; Phase 0 only records this policy.
 
 ## Amendment register (original graph retained)
 
-Only F01 authority and F02 identity/evidence Phase 0 portions are implemented.
+F01 authority and F02 identity/evidence Phase 0 portions are complete. Action
+2.01 supplies the baseline ledger, fixed oracle and product-result contracts.
 F14 distribution policy is decided; its build proof remains future work.
 All other contracts below are future obligations, not acceptance receipts.
 
 | Finding | Owner | Contract / remaining evidence |
 |---|---|---|
-| F01 | Phase 0 / 2.01 | Explicit authority and frozen-v1 dispatch; baseline fixtures remain 2.01 work. |
+| F01 | Phase 0 / 2.01 | Explicit authority/frozen-v1 dispatch and baseline fixture evidence; later phase transitions remain bounded. |
 | F02 | Phase 0 / 2.01–2.02 | `/v2`, prerelease/provenance and evidence identities; qualified public assets remain future. |
 | F03 | 2.04–2.05, 2.08 | Private catalog-independent installation descriptor and bounded setup-intent journal; recover same create/adopt intent, authenticated unavailable status, no second history catalog. |
 | F04 | 2.03–2.05, 2.15 | Typed inspect/open-existing, create-new, migrate and owned-runtime modes; passive open never initializes/repairs/falls back. One validated catalog/root/key/profile tuple; close resources before releasing lease. |
@@ -132,8 +145,9 @@ F01–F14 informed this charter. Inspected code archive SHA-256
 is an archive identity, never a Git revision.
 
 Future handoffs for this user specify recommended Codex model, reasoning
-effort, execution scope, short rationale and completion criteria. Phase 0
-recommendation: GPT-6 Astra / Extra High for cross-cutting governance and
-identity review. Actual parent model/effort are not observable. This personal
+effort, execution scope, short rationale and completion criteria. Phase 1A
+recommendation: GPT-6 Astra / Extra High because historical readers, fixture
+oracles and compatibility promises must agree. Actual parent model/effort are
+not observable. This personal
 preference creates no contributor subscription requirement, CI gate or global
 configuration change. See [next-slice.md](next-slice.md) and the local result.

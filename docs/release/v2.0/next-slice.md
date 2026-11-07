@@ -1,68 +1,51 @@
-# Next bounded slice: Phase 1A — complete action 2.01 only
+# Next bounded slice: 2.03 passive open and recovery-cut inventory
 
-Recommended Codex model: **GPT-6 Astra**, reasoning **Extra High**. Rationale:
-historical readers, fixture expectations and future compatibility claims must
-agree without changing stored-data behavior. Record actual model and effort
-only if observable. Execution scope: local development branch,
-disposable fixtures/server/storage, focused implementation and checks, local
-commits; no publication or user-repository migration. This is a future handoff,
-not authority to implement it in Phase 0. Use the separately supplied
-`coldkeep_phase1a_2_01_codex_2026-11-07.md` for that run; no additional planning
-ceremony is required. Passive opening, recovery export/import and isolated
-restoration are subsequent bounded units of 2.03, not Phase 1A deliverables.
+Recommended model: **GPT-6 Astra**, effort **Extra High**. Scope: a separate local
+BUILD run on disposable repositories, focused implementation/tests and local
+commits; no publication, user migration or schema additions. Rationale: opening
+mode, root/key/backend identity, ownership and complete reachability must agree
+before an exporter can safely reuse them. Record actual settings only if
+observable; no account/global configuration change is implied.
 
-## Inputs and baseline
+## Inputs
 
-Read active instructions, current.json, the adopted charter and original full
-2.01 specification plus shared C02/C10 and review F03–F05/F10; consult 2.02/2.03
-to retain their future obligations. Bind actual launch HEAD and preserve
-unrelated work. Inspect `internal/application/session.go`,
-`internal/db`/`db.ConnectDB` schema bootstrap, `internal/storage` startup recovery,
-`internal/coordination`, catalog reachability and existing test fixture builders.
-Do not assume application.Open or OpenLocalStorage is passive.
+Bind the completed 2.01 candidate and preserve unrelated work. Read the original
+full 2.03 specification, shared C02/C10 and adopted F03–F05/F09/F10, the
+[baseline ledger](baseline-compatibility.md), [product contract](product-contract.md)
+and [fixed fixture oracle](../../../testdata/product-fixtures/README.md).
+Use exact D19 reader/schema/key references and copied valid/refusal fixtures.
+Inspect application.Open, db.ConnectDB/EnsureSchema, ParseStorageContext,
+OpenLocalStorage, the repository lease and all reachability queries. Existing
+constructors and successful restore are not passive-compatibility proof.
 
-Complete all of original 2.01: a source-linked baseline/compatibility ledger,
-separate application/API/catalog/payload/recovery version domains, representative
-executable fixtures, the capture/archive and exclusion contract, operating
-profile statuses, and a glossary distinguishing intent, commitment, completeness,
-verification, independent protection and installed restore results. Connect the
-small fixture harness to ordinary CI using existing disposable conventions.
-Future contracts are documented without implementing their formats or services.
+## First-unit output and completion criteria
 
-Build representative baseline fixtures with v1.13.19 reader identity
-D19 `d3581602aee2599547564322fe083baae1d52063`, pinned Go/dependencies and
-schema 17. Reuse existing fixture builders/readers and historical regression
-cases; record a small manifest of expected bytes, metadata, supported names,
-reader versions and separately retained test keys. Cover plaintext/AES-GCM,
-legacy/packed, none/zstd compression, empty files, multiple historical versions,
-snapshots, metadata, interrupted/inconsistent states and distinct native names.
-Distinguish inherited catalog history from fresh capture generations. Preserve
-unreadable fixtures as failing evidence rather than regenerating them. Retain
-the oracle and run operations on disposable working copies: existing open and
-restore paths can perform startup work or mutate catalog pins; they are not
-proof of future passive-open behavior.
+1. Define explicit inspect/open-existing inputs and ownership lifetime, distinct
+   from create, migration and corrective owned-runtime modes. Resolve one
+   immutable catalog/backend, payload/control-root, key and profile tuple.
+2. Acquire the established legacy lease before applicable repository access;
+   retain ownership through all opened resources, closing them before release.
+   Preserve `.coldkeep-control/repository.lock`; no new persistent identity or
+   catalog schema is introduced to make inspection work.
+3. Produce a bounded capability/version/layout verdict and a quiesced full-catalog
+   recovery-cut inventory: all referenced recipes, blocks/whole containers,
+   required reader/key material and incompatible/missing members. Account for
+   physical_file/snapshot_file roots and existing pins; do not infer full format
+   compatibility from a successful restore alone.
+4. Prove on disposable data that missing root/database, future schema/format,
+   wrong root, missing key and inconsistent graph refuse without creation,
+   migration, repair, replacement or fallback. Compare source schema, catalog
+   meaning and payload/control inventories before/after. Preserve failures.
+5. Prove lifetime/cancellation/partial-open cleanup and maintenance exclusion;
+   no hidden second root or ambient backend may be used. Record limits and
+   expected versus observed fixture outcomes without rewriting the oracle.
 
-## Action 2.01 completion criteria
+This first unit ends at passive opening and the recovery-cut inventory. It
+**does not complete 2.03**. Package staging/publication, constrained import and
+original-installation-loss restoration are subsequent bounded 2.03 work. All
+must pass before any schema additions or adoption claims.
 
-The baseline inventory, version-domain map, fixture manifest/harness, product
-contract, profile statuses and result glossary must agree with original 2.01.
-Map every preserved payload reader and reused operation to source or evidence.
-Record expected versus observed fixture outcomes and supported metadata/names;
-explain known baseline limits without turning them into support claims. Retain
-ordinary-CI coverage, pinned dependencies and frozen historical bytes.
-
-> Every valid selected fixture restores to its recorded bytes and supported metadata. Every deliberately invalid, incomplete, unsupported, or key-unavailable fixture produces its recorded refusal without repair, replacement, or unintended source mutation. Unexpectedly unreadable fixtures remain preserved for investigation.
-
-An unexplained valid-fixture failure leaves 2.01 incomplete. Report the actual
-launch/final identities, fixture results and applicable check evidence. Stop
-the run at 2.01; it does not qualify the product or authorize publication.
-
-## Subsequent 2.03 units: input/output/failure contract
-
-After 2.01, first bound passive existing-repository opening and recovery-cut
-inventory; then complete the integrated recovery package, import and isolated
-restoration proof. Both units remain future work requiring their own execution
-scope. Retain the full contract below before schema additions.
+## Remaining integrated 2.03 contract (subsequent unit)
 
 Input: explicit existing backend/catalog, validated payload root, legacy lease,
 separate new export destination with capacity, trusted compatible database

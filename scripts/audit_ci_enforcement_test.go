@@ -37,6 +37,24 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 	}
 }
 
+func TestAuditCIEnforcementRequiresProductFixtures(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeql := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	for _, mutation := range []string{
+		strings.Replace(workflow, "scripts/run_product_fixtures.py --reader current", "scripts/missing_fixtures.py --reader current", 1),
+		strings.Replace(workflow, "      - name: Run product baseline fixtures\n", "      - name: Run product baseline fixtures\n        if: false\n", 1),
+		strings.Replace(workflow, "      - name: Run product baseline fixtures\n", "      - name: Run product baseline fixtures\n        continue-on-error: true\n", 1),
+	} {
+		if mutation == workflow {
+			t.Fatal("product fixture gate mutation was not applied")
+		}
+		output := runAuditLocalOnly(t, mutation, codeql, true)
+		if !strings.Contains(output, "product fixture oracle") {
+			t.Fatalf("missing fixture gate diagnostic: %s", output)
+		}
+	}
+}
+
 func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T) {
 	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
 	codeqlWorkflow := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))

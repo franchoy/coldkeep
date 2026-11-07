@@ -120,6 +120,22 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Run product baseline fixtures
+        run: python3 scripts/run_product_fixtures.py --reader current --output "$RUNNER_TEMP/product-fixtures"
+
+      - name: Upload product fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-fixtures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/product-fixtures/execution.json
+            ${{ runner.temp }}/product-fixtures/fixture-results.json
+            ${{ runner.temp }}/product-fixtures/go-test.jsonl
+            ${{ runner.temp }}/product-fixtures/go-test.stderr
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Test packages (plain codec)
         env:
           COLDKEEP_CODEC: plain

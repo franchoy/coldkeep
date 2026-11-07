@@ -2544,7 +2544,7 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
     """Validate only the adopted development scope, never certify a product release."""
     result = ValidationResult("development", version)
     result.artifact_state = "development"
-    result.evidence_scope = "LOCAL_PHASE0_AUTHORITY_ONLY"
+    result.evidence_scope = "UNRESOLVED_ACTIVE_SCOPE"
     result.outstanding_obligations = ["2.01-2.13", "2.15", "2.17", "separate-publication-authorization"]
 
     def fail(message: str, path: str = CURRENT_AUTHORITY_PATH) -> None:
@@ -2555,9 +2555,16 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
         if not path.is_file() or path.is_symlink() or path.stat().st_size > 16384:
             raise ValueError("one bounded regular current authority file is required")
         state = json.loads(path.read_text(), object_pairs_hook=_unique_json_pairs)
+        scopes = {"0": "LOCAL_PHASE0_AUTHORITY_ONLY", "2.01": "LOCAL_ACTION_2_01_AUTHORITY_ONLY"}
+        phase = state.get("phase") if isinstance(state, dict) else None
+        if not isinstance(phase, str) or phase not in scopes:
+            raise ValueError("active phase must be exactly 0 or 2.01")
+        result.evidence_scope = scopes[phase]
+        if phase == "2.01" and state.get("phase_status") == "COMPLETE":
+            result.outstanding_obligations = ["2.02-2.13", "2.15", "2.17", "separate-publication-authorization"]
         expected = {
             "schema": "coldkeep-active-development/v1", "family": "v2.0",
-            "version": version, "state": "development", "phase": "0",
+            "version": version, "state": "development", "phase": phase,
             "profile": "manual-postgresql-docker", "latest_stable": "1.13.19",
             "charter": "docs/release/v2.0/README.md", "stable_target": "2.0.0",
             "stable_gate": "2.17", "module": "github.com/franchoy/coldkeep/v2",
@@ -2569,7 +2576,7 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
             if state.get(key) != value:
                 fail(f"{key} must be {value!r}")
         if version_core(version)[:2] != ("2", "0") or release_channel(version) not in {"dev", "alpha", "beta", "rc"}:
-            fail("Phase 0 requires a v2.0 development/prerelease identity")
+            fail("active development requires a v2.0 development/prerelease identity")
         if state.get("phase_status") not in {"ACTIVE", "COMPLETE"}:
             fail("phase_status must be ACTIVE or COMPLETE; product gates stay incomplete")
         if not re.fullmatch(r"[0-9a-f]{40}", str(state.get("historical_base"))):
@@ -2585,7 +2592,7 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
             fail("selected charter must be a regular file")
         mirror = {
             "SOURCE_VERSION": version, "RELEASE_FAMILY": "v2.0",
-            "RELEASE_STATE": "development", "CURRENT_PHASE": "0",
+            "RELEASE_STATE": "development", "CURRENT_PHASE": phase,
             "CURRENT_AUTHORITY": CURRENT_AUTHORITY_PATH, "LATEST_STABLE": "1.13.19",
             "V2_IMPLEMENTATION": "ACTIVE", "PRODUCT_GATES": "INCOMPLETE",
         }
@@ -2600,7 +2607,7 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                 if "never lose user data" not in prose:
                     fail("active provider must preserve the primary correctness invariant", relative)
                 if re.search(r"(?i)(?:do not implement v2|v2 implementation has not started|v2 implementation(?: and SQLite-first product defaults)? require[sd]? a separate plan)", prose):
-                    fail("active provider contradicts the adopted Phase 0 authority", relative)
+                    fail("active provider contradicts the adopted development authority", relative)
         agents = " ".join((root / "AGENTS.md").read_text().split())
         for invariant in (
             "GC must never delete reachable data.",
@@ -2612,10 +2619,10 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
             if invariant not in agents:
                 fail(f"required correctness rule missing: {invariant}", "AGENTS.md")
         if requested_state not in {"auto", "development"}:
-            fail("active Phase 0 cannot validate a release/publication state")
+            fail("active development cannot validate a release/publication state")
         env = github_context()
         if env.get("GITHUB_REF", "").startswith("refs/tags/") or env.get("GITHUB_REF_TYPE") == "tag":
-            fail("Phase 0 does not authorize or certify tag publication")
+            fail("active development does not authorize or certify tag publication")
     except (OSError, UnicodeError, ValueError, TypeError) as exc:
         fail(str(exc))
     return result

@@ -1,4 +1,4 @@
-"""Phase 0 authority and prerelease boundary regressions on disposable files."""
+"""Explicit Phase 0 / action 2.01 authority and prerelease regressions."""
 from pathlib import Path
 import json
 import re
@@ -15,7 +15,9 @@ import check_required_test_events as events
 ROOT = Path(__file__).resolve().parent.parent
 
 
-class V2AuthorityTests(unittest.TestCase):
+class V2AuthorityFixture(unittest.TestCase):
+    fixture_phase = "0"
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="coldkeep-v2-authority-")
         self.addCleanup(self.temp.cleanup)
@@ -26,6 +28,12 @@ class V2AuthorityTests(unittest.TestCase):
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, target)
+        # Bind the fixture to its declared phase, independently of live authority.
+        self.change(phase=self.fixture_phase, phase_status="ACTIVE")
+        for relative in support.V2_MIRRORS:
+            path = self.root / relative
+            path.write_text(re.sub(r"(?m)^CURRENT_PHASE: .*?$",
+                                   "CURRENT_PHASE: " + self.fixture_phase, path.read_text()))
         # Preserve real archived documents in the fixture, without touching them.
         for directory in (ROOT / "docs/release").glob("v1*"):
             if directory.is_dir():
@@ -44,12 +52,17 @@ class V2AuthorityTests(unittest.TestCase):
         self.assertTrue(governance.validate(self.root))
         self.assertTrue(release.validate(self.root, "auto").violations)
 
+
+class V2AuthorityTests(V2AuthorityFixture):
+    fixture_phase = "0"
+
     def test_current_and_historical_dispatch_are_distinct(self):
         self.assertEqual(governance.validate(self.root), [])
         result = release.validate(self.root, "auto")
         self.assertEqual(result.violations, [])
         self.assertEqual(result.active_version, "2.0.0-dev.0")
         self.assertEqual(result.state, "development")
+        self.assertEqual(result.evidence_scope, "LOCAL_PHASE0_AUTHORITY_ONLY")
         self.assertTrue(result.outstanding_obligations)
         self.assertTrue(governance.validate(self.root, "historical-v1"))
         self.assertTrue(release.validate(self.root, "auto", authority="historical-v1").violations)
@@ -185,6 +198,63 @@ class V2AuthorityTests(unittest.TestCase):
                      original + "\nV2 implementation has not started.\n"):
             path.write_text(text)
             self.assert_rejected()
+
+
+class Action201AuthorityTests(V2AuthorityFixture):
+    fixture_phase = "2.01"
+
+    def test_only_declared_action_has_its_own_scope_and_future_obligations(self):
+        for status in ("ACTIVE", "COMPLETE"):
+            with self.subTest(status=status):
+                self.change(phase_status=status)
+                self.assertEqual(governance.validate(self.root), [])
+                result = release.validate(self.root, "auto")
+                self.assertEqual(result.violations, [])
+                self.assertEqual(result.evidence_scope, "LOCAL_ACTION_2_01_AUTHORITY_ONLY")
+                self.assertEqual(result.outstanding_obligations[0],
+                                 "2.02-2.13" if status == "COMPLETE" else "2.01-2.13")
+                self.assertIn("2.17", result.outstanding_obligations)
+                self.assertTrue(governance.validate(self.root, "historical-v1"))
+
+    def test_unknown_and_conflicting_action_fail_without_phase0_fallback(self):
+        for phase in ("2.02", "2.03", "2.17", "Phase 1A", "2.1", "", None, 2.01, []):
+            with self.subTest(phase=phase):
+                self.change(phase=phase)
+                self.assert_rejected()
+                self.assertEqual(release.validate(self.root, "auto").evidence_scope,
+                                 "UNRESOLVED_ACTIVE_SCOPE")
+        self.change(phase="0")  # Known phase with contradictory 2.01 mirrors.
+        self.assert_rejected()
+
+    def test_each_stale_phase_mirror_is_rejected(self):
+        for relative in support.V2_MIRRORS:
+            path = self.root / relative
+            original = path.read_text()
+            with self.subTest(path=relative):
+                path.write_text(original.replace("CURRENT_PHASE: 2.01", "CURRENT_PHASE: 0"))
+                self.assert_rejected()
+            path.write_text(original)
+
+    def test_completion_never_qualifies_release_or_product(self):
+        self.change(phase_status="COMPLETE")
+        for requested in ("pre-release", "released", "post-release-closed"):
+            self.assertTrue(release.validate(self.root, requested).violations)
+        with patch.dict("os.environ", {"GITHUB_REF": "refs/tags/v2.0.0-dev.0"}):
+            self.assert_rejected()
+        self.change(product_gates="COMPLETE")
+        self.assert_rejected()
+
+    def test_action_preserves_corrected_history_and_version_guards(self):
+        history = self.root / "docs/release/v1.13"
+        moved = self.root / "relocated-history"
+        history.rename(moved)
+        history.symlink_to(moved, target_is_directory=True)
+        self.assert_rejected()
+        history.unlink()
+        moved.rename(history)
+        path = self.root / "internal/version/version.go"
+        path.write_text(re.sub(r"(?m)^(\s*Major\s*=\s*2)$", r"\1 + 1", path.read_text()))
+        self.assert_rejected()
 
 
 class VersionBoundaryTests(unittest.TestCase):

@@ -5,7 +5,7 @@
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 0
+CURRENT_PHASE: 2.01
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE
@@ -13,12 +13,14 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 0 is authorized in BUILD mode by the adopted 7 November
-2026 charter at `docs/release/v2.0/README.md`; `docs/release/current.json` is
-current authority. Scope: governance, module/import/version identity, affected
-evidence consumers and handoff only. Latest stable remains v1.13.19. Frozen
-`docs/release/v1*/` records retain their historical meanings and bytes.
-Do not implement daemon/storage/schema/migration/recovery features in Phase 0.
+Active v2.0 Phase 1A / action 2.01 is authorized in BUILD mode by the accepted
+7 November 2026 instruction and `docs/release/v2.0/README.md`;
+`docs/release/current.json` is current authority. Scope: baseline/compatibility
+ledger, version domains, executable fixtures, product contracts, profile
+statuses, result glossary and applicable evidence. Latest stable remains
+v1.13.19; frozen `docs/release/v1*/` records retain their historical bytes.
+Do not implement passive opening, daemon/UI, storage/schema, capture, migration
+or recovery-export/import features in 2.01. Actions 2.02 and 2.03 are separate.
 No push, PR publication, merge, tag, release or deployment is authorized.
 Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
@@ -76,7 +78,7 @@ Identify and state:
   plan remains historical evidence.
 - v1.13.15 remains published stable and immutable; planned v1 feature and
   architecture work remains closed and frozen.
-- Keep v2 implementation within adopted Phase 0; SQLite-first defaults
+- Keep v2 implementation within adopted action 2.01; SQLite-first defaults
   require their later owning phase.
 - Do not change public APIs, schemas, storage formats, or repository formats.
 - New v1 product/runtime work requires separate explicit authority; keep any

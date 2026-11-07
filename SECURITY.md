@@ -7,7 +7,7 @@
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 0
+CURRENT_PHASE: 2.01
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE
@@ -43,12 +43,14 @@ product change, or v2 implementation.
 Planned v1 feature and architecture work remains closed and frozen. Existing
 security and crash-consistency limitations below are unchanged.
 
-Active v2.0 Phase 0 is authorized in BUILD mode by the adopted 7 November
-2026 charter at `docs/release/v2.0/README.md`; `docs/release/current.json` is
-current authority. Scope: governance, module/import/version identity, affected
-evidence consumers and handoff only. Latest stable remains v1.13.19. Frozen
-`docs/release/v1*/` records retain their historical meanings and bytes.
-Do not implement daemon/storage/schema/migration/recovery features in Phase 0.
+Active v2.0 Phase 1A / action 2.01 is authorized in BUILD mode by the accepted
+7 November 2026 instruction and `docs/release/v2.0/README.md`;
+`docs/release/current.json` is current authority. Scope: baseline/compatibility
+ledger, version domains, executable fixtures, product contracts, profile
+statuses, result glossary and applicable evidence. Latest stable remains
+v1.13.19; frozen `docs/release/v1*/` records retain their historical bytes.
+Do not implement passive opening, daemon/UI, storage/schema, capture, migration
+or recovery-export/import features in 2.01. Actions 2.02 and 2.03 are separate.
 No push, PR publication, merge, tag, release or deployment is authorized.
 Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
@@ -225,6 +227,17 @@ integrity checks can be bypassed.
 ------------------------------------------------------------------------
 
 ## Known Security Limitations
+
+Action 2.01 records these limits in the source-linked
+[baseline ledger](docs/release/v2.0/baseline-compatibility.md). Process interruption
+checks do not prove sudden-power-loss durability. Existing opening may ensure
+schema or run recovery, and restore may mutate temporary pins; those paths are
+not evidence of passive inspection. The fixture harness uses disposable copies,
+separate public test-key references and expected refusals, never user data.
+Restore alone is not a full compatibility verdict: the observed metadata-only
+future-block-version gap is recorded alongside the verifier's rejection.
+No security/storage behavior is changed in 2.01. Future package import and
+independent restoration remain required before schema additions.
 
 - Crash consistency is incomplete.
 - Filesystem state and database state may temporarily diverge.
