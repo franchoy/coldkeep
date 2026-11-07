@@ -254,6 +254,9 @@ def copy_successor_fixture_source(
             paths.add(relative)
     paths.difference_update(SUCCESSOR_TERMINAL_ONLY_PATHS)
     paths.difference_update(validate_governance.V18_AUTHORITY_FILES)
+    # Current v2 authority must never leak into a deliberately historical v1
+    # fixture, regardless of whether the new selector has entered the index.
+    paths.discard(Path(release_state_support.CURRENT_AUTHORITY_PATH))
     for relative in sorted(paths):
         source = source_root / relative
         destination = destination_root / relative
@@ -4518,6 +4521,20 @@ class SuccessorFixtureSourceCopyTests(unittest.TestCase):
                 observed.append(tuple((destination / item).read_bytes() for item in pair))
             self.assertEqual(observed[0], observed[1])
             self.assertEqual(observed[0], (body, f"{digest}  {pair[0].as_posix()}\n".encode("ascii")))
+
+    def test_v2_selector_is_excluded_regardless_of_index_membership(self) -> None:
+        relative = Path(release_state_support.CURRENT_AUTHORITY_PATH)
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            base = self.make_source(source)
+            write(source, relative.as_posix(), '{"family":"v2.0"}\n')
+            for membership in ("untracked", "tracked"):
+                if membership == "tracked":
+                    git(source, "add", relative.as_posix())
+                destination = Path(directory) / membership
+                copy_successor_fixture_source(source, destination, compatibility_base=base)
+                self.assertFalse((destination / relative).exists())
 
     def test_terminal_reference_is_excluded_regardless_of_index_membership(self) -> None:
         relative = validate_governance.TERMINAL_DISPOSITION_REFERENCE_FILE
