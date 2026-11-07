@@ -13504,10 +13504,11 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
         # immutable v19 source identity, rather than inheriting current HEAD.
         with tempfile.TemporaryDirectory(prefix="coldkeep-v19-diagnostic-") as directory:
             root = Path(directory)
-            version_source = git(
-                ACTIVE_FINAL_SNAPSHOT_TEST_ROOT, "show",
-                release_state_support.V11319_RELEASE_COMMIT + ":internal/version/version.go",
-            )
+            version_source = run_process(
+                [resolved_executable("git"), "-C", str(ACTIVE_FINAL_SNAPSHOT_TEST_ROOT),
+                 "show", release_state_support.V11319_RELEASE_COMMIT + ":internal/version/version.go"],
+                check=True,
+            ).stdout
             write(root, "internal/version/version.go", version_source)
             recorder.bind_sources(root, SCRIPT)
         self.assertEqual(
