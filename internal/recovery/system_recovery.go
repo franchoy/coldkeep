@@ -12,11 +12,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/fsx"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/utils_env"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/utils_env"
 )
 
 type recoveryStats struct {

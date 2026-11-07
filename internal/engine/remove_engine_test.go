@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/container"
-	dbpkg "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/storage"
-	verifypkg "github.com/franchoy/coldkeep/internal/verify"
-	"github.com/franchoy/coldkeep/tests/utils/removestate"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	dbpkg "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+	verifypkg "github.com/franchoy/coldkeep/v2/internal/verify"
+	"github.com/franchoy/coldkeep/v2/tests/utils/removestate"
+	"github.com/franchoy/coldkeep/v2/tests/utils/testgate"
 )
 
 type sharedChunkRemoveFixture struct {

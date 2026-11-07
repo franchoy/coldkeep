@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 type recordingDownstreamReader struct {

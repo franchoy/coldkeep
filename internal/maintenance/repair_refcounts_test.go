@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 	_ "github.com/mattn/go-sqlite3"
 )
 

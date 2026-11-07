@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/testutil/backendtest"
 )
 
 func TestVerifyFileDeepRejectsPackedChunkHashMismatch(t *testing.T) {

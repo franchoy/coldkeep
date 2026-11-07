@@ -9,10 +9,10 @@ import (
 	"sort"
 	"strings"
 
-	chunkmeta "github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/retention"
-	"github.com/franchoy/coldkeep/internal/verify"
+	chunkmeta "github.com/franchoy/coldkeep/v2/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/retention"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 // PlanOptions configures a GC plan computation.

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/testutil/backendtest"
 )
 
 const (

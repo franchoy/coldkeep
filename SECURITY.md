@@ -4,24 +4,14 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.19
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
-RELEASE_STATE: POST_RELEASE_CLOSED
-TRACKED_PUBLICATION_MATERIAL: FROZEN
-V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
-V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
-CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
-FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 15/15
-V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
-V1_13_19_PUBLICATION: COMPLETE
-V1_X: CLOSED_AND_FROZEN
-V2_IMPLEMENTATION: NOT_STARTED
+SOURCE_VERSION: 2.0.0-dev.0
+RELEASE_FAMILY: v2.0
+RELEASE_STATE: development
+CURRENT_PHASE: 0
+CURRENT_AUTHORITY: docs/release/current.json
+LATEST_STABLE: 1.13.19
+V2_IMPLEMENTATION: ACTIVE
+PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -53,12 +43,16 @@ product change, or v2 implementation.
 Planned v1 feature and architecture work remains closed and frozen. Existing
 security and crash-consistency limitations below are unchanged.
 
-v1.13.14, v1.13.15, and the v1.13.16 failed-publication disposition remain
-immutable historical release state. V2 planning
-review is authorized. V2 implementation has not started and requires a
-separate plan.
+Active v2.0 Phase 0 is authorized in BUILD mode by the adopted 7 November
+2026 charter at `docs/release/v2.0/README.md`; `docs/release/current.json` is
+current authority. Scope: governance, module/import/version identity, affected
+evidence consumers and handoff only. Latest stable remains v1.13.19. Frozen
+`docs/release/v1*/` records retain their historical meanings and bytes.
+Do not implement daemon/storage/schema/migration/recovery features in Phase 0.
+No push, PR publication, merge, tag, release or deployment is authorized.
+Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
-It is suitable for controlled production environments where:
+The published v1 engine is suitable for controlled production environments where:
 
 - operational assumptions are respected (supported database-backend
     correctness, filesystem durability)

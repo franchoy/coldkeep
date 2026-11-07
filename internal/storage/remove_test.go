@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/tests/testdb"
-	"github.com/franchoy/coldkeep/tests/utils/removestate"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/tests/testdb"
+	"github.com/franchoy/coldkeep/v2/tests/utils/removestate"
 	_ "github.com/mattn/go-sqlite3"
 )
 

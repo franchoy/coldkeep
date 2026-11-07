@@ -20,6 +20,12 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v2.0.0-dev.0 — Phase 0 development
+
+- Adopt explicit v2 authority and manual PostgreSQL Docker target; product gates remain incomplete.
+- Move active Go module/import/evidence identities to `/v2` with prerelease and separate build provenance.
+- Preserve catalog/payload behavior, dependencies and frozen v1 release records.
+
 ## v1.13.19 - 2026-11-02 — Final v1.x Tag-Certification Recovery
 
 Protected integration completed at D19

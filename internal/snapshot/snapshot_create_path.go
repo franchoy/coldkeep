@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
 )
 
 const snapshotMemberPathUnrepresentable = "SNAPSHOT_MEMBER_PATH_UNREPRESENTABLE"

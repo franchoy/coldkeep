@@ -11,8 +11,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	idb "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
+	idb "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 // openSnapshotTestDB opens an in-memory SQLite DB with the coldkeep schema applied.

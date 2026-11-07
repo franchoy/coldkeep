@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
 )
 
 func TestNewV17CompatRestoreServiceHasV17Resolver(t *testing.T) {

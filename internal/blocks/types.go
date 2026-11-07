@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
+	storagemetadata "github.com/franchoy/coldkeep/v2/internal/storage/metadata"
 )
 
 type Codec string

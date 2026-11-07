@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/fsx"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
 )
 
 func writeContainerHeaderFixture(t *testing.T, path string, major uint16, maxSize int64) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 const (

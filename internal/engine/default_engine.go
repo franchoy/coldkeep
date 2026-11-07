@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/observability"
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	"github.com/franchoy/coldkeep/internal/storage"
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 // Config holds configuration for a DefaultEngine.

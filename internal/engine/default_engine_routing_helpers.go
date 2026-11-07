@@ -9,15 +9,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/execution"
-	internalgc "github.com/franchoy/coldkeep/internal/gc"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/execution"
+	internalgc "github.com/franchoy/coldkeep/v2/internal/gc"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 func isSnapshotDiffSummaryFastPath(req SnapshotDiffRequest) bool {

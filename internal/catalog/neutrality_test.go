@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
 )
 
 // TestCatalogContractGraphsAreNeutral walks every exported request/result
@@ -77,7 +77,7 @@ func assertCatalogMethodContractCovered(t *testing.T, method string, typ reflect
 	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
 		typ = typ.Elem()
 	}
-	if typ.PkgPath() != "github.com/franchoy/coldkeep/internal/catalog" || typ.Kind() != reflect.Struct {
+	if typ.PkgPath() != "github.com/franchoy/coldkeep/v2/internal/catalog" || typ.Kind() != reflect.Struct {
 		return
 	}
 	if !covered[typ] {
@@ -106,11 +106,11 @@ func checkCatalogContractType(t *testing.T, typ reflect.Type, path string, seen 
 		t.Errorf("%s exposes executable or unsafe type %v", path, typ)
 		return
 	}
-	if pkg := typ.PkgPath(); pkg != "" && pkg != "time" && pkg != "github.com/franchoy/coldkeep/internal/catalog" {
+	if pkg := typ.PkgPath(); pkg != "" && pkg != "time" && pkg != "github.com/franchoy/coldkeep/v2/internal/catalog" {
 		t.Errorf("%s exposes non-neutral package type %v from %q", path, typ, pkg)
 		return
 	}
-	if typ.Kind() != reflect.Struct || (typ.PkgPath() != "" && typ.PkgPath() != "github.com/franchoy/coldkeep/internal/catalog") {
+	if typ.Kind() != reflect.Struct || (typ.PkgPath() != "" && typ.PkgPath() != "github.com/franchoy/coldkeep/v2/internal/catalog") {
 		return
 	}
 	for i := 0; i < typ.NumField(); i++ {

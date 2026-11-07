@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	dbpkg "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
+	dbpkg "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 func TestRemoveStoredPathsRejectsCancelledContext(t *testing.T) {

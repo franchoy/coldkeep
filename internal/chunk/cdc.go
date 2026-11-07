@@ -1,6 +1,6 @@
 package chunk
 
-import "github.com/franchoy/coldkeep/internal/chunk/simplecdc"
+import "github.com/franchoy/coldkeep/v2/internal/chunk/simplecdc"
 
 // MaxChunkSize is the hard upper bound on chunk payload size.
 // Sourced from the concrete v1-simple-rolling implementation.

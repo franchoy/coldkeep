@@ -178,12 +178,14 @@ require_executable_file() {
   fi
 }
 
+# Phase 0: approved wrapper bodies differ from v1 only by the /v2 package identity.
+# Preserve exact body checking and all fail-closed structural/evidence checks.
 ck015_expected_wrapper_sha256() {
   case "$1" in
-    hosted-sqlite) printf '%s\n' '3865079f0a221bc1ed0fe3ef6b6617214e6054944a849b09d2874cc705662aa8' ;;
-    hosted-postgres) printf '%s\n' '6a0567977980e428115791a843cc2a515bb8880429af309ac5f9f4d1f63a329f' ;;
-    local-sqlite) printf '%s\n' '4caf6517976adcd50eee7c416c679b4653086ac0a61fc1a10e48df74f7799357' ;;
-    local-postgres) printf '%s\n' '8d84858ae08bab569980bdc5e1b466168c9a4441507834770b3e6907eda31f89' ;;
+    hosted-sqlite) printf '%s\n' 'f6925c8a42961f5892bffa71cdc2b3a44e7b2ff2d72d7d810cab1ace10ea107d' ;;
+    hosted-postgres) printf '%s\n' 'e7c53249e99aec80750c7d7ca6e8c1c0c79e493a30f65893219e32b4905a7f1d' ;;
+    local-sqlite) printf '%s\n' '92b9319651a035042c2cc83ecfcaa64b319dfd0a9d376e671f2ff2b0d9b38040' ;;
+    local-postgres) printf '%s\n' 'aa7b7f5ea152e74b87caa0e0a7ec3fda570295ef8e5566de7167a4b19cf681e5' ;;
     *)
       echo "[audit] ERROR: unknown CK-015 approved wrapper slot: $1" >&2
       return 1
@@ -1581,7 +1583,7 @@ check_local_workflow() {
 	    require_content_pattern "$ck015_sqlite_block" '^          COLDKEEP_CODEC: plain$' 'CK-015 SQLite proof freezes plain codec' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" 'unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'CK-015 SQLite proof clears inherited compression and long-run settings' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" 'profile=ck015-initial-lookup-sqlite' 'CK-015 SQLite proof freezes checker profile' || check_status=1
-	    require_content_pattern "$ck015_sqlite_block" 'package=github\.com/franchoy/coldkeep/internal/storage' 'CK-015 SQLite proof binds storage package' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'package=github\.com/franchoy/coldkeep/v2/internal/storage' 'CK-015 SQLite proof binds storage package' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" 'prefix="ck015-sqlite-\$\{GITHUB_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{GITHUB_JOB\}-plain"' 'CK-015 SQLite evidence prefix binds candidate/run/attempt/job/leg' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" "selector='\\^\\(.*TestCKV11316015InitialLookupSupportedStatusRoutingSQLite.*\\)\\$'" 'CK-015 SQLite selector is top-level anchored' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite' 'CK-015 SQLite operational-error selector' || check_status=1
@@ -1614,7 +1616,7 @@ check_local_workflow() {
 	    require_content_pattern "$ck015_postgres_block" 'DB_SSLMODE:\s*disable' 'CK-015 PostgreSQL proof sets DB SSL mode' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" 'unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'CK-015 PostgreSQL proof clears schema/compression/long-run inheritance' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" 'profile=ck015-initial-lookup-postgres' 'CK-015 PostgreSQL proof freezes checker profile' || check_status=1
-	    require_content_pattern "$ck015_postgres_block" 'package=github\.com/franchoy/coldkeep/internal/storage' 'CK-015 PostgreSQL proof binds storage package' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'package=github\.com/franchoy/coldkeep/v2/internal/storage' 'CK-015 PostgreSQL proof binds storage package' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" 'prefix="ck015-postgres-\$\{GITHUB_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{GITHUB_JOB\}-plain"' 'CK-015 PostgreSQL evidence prefix binds candidate/run/attempt/job/leg' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" "selector='\\^\\(.*TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies.*\\)\\$'" 'CK-015 PostgreSQL selector is top-level anchored' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback' 'CK-015 PostgreSQL operational-error selector' || check_status=1
@@ -1768,7 +1770,7 @@ check_local_workflow() {
   require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.10'" 'source installation pins Go 1.26.10' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
-  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.19" 'source installation proves binary identity' || check_status=1
+  require_content_pattern "$source_install_block" "coldkeep version 2\.0\.0-dev\.0" 'source installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'remote candidate installation covers Linux, macOS, and Windows' || check_status=1
   require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.10'" 'remote candidate installation pins Go 1.26.10' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'cache:\s*false' 'remote candidate installation does not require checkout-backed Go caching' || check_status=1
@@ -1820,7 +1822,7 @@ check_local_workflow() {
   require_content_pattern "$remote_candidate_install_block" 'go install "\$\{module\}/cmd/coldkeep@\$\{CANDIDATE_QUERY\}"' 'Unix public installation uses the selected candidate query' || check_status=1
   # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'go install "\$module/cmd/coldkeep@\$env:CANDIDATE_QUERY"' 'Windows public installation uses the selected candidate query' || check_status=1
-  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.19" 'remote candidate installation proves binary identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "coldkeep version 2\.0\.0-dev\.0" 'remote candidate installation proves binary identity' || check_status=1
   require_content_literal "$remote_candidate_install_block" "head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.10\$'" 'Unix remote candidate installation proves binary compiler identity' || check_status=1
   require_content_literal "$remote_candidate_install_block" "-notmatch ': go1\\.26\\.10\$') { throw 'binary Go toolchain identity mismatch' }" 'Windows remote candidate installation proves binary compiler identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'grep -F .*resolved_version.*binary-build-info\.txt' 'Unix remote installation proves module build metadata' || check_status=1
@@ -1929,9 +1931,9 @@ check_local_workflow() {
     check_ck015_proof_wrapper "$ck015_postgres_local_block" 'local CK-015 PostgreSQL wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' local local-postgres
   fi
 
-  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
-  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/verify' 1 'required-event profiles bind the internal verify profile' || check_status=1
-  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/storage' 2 'required-event profiles bind storage package for both CK-015 profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/v2/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/v2/internal/verify' 1 'required-event profiles bind the internal verify profile' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/v2/internal/storage' 2 'required-event profiles bind storage package for both CK-015 profiles' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" '"ck015-initial-lookup-sqlite"' 1 'required-event profiles contain exact CK-015 SQLite profile once' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" '"ck015-initial-lookup-postgres"' 1 'required-event profiles contain exact CK-015 PostgreSQL profile once' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite' 1 'CK-015 SQLite profile requires operational-error proof' || check_status=1
@@ -1988,7 +1990,7 @@ check_local_workflow() {
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm' 'independent-process AES-GCM execution proof' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6KilledLeaseHolderReleasesRepository' 'killed-holder execution proof' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6LiveGCExcludesIndependentStoreProcess' 'live-GC execution proof' || check_status=1
-      require_content_pattern "$adversarial_validation_block" 'github.com/franchoy/coldkeep/tests/adversarial' 'adversarial coordination execution proof binds the adversarial package' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'github.com/franchoy/coldkeep/v2/tests/adversarial' 'adversarial coordination execution proof binds the adversarial package' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'json\.loads\(raw_line\)' 'adversarial coordination execution proof rejects malformed JSON' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'if not events:' 'adversarial coordination execution proof rejects empty JSON' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'event\.get\("Action"\) == "skip"' 'adversarial coordination execution proof rejects required skips' || check_status=1

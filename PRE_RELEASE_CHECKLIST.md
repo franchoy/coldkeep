@@ -1,5 +1,11 @@
 # Pre-release Checklist
 
+Active development: [v2.0 Phase 0](docs/release/v2.0/README.md), selected by
+[docs/release/current.json](docs/release/current.json). Use its bounded local
+validation profile for this phase. Full release/publication procedures below
+remain applicable to their declared release scopes; frozen v1 certification
+is not repeated to begin v2. Go/dependency pins and correctness gates remain.
+
 Use this checklist before opening a correctness-sensitive PR or cutting a release tag.
 
 Audience:
@@ -302,7 +308,7 @@ python3 scripts/validate_release_state.py --state auto
 
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.19"
+expected_version="2.0.0-dev.0"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -330,7 +336,8 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.19 in both human and JSON modes.
+Expected: the active development CLI reports exactly 2.0.0-dev.0 in both human
+and JSON modes. The published stable v1.13.19 identity is separate.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
@@ -448,7 +455,7 @@ status_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.statu
 metadata_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.metadata"
 selector='^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$'
 profile=ck015-initial-lookup-sqlite
-package=github.com/franchoy/coldkeep/internal/storage
+package=github.com/franchoy/coldkeep/v2/internal/storage
 for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
   if [ -e "$target" ]; then
     echo "refusing to reuse CK-015 SQLite evidence path: $target" >&2
@@ -538,7 +545,7 @@ status_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.statu
 metadata_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.metadata"
 selector='^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$'
 profile=ck015-initial-lookup-postgres
-package=github.com/franchoy/coldkeep/internal/storage
+package=github.com/franchoy/coldkeep/v2/internal/storage
 for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
   if [ -e "$target" ]; then
     echo "refusing to reuse CK-015 PostgreSQL evidence path: $target" >&2

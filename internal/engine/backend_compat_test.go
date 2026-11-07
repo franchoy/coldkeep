@@ -8,7 +8,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 // TestEnginePublicTypesDoNotExposeBackendSpecificFields verifies that

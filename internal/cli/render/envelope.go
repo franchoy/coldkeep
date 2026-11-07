@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
 )
 
 // cliJSONSchemaVersion tracks the CLI JSON envelope contract version.

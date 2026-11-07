@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/db"
 )
 
 // LogicalFileInfo is lightweight metadata used by batch planning.

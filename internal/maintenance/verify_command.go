@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 type SystemAuditSummary struct {

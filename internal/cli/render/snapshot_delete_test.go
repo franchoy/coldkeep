@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
 )
 
 func TestSnapshotDeleteWarningsWithChildren(t *testing.T) {

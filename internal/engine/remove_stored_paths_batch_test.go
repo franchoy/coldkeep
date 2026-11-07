@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	dbpkg "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/tests/utils/removestate"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
+	dbpkg "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/tests/utils/removestate"
+	"github.com/franchoy/coldkeep/v2/tests/utils/testgate"
 )
 
 func TestRemoveStoredPathsMixedBatchDecrementsRefCountOncePerSuccessfulMapping(t *testing.T) {

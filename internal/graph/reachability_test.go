@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	idb "github.com/franchoy/coldkeep/internal/db"
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	idb "github.com/franchoy/coldkeep/v2/internal/db"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/db"
 )
 
 type SimulatedWriter struct {

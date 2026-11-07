@@ -16,8 +16,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Optional
 
 
-SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
-CHANGELOG_HEADING = re.compile(r"^## (?:v|\[)(\d+\.\d+\.\d+)(?:\]|\b)(.*)$")
+SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+SEMVER_PRE_ID = rf"(?:{SEMVER_NUMBER}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+SEMVER_TEXT = rf"{SEMVER_NUMBER}\.{SEMVER_NUMBER}\.{SEMVER_NUMBER}(?:-{SEMVER_PRE_ID}(?:\.{SEMVER_PRE_ID})*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+SEMVER = re.compile(rf"^{SEMVER_TEXT}$")
+CHANGELOG_HEADING = re.compile(rf"^## (?:v|\[)({SEMVER_TEXT})(?:\]|(?=\s|$))(.*)$")
 PHASE_HEADING = re.compile(r"^## Phase (\d+)\b")
 METADATA = re.compile(r"^\*\*(Release|Status|Branch|Phase status):\*\*\s*(.*)$")
 LIFECYCLE_BOUNDARY = re.compile(
@@ -771,19 +774,13 @@ class DiagnosticRecorder:
         """Measure loaded implementation bytes once at startup."""
         self.root = root
         try:
-            version_source = (root / "internal/version/version.go").read_text(
-                encoding="utf-8"
-            )
-            version_match = re.search(
-                r"(?m)^\s*Major\s*=\s*(\d+)\s*$.*?"
-                r"^\s*Minor\s*=\s*(\d+)\s*$.*?"
-                r"^\s*Patch\s*=\s*(\d+)\s*$",
-                version_source,
-                re.DOTALL,
-            )
-            source_version = (
-                ".".join(version_match.groups()) if version_match else None
-            )
+            source_version = parse_source_version(root, ValidationResult(None, None))
+            if source_version is not None and version_core(source_version)[0] == "2":
+                self.source_paths = (
+                    "scripts/validate_release_state.py", "scripts/release_state_support.py",
+                    "internal/version/version.go", "go.mod", CURRENT_AUTHORITY_PATH,
+                    "docs/release/v2.0/README.md",
+                )
             if source_version in self._FINAL_SNAPSHOT_SOURCE_PATHS:
                 self.source_paths = self._FINAL_SNAPSHOT_SOURCE_PATHS[
                     source_version
@@ -2411,7 +2408,7 @@ def validate_root(value: Optional[str]) -> Path:
 
 
 def parse_source_version(root: Path, result: ValidationResult) -> Optional[str]:
-    """Parse the three authoritative Go version constants."""
+    """Parse the complete source identity; never discard a prerelease suffix."""
     path = "internal/version/version.go"
     text = (root / path).read_text(encoding="utf-8")
     parts: list[str] = []
@@ -2432,6 +2429,20 @@ def parse_source_version(root: Path, result: ValidationResult) -> Optional[str]:
             return None
         parts.append(matches[0])
     version = ".".join(parts)
+    declarations = re.findall(r'(?m)^\s*(?:const\s+)?Prerelease\b([^\n]*)', text)
+    if int(parts[0]) >= 2 and not declarations:
+        result.add("CKRS001", path, 0, "v2+ source requires an explicit Prerelease literal (empty for stable)")
+        return None
+    if declarations:
+        if len(declarations) != 1 or re.fullmatch(r'\s*=\s*"[^"\n]*"\s*(?://[^\n]*)?', declarations[0]) is None:
+            result.add("CKRS001", path, 0, "Prerelease must be one literal string")
+            return None
+        prerelease = declarations[0].split('"')[1]
+        if prerelease:
+            version += "-" + prerelease
+            if "+" in prerelease:
+                result.add("CKRS001", path, 0, "build provenance must be separate from Prerelease")
+                return None
     if not SEMVER.fullmatch(version):
         result.add(
             "CKRS001",
@@ -2445,10 +2456,151 @@ def parse_source_version(root: Path, result: ValidationResult) -> Optional[str]:
 
 def version_from_release(value: str) -> Optional[tuple[str, str]]:
     """Parse version and title from a release metadata field."""
-    match = re.search(r"`?(v\d+\.\d+\.\d+)\s+—\s+([^`]+?)`?$", value)
+    match = re.fullmatch(rf"`?(v{SEMVER_TEXT})\s+—\s+([^`]+?)`?", value)
     if not match:
         return None
     return match.group(1)[1:], match.group(2).strip()
+
+
+CURRENT_AUTHORITY_PATH = "docs/release/current.json"
+V2_MIRRORS = (
+    "AGENTS.md", ".github/copilot-instructions.md",
+    ".github/instructions/ci.instructions.md",
+    ".github/prompts/critical-path-coverage.prompt.md",
+    ".github/prompts/regression-fix.prompt.md", "README.md", "SECURITY.md",
+)
+
+
+def version_core(version: str) -> tuple[str, str, str]:
+    if SEMVER.fullmatch(version) is None:
+        raise ValueError(f"invalid semantic version: {version!r}")
+    return tuple(version.split("+", 1)[0].split("-", 1)[0].split("."))
+
+
+def release_channel(version: str) -> str:
+    version_core(version)
+    identity = version.split("+", 1)[0]
+    return identity.split("-", 1)[1].split(".", 1)[0] if "-" in identity else "stable"
+
+
+def validate_distribution_identity(version: str, module: str, tag: str | None = None,
+                                   artifact_version: str | None = None) -> list[str]:
+    """Exact identity check usable before release packaging exists."""
+    try:
+        major, _, _ = version_core(version)
+    except ValueError as exc:
+        return [str(exc)]
+    expected = "github.com/franchoy/coldkeep" + (f"/v{major}" if int(major) >= 2 else "")
+    errors = []
+    if module != expected:
+        errors.append(f"module must be {expected}")
+    if tag is not None and tag != "v" + version:
+        errors.append("tag must equal the complete source version")
+    if artifact_version is not None and artifact_version != version:
+        errors.append("artifact must equal the complete source version")
+    return errors
+
+
+def frozen_v1_digest(root: Path) -> str:
+    """Bind exact historical release paths and bytes, including additions/removals."""
+    digest = hashlib.sha256()
+    for path in sorted((root / "docs/release").glob("v1*/**/*")):
+        if path.is_symlink():
+            raise ValueError(f"historical symlink: {path.relative_to(root)}")
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def _unique_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate authority key: {key}")
+        result[key] = value
+    return result
+
+
+def validate_v2_authority(root: Path, version: str, requested_state: str = "auto") -> ValidationResult:
+    """Validate only the adopted development scope, never certify a product release."""
+    result = ValidationResult("development", version)
+    result.artifact_state = "development"
+    result.evidence_scope = "LOCAL_PHASE0_AUTHORITY_ONLY"
+    result.outstanding_obligations = ["2.01-2.13", "2.15", "2.17", "separate-publication-authorization"]
+
+    def fail(message: str, path: str = CURRENT_AUTHORITY_PATH) -> None:
+        result.add("CKRS021", path, 0, message)
+
+    try:
+        path = root / CURRENT_AUTHORITY_PATH
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 16384:
+            raise ValueError("one bounded regular current authority file is required")
+        state = json.loads(path.read_text(), object_pairs_hook=_unique_json_pairs)
+        expected = {
+            "schema": "coldkeep-active-development/v1", "family": "v2.0",
+            "version": version, "state": "development", "phase": "0",
+            "profile": "manual-postgresql-docker", "latest_stable": "1.13.19",
+            "charter": "docs/release/v2.0/README.md", "stable_target": "2.0.0",
+            "stable_gate": "2.17", "module": "github.com/franchoy/coldkeep/v2",
+            "product_gates": "INCOMPLETE", "implementation": "ACTIVE",
+        }
+        if not isinstance(state, dict) or set(state) != set(expected) | {"phase_status", "historical_base", "frozen_v1_sha256"}:
+            raise ValueError("unknown or missing authority fields")
+        for key, value in expected.items():
+            if state.get(key) != value:
+                fail(f"{key} must be {value!r}")
+        if version_core(version)[:2] != ("2", "0") or release_channel(version) not in {"dev", "alpha", "beta", "rc"}:
+            fail("Phase 0 requires a v2.0 development/prerelease identity")
+        if state.get("phase_status") not in {"ACTIVE", "COMPLETE"}:
+            fail("phase_status must be ACTIVE or COMPLETE; product gates stay incomplete")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(state.get("historical_base"))):
+            fail("historical_base must identify the actual frozen Git launch revision")
+        if frozen_v1_digest(root) != state.get("frozen_v1_sha256"):
+            fail("frozen v1 release paths/bytes changed")
+        module_text = (root / "go.mod").read_text()
+        modules = re.findall(r"(?m)^module (\S+)$", module_text)
+        for message in validate_distribution_identity(version, modules[0] if len(modules) == 1 else ""):
+            fail(message, "go.mod")
+        charter = root / expected["charter"]
+        if not charter.is_file() or charter.is_symlink():
+            fail("selected charter must be a regular file")
+        mirror = {
+            "SOURCE_VERSION": version, "RELEASE_FAMILY": "v2.0",
+            "RELEASE_STATE": "development", "CURRENT_PHASE": "0",
+            "CURRENT_AUTHORITY": CURRENT_AUTHORITY_PATH, "LATEST_STABLE": "1.13.19",
+            "V2_IMPLEMENTATION": "ACTIVE", "PRODUCT_GATES": "INCOMPLETE",
+        }
+        for relative in V2_MIRRORS:
+            text = (root / relative).read_text()
+            blocks = re.findall(r"<!-- coldkeep-current-state:start -->\s*```text\n(.*?)\n```\s*<!-- coldkeep-current-state:end -->", text, re.S)
+            actual = [f"{key}: {value}" for key, value in mirror.items()]
+            if len(blocks) != 1 or blocks[0].splitlines() != actual:
+                fail("current-state mirror must exactly match selected v2 authority", relative)
+            if relative in V2_MIRRORS[:5]:
+                prose = " ".join(text.split())
+                if "never lose user data" not in prose:
+                    fail("active provider must preserve the primary correctness invariant", relative)
+                if re.search(r"(?i)(?:do not implement v2|v2 implementation has not started|v2 implementation(?: and SQLite-first product defaults)? require[sd]? a separate plan)", prose):
+                    fail("active provider contradicts the adopted Phase 0 authority", relative)
+        agents = " ".join((root / "AGENTS.md").read_text().split())
+        for invariant in (
+            "GC must never delete reachable data.",
+            "Restore must not write outside its intended destination.",
+            "Verify must fail closed on inconsistent catalog or storage state.",
+            "Recovery must not legitimize corrupt mappings.",
+            "Packed and legacy storage behavior must remain aligned.",
+        ):
+            if invariant not in agents:
+                fail(f"required correctness rule missing: {invariant}", "AGENTS.md")
+        if requested_state not in {"auto", "development"}:
+            fail("active Phase 0 cannot validate a release/publication state")
+        env = github_context()
+        if env.get("GITHUB_REF", "").startswith("refs/tags/") or env.get("GITHUB_REF_TYPE") == "tag":
+            fail("Phase 0 does not authorize or certify tag publication")
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        fail(str(exc))
+    return result
 
 
 def phase_blocks(doc: Document) -> list[tuple[int, int, list[str]]]:

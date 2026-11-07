@@ -319,7 +319,7 @@ jobs:
           metadata_file="$diag_dir/$prefix.metadata"
           selector='^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$'
           profile=ck015-initial-lookup-sqlite
-          package=github.com/franchoy/coldkeep/internal/storage
+          package=github.com/franchoy/coldkeep/v2/internal/storage
 
           for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
             if [ -e "$target" ]; then
@@ -438,7 +438,7 @@ jobs:
           metadata_file="$diag_dir/$prefix.metadata"
           selector='^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$'
           profile=ck015-initial-lookup-postgres
-          package=github.com/franchoy/coldkeep/internal/storage
+          package=github.com/franchoy/coldkeep/v2/internal/storage
           postgres_image='postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825'
 
           for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
@@ -563,10 +563,10 @@ jobs:
 
           output_file = sys.argv[1]
           expected = {
-              "github.com/franchoy/coldkeep/internal/testutil/backendtest": [
+              "github.com/franchoy/coldkeep/v2/internal/testutil/backendtest": [
                   r"^TestForEachSQLiteFixture/postgres$",
               ],
-              "github.com/franchoy/coldkeep/internal/catalog": [
+              "github.com/franchoy/coldkeep/v2/internal/catalog": [
                   r"^TestCatalogContractFindLogicalFileAcrossBackends/postgres$",
                   r"^TestCatalogContractFindPhysicalFilesAcrossBackends/postgres$",
                   r"^TestCatalogContractCurrentFileQueriesAcrossBackends/postgres$",
@@ -579,7 +579,7 @@ jobs:
                   r"^TestCatalogContractChunkPlacementsAcrossBackends/postgres$",
                   r"^TestCatalogContractRestorePlansAcrossBackends/postgres$",
               ],
-              "github.com/franchoy/coldkeep/internal/db": [
+              "github.com/franchoy/coldkeep/v2/internal/db": [
                   r"^TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve$",
                   r"^TestSCH001AndSCH002BootstrapVersionAndIdempotency/postgres$",
                   r"^TestSCH003CurrentSchemaMetadata/postgres$",
@@ -595,7 +595,7 @@ jobs:
                   r"^TestBackendBlockedLockCancellationAcrossBackends/postgres$",
                   r"^TestMutationRowsAffectedContractAcrossBackends/postgres$",
               ],
-              "github.com/franchoy/coldkeep/internal/engine": [
+              "github.com/franchoy/coldkeep/v2/internal/engine": [
                   r"^TestRemoveByIDPostgresPreservesSharedChunks$",
                   r"^TestEngineCurrentFilesAndConfigurationAcrossBackends/postgres$",
                   r"^TestEngineDoctorAcrossBackends/postgres$",
@@ -619,13 +619,13 @@ jobs:
                   r"^TestEngineRepairTypedBoundaryErrors/postgres$",
                   r"^TestEngineRepairFailFastOnInvariantViolation/postgres$",
               ],
-              "github.com/franchoy/coldkeep/internal/maintenance": [
+              "github.com/franchoy/coldkeep/v2/internal/maintenance": [
                   r"^TestGCAdvisoryLockUsesDedicatedSessionAndReleases$",
                   r"^TestRunGCReleasesAdvisoryLockAfterOperationFailure$",
                   r"^TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession$",
                   r"^TestRunGCLiveRefusesSingleConnectionPool$",
               ],
-              "github.com/franchoy/coldkeep/internal/container": [
+              "github.com/franchoy/coldkeep/v2/internal/container": [
                   r"^TestContainerRowLockIntegrationAcrossBackends/postgres$",
               ],
           }
@@ -954,7 +954,7 @@ jobs:
           import sys
 
           log_file = sys.argv[1]
-          package = "github.com/franchoy/coldkeep/tests/adversarial"
+          package = "github.com/franchoy/coldkeep/v2/tests/adversarial"
           expected = [
               r"^TestAdversarialG6IndependentProcessRepositoryContention/plain$",
               r"^TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm$",
@@ -1593,7 +1593,7 @@ jobs:
           cc --version
           CGO_ENABLED=1 go build ./cmd/coldkeep
           CGO_ENABLED=1 go install ./cmd/coldkeep
-          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 1.13.19'
+          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 2.0.0-dev.0'
           {
             echo "GO_VERSION=$(go version)"
             echo "GOTOOLCHAIN=$(go env GOTOOLCHAIN)"
@@ -1616,7 +1616,7 @@ jobs:
           go build ./cmd/coldkeep
           go install ./cmd/coldkeep
           $binary = Join-Path (go env GOPATH) 'bin/coldkeep.exe'
-          if ((& $binary version) -ne 'coldkeep version 1.13.19') { throw 'binary identity mismatch' }
+          if ((& $binary version) -ne 'coldkeep version 2.0.0-dev.0') { throw 'binary identity mismatch' }
           "GO_VERSION=$(go version)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOTOOLCHAIN=$(go env GOTOOLCHAIN)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOOS=$(go env GOOS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
@@ -1664,7 +1664,7 @@ jobs:
           export GOPROXY=direct
           export GOWORK=off
 
-          module='github.com/franchoy/coldkeep'
+          module='github.com/franchoy/coldkeep/v2'
           EXPECTED_ORIGIN_SHA="${TRIGGER_SHA}"
           EXPECTED_VERSION=''
           PUBLIC_TAG_OBJECT_SHA=''
@@ -1672,7 +1672,7 @@ jobs:
 
           if [[ "${EVENT_REF_TYPE}" == "tag" ]]; then
             test "${CANDIDATE_QUERY}" = "${EVENT_REF_NAME}"
-            [[ "${CANDIDATE_QUERY}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]
+            [[ "${CANDIDATE_QUERY}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
 
             tag_ref="refs/tags/${CANDIDATE_QUERY}"
             peeled_ref="${tag_ref}^{}"
@@ -1701,7 +1701,7 @@ jobs:
           fi
 
           go install "${module}/cmd/coldkeep@${CANDIDATE_QUERY}"
-          "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.19'
+          "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 2.0.0-dev.0'
           go version -m "${GOBIN}/coldkeep" > binary-build-info.txt
           head -n 1 binary-build-info.txt | grep -E ': go1\.26\.10$'
           grep -F "$(printf 'mod\t%s\t%s' "${module}" "${resolved_version}")" binary-build-info.txt
@@ -1742,7 +1742,7 @@ jobs:
           $env:GOPROXY = 'direct'
           $env:GOWORK = 'off'
 
-          $module = 'github.com/franchoy/coldkeep'
+          $module = 'github.com/franchoy/coldkeep/v2'
           $env:EXPECTED_ORIGIN_SHA = $env:TRIGGER_SHA
           $env:EXPECTED_VERSION = ''
           $publicTagObjectSha = ''
@@ -1750,7 +1750,7 @@ jobs:
 
           if ($env:EVENT_REF_TYPE -eq 'tag') {
             if ($env:CANDIDATE_QUERY -ne $env:EVENT_REF_NAME) { throw 'tag query does not match event ref name' }
-            if ($env:CANDIDATE_QUERY -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$') {
+            if ($env:CANDIDATE_QUERY -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') {
               throw 'tag query is not release-version-shaped'
             }
 
@@ -1791,7 +1791,7 @@ jobs:
           go install "$module/cmd/coldkeep@$env:CANDIDATE_QUERY"
           if ($LASTEXITCODE -ne 0) { throw 'remote candidate installation failed' }
           $binary = Join-Path $env:GOBIN 'coldkeep.exe'
-          if ((& $binary version) -ne 'coldkeep version 1.13.19') { throw 'binary identity mismatch' }
+          if ((& $binary version) -ne 'coldkeep version 2.0.0-dev.0') { throw 'binary identity mismatch' }
           $buildInfo = go version -m $binary
           $buildInfo | Out-File -FilePath binary-build-info.txt -Encoding utf8
           if ($buildInfo[0] -notmatch ': go1\.26\.10$') { throw 'binary Go toolchain identity mismatch' }

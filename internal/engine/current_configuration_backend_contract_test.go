@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/testutil/backendtest"
 )
 
 func TestEngineCurrentFilesAndConfigurationAcrossBackends(t *testing.T) {

@@ -249,7 +249,7 @@ type Metrics struct {
 ```go
 import (
     "time"
-    "github.com/franchoy/coldkeep/internal/benchmark"
+    "github.com/franchoy/coldkeep/v2/internal/benchmark"
 )
 
 metrics, err := benchmark.Measure(func() error {

@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/recovery"
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	"github.com/franchoy/coldkeep/internal/storage"
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/recovery"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 func TestRunSnapshotCommandCreateUsesEngineOwnership(t *testing.T) {

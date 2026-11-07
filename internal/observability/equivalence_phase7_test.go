@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
 )
 
 type phase7ScenarioRefs struct {

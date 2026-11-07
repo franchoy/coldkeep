@@ -1,0 +1,18 @@
+{
+  "schema": "coldkeep-active-development/v1",
+  "family": "v2.0",
+  "version": "2.0.0-dev.0",
+  "state": "development",
+  "phase": "0",
+  "phase_status": "ACTIVE",
+  "profile": "manual-postgresql-docker",
+  "latest_stable": "1.13.19",
+  "charter": "docs/release/v2.0/README.md",
+  "stable_target": "2.0.0",
+  "stable_gate": "2.17",
+  "module": "github.com/franchoy/coldkeep/v2",
+  "product_gates": "INCOMPLETE",
+  "implementation": "ACTIVE",
+  "historical_base": "e8a501d6edbc32cd440562065f1a851d8afdc03d",
+  "frozen_v1_sha256": "64fb69cb875c4bdf96c10cd759275b7232849c2f8083b0b406f11d7b18b23c7a"
+}

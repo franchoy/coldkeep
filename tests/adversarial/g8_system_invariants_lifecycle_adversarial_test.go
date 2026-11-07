@@ -8,15 +8,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	dbschema "github.com/franchoy/coldkeep/db"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/recovery"
-	"github.com/franchoy/coldkeep/internal/storage"
-	"github.com/franchoy/coldkeep/internal/verify"
-	testutils "github.com/franchoy/coldkeep/tests/utils"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
+	dbschema "github.com/franchoy/coldkeep/v2/db"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/recovery"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
+	testutils "github.com/franchoy/coldkeep/v2/tests/utils"
+	"github.com/franchoy/coldkeep/v2/tests/utils/testgate"
 )
 
 // G8 — System invariants under adversarial lifecycle

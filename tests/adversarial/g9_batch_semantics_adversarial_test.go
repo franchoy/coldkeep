@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	testutils "github.com/franchoy/coldkeep/tests/utils"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
+	testutils "github.com/franchoy/coldkeep/v2/tests/utils"
+	"github.com/franchoy/coldkeep/v2/tests/utils/testgate"
 )
 
 func parseBatchPayload(t *testing.T, res testutils.CLIExecResult) map[string]any {

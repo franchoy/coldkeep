@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 func TestCatalogRestorePlanPreservesLegacyQueryExecutionMetadata(t *testing.T) {

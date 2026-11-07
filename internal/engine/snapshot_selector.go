@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
 )
 
 // snapshotSelectorInput is the private neutral selector representation shared

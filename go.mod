@@ -1,4 +1,4 @@
-module github.com/franchoy/coldkeep
+module github.com/franchoy/coldkeep/v2
 
 go 1.25.0
 

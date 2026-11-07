@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/coordination"
+	"github.com/franchoy/coldkeep/v2/internal/coordination"
 )
 
 const (

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/db"
 )
 
 func TestRequiredContainerMutationsFailClosedOnMissingRows(t *testing.T) {

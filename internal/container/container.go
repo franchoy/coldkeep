@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/fsx"
-	"github.com/franchoy/coldkeep/internal/iodebug"
-	"github.com/franchoy/coldkeep/internal/pathsafe"
-	"github.com/franchoy/coldkeep/internal/utils_hash"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
+	"github.com/franchoy/coldkeep/v2/internal/iodebug"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
+	"github.com/franchoy/coldkeep/v2/internal/utils_hash"
 )
 
 // ErrContainerFull is returned by Container.Append when the payload would exceed the container's max size.

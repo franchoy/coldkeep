@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
 )
 
 // Result is the generic chunker output summary used by the benchmark harness.

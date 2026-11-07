@@ -1,5 +1,11 @@
 # Contributing to coldkeep
 
+Active development: [v2.0 Phase 0](docs/release/v2.0/README.md), selected by
+[docs/release/current.json](docs/release/current.json). Use its bounded local
+validation profile for this phase. Full release/publication procedures below
+remain applicable to their declared release scopes; frozen v1 certification
+is not repeated to begin v2. Go/dependency pins and correctness gates remain.
+
 Thank you for your interest in contributing to coldkeep.
 
 coldkeep v1.x is a correctness-first storage engine.

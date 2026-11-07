@@ -13480,14 +13480,18 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
             delta_paths.isdisjoint(path for _, _, path in spec.frozen_blobs)
         )
 
-    def test_diagnostic_v6_uses_only_active_v19_sources(self) -> None:
+    def test_diagnostic_v6_uses_only_historical_v19_sources(self) -> None:
         recorder = release_state_support.DiagnosticRecorder("auto", {})
-        recorder.bind_sources(
-            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT,
-            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT
-            / "scripts"
-            / "validate_release_state.py",
-        )
+        # The live tree is now v2. Bind this historical parser test to the
+        # immutable v19 source identity, rather than inheriting current HEAD.
+        with tempfile.TemporaryDirectory(prefix="coldkeep-v19-diagnostic-") as directory:
+            root = Path(directory)
+            version_source = git(
+                ACTIVE_FINAL_SNAPSHOT_TEST_ROOT, "show",
+                release_state_support.V11319_RELEASE_COMMIT + ":internal/version/version.go",
+            )
+            write(root, "internal/version/version.go", version_source)
+            recorder.bind_sources(root, SCRIPT)
         self.assertEqual(
             recorder.source_paths,
             (

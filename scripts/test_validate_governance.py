@@ -937,7 +937,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
     def assert_governance_fails(self) -> None:
-        self.assertNotEqual(governance.validate(self.root), [])
+        self.assertNotEqual(governance.validate_historical_v1(self.root), [])
 
     def canonical_state(self) -> dict[str, str]:
         path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
@@ -960,7 +960,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         )
 
     def test_current_repository_authority_passes(self) -> None:
-        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(governance.validate_historical_v1(self.root), [])
 
     def test_security_progression_reference_is_exact_and_selected(self) -> None:
         """SP-GOV-01: the pointer, remapped anchors, and digest parse together."""
@@ -969,7 +969,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             state["SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE"],
             governance.SECURITY_TOOLCHAIN_PROGRESSION_REFERENCE_FILE.as_posix(),
         )
-        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(governance.validate_historical_v1(self.root), [])
 
     def test_security_progression_partial_and_mutated_material_fails(self) -> None:
         """SP-GOV-02: selected progression material has no downgrade route."""
@@ -999,7 +999,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         reference_path.write_bytes(reference_original)
 
         reference_path.unlink()
-        violations = governance.validate(self.root)
+        violations = governance.validate_historical_v1(self.root)
         self.assertTrue(
             any("security progression reference unavailable:" in item for item in violations),
             violations,
@@ -1100,7 +1100,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             state["TRACKED_TERMINAL_SERIALIZATION"],
             "DECLARATION_PRESENT_NON_AUTHORIZING",
         )
-        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(governance.validate_historical_v1(self.root), [])
 
     def test_terminal_serialization_keys_fail_closed(self) -> None:
         """TS-GOV-02: accepted terminal state fails on one-key mutations."""
@@ -1120,7 +1120,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         )
         for name, key, replacement in cases:
             with self.subTest(name=name):
-                self.assertEqual(governance.validate(self.root), [])
+                self.assertEqual(governance.validate_historical_v1(self.root), [])
                 path = self.root / governance.CANONICAL_CURRENT_STATE_FILE
                 original = path.read_text(encoding="utf-8")
                 value = governance.canonical_current_state(original)[0][key]
@@ -1128,12 +1128,12 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
                     original.replace(f"{key}: {value}", replacement, 1),
                     encoding="utf-8",
                 )
-                self.assertNotEqual(governance.validate(self.root), [])
+                self.assertNotEqual(governance.validate_historical_v1(self.root), [])
                 path.write_text(original, encoding="utf-8")
 
     def test_selected_terminal_requires_expectation_block(self) -> None:
         """TS-GOV-02: selected terminal vocabulary cannot omit expectations."""
-        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(governance.validate_historical_v1(self.root), [])
         contract = self.root / Path(
             "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
         )
@@ -1162,7 +1162,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
         )
 
     def test_selected_terminal_malformed_expectation_marker_fails(self) -> None:
-        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(governance.validate_historical_v1(self.root), [])
         contract = self.root / Path(
             "docs/release/v1.13/v1.13.17-release-state-validator-contract.md"
         )
@@ -1174,11 +1174,11 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        violations = governance.validate(self.root)
+        violations = governance.validate_historical_v1(self.root)
         self.assertTrue(any("reference invalid" in item for item in violations), violations)
 
     def test_fixture_owns_its_object_graph(self) -> None:
-        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(governance.validate_historical_v1(self.root), [])
         for relative in (
             ".git/objects/info/alternates",
             ".git/info/grafts",
@@ -1217,7 +1217,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
             + "\nHistorical quote: FINDINGS_CLOSED: 0/7; Phase 2 is Next.\n",
             encoding="utf-8",
         )
-        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(governance.validate_historical_v1(self.root), [])
 
     def test_current_pair_copy_is_independent_of_index_membership(self) -> None:
         pair = (
@@ -1270,7 +1270,7 @@ class CurrentStateGovernanceContractTests(unittest.TestCase):
                 copy_current_governance_inputs(source, destination)
                 self.assertEqual((destination / pair[0]).exists(), case != "missing")
                 self.assertEqual((destination / pair[1]).exists(), case == "inconsistent")
-                self.assertNotEqual(governance.validate(destination), [])
+                self.assertNotEqual(governance.validate_historical_v1(destination), [])
 
     def test_future_canonical_state_requires_mirror_updates(self) -> None:
         self.replace_canonical_value("CURRENT_PHASE", "CURRENT_PHASE: 3_NEXT")
@@ -2378,6 +2378,14 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             self.assertIn("frozen historical SHA-256", violations[0])
 
 
+def historical_v19_text(relative: Path) -> str:
+    """Frozen launch mirrors, independent of current v2 providers."""
+    return run_process([
+        resolved_executable("git"), "-C", str(governance.ROOT), "show",
+        f"e8a501d6edbc32cd440562065f1a851d8afdc03d:{relative.as_posix()}",
+    ], check=True).stdout
+
+
 class V11319RecoveryGovernanceTests(unittest.TestCase):
     """Terminal publication and frozen-predecessor checks for v1.13.19."""
 
@@ -2426,7 +2434,7 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
         for relative in governance.CURRENT_STATE_MIRROR_FILES:
             mirror, mirror_violations = governance._v19_mirror(
                 relative,
-                (governance.ROOT / relative).read_text(encoding="utf-8"),
+                historical_v19_text(relative),
             )
             self.assertEqual(mirror_violations, [])
             self.assertEqual(
@@ -2440,7 +2448,7 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
             version = root / "internal/version/version.go"
             version.parent.mkdir(parents=True)
             version.write_text(
-                "package version\n\nconst (\n    Patch = 19\n)\n",
+                "package version\n\nconst (\n    Major = 1\n    Minor = 13\n    Patch = 19\n)\n",
                 encoding="utf-8",
             )
             state = root / governance.V19_CANONICAL_CURRENT_STATE_FILE
@@ -2448,7 +2456,7 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
             state.write_text("TEST_FIXTURE_ONLY\n", encoding="utf-8")
             self.assertTrue(governance._v19_selected(root))
             version.write_text(
-                "package version\n\nconst (\n    Patch = 18\n)\n",
+                "package version\n\nconst (\n    Major = 1\n    Minor = 13\n    Patch = 18\n)\n",
                 encoding="utf-8",
             )
             self.assertFalse(governance._v19_selected(root))
@@ -2458,7 +2466,7 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
             )
             self.assertFalse(governance._v19_selected(root))
             version.write_text(
-                "package version\n\nconst (\n    Patch = 19\n)\n",
+                "package version\n\nconst (\n    Major = 1\n    Minor = 13\n    Patch = 19\n)\n",
                 encoding="utf-8",
             )
             state.unlink()
@@ -2536,7 +2544,7 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
         canonical, violations = governance._v19_canonical_state(canonical_text)
         self.assertEqual(violations, [])
         texts = {
-            relative: (governance.ROOT / relative).read_text(encoding="utf-8")
+            relative: historical_v19_text(relative)
             for relative in governance.CURRENT_STATE_MIRROR_FILES
         }
         texts[Path("AGENTS.md")] = texts[Path("AGENTS.md")].replace(
@@ -2634,7 +2642,7 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
             self.assertIn("frozen v1.13.18 historical SHA-256", violations[0])
 
     def test_historical_v18_mirror_is_loaded_from_exact_m18(self) -> None:
-        live = (governance.ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        live = historical_v19_text(Path("AGENTS.md"))
         historical = historical_v18_text(Path("AGENTS.md"))
         self.assertIn("SOURCE_VERSION: 1.13.19", live)
         self.assertIn("SOURCE_VERSION: 1.13.18", historical)
@@ -2710,7 +2718,7 @@ class V11319RecoveryGovernanceTests(unittest.TestCase):
 
     def test_v19_contract_aggregation_is_clean_on_the_real_candidate(self) -> None:
         texts = {
-            relative: (governance.ROOT / relative).read_text(encoding="utf-8")
+            relative: historical_v19_text(relative)
             for relative in governance.CURRENT_STATE_MIRROR_FILES
         }
         self.assertEqual(governance.validate_v19_contract(governance.ROOT, texts), [])

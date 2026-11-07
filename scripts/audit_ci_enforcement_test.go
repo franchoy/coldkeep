@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/pathsafe"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
 )
 
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.T) {
@@ -246,14 +246,14 @@ func TestAuditCIEnforcementRejectsStaleApplicationVersion(t *testing.T) {
 		{
 			name:     "source-install",
 			next:     "remote-candidate-install",
-			anchor:   "coldkeep version 1.13.19",
+			anchor:   "coldkeep version 2.0.0-dev.0",
 			expected: "coldkeep version 1.13.17",
 			message:  "source installation proves binary identity",
 		},
 		{
 			name:     "remote-candidate-install",
 			next:     "product-container",
-			anchor:   "coldkeep version 1.13.19",
+			anchor:   "coldkeep version 2.0.0-dev.0",
 			expected: "coldkeep version 1.13.17",
 			message:  "remote candidate installation proves binary identity",
 		},
@@ -1747,8 +1747,8 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 		},
 		{
 			name:        "correctness package binding",
-			old:         "github.com/franchoy/coldkeep/tests/integration",
-			replacement: "github.com/franchoy/coldkeep/tests/adversarial",
+			old:         "github.com/franchoy/coldkeep/v2/tests/integration",
+			replacement: "github.com/franchoy/coldkeep/v2/tests/adversarial",
 			wantMessage: "required-event profiles bind integration package",
 			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
 			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
@@ -1882,8 +1882,8 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 		{
 			name:        "adversarial package binding",
 			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
-			old:         "github.com/franchoy/coldkeep/tests/adversarial",
-			replacement: "github.com/franchoy/coldkeep/tests/integration",
+			old:         "github.com/franchoy/coldkeep/v2/tests/adversarial",
+			replacement: "github.com/franchoy/coldkeep/v2/tests/integration",
 			wantMessage: "adversarial coordination execution proof binds the adversarial package",
 		},
 		{
@@ -3007,7 +3007,7 @@ if [ "$9" != "$CK015_EXPECTED_SELECTOR" ]; then
   printf 'unexpected CK-015 selector: %s\n' "$9" >&2
   exit 98
 fi
-package=github.com/franchoy/coldkeep/internal/storage
+package=github.com/franchoy/coldkeep/v2/internal/storage
 printf '{"Action":"start","Package":"%s"}\n' "$package"
 case "$CK015_EXPECTED_PROFILE" in
   ck015-initial-lookup-sqlite)

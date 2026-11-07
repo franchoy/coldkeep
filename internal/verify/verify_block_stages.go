@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"log"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
 )
 
 type verifyBlockLocation struct {

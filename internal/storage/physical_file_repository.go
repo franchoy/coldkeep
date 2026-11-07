@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 type execer interface {

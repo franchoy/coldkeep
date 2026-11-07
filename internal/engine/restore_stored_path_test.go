@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/container"
-	dbpkg "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/storage"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	dbpkg "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+	"github.com/franchoy/coldkeep/v2/tests/utils/testgate"
 )
 
 type storedPathRestoreFixture struct {

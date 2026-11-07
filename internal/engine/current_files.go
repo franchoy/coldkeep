@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
 )
 
 func (e *DefaultEngine) ListFiles(ctx context.Context, req ListFilesRequest) (_ ListFilesResult, outErr error) {

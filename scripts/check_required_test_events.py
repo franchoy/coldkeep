@@ -11,7 +11,7 @@ from pathlib import Path
 
 PROFILES = {
     "integration-correctness-plain": {
-        "package": "github.com/franchoy/coldkeep/tests/integration",
+        "package": "github.com/franchoy/coldkeep/v2/tests/integration",
         "tests": (
             "TestRoundTripStoreRestore",
             "TestRemoveWithSharedChunksRefCount",
@@ -22,11 +22,11 @@ PROFILES = {
         ),
     },
     "integration-correctness-aes-gcm": {
-        "package": "github.com/franchoy/coldkeep/tests/integration",
+        "package": "github.com/franchoy/coldkeep/v2/tests/integration",
         "tests": ("TestRoundTripStoreRestore",),
     },
     "ck014-internal-verify": {
-        "package": "github.com/franchoy/coldkeep/internal/verify",
+        "package": "github.com/franchoy/coldkeep/v2/internal/verify",
         "tests": (
             "TestVerifySystemDeepPreflightFailureDoesNotInvokeDownstreamReader",
             "TestVerifySystemDeepCollectsTwoInjectedDownstreamPhysicalFaults",
@@ -35,7 +35,7 @@ PROFILES = {
         ),
     },
     "ck015-initial-lookup-sqlite": {
-        "package": "github.com/franchoy/coldkeep/internal/storage",
+        "package": "github.com/franchoy/coldkeep/v2/internal/storage",
         "tests": (
             "TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite",
             "TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite",
@@ -47,7 +47,7 @@ PROFILES = {
         ),
     },
     "ck015-initial-lookup-postgres": {
-        "package": "github.com/franchoy/coldkeep/internal/storage",
+        "package": "github.com/franchoy/coldkeep/v2/internal/storage",
         "tests": (
             "TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback",
             "TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery",

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
 )
 
 func TestRestorePlanSelectorContract(t *testing.T) {

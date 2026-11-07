@@ -30,7 +30,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/chunk/shared"
+	"github.com/franchoy/coldkeep/v2/internal/chunk/shared"
 )
 
 // lcgBytes generates n deterministic pseudo-random bytes using a 32-bit LCG

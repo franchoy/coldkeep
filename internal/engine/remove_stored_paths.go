@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 type preparedRemoveStoredPathTarget struct {

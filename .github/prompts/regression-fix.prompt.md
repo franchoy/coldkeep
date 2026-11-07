@@ -2,26 +2,26 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.19
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
-RELEASE_STATE: POST_RELEASE_CLOSED
-TRACKED_PUBLICATION_MATERIAL: FROZEN
-V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
-V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
-CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
-FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 15/15
-V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
-V1_13_19_PUBLICATION: COMPLETE
-V1_X: CLOSED_AND_FROZEN
-V2_IMPLEMENTATION: NOT_STARTED
+SOURCE_VERSION: 2.0.0-dev.0
+RELEASE_FAMILY: v2.0
+RELEASE_STATE: development
+CURRENT_PHASE: 0
+CURRENT_AUTHORITY: docs/release/current.json
+LATEST_STABLE: 1.13.19
+V2_IMPLEMENTATION: ACTIVE
+PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
+
+Active v2.0 Phase 0 is authorized in BUILD mode by the adopted 7 November
+2026 charter at `docs/release/v2.0/README.md`; `docs/release/current.json` is
+current authority. Scope: governance, module/import/version identity, affected
+evidence consumers and handoff only. Latest stable remains v1.13.19. Frozen
+`docs/release/v1*/` records retain their historical meanings and bytes.
+Do not implement daemon/storage/schema/migration/recovery features in Phase 0.
+No push, PR publication, merge, tag, release or deployment is authorized.
+Dependency/toolchain versions remain pinned. Preserve user changes and data.
+
 
 You are fixing a Coldkeep regression or correctness bug.
 
@@ -76,8 +76,8 @@ Identify and state:
   plan remains historical evidence.
 - v1.13.15 remains published stable and immutable; planned v1 feature and
   architecture work remains closed and frozen.
-- Do not implement v2 or SQLite-first product-default behavior without a
-  separate implementation plan.
+- Keep v2 implementation within adopted Phase 0; SQLite-first defaults
+  require their later owning phase.
 - Do not change public APIs, schemas, storage formats, or repository formats.
 - New v1 product/runtime work requires separate explicit authority; keep any
   authorized repair within its exact plan and allowlist.

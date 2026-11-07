@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/storage"
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 type verifyOutputSummary struct {

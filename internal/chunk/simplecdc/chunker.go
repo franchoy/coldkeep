@@ -13,7 +13,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/franchoy/coldkeep/internal/chunk/shared"
+	"github.com/franchoy/coldkeep/v2/internal/chunk/shared"
 )
 
 const (

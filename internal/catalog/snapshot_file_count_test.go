@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
 )
 
 func TestSnapshotMetaFileCountIsTotalPersistedMembership(t *testing.T) {
