@@ -9,6 +9,9 @@ complete and accepted; every product gate remains incomplete. See [the original 
 and [the later guard-correction record](phase0-followup-result.md).
 Latest published stable is **v1.13.19**, independently recorded in the frozen
 [v1 closure](../v1.13/v1.13.19-post-publication-closure.md).
+Action 2.01 is locally complete; see [the Phase 1A result](phase1a-result.md)
+and [expected versus observed fixtures](fixture-results.md). This completion
+does not select or start another action.
 
 ## Selected first stable profile
 

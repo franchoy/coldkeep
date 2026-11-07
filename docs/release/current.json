@@ -4,7 +4,7 @@
   "version": "2.0.0-dev.0",
   "state": "development",
   "phase": "2.01",
-  "phase_status": "ACTIVE",
+  "phase_status": "COMPLETE",
   "profile": "manual-postgresql-docker",
   "latest_stable": "1.13.19",
   "charter": "docs/release/v2.0/README.md",
