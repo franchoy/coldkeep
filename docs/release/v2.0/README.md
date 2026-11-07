@@ -4,7 +4,8 @@ Adopted 7 November 2026 (Europe/Madrid), under instruction edition 1.0.
 V2 implementation is active under the bounded Phase 0 BUILD authorization.
 The single machine-readable phase/state authority is
 [../current.json](../current.json). Phase 0 is complete as a local development
-candidate; every product gate remains incomplete. See [the result](phase0-result.md).
+candidate; every product gate remains incomplete. See [the original result](phase0-result.md)
+and [the later guard-correction record](phase0-followup-result.md).
 Latest published stable is **v1.13.19**, independently recorded in the frozen
 [v1 closure](../v1.13/v1.13.19-post-publication-closure.md).
 
@@ -69,10 +70,11 @@ Initial application identity is `2.0.0-dev.0`; base `2.0.0`, prerelease `dev.0`,
 channel `dev`. Dev, alpha, beta, rc and stable remain distinct across parsers,
 paths and artifact/tag identity checks. VCS revision, modified/unknown state,
 Go toolchain and module build provenance are separate JSON version fields.
-Build provenance is explicitly unknown when the Go build omits VCS settings
-(including this pinned toolchain in a Git worktree with a `.git` file). An
-ordinary disposable clone is used to verify clean/dirty VCS stamping; packaging
-at 2.02 must bind its source revision explicitly. An application version change
+Missing VCS metadata was observed in the reported Phase 0 build environment;
+this observation does not establish a general Go worktree limitation. When
+unknown, modification state remains `null` and revision is omitted. The original
+run verified clean/dirty VCS stamping in an ordinary disposable clone; prepared
+package revision binding remains 2.02 work. An application version change
 does not change API/catalog/payload/recovery formats. Binary names stay
 `coldkeep` and future `coldkeepd`.
 

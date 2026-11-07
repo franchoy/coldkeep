@@ -101,6 +101,83 @@ class V2AuthorityTests(unittest.TestCase):
                 self.assert_rejected()
                 path.write_bytes(original)
 
+    def test_frozen_history_roots_and_ancestors_must_be_real_directories(self):
+        for relative in ("docs/release/v1.13", "docs/release", "docs"):
+            with self.subTest(path=relative):
+                path = self.root / relative
+                moved = self.root / "relocated-history"
+                path.rename(moved)
+                try:
+                    path.symlink_to(moved, target_is_directory=True)
+                    self.assert_rejected()
+                    with self.assertRaisesRegex(ValueError, "historical"):
+                        support.frozen_v1_digest(self.root)
+                finally:
+                    if path.is_symlink():
+                        path.unlink()
+                    moved.rename(path)
+
+    def test_frozen_history_family_and_descendant_links_are_rejected(self):
+        file_target = self.root / "external-history-file"
+        file_target.write_text("external history")
+        directory_target = self.root / "external-history-directory"
+        directory_target.mkdir()
+        (directory_target / "evidence.md").write_text("external history")
+        for relative, target in (
+            ("docs/release/v1.link", file_target),
+            ("docs/release/v1.13/linked-file.md", file_target),
+            ("docs/release/v1.13/linked-directory", directory_target),
+        ):
+            with self.subTest(path=relative):
+                path = self.root / relative
+                path.symlink_to(target, target_is_directory=target.is_dir())
+                try:
+                    self.assert_rejected()
+                    with self.assertRaisesRegex(ValueError, "historical"):
+                        support.frozen_v1_digest(self.root)
+                finally:
+                    path.unlink()
+
+    def test_missing_protected_history_is_rejected(self):
+        for relative in ("docs", "docs/release", "docs/release/v1.13",
+                         "docs/release/v1.13/v1.13.19-release-state.md"):
+            with self.subTest(path=relative):
+                path = self.root / relative
+                moved = self.root / "removed-history"
+                path.rename(moved)
+                try:
+                    self.assert_rejected()
+                finally:
+                    moved.rename(path)
+
+    def test_frozen_digest_preserves_real_tree_bytes_and_path_order(self):
+        state = json.loads((self.root / support.CURRENT_AUTHORITY_PATH).read_text())
+        self.assertEqual(support.frozen_v1_digest(self.root), state["frozen_v1_sha256"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative, content in (("a.md", b"flat\n"), ("a/x", b"nested\n")):
+                path = root / "docs/release/v1.13" / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            # The original sorted(Path) encoding places a/x before a.md.
+            self.assertEqual(support.frozen_v1_digest(root),
+                             "d8cee37b3841a8f9ebdf93038c019035a0c10af780fb8c77d6cb23a9866635f5")
+
+    def test_core_version_expressions_and_trailing_tokens_are_rejected(self):
+        path = self.root / "internal/version/version.go"
+        original = path.read_text()
+        for name in ("Major", "Minor", "Patch"):
+            for suffix in (" + 1", " / 1", " << 1", " trailing"):
+                with self.subTest(component=name, suffix=suffix):
+                    text = re.sub(rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*[0-9]+)[ \t]*$",
+                                  lambda match: match.group(1) + suffix, original)
+                    self.assertNotEqual(text, original)
+                    path.write_text(text)
+                    result = support.ValidationResult(None, None)
+                    self.assertIsNone(support.parse_source_version(self.root, result))
+                    self.assertTrue(result.violations)
+                    self.assert_rejected()
+
     def test_active_providers_cannot_remove_rules_or_restore_v1_prohibition(self):
         path = self.root / "AGENTS.md"
         original = path.read_text()
@@ -156,6 +233,37 @@ class VersionBoundaryTests(unittest.TestCase):
                 result = support.ValidationResult(None, None)
                 self.assertIsNone(support.parse_source_version(root, result))
                 self.assertTrue(result.violations)
+
+    def test_core_declarations_count_unsupported_duplicates(self):
+        source = 'package version\nconst (\n Major = 2\n Minor = 0\n Patch = 0\n Prerelease = "dev.0"\n)\n'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "internal/version/version.go"
+            path.parent.mkdir(parents=True)
+            for name in ("Major", "Minor", "Patch"):
+                for text in (source.replace("\n)\n", f"\n {name} int = 2\n)\n"),
+                             source + f"const {name} = 2\n"):
+                    with self.subTest(component=name, source=text):
+                        path.write_text(text)
+                        result = support.ValidationResult(None, None)
+                        self.assertIsNone(support.parse_source_version(root, result))
+                        self.assertTrue(result.violations)
+
+    def test_literal_versions_preserve_trailing_line_comments(self):
+        for major, minor, patch_number, prerelease in ((1, 13, 19, None), (2, 0, 0, "dev.0")):
+            with self.subTest(major=major), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / "internal/version/version.go"
+                path.parent.mkdir(parents=True)
+                source = (f"package version\nconst (\n Major = {major} // major\n"
+                          f"\tMinor = {minor}\t// minor\n Patch = {patch_number}// patch\n")
+                if prerelease is not None:
+                    source += f' Prerelease = "{prerelease}" // channel\n'
+                path.write_text(source + ")\n")
+                result = support.ValidationResult(None, None)
+                expected = f"{major}.{minor}.{patch_number}" + (f"-{prerelease}" if prerelease else "")
+                self.assertEqual(support.parse_source_version(root, result), expected)
+                self.assertEqual(result.violations, [])
 
     def test_literal_package_event_identity(self):
         # Deliberately independent of PROFILES: a stale profile cannot self-confirm.

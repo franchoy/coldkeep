@@ -2413,21 +2413,18 @@ def parse_source_version(root: Path, result: ValidationResult) -> Optional[str]:
     text = (root / path).read_text(encoding="utf-8")
     parts: list[str] = []
     for name in ("Major", "Minor", "Patch"):
-        matches = re.findall(rf"(?m)^\s*{name}\s*=\s*([^\s/]+)", text)
-        valid = (
-            len(matches) == 1
-            and re.fullmatch(r"\d+", matches[0]) is not None
-            and int(matches[0]) >= 0
-        )
-        if not valid:
+        declarations = re.findall(rf"(?m)^[ \t]*(?:const[ \t]+)?{name}\b([^\n]*)", text)
+        literal = re.fullmatch(rf"[ \t]*=[ \t]*({SEMVER_NUMBER})[ \t]*(?://[^\n]*)?",
+                               declarations[0]) if len(declarations) == 1 else None
+        if literal is None:
             result.add(
                 "CKRS001",
                 path,
                 0,
-                "source version must contain exactly one integer Major, Minor, and Patch declaration",
+                "source version must contain exactly one decimal literal declaration for each of Major, Minor, and Patch",
             )
             return None
-        parts.append(matches[0])
+        parts.append(literal.group(1))
     version = ".".join(parts)
     declarations = re.findall(r'(?m)^\s*(?:const\s+)?Prerelease\b([^\n]*)', text)
     if int(parts[0]) >= 2 and not declarations:
@@ -2503,13 +2500,34 @@ def validate_distribution_identity(version: str, module: str, tag: str | None = 
 
 def frozen_v1_digest(root: Path) -> str:
     """Bind exact historical release paths and bytes, including additions/removals."""
+    def require_directory(path: Path) -> None:
+        if not stat.S_ISDIR(path.lstat().st_mode):
+            raise ValueError(f"historical path must be a real directory: {path.relative_to(root)}")
+
+    release_root = root / "docs/release"
+    for path in (root / "docs", release_root):
+        require_directory(path)
+    pending = [path for path in release_root.iterdir() if path.name.startswith("v1")]
+    for path in pending:
+        require_directory(path)
+    files: list[Path] = []
+    while pending:
+        directory = pending.pop()
+        for path in directory.iterdir():
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"historical symlink: {path.relative_to(root)}")
+            if stat.S_ISDIR(mode):
+                pending.append(path)
+            elif stat.S_ISREG(mode):
+                files.append(path)
+            else:
+                raise ValueError(f"historical file must be regular: {path.relative_to(root)}")
+
     digest = hashlib.sha256()
-    for path in sorted((root / "docs/release").glob("v1*/**/*")):
-        if path.is_symlink():
-            raise ValueError(f"historical symlink: {path.relative_to(root)}")
-        if path.is_file():
-            digest.update(path.relative_to(root).as_posix().encode() + b"\0")
-            digest.update(hashlib.sha256(path.read_bytes()).digest())
+    for path in sorted(files):
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
 
 

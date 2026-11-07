@@ -54,9 +54,11 @@ Application identity is `2.0.0-dev.0`. Parsers preserve complete prereleases and
 reject malformed/truncated identities. Version JSON adds base, prerelease,
 channel and separate build provenance. Clean and dirty ordinary-clone builds
 report their actual revision/modification state while keeping the same version.
-The pinned Go toolchain omits VCS metadata in this `.git`-file worktree; those
-builds truthfully report unknown provenance. A normal disposable clone proves
-source installation/stamping. Packaging must bind revision explicitly at 2.02.
+Missing VCS metadata was observed in the reported Phase 0 build environment;
+the execution narrative does not establish a general Go worktree limitation.
+Those builds truthfully report `modified: null` and omit the revision. A normal
+disposable clone proved source installation/stamping. Prepared-package revision
+binding remains 2.02 work.
 
 ## Validation
 
@@ -123,10 +125,20 @@ no remaining material issue; it did not substitute for runtime test evidence.
 
 ## Next bounded work
 
-Use [next-slice.md](next-slice.md): complete 2.01 representative baseline fixtures,
-then 2.03 passive existing-repository inspection and a quiesced full-catalog /
-complete-payload-closure recovery package on disposable data. Recovery must
-restore known history with the original installation unavailable before schema
-additions. After baseline fixtures, 2.02 packaging and Linux native feasibility
-can proceed. Recommended model/effort: **GPT-6 Astra / Extra High**, for the
-cross-boundary ownership and recovery proof. No later action was implemented.
+The updated [next-slice.md](next-slice.md) selects a separate Phase 1A run to
+complete **all of 2.01 only**: baseline/compatibility inventory, version domains,
+representative fixtures, product contract, profile statuses and result glossary.
+Recommended model/effort: **GPT-6 Astra / Extra High**. Passive inspection and
+integrated recovery/restoration remain subsequent bounded 2.03 work; full
+recovery proof is still required before schema additions. Packaging/Linux
+feasibility remains separate 2.02 work after baseline fixtures.
+
+## Later review correction — 7 November 2026
+
+The [Phase 0 follow-up](phase0-followup-result.md) repairs the historical-directory
+and complete-literal version guards, clarifies fixture outcomes and separates
+the next action from later recovery work. Its execution base and final identity
+are recorded separately. The original archive, frozen-v1 anchors, commits and
+execution evidence above remain unchanged. The provenance wording above is
+qualified by this later review, without claiming the earlier runtime checks
+were rerun.
