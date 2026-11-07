@@ -1,9 +1,10 @@
 # Coldkeep v2.0 active charter
 
 Adopted 7 November 2026 (Europe/Madrid), under instruction edition 1.0.
-Phase 0 is active implementation in BUILD mode. The single machine-readable
-phase/state authority is [../current.json](../current.json). A completed Phase 0
-is a local development candidate; every product gate remains incomplete.
+V2 implementation is active under the bounded Phase 0 BUILD authorization.
+The single machine-readable phase/state authority is
+[../current.json](../current.json). Phase 0 is complete as a local development
+candidate; every product gate remains incomplete. See [the result](phase0-result.md).
 Latest published stable is **v1.13.19**, independently recorded in the frozen
 [v1 closure](../v1.13/v1.13.19-post-publication-closure.md).
 
@@ -68,8 +69,12 @@ Initial application identity is `2.0.0-dev.0`; base `2.0.0`, prerelease `dev.0`,
 channel `dev`. Dev, alpha, beta, rc and stable remain distinct across parsers,
 paths and artifact/tag identity checks. VCS revision, modified/unknown state,
 Go toolchain and module build provenance are separate JSON version fields.
-An application version change does not change API/catalog/payload/recovery
-formats. Binary names stay `coldkeep` and future `coldkeepd`.
+Build provenance is explicitly unknown when the Go build omits VCS settings
+(including this pinned toolchain in a Git worktree with a `.git` file). An
+ordinary disposable clone is used to verify clean/dirty VCS stamping; packaging
+at 2.02 must bind its source revision explicitly. An application version change
+does not change API/catalog/payload/recovery formats. Binary names stay
+`coldkeep` and future `coldkeepd`.
 
 Prepared daemon binaries/images will contain the embedded UI. Source builds
 must document frontend-then-Go steps, pinned frontend tools/lockfile, asset
