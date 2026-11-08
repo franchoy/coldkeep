@@ -1,7 +1,8 @@
 # Action 2.02 internal delivery decision
 
 Status: selected engineering proof, not product/native readiness. The owning
-instruction is `coldkeep_phase2_codex_2026-11-08.md`. Product gates remain
+instruction is `coldkeep_phase2_codex_2026-11-08.md`, with P1–P3 corrected under
+`coldkeep_phase2_followup_codex_2026-11-08.md`. Product gates remain
 INCOMPLETE; implementation remains ACTIVE. No 2.04 identity or migration work.
 
 `cmd/coldkeepd` composes `internal/proofdaemon`, the existing engine and adapters,
@@ -68,3 +69,28 @@ The prepared source build and dependency policy are in [the build guide](phase2-
 The native/exposure qualifications are in [the feasibility matrix](phase2-native-matrix.md).
 Later owners: 2.04 identities/migration fences, 2.05 lifecycle, 2.07 durable jobs,
 2.08 authentication, 2.14 SQLite lifecycle and 2.22–2.26 native distribution.
+
+## P1–P3 admission and exposure follow-up
+
+The configured restore root must equal its inherited engine TrimSpace
+interpretation. Otherwise configuration refuses before the lease or catalog is
+opened; it never redirects the requested output. Internal spaces remain valid.
+
+All six existing variable-text guards use OCTET_LENGTH before engine Verify or
+SnapshotShow. The selected fixture envelope admits SQLite UTF-8 storage only,
+and PostgreSQL UTF8 server and client encodings only. This keeps measured bytes
+aligned with strings delivered by the pinned drivers; other encodings refuse
+without conversion or catalog repair. NULL retains its existing schema/reader
+semantics. SQLite's column octet_length uses byte metadata without materializing
+another complete text value. No schema, engine reader or budget changed.
+
+The private CGO-disabled TCP helper performs one numeric socket connection with
+a 1000 ms connect deadline. A connected result fails confinement independently
+of HTTP or close behavior. ECONNREFUSED, connect timeout and identified route
+errors remain distinct observations. All other local errors, invalid output,
+helper/container failure or the separate 10-second subprocess deadline invalidate
+proof. The same isolated sibling container namespace hosts owned 200/403/404,
+stalled and closed-port controls and probes every original exposure target.
+Accept logs independently corroborate the positive controls; a mismatched Host
+403 is also executed. Separate host socket observations remain mandatory.
+No external LAN or routed IPv6 qualification is inferred.

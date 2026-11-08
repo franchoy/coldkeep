@@ -7,11 +7,11 @@ import os
 from pathlib import Path
 import secrets
 import shutil
-import socket
 import subprocess
 import time
 import urllib.request
 from proof_browser import port
+from proof_tcp import campaign, endpoint as numeric_endpoint
 
 ROOT = Path(__file__).resolve().parent.parent
 PG_IMAGE = 'postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825'
@@ -34,7 +34,9 @@ def main():
     pg = None
     probe_network = None
     project = network
+    daemon_image = network+'-daemon'
     env = os.environ.copy()
+    env['PROOF_IMAGE'] = daemon_image
     facts = {'events': [], 'mount_roles': {'source':'read-only immutable fixtures', 'payload':'copied writable payload and legacy control lock', 'catalog':'disposable PostgreSQL private network, bounded tmpfs', 'output':'explicit fresh host directory', 'private':'read-only operator config/key', 'runtime':'private writable bootstrap, removed on cleanup', 'tmp':'64 MiB tmpfs'}, 'limitations':['No external LAN peer or physical failure-domain proof; host and isolated sibling-network observations only.','IPv6 host ::1 refusal qualified; no routed external IPv6 peer available.','Fixed mounts; stop and recreate after uncertain reattachment; hot reattachment unimplemented.']}
     def run(name,cmd,check=True,**kwargs):
         with (out/(name+'.log')).open('wb') as log:
@@ -53,11 +55,11 @@ def main():
         run('docker-info',['docker','info'])
         run('prepared-check',['python3','scripts/prepare_daemon.py','--check'])
         run('cli-image-build',['docker','build','-t',network+'-cli','-f','Dockerfile','.'])
-        run('daemon-image-build',['docker','build','-t','coldkeep-phase2-proof:local','-f','deploy/phase2/Dockerfile','.'])
+        run('daemon-image-build',['docker','build','-t',daemon_image,'-f','deploy/phase2/Dockerfile','.'])
         facts['cli_image']=capture('docker','image','inspect',network+'-cli','--format','{{.Id}}')
-        facts['daemon_image']=capture('docker','image','inspect','coldkeep-phase2-proof:local','--format','{{.Id}}')
+        facts['daemon_image']=capture('docker','image','inspect',daemon_image,'--format','{{.Id}}')
         run('cli-version',['docker','run','--rm',network+'-cli','version'])
-        run('daemon-diagnostics',['docker','run','--rm','coldkeep-phase2-proof:local','--diagnostics'])
+        run('daemon-diagnostics',['docker','run','--rm',daemon_image,'--diagnostics'])
         capture('docker','network','create','--label',label,network)
         secret=secrets.token_hex(32)
         envfile=work/'private/postgres.env'
@@ -75,9 +77,11 @@ def main():
         host={'fixture_only':True,'backend':'postgres','catalog':f'postgres://ck_phase2_admin:{secret}@{address}:5432/ck_phase2_proof?sslmode=disable','payload_root':str(work/'payload'),'snapshot':'proof-history','key_file':str(work/'private/key'),'restore_root':str(work/'output'),'runtime_dir':str(work/'runtime'),'listen':endpoint,'public_url':'http://'+endpoint,'container':False}
         setup=work/'private/setup.json';setup.write_text(json.dumps(host));setup.chmod(0o600)
         env['COLDKEEP_PROOF_PG_CONFIG']=str(setup)
-        run('postgres-fixture',['go','test','-count=1','-v','./internal/proofdaemon','-run','^TestProofPostgresFixture$'])
-        if 'PROOF_EVENT postgres_old_writer_fixture_prepared' not in (out/'postgres-fixture.log').read_text():
+        run('postgres-fixture',['go','test','-race','-count=1','-json','./internal/proofdaemon','-run','^TestProofPostgresFixture$'])
+        if any('PROOF_EVENT '+event not in (out/'postgres-fixture.log').read_text() for event in ('postgres_old_writer_fixture_prepared','scalar_byte_fields_postgres','postgres_encoding_admission')):
             raise RuntimeError('PostgreSQL fixture event missing')
+        from check_phase2_events import validate_postgres
+        facts['postgres_requirements']=validate_postgres([json.loads(line) for line in (out/'postgres-fixture.log').read_text().splitlines()],0)
         container={**host,'catalog':f'postgres://ck_phase2_admin:{secret}@catalog:5432/ck_phase2_proof?sslmode=disable','payload_root':'/data/payload','restore_root':'/data/output','runtime_dir':'/runtime','key_file':'/private/key','listen':'0.0.0.0:18766','container':True}
         (work/'private/container.json').write_text(json.dumps(container));(work/'private/container.json').chmod(0o600)
         # Long bind syntax must refuse a missing source, without creating it.
@@ -111,29 +115,21 @@ def main():
         second=work/'second-output';second.mkdir(mode=0o700)
         second_config={**container,'restore_root':'/data/second'}
         (work/'private/second.json').write_text(json.dumps(second_config));(work/'private/second.json').chmod(0o600)
-        second_command=['docker','run','--rm','--network',network,'--user',f'{uid}:{gid}','--mount',f'type=bind,src={work / "payload"},dst=/data/payload','--mount',f'type=bind,src={second},dst=/data/second','--mount',f'type=bind,src={work / "private"},dst=/private,readonly','--mount',f'type=bind,src={work / "runtime"},dst=/runtime','coldkeep-phase2-proof:local','--config','/private/second.json']
+        second_command=['docker','run','--rm','--network',network,'--user',f'{uid}:{gid}','--mount',f'type=bind,src={work / "payload"},dst=/data/payload','--mount',f'type=bind,src={second},dst=/data/second','--mount',f'type=bind,src={work / "private"},dst=/private,readonly','--mount',f'type=bind,src={work / "runtime"},dst=/runtime',daemon_image,'--config','/private/second.json']
         if run('container-contention',second_command,check=False)==0 or 'repository is busy' not in (out/'container-contention.log').read_text():raise RuntimeError('container lock contention absent')
         # Host IPv4 non-loopback and IPv6 loopback are not published endpoints.
         ips=[]
         for interface in json.loads(capture('ip','-j','address','show')):
             for a in interface.get('addr_info',[]):
                 if a['family']=='inet' and a['scope']=='global':ips.append(a['local'])
-        observations=[]
-        for address,family in [(x,socket.AF_INET) for x in ips]+[('::1',socket.AF_INET6)]:
-            with socket.socket(family) as probe:
-                probe.settimeout(1);code=probe.connect_ex((address,int(endpoint.split(':')[1])))
-            observations.append({'address':address,'connect_errno':code,'refused':code!=0})
-            if code==0:raise RuntimeError('unexpected non-published endpoint reachable')
         probe_network=network+'-probe'
         capture('docker','network','create','--label',label,probe_network)
         app_address=inspect['NetworkSettings']['Networks'][network]['IPAddress']
-        targets=[(x,int(endpoint.split(':')[1])) for x in ips]+[(app_address,18766)]
-        for index,(ip,number) in enumerate(targets):
-            command=['docker','run','--rm','--network',probe_network,'--cap-drop','ALL','--security-opt','no-new-privileges:true','--user','65532:65532','--entrypoint','wget','coldkeep-phase2-proof:local','-T','2','-O','-',f'http://{ip}:{number}/']
-            code=run('sibling-network-'+str(index),command,check=False)
-            if code==0:raise RuntimeError('unpublished service reachable from sibling network')
-            observations.append({'from':'isolated sibling network','address':ip,'port':number,'exit_code':code,'refused':True})
-        facts['exposure_observations']=observations
+        targets=[numeric_endpoint(x,int(endpoint.split(':')[1])) for x in ips]+[numeric_endpoint(app_address,18766)]
+        host_targets=[numeric_endpoint(x,int(endpoint.split(':')[1])) for x in ips]+[numeric_endpoint('::1',int(endpoint.split(':')[1]))]
+        facts['exposure_targets']=targets
+        facts['host_exposure_targets']=host_targets
+        facts['tcp']=campaign(ROOT,out,work,facts['daemon_image'],probe_network,label,targets,host_targets)
         facts['network']=json.loads(capture('docker','network','inspect',network))[0]
         facts['events']=['postgres_embedded_browser_restore','nonroot_fixed_mounts_bounded_tmp','missing_mount_refused','loopback_only_publication','browser_closed_container_kept_lease','container_second_owner_refused','cli_image_runs']
         # Retained CLI actually reads this PostgreSQL catalog through its own path.
@@ -152,9 +148,12 @@ def main():
         run('network-cleanup',['docker','network','rm',network],check=False)
         facts['owned_container_residuals']=capture('docker','ps','-aq','--filter','label='+label)
         facts['owned_network_residuals']=capture('docker','network','ls','-q','--filter','label='+label)
-        facts['cleanup_complete']=not facts['owned_container_residuals'] and not facts['owned_network_residuals']
-        (out/'docker.json').write_text(json.dumps(facts,indent=2)+'\n')
+        facts['owned_project_residuals']=capture('docker','ps','-aq','--filter','label=com.docker.compose.project='+project)
         shutil.rmtree(work)
+        facts['owned_image_cleanup']={tag:run('image-cleanup-'+tag,['docker','image','rm',tag],check=False) for tag in (network+'-cli',daemon_image)}
+        facts['cleanup_complete']=(not facts['owned_container_residuals'] and not facts['owned_network_residuals']
+                                   and not facts['owned_project_residuals'] and not any(facts['owned_image_cleanup'].values()))
+        (out/'docker.json').write_text(json.dumps(facts,indent=2)+'\n')
     if not facts['cleanup_complete']:raise RuntimeError('owned Docker resources remain')
     print('PROOF_EVENT postgres_docker_cli_daemon_mount_exposure_cleanup')
 

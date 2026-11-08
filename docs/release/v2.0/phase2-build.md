@@ -78,3 +78,11 @@ All binds use existing paths and `create_host_path: false`. No Docker socket mou
 Data is outside /app. Stop and recreate after uncertain mount reattachment; no hot
 reattachment behavior is implemented. `proof_docker.py` prepares and cleans only
 its owned disposable resources and retains the concrete mount/exposure observations.
+
+The P1–P3 follow-up builds `scripts/proofprobe` with the same pinned Go toolchain,
+CGO disabled, and mounts that private helper read-only in the existing pinned
+proof image. It records source/binary/image identities, actual commands/statuses,
+connect deadlines and independent listener accepts. The Docker runner uses
+unique per-run image tags through PROOF_IMAGE and removes only its owned tags;
+it preserves pre-existing local proof images. The integrated gate requires all
+new Go cases, PostgreSQL scalar controls and TCP control/target results.

@@ -2593,6 +2593,19 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                     fail("2.02 COMPLETE requires its owning bounded Phase 2 result")
                 else:
                     result.outstanding_obligations.remove("2.02-delivery-native-proof")
+                followup = root / "docs/release/v2.0/phase2-followup-result.md"
+                followup_required = (
+                    "Local action 2.02: COMPLETE — internal delivery and Linux feasibility proof",
+                    "Product gates: INCOMPLETE", "Implementation: ACTIVE",
+                    "coldkeep_phase2_followup_codex_2026-11-08.md",
+                    "P1 restore destination: PASS", "P2 TCP classification: PASS",
+                    "P3 complete-value byte bounds: PASS", "Fresh integrated qualification: PASS",
+                )
+                if (not followup.is_file() or followup.is_symlink() or followup.stat().st_size > 65536
+                        or any(token not in followup.read_text() for token in followup_required)):
+                    fail("2.02 COMPLETE also requires its owning P1–P3 follow-up result")
+                    if "2.02-delivery-native-proof" not in result.outstanding_obligations:
+                        result.outstanding_obligations.insert(0, "2.02-delivery-native-proof")
         expected = {
             "schema": "coldkeep-active-development/v1", "family": "v2.0",
             "version": version, "state": "development", "phase": phase,

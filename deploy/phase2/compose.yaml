@@ -1,7 +1,7 @@
 # Explicit internal proof. All host directories must already exist.
 services:
   daemon:
-    image: coldkeep-phase2-proof:local
+    image: "${PROOF_IMAGE:?}"
     user: "${PROOF_UID:?}:${PROOF_GID:?}"
     read_only: true
     cap_drop: [ALL]

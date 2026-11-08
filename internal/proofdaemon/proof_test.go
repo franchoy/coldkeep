@@ -435,6 +435,22 @@ func TestProofPostgresFixture(t *testing.T) {
 	must(t, e)
 	must(t, os.WriteFile(config.KeyFile, key, 0600))
 	must(t, coordination.PrepareExisting(context.Background(), config.PayloadRoot))
+	// These controls are required by the Docker gate, which supplies this owned
+	// fixture. No PostgreSQL NUL value is manufactured.
+	var serverEncoding, clientEncoding string
+	must(t, pg.QueryRow("SHOW server_encoding").Scan(&serverEncoding))
+	must(t, pg.QueryRow("SHOW client_encoding").Scan(&clientEncoding))
+	t.Logf("PostgreSQL server_encoding=%s client_encoding=%s", serverEncoding, clientEncoding)
+	proofScalarByteControls(t, pg)
+	_, e = pg.Exec("SET client_encoding TO LATIN1")
+	must(t, e)
+	if !errors.Is(checkEnvelope(pg), ErrEncoding) {
+		t.Fatal("non-UTF8 client encoding was admitted")
+	}
+	_, e = pg.Exec("SET client_encoding TO UTF8")
+	must(t, e)
+	must(t, checkEnvelope(pg))
+	t.Log("PROOF_EVENT postgres_encoding_admission")
 	t.Log("PROOF_EVENT postgres_old_writer_fixture_prepared")
 }
 

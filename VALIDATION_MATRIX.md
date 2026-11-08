@@ -1,4 +1,8 @@
 # Validation Matrix
+The P1–P3 follow-up makes restore-root aliases, complete scalar byte bounds and
+TCP reachability controls mandatory in that gate. Its selected fresh/reuse
+schedule is recorded in the charter; all 244 recovery requirements remain intact.
+
 
 Phase 2 / action 2.02 adds the bounded internal delivery/native-feasibility
 profile in [the current charter](docs/release/v2.0/README.md). Required evidence

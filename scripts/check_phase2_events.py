@@ -25,21 +25,54 @@ CRITICAL = {
     'disconnect_continues_shutdown_joins_before_release',
 }
 
-def validate(records, exit_code):
+BYTE_FIELDS = ('logical_file_original_name','snapshot_path_path','chunk_chunk_hash',
+               'snapshot_id','snapshot_label','container_filename')
+def scalar_cases(parent, sqlite):
+    cases = {parent}
+    for field in BYTE_FIELDS:
+        cases.add(parent+'/'+field)
+        names = ['ascii_exact','ascii_over','utf8_exact','utf8_over','empty']
+        if sqlite: names.append('nul_over')
+        if field == 'snapshot_label': names.append('null')
+        cases.update(parent+'/'+field+'/'+name for name in names)
+    return cases
+
+REQUIRED[PREFIX+'internal/proofdaemon'].update({
+    'TestProofReviewRejectsRestoreRootTrimAlias',
+    *('TestProofReviewRejectsRestoreRootTrimAlias/'+x for x in ('ascii_space','unicode_nonbreaking_space')),
+    'TestProofReviewRestoreRootValidControls',
+    *('TestProofReviewRestoreRootValidControls/'+x for x in ('ordinary_sibling','internal_space')),
+    'TestProofReviewRejectsOversizedNULLabelBeforeHistory',
+    'TestProofReviewLabelBoundaryControls',
+    *('TestProofReviewLabelBoundaryControls/'+x for x in ('ascii_at_1024','utf8_1024_bytes','ascii_over_1024','utf8_over_1024','empty','bounded_nul')),
+    'TestProofSQLiteEncodingAdmission',
+    *('TestProofSQLiteEncodingAdmission/'+x for x in ('UTF-16le','UTF-16be')),
+    *scalar_cases('TestProofScalarByteFieldsSQLite',True),
+})
+CRITICAL.update({'restore_alias_refused_preserved','restore_valid_root_hash_metadata',
+                 'nul_label_refused_before_engine_preserved','scalar_byte_fields_sqlite',
+                 'sqlite_utf16_refused_before_reads'})
+POSTGRES_REQUIRED = {PREFIX+'internal/proofdaemon':scalar_cases('TestProofPostgresFixture',False)}
+POSTGRES_CRITICAL = {'postgres_old_writer_fixture_prepared','scalar_byte_fields_postgres','postgres_encoding_admission'}
+
+def validate_postgres(records, exit_code):
+    return validate(records,exit_code,POSTGRES_REQUIRED,POSTGRES_CRITICAL)
+
+def validate(records, exit_code, required=REQUIRED, critical=CRITICAL):
     if exit_code != 0:
         raise ValueError('nonzero Go test exit')
     if not records or any(r.get('Action') in ('fail','skip') for r in records):
         raise ValueError('empty, failed or skipped proof stream')
-    for package, tests in REQUIRED.items():
+    for package, tests in required.items():
         for test in tests:
             for action in ('run','pass'):
                 if not any(r.get('Package')==package and r.get('Test')==test and r.get('Action')==action for r in records):
                     raise ValueError('missing required '+action+' '+test)
     text=''.join(r.get('Output','') for r in records)
-    for event in CRITICAL:
+    for event in critical:
         if 'PROOF_EVENT '+event not in text:
             raise ValueError('missing critical event '+event)
-    return {'required_tests':sum(map(len,REQUIRED.values())), 'critical_events':sorted(CRITICAL)}
+    return {'required_tests':sum(map(len,required.values())), 'critical_events':sorted(critical)}
 
 if __name__=='__main__':
     import sys

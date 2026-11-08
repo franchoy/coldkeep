@@ -17,15 +17,14 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 2 / action 2.02 is authorized in BUILD mode by
-`coldkeep_phase2_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
-Scope: one owned internal fixture daemon, embedded typed UI/API, real historical
-restoration and Linux x86-64 CGO SQLite feasibility alongside PostgreSQL Docker.
+Active v2.0 Phase 2 follow-up / action 2.02 is authorized in BUILD mode by
+`coldkeep_phase2_followup_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
+Scope: P1 restore-root admission, P2 TCP exposure classification and P3 complete-
+value byte bounds in the existing internal proof; fresh integrated qualification.
 Accepted 2.01 and local-profile 2.03 COMPLETE reports remain unchanged.
 Implementation stays ACTIVE; product gates stay INCOMPLETE. Action 2.04 must not
 begin. No schema/payload/recovery-format change or real-repository adoption.
-Only the mattn SQLite driver and its checksums may change among Go dependencies;
-Go 1.26.10 and unrelated pins remain fixed. Local commits and owned disposable
+All dependency pins and checksums remain fixed, including Go 1.26.10. Local commits and owned disposable
 fixtures are authorized. Preserve predecessor worktrees and frozen v1 records.
 No push, PR publication, merge, tag, release or deployment is authorized.
 Preserve user changes and data.

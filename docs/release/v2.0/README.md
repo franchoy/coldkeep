@@ -1,8 +1,8 @@
 # Coldkeep v2.0 active charter
 
-Current unit: **Phase 2 / action 2.02 BUILD**, authorized by
-`coldkeep_phase2_codex_2026-11-08.md` (8 November 2026 launch bundle).
-[Current authority](../current.json) records **2.02 COMPLETE**, implementation
+Current unit: **Phase 2 follow-up / action 2.02 BUILD**, authorized by
+`coldkeep_phase2_followup_codex_2026-11-08.md` (8 November 2026 follow-up bundle).
+[Current authority](../current.json) records **2.02 ACTIVE**, implementation
 ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
 **1.13.19**, /v2 and profile manual-postgresql-docker remain unchanged.
 
@@ -19,8 +19,7 @@ and real Linux x86-64 CGO SQLite persistence alongside CGO-disabled PostgreSQL
 Docker. This is an internal delivery and feasibility proof. It does not qualify
 native support, SQLite lifecycle/defaults, durable jobs or production authentication.
 No 2.04, schema/payload/recovery-format change, real repository adoption or publication.
-Only the mattn SQLite driver and necessary Go checksums may change; unrelated
-pins and Go 1.26.10 remain fixed. Frontend tools/dependencies are pinned separately.
+All Go dependency pins, checksums and Go 1.26.10 remain fixed. Frontend tools/dependencies are pinned separately.
 
 Required clean-checkpoint validation:
 
@@ -32,21 +31,24 @@ Required clean-checkpoint validation:
 - Prepared-build identity, missing/stale assets and independent CLI go install.
 - Real SQLite store/close/reopen/restore and copied historical reader, named no-CGO
   refusal; PostgreSQL CLI and daemon Docker, mount/non-root/temp/exposure proof.
-- Fresh unchanged 23-case product oracle and affected SQLite/reader/store checks.
-- Fresh accepted recovery/coordination/command race gate, all 244 requirements;
+- Fresh unchanged 23-case product oracle; source-bound reuse of unchanged affected
+  SQLite/reader/store checks.
+- Source-bound reuse of accepted recovery/coordination/command race gate, all 244 requirements;
   original-loss, post-live-GC and large-receipt scenarios remain blocking.
 - Fresh full Python suite and focused authority tests; explicit 0/2.01/2.03 fixtures,
   historical-v1 validators against the actual frozen checkout and 849-file digest.
 - Source-bound raw commands, identities, initial failures, predecessor preservation,
   owned cleanup, local commits, replay-verified patches and checksummed evidence.
 
-All selected proof packages and integrated criteria passed at the clean
-implementation checkpoint; [the bounded result](phase2-result.md) records local
-2.02 COMPLETE under the authorized conditional rule. LOCAL_ACTION_2_02_AUTHORITY_ONLY is a
-structural diagnostic and never runtime certification. Otherwise retain ACTIVE
-with precise blockers. Product gates stay INCOMPLETE and implementation ACTIVE.
-Action 2.04 and later product/native/release gates remain outstanding.
-Requested GPT-6 Astra / Extra High; actual settings unknown unless observable.
+The submitted [Phase 2 result](phase2-result.md) is preserved. Its local completion
+is held pending P1 restore-destination admission, P2 TCP reachability classification
+and P3 complete-value byte bounds. The follow-up requires fresh counterexamples,
+corrected race tests, integrated native/browser/Docker proof, current oracle,
+Python/authority and build/static checks. Unchanged recovery, broad SQLite/retained
+history and D19 evidence may be reused only with exact source/command/log bindings.
+The follow-up result will record conditional local completion after all criteria
+pass; implementation stays ACTIVE and product gates INCOMPLETE. No 2.04 work.
+Actual model/effort are unknown unless directly observable.
 
 ## Selected first stable profile
 

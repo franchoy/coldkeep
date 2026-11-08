@@ -432,6 +432,23 @@ class Action202AuthorityTests(V2AuthorityFixture):
                 "coldkeep_phase2_codex_2026-11-08.md\nPackaged process: PASS\n"
                 "Authenticated engine journey: PASS\nLinux SQLite and PostgreSQL Docker: PASS\n")
         report.write_text(body)
+        self.assert_rejected()  # The preserved submission alone cannot close P1–P3.
+        followup = self.root / "docs/release/v2.0/phase2-followup-result.md"
+        followup_body = ("Local action 2.02: COMPLETE — internal delivery and Linux feasibility proof\n"
+                         "Product gates: INCOMPLETE\nImplementation: ACTIVE\n"
+                         "coldkeep_phase2_followup_codex_2026-11-08.md\n"
+                         "P1 restore destination: PASS\nP2 TCP classification: PASS\n"
+                         "P3 complete-value byte bounds: PASS\nFresh integrated qualification: PASS\n")
+        for line in followup_body.splitlines():
+            followup.write_text(followup_body.replace(line, ""))
+            self.assert_rejected()
+        followup.write_text(followup_body + "x" * 65536)
+        self.assert_rejected()
+        followup.unlink()
+        followup.symlink_to(report)
+        self.assert_rejected()
+        followup.unlink()
+        followup.write_text(followup_body)
         result = release.validate(self.root, "auto")
         self.assertEqual(result.violations, [])
         self.assertNotIn("2.02-delivery-native-proof", result.outstanding_obligations)

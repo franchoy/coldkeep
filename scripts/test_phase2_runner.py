@@ -29,3 +29,28 @@ class Phase2Events(unittest.TestCase):
                     records.append({'Package':package,'Test':test,'Action':'skip'})
                     with self.assertRaisesRegex(ValueError,'skipped'):
                         proof.validate(records,0)
+
+class PostgresEvents(Phase2Events):
+    def stream(self):
+        records=[{'Package':p,'Test':t,'Action':a} for p,tests in proof.POSTGRES_REQUIRED.items()
+                 for t in tests for a in ('run','pass')]
+        records += [{'Action':'output','Output':'PROOF_EVENT '+e} for e in proof.POSTGRES_CRITICAL]
+        return records
+
+    def test_complete_stream_and_nonzero_exit(self):
+        self.assertEqual(proof.validate_postgres(self.stream(),0)['required_tests'],sum(map(len,proof.POSTGRES_REQUIRED.values())))
+        with self.assertRaisesRegex(ValueError,'nonzero'): proof.validate_postgres(self.stream(),1)
+
+    def test_every_missing_event_refuses(self):
+        for event in proof.POSTGRES_CRITICAL:
+            with self.subTest(event=event), self.assertRaisesRegex(ValueError,'critical'):
+                proof.validate_postgres([r for r in self.stream() if r.get('Output')!='PROOF_EVENT '+event],0)
+
+    def test_required_skip_and_missing_case_refuse(self):
+        for package,tests in proof.POSTGRES_REQUIRED.items():
+            for test in tests:
+                with self.subTest(test=test):
+                    records=[r for r in self.stream() if (r.get('Package'),r.get('Test'))!=(package,test)]
+                    with self.assertRaisesRegex(ValueError,'missing'): proof.validate_postgres(records,0)
+                    records.append({'Package':package,'Test':test,'Action':'skip'})
+                    with self.assertRaisesRegex(ValueError,'skipped'): proof.validate_postgres(records,0)

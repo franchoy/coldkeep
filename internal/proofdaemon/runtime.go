@@ -32,6 +32,7 @@ const MaxFileBytes = 16 << 20
 var ErrUnsupportedSQLite = errors.New("sqlite_cgo_required")
 var ErrFixture = errors.New("fixture_configuration_refused")
 var ErrBounds = errors.New("fixture_limit_exceeded")
+var ErrEncoding = errors.New("fixture_encoding_refused")
 
 // Config is supplied by the operator in a private file, never by the browser.
 // Catalog is a SQLite absolute filename or an explicit PostgreSQL URL.
@@ -88,6 +89,11 @@ func (c Config) validate() error {
 	}
 	if c.Backend == "sqlite" && !sqliteEnabled {
 		return ErrUnsupportedSQLite
+	}
+	// The inherited engine trims this exact prefix before restoring. Refuse an
+	// interpretation change before ownership/catalog work; never redirect output.
+	if strings.TrimSpace(c.RestoreRoot) != c.RestoreRoot {
+		return ErrFixture
 	}
 	roots := []string{c.PayloadRoot, c.RestoreRoot, c.RuntimeDir}
 	for _, p := range roots {
@@ -255,6 +261,27 @@ func Open(c Config) (r *Runtime, err error) {
 // Scalar counts/lengths precede the existing engine's allocation-producing
 // queries. Fixed SQL identifiers only. No HTTP parameter reaches this SQL.
 func checkEnvelope(conn *sql.DB) error {
+	// SQLite octet_length(column) uses stored byte metadata without materializing
+	// the complete text. Admit UTF-8 only: the pinned driver returns UTF-8 via
+	// sqlite3_column_text/bytes, so UTF-16 storage sizes would understate some
+	// Go strings. PostgreSQL must use UTF8 for both storage and client transfer.
+	// These are read-only admission checks, never encoding conversion/repair.
+	switch db.BackendFromDB(conn) {
+	case db.BackendSQLite:
+		var encoding string
+		if err := conn.QueryRow("PRAGMA main.encoding").Scan(&encoding); err != nil || encoding != "UTF-8" {
+			return ErrEncoding
+		}
+	case db.BackendPostgres:
+		for _, query := range []string{"SHOW server_encoding", "SHOW client_encoding"} {
+			var encoding string
+			if err := conn.QueryRow(query).Scan(&encoding); err != nil || encoding != "UTF8" {
+				return ErrEncoding
+			}
+		}
+	default:
+		return ErrEncoding
+	}
 	for table, bound := range map[string]int{"snapshot": 32, "snapshot_file": MaxEntries, "snapshot_path": MaxEntries, "logical_file": MaxEntries, "physical_file": MaxEntries, "file_chunk": 4096, "chunk": 4096, "blocks": 4096, "storage_blocks": 4096, "chunk_block_refs": 4096, "container": 128, "repository_config": 64, "store_repair_attempt": 256, "store_repair_container": 128, "store_repair_block": 4096, "store_repair_chunk": 4096, "retired_chunk_block_ref": 4096, "retired_legacy_block_extent": 4096} {
 		var n int
 		if e := conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); e != nil {
@@ -265,13 +292,13 @@ func checkEnvelope(conn *sql.DB) error {
 		}
 	}
 	for _, q := range []string{
-		"SELECT COUNT(*) FROM logical_file WHERE total_size<0 OR total_size>16777216 OR LENGTH(original_name)>1024",
-		"SELECT COUNT(*) FROM snapshot_path WHERE LENGTH(path)>1024",
-		"SELECT COUNT(*) FROM chunk WHERE size>16777216 OR LENGTH(chunk_hash)>128",
+		"SELECT COUNT(*) FROM logical_file WHERE total_size<0 OR total_size>16777216 OR OCTET_LENGTH(original_name)>1024",
+		"SELECT COUNT(*) FROM snapshot_path WHERE OCTET_LENGTH(path)>1024",
+		"SELECT COUNT(*) FROM chunk WHERE size>16777216 OR OCTET_LENGTH(chunk_hash)>128",
 		"SELECT COUNT(*) FROM blocks WHERE stored_size>16777216 OR plaintext_size>16777216",
 		"SELECT COUNT(*) FROM storage_blocks WHERE stored_size>16777216 OR plaintext_size>16777216",
-		"SELECT COUNT(*) FROM snapshot WHERE LENGTH(id)>128 OR LENGTH(label)>1024",
-		"SELECT COUNT(*) FROM container WHERE current_size>67108864 OR LENGTH(filename)>255",
+		"SELECT COUNT(*) FROM snapshot WHERE OCTET_LENGTH(id)>128 OR OCTET_LENGTH(label)>1024",
+		"SELECT COUNT(*) FROM container WHERE current_size>67108864 OR OCTET_LENGTH(filename)>255",
 	} {
 		var n int
 		if e := conn.QueryRow(q).Scan(&n); e != nil {
