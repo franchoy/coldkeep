@@ -1,64 +1,53 @@
 # Coldkeep v2.0 active charter
 
-Adopted 7 November 2026 (Europe/Madrid), under instruction edition 1.0.
-The current unit is the **Phase 1C C1–C3 follow-up BUILD** under the
-8 November 2026 correction instruction. The submitted copy/completion report
-is preserved; its acceptance is pending this bounded follow-up review. [../current.json](../current.json) remains the single authority:
-**2.03 ACTIVE**, implementation ACTIVE, product gates INCOMPLETE, application
-**2.0.0-dev.0**. Structural validation reports
-`LOCAL_ACTION_2_03_AUTHORITY_ONLY`; it does not certify exported bytes.
+Adopted 7 November 2026 (Europe/Madrid). Current unit: **Phase 1D BUILD** under
+`coldkeep_phase1d_codex_2026-11-08.md` (8 November launch bundle).
+[Current authority](../current.json) remains **2.03 ACTIVE**, implementation
+ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
+**1.13.19** and the frozen v1 records retain their identities.
 
-Phase 0, Phase 1A / 2.01 and the Phase 1B follow-up B1–B3 are accepted.
-Preserve their [Phase 1A result](phase1a-result.md), [submitted Phase 1B
-result](phase1b-result.md), [accepted follow-up](phase1b-followup-result.md),
-[fixed oracle](fixture-results.md), product contract and frozen v1 records.
-Latest stable remains **v1.13.19**.
+The exact accepted starting HEAD is `d96edea6abb1c2d55152e2020286a08ad959368e`,
+tree `8c30e47284668c86dae8aad55945458111eaed06`. Phase 0, 1A, B1–B3 and C1–C3
+are accepted and their reports/fixtures remain byte-identical.
 
-## Phase 1C scope and validation
+## Phase 1D scope and validation
 
-Implement explicit preparation of already-existing legacy coordination, one
-fresh owned full-catalog cut, a snapshot-bound PostgreSQL custom archive,
-independent whole-object copies, a bounded source-independent checker and
-atomic completion publication after successful source cleanup. Preserve the
-[passive API](passive-inventory.md), actual transaction/connection/socket joins,
-named migrated-column checks and policy-filtered-view refusals. Follow the
-[package and operator contract](recovery-package.md). No implicit preparation,
-source grants, initialization, migration, schema/format/dependency changes,
-product import, adoption or publication is authorized. Local commits and
-owned disposable validation are authorized. Accepted worktrees remain intact.
+Implement the constrained package-v1 importer into a fresh explicit target;
+restore plaintext/encrypted history with the original installation unavailable;
+then freshly import the unchanged pre-GC generation after actual live source GC.
+Use the [operator contract](recovery-package.md). Only trusted operator backups
+are accepted. Source Inspect/Export remain passive and their cleanup joins,
+visibility checks, layout checks and all 135 named requirements remain blocking.
+No schema migration, dependency change, adoption, daemon/UI or 2.04 work belongs
+here. No push, PR publication, merge, tag, release or deployment is authorized.
 
-Use installed pinned Go 1.26.10, `GOTOOLCHAIN=local`, `GOWORK=off`, CGO=1,
-PostgreSQL 16, and explicitly selected matched PostgreSQL 16 clients. Required
-local evidence at a clean implementation checkpoint:
+The owning instruction conditionally authorizes **local-profile 2.03 COMPLETE**
+once all D1–D12 criteria pass for Linux/manual PostgreSQL 16. The authority
+validator accepts ACTIVE/COMPLETE structurally under the Phase 1D result;
+`LOCAL_ACTION_2_03_AUTHORITY_ONLY` never certifies runtime evidence or the product.
+Keep 2.02, 2.04–2.13, 2.15, 2.17 and separate publication authorization outstanding.
+Physical failure-domain confirmation is a separate operator fact.
 
-- `scripts/run_recovery_export_tests.sh <new-dir>` under race detection with
-  explicit disposable DB inputs and client paths. Require all named scenarios
-  and no failed/skipped events, including retained B1–B3 and coordination cases.
-- Preserve the passive and product gates. Run current product fixtures against
-  the unchanged 23-case oracle. Exact D19 and unaffected historical package
-  evidence may be reused with their original source identity and scope.
-- Both authority validators and focused explicit-phase/refusal tests. Reuse the
-  submitted 542-test full Python run while its authority/governance implementation
-  and tests remain byte-identical; rerun it if they change. Historical Phase 0
-  and 2.01 fixtures remain independent of the live phase.
-- Local CI audit and relevant Go mutation tests, including the blocking recovery
-  step. Build, vet, pinned lint, formatting, shell syntax/ShellCheck, smart-quote,
-  validation-matrix, row-writer and whitespace guards.
-- Preserve all 849 frozen v1 files, accepted historical reports, fixed fixtures,
-  schema SQL, payload format code and module/toolchain pins. Bind commands,
-  raw events, preservation and cleanup to actual source identities.
+Required clean-checkpoint validation:
 
-The [submitted result](phase1c-result.md) preserves its original outcome and
-evidence. The [follow-up result](phase1c-followup-result.md) records C1–C3 red/green
-proof, proposal adaptations, clean-checkpoint validation and explicit reuse.
-C1 bounds JSON counts before typed allocation with cancellation and folded-alias
-checks; C2 validates the canonical credential parent before creation; C3 refuses
-subscriptions only in the selected source database. Ownership, source cleanup,
-publication, preparation, payload copying and the package version are retained. Constrained import, isolated restoration without the original
-installation and post-live-GC survival remain in [next-slice.md](next-slice.md).
-Full release/platform/stress/hosted qualification is outside this local unit.
-Recommended settings: **GPT-6 Astra / Extra High**; requested and observable
-settings are recorded separately, with unknown settings left unknown.
+- Go 1.26.10, `GOTOOLCHAIN=local`, `GOWORK=off`; pinned dependencies/linter.
+- Race-enabled `scripts/run_recovery_export_tests.sh <new-dir>` with explicit
+  disposable PostgreSQL/client/image inputs. Includes isolated recovery and real
+  live GC, all retained requirements, no missing/failed/skipped named events.
+- Unchanged 23-case current-reader product oracle; explicit retained D19 evidence.
+- Affected storage/restore/snapshot/maintenance regressions and source-preservation
+  checks. Reuse only actually unchanged historical evidence, preserving skips.
+- Build, vet, pinned lint, formatting, shell/CI/whitespace/dependency guards.
+- Focused authority tests, current and explicit historical validators, full fresh
+  Python suite, local CI audit and failure/missing/skip enforcement mutations.
+- Final authority/governance diagnostics, frozen 849-file digest, protected-path
+  and predecessor receipts, source-bound commands/logs, owned-resource cleanup,
+  incremental/ordered patches with replay and compact checksummed evidence.
+
+Requested settings: **GPT-6 Astra / Extra High**. Record actual settings only if
+observable; no global configuration changes or contributor model requirement.
+The [next handoff](next-slice.md) records remaining scope. Full product/platform/
+hosted/release qualification remains with its owning action.
 
 ## Selected first stable profile
 

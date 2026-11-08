@@ -728,6 +728,7 @@ jobs:
         env:
           COLDKEEP_PHASE1B_TEST: 1
           COLDKEEP_PHASE1C_TEST: 1
+          COLDKEEP_RECOVERY_IMAGE: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
           COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump
           COLDKEEP_PG_RESTORE: /usr/lib/postgresql/16/bin/pg_restore
           DB_HOST: 127.0.0.1

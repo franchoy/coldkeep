@@ -1512,6 +1512,7 @@ check_local_workflow() {
   # shellcheck disable=SC2016
   require_content_pattern "$recovery_copy_block" '^        if: [$][{][{] matrix[.]codec == .plain. [}][}]$' 'recovery copy contract executes in plain matrix' || check_status=1
   require_content_pattern "$recovery_copy_block" '^          COLDKEEP_PHASE1C_TEST: 1$' 'recovery copy contract explicitly opts into disposable tests' || check_status=1
+  require_content_pattern "$recovery_copy_block" '^          COLDKEEP_RECOVERY_IMAGE: postgres:16[.]15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825$' 'recovery copy contract requires isolated recovery image' || check_status=1
   if grep -Eq 'continue-on-error' <<<"$recovery_copy_block"; then
     echo '[audit] ERROR: recovery copy contract must remain blocking' >&2
     check_status=1

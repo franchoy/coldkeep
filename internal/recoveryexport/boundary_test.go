@@ -41,7 +41,7 @@ func TestPassiveCallBoundary(t *testing.T) {
 }
 
 // Destination writes are allowed in Export; source runtime/bootstrap/preparation
-// and SQL writes remain forbidden throughout this package.
+// and SQL writes remain forbidden outside the explicit fresh-target importer.
 func TestRecoverySourceCallBoundary(t *testing.T) {
 	forbidden := map[string]bool{}
 	for _, name := range strings.Fields("PrepareExisting PrepareControlNamespace ConnectDB EnsureSchema RunMigrations ParseStorageContext OpenLocalStorage LoadDefaultStorageContext NewLocalWriter NewLocalWriterWithDirAndDB Exec ExecContext") {
@@ -62,6 +62,11 @@ func TestRecoverySourceCallBoundary(t *testing.T) {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
+			// The only preparation allowance is in the fresh-target importer.
+			// No source/export file gains SQL, bootstrap or preparation capability.
+			if ok && name == "import_linux.go" && sel.Sel.Name == "PrepareExisting" {
+				return true
+			}
 			if ok && forbidden[sel.Sel.Name] {
 				t.Errorf("%s: source mutation capability %s", name, sel.Sel.Name)
 			}

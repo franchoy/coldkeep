@@ -2565,8 +2565,18 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
             result.outstanding_obligations = ["2.02-2.13", "2.15", "2.17", "separate-publication-authorization"]
         if phase == "2.03":
             result.outstanding_obligations = ["2.03-recovery-copy-completion-import-isolated-restoration", "2.02", "2.04-2.13", "2.15", "2.17", "separate-publication-authorization"]
-            if state.get("phase_status") != "ACTIVE":
-                fail("structural authority cannot complete parent action 2.03; phase_status must remain ACTIVE")
+            if state.get("phase_status") == "COMPLETE":
+                # This is structural local authority, never runtime certification.
+                report = root / "docs/release/v2.0/phase1d-result.md"
+                required = ("Local-profile action 2.03: COMPLETE",
+                            "Profile: Linux/manual PostgreSQL 16",
+                            "Product gates: INCOMPLETE", "Implementation: ACTIVE",
+                            "coldkeep_phase1d_codex_2026-11-08.md")
+                if (not report.is_file() or report.is_symlink() or report.stat().st_size > 65536
+                        or any(token not in report.read_text() for token in required)):
+                    fail("2.03 COMPLETE requires the owning Phase 1D local-profile result")
+                else:
+                    result.outstanding_obligations.remove("2.03-recovery-copy-completion-import-isolated-restoration")
         expected = {
             "schema": "coldkeep-active-development/v1", "family": "v2.0",
             "version": version, "state": "development", "phase": phase,

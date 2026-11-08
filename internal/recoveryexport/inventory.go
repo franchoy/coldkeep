@@ -241,6 +241,30 @@ func inspectCut(ctx context.Context, c Config, l Limits, consume func(context.Co
 	if err = h.at("acquired", nil); err != nil {
 		return
 	}
+	return inspectOwnedCut(ctx, c, r, l, consume, h, ownedCut{r.identity, lease})
+}
+
+// ownedCut binds continuous ownership to the exact root. Active sessions join
+// inside inspectOwnedCut; callers retain the lease through their handoff.
+type ownedCut struct {
+	identity coordination.Identity
+	lease    coordination.ExistingLease
+}
+
+func inspectOwnedCut(ctx context.Context, c Config, r resolved, l Limits, consume func(context.Context, resolved, *sql.Tx, *Inventory) error, h *hooks, owned ownedCut) (result Result, err error) {
+	result.DiagnosticOnly = true
+	if owned.lease == nil || owned.identity != r.identity || !l.valid() || consume == nil {
+		return result, ErrConfiguration
+	}
+	lease := owned.lease
+	if err = lease.Check(); err != nil {
+		return
+	}
+	defer func() {
+		if err != nil {
+			result.Complete = false
+		}
+	}()
 	// The dialer owns cancellation of all physical I/O, including startup.
 	dialer := &catalogDialer{ctx: ctx}
 	r.connector.Dialer(dialer)

@@ -271,6 +271,30 @@ class Action203InventoryAuthorityTests(V2AuthorityFixture):
         self.change(phase_status="COMPLETE")
         self.assert_rejected()
 
+    def test_phase1d_complete_is_local_structural_authority_only(self):
+        self.change(phase_status="COMPLETE")
+        self.assert_rejected()
+        path = self.root / "docs/release/v2.0/phase1d-result.md"
+        tokens = ("Local-profile action 2.03: COMPLETE", "Profile: Linux/manual PostgreSQL 16",
+                  "Product gates: INCOMPLETE", "Implementation: ACTIVE",
+                  "coldkeep_phase1d_codex_2026-11-08.md")
+        path.write_text("\n".join(tokens))
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(result.evidence_scope, "LOCAL_ACTION_2_03_AUTHORITY_ONLY")
+        self.assertEqual(result.outstanding_obligations,
+                         ["2.02", "2.04-2.13", "2.15", "2.17", "separate-publication-authorization"])
+        for token in tokens:
+            with self.subTest(missing=token):
+                path.write_text("\n".join(t for t in tokens if t != token))
+                self.assert_rejected()
+        path.write_text("\n".join(tokens))
+        self.change(product_gates="COMPLETE")
+        self.assert_rejected()
+        self.change(product_gates="INCOMPLETE", phase="2.04")
+        self.assert_rejected()
+
     def test_conflicting_or_publication_scope_refused(self):
         for phase in ("0", "2.01", "2.04", "Phase 1B", None):
             self.change(phase=phase)

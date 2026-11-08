@@ -13,15 +13,15 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 1B / action 2.03 is authorized in BUILD mode by the accepted
-8 November 2026 passive/inventory instruction and `docs/release/v2.0/README.md`.
-`docs/release/current.json` remains current authority; parent action 2.03 stays
-ACTIVE. Scope: passive existing-repository opening and a quiesced full-catalog
-recovery inventory, plus the accepted CI-audit correction. Phase 1A / 2.01 is
-accepted complete and preserved. Latest stable remains v1.13.19; frozen
-`docs/release/v1*/` records retain their historical bytes. No package copy,
-completion/import protocol, daemon/UI, schema, capture or migration belongs to
-this unit. Product gates and full action 2.03 remain incomplete.
+Active v2.0 Phase 1D / action 2.03 is authorized in BUILD mode by the
+8 November 2026 constrained-import instruction and `docs/release/v2.0/README.md`.
+The accepted Phase 1C C1–C3 follow-up is preserved. Scope: constrained fresh-target
+import, actual installation-loss recovery and fresh recovery after real live GC.
+Parent action 2.03 remains ACTIVE until all integrated criteria pass; this
+instruction conditionally authorizes local-profile COMPLETE. Product gates stay
+INCOMPLETE, implementation ACTIVE, and action 2.04 must not begin. No daemon/UI,
+schema migration, real-repository adoption or release publication is authorized.
+Preserve predecessor worktrees and frozen v1 records. Local commits are authorized.
 No push, PR publication, merge, tag, release or deployment is authorized.
 Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
@@ -131,7 +131,7 @@ dimensions for v1.13.19 evidence. The completed v1.13.19 10-phase plan and
 exact 34-path boundary remain historical authority. Do not use CI work to
 introduce:
 
-- v2 work beyond the adopted Phase 1B passive/inventory unit or SQLite-first product-default behavior;
+- v2 work beyond the adopted Phase 1D recovery unit or SQLite-first product-default behavior;
 - public API, schema, storage-format, or repository-format changes;
 - product features;
 - broad refactors;
@@ -141,7 +141,7 @@ introduce:
 Treat v1.13.14 and v1.13.15 release evidence, and the v1.13.16
 failed-publication disposition, as immutable historical state.
 Do not perform out-of-phase repair, dependency movement, or schema/format
-change. V2 Phase 1B passive/inventory work is authorized under the active charter. Stop on release identity drift or newly discovered private
+change. V2 Phase 1D recovery work is authorized under the active charter. Stop on release identity drift or newly discovered private
 security impact.
 
 ## Required Review Questions

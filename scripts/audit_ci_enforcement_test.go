@@ -4069,6 +4069,7 @@ func TestAuditCIEnforcementRequiresRecoveryCopy(t *testing.T) {
 	codeql := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
 	command := `        run: bash scripts/run_recovery_export_tests.sh "$RUNNER_TEMP/integration-diag/recovery-export"`
 	for _, mutation := range []string{
+		strings.Replace(workflow, "          COLDKEEP_RECOVERY_IMAGE: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825\n", "", 1),
 		strings.Replace(workflow, "scripts/run_recovery_export_tests.sh", "scripts/missing_recovery.sh", 1),
 		strings.Replace(workflow, "      - name: Run recovery copy PostgreSQL contracts\n", "      - name: Run recovery copy PostgreSQL contracts\n        continue-on-error: true\n", 1),
 		strings.Replace(workflow, command, command+" || true", 1),

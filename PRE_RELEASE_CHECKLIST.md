@@ -1,6 +1,6 @@
 # Pre-release Checklist
 
-Active development: [v2.0 Phase 1C / action 2.03](docs/release/v2.0/README.md), selected by
+Active development: [v2.0 Phase 1D / action 2.03](docs/release/v2.0/README.md), selected by
 [docs/release/current.json](docs/release/current.json). Use its bounded local
 validation profile for this phase. Full release/publication procedures below
 remain applicable to their declared release scopes; frozen v1 certification

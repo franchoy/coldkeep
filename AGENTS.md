@@ -17,17 +17,15 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 1C / action 2.03 is authorized in BUILD mode by the
-8 November 2026 recovery-copy instruction and `docs/release/v2.0/README.md`.
-`docs/release/current.json` remains current authority; parent action 2.03 stays
-ACTIVE. Scope: explicit legacy coordination preparation, a fresh owned
-full-catalog recovery copy, bounded integrity checking and truthful completion
-publication after source cleanup. Phase 1A and the Phase 1B B1–B3 follow-up are
-accepted and preserved. Latest stable remains v1.13.19; frozen
-`docs/release/v1*/` records retain their historical bytes. Constrained import,
-installation-loss restoration and post-live-GC proof remain the next unit.
-No daemon/UI, schema, capture or migration belongs to this unit. Product gates
-and full action 2.03 remain incomplete.
+Active v2.0 Phase 1D / action 2.03 is authorized in BUILD mode by the
+8 November 2026 constrained-import instruction and `docs/release/v2.0/README.md`.
+The accepted Phase 1C C1–C3 follow-up is preserved. Scope: constrained fresh-target
+import, actual installation-loss recovery and fresh recovery after real live GC.
+Parent action 2.03 remains ACTIVE until all integrated criteria pass; this
+instruction conditionally authorizes local-profile COMPLETE. Product gates stay
+INCOMPLETE, implementation ACTIVE, and action 2.04 must not begin. No daemon/UI,
+schema migration, real-repository adoption or release publication is authorized.
+Preserve predecessor worktrees and frozen v1 records. Local commits are authorized.
 No push, PR publication, merge, tag, release or deployment is authorized.
 Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
@@ -43,7 +41,7 @@ Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
 ## Validation and handoffs
 
-Use the bounded Phase 1C validation profile in `docs/release/v2.0/README.md`
+Use the bounded Phase 1D validation profile in `docs/release/v2.0/README.md`
 and `PRE_RELEASE_CHECKLIST.md`. Run focused checks before applicable broader
 gates. Missing hosted or platform evidence is not a pass. The baseline commands:
 
