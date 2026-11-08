@@ -7,3 +7,6 @@ storage
 coldkeep
 *.test
 *.out
+web/node_modules
+web/dist
+bin

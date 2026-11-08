@@ -127,3 +127,9 @@ __pycache__/
 # github agents
 # =========================
 .github/agents/
+
+# Action 2.02 prepared frontend assets and build dependencies
+web/node_modules/
+web/dist/
+internal/webui/assets/*
+!internal/webui/assets/UNPREPARED

@@ -1505,6 +1505,19 @@ check_local_workflow() {
     fi
   fi
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
+  local phase2_block phase2_tools phase2_browser
+  phase2_block="$(extract_step_block_from_content "$quality_block" "Run Phase 2 delivery proof")"
+  phase2_tools="$(extract_step_block_from_content "$quality_block" "Setup Phase 2 frontend tools")"
+  phase2_browser="$(extract_step_block_from_content "$quality_block" "Install Phase 2 browser tooling")"
+  # shellcheck disable=SC2016 # Literal runner path is part of the gate contract.
+  require_content_pattern "$phase2_block" '^        run: python3 scripts/run_phase2_proof\.py --output "\$RUNNER_TEMP/phase2-proof"$' 'Phase 2 delivery proof command' || check_status=1
+  require_content_pattern "$phase2_tools" "^          node-version: '24[.]22[.]2'$" 'Phase 2 delivery proof pins Node' || check_status=1
+  require_content_pattern "$phase2_browser" '^          npm --prefix web ci --ignore-scripts$' 'Phase 2 delivery proof installs locked frontend' || check_status=1
+  require_content_pattern "$phase2_browser" '^          node web/node_modules/playwright/cli[.]js install --with-deps chromium$' 'Phase 2 delivery proof installs real browser' || check_status=1
+  if grep -Eq 'continue-on-error|^[[:space:]]+if:|\|\| true|; true' <<<"$phase2_block$phase2_tools$phase2_browser"; then
+    echo '[audit] ERROR: Phase 2 delivery proof must be unconditional and blocking' >&2
+    check_status=1
+  fi
   local recovery_copy_block
   recovery_copy_block="$(extract_step_block_from_content "$(extract_job_block correctness-matrix)" "Run recovery copy PostgreSQL contracts")"
   # shellcheck disable=SC2016 # Match literal runner and matrix variables.

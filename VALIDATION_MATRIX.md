@@ -1,5 +1,13 @@
 # Validation Matrix
 
+Phase 2 / action 2.02 adds the bounded internal delivery/native-feasibility
+profile in [the current charter](docs/release/v2.0/README.md). Required evidence
+includes packaged browser/engine restoration, owned runtime/security bounds,
+real SQLite persistence, PostgreSQL Docker and the retained 244-event recovery
+gate and 23-case oracle. Full Python and CI enforcement mutations are fresh.
+Product gates remain INCOMPLETE; native support and later actions are unqualified.
+
+
 This document is the authoritative mapping between public guarantees (README)
 and enforced evidence (tests and verify checks).
 

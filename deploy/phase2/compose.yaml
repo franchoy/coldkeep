@@ -1,0 +1,41 @@
+# Explicit internal proof. All host directories must already exist.
+services:
+  daemon:
+    image: coldkeep-phase2-proof:local
+    user: "${PROOF_UID:?}:${PROOF_GID:?}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=67108864,mode=1777"]
+    command: ["--config", "/private/container.json"]
+    ports: ["127.0.0.1:${PROOF_PORT:?}:18766"]
+    volumes:
+      - type: bind
+        source: ${PROOF_SOURCE:?}
+        target: /source
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${PROOF_PAYLOAD:?}
+        target: /data/payload
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${PROOF_OUTPUT:?}
+        target: /data/output
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${PROOF_PRIVATE:?}
+        target: /private
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${PROOF_RUNTIME:?}
+        target: /runtime
+        bind: {create_host_path: false}
+    networks: [proof]
+networks:
+  proof:
+    external: true
+    name: ${PROOF_NETWORK:?}

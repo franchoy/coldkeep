@@ -1,5 +1,13 @@
 # Pre-release Checklist
 
+Phase 2 / action 2.02 adds the bounded internal delivery/native-feasibility
+profile in [the current charter](docs/release/v2.0/README.md). Required evidence
+includes packaged browser/engine restoration, owned runtime/security bounds,
+real SQLite persistence, PostgreSQL Docker and the retained 244-event recovery
+gate and 23-case oracle. Full Python and CI enforcement mutations are fresh.
+Product gates remain INCOMPLETE; native support and later actions are unqualified.
+
+
 Active development: [v2.0 Phase 1D / action 2.03](docs/release/v2.0/README.md), selected by
 [docs/release/current.json](docs/release/current.json). Its local profile is COMPLETE;
 see [the Phase 1D result](docs/release/v2.0/phase1d-result.md). Use its bounded local

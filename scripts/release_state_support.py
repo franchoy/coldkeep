@@ -2556,10 +2556,11 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
             raise ValueError("one bounded regular current authority file is required")
         state = json.loads(path.read_text(), object_pairs_hook=_unique_json_pairs)
         scopes = {"0": "LOCAL_PHASE0_AUTHORITY_ONLY", "2.01": "LOCAL_ACTION_2_01_AUTHORITY_ONLY",
+                  "2.02": "LOCAL_ACTION_2_02_AUTHORITY_ONLY",
                   "2.03": "LOCAL_ACTION_2_03_AUTHORITY_ONLY"}
         phase = state.get("phase") if isinstance(state, dict) else None
         if not isinstance(phase, str) or phase not in scopes:
-            raise ValueError("active phase must be exactly 0, 2.01 or 2.03")
+            raise ValueError("active phase must be exactly 0, 2.01, 2.02 or 2.03")
         result.evidence_scope = scopes[phase]
         if phase == "2.01" and state.get("phase_status") == "COMPLETE":
             result.outstanding_obligations = ["2.02-2.13", "2.15", "2.17", "separate-publication-authorization"]
@@ -2577,6 +2578,21 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                     fail("2.03 COMPLETE requires the owning Phase 1D local-profile result")
                 else:
                     result.outstanding_obligations.remove("2.03-recovery-copy-completion-import-isolated-restoration")
+        if phase == "2.02":
+            result.outstanding_obligations = ["2.02-delivery-native-proof", "2.04-2.13", "2.15", "2.17", "separate-publication-authorization"]
+            if state.get("phase_status") == "COMPLETE":
+                # Structural authority only: actual executions are reviewed separately.
+                report = root / "docs/release/v2.0/phase2-result.md"
+                required = ("Local action 2.02: COMPLETE — internal delivery and Linux feasibility proof",
+                            "Product gates: INCOMPLETE", "Implementation: ACTIVE",
+                            "coldkeep_phase2_codex_2026-11-08.md",
+                            "Packaged process: PASS", "Authenticated engine journey: PASS",
+                            "Linux SQLite and PostgreSQL Docker: PASS")
+                if (not report.is_file() or report.is_symlink() or report.stat().st_size > 65536
+                        or any(token not in report.read_text() for token in required)):
+                    fail("2.02 COMPLETE requires its owning bounded Phase 2 result")
+                else:
+                    result.outstanding_obligations.remove("2.02-delivery-native-proof")
         expected = {
             "schema": "coldkeep-active-development/v1", "family": "v2.0",
             "version": version, "state": "development", "phase": phase,

@@ -4085,3 +4085,26 @@ func TestAuditCIEnforcementRequiresRecoveryCopy(t *testing.T) {
 		}
 	}
 }
+
+func TestAuditCIEnforcementRequiresPhase2Proof(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeql := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	command := `        run: python3 scripts/run_phase2_proof.py --output "$RUNNER_TEMP/phase2-proof"`
+	for _, mutation := range []string{
+		strings.Replace(workflow, "scripts/run_phase2_proof.py", "scripts/missing_phase2.py", 1),
+		strings.Replace(workflow, "      - name: Run Phase 2 delivery proof\n", "      - name: Run Phase 2 delivery proof\n        if: false\n", 1),
+		strings.Replace(workflow, "      - name: Run Phase 2 delivery proof\n", "      - name: Run Phase 2 delivery proof\n        continue-on-error: true\n", 1),
+		strings.Replace(workflow, command, command+" || true", 1),
+		strings.Replace(workflow, command, command+"; true", 1),
+		strings.Replace(workflow, "          node-version: '24.22.2'", "          node-version: '18'", 1),
+		strings.Replace(workflow, "          node web/node_modules/playwright/cli.js install --with-deps chromium", "          true", 1),
+	} {
+		if mutation == workflow {
+			t.Fatal("Phase 2 mutation absent")
+		}
+		output := runAuditLocalOnly(t, mutation, codeql, true)
+		if !strings.Contains(output, "Phase 2 delivery proof") {
+			t.Fatalf("missing Phase 2 diagnostic: %s", output)
+		}
+	}
+}

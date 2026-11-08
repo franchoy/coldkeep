@@ -5,7 +5,7 @@
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 2.03
+CURRENT_PHASE: 2.02
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE
@@ -13,17 +13,18 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 1D / action 2.03 is authorized in BUILD mode by the
-8 November 2026 constrained-import instruction and `docs/release/v2.0/README.md`.
-The accepted Phase 1C C1–C3 follow-up is preserved. Scope: constrained fresh-target
-import, actual installation-loss recovery and fresh recovery after real live GC.
-Local-profile action 2.03 is COMPLETE after integrated Phase 1D validation; see
-`docs/release/v2.0/phase1d-result.md`. Product gates stay INCOMPLETE,
-implementation ACTIVE, and action 2.04 must not begin. No daemon/UI,
-schema migration, real-repository adoption or release publication is authorized.
-Preserve predecessor worktrees and frozen v1 records. Local commits are authorized.
+Active v2.0 Phase 2 / action 2.02 is authorized in BUILD mode by
+`coldkeep_phase2_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
+Scope: one owned internal fixture daemon, embedded typed UI/API, real historical
+restoration and Linux x86-64 CGO SQLite feasibility alongside PostgreSQL Docker.
+Accepted 2.01 and local-profile 2.03 COMPLETE reports remain unchanged.
+Implementation stays ACTIVE; product gates stay INCOMPLETE. Action 2.04 must not
+begin. No schema/payload/recovery-format change or real-repository adoption.
+Only the mattn SQLite driver and its checksums may change among Go dependencies;
+Go 1.26.10 and unrelated pins remain fixed. Local commits and owned disposable
+fixtures are authorized. Preserve predecessor worktrees and frozen v1 records.
 No push, PR publication, merge, tag, release or deployment is authorized.
-Dependency/toolchain versions remain pinned. Preserve user changes and data.
+Preserve user changes and data.
 
 
 Coldkeep is a correctness-first cold storage engine. The primary invariant is: never lose user data.
@@ -47,7 +48,7 @@ publication predecessor; v1.13.15 remains published stable and immutable.
 For future work:
 
 - treat v1.13.14 as immutable historical release state;
-- keep v2 work within the adopted Phase 1D recovery unit; no SQLite-first product-default behavior;
+- keep v2 work within the adopted Phase 2 delivery/feasibility unit; no SQLite-first product-default behavior;
 - do not change public APIs, schema, storage format, or repository format;
 - do not perform broad refactors;
 - keep fixes narrow and separately planned;

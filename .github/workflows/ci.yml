@@ -109,6 +109,20 @@ jobs:
       - name: Enforce versioned row writer scope
         run: bash scripts/check_versioned_row_writers.sh
 
+      - name: Setup Phase 2 frontend tools
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.2'
+
+      - name: Install Phase 2 browser tooling
+        run: |
+          test "$(npm --version)" = 11.19.1
+          npm --prefix web ci --ignore-scripts
+          node web/node_modules/playwright/cli.js install --with-deps chromium
+
+      - name: Run Phase 2 delivery proof
+        run: python3 scripts/run_phase2_proof.py --output "$RUNNER_TEMP/phase2-proof"
+
       - name: Test candidate lint gate contract
         run: go test -count=1 ./scripts -run '^TestCandidateLintGate'
           
@@ -133,6 +147,18 @@ jobs:
             ${{ runner.temp }}/product-fixtures/fixture-results.json
             ${{ runner.temp }}/product-fixtures/go-test.jsonl
             ${{ runner.temp }}/product-fixtures/go-test.stderr
+            ${{ runner.temp }}/phase2-proof/*.log
+            ${{ runner.temp }}/phase2-proof/*.json
+            ${{ runner.temp }}/phase2-proof/*.jsonl
+            ${{ runner.temp }}/phase2-proof/*.stderr
+            ${{ runner.temp }}/phase2-proof/browser/*.json
+            ${{ runner.temp }}/phase2-proof/browser/*.log
+            ${{ runner.temp }}/phase2-proof/browser/*.png
+            ${{ runner.temp }}/phase2-proof/packaging/*.json
+            ${{ runner.temp }}/phase2-proof/packaging/*.log
+            ${{ runner.temp }}/phase2-proof/docker/*.json
+            ${{ runner.temp }}/phase2-proof/docker/*.log
+            ${{ runner.temp }}/phase2-proof/docker/*.png
           if-no-files-found: error
           retention-days: 14
 

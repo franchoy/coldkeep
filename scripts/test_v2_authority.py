@@ -217,12 +217,14 @@ class Action201AuthorityTests(V2AuthorityFixture):
                 self.assertTrue(governance.validate(self.root, "historical-v1"))
 
     def test_unknown_and_conflicting_action_fail_without_phase0_fallback(self):
-        for phase in ("2.02", "2.04", "2.17", "Phase 1A", "2.1", "", None, 2.01, []):
+        for phase in ("2.04", "2.17", "Phase 1A", "2.1", "", None, 2.01, []):
             with self.subTest(phase=phase):
                 self.change(phase=phase)
                 self.assert_rejected()
                 self.assertEqual(release.validate(self.root, "auto").evidence_scope,
                                  "UNRESOLVED_ACTIVE_SCOPE")
+        self.change(phase="2.02")  # Known new scope with contradictory 2.01 mirrors.
+        self.assert_rejected()
         self.change(phase="2.03")  # Known new scope with contradictory 2.01 mirrors.
         self.assert_rejected()
         self.change(phase="0")  # Known phase with contradictory 2.01 mirrors.
@@ -407,3 +409,45 @@ class VersionBoundaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Action202AuthorityTests(V2AuthorityFixture):
+    fixture_phase = "2.02"
+
+    def test_exact_scope_and_later_obligations(self):
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertEqual(result.evidence_scope, "LOCAL_ACTION_2_02_AUTHORITY_ONLY")
+        self.assertIn("2.04-2.13", result.outstanding_obligations)
+        for phase in ("2.04", "2.17", "2.2", "future"):
+            self.change(phase=phase)
+            self.assert_rejected()
+
+    def test_completion_requires_own_bounded_report_and_never_product(self):
+        self.change(phase_status="COMPLETE")
+        self.assert_rejected()
+        report = self.root / "docs/release/v2.0/phase2-result.md"
+        body = ("Local action 2.02: COMPLETE — internal delivery and Linux feasibility proof\n"
+                "Product gates: INCOMPLETE\nImplementation: ACTIVE\n"
+                "coldkeep_phase2_codex_2026-11-08.md\nPackaged process: PASS\n"
+                "Authenticated engine journey: PASS\nLinux SQLite and PostgreSQL Docker: PASS\n")
+        report.write_text(body)
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertNotIn("2.02-delivery-native-proof", result.outstanding_obligations)
+        for line in body.splitlines():
+            report.write_text(body.replace(line, ""))
+            self.assert_rejected()
+        report.write_text(body + "x" * 65536)
+        self.assert_rejected()
+        report.unlink()
+        other = self.root / "report"
+        other.write_text(body)
+        report.symlink_to(other)
+        self.assert_rejected()
+        report.unlink()
+        report.write_text(body)
+        self.change(product_gates="COMPLETE")
+        self.assert_rejected()
+        self.change(product_gates="INCOMPLETE")
+        self.assertTrue(release.validate(self.root, "released").violations)

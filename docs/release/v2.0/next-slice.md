@@ -1,31 +1,25 @@
-# Handoff after the Phase 1D F1–F2 follow-up
+# Phase 2 / action 2.02 handoff
 
-Phase 1D implements constrained import, actual isolated historical restoration
-and fresh recovery after real live GC under the 8 November 2026 instruction
-`coldkeep_phase1d_codex_2026-11-08.md`. The accepted C1–C3 base remains
-`d96edea6abb1c2d55152e2020286a08ad959368e`, tree
-`8c30e47284668c86dae8aad55945458111eaed06`; all predecessors are preserved.
+Current bounded unit is **2.02 ACTIVE** under
+`coldkeep_phase2_codex_2026-11-08.md`. Accepted base is
+`e25da48003f30aeacb900131be28c3e092f85283`, tree
+`bad2400116d4dbb4fd50446acd48034c82ffb2d8`. Accepted 2.01 and local-profile
+2.03 COMPLETE reports and all predecessors remain preserved.
 
-Current action **2.03 COMPLETE** for the Linux/manual PostgreSQL 16 profile after
-the F1–F2 correction under `coldkeep_phase1d_followup_codex_2026-11-08.md`; see the
-[follow-up result](phase1d-followup-result.md). The submitted
-[Phase 1D result](phase1d-result.md) remains byte-identical historical evidence. Structural
-`LOCAL_ACTION_2_03_AUTHORITY_ONLY` diagnostics do not certify runtime recovery.
-Product gates stay **INCOMPLETE**, implementation **ACTIVE**, application
-**2.0.0-dev.0**, latest stable **1.13.19**. Action **2.04 has not begun**.
+Finish and review the source-bound integrated proof and [result](phase2-result.md):
+packaged embedded UI, authenticated historical engine restoration and process
+ownership, real Linux CGO SQLite persistence, retained PostgreSQL Docker, and all
+applicable preservation/validation gates. Conditional local completion is authorized
+when those pass, with no mandatory closure-only run.
 
-Review the final result, identity, incremental patch and compact checksummed
-source-bound evidence. The [operator guide](recovery-package.md) specifies trusted
-backup consent, fresh-target provisioning, key/reader custody, import-ready versus
-late uncertainty, exact cleanup and recovery invocation. Physical failure-domain
-confirmation remains an independent operator fact; same-host tests do not supply it.
+After review, propose **2.04 identities and explicit migration fences** under a
+separate owning instruction. This run does not begin 2.04. The practical sequence
+is not a claim that 2.02 is a formal dependency of 2.04. Production lifecycle (2.05),
+durable jobs (2.07), full authentication (2.08), remaining product actions through
+2.17 and native support qualification remain outstanding. Product gates stay
+INCOMPLETE; implementation ACTIVE; version 2.0.0-dev.0; latest stable 1.13.19.
 
-Outstanding work stays **2.02, 2.04–2.13, 2.15, 2.17**, plus separate publication
-permission. No mandatory closure-only build is imposed after integrated completion.
-Choose the next owning instruction only after review; this run grants no later
-action, real-repository adoption, push, PR, merge, tag, release or deployment.
-
-Recommended settings for the next scoped review: **GPT-6 Astra / Extra High**,
-because custody, destination ownership and recovery evidence must be assessed
-together. Record requested versus observable settings separately. Do not change
-account/global settings or impose a contributor model requirement.
+Recommended next execution: GPT-6 Astra / Extra High, for cross-cutting identity,
+compatibility and migration-fence reasoning. Record requested versus observable
+settings separately, without account/global changes. No real repository adoption,
+push, public PR, merge, tag, release, publication or deployment is authorized here.

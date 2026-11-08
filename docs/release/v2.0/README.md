@@ -1,57 +1,51 @@
 # Coldkeep v2.0 active charter
 
-Adopted 7 November 2026 (Europe/Madrid). Current unit: **Phase 1D follow-up BUILD** under
-`coldkeep_phase1d_followup_codex_2026-11-08.md` (8 November follow-up bundle).
-[Current authority](../current.json) records **local-profile 2.03 COMPLETE**, implementation
+Current unit: **Phase 2 / action 2.02 BUILD**, authorized by
+`coldkeep_phase2_codex_2026-11-08.md` (8 November 2026 launch bundle).
+[Current authority](../current.json) records **2.02 ACTIVE**, implementation
 ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
-**1.13.19** and the frozen v1 records retain their identities.
+**1.13.19**, /v2 and profile manual-postgresql-docker remain unchanged.
 
-The exact follow-up starting HEAD is `c26f608cdc9e14d62597862ff81c138978f95ab0`,
-tree `3ffa87b30b8bc9b4b15b2ae9775d47aad6d9be92`. Phase 0, 1A, B1–B3 and C1–C3
-are accepted and their reports/fixtures remain byte-identical.
+Accepted base: `e25da48003f30aeacb900131be28c3e092f85283`, tree
+`bad2400116d4dbb4fd50446acd48034c82ffb2d8`. Accepted 2.01 and local-profile
+2.03 COMPLETE remain in their unchanged reports, including the
+[Phase 1D follow-up](phase1d-followup-result.md). Preserve all predecessors.
 
-## Phase 1D scope and validation
+## Phase 2 scope and validation
 
-Implement the constrained package-v1 importer into a fresh explicit target;
-restore plaintext/encrypted history with the original installation unavailable;
-then freshly import the unchanged pre-GC generation after actual live source GC.
-Use the [operator contract](recovery-package.md). Only trusted operator backups
-are accepted. Source Inspect/Export remain passive and their cleanup joins,
-visibility checks, layout checks and all 135 named requirements remain blocking.
-No schema migration, dependency change, adoption, daemon/UI or 2.04 work belongs
-here. No push, PR publication, merge, tag, release or deployment is authorized.
-
-The submitted [Phase 1D result](phase1d-result.md) records D1–D12 evidence.
-F1 receipt capacity and F2 lowered inventory duration are corrected and qualified
-in the [follow-up result](phase1d-followup-result.md); its conditional local-profile
-completion authority is exercised after the new and retained criteria passed. The authority
-validator accepts ACTIVE/COMPLETE structurally under the Phase 1D result;
-`LOCAL_ACTION_2_03_AUTHORITY_ONLY` never certifies runtime evidence or the product.
-Keep 2.02, 2.04–2.13, 2.15, 2.17 and separate publication authorization outstanding.
-Physical failure-domain confirmation is a separate operator fact.
+Prove an embedded React/TypeScript/Vite UI and typed /api/v1 in one owned Go
+fixture process; authenticated history-to-restore through the existing engine;
+and real Linux x86-64 CGO SQLite persistence alongside CGO-disabled PostgreSQL
+Docker. This is an internal delivery and feasibility proof. It does not qualify
+native support, SQLite lifecycle/defaults, durable jobs or production authentication.
+No 2.04, schema/payload/recovery-format change, real repository adoption or publication.
+Only the mattn SQLite driver and necessary Go checksums may change; unrelated
+pins and Go 1.26.10 remain fixed. Frontend tools/dependencies are pinned separately.
 
 Required clean-checkpoint validation:
 
-- Go 1.26.10, `GOTOOLCHAIN=local`, `GOWORK=off`; pinned dependencies/linter.
-- Race-enabled `scripts/run_recovery_export_tests.sh <new-dir>` with explicit
-  disposable PostgreSQL/client/image inputs. Includes isolated recovery and real
-  live GC, all retained requirements, no missing/failed/skipped named events.
-- Unchanged 23-case current-reader product oracle; explicit retained D19 evidence.
-- Affected storage/restore/snapshot/maintenance regressions and source-preservation
-  checks. Reuse only actually unchanged historical evidence, preserving skips.
-- Build, vet, pinned lint, formatting, shell/CI/whitespace/dependency guards.
-- Focused authority tests, current and explicit historical validators, fresh runner
-  tests and reader-event mutations, local CI audit and enforcement mutations.
-  The submitted 547-test Python suite may be explicitly reused only while Python/
-  authority code remains unchanged and changed-runner dependencies are freshly tested.
-- Final authority/governance diagnostics, frozen 849-file digest, protected-path
-  and predecessor receipts, source-bound commands/logs, owned-resource cleanup,
-  incremental/ordered patches with replay and compact checksummed evidence.
+- Go 1.26.10, GOTOOLCHAIN=local, GOWORK=off, pinned lint; build, vet, formatting,
+  shell checks, CI audits/mutations, matrix, row-writer/source and dependency guards.
+- Owned-runtime/API/security/admission tests and blocking ordinary Linux proof gate;
+  packaged browser history-to-restore, independent reread, browser-close ownership,
+  competing process and shutdown joins; no Node runtime or external assets.
+- Prepared-build identity, missing/stale assets and independent CLI go install.
+- Real SQLite store/close/reopen/restore and copied historical reader, named no-CGO
+  refusal; PostgreSQL CLI and daemon Docker, mount/non-root/temp/exposure proof.
+- Fresh unchanged 23-case product oracle and affected SQLite/reader/store checks.
+- Fresh accepted recovery/coordination/command race gate, all 244 requirements;
+  original-loss, post-live-GC and large-receipt scenarios remain blocking.
+- Fresh full Python suite and focused authority tests; explicit 0/2.01/2.03 fixtures,
+  historical-v1 validators against the actual frozen checkout and 849-file digest.
+- Source-bound raw commands, identities, initial failures, predecessor preservation,
+  owned cleanup, local commits, replay-verified patches and checksummed evidence.
 
-Requested settings: **GPT-6 Astra / Extra High**. Record actual settings only if
-observable; no global configuration changes or contributor model requirement.
-The [next handoff](next-slice.md) records remaining scope. Full product/platform/
-hosted/release qualification remains with its owning action.
+Conditional local 2.02 completion is authorized only when all selected proof
+packages and integrated criteria pass. LOCAL_ACTION_2_02_AUTHORITY_ONLY is a
+structural diagnostic and never runtime certification. Otherwise retain ACTIVE
+with precise blockers. Product gates stay INCOMPLETE and implementation ACTIVE.
+Action 2.04 and later product/native/release gates remain outstanding.
+Requested GPT-6 Astra / Extra High; actual settings unknown unless observable.
 
 ## Selected first stable profile
 
