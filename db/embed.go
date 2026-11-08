@@ -8,4 +8,6 @@ var (
 
 	//go:embed schema_postgres.sql
 	PostgresSchema string
+	//go:embed adoption_postgres.sql
+	AdoptionPostgres string
 )

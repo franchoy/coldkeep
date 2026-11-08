@@ -41,6 +41,9 @@ func Export(ctx context.Context, c Config, o ExportOptions) (ExportResult, error
 	return export(ctx, c, o, nil)
 }
 func export(ctx context.Context, c Config, o ExportOptions, h *exportHooks) (result ExportResult, err error) {
+	return exportOwned(ctx, c, o, h, nil, nil)
+}
+func exportOwned(ctx context.Context, c Config, o ExportOptions, h *exportHooks, r *resolved, owned *ownedCut) (result ExportResult, err error) {
 	result.Status = "incomplete"
 	if ctx == nil || !o.Limits.valid() || !o.InventoryLimits.valid() {
 		return result, ErrConfiguration
@@ -83,7 +86,13 @@ func export(ctx context.Context, c Config, o ExportOptions, h *exportHooks) (res
 	if h != nil {
 		cutHooks = h.cut
 	}
-	inspected, e := inspectCut(ctx, c, o.InventoryLimits, func(cutCtx context.Context, r resolved, tx *sql.Tx, inv *Inventory) (cutErr error) {
+	inspectFn := func(ctx context.Context, c Config, l Limits, consume func(context.Context, resolved, *sql.Tx, *Inventory) error, h *hooks) (Result, error) {
+		if owned != nil && r != nil {
+			return inspectOwnedCut(ctx, c, *r, l, consume, h, *owned)
+		}
+		return inspectCut(ctx, c, l, consume, h)
+	}
+	inspected, e := inspectFn(ctx, c, o.InventoryLimits, func(cutCtx context.Context, r resolved, tx *sql.Tx, inv *Inventory) (cutErr error) {
 		requirements, e := databaseRequirements(cutCtx, tx)
 		if e != nil {
 			return e
@@ -97,7 +106,10 @@ func export(ctx context.Context, c Config, o ExportOptions, h *exportHooks) (res
 		if !snapshotName.MatchString(snapshot) {
 			return ErrUnsupported
 		}
-		manifest = Manifest{Version: packageVersion, Generation: result.Generation, ApplicationVersion: version.String(), CatalogVersion: inv.CatalogVersion, Selection: "full-catalog", CutTime: time.Now().UTC().Format(time.RFC3339Nano), Snapshot: snapshot, LegacyRootHash: inv.RootHash, Reader: inv.Reader, KeyRequired: inv.KeyRequired, KeyReference: inv.KeyReference, KeyCustody: "unknown", ReaderCustody: "unknown", Independence: "unknown", Database: requirements, CatalogRows: inv.Rows, Tables: len(catalogTables), Excluded: inv.Uncataloged}
+		manifest = Manifest{Version: profilePackage(inv.CatalogVersion), Generation: result.Generation, ApplicationVersion: version.String(), CatalogVersion: inv.CatalogVersion, Selection: "full-catalog", CutTime: time.Now().UTC().Format(time.RFC3339Nano), Snapshot: snapshot, LegacyRootHash: inv.RootHash, Reader: inv.Reader, KeyRequired: inv.KeyRequired, KeyReference: inv.KeyReference, KeyCustody: "unknown", ReaderCustody: "unknown", Independence: "unknown", Database: requirements, CatalogRows: inv.Rows, Tables: len(profileTables(inv.CatalogVersion)), Excluded: inv.Uncataloged}
+		if inv.CatalogVersion == 18 {
+			manifest.RepositoryID = inv.Catalog["repository_identity"][0].s("repository_id")
+		}
 		if len(inv.Objects)+1 > o.Limits.Members {
 			return ErrLimit
 		}
@@ -119,7 +131,7 @@ func export(ctx context.Context, c Config, o ExportOptions, h *exportHooks) (res
 		}
 		env, remove, e := childCredentials(r, dest.path)
 		if remove != nil {
-			defer func() { cutErr = errors.Join(cutErr, remove()) }()
+			defer func() { cutErr = errors.Join(cutErr, h.cleanCredentials(remove)) }()
 		}
 		if e != nil {
 			return e
@@ -193,8 +205,8 @@ func export(ctx context.Context, c Config, o ExportOptions, h *exportHooks) (res
 	if e != nil || !inspected.Complete {
 		return result, errors.Join(e, errors.New("source cut did not close successfully"))
 	}
-	// inspectCut's resources and lease are gone. All remaining reads concern the
-	// independent staging directory, never the live source or its old snapshot.
+	// SQL, children and credentials have joined. Standalone export also released
+	// its lease; adoption retains the outer lease. Publication reads only staging.
 	if e = h.at("source-cleaned"); e != nil {
 		return result, e
 	}
@@ -206,7 +218,7 @@ func export(ctx context.Context, c Config, o ExportOptions, h *exportHooks) (res
 		return result, e
 	}
 	digest := sha256.Sum256(raw)
-	marker, e := json.Marshal(completionMarker{packageVersion, result.Generation, hex.EncodeToString(digest[:])})
+	marker, e := json.Marshal(completionMarker{manifest.Version, result.Generation, hex.EncodeToString(digest[:])})
 	if e != nil {
 		return result, e
 	}

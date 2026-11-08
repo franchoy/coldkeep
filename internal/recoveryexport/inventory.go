@@ -29,7 +29,7 @@ var (
 
 // Config is an explicit operation input, never an ambient database selection.
 // Password and Key resolve once before adapter construction. A nil Key is valid
-// for plaintext data only. No secrets, DSNs or persistent origin IDs are reported.
+// for plaintext data only. No secrets or DSNs are reported. Schema18 reports logical lineage only.
 // This unit supports a local PostgreSQL 16 catalog with explicit plaintext
 // transport on loopback or a local Unix socket; SQLite opening is not included.
 type Config struct {
@@ -402,7 +402,7 @@ func (i *Inventory) WriteDiagnostic(w io.Writer) error {
 	if _, e = io.WriteString(bw, `,"catalog":{`); e != nil {
 		return e
 	}
-	for ti, spec := range catalogTables {
+	for ti, spec := range profileTables(i.CatalogVersion) {
 		if ti > 0 {
 			if _, e = io.WriteString(bw, ","); e != nil {
 				return e

@@ -1,5 +1,12 @@
 # Security Policy
 
+Phase 3A adds explicit PostgreSQL17-to-18 identity adoption and exact recovery
+profiles. See [identity/adoption contract](docs/release/v2.0/identity-adoption.md).
+Parent 2.04 remains ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
+Ordinary schema18 mutation and SQLite adoption are refused. Run the complete
+fresh recovery/adoption gate plus the retained Phase 2 proof and fixed oracle.
+
+
 ## Status
 
 <!-- coldkeep-current-state:start -->
@@ -7,7 +14,7 @@
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 2.02
+CURRENT_PHASE: 2.04
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE

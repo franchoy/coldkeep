@@ -14,12 +14,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/franchoy/coldkeep/v2/internal/db"
 )
 
 const packageVersion = 1
 
-var safeGeneration = regexp.MustCompile(`^[0-9a-f]{32}$`)
-var safeDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var safeMember = regexp.MustCompile(`^(catalog\.dump|object-[0-9]{6}\.bin)$`)
 var ErrPackage = errors.New("invalid or incomplete recovery generation")
 
@@ -56,6 +56,7 @@ type DatabaseRequirements struct {
 	RestorePolicy  string `json:"restore_policy"`
 }
 type Manifest struct {
+	RepositoryID       string               `json:"repository_id,omitempty"`
 	Version            int                  `json:"package_version"`
 	Generation         string               `json:"generation"`
 	ApplicationVersion string               `json:"application_version"`
@@ -293,7 +294,11 @@ func checkGeneration(ctx context.Context, root *os.Root, l ExportLimits, complet
 	if err = strictJSON(ctx, raw, &m, l.Members); err != nil {
 		return
 	}
-	if m.Version != packageVersion || !safeGeneration.MatchString(m.Generation) || m.CatalogVersion != 17 || m.Selection != "full-catalog" || m.Tables != 19 || m.CatalogRows < 1 || m.CatalogRows > DefaultLimits().Rows || m.Reader == "" || m.ApplicationVersion == "" || !safeDigest.MatchString(m.LegacyRootHash) || m.KeyCustody != "unknown" || m.ReaderCustody != "unknown" || m.Independence != "unknown" || m.Database.ServerVersion < 160000 || m.Database.ServerVersion >= 170000 || m.Database.RestorePolicy != "trusted operator; fresh database; --no-owner --no-acl --exit-on-error" || (m.KeyRequired && m.KeyReference == "") {
+	if (m.CatalogVersion == 17 && m.RepositoryID != "") || (m.CatalogVersion == 18 && !db.ValidIdentity("repo", m.RepositoryID)) {
+		err = ErrPackage
+		return
+	}
+	if m.Version != profilePackage(m.CatalogVersion) || !safeGeneration.MatchString(m.Generation) || profileTables(m.CatalogVersion) == nil || m.Selection != "full-catalog" || m.Tables != len(profileTables(m.CatalogVersion)) || m.CatalogRows < 1 || m.CatalogRows > DefaultLimits().Rows || m.Reader != profileReader(m.CatalogVersion) || m.ApplicationVersion == "" || !safeDigest.MatchString(m.LegacyRootHash) || m.KeyCustody != "unknown" || m.ReaderCustody != "unknown" || m.Independence != "unknown" || m.Database.ServerVersion < 160000 || m.Database.ServerVersion >= 170000 || m.Database.RestorePolicy != "trusted operator; fresh database; --no-owner --no-acl --exit-on-error" || (m.KeyRequired && m.KeyReference == "") {
 		err = ErrPackage
 		return
 	}
@@ -363,7 +368,7 @@ func checkGeneration(ctx context.Context, root *os.Root, l ExportLimits, complet
 			return
 		}
 		digest := sha256.Sum256(raw)
-		if marker.Version != packageVersion || marker.Generation != m.Generation || marker.ManifestSHA256 != hex.EncodeToString(digest[:]) {
+		if marker.Version != m.Version || marker.Generation != m.Generation || marker.ManifestSHA256 != hex.EncodeToString(digest[:]) {
 			err = ErrPackage
 			return
 		}

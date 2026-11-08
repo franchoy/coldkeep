@@ -16,6 +16,8 @@ export COLDKEEP_PHASE1B_REPORT_DIR="$output" COLDKEEP_PHASE1C_REPORT_DIR="$outpu
 reader_dir=$(mktemp -d)
 trap 'rm -rf -- "$reader_dir"' EXIT
 CGO_ENABLED=0 go build -o "$reader_dir/coldkeep-recovery" ./cmd/coldkeep-recovery
+python3 scripts/build_phase3a_readers.py "$reader_dir/phase3a" "$output/phase3a-readers.json"
+export COLDKEEP_PHASE3A_READERS="$reader_dir/phase3a"
 export COLDKEEP_RECOVERY_READER="$reader_dir/coldkeep-recovery"
 sha256sum "$COLDKEEP_RECOVERY_READER" >"$output/staged-reader.sha256"
 docker image inspect "$COLDKEEP_RECOVERY_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' >"$output/recovery-image.txt"
@@ -93,6 +95,26 @@ for parent, cases in {
  'TestRecoveryReceiptRegularInput': 'symlink hardlink directory',
 }.items():
  required['github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery'].update(parent+'/'+case for case in cases.split())
+# Phase 3A adds requirements; all 244 accepted requirements above remain intact.
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update({
+ 'TestAdoptionRoundTrip','TestAdoptionOldReceiptCompatibility','TestAdoptionOwnershipContinuity',
+ 'TestAdoptionIdentityConstraints','TestAdoptionOperatorAndDatabaseReservation','TestAdoptionEngineAdmission',
+ 'TestAdoptionCheckpointWrongSource',
+})
+for parent,cases in {
+ 'TestAdoptionStalePlanAndBounds':'stale-plan aggregate deadline operation-length sqlite-file',
+ 'TestAdoptionTransactionFaults':'before-ddl during-ddl during-data before-commit after-commit',
+ 'TestAdoptionEarlyRefusals':'sqlite expected-schema request plan missing-key retained-receipt checkpoint-failure checkpoint-corrupt checkpoint-missing',
+ 'TestAdoptionHistoricalIsolation':'plaintext=true plaintext=false',
+ 'TestAdoptionWriterFences':'d19 accepted current',
+ 'TestAdoptionCleanupOwnership':'false true',
+ 'TestAdoptionProfileRefusals':'future missing-table extra-table unknown-column wrong-type missing-lineage unknown-capability constraint orphan identity-bound row-budget text-budget',
+ 'TestAdoptionMigrationCleanup':'rollback driver-close cancellation',
+ 'TestAdoptionExportCleanup':'rollback credential child',
+ 'TestAdoptionImportProfiles':'mixed-version false-schema17 unknown-reader repository-conflict catalog-missing-lineage receipt-v1 receipt-reader receipt-identity',
+}.items():
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in cases.split())
 passes={(e['Package'],e.get('Test','')) for e in records if e.get('Action')=='pass'}
 failures=[e for e in records if e.get('Action') in ('fail','skip')]
 missing=[p+'/'+t for p,tests in required.items() for t in tests|{''} if (p,t) not in passes]

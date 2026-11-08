@@ -62,6 +62,10 @@ func TestRecoverySourceCallBoundary(t *testing.T) {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
+			// Explicit adoption alone may execute its transactional DDL/data.
+			if ok && name == "adoption_linux.go" && sel.Sel.Name == "ExecContext" {
+				return true
+			}
 			// The only preparation allowance is in the fresh-target importer.
 			// No source/export file gains SQL, bootstrap or preparation capability.
 			if ok && name == "import_linux.go" && sel.Sel.Name == "PrepareExisting" {

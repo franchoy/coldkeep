@@ -20,12 +20,13 @@ import (
 
 type Tools struct{ PGDump, PGRestore string }
 type exportHooks struct {
-	childPID func(int)
-	cut      *hooks
-	event    func(string) error
-	write    func(*os.File, []byte) (int, error)
-	sync     func(*os.File) error
-	close    func(*os.File) error
+	credentials func(func() error) error
+	childPID    func(int)
+	cut         *hooks
+	event       func(string) error
+	write       func(*os.File, []byte) (int, error)
+	sync        func(*os.File) error
+	close       func(*os.File) error
 }
 
 func (h *exportHooks) at(stage string) error {
@@ -274,4 +275,11 @@ func databaseRequirements(ctx context.Context, tx *sql.Tx) (r DatabaseRequiremen
 	err = tx.QueryRowContext(ctx, `SELECT current_setting('server_version_num')::int,pg_encoding_to_char(encoding),datcollate,datctype,datlocprovider::text FROM pg_database WHERE datname=current_database()`).Scan(&r.ServerVersion, &r.Encoding, &r.Collate, &r.CType, &r.LocaleProvider)
 	r.RestorePolicy = "trusted operator; fresh database; --no-owner --no-acl --exit-on-error"
 	return
+}
+
+func (h *exportHooks) cleanCredentials(clean func() error) error {
+	if h != nil && h.credentials != nil {
+		return h.credentials(clean)
+	}
+	return clean()
 }

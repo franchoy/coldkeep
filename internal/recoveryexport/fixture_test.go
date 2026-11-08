@@ -168,6 +168,7 @@ func catalogFingerprint(t *testing.T, conn *sql.DB) string {
 		`SELECT json_build_array(nspowner,nspacl)::text FROM pg_namespace WHERE nspname='public'`,
 		`SELECT json_build_array(rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,rolconfig)::text FROM pg_roles ORDER BY rolname`,
 		`SELECT row_to_json(m)::text FROM pg_auth_members m ORDER BY roleid,member,grantor`,
+		`SELECT json_build_array(conname,contype,convalidated,condeferrable,pg_get_constraintdef(oid))::text FROM pg_constraint WHERE connamespace='public'::regnamespace ORDER BY conname`,
 	} {
 		rows, e := conn.Query(query)
 		must(t, e)
@@ -179,8 +180,18 @@ func catalogFingerprint(t *testing.T, conn *sql.DB) string {
 		must(t, rows.Err())
 		must(t, rows.Close())
 	}
-	for _, spec := range catalogTables {
-		rows, e := conn.Query("SELECT row_to_json(t)::text FROM public." + pqIdent(spec.name) + " t ORDER BY row_to_json(t)::text")
+	names, e := conn.Query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
+	must(t, e)
+	tables := []string{}
+	for names.Next() {
+		var name string
+		must(t, names.Scan(&name))
+		tables = append(tables, name)
+	}
+	must(t, names.Err())
+	must(t, names.Close())
+	for _, name := range tables {
+		rows, e := conn.Query("SELECT row_to_json(t)::text FROM public." + pqIdent(name) + " t ORDER BY row_to_json(t)::text")
 		must(t, e)
 		for rows.Next() {
 			var s string

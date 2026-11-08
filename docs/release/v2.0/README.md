@@ -1,56 +1,33 @@
 # Coldkeep v2.0 active charter
 
-Current unit: **Phase 2 follow-up / action 2.02 BUILD**, authorized by
-`coldkeep_phase2_followup_codex_2026-11-08.md` (8 November 2026 follow-up bundle).
-[Current authority](../current.json) records **2.02 COMPLETE**, implementation
-ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
-**1.13.19**, /v2 and profile manual-postgresql-docker remain unchanged.
+Current unit: **Phase 3A BUILD**, authorized by
+`coldkeep_phase3a_codex_2026-11-08.md` and the 8 November 2026 user instruction.
+[Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
+product gates INCOMPLETE. Phase 3A unit is ACTIVE pending qualification.
+Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
 
-Accepted base: `e25da48003f30aeacb900131be28c3e092f85283`, tree
-`bad2400116d4dbb4fd50446acd48034c82ffb2d8`. Accepted 2.01 and local-profile
-2.03 COMPLETE remain in their unchanged reports, including the
-[Phase 1D follow-up](phase1d-followup-result.md). Preserve all predecessors.
+Accepted base: `1229563116f71067c74801516bcd64c92e7b6ed2`, tree
+`883f1a4a27db1c5eb747c76e5d77bb4379ef5f78`. The supplied acceptance closes P1–P3
+and local 2.02. Accepted 2.01, local-profile 2.03 and corrected 2.02 reports are
+preserved byte-for-byte. Preserve predecessors, frozen v1 and dependency pins.
 
-## Phase 2 scope and validation
+Scope: additive PostgreSQL identity lineage, explicit recovery-bound adoption,
+incompatible-writer refusal and recovery of schema18. Ordinary schema17 and
+SQLite proof behavior remain. Adopted identities are physically unbound;
+ordinary mutation remains refused. Phase 3B/3C are not authorized by this unit.
 
-Prove an embedded React/TypeScript/Vite UI and typed /api/v1 in one owned Go
-fixture process; authenticated history-to-restore through the existing engine;
-and real Linux x86-64 CGO SQLite persistence alongside CGO-disabled PostgreSQL
-Docker. This is an internal delivery and feasibility proof. It does not qualify
-native support, SQLite lifecycle/defaults, durable jobs or production authentication.
-No 2.04, schema/payload/recovery-format change, real repository adoption or publication.
-All Go dependency pins, checksums and Go 1.26.10 remain fixed. Frontend tools/dependencies are pinned separately.
+Required fresh gates: new adoption/recovery race suite; retained recovery gate
+(all 244 named requirements); applicable DB/storage/snapshot/restore regressions;
+unchanged 23-case oracle; full Phase 2 integrated proof (85 Go/38 PostgreSQL cases,
+15/3 critical outputs, nine TCP controls and native/Docker browser journeys);
+full Python and authority tests; build/vet/pinned lint, dependency/source checks
+and local CI audit/mutations. Historical D19 evidence reuse requires exact source
+and original command/log binding. No changed recovery contract may reuse old runs.
 
-Required clean-checkpoint validation:
-
-- Go 1.26.10, GOTOOLCHAIN=local, GOWORK=off, pinned lint; build, vet, formatting,
-  shell checks, CI audits/mutations, matrix, row-writer/source and dependency guards.
-- Owned-runtime/API/security/admission tests and blocking ordinary Linux proof gate;
-  packaged browser history-to-restore, independent reread, browser-close ownership,
-  competing process and shutdown joins; no Node runtime or external assets.
-- Prepared-build identity, missing/stale assets and independent CLI go install.
-- Real SQLite store/close/reopen/restore and copied historical reader, named no-CGO
-  refusal; PostgreSQL CLI and daemon Docker, mount/non-root/temp/exposure proof.
-- Fresh unchanged 23-case product oracle; source-bound reuse of unchanged affected
-  SQLite/reader/store checks.
-- Source-bound reuse of accepted recovery/coordination/command race gate, all 244 requirements;
-  original-loss, post-live-GC and large-receipt scenarios remain blocking.
-- Fresh full Python suite and focused authority tests; explicit 0/2.01/2.03 fixtures,
-  historical-v1 validators against the actual frozen checkout and 849-file digest.
-- Source-bound raw commands, identities, initial failures, predecessor preservation,
-  owned cleanup, local commits, replay-verified patches and checksummed evidence.
-
-The submitted [Phase 2 result](phase2-result.md) remains unchanged. The
-[P1–P3 follow-up result](phase2-followup-result.md) records corrected local
-2.02 COMPLETE after all 27 clean-checkpoint qualifying commands passed:
-restore-destination admission, actual TCP classification, complete-value byte
-bounds and fresh integrated native/browser/Docker proof, current oracle,
-Python/authority and build/static checks. Unchanged recovery, broad SQLite/
-retained history and historical D19 evidence is explicitly source-bound reuse.
-Corrected 2.02 awaits review. Implementation stays ACTIVE and product gates
-INCOMPLETE; accepted local-profile 2.03 remains COMPLETE. No 2.04 work began.
-Actual model/effort are unknown; requested GPT-6 Astra / Extra High.
-LOCAL_ACTION_2_02_AUTHORITY_ONLY certifies structural authority, not runtime behavior.
+Requested settings GPT-6 Astra / Extra High; actual model/effort unknown.
+LOCAL_ACTION_2_04_PHASE3A_AUTHORITY_ONLY is structural authority only.
+A qualified Phase 3A may complete its unit while parent 2.04 remains ACTIVE.
+No push, publication, merge, tag, release or live installation switch.
 
 ## Selected first stable profile
 

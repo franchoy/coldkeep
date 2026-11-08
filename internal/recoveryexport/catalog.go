@@ -40,7 +40,7 @@ var catalogTables = []tableSpec{
 func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) error {
 	// LIMIT bounds enumeration even with a damaged/unexpected catalog. The
 	// information schema query also rejects foreign tables and views as readers.
-	rows, err := tx.QueryContext(ctx, `SELECT c.relname,a.attname,t.typname,c.relkind
+	rows, err := tx.QueryContext(ctx, `SELECT c.relname,a.attname,t.typname,c.relkind,a.attnotnull
  FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
  JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
  JOIN pg_type t ON t.oid=a.atttypid
@@ -50,10 +50,12 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 		return fmt.Errorf("%w: schema inspection", ErrUnsupported)
 	}
 	shape := map[string]map[string]string{}
+	nonnull := map[string]map[string]bool{}
 	n := 0
 	for rows.Next() {
 		var table, col, typ, kind string
-		if err = rows.Scan(&table, &col, &typ, &kind); err != nil {
+		var required bool
+		if err = rows.Scan(&table, &col, &typ, &kind, &required); err != nil {
 			break
 		}
 		n++
@@ -67,17 +69,29 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 		}
 		if shape[table] == nil {
 			shape[table] = map[string]string{}
+			nonnull[table] = map[string]bool{}
 		}
 		shape[table][col] = typ
+		nonnull[table][col] = required
 	}
 	err = joinRows(err, rows)
 	if err != nil {
 		return err
 	}
-	if len(shape) != len(catalogTables) {
+	if len(shape["schema_version"]) != 1 || shape["schema_version"]["catalog_version"] != "int4" {
+		return ErrUnsupported
+	}
+	var version int
+	if err = tx.QueryRowContext(ctx, `SELECT catalog_version FROM public.schema_version LIMIT 1`).Scan(&version); err != nil || profileTables(version) == nil {
+		return fmt.Errorf("%w: schema version", ErrUnsupported)
+	}
+	inv.CatalogVersion = version
+	inv.Reader = profileReader(version)
+	tables := profileTables(version)
+	if len(shape) != len(tables) {
 		return fmt.Errorf("%w: schema table set", ErrUnsupported)
 	}
-	for _, spec := range catalogTables {
+	for _, spec := range tables {
 		// Supported upgrades append columns without changing their meaning. Match
 		// the exact named fields/types, not PostgreSQL physical attribute order.
 		columns := strings.Fields(spec.columns)
@@ -92,11 +106,7 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 			}
 		}
 	}
-	var version int
-	if err = tx.QueryRowContext(ctx, `SELECT catalog_version FROM public.schema_version LIMIT 1`).Scan(&version); err != nil || version != 17 {
-		return fmt.Errorf("%w: schema version", ErrUnsupported)
-	}
-	for _, spec := range catalogTables {
+	for _, spec := range tables {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -152,6 +162,16 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 	}
 	if len(inv.Catalog["schema_version"]) != 1 {
 		return fmt.Errorf("%w: schema singleton", ErrUnsupported)
+	}
+	if version == 18 {
+		for _, spec := range identityTables {
+			for _, col := range strings.Fields(spec.required) {
+				if !nonnull[spec.name][col] {
+					return fmt.Errorf("%w: identity NOT NULL constraint", ErrUnsupported)
+				}
+			}
+		}
+		return validateIdentityConstraints(ctx, tx)
 	}
 	return nil
 }
@@ -213,6 +233,9 @@ func strIndex(rows []Row, key string) (map[string]Row, error) {
 }
 
 func validateGraph(ctx context.Context, i *Inventory) error {
+	if e := validateIdentity(i); e != nil {
+		return e
+	}
 	c := i.Catalog
 	files, e := index(c["logical_file"], "id")
 	if e != nil {

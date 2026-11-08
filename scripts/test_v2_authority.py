@@ -217,12 +217,14 @@ class Action201AuthorityTests(V2AuthorityFixture):
                 self.assertTrue(governance.validate(self.root, "historical-v1"))
 
     def test_unknown_and_conflicting_action_fail_without_phase0_fallback(self):
-        for phase in ("2.04", "2.17", "Phase 1A", "2.1", "", None, 2.01, []):
+        for phase in ("2.05", "2.17", "Phase 1A", "2.1", "", None, 2.01, []):
             with self.subTest(phase=phase):
                 self.change(phase=phase)
                 self.assert_rejected()
                 self.assertEqual(release.validate(self.root, "auto").evidence_scope,
                                  "UNRESOLVED_ACTIVE_SCOPE")
+        self.change(phase="2.04")  # Known bounded scope with contradictory mirrors.
+        self.assert_rejected()
         self.change(phase="2.02")  # Known new scope with contradictory 2.01 mirrors.
         self.assert_rejected()
         self.change(phase="2.03")  # Known new scope with contradictory 2.01 mirrors.
@@ -468,3 +470,44 @@ class Action202AuthorityTests(V2AuthorityFixture):
         self.assert_rejected()
         self.change(product_gates="INCOMPLETE")
         self.assertTrue(release.validate(self.root, "released").violations)
+
+
+class Action204Phase3AAuthorityTests(V2AuthorityFixture):
+    fixture_phase = "2.04"
+
+    def setUp(self):
+        super().setUp()
+        for name in ("phase1a-result.md", "phase1d-result.md", "phase2-followup-result.md"):
+            shutil.copy2(ROOT / "docs/release/v2.0" / name, self.root / "docs/release/v2.0" / name)
+
+    def test_unit_complete_keeps_parent_active(self):
+        report = self.root / "docs/release/v2.0/phase3a-result.md"
+        body = ("Phase 3A unit: COMPLETE\nParent action 2.04: ACTIVE\nProduct gates: INCOMPLETE\n"
+                "Implementation: ACTIVE\ncoldkeep_phase3a_codex_2026-11-08.md\n"
+                "Identity/adoption/recovery qualification: PASS\n")
+        self.assertEqual(release.validate(self.root, "auto").violations, [])
+        self.assertIn("2.04-phase3a-qualification", release.validate(self.root, "auto").outstanding_obligations)
+        report.write_text(body)
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertNotIn("2.04-phase3a-qualification", result.outstanding_obligations)
+        self.assertIn("2.04-phase3b", result.outstanding_obligations)
+        self.assertIn("2.04-phase3c", result.outstanding_obligations)
+        self.change(phase_status="COMPLETE")
+        self.assert_rejected()
+        self.change(phase_status="ACTIVE", product_gates="COMPLETE")
+        self.assert_rejected()
+
+    def test_incomplete_reports_and_future_authority_do_not_pass(self):
+        report = self.root / "docs/release/v2.0/phase3a-result.md"
+        for body in ("Phase 3A unit: COMPLETE", "Phase 3A unit: ACTIVE", "x" * 65537):
+            report.write_text(body)
+            self.assertIn("2.04-phase3a-qualification", release.validate(self.root, "auto").outstanding_obligations)
+        for phase in ("2.04.1", "2.05", "2.17", "3A"):
+            self.change(phase=phase)
+            self.assert_rejected()
+
+    def test_predecessor_and_publication_fences(self):
+        self.assertTrue(release.validate(self.root, "released").violations)
+        (self.root / "docs/release/v2.0/phase2-followup-result.md").unlink()
+        self.assert_rejected()

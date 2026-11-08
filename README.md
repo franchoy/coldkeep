@@ -34,7 +34,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 2.02
+CURRENT_PHASE: 2.04
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE

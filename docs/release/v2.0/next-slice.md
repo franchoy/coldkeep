@@ -1,27 +1,16 @@
-# Phase 2 follow-up / action 2.02 handoff
+# Phase 3A handoff
 
-Current bounded unit: **2.02 COMPLETE**, corrected under
-`coldkeep_phase2_followup_codex_2026-11-08.md`; **awaiting review**.
-Review the [follow-up result](phase2-followup-result.md) and its local artifacts.
-The submitted [Phase 2 result](phase2-result.md), accepted local-profile
-2.03 COMPLETE and all predecessors remain unchanged.
+Phase 3A unit ACTIVE pending all required qualification. Parent action 2.04 ACTIVE;
+implementation ACTIVE; product gates INCOMPLETE. No later unit is authorized here.
 
-Submitted base: `eb19d18da9307f61ea3a6f775565ec21a153f0d1`, tree
-`4f6197ff35fd065c3432fdb7f19ee6a5f1b3e40f`. Clean tested correction:
-`553967e53e8dcc2853b5dba0c73f6104e92e3d71`, tree
-`bfe1b019d67fdbf6cae638b2ed8e60820cefaf09`. The final commit changes only
-current-authority/result documents; exact final identity and replay-verified
-patches accompany the evidence. No separate closure-only run remains.
+After Phase 3A is qualified and accepted, Phase 3B owns physical root markers,
+expected-volume evidence/confidence, source/root relocation and revisioned rebind,
+and missing/substituted empty-mount refusal. Ordinary schema18 mutation remains
+fenced until that physical admission is qualified.
 
-After review, the next planned product action is **2.04 identities and explicit
-migration fences**, under a separate owning instruction. Do not begin it in this
-follow-up. Keep the existing lock domain and format/compatibility fences, and
-retain the later 2.05 lifecycle, 2.07 durable jobs, 2.08 authentication and product
-qualification obligations. Implementation stays ACTIVE; product gates INCOMPLETE;
-version 2.0.0-dev.0, /v2, manual-postgresql-docker and latest stable 1.13.19.
+Phase 3C owns generation-owned typed membership, exact-name encoding with separate
+display, policy provenance and measured indexed/paginated lookup. Complete 2.04
+only after all three packages and integrated action-level acceptance qualify.
 
-Recommended next execution: GPT-6 Astra / Extra High, for the cross-cutting
-identity and migration boundaries. Record requested versus observable settings;
-actual model/effort in this run are unknown. Completion of a later unit requires
-its own authorized implementation, applicable regressions and source-bound proof.
-No push, publication, merge, release or real-installation switch is authorized here.
+Recommended next settings: GPT-6 Astra / Extra High; record actual settings separately.
+No live switch, push, publication, merge, tag or release is included.

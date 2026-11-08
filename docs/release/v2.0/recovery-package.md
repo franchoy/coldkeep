@@ -351,3 +351,13 @@ independence remains **unknown** until separately confirmed by the operator.
 PostgreSQL's [pg_restore trust and transaction contract](https://www.postgresql.org/docs/16/app-pgrestore.html)
 and [template0 provisioning](https://www.postgresql.org/docs/16/sql-createdatabase.html)
 remain the governing upstream boundaries.
+
+## Phase 3A profile extension
+
+[Identity adoption](identity-adoption.md) adds package-v2/schema18/receipt-v2 with
+all six identity/provenance tables, exact constraints and unbound lineage. The
+existing v1/schema17/receipt-v1 contract above remains unchanged. The new operator
+validates either exact tuple before restore pins; mixed profiles refuse. Existing
+v1 ready receipts remain readable on unchanged targets, and any retained ready
+receipt blocks adoption. Phase 3B physical binding is still required for ordinary
+schema18 mutations.

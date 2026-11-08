@@ -9,7 +9,7 @@ Coldkeep is correctness-first. The primary invariant is: never lose user data.
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 2.02
+CURRENT_PHASE: 2.04
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE
@@ -17,13 +17,12 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 2 follow-up / action 2.02 is authorized in BUILD mode by
-`coldkeep_phase2_followup_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
-Scope: P1 restore-root admission, P2 TCP exposure classification and P3 complete-
-value byte bounds in the existing internal proof; fresh integrated qualification.
-Accepted 2.01 and local-profile 2.03 COMPLETE reports remain unchanged.
-Implementation stays ACTIVE; product gates stay INCOMPLETE. Action 2.04 must not
-begin. No schema/payload/recovery-format change or real-repository adoption.
+Active v2.0 Phase 3A / action 2.04 is authorized in BUILD mode by
+`coldkeep_phase3a_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
+Scope: explicit PostgreSQL identity adoption, writer admission and recovery
+continuity. Accepted 2.01, local-profile 2.03 and corrected 2.02 remain COMPLETE.
+Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
+No Phase 3B/3C or real-installation switch is authorized. SQLite adoption refuses.
 All dependency pins and checksums remain fixed, including Go 1.26.10. Local commits and owned disposable
 fixtures are authorized. Preserve predecessor worktrees and frozen v1 records.
 No push, PR publication, merge, tag, release or deployment is authorized.
@@ -41,7 +40,7 @@ Preserve user changes and data.
 
 ## Validation and handoffs
 
-Use the bounded Phase 2 validation profile in `docs/release/v2.0/README.md`
+Use the bounded Phase 3A validation profile in `docs/release/v2.0/README.md`
 and `PRE_RELEASE_CHECKLIST.md`. Run focused checks before applicable broader
 gates. Missing hosted or platform evidence is not a pass. The baseline commands:
 

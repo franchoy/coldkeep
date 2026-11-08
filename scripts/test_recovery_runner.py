@@ -10,10 +10,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts/run_recovery_export_tests.sh"
-NEW_EVENT = "TestRecoveryPostLiveGC"
+NEW_EVENT = "TestAdoptionOperatorAndDatabaseReservation"
 
 
 class RecoveryRunnerTests(unittest.TestCase):
+    required_event = NEW_EVENT
     def run_mutation(self, mutation):
         with tempfile.TemporaryDirectory(prefix="coldkeep-runner-mutation-") as directory:
             root = Path(directory)
@@ -30,13 +31,13 @@ class RecoveryRunnerTests(unittest.TestCase):
             with patch.object(sys, "argv", ["checker", str(event_file)]):
                 exec("\n".join(source.splitlines()[:boundary - 1]), namespace)
             required = namespace["required"]
-            self.assertIn(NEW_EVENT, required["github.com/franchoy/coldkeep/v2/internal/recoveryexport"])
+            self.assertIn(self.required_event, required["github.com/franchoy/coldkeep/v2/internal/recoveryexport"])
             records = [{"Action": "pass", "Package": package, "Test": test}
                        for package, tests in required.items() for test in tests | {""}]
             if mutation == "missing":
-                records = [e for e in records if e["Test"] != NEW_EVENT]
+                records = [e for e in records if e["Test"] != self.required_event]
             if mutation == "skip":
-                next(e for e in records if e["Test"] == NEW_EVENT)["Action"] = "skip"
+                next(e for e in records if e["Test"] == self.required_event)["Action"] = "skip"
             event_file.write_text("".join(json.dumps(e) + "\n" for e in records))
             fake = root / "bin"
             fake.mkdir()
@@ -78,9 +79,13 @@ else:
     def test_missing_new_required_event_is_blocking(self):
         result = self.run_mutation("missing")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(NEW_EVENT, result.stdout)
+        self.assertIn(self.required_event, result.stdout)
 
     def test_required_skip_is_blocking(self):
         result = self.run_mutation("skip")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('"Action": "skip"', result.stdout)
+
+
+class RetainedRecoveryRunnerTests(RecoveryRunnerTests):
+    required_event = "TestRecoveryPostLiveGC"

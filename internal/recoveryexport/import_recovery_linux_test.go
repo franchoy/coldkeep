@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -141,6 +142,12 @@ func isolatedRecovery(t *testing.T, f *fixture, o ExportOptions, files []expecte
 	if image == "" || reader == "" {
 		t.Fatal("explicit staged reader and PostgreSQL recovery image required")
 	}
+	checkedProfile, e := Check(context.Background(), o.Destination, o.Limits)
+	must(t, e)
+	var expectedLineage string
+	if checkedProfile.Manifest.CatalogVersion == 18 {
+		must(t, f.db.QueryRow(identityLineageQuery).Scan(&expectedLineage))
+	}
 	name := fmt.Sprintf("ck-phase1d-recovery-%d-%d", os.Getpid(), fixtureSeq.Add(1))
 	containerID := strings.TrimSpace(string(proofDocker(t, "", "run", "-d", "--name", name, "--label", "coldkeep.disposable=phase1d-recovery", "--memory", "1g", "--cpus", "2", "--tmpfs", "/var/lib/postgresql/data:rw,size=768m", "-e", "POSTGRES_USER", "-e", "POSTGRES_PASSWORD", "-e", "POSTGRES_DB", image)))
 	t.Cleanup(func() { proofDocker(t, "", "rm", "-f", containerID) })
@@ -268,7 +275,17 @@ test ! -e /recovered/capacity-payload/.coldkeep-control/IMPORT_READY`, "capacity
 	if sessions != "0" {
 		t.Fatalf("recovery session leak %s", sessions)
 	}
-	report := map[string]any{"scenario": label, "finite_postgres_capacity_failure": capacityFailure, "expected": files, "import": json.RawMessage(importBytes), "restore": json.RawMessage(restoreBytes), "negative_source_access": string(isolation), "reader_sha256": hex.EncodeToString(readerHash[:]), "image": image, "container_id": containerID, "key_custody": "private file staged before export; parent key memory cleared before recovery; no source key file mounted", "mounts": "package/read-only, independent custody/read-only, staged reader/read-only, fresh destination; no source installation or payload", "source_port": f.config.Port, "source_root": f.root, "postgres_capacity_bytes": 768 << 20, "reader_memory_bytes": 512 << 20, "remaining_owned_sessions": 0, "physical_independence": "unknown; same-host functional isolation"}
+	var recoveredLineage any
+	if expectedLineage != "" {
+		observed := proofDocker(t, "", "exec", containerID, "psql", "-X", "-t", "-A", "-U", "ck_recovery_admin", "-d", "recovery_target", "-c", identityLineageQuery)
+		var expected any
+		must(t, json.Unmarshal([]byte(expectedLineage), &expected))
+		must(t, json.Unmarshal(observed, &recoveredLineage))
+		if !reflect.DeepEqual(expected, recoveredLineage) {
+			t.Fatal("isolated recovery changed identity or migration lineage")
+		}
+	}
+	report := map[string]any{"scenario": label, "identity_lineage": recoveredLineage, "finite_postgres_capacity_failure": capacityFailure, "expected": files, "import": json.RawMessage(importBytes), "restore": json.RawMessage(restoreBytes), "negative_source_access": string(isolation), "reader_sha256": hex.EncodeToString(readerHash[:]), "image": image, "container_id": containerID, "key_custody": "private file staged before export; parent key memory cleared before recovery; no source key file mounted", "mounts": "package/read-only, independent custody/read-only, staged reader/read-only, fresh destination; no source installation or payload", "source_port": f.config.Port, "source_root": f.root, "postgres_capacity_bytes": 768 << 20, "reader_memory_bytes": 512 << 20, "remaining_owned_sessions": 0, "physical_independence": "unknown; same-host functional isolation"}
 	if dir := os.Getenv("COLDKEEP_PHASE1D_REPORT_DIR"); dir != "" {
 		b, e := json.MarshalIndent(report, "", "  ")
 		must(t, e)

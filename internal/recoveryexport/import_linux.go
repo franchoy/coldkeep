@@ -42,6 +42,7 @@ type ImportResult struct {
 }
 
 type ImportReceipt struct {
+	RepositoryID          string   `json:"repository_id,omitempty"`
 	Kind                  string   `json:"kind"`
 	Generation            string   `json:"generation"`
 	ManifestSHA256        string   `json:"manifest_sha256"`
@@ -62,7 +63,6 @@ type ImportReceipt struct {
 	PhysicalIndependence  string   `json:"physical_independence"`
 }
 
-const importReader = "Coldkeep schema-17, container-major-0/1, legacy-v1, CKBL-v1, none/zstd, plain/AES-GCM"
 const importReserve int64 = 16 << 20
 const importLock int64 = 0x434b494d504f5254
 
@@ -135,7 +135,7 @@ func importGeneration(ctx context.Context, d Destination, o ImportOptions, h *im
 		return result, e
 	}
 	digest := sha256.Sum256(raw)
-	if m.Generation != o.Generation || hex.EncodeToString(digest[:]) != o.ManifestSHA256 || m.Reader != importReader {
+	if m.Generation != o.Generation || hex.EncodeToString(digest[:]) != o.ManifestSHA256 || m.Reader != profileReader(m.CatalogVersion) {
 		return result, ErrPackage
 	}
 	if e = validateImportNames(m); e != nil {
@@ -290,7 +290,7 @@ func importGeneration(ctx context.Context, d Destination, o ImportOptions, h *im
 	if e = control.Remove("catalog.dump"); e != nil {
 		return result, e
 	}
-	receipt := &ImportReceipt{Kind: "coldkeep-import-ready/v1", Generation: m.Generation, ManifestSHA256: o.ManifestSHA256,
+	receipt := &ImportReceipt{Kind: profileReceipt(m.CatalogVersion), RepositoryID: m.RepositoryID, Generation: m.Generation, ManifestSHA256: o.ManifestSHA256,
 		LegacyRootObservation: m.LegacyRootHash, TargetRoot: dest.path, TargetRootHash: id.Hash,
 		Host: d.Host, Port: d.Port, Database: d.Database, DatabaseOID: oid, Role: d.User, Profile: d.Profile,
 		Reader: m.Reader, KeyRequired: m.KeyRequired, KeyReference: m.KeyReference, Objects: admitted,
@@ -421,7 +421,10 @@ func restoreImport(ctx context.Context, r resolved, pkg string, dest *generation
 }
 
 func admitImport(m Manifest, inv *Inventory) error {
-	if inv.CatalogVersion != m.CatalogVersion || inv.Rows != m.CatalogRows || len(catalogTables) != m.Tables || inv.Reader != m.Reader || inv.KeyRequired != m.KeyRequired || inv.KeyReference != m.KeyReference || len(inv.Objects)+1 != len(m.Members) {
+	if inv.CatalogVersion == 18 && inv.Catalog["repository_identity"][0].s("repository_id") != m.RepositoryID {
+		return ErrCorrupt
+	}
+	if inv.CatalogVersion != m.CatalogVersion || inv.Rows != m.CatalogRows || len(profileTables(inv.CatalogVersion)) != m.Tables || inv.Reader != m.Reader || inv.KeyRequired != m.KeyRequired || inv.KeyReference != m.KeyReference || len(inv.Objects)+1 != len(m.Members) {
 		return fmt.Errorf("%w: manifest/catalog admission", ErrCorrupt)
 	}
 	objects := make(map[int64]Object, len(inv.Objects))

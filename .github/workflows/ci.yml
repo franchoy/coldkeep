@@ -212,6 +212,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Clean test storage
         run: bash scripts/clean_test_storage.sh

@@ -1,5 +1,6 @@
 // coldkeep-recovery is the bounded Linux operator adapter for package-v1 import
-// and the existing schema-17 snapshot reader. It never initializes a catalog.
+// and constrained schema17/18 snapshot restoration, with explicit adoption.
+// Ordinary startup never initializes or adopts a catalog.
 package main
 
 import (
@@ -46,7 +47,7 @@ func main() {
 }
 func run() error {
 	if len(os.Args) < 2 {
-		return errors.New("usage: coldkeep-recovery check|import|restore [explicit options]; see recovery-package.md")
+		return errors.New("usage: coldkeep-recovery check|import|restore|adopt-preview|adopt-apply [explicit options]; see recovery-package.md")
 	}
 	fs := flag.NewFlagSet(os.Args[1], flag.ContinueOnError)
 	pkg := fs.String("package", "", "completed generation path")
@@ -56,6 +57,10 @@ func run() error {
 	trusted := fs.Bool("trusted-operator-backup", false, "consent to execute this trusted operator backup")
 	exclusive := fs.Bool("exclusive-target", false, "operator controls exclusive access to dedicated target")
 	capacity := fs.Int64("database-capacity-bytes", 0, "dedicated PostgreSQL heap/index/temp/WAL budget")
+	expectedSchema := fs.Int("expected-schema", 0, "explicit adoption source schema")
+	operation := fs.String("operation-id", "", "typed adoption request identity")
+	plan := fs.String("plan-sha256", "", "reviewed preview digest")
+	checkpoint := fs.String("checkpoint", "", "fresh independent pre-adoption generation path")
 	snap := fs.String("snapshot", "", "exact selected snapshot ID")
 	out := fs.String("output", "", "fresh absolute restore output directory")
 	if e := fs.Parse(os.Args[2:]); e != nil {
@@ -100,6 +105,12 @@ func run() error {
 		d.Key = func(context.Context) ([]byte, error) { return key, nil }
 	}
 	switch os.Args[1] {
+	case "adopt-preview":
+		r, e := recoveryexport.PreviewAdoption(ctx, recoveryexport.Config(d), recoveryexport.DefaultLimits())
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "adopt-apply":
+		r, e := recoveryexport.ApplyAdoption(ctx, recoveryexport.Config(d), recoveryexport.AdoptionOptions{ExpectedSchema: *expectedSchema, OperationID: *operation, PlanSHA256: *plan, Export: recoveryexport.ExportOptions{Destination: *checkpoint, Tools: recoveryexport.Tools{PGDump: c.PGDump, PGRestore: c.PGRestore}, Limits: recoveryexport.DefaultExportLimits(), InventoryLimits: recoveryexport.DefaultLimits()}})
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
 	case "import":
 		r, e := recoveryexport.Import(ctx, d, recoveryexport.ImportOptions{Package: *pkg, Generation: *gen, ManifestSHA256: *digest, TrustedOperatorBackup: *trusted, ExclusiveTarget: *exclusive, DatabaseCapacityBytes: *capacity, Tools: recoveryexport.Tools{PGDump: c.PGDump, PGRestore: c.PGRestore}, Limits: recoveryexport.DefaultExportLimits(), InventoryLimits: recoveryexport.DefaultLimits()})
 		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
@@ -170,7 +181,7 @@ func restore(ctx context.Context, c config, password string, key []byte, selecti
 	if e = errors.Join(e, root.Close()); e != nil {
 		return e
 	}
-	if receipt.Kind != "coldkeep-import-ready/v1" || receipt.TargetRootHash != id.Hash || receipt.Database != c.Database || receipt.Role != c.User || receipt.Host != c.Host || receipt.Port != c.Port || receipt.KeyRequired != (len(key) > 0) || receipt.KeyReference != c.KeyReference {
+	if (receipt.Kind != "coldkeep-import-ready/v1" && receipt.Kind != "coldkeep-import-ready/v2") || receipt.TargetRootHash != id.Hash || receipt.Database != c.Database || receipt.Role != c.User || receipt.Host != c.Host || receipt.Port != c.Port || receipt.KeyRequired != (len(key) > 0) || receipt.KeyReference != c.KeyReference {
 		return errors.New("ready receipt/target/key mismatch")
 	}
 	for _, v := range os.Environ() {
@@ -203,6 +214,14 @@ func restore(ctx context.Context, c config, password string, key []byte, selecti
 	var oid, pinsBefore, pinsAfter int64
 	if e = db.QueryRowContext(ctx, "SELECT oid::bigint FROM pg_database WHERE datname=current_database()").Scan(&oid); e != nil || oid != receipt.DatabaseOID {
 		return errors.New("reader database identity changed")
+	}
+	validation := recoveryexport.Config{Backend: "postgres", Profile: "manual-postgresql-docker", Transport: "local-plaintext", Host: c.Host, Port: c.Port, Database: c.Database, User: c.User, PayloadRoot: c.PayloadRoot, KeyReference: c.KeyReference, Password: func(context.Context) (string, error) { return password, nil }}
+	if key != nil {
+		validation.Key = func(context.Context) ([]byte, error) { return key, nil }
+	}
+	// The admission session consumes the explicit resolved key and joins cleanup.
+	if e = recoveryexport.ValidateRestoreOwned(ctx, validation, lease, receipt); e != nil {
+		return e
 	}
 	if e = db.QueryRowContext(ctx, "SELECT COALESCE(sum(pin_count),0) FROM chunk").Scan(&pinsBefore); e != nil {
 		return e
@@ -255,5 +274,5 @@ func restore(ctx context.Context, c config, password string, key []byte, selecti
 	if e = lease.Check(); e != nil {
 		return e
 	}
-	return json.NewEncoder(os.Stdout).Encode(map[string]any{"snapshot": selection, "selection": entries, "files": files, "pins_before": pinsBefore, "pins_after": pinsAfter, "warnings": r.Warnings, "target": receipt.Database, "reader": "coldkeep-recovery schema17"})
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{"snapshot": selection, "selection": entries, "files": files, "pins_before": pinsBefore, "pins_after": pinsAfter, "warnings": r.Warnings, "target": receipt.Database, "reader": receipt.Reader})
 }

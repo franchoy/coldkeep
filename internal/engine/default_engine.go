@@ -14,6 +14,7 @@ import (
 	"github.com/franchoy/coldkeep/v2/internal/catalog"
 	"github.com/franchoy/coldkeep/v2/internal/chunk"
 	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
 	"github.com/franchoy/coldkeep/v2/internal/maintenance"
 	"github.com/franchoy/coldkeep/v2/internal/observability"
 	"github.com/franchoy/coldkeep/v2/internal/snapshot"
@@ -62,6 +63,13 @@ type DefaultEngine struct {
 func New(cfg Config) (*DefaultEngine, error) {
 	if cfg.DB == nil {
 		return nil, fmt.Errorf("engine: Config.DB is required")
+	}
+	// A caller-supplied PostgreSQL handle must not bypass ordinary admission.
+	// SQLite retains its existing constructor contract; adoption is unsupported.
+	if db.BackendFromDB(cfg.DB) == db.BackendPostgres {
+		if _, err := db.CurrentSchemaVersion(cfg.DB); err != nil {
+			return nil, fmt.Errorf("engine catalog admission: %w", err)
+		}
 	}
 	obs, err := observability.NewService(cfg.DB)
 	if err != nil {

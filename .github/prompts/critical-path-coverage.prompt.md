@@ -5,7 +5,7 @@
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 2.02
+CURRENT_PHASE: 2.04
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE
@@ -13,13 +13,12 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 2 follow-up / action 2.02 is authorized in BUILD mode by
-`coldkeep_phase2_followup_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
-Scope: P1 restore-root admission, P2 TCP exposure classification and P3 complete-
-value byte bounds in the existing internal proof; fresh integrated qualification.
-Accepted 2.01 and local-profile 2.03 COMPLETE reports remain unchanged.
-Implementation stays ACTIVE; product gates stay INCOMPLETE. Action 2.04 must not
-begin. No schema/payload/recovery-format change or real-repository adoption.
+Active v2.0 Phase 3A / action 2.04 is authorized in BUILD mode by
+`coldkeep_phase3a_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
+Scope: explicit PostgreSQL identity adoption, writer admission and recovery
+continuity. Accepted 2.01, local-profile 2.03 and corrected 2.02 remain COMPLETE.
+Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
+No Phase 3B/3C or real-installation switch is authorized. SQLite adoption refuses.
 All dependency pins and checksums remain fixed, including Go 1.26.10. Local commits and owned disposable
 fixtures are authorized. Preserve predecessor worktrees and frozen v1 records.
 No push, PR publication, merge, tag, release or deployment is authorized.
@@ -131,7 +130,7 @@ NONPASS with no GitHub Release; its passing bounded evidence does not certify
 the v1.13.19 certificate. The completed 10-phase plan and exact 34-path
 boundary remain historical evidence:
 
-- keep v2 work within the adopted Phase 2 delivery/feasibility unit; no SQLite-first product-default behavior;
+- keep v2 work within the adopted Phase 3A identity/recovery unit; no SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;
 - do not introduce product features;
 - do not perform broad refactors;
@@ -139,5 +138,5 @@ boundary remain historical evidence:
 - do not remove PostgreSQL compatibility;
 - keep changes within the separately authorized plan and allowlist.
 
-V2 Phase 2 delivery/feasibility work is authorized under the active charter. Work beyond this unit
+V2 Phase 3A identity/recovery work is authorized under the active charter. Work beyond this unit
 and SQLite-first product defaults require their later owning phase.
