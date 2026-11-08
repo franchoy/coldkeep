@@ -2,7 +2,7 @@
 
 Adopted 7 November 2026 (Europe/Madrid). Current unit: **Phase 1D BUILD** under
 `coldkeep_phase1d_codex_2026-11-08.md` (8 November launch bundle).
-[Current authority](../current.json) remains **2.03 ACTIVE**, implementation
+[Current authority](../current.json) records **local-profile 2.03 COMPLETE**, implementation
 ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
 **1.13.19** and the frozen v1 records retain their identities.
 
@@ -21,8 +21,8 @@ visibility checks, layout checks and all 135 named requirements remain blocking.
 No schema migration, dependency change, adoption, daemon/UI or 2.04 work belongs
 here. No push, PR publication, merge, tag, release or deployment is authorized.
 
-The owning instruction conditionally authorizes **local-profile 2.03 COMPLETE**
-once all D1–D12 criteria pass for Linux/manual PostgreSQL 16. The authority
+All D1–D12 criteria passed for Linux/manual PostgreSQL 16; the owning instruction's
+conditional authority is exercised in [the Phase 1D result](phase1d-result.md). The authority
 validator accepts ACTIVE/COMPLETE structurally under the Phase 1D result;
 `LOCAL_ACTION_2_03_AUTHORITY_ONLY` never certifies runtime evidence or the product.
 Keep 2.02, 2.04–2.13, 2.15, 2.17 and separate publication authorization outstanding.

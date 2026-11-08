@@ -6,8 +6,8 @@ and fresh recovery after real live GC under the 8 November 2026 instruction
 `d96edea6abb1c2d55152e2020286a08ad959368e`, tree
 `8c30e47284668c86dae8aad55945458111eaed06`; all predecessors are preserved.
 
-Current action **2.03 ACTIVE** pending integrated qualifying validation and its
-result. Conditional completion is local to Linux/manual PostgreSQL 16; structural
+Current action **2.03 COMPLETE** for Linux/manual PostgreSQL 16 after all integrated
+criteria passed; see [the result](phase1d-result.md). Structural
 `LOCAL_ACTION_2_03_AUTHORITY_ONLY` diagnostics do not certify runtime recovery.
 Product gates stay **INCOMPLETE**, implementation **ACTIVE**, application
 **2.0.0-dev.0**, latest stable **1.13.19**. Action **2.04 has not begun**.
