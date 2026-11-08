@@ -17,15 +17,17 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 1B / action 2.03 is authorized in BUILD mode by the accepted
-8 November 2026 passive/inventory instruction and `docs/release/v2.0/README.md`.
+Active v2.0 Phase 1C / action 2.03 is authorized in BUILD mode by the
+8 November 2026 recovery-copy instruction and `docs/release/v2.0/README.md`.
 `docs/release/current.json` remains current authority; parent action 2.03 stays
-ACTIVE. Scope: passive existing-repository opening and a quiesced full-catalog
-recovery inventory, plus the accepted CI-audit correction. Phase 1A / 2.01 is
-accepted complete and preserved. Latest stable remains v1.13.19; frozen
-`docs/release/v1*/` records retain their historical bytes. No package copy,
-completion/import protocol, daemon/UI, schema, capture or migration belongs to
-this unit. Product gates and full action 2.03 remain incomplete.
+ACTIVE. Scope: explicit legacy coordination preparation, a fresh owned
+full-catalog recovery copy, bounded integrity checking and truthful completion
+publication after source cleanup. Phase 1A and the Phase 1B B1–B3 follow-up are
+accepted and preserved. Latest stable remains v1.13.19; frozen
+`docs/release/v1*/` records retain their historical bytes. Constrained import,
+installation-loss restoration and post-live-GC proof remain the next unit.
+No daemon/UI, schema, capture or migration belongs to this unit. Product gates
+and full action 2.03 remain incomplete.
 No push, PR publication, merge, tag, release or deployment is authorized.
 Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
@@ -41,7 +43,7 @@ Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
 ## Validation and handoffs
 
-Use the bounded Phase 1B validation profile in `docs/release/v2.0/README.md`
+Use the bounded Phase 1C validation profile in `docs/release/v2.0/README.md`
 and `PRE_RELEASE_CHECKLIST.md`. Run focused checks before applicable broader
 gates. Missing hosted or platform evidence is not a pass. The baseline commands:
 

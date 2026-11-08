@@ -1,5 +1,5 @@
-// Package recoveryexport establishes a passive, quiesced full-catalog cut.
-// It does not copy, publish, import or certify a recovery package.
+// Package recoveryexport establishes owned full-catalog cuts and independent
+// recovery copies. Inspect remains diagnostic-only; Export publishes after cleanup.
 package recoveryexport
 
 import (
@@ -107,6 +107,7 @@ type Result struct {
 type resolved struct {
 	identity        coordination.Identity
 	connector       *pq.Connector
+	pg              pq.Config
 	key             []byte
 	keyRef, profile string
 }
@@ -177,7 +178,7 @@ func resolve(ctx context.Context, c Config) (resolved, error) {
 		clear(key)
 		return r, ErrConfiguration
 	}
-	return resolved{id, connector, key, c.KeyReference, c.Profile}, nil
+	return resolved{identity: id, connector: connector, pg: config, key: key, keyRef: c.KeyReference, profile: c.Profile}, nil
 }
 
 // Inspect holds the legacy lease and one REPEATABLE READ READ ONLY snapshot
@@ -192,8 +193,9 @@ func Inspect(ctx context.Context, c Config, limits Limits, consume func(context.
 
 // hooks are package-private failure/lifetime instrumentation, never configuration.
 type hooks struct {
-	event     func(string, *sql.Tx) error
-	connector driver.Connector
+	event         func(string, *sql.Tx) error
+	connector     driver.Connector
+	wrapConnector func(driver.Connector) driver.Connector
 }
 
 func (h *hooks) at(s string, tx *sql.Tx) error {
@@ -203,7 +205,15 @@ func (h *hooks) at(s string, tx *sql.Tx) error {
 	return nil
 }
 
-func inspect(ctx context.Context, c Config, l Limits, consume func(context.Context, *Inventory) error, h *hooks) (result Result, err error) {
+func inspect(ctx context.Context, c Config, l Limits, consume func(context.Context, *Inventory) error, h *hooks) (Result, error) {
+	if consume == nil {
+		return Result{DiagnosticOnly: true}, ErrConfiguration
+	}
+	return inspectCut(ctx, c, l, func(ctx context.Context, _ resolved, _ *sql.Tx, inv *Inventory) error { return consume(ctx, inv) }, h)
+}
+
+// inspectCut is private: no transaction, configuration, or lease capability escapes.
+func inspectCut(ctx context.Context, c Config, l Limits, consume func(context.Context, resolved, *sql.Tx, *Inventory) error, h *hooks) (result Result, err error) {
 	result.DiagnosticOnly = true
 	if ctx == nil || consume == nil || !l.valid() {
 		return result, ErrConfiguration
@@ -238,6 +248,9 @@ func inspect(ctx context.Context, c Config, l Limits, consume func(context.Conte
 	var connector driver.Connector = r.connector
 	if h != nil && h.connector != nil {
 		connector = h.connector
+	}
+	if h != nil && h.wrapConnector != nil {
+		connector = h.wrapConnector(connector)
 	}
 	session, e := openCatalogSession(ctx, connector)
 	if e != nil {
@@ -303,7 +316,7 @@ func inspect(ctx context.Context, c Config, l Limits, consume func(context.Conte
 		return
 	}
 	rows, objects, catalogBytes := inv.Rows, len(inv.Objects), inv.CatalogBytes
-	if err = consume(ctx, inv); err != nil {
+	if err = consume(ctx, r, tx, inv); err != nil {
 		return
 	}
 	if err = errors.Join(ctx.Err(), lease.Check()); err != nil {

@@ -21,7 +21,7 @@ func TestPassiveCallBoundary(t *testing.T) {
 	must(t, e)
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		if name != "inventory.go" && name != "catalog.go" && name != "payload.go" && name != "catalog_session.go" {
 			continue
 		}
 		f, e := parser.ParseFile(token.NewFileSet(), name, nil, 0)
@@ -34,6 +34,36 @@ func TestPassiveCallBoundary(t *testing.T) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if ok && forbidden[sel.Sel.Name] {
 				t.Errorf("%s: mutation-capable or ambient constructor %s", name, sel.Sel.Name)
+			}
+			return true
+		})
+	}
+}
+
+// Destination writes are allowed in Export; source runtime/bootstrap/preparation
+// and SQL writes remain forbidden throughout this package.
+func TestRecoverySourceCallBoundary(t *testing.T) {
+	forbidden := map[string]bool{}
+	for _, name := range strings.Fields("PrepareExisting PrepareControlNamespace ConnectDB EnsureSchema RunMigrations ParseStorageContext OpenLocalStorage LoadDefaultStorageContext NewLocalWriter NewLocalWriterWithDirAndDB Exec ExecContext") {
+		forbidden[name] = true
+	}
+	entries, e := os.ReadDir(".")
+	must(t, e)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, e := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		must(t, e)
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && forbidden[sel.Sel.Name] {
+				t.Errorf("%s: source mutation capability %s", name, sel.Sel.Name)
 			}
 			return true
 		})

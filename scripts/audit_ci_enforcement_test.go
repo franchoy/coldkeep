@@ -4063,3 +4063,24 @@ func repoRoot(t *testing.T) string {
 	}
 	return filepath.Dir(root)
 }
+
+func TestAuditCIEnforcementRequiresRecoveryCopy(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeql := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	command := `        run: bash scripts/run_recovery_export_tests.sh "$RUNNER_TEMP/integration-diag/recovery-export"`
+	for _, mutation := range []string{
+		strings.Replace(workflow, "scripts/run_recovery_export_tests.sh", "scripts/missing_recovery.sh", 1),
+		strings.Replace(workflow, "      - name: Run recovery copy PostgreSQL contracts\n", "      - name: Run recovery copy PostgreSQL contracts\n        continue-on-error: true\n", 1),
+		strings.Replace(workflow, command, command+" || true", 1),
+		strings.Replace(workflow, command, command+"; true", 1),
+		strings.Replace(workflow, "      - name: Run recovery copy PostgreSQL contracts\n        if: ${{ matrix.codec == 'plain' }}", "      - name: Run recovery copy PostgreSQL contracts\n        if: false", 1),
+	} {
+		if mutation == workflow {
+			t.Fatal("recovery gate mutation absent")
+		}
+		output := runAuditLocalOnly(t, mutation, codeql, true)
+		if !strings.Contains(output, "recovery copy contract") {
+			t.Fatalf("missing recovery gate diagnostic: %s", output)
+		}
+	}
+}

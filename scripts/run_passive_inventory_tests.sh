@@ -14,7 +14,7 @@ mkdir -- "$1"
 output=$(cd -- "$1" && pwd -P)
 export COLDKEEP_PHASE1B_REPORT_DIR="$output"
 status=0
-go test -race -count=1 -json -timeout=4m ./internal/recoveryexport ./internal/coordination >"$output/go.jsonl" 2>"$output/go.stderr" || status=$?
+go test -race -count=1 -skip '^TestRecovery' -json -timeout=4m ./internal/recoveryexport ./internal/coordination >"$output/go.jsonl" 2>"$output/go.stderr" || status=$?
 python3 - "$output/go.jsonl" <<'PY' || status=$?
 import json,sys
 from pathlib import Path

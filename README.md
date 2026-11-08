@@ -43,7 +43,7 @@ PRODUCT_GATES: INCOMPLETE
 <!-- coldkeep-current-state:end -->
 
 
-Active development is **2.0.0-dev.0**, bounded to [v2.0 Phase 1B / action 2.03](docs/release/v2.0/README.md).
+Active development is **2.0.0-dev.0**, bounded to [v2.0 Phase 1C / action 2.03](docs/release/v2.0/README.md).
 Latest published stable remains **v1.13.19**, source-only, immutable at
 D19 `d3581602aee2599547564322fe083baae1d52063`, tag object
 `60b6878114f936b295c415605e8af31def2aba5a`, GitHub Release `431395975`.

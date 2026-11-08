@@ -1505,6 +1505,17 @@ check_local_workflow() {
     fi
   fi
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
+  local recovery_copy_block
+  recovery_copy_block="$(extract_step_block_from_content "$(extract_job_block correctness-matrix)" "Run recovery copy PostgreSQL contracts")"
+  # shellcheck disable=SC2016 # Match literal runner and matrix variables.
+  require_content_pattern "$recovery_copy_block" '^        run: bash scripts/run_recovery_export_tests\.sh "\$RUNNER_TEMP/integration-diag/recovery-export"$' 'recovery copy contract command remains blocking' || check_status=1
+  # shellcheck disable=SC2016
+  require_content_pattern "$recovery_copy_block" '^        if: [$][{][{] matrix[.]codec == .plain. [}][}]$' 'recovery copy contract executes in plain matrix' || check_status=1
+  require_content_pattern "$recovery_copy_block" '^          COLDKEEP_PHASE1C_TEST: 1$' 'recovery copy contract explicitly opts into disposable tests' || check_status=1
+  if grep -Eq 'continue-on-error' <<<"$recovery_copy_block"; then
+    echo '[audit] ERROR: recovery copy contract must remain blocking' >&2
+    check_status=1
+  fi
 	correctness_matrix_block="$(extract_job_block correctness-matrix)"
 	if [[ -z "$correctness_matrix_block" ]]; then
 	  echo "[audit] ERROR: missing correctness-matrix job block content" >&2

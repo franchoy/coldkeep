@@ -266,7 +266,7 @@ class Action203InventoryAuthorityTests(V2AuthorityFixture):
         result = release.validate(self.root, "auto")
         self.assertEqual(result.violations, [])
         self.assertEqual(governance.validate(self.root), [])
-        self.assertEqual(result.evidence_scope, "LOCAL_ACTION_2_03_PASSIVE_INVENTORY_ONLY")
+        self.assertEqual(result.evidence_scope, "LOCAL_ACTION_2_03_AUTHORITY_ONLY")
         self.assertIn("2.03-recovery-copy-completion-import-isolated-restoration", result.outstanding_obligations)
         self.change(phase_status="COMPLETE")
         self.assert_rejected()

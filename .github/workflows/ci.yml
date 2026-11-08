@@ -719,6 +719,25 @@ jobs:
           DB_SSLMODE: disable
         run: bash scripts/run_passive_inventory_tests.sh "$RUNNER_TEMP/integration-diag/passive-inventory"
 
+      - name: Install recovery PostgreSQL 16 clients
+        if: ${{ matrix.codec == 'plain' }}
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+
+      - name: Run recovery copy PostgreSQL contracts
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_PHASE1B_TEST: 1
+          COLDKEEP_PHASE1C_TEST: 1
+          COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump
+          COLDKEEP_PG_RESTORE: /usr/lib/postgresql/16/bin/pg_restore
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: bash scripts/run_recovery_export_tests.sh "$RUNNER_TEMP/integration-diag/recovery-export"
+
       - name: Upload correctness-matrix execution evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

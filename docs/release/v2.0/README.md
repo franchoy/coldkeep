@@ -1,56 +1,57 @@
 # Coldkeep v2.0 active charter
 
 Adopted 7 November 2026 (Europe/Madrid), under instruction edition 1.0.
-V2 implementation is active under the 8 November 2026 **Phase 1B** BUILD
-instruction: passive existing-repository opening and a quiesced full-catalog
-recovery inventory. The single machine-readable authority is
-[../current.json](../current.json), selecting `phase: "2.03"`,
-`phase_status: "ACTIVE"`. This unit cannot complete parent action 2.03.
-Phase 0 and Phase 1A / action 2.01 are accepted complete. Preserve their
-[results](phase1a-result.md), [fixed oracle](fixture-results.md) and product
-contract. Latest stable remains **v1.13.19** with its frozen v1 evidence;
-application identity is 2.0.0-dev.0 and every product gate remains incomplete.
+The current unit is **Phase 1C BUILD** under the 8 November 2026 recovery-copy
+instruction. [../current.json](../current.json) remains the single authority:
+**2.03 ACTIVE**, implementation ACTIVE, product gates INCOMPLETE, application
+**2.0.0-dev.0**. Structural validation reports
+`LOCAL_ACTION_2_03_AUTHORITY_ONLY`; it does not certify exported bytes.
 
-## Phase 1B scope and validation
+Phase 0, Phase 1A / 2.01 and the Phase 1B follow-up B1–B3 are accepted.
+Preserve their [Phase 1A result](phase1a-result.md), [submitted Phase 1B
+result](phase1b-result.md), [accepted follow-up](phase1b-followup-result.md),
+[fixed oracle](fixture-results.md), product contract and frozen v1 records.
+Latest stable remains **v1.13.19**.
 
-Implement only the open-existing lease, explicit compatible PostgreSQL input,
-read-only snapshot and bounded full-catalog inventory. Reconcile the accepted
-CI-audit carry-forward patch. No source preparation, writer startup, migration,
-pins, repair, schema/format/dependency changes, recovery copy/completion/import,
-daemon/UI, user-data adoption or publication belongs to this unit. Local commits
-are authorized. Keep the accepted Phase 1A worktree inspectable.
+## Phase 1C scope and validation
 
-The [API contract](passive-inventory.md) states input, lifetime, concrete limits,
-checks and refusals. **A missing persistent coordination lock is a preparation-
-required refusal**, never a passive bootstrap. This excludes unprepared legacy
-repositories until a separately explicit coordination-preparation decision.
-The [handoff](next-slice.md) retains the remaining integrated recovery contract.
-The [submitted Phase 1B result](phase1b-result.md) preserves its execution's
-completion claim. Review required B1–B3 corrections; the
-[follow-up result](phase1b-followup-result.md) governs the corrected candidate.
-Parent action 2.03 remains ACTIVE and product gates incomplete.
+Implement explicit preparation of already-existing legacy coordination, one
+fresh owned full-catalog cut, a snapshot-bound PostgreSQL custom archive,
+independent whole-object copies, a bounded source-independent checker and
+atomic completion publication after successful source cleanup. Preserve the
+[passive API](passive-inventory.md), actual transaction/connection/socket joins,
+named migrated-column checks and policy-filtered-view refusals. Follow the
+[package and operator contract](recovery-package.md). No implicit preparation,
+source grants, initialization, migration, schema/format/dependency changes,
+product import, adoption or publication is authorized. Local commits and
+owned disposable validation are authorized. Accepted worktrees remain intact.
 
-Use pinned Go 1.26.10, `GOTOOLCHAIN=local`, CGO for retained fixtures and unchanged
-dependencies. The bounded local gates are:
+Use installed pinned Go 1.26.10, `GOTOOLCHAIN=local`, `GOWORK=off`, CGO=1,
+PostgreSQL 16, and explicitly selected matched PostgreSQL 16 clients. Required
+local evidence at a clean implementation checkpoint:
 
-- The two authority validators and complete Python suite below; explicit Phase 0,
-  2.01 and 2.03 fixtures, unknown/conflicting scope and publication refusals.
-- CI-audit Go mutation tests and `bash scripts/audit_ci_enforcement.sh --local-only`.
-- `scripts/run_passive_inventory_tests.sh <new-evidence-directory>` with an
-  explicitly disposable PostgreSQL 16 server and `DB_*` inputs. Every declared
-  test must execute; missing/skipped PostgreSQL proof is not a pass.
-- Affected coordination/container/storage/catalog/verify/recovery regressions
-  under race detection using disposable catalogs/storage; current fixed product
-  fixtures. Reuse the accepted D19 results and immutable oracle, not a second
-  Phase 1A closure. No SQLite passive adapter is included.
-- Build, `go vet ./...`, formatting, shell syntax, validation-matrix and row-writer
-  guards. Check frozen-v1/Phase-1A fixture and product-contract bytes and unchanged
-  module/toolchain pins against the accepted entry.
+- `scripts/run_recovery_export_tests.sh <new-dir>` under race detection with
+  explicit disposable DB inputs and client paths. Require all named scenarios
+  and no failed/skipped events, including retained B1–B3 and coordination cases.
+- Preserve the passive and product gates. Run current product fixtures against
+  the unchanged 23-case oracle. Exact D19 and unaffected historical package
+  evidence may be reused with their original source identity and scope.
+- Both authority validators, focused explicit-phase/refusal tests, and the full
+  Python suite because authority implementation changes. Historical Phase 0
+  and 2.01 fixtures remain independent of the live phase.
+- Local CI audit and relevant Go mutation tests, including the blocking recovery
+  step. Build, vet, pinned lint, formatting, shell syntax/ShellCheck, smart-quote,
+  validation-matrix, row-writer and whitespace guards.
+- Preserve all 849 frozen v1 files, accepted historical reports, fixed fixtures,
+  schema SQL, payload format code and module/toolchain pins. Bind commands,
+  raw events, preservation and cleanup to actual source identities.
 
-Full release/platform/benchmark/stress/hosted qualification remains outside this
-bounded unit. Parent action 2.03 and product gates stay ACTIVE/INCOMPLETE even
-when the Phase 1B result is complete. Recommended execution: GPT-6 Astra / Extra
-High for the whole unit; actual settings are recorded only when observable.
+The [result](phase1c-result.md) records the measured unit outcome and evidence
+reuse. Constrained import, isolated restoration without the original
+installation and post-live-GC survival remain in [next-slice.md](next-slice.md).
+Full release/platform/stress/hosted qualification is outside this local unit.
+Recommended settings: **GPT-6 Astra / Extra High**; requested and observable
+settings are recorded separately, with unknown settings left unknown.
 
 ## Selected first stable profile
 
