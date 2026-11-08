@@ -1,8 +1,8 @@
 # Coldkeep v2.0 active charter
 
-Adopted 7 November 2026 (Europe/Madrid). Current unit: **Phase 1D BUILD** under
-`coldkeep_phase1d_codex_2026-11-08.md` (8 November launch bundle).
-[Current authority](../current.json) records **local-profile 2.03 COMPLETE**, implementation
+Adopted 7 November 2026 (Europe/Madrid). Current unit: **Phase 1D follow-up BUILD** under
+`coldkeep_phase1d_followup_codex_2026-11-08.md` (8 November follow-up bundle).
+[Current authority](../current.json) records **local-profile 2.03 ACTIVE**, implementation
 ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
 **1.13.19** and the frozen v1 records retain their identities.
 
@@ -21,8 +21,9 @@ visibility checks, layout checks and all 135 named requirements remain blocking.
 No schema migration, dependency change, adoption, daemon/UI or 2.04 work belongs
 here. No push, PR publication, merge, tag, release or deployment is authorized.
 
-All D1–D12 criteria passed for Linux/manual PostgreSQL 16; the owning instruction's
-conditional authority is exercised in [the Phase 1D result](phase1d-result.md). The authority
+The submitted [Phase 1D result](phase1d-result.md) records D1–D12 evidence.
+Acceptance is held for F1 receipt capacity and F2 lowered inventory duration;
+local-profile completion requires the follow-up instruction’s new and retained criteria. The authority
 validator accepts ACTIVE/COMPLETE structurally under the Phase 1D result;
 `LOCAL_ACTION_2_03_AUTHORITY_ONLY` never certifies runtime evidence or the product.
 Keep 2.02, 2.04–2.13, 2.15, 2.17 and separate publication authorization outstanding.
@@ -38,8 +39,10 @@ Required clean-checkpoint validation:
 - Affected storage/restore/snapshot/maintenance regressions and source-preservation
   checks. Reuse only actually unchanged historical evidence, preserving skips.
 - Build, vet, pinned lint, formatting, shell/CI/whitespace/dependency guards.
-- Focused authority tests, current and explicit historical validators, full fresh
-  Python suite, local CI audit and failure/missing/skip enforcement mutations.
+- Focused authority tests, current and explicit historical validators, fresh runner
+  tests and reader-event mutations, local CI audit and enforcement mutations.
+  The submitted 547-test Python suite may be explicitly reused only while Python/
+  authority code remains unchanged and changed-runner dependencies are freshly tested.
 - Final authority/governance diagnostics, frozen 849-file digest, protected-path
   and predecessor receipts, source-bound commands/logs, owned-resource cleanup,
   incremental/ordered patches with replay and compact checksummed evidence.

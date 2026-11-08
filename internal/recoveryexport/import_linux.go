@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -79,6 +78,7 @@ type importHooks struct {
 	event       func(string) error
 	credentials func(func() error) error
 	release     func(func() error) error
+	receipt     func(*ImportReceipt)
 }
 
 func (h *importHooks) at(s string) error {
@@ -295,11 +295,10 @@ func importGeneration(ctx context.Context, d Destination, o ImportOptions, h *im
 		Host: d.Host, Port: d.Port, Database: d.Database, DatabaseOID: oid, Role: d.User, Profile: d.Profile,
 		Reader: m.Reader, KeyRequired: m.KeyRequired, KeyReference: m.KeyReference, Objects: admitted,
 		DatabaseCapacityBytes: o.DatabaseCapacityBytes, PhysicalIndependence: "unknown"}
-	b, e := json.Marshal(receipt)
-	if e != nil {
-		return result, e
+	if h != nil && h.receipt != nil {
+		h.receipt(receipt)
 	}
-	if e = writeMember(control, "import-ready.pending", b, fh); e != nil {
+	if e = writeImportReceipt(ctx, control, receipt, fh); e != nil {
 		return result, e
 	}
 	dir, e := control.Open(".")

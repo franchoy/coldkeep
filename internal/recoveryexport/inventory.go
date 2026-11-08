@@ -253,8 +253,13 @@ type ownedCut struct {
 
 func inspectOwnedCut(ctx context.Context, c Config, r resolved, l Limits, consume func(context.Context, resolved, *sql.Tx, *Inventory) error, h *hooks, owned ownedCut) (result Result, err error) {
 	result.DiagnosticOnly = true
-	if owned.lease == nil || owned.identity != r.identity || !l.valid() || consume == nil {
+	if ctx == nil || owned.lease == nil || owned.identity != r.identity || !l.valid() || consume == nil {
 		return result, ErrConfiguration
+	}
+	ctx, cancel := context.WithTimeout(ctx, l.Duration)
+	defer cancel()
+	if err = ctx.Err(); err != nil {
+		return
 	}
 	lease := owned.lease
 	if err = lease.Check(); err != nil {

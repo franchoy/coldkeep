@@ -200,6 +200,8 @@ func strictJSON(ctx context.Context, b []byte, v any, membersLimit int) error {
 					switch {
 					case strings.EqualFold(s, "members"):
 						childLimit = membersLimit
+					case strings.EqualFold(s, "objects"):
+						childLimit = ImportReceiptMaxObjects
 					case strings.EqualFold(s, "uncataloged_excluded"):
 						childLimit = DefaultLimits().DirectoryEntries
 					}
@@ -210,8 +212,8 @@ func strictJSON(ctx context.Context, b []byte, v any, membersLimit int) error {
 			}
 		case '[':
 			for count := 0; d.More(); count++ {
-				// Enforce the manifest slice caps before the typed decoder
-				// can allocate Members or Excluded, including lowered caps.
+				// Enforce slice caps before typed allocation (manifest Members,
+				// Excluded, or readiness Objects), including lowered caps.
 				if arrayLimit >= 0 && count >= arrayLimit {
 					return ErrLimit
 				}

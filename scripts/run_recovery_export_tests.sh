@@ -20,7 +20,7 @@ export COLDKEEP_RECOVERY_READER="$reader_dir/coldkeep-recovery"
 sha256sum "$COLDKEEP_RECOVERY_READER" >"$output/staged-reader.sha256"
 docker image inspect "$COLDKEEP_RECOVERY_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' >"$output/recovery-image.txt"
 status=0
-go test -race -count=1 -json -timeout=6m ./internal/recoveryexport ./internal/coordination >"$output/go.jsonl" 2>"$output/go.stderr" || status=$?
+go test -race -count=1 -json -timeout=6m ./internal/recoveryexport ./internal/coordination ./cmd/coldkeep-recovery >"$output/go.jsonl" 2>"$output/go.stderr" || status=$?
 python3 - "$output/go.jsonl" <<'PY' || status=$?
 import json,sys
 from pathlib import Path
@@ -34,6 +34,8 @@ required={
  'TestRecoveryCleanupBeforePublication/automatic-rollback-error',
  'TestRecoveryChildCancellationJoins','TestRecoveryExportStages','TestRecoveryOwnedDumpAndCopy',
  'TestRecoverySourceCallBoundary','TestRecoveryServerVersionRefusal',
+ 'TestRecoveryImportHonorsInventoryDuration','TestRecoveryOwnedInventoryDeadline',
+ 'TestRecoveryReceiptBoundDerivation','TestRecoveryImportReceiptPublicationBudget','TestRecoveryImportReceiptScaleRestore',
  'TestRecoveryImportRoundTrip','TestRecoveryImportTrustAndPackage','TestRecoveryImportSemanticAdmission',
  'TestRecoveryImportTargetRefusals','TestRecoveryImportContention','TestRecoveryImportFailures',
  'TestRecoveryImportCleanupJoins','TestRecoveryImportCredentialJoin','TestRecoveryImportChildJoin',
@@ -53,10 +55,16 @@ required={
  'TestCatalogRowSecurityCannotHideClosure','TestCleanupJoinsAutomaticRollbackAndDriverClose',
  'TestCleanupPreservesDriverErrors','TestPostgresCanceledQueryClosesSession',
  'TestPostgresStalledStartupCancellation','TestPassiveCallBoundary'},
+ 'github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery':{
+ 'TestRecoveryReaderReceiptWithinAdvertisedScale','TestRecoveryRestoreConsumesLargeReceiptBeforeBackend',
+ 'TestRecoveryReceiptByteBoundary','TestRecoveryReceiptObjectBoundary','TestRecoveryReceiptStrictness',
+ 'TestRecoveryReceiptCancellation','TestRecoveryReceiptRegularInput','TestRecoveryConfigLimitRemainsSmall'},
  'github.com/franchoy/coldkeep/v2/internal/coordination':{
  'TestPrepareExisting','TestPrepareExistingChildContention','TestExistingLeasePreparationAndMetadata',
  'TestExistingLeaseLegacyContention','TestExistingLeaseUnsafeAndLost'}}
 for parent, cases in {
+ 'TestRecoveryImportReceiptPublicationBudget': 'bytes objects compatible',
+ 'TestRecoveryOwnedInventoryDeadline': 'earlier-parent lower-inventory expired-parent',
  'TestRecoveryImportTrustAndPackage': 'untrusted generation digest missing incomplete corrupt unsupported',
  'TestRecoveryImportSemanticAdmission': 'unsafe-name reserved-name id format rows reader key-declaration name missing-object extra-object payload-header',
  'TestRecoveryImportTargetRefusals': 'populated system privileged membership incompatible existing-root package-alias no-exclusive missing-key wrong-key unsupported-key ambient',
@@ -78,6 +86,13 @@ for parent, cases in {
  'TestRecoverySubscriptionRefusal': 'restricted-reader database-owner',
 }.items():
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in cases.split())
+for parent, cases in {
+ 'TestRecoveryReceiptObjectBoundary': 'objects OBJECTS objectſ',
+ 'TestRecoveryReceiptStrictness': 'duplicate alias-duplicate unicode-duplicate nested-duplicate unknown truncated trailing-value trailing-garbage depth string key',
+ 'TestRecoveryReceiptCancellation': 'before during',
+ 'TestRecoveryReceiptRegularInput': 'symlink hardlink directory',
+}.items():
+ required['github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery'].update(parent+'/'+case for case in cases.split())
 passes={(e['Package'],e.get('Test','')) for e in records if e.get('Action')=='pass'}
 failures=[e for e in records if e.get('Action') in ('fail','skip')]
 missing=[p+'/'+t for p,tests in required.items() for t in tests|{''} if (p,t) not in passes]

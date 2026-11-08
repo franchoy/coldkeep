@@ -162,8 +162,12 @@ func restore(ctx context.Context, c config, password string, key []byte, selecti
 	if e != nil || rel == "." || rel != ".." && !strings.HasPrefix(rel, "../") {
 		return errors.New("output overlaps payload root")
 	}
-	var receipt recoveryexport.ImportReceipt
-	if e = readJSON(filepath.Join(id.CanonicalPath, ".coldkeep-control", "IMPORT_READY"), &receipt); e != nil {
+	root, e := os.OpenRoot(id.CanonicalPath)
+	if e != nil {
+		return e
+	}
+	receipt, e := recoveryexport.ReadImportReceipt(ctx, root)
+	if e = errors.Join(e, root.Close()); e != nil {
 		return e
 	}
 	if receipt.Kind != "coldkeep-import-ready/v1" || receipt.TargetRootHash != id.Hash || receipt.Database != c.Database || receipt.Role != c.User || receipt.Host != c.Host || receipt.Port != c.Port || receipt.KeyRequired != (len(key) > 0) || receipt.KeyReference != c.KeyReference {

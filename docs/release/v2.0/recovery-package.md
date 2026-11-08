@@ -170,6 +170,26 @@ before typed slice allocation. The caller's member cap and the independent
 20,000-name exclusion cap remain separate. Traversal observes cancellation;
 case-folded aliases cannot bypass count limits or name the same field twice.
 
+Readiness receipts have a separate shared **32 MiB + 64 KiB** byte ceiling and
+**20,000 objects**. The unchanged inventory diagnostic ceiling already contains
+the complete JSON object array within 32 MiB; 64 KiB covers the other fields.
+At most two 4,096-byte strings (target root and host) expand sixfold under JSON
+escaping; database/role are at most 63 bytes, key reference 128, and remaining
+labels/digests/integers are fixed or bounded. The row/directory and 20,001-member
+archive-plus-object limits independently bound the array. The producer validates
+this exact reader contract before staging readiness. The anchored regular-file
+reader checks actual bytes through EOF, then traverses tokens before typed object
+allocation, enforcing alias-aware counts, duplicate/unknown-field, depth (12),
+string (4,096), key (128) and trailing-input refusal. Operator config remains
+separately limited to 1 MiB. No supported package capacity or format changes.
+
+The caller-lowered inventory duration starts at the shared owned inspection entry,
+including import's destination admission. Its nested deadline never extends an
+earlier parent/global deadline. It limits work permission; actual rollback,
+physical-driver/socket and child/credential cleanup must still join while outer
+reservation/root ownership is held. A deadline is not a hard wall-clock promise
+that cleanup or a wedged kernel syscall has completed.
+
 Retained inventory limits include 20,000 rows/directory entries, 16 MiB catalog,
 8 MiB decoded block, 1 GiB whole object, 4 GiB total objects and two minutes.
 Integer subtraction bounds totals before writes. Capacity reserves payload
