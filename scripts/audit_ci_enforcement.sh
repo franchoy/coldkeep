@@ -1481,7 +1481,7 @@ check_local_workflow() {
     require_content_pattern "$python_suite_block" '^      - name: Run complete Python validation suite$' 'complete Python validation suite step' || check_status=1
     require_content_pattern "$python_suite_block" "^        run: python3 -m unittest discover -s scripts -p 'test_\\*\\.py' -v$" 'canonical complete Python validation command' || check_status=1
     # shellcheck disable=SC2016 # Match the literal runner variable in the workflow command.
-    require_content_literal "$product_fixture_block" '        run: python3 scripts/run_product_fixtures.py --reader current --output "$RUNNER_TEMP/product-fixtures"' 'ordinary CI executes the product fixture oracle' || check_status=1
+    require_content_pattern "$product_fixture_block" '^        run: python3 scripts/run_product_fixtures\.py --reader current --output "\$RUNNER_TEMP/product-fixtures"$' 'ordinary CI executes the product fixture oracle' || check_status=1
     if grep -Eq 'continue-on-error|^[[:space:]]+if:' <<<"$product_fixture_block"; then
       echo "[audit] ERROR: product fixture oracle must be unconditional and blocking" >&2
       check_status=1
