@@ -2,7 +2,7 @@
 
 Current unit: **Phase 2 / action 2.02 BUILD**, authorized by
 `coldkeep_phase2_codex_2026-11-08.md` (8 November 2026 launch bundle).
-[Current authority](../current.json) records **2.02 ACTIVE**, implementation
+[Current authority](../current.json) records **2.02 COMPLETE**, implementation
 ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
 **1.13.19**, /v2 and profile manual-postgresql-docker remain unchanged.
 
@@ -40,8 +40,9 @@ Required clean-checkpoint validation:
 - Source-bound raw commands, identities, initial failures, predecessor preservation,
   owned cleanup, local commits, replay-verified patches and checksummed evidence.
 
-Conditional local 2.02 completion is authorized only when all selected proof
-packages and integrated criteria pass. LOCAL_ACTION_2_02_AUTHORITY_ONLY is a
+All selected proof packages and integrated criteria passed at the clean
+implementation checkpoint; [the bounded result](phase2-result.md) records local
+2.02 COMPLETE under the authorized conditional rule. LOCAL_ACTION_2_02_AUTHORITY_ONLY is a
 structural diagnostic and never runtime certification. Otherwise retain ACTIVE
 with precise blockers. Product gates stay INCOMPLETE and implementation ACTIVE.
 Action 2.04 and later product/native/release gates remain outstanding.
@@ -141,8 +142,9 @@ Action 2.02 proves packaging; Phase 0 only records this policy.
 
 F01 authority and F02 identity/evidence Phase 0 portions are complete. Action
 2.01 supplies the baseline ledger, fixed oracle and product-result contracts.
-F14 distribution policy is decided; its build proof remains future work.
-All other contracts below are future obligations, not acceptance receipts.
+F14 distribution policy and the bounded internal prepared-build proof are recorded
+in the Phase 2 result; public distribution qualification remains future work.
+The contracts below retain all later obligations; this is not a product acceptance receipt.
 
 | Finding | Owner | Contract / remaining evidence |
 |---|---|---|
@@ -159,7 +161,7 @@ All other contracts below are future obligations, not acceptance receipts.
 | F11 | 2.08 | HttpOnly session plus per-tab in-memory proof from one-use private bootstrap; sensitive reads/writes need both. Exact Host/full Origin, CSRF, deny CORS, practical CSP; stolen loopback cookie alone grants nothing. |
 | F12 | 2.02, 2.13, 2.17, 2.21 | Docker mount-role map, read-only sources, non-root identity, bounded temp, `create_host_path: false`, qualified Engine with localhost fix, IPv4/IPv6 checks, no ordinary DB host port. Fixed mounts and controlled recreation after uncertain reattach. |
 | F13 | 2.07, 2.15; 2.16 conversion | Irreversible token-retirement frontier, clock uncertainty and random admission epoch after recovery/rollback; preserve compatible restart receipts. Old tokens never admit duplicate intent. |
-| F14 | 2.02, 2.17 | Prepared embedded-UI assets and frontend-then-Go source policy; clean distribution builds, offline UI, API routing, missing asset failures and identity proof remain incomplete. |
+| F14 | 2.02, 2.17 | Bounded prepared embedded-UI build, offline browser, API routing, missing/stale assets and identity proof observed in 2.02; full public distribution qualification remains incomplete. |
 
 Measured bounds belong to their actions: file/name/entry/memory/query/staging
 limits (2.07, 2.10–2.12, 2.17); shutdown/mount envelope (2.02, 2.05, 2.17);

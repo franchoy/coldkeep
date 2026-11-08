@@ -1,16 +1,17 @@
 # Phase 2 / action 2.02 handoff
 
-Current bounded unit is **2.02 ACTIVE** under
+Current bounded unit is **2.02 COMPLETE** under
 `coldkeep_phase2_codex_2026-11-08.md`. Accepted base is
 `e25da48003f30aeacb900131be28c3e092f85283`, tree
 `bad2400116d4dbb4fd50446acd48034c82ffb2d8`. Accepted 2.01 and local-profile
 2.03 COMPLETE reports and all predecessors remain preserved.
 
-Finish and review the source-bound integrated proof and [result](phase2-result.md):
-packaged embedded UI, authenticated historical engine restoration and process
-ownership, real Linux CGO SQLite persistence, retained PostgreSQL Docker, and all
-applicable preservation/validation gates. Conditional local completion is authorized
-when those pass, with no mandatory closure-only run.
+Review the completed [source-bound result](phase2-result.md) and local artifacts.
+All three selected packages and applicable gates passed at clean implementation
+HEAD `82f3ad0b6d8bd80825871562098e5919f2158475`, tree
+`20c3d19851b4d8e2ec226efd2737b0152d021970`. The final completion commit changes
+only report/current-authority documents; the evidence identity records that delta.
+No mandatory closure-only run remains.
 
 After review, propose **2.04 identities and explicit migration fences** under a
 separate owning instruction. This run does not begin 2.04. The practical sequence

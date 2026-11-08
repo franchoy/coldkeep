@@ -5,10 +5,11 @@ Final clean-checkpoint outcomes and artifacts belong to [the result](phase2-resu
 
 | Target or behavior | Disposition | Evidence/remaining qualification |
 |---|---|---|
-| Linux x86-64, local filesystem, CGO SQLite | Selected; development persistence observed | Real LocalWriter store, finalize/close/reopen and engine restore with fixed independent hash. Final checkpoint reruns required. |
-| Copied historical reader | Selected; development observed | Existing old-writer fixture bytes including nonempty, empty and encrypted; unchanged 23-case oracle required. |
-| CGO-disabled SQLite | Expected refusal | `sqlite_cgo_required`, no backend fallback. |
-| PostgreSQL Docker / embedded UI | Selected; development observed | Separate non-root proof profile, retained independent CLI image, actual mount/exposure/browser evidence. |
+| Linux x86-64, local filesystem, CGO SQLite | Observed at clean checkpoint | Real LocalWriter store, finalize/close/reopen and engine restore with fixed independent hash. Clean-checkpoint race test passed. |
+| Copied historical reader | Observed at clean checkpoint | Existing old-writer fixture bytes including nonempty, empty and encrypted; unchanged 23-case current oracle passed. |
+| CGO-disabled SQLite | Observed expected refusal | `sqlite_cgo_required`, no backend fallback. |
+| PostgreSQL Docker / embedded UI | Observed at clean checkpoint | Separate non-root proof profile, retained independent CLI image, actual mount/exposure/browser evidence. |
+| Initial development failures | Failed, corrected before checkpoint | CSS declaration, explicit PG fixture bootstrap, three lint simplifications and CLI storage-variable correction; raw failures retained and final checks passed. |
 | Full SQLite lifecycle/default, live GC | Later support qualification | Live GC remains refused; durability, upgrade, capacity, native distribution and maintenance unqualified. |
 | Windows / macOS / other architectures | Not selected; not attempted | No runnable selected-target qualification or maintenance capacity in this Linux run. No cross-build implies support. |
 | Installers, signing/notarization, WebView, OS startup | Not attempted | Later independently selected delivery actions; no new resource purchase required. |
@@ -21,7 +22,7 @@ maintains the same driver line, updates its embedded SQLite and includes connect
 lifetime corrections. [Build requirements](https://github.com/mattn/go-sqlite3/blob/master/README.md)
 still require CGO and a C compiler. The selection is qualified by fresh affected
 SQLite evidence; being newest alone is not qualification. Language floor 1.25,
-Go 1.26.10, pq 1.11.2, compress 1.20.2 and x/sys 0.44.0 remain fixed. The development
+Go 1.26.10, pq 1.11.2, compress 1.20.2 and x/sys 0.44.0 remain fixed. The clean-checkpoint
 run observed SQLite 3.54.1 and GCC 13.3.0; the final report records actual runtime,
 linker/interpreter/library/filesystem facts and exact source binding.
 
