@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -149,10 +150,13 @@ func openRegular(root *os.Root, name string) (*os.File, error) {
 	}
 	return f, nil
 }
-func strictJSON(b []byte, v any) error {
+func strictJSON(ctx context.Context, b []byte, v any, membersLimit int) error {
 	d := json.NewDecoder(bytes.NewReader(b))
-	var walk func(int) error
-	walk = func(depth int) error {
+	var walk func(int, int) error
+	walk = func(depth, arrayLimit int) error {
+		if e := ctx.Err(); e != nil {
+			return e
+		}
 		if depth > 12 {
 			return ErrLimit
 		}
@@ -179,17 +183,39 @@ func strictJSON(b []byte, v any) error {
 				if !ok || seen[s] || len(s) > 128 {
 					return ErrPackage
 				}
+				// encoding/json matches struct fields case-insensitively,
+				// including Unicode simple folds. Refuse aliases of a key
+				// already seen so the two passes have one interpretation.
+				for prior := range seen {
+					if strings.EqualFold(s, prior) {
+						return ErrPackage
+					}
+				}
 				seen[s] = true
 				if len(seen) > 64 {
 					return ErrLimit
 				}
-				if e = walk(depth + 1); e != nil {
+				childLimit := -1
+				if depth == 0 {
+					switch {
+					case strings.EqualFold(s, "members"):
+						childLimit = membersLimit
+					case strings.EqualFold(s, "uncataloged_excluded"):
+						childLimit = DefaultLimits().DirectoryEntries
+					}
+				}
+				if e = walk(depth+1, childLimit); e != nil {
 					return e
 				}
 			}
 		case '[':
-			for d.More() {
-				if e = walk(depth + 1); e != nil {
+			for count := 0; d.More(); count++ {
+				// Enforce the manifest slice caps before the typed decoder
+				// can allocate Members or Excluded, including lowered caps.
+				if arrayLimit >= 0 && count >= arrayLimit {
+					return ErrLimit
+				}
+				if e = walk(depth+1, -1); e != nil {
 					return e
 				}
 			}
@@ -199,15 +225,21 @@ func strictJSON(b []byte, v any) error {
 		_, e = d.Token()
 		return e
 	}
-	if e := walk(0); e != nil {
+	if e := walk(0, -1); e != nil {
 		return errors.Join(ErrPackage, e)
 	}
 	if _, e := d.Token(); e != io.EOF {
 		return ErrPackage
 	}
+	if e := ctx.Err(); e != nil {
+		return errors.Join(ErrPackage, e)
+	}
 	d = json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if e := d.Decode(v); e != nil {
+		return errors.Join(ErrPackage, e)
+	}
+	if e := ctx.Err(); e != nil {
 		return errors.Join(ErrPackage, e)
 	}
 	return nil
@@ -256,7 +288,7 @@ func checkGeneration(ctx context.Context, root *os.Root, l ExportLimits, complet
 	if err != nil {
 		return
 	}
-	if err = strictJSON(raw, &m); err != nil {
+	if err = strictJSON(ctx, raw, &m, l.Members); err != nil {
 		return
 	}
 	if m.Version != packageVersion || !safeGeneration.MatchString(m.Generation) || m.CatalogVersion != 17 || m.Selection != "full-catalog" || m.Tables != 19 || m.CatalogRows < 1 || m.CatalogRows > DefaultLimits().Rows || m.Reader == "" || m.ApplicationVersion == "" || !safeDigest.MatchString(m.LegacyRootHash) || m.KeyCustody != "unknown" || m.ReaderCustody != "unknown" || m.Independence != "unknown" || m.Database.ServerVersion < 160000 || m.Database.ServerVersion >= 170000 || m.Database.RestorePolicy != "trusted operator; fresh database; --no-owner --no-acl --exit-on-error" || (m.KeyRequired && m.KeyReference == "") {
@@ -325,7 +357,7 @@ func checkGeneration(ctx context.Context, root *os.Root, l ExportLimits, complet
 			err = e
 			return
 		}
-		if err = strictJSON(b, &marker); err != nil {
+		if err = strictJSON(ctx, b, &marker, l.Members); err != nil {
 			return
 		}
 		digest := sha256.Sum256(raw)

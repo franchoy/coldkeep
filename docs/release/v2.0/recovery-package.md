@@ -96,17 +96,26 @@ belong in execution receipts; actual versions and encoding/locale also appear in
 the manifest. Missing/incompatible tools refuse without fallback. The database
 must use libc locale and default tablespace. Extra schemas, extensions beyond
 plpgsql, row policies/RLS, custom tablespaces, foreign servers, large objects,
-event triggers, publications/security labels, and public SECURITY DEFINER or
-non-SQL/plpgsql functions refuse. The existing catalog validator also refuses
-unknown table/column requirements. These are deliberate bounded profile
+event triggers, publications/subscriptions/security labels, and public SECURITY
+DEFINER or non-SQL/plpgsql functions refuse. The existing catalog validator also
+refuses unknown table/column requirements. These are deliberate bounded profile
 restrictions, not silently discarded dependencies. Backups remain **trusted
 operator executable material**; checksums do not make untrusted SQL safe.
+
+Subscription refusal applies only to the selected database, including disabled
+subscriptions. It reads their publicly visible database identity without reading
+connection strings or requiring additional privileges. Subscriptions belonging
+to another database in the same PostgreSQL cluster do not block this export.
 
 Children receive structured arguments and an explicit environment, with no
 inherited PG/service/passfile/options target selection. Passwords go in an
 operation-owned mode-0600 escaped passfile inside a private mode-0700 temporary
-directory outside both trees, removed after the child joins. Host/port/user/name
-are explicit. Read-only and row_security=off are enforced. No retries select a
+directory outside both trees, removed after the child joins. The existing
+temporary parent is canonicalized and checked before any creation. A parent
+equal to or inside either protected tree refuses; a common ancestor with
+separate existing source and generation directories remains supported.
+Creation, passfile writing and removal use the validated directory anchor.
+Host/port/user/name are explicit. Read-only and row_security=off are enforced. No retries select a
 new cut. stdout/archive, stderr and archive-inspection output are bounded;
 nonzero exit, malformed archive or I/O errors prevent publication.
 
@@ -152,6 +161,11 @@ Callers may lower ceilings, not raise them. Default export/check limits:
 | Archive inspection SQL output | 512 MiB, discarded without execution |
 | Copy buffer / parallel copies / active archive child | 64 KiB / 1 / 1 |
 | Operation duration | 2 minutes; cancellation joins actual cleanup |
+
+Manifest member and excluded-name counts are checked during token traversal,
+before typed slice allocation. The caller's member cap and the independent
+20,000-name exclusion cap remain separate. Traversal observes cancellation;
+case-folded aliases cannot bypass count limits or name the same field twice.
 
 Retained inventory limits include 20,000 rows/directory entries, 16 MiB catalog,
 8 MiB decoded block, 1 GiB whole object, 4 GiB total objects and two minutes.

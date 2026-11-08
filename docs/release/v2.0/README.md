@@ -1,8 +1,9 @@
 # Coldkeep v2.0 active charter
 
 Adopted 7 November 2026 (Europe/Madrid), under instruction edition 1.0.
-The current unit is **Phase 1C BUILD** under the 8 November 2026 recovery-copy
-instruction. [../current.json](../current.json) remains the single authority:
+The current unit is the **Phase 1C C1–C3 follow-up BUILD** under the
+8 November 2026 correction instruction. The submitted copy/completion report
+is preserved; its acceptance is pending this bounded follow-up review. [../current.json](../current.json) remains the single authority:
 **2.03 ACTIVE**, implementation ACTIVE, product gates INCOMPLETE, application
 **2.0.0-dev.0**. Structural validation reports
 `LOCAL_ACTION_2_03_AUTHORITY_ONLY`; it does not certify exported bytes.
@@ -36,8 +37,9 @@ local evidence at a clean implementation checkpoint:
 - Preserve the passive and product gates. Run current product fixtures against
   the unchanged 23-case oracle. Exact D19 and unaffected historical package
   evidence may be reused with their original source identity and scope.
-- Both authority validators, focused explicit-phase/refusal tests, and the full
-  Python suite because authority implementation changes. Historical Phase 0
+- Both authority validators and focused explicit-phase/refusal tests. Reuse the
+  submitted 542-test full Python run while its authority/governance implementation
+  and tests remain byte-identical; rerun it if they change. Historical Phase 0
   and 2.01 fixtures remain independent of the live phase.
 - Local CI audit and relevant Go mutation tests, including the blocking recovery
   step. Build, vet, pinned lint, formatting, shell syntax/ShellCheck, smart-quote,
@@ -46,8 +48,13 @@ local evidence at a clean implementation checkpoint:
   schema SQL, payload format code and module/toolchain pins. Bind commands,
   raw events, preservation and cleanup to actual source identities.
 
-The [result](phase1c-result.md) records the measured unit outcome and evidence
-reuse. Constrained import, isolated restoration without the original
+The [submitted result](phase1c-result.md) preserves its original outcome and
+evidence. The [follow-up result](phase1c-followup-result.md) records C1–C3 red/green
+proof, proposal adaptations, clean-checkpoint validation and explicit reuse.
+C1 bounds JSON counts before typed allocation with cancellation and folded-alias
+checks; C2 validates the canonical credential parent before creation; C3 refuses
+subscriptions only in the selected source database. Ownership, source cleanup,
+publication, preparation, payload copying and the package version are retained. Constrained import, isolated restoration without the original
 installation and post-live-GC survival remain in [next-slice.md](next-slice.md).
 Full release/platform/stress/hosted qualification is outside this local unit.
 Recommended settings: **GPT-6 Astra / Extra High**; requested and observable

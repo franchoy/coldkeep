@@ -3,7 +3,9 @@ package recoveryexport
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -161,18 +163,68 @@ var snapshotName = regexp.MustCompile(`^[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+$`)
 // No inherited environment or connection-string-valued dbname is admitted.
 // Credentials live only in a private operation-owned passfile outside both trees.
 func childCredentials(r resolved, destination string) (env []string, remove func() error, err error) {
+	return childCredentialsAt(r, destination, "/tmp")
+}
+
+// tempParent is private test instrumentation, not operator configuration. Resolve
+// and reject a parent inside either protected tree before making any entry there.
+// An ancestor containing sibling source/destination directories remains usable.
+func childCredentialsAt(r resolved, destination, tempParent string) (env []string, remove func() error, err error) {
 	p := r.pg
 	if !scalarName.MatchString(p.Database) || !scalarName.MatchString(p.User) || strings.ContainsAny(p.Password, "\r\n\x00") {
 		return nil, nil, ErrConfiguration
 	}
-	dir, e := os.MkdirTemp("/tmp", "coldkeep-export-credentials-")
+	if !filepath.IsAbs(tempParent) {
+		return nil, nil, ErrConfiguration
+	}
+	parentPath, e := filepath.EvalSymlinks(tempParent)
 	if e != nil {
 		return nil, nil, e
 	}
-	remove = func() error { return os.RemoveAll(dir) }
-	if overlap(dir, r.identity.CanonicalPath) || overlap(dir, destination) {
-		return nil, remove, ErrConfiguration
+	for _, tree := range []string{r.identity.CanonicalPath, destination} {
+		rel, x := filepath.Rel(tree, parentPath)
+		if x != nil || rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, nil, ErrConfiguration
+		}
 	}
+	parent, e := os.OpenRoot(parentPath)
+	if e != nil {
+		return nil, nil, e
+	}
+	created := false
+	defer func() {
+		if !created {
+			err = errors.Join(err, parent.Close())
+		}
+	}()
+	info, e := parent.Stat(".")
+	if e != nil {
+		return nil, nil, e
+	}
+	checkParent := func() error {
+		current, x := os.Stat(parentPath)
+		if x != nil || !os.SameFile(info, current) {
+			return ErrConfiguration
+		}
+		return nil
+	}
+	if e = checkParent(); e != nil {
+		return nil, nil, e
+	}
+	var nonce [16]byte
+	if _, e = rand.Read(nonce[:]); e != nil {
+		return nil, nil, e
+	}
+	name := "coldkeep-export-credentials-" + hex.EncodeToString(nonce[:])
+	if e = parent.Mkdir(name, 0700); e != nil {
+		return nil, nil, e
+	}
+	created = true
+	remove = func() error { return errors.Join(parent.RemoveAll(name), parent.Close()) }
+	if e = checkParent(); e != nil {
+		return nil, remove, e
+	}
+	dir := filepath.Join(parentPath, name)
 	pass := filepath.Join(dir, "passfile")
 	escape := func(s string) string { return strings.NewReplacer("\\", "\\\\", ":", "\\:").Replace(s) }
 	host := p.Host
@@ -180,7 +232,7 @@ func childCredentials(r resolved, destination string) (env []string, remove func
 		host = "localhost"
 	}
 	line := escape(host) + ":" + strconv.Itoa(int(p.Port)) + ":" + escape(p.Database) + ":" + escape(p.User) + ":" + escape(p.Password) + "\n"
-	f, e := os.OpenFile(pass, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	f, e := parent.OpenFile(filepath.Join(name, "passfile"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
 		return nil, remove, e
 	}
@@ -192,12 +244,17 @@ func childCredentials(r resolved, destination string) (env []string, remove func
 	if e != nil {
 		return nil, remove, e
 	}
+	if e = checkParent(); e != nil {
+		return nil, remove, e
+	}
 	env = []string{"LC_ALL=C", "LANG=C", "HOME=" + dir, "PGPASSFILE=" + pass, "PGCONNECT_TIMEOUT=5", "PGSSLMODE=disable", "PGAPPNAME=coldkeep-recovery-dump", "PGOPTIONS=-c default_transaction_read_only=on -c row_security=off"}
 	return env, remove, nil
 }
 func databaseRequirements(ctx context.Context, tx *sql.Tx) (r DatabaseRequirements, err error) {
 	// Full-database dumps are supported only where ownership/ACL remapping suffices.
 	// Policies and external objects are refused, never discarded from the dump.
+	// pg_subscription is shared across databases. Inspect only this database's
+	// publicly readable subdbid; pg_dump skips subscriptions for non-superusers.
 	var unsupported bool
 	err = tx.QueryRowContext(ctx, `SELECT
  EXISTS(SELECT FROM pg_namespace WHERE nspname NOT IN ('public','information_schema') AND nspname !~ '^pg_') OR
@@ -206,7 +263,8 @@ func databaseRequirements(ctx context.Context, tx *sql.Tx) (r DatabaseRequiremen
  EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND (c.relrowsecurity OR c.relforcerowsecurity OR c.reltablespace<>0)) OR
  EXISTS(SELECT FROM pg_database WHERE datname=current_database() AND (dattablespace<>(SELECT oid FROM pg_tablespace WHERE spcname='pg_default') OR datlocprovider<>'c')) OR
  EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang WHERE n.nspname='public' AND (l.lanname NOT IN ('sql','plpgsql') OR p.prosecdef)) OR
- EXISTS(SELECT FROM pg_foreign_server) OR EXISTS(SELECT FROM pg_largeobject_metadata) OR EXISTS(SELECT FROM pg_event_trigger) OR EXISTS(SELECT FROM pg_publication) OR EXISTS(SELECT FROM pg_seclabel)`).Scan(&unsupported)
+ EXISTS(SELECT FROM pg_foreign_server) OR EXISTS(SELECT FROM pg_largeobject_metadata) OR EXISTS(SELECT FROM pg_event_trigger) OR EXISTS(SELECT FROM pg_publication) OR EXISTS(SELECT FROM pg_seclabel) OR
+ EXISTS(SELECT 1 FROM pg_catalog.pg_subscription WHERE subdbid=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()))`).Scan(&unsupported)
 	if err != nil {
 		return r, errors.New("catalog export prerequisites unavailable")
 	}

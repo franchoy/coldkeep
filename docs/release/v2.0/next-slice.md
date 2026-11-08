@@ -1,7 +1,11 @@
-# Next handoff after Phase 1C
+# Next handoff after the Phase 1C C1–C3 follow-up
 
-The [Phase 1C result](phase1c-result.md) and external final identity identify the
-local copy/completion candidate. Review it before the next BUILD unit.
+The [submitted Phase 1C result](phase1c-result.md) is preserved byte-identically.
+The [C1–C3 follow-up result](phase1c-followup-result.md) and its external final
+identity identify the corrected local copy/completion candidate. Review the
+follow-up before the next BUILD unit. C1 enforces pre-allocation JSON counts and
+cancellation, C2 refuses protected credential parents before creation, and C3
+refuses selected-source subscriptions without blocking other databases.
 Parent **2.03 remains ACTIVE**, product gates **INCOMPLETE**, application
 **2.0.0-dev.0**. The authority validator's
 `LOCAL_ACTION_2_03_AUTHORITY_ONLY` label is structural validation, not a recovery
@@ -25,7 +29,7 @@ constrained archive import, key/reader custody, historical reconstruction and
 activation must agree under isolation and failures. Record requested settings
 separately from observable settings; unknown remains unknown. No account/global
 changes or contributor subscription requirement. Begin from the exact reviewed
-Phase 1C identity, preserve all predecessors and use a separate worktree.
+Phase 1C follow-up identity, preserve all predecessors and use a separate worktree.
 
 1. Implement constrained import into a fresh explicit destination. Use only a
    supported completed package, separately available keys and compatible reader.

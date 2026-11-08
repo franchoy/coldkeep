@@ -28,6 +28,14 @@ required={
  'TestRecoveryCleanupBeforePublication/automatic-rollback-error',
  'TestRecoveryChildCancellationJoins','TestRecoveryExportStages','TestRecoveryOwnedDumpAndCopy',
  'TestRecoverySourceCallBoundary','TestRecoveryServerVersionRefusal',
+ 'TestRecoveryJSONPredecodeLimits',
+ 'TestRecoveryJSONIndependentLimits',
+ 'TestRecoveryJSONFieldAliases',
+ 'TestRecoveryJSONStrictness',
+ 'TestRecoveryJSONCancellation',
+ 'TestRecoveryCredentialDirectoryPlacement',
+ 'TestRecoverySubscriptionRefusal',
+ 'TestRecoverySubscriptionOtherDatabase',
  'TestRecoveryFilesystemFailures','TestRecoveryCancellationStages','TestRecoveryDestinationAndLimits',
  'TestRecoveryToolAndConfigRefusals','TestRecoveryAmbientIsolation','TestRecoveryCompletedChecker',
  'TestSupportedPostgresMigrationColumnOrder','TestCatalogMissingOrRenamedColumn',
@@ -45,6 +53,11 @@ for parent, cases in {
  'TestRecoveryToolAndConfigRefusals': 'missing-tool wrong-major mismatched-client nonzero empty stdout-overflow stderr-overflow expired-snapshot privilege policy schema hostile-database hostile-user',
  'TestRecoveryCompletedChecker': 'produce-and-remove-source missing-marker missing-member object-altered manifest-altered marker-generation future-version wrong-size wrong-digest overflow duplicate-member duplicate-key traversal absolute symlink fifo hardlink extra nested depth manifest-limit count-limit total-limit unknown-field archive-header',
  'TestRecoveryOwnedDumpAndCopy': 'child-started payload-copy',
+ 'TestRecoveryJSONPredecodeLimits': 'members excluded',
+ 'TestRecoveryJSONFieldAliases': 'MEMBERS memberſ excluded-uppercase duplicate-MEMBERS duplicate-memberſ nested-duplicate',
+ 'TestRecoveryJSONStrictness': 'duplicate-key depth long-string long-key trailing-value unknown-field',
+ 'TestRecoveryCredentialDirectoryPlacement': 'source-equal source-descendant source-alias destination-equal destination-descendant destination-alias sibling-parent outside-alias',
+ 'TestRecoverySubscriptionRefusal': 'restricted-reader database-owner',
 }.items():
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in cases.split())
 passes={(e['Package'],e.get('Test','')) for e in records if e.get('Action')=='pass'}
