@@ -148,6 +148,33 @@ func OpenReadOnlyContainer(path string, maxSize int64) (*FileContainer, error) {
 	return openExistingContainer(true, path, maxSize, fsx.Default())
 }
 
+// OpenReadOnlyContainerFile takes ownership of an already opened, confined file.
+// It uses the unchanged historical header validator and never reopens its path.
+// The handle is closed on failure; on success the caller owns Close.
+func OpenReadOnlyContainerFile(f *os.File, maxSize int64) (*FileContainer, Header, error) {
+	if f == nil {
+		return nil, Header{}, fmt.Errorf("container file is required")
+	}
+	fail := func(err error) (*FileContainer, Header, error) {
+		return nil, Header{}, errors.Join(err, f.Close())
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		return fail(err)
+	}
+	if !stat.Mode().IsRegular() {
+		return fail(fmt.Errorf("container must be regular"))
+	}
+	header, err := readAndValidateContainerHeader(f)
+	if err != nil {
+		return fail(err)
+	}
+	if maxSize <= ContainerHdrLen || header.MaxSize != maxSize || stat.Size() > maxSize {
+		return fail(fmt.Errorf("container size/header/catalog mismatch"))
+	}
+	return &FileContainer{f: f, offset: stat.Size(), persistedSize: stat.Size(), maxSize: maxSize, readonly: true}, header, nil
+}
+
 // OpenWritableContainer opens an existing container in writable mode.
 //
 // This wrapper avoids ambiguous boolean call sites like

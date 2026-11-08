@@ -7,3 +7,7 @@ import "fmt"
 func acquireNativeLockPlatform(string) (*nativeLockHandle, error) {
 	return nil, fmt.Errorf("%w: native repository locking is unavailable on this platform", ErrRepositoryLockUnsupported)
 }
+
+func acquireExistingNativeLockPlatform(path string) (*nativeLockHandle, error) {
+	return acquireNativeLockPlatform(path)
+}

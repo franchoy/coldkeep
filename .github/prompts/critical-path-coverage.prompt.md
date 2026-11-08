@@ -5,7 +5,7 @@
 SOURCE_VERSION: 2.0.0-dev.0
 RELEASE_FAMILY: v2.0
 RELEASE_STATE: development
-CURRENT_PHASE: 2.01
+CURRENT_PHASE: 2.03
 CURRENT_AUTHORITY: docs/release/current.json
 LATEST_STABLE: 1.13.19
 V2_IMPLEMENTATION: ACTIVE
@@ -13,14 +13,15 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 1A / action 2.01 is authorized in BUILD mode by the accepted
-7 November 2026 instruction and `docs/release/v2.0/README.md`;
-`docs/release/current.json` is current authority. Scope: baseline/compatibility
-ledger, version domains, executable fixtures, product contracts, profile
-statuses, result glossary and applicable evidence. Latest stable remains
-v1.13.19; frozen `docs/release/v1*/` records retain their historical bytes.
-Do not implement passive opening, daemon/UI, storage/schema, capture, migration
-or recovery-export/import features in 2.01. Actions 2.02 and 2.03 are separate.
+Active v2.0 Phase 1B / action 2.03 is authorized in BUILD mode by the accepted
+8 November 2026 passive/inventory instruction and `docs/release/v2.0/README.md`.
+`docs/release/current.json` remains current authority; parent action 2.03 stays
+ACTIVE. Scope: passive existing-repository opening and a quiesced full-catalog
+recovery inventory, plus the accepted CI-audit correction. Phase 1A / 2.01 is
+accepted complete and preserved. Latest stable remains v1.13.19; frozen
+`docs/release/v1*/` records retain their historical bytes. No package copy,
+completion/import protocol, daemon/UI, schema, capture or migration belongs to
+this unit. Product gates and full action 2.03 remain incomplete.
 No push, PR publication, merge, tag, release or deployment is authorized.
 Dependency/toolchain versions remain pinned. Preserve user changes and data.
 
@@ -130,7 +131,7 @@ NONPASS with no GitHub Release; its passing bounded evidence does not certify
 the v1.13.19 certificate. The completed 10-phase plan and exact 34-path
 boundary remain historical evidence:
 
-- keep v2 work within adopted action 2.01; no SQLite-first product-default behavior;
+- keep v2 work within the adopted Phase 1B passive/inventory unit; no SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;
 - do not introduce product features;
 - do not perform broad refactors;
@@ -138,5 +139,5 @@ boundary remain historical evidence:
 - do not remove PostgreSQL compatibility;
 - keep changes within the separately authorized plan and allowlist.
 
-V2 action 2.01 is authorized under the active charter. Work beyond 2.01
+V2 Phase 1B passive/inventory work is authorized under the active charter. Work beyond this unit
 and SQLite-first product defaults require their later owning phase.

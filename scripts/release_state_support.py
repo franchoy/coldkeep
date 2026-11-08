@@ -2555,13 +2555,18 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
         if not path.is_file() or path.is_symlink() or path.stat().st_size > 16384:
             raise ValueError("one bounded regular current authority file is required")
         state = json.loads(path.read_text(), object_pairs_hook=_unique_json_pairs)
-        scopes = {"0": "LOCAL_PHASE0_AUTHORITY_ONLY", "2.01": "LOCAL_ACTION_2_01_AUTHORITY_ONLY"}
+        scopes = {"0": "LOCAL_PHASE0_AUTHORITY_ONLY", "2.01": "LOCAL_ACTION_2_01_AUTHORITY_ONLY",
+                  "2.03": "LOCAL_ACTION_2_03_PASSIVE_INVENTORY_ONLY"}
         phase = state.get("phase") if isinstance(state, dict) else None
         if not isinstance(phase, str) or phase not in scopes:
-            raise ValueError("active phase must be exactly 0 or 2.01")
+            raise ValueError("active phase must be exactly 0, 2.01 or 2.03")
         result.evidence_scope = scopes[phase]
         if phase == "2.01" and state.get("phase_status") == "COMPLETE":
             result.outstanding_obligations = ["2.02-2.13", "2.15", "2.17", "separate-publication-authorization"]
+        if phase == "2.03":
+            result.outstanding_obligations = ["2.03-recovery-copy-completion-import-isolated-restoration", "2.02", "2.04-2.13", "2.15", "2.17", "separate-publication-authorization"]
+            if state.get("phase_status") != "ACTIVE":
+                fail("passive inventory unit cannot complete parent action 2.03; phase_status must remain ACTIVE")
         expected = {
             "schema": "coldkeep-active-development/v1", "family": "v2.0",
             "version": version, "state": "development", "phase": phase,

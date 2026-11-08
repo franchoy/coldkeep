@@ -707,6 +707,18 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Run passive inventory PostgreSQL contracts
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_PHASE1B_TEST: 1
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: bash scripts/run_passive_inventory_tests.sh "$RUNNER_TEMP/integration-diag/passive-inventory"
+
       - name: Upload correctness-matrix execution evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

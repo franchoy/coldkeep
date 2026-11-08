@@ -1,6 +1,6 @@
 # Contributing to coldkeep
 
-Active development: [v2.0 action 2.01](docs/release/v2.0/README.md), selected by
+Active development: [v2.0 Phase 1B / action 2.03](docs/release/v2.0/README.md), selected by
 [docs/release/current.json](docs/release/current.json). Use its bounded local
 validation profile for this phase. Full release/publication procedures below
 remain applicable to their declared release scopes; frozen v1 certification

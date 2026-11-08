@@ -147,3 +147,18 @@ and fail-closed hosted execution proof.
    and benchmark-timing-advisory evaluation all complete successfully; required
    named pass events are present with no matching required skip.
 3. Contract-sensitive checks (doctor and verify JSON shape, exit codes, failure typing) stay stable.
+
+## Phase 1B passive full-catalog inventory (local unit)
+
+The `LOCAL_ACTION_2_03_PASSIVE_INVENTORY_ONLY` scope keeps parent action 2.03
+ACTIVE and product gates incomplete. `scripts/run_passive_inventory_tests.sh`
+requires explicit disposable PostgreSQL inputs and rejects skipped/missing
+acceptance events. `internal/recoveryexport` covers passive full-catalog/physical
+closure, schema/format/key/graph refusals, source mutation events, snapshot and
+resource lifetime, cancellation and actual row/byte limits.
+`internal/coordination` covers open-existing preparation refusal, unchanged
+owner/lock material, aliases and legacy contention in/across processes.
+The current 23-case product oracle is unchanged; D19 evidence remains accepted.
+See [the API contract](docs/release/v2.0/passive-inventory.md) and
+[unit result](docs/release/v2.0/phase1b-result.md). No recovery-package/import,
+passive SQLite or cross-platform runtime qualification is implied.

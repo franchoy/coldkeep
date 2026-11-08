@@ -1,17 +1,52 @@
 # Coldkeep v2.0 active charter
 
 Adopted 7 November 2026 (Europe/Madrid), under instruction edition 1.0.
-V2 implementation is active under the bounded Phase 1A / action 2.01 BUILD
-instruction accepted after the Phase 0 guard correction.
-The single machine-readable phase/state authority is
-[../current.json](../current.json), now selecting `phase: "2.01"`. Phase 0 is
-complete and accepted; every product gate remains incomplete. See [the original result](phase0-result.md)
-and [the later guard-correction record](phase0-followup-result.md).
-Latest published stable is **v1.13.19**, independently recorded in the frozen
-[v1 closure](../v1.13/v1.13.19-post-publication-closure.md).
-Action 2.01 is locally complete; see [the Phase 1A result](phase1a-result.md)
-and [expected versus observed fixtures](fixture-results.md). This completion
-does not select or start another action.
+V2 implementation is active under the 8 November 2026 **Phase 1B** BUILD
+instruction: passive existing-repository opening and a quiesced full-catalog
+recovery inventory. The single machine-readable authority is
+[../current.json](../current.json), selecting `phase: "2.03"`,
+`phase_status: "ACTIVE"`. This unit cannot complete parent action 2.03.
+Phase 0 and Phase 1A / action 2.01 are accepted complete. Preserve their
+[results](phase1a-result.md), [fixed oracle](fixture-results.md) and product
+contract. Latest stable remains **v1.13.19** with its frozen v1 evidence;
+application identity is 2.0.0-dev.0 and every product gate remains incomplete.
+
+## Phase 1B scope and validation
+
+Implement only the open-existing lease, explicit compatible PostgreSQL input,
+read-only snapshot and bounded full-catalog inventory. Reconcile the accepted
+CI-audit carry-forward patch. No source preparation, writer startup, migration,
+pins, repair, schema/format/dependency changes, recovery copy/completion/import,
+daemon/UI, user-data adoption or publication belongs to this unit. Local commits
+are authorized. Keep the accepted Phase 1A worktree inspectable.
+
+The [API contract](passive-inventory.md) states input, lifetime, concrete limits,
+checks and refusals. **A missing persistent coordination lock is a preparation-
+required refusal**, never a passive bootstrap. This excludes unprepared legacy
+repositories until a separately explicit coordination-preparation decision.
+The [handoff](next-slice.md) retains the remaining integrated recovery contract.
+
+Use pinned Go 1.26.10, `GOTOOLCHAIN=local`, CGO for retained fixtures and unchanged
+dependencies. The bounded local gates are:
+
+- The two authority validators and complete Python suite below; explicit Phase 0,
+  2.01 and 2.03 fixtures, unknown/conflicting scope and publication refusals.
+- CI-audit Go mutation tests and `bash scripts/audit_ci_enforcement.sh --local-only`.
+- `scripts/run_passive_inventory_tests.sh <new-evidence-directory>` with an
+  explicitly disposable PostgreSQL 16 server and `DB_*` inputs. Every declared
+  test must execute; missing/skipped PostgreSQL proof is not a pass.
+- Affected coordination/container/storage/catalog/verify/recovery regressions
+  under race detection using disposable catalogs/storage; current fixed product
+  fixtures. Reuse the accepted D19 results and immutable oracle, not a second
+  Phase 1A closure. No SQLite passive adapter is included.
+- Build, `go vet ./...`, formatting, shell syntax, validation-matrix and row-writer
+  guards. Check frozen-v1/Phase-1A fixture and product-contract bytes and unchanged
+  module/toolchain pins against the accepted entry.
+
+Full release/platform/benchmark/stress/hosted qualification remains outside this
+bounded unit. Parent action 2.03 and product gates stay ACTIVE/INCOMPLETE even
+when the Phase 1B result is complete. Recommended execution: GPT-6 Astra / Extra
+High for the whole unit; actual settings are recorded only when observable.
 
 ## Selected first stable profile
 
@@ -33,7 +68,7 @@ backend and encryption. Capture is best-effort per-file observation, not an
 atomic application snapshot. Existing crash-consistency and plaintext metadata
 limitations remain; keys are independently required for encrypted recovery.
 
-## Action 2.01 scope and validation
+## Accepted action 2.01 scope and validation (historical)
 
 Complete the [baseline/compatibility and version-domain ledger](baseline-compatibility.md),
 [fixture manifest/harness](../../../testdata/product-fixtures/README.md),
@@ -148,7 +183,7 @@ F01–F14 informed this charter. Inspected code archive SHA-256
 is an archive identity, never a Git revision.
 
 Future handoffs for this user specify recommended Codex model, reasoning
-effort, execution scope, short rationale and completion criteria. Phase 1A
+effort, execution scope, short rationale and completion criteria. Phase 1A historical
 recommendation: GPT-6 Astra / Extra High because historical readers, fixture
 oracles and compatibility promises must agree. Actual parent model/effort are
 not observable. This personal

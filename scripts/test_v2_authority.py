@@ -217,12 +217,14 @@ class Action201AuthorityTests(V2AuthorityFixture):
                 self.assertTrue(governance.validate(self.root, "historical-v1"))
 
     def test_unknown_and_conflicting_action_fail_without_phase0_fallback(self):
-        for phase in ("2.02", "2.03", "2.17", "Phase 1A", "2.1", "", None, 2.01, []):
+        for phase in ("2.02", "2.04", "2.17", "Phase 1A", "2.1", "", None, 2.01, []):
             with self.subTest(phase=phase):
                 self.change(phase=phase)
                 self.assert_rejected()
                 self.assertEqual(release.validate(self.root, "auto").evidence_scope,
                                  "UNRESOLVED_ACTIVE_SCOPE")
+        self.change(phase="2.03")  # Known new scope with contradictory 2.01 mirrors.
+        self.assert_rejected()
         self.change(phase="0")  # Known phase with contradictory 2.01 mirrors.
         self.assert_rejected()
 
@@ -254,6 +256,31 @@ class Action201AuthorityTests(V2AuthorityFixture):
         moved.rename(history)
         path = self.root / "internal/version/version.go"
         path.write_text(re.sub(r"(?m)^(\s*Major\s*=\s*2)$", r"\1 + 1", path.read_text()))
+        self.assert_rejected()
+
+
+class Action203InventoryAuthorityTests(V2AuthorityFixture):
+    fixture_phase = "2.03"
+
+    def test_inventory_scope_keeps_parent_active_and_obligations(self):
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertEqual(governance.validate(self.root), [])
+        self.assertEqual(result.evidence_scope, "LOCAL_ACTION_2_03_PASSIVE_INVENTORY_ONLY")
+        self.assertIn("2.03-recovery-copy-completion-import-isolated-restoration", result.outstanding_obligations)
+        self.change(phase_status="COMPLETE")
+        self.assert_rejected()
+
+    def test_conflicting_or_publication_scope_refused(self):
+        for phase in ("0", "2.01", "2.04", "Phase 1B", None):
+            self.change(phase=phase)
+            self.assert_rejected()
+        self.change(phase="2.03")
+        for requested in ("released", "pre-release", "post-release-closed"):
+            self.assertTrue(release.validate(self.root, requested).violations)
+        with patch.dict("os.environ", {"GITHUB_REF": "refs/tags/v2.0.0-dev.0"}):
+            self.assert_rejected()
+        self.change(product_gates="COMPLETE")
         self.assert_rejected()
 
 
