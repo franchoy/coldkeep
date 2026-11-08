@@ -160,6 +160,20 @@ func TestPassiveRefusals(t *testing.T) {
 		}, ErrLimit},
 		{"unsupported-backend", func(t *testing.T, f *fixture) { f.config.Backend = "sqlite" }, ErrConfiguration},
 		{"ambiguous-config", func(t *testing.T, f *fixture) { f.config.Database = "" }, ErrConfiguration},
+		{"password-resolver-ambient-host", func(t *testing.T, f *fixture) {
+			password := f.config.Password
+			f.config.Password = func(ctx context.Context) (string, error) {
+				t.Setenv("PGHOSTADDR", "192.0.2.1")
+				return password(ctx)
+			}
+		}, ErrConfiguration},
+		{"key-resolver-ambient-passfile", func(t *testing.T, f *fixture) {
+			key := f.config.Key
+			f.config.Key = func(ctx context.Context) ([]byte, error) {
+				t.Setenv("PGPASSFILE", filepath.Join(f.root, "not-a-credential-source"))
+				return key(ctx)
+			}
+		}, ErrConfiguration},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

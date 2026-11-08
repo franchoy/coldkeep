@@ -133,13 +133,6 @@ func resolve(ctx context.Context, c Config) (resolved, error) {
 	if err != nil || !info.IsDir() {
 		return r, ErrConfiguration
 	}
-	// pq.NewConnector snapshots its configuration. Reject libpq ambient inputs
-	// rather than letting them add alternate hosts, options or credential files.
-	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "PG") || strings.HasPrefix(e, "PQGO_DEBUG=") {
-			return r, ErrConfiguration
-		}
-	}
 	password, err := c.Password(ctx)
 	if err != nil || len(password) > 4096 {
 		return r, ErrConfiguration
@@ -156,11 +149,29 @@ func resolve(ctx context.Context, c Config) (resolved, error) {
 			return r, ErrKeyUnavailable
 		}
 	}
+	// Resolve scoped secrets before checking the environment: a resolver must
+	// not introduce an alternate host, options or credential file either.
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "PG") || strings.HasPrefix(e, "PQGO_DEBUG=") {
+			clear(key)
+			return r, ErrConfiguration
+		}
+	}
 	quote := func(s string) string { return "'" + strings.NewReplacer("\\", "\\\\", "'", "\\'").Replace(s) + "'" }
 	dsn := "host=" + quote(c.Host) + " port=" + fmt.Sprint(c.Port) + " dbname=" + quote(c.Database) + " user=" + quote(c.User) +
 		" password=" + quote(password) + " sslmode=disable connect_timeout=5 application_name=coldkeep-passive-inventory" +
 		" default_transaction_read_only=on search_path=pg_catalog statement_timeout=10000 lock_timeout=1000 bytea_output=hex"
-	connector, err := pq.NewConnector(dsn)
+	config, err := pq.NewConfig(dsn)
+	// Validate the parsed destination too, so an environment change racing
+	// resolution cannot redirect the connection via hostaddr or multiple hosts.
+	// Retain pq's explicit-password flag, preventing a later .pgpass lookup.
+	if err != nil || config.Host != c.Host || config.Port != c.Port || config.Database != c.Database ||
+		config.User != c.User || config.Password != password || config.Hostaddr.IsValid() || len(config.Multi) != 0 ||
+		config.Options != "" || config.Passfile != "" || config.SSLMode != pq.SSLModeDisable {
+		clear(key)
+		return r, ErrConfiguration
+	}
+	connector, err := pq.NewConnectorConfig(config)
 	if err != nil {
 		clear(key)
 		return r, ErrConfiguration
