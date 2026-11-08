@@ -25,6 +25,8 @@ checks and refusals. **A missing persistent coordination lock is a preparation-
 required refusal**, never a passive bootstrap. This excludes unprepared legacy
 repositories until a separately explicit coordination-preparation decision.
 The [handoff](next-slice.md) retains the remaining integrated recovery contract.
+The [Phase 1B result](phase1b-result.md) records this unit COMPLETE separately
+from parent action 2.03, which remains ACTIVE.
 
 Use pinned Go 1.26.10, `GOTOOLCHAIN=local`, CGO for retained fixtures and unchanged
 dependencies. The bounded local gates are:
