@@ -21,6 +21,7 @@ import (
 
 	"github.com/franchoy/coldkeep/v2/internal/blocks"
 	"github.com/franchoy/coldkeep/v2/internal/coordination"
+	"github.com/lib/pq"
 )
 
 func TestCompatibleFullCatalogCut(t *testing.T) {
@@ -353,9 +354,13 @@ func TestReadOnlyWriteAttemptAndQueryFailure(t *testing.T) {
 			f := newFixture(t)
 			h := &hooks{event: func(s string, tx *sql.Tx) error {
 				if s == "snapshot-opened" {
-					_, e := tx.Exec(query)
-					if e == nil {
-						t.Fatal("write/failing query accepted")
+					rows, e := tx.QueryContext(context.Background(), query)
+					if rows != nil {
+						_ = rows.Close()
+					}
+					var serverError *pq.Error
+					if !errors.As(e, &serverError) || (serverError.Code != "25006" && serverError.Code != "42P01") {
+						t.Fatalf("expected PostgreSQL read-only/undefined-table refusal, got %v", e)
 					}
 					return e
 				}

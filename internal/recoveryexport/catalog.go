@@ -49,8 +49,7 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 	if err != nil {
 		return fmt.Errorf("%w: schema inspection", ErrUnsupported)
 	}
-	shape := map[string][]string{}
-	types := map[string][]string{}
+	shape := map[string]map[string]string{}
 	n := 0
 	for rows.Next() {
 		var table, col, typ, kind string
@@ -66,8 +65,10 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 			err = ErrUnsupported
 			break
 		}
-		shape[table] = append(shape[table], col)
-		types[table] = append(types[table], typ)
+		if shape[table] == nil {
+			shape[table] = map[string]string{}
+		}
+		shape[table][col] = typ
 	}
 	err = joinRows(err, rows)
 	if err != nil {
@@ -77,11 +78,14 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 		return fmt.Errorf("%w: schema table set", ErrUnsupported)
 	}
 	for _, spec := range catalogTables {
-		if strings.Join(shape[spec.name], " ") != spec.columns {
+		// Supported upgrades append columns without changing their meaning. Match
+		// the exact named fields/types, not PostgreSQL physical attribute order.
+		columns := strings.Fields(spec.columns)
+		if len(shape[spec.name]) != len(columns) {
 			return fmt.Errorf("%w: columns for %s", ErrUnsupported, spec.name)
 		}
 		for k, want := range strings.Fields(spec.types) {
-			got := types[spec.name][k]
+			got := shape[spec.name][columns[k]]
 			allowed := map[string]string{"int": "|int4|int8|", "time": "|timestamp|timestamptz|", "float": "|float4|float8|", "text": "|text|", "bytea": "|bytea|", "bool": "|bool|"}
 			if !strings.Contains(allowed[want], "|"+got+"|") {
 				return fmt.Errorf("%w: column types for %s", ErrUnsupported, spec.name)

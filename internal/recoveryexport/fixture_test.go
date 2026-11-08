@@ -160,6 +160,25 @@ func catalogFingerprint(t *testing.T, conn *sql.DB) string {
 	}
 	must(t, rows.Err())
 	must(t, rows.Close())
+	// Include visibility/ownership metadata; SELECT permission alone is not a
+	// full-view guarantee. These must be identical across passive inspection.
+	for _, query := range []string{
+		`SELECT json_build_array(c.relname,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' ORDER BY c.relname`,
+		`SELECT row_to_json(p)::text FROM pg_policies p WHERE schemaname='public' ORDER BY tablename,policyname`,
+		`SELECT json_build_array(nspowner,nspacl)::text FROM pg_namespace WHERE nspname='public'`,
+		`SELECT json_build_array(rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,rolconfig)::text FROM pg_roles ORDER BY rolname`,
+		`SELECT row_to_json(m)::text FROM pg_auth_members m ORDER BY roleid,member,grantor`,
+	} {
+		rows, e := conn.Query(query)
+		must(t, e)
+		for rows.Next() {
+			var value string
+			must(t, rows.Scan(&value))
+			fmt.Fprintln(hash, value)
+		}
+		must(t, rows.Err())
+		must(t, rows.Close())
+	}
 	for _, spec := range catalogTables {
 		rows, e := conn.Query("SELECT row_to_json(t)::text FROM public." + pqIdent(spec.name) + " t ORDER BY row_to_json(t)::text")
 		must(t, e)
@@ -211,6 +230,7 @@ func runPreserved(t *testing.T, f *fixture, ctx context.Context, l Limits, h *ho
 	beforeCatalog := catalogFingerprint(t, f.db)
 	beforeTree := treeFingerprint(t, f.root)
 	r, e := inspect(ctx, f.config, l, consume, h)
+	assertNoInventorySessions(t, f.db)
 	if got := catalogFingerprint(t, f.db); got != beforeCatalog {
 		t.Fatal("catalog/schema changed")
 	}

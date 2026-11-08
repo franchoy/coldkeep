@@ -1,11 +1,15 @@
-# Next handoff after Phase 1B
+# Next handoff after the Phase 1B follow-up
 
 Phase 1A / action 2.01 remains accepted complete at
 `cc2c175549b9a185de8c79943ae5855a4aa8d44f`, tree
 `c62d1d17780bb3037c4eee5e15106ebd6650d2aa`. Its report, ledger, product contract,
 fixed fixture oracle and frozen v1 records remain unchanged. The active
 execution label is **Phase 1B**; `current.json` keeps parent **2.03 ACTIVE**.
-See the [unit result](phase1b-result.md) and [passive API](passive-inventory.md).
+See the [follow-up result](phase1b-followup-result.md), the preserved
+[submitted execution](phase1b-result.md) and [passive API](passive-inventory.md).
+B1 joins actual rollback/driver/socket cleanup before lease release, B2 admits
+supported migrated column order, and B3 refuses policy-filtered catalog reads.
+Review the follow-up candidate and evidence before beginning the next unit.
 No unit completion qualifies full recovery or the product.
 
 ## Recommended next bounded BUILD unit
@@ -14,7 +18,7 @@ Use **GPT-6 Astra / Extra High (`gpt-6-astra`, `xhigh`)** for a complete local
 recovery-copy/completion unit. Rationale: the catalog snapshot, physical closure,
 key/reader custody and completion publication must bind the same cut despite
 interruption. Record actual settings only if observable; no account/global
-changes or paid-model contributor rule. Begin from the exact reviewed Phase 1B
+changes or paid-model contributor rule. Begin from the exact reviewed Phase 1B follow-up
 identity, preserve both accepted predecessors and unrelated changes, and verify
 its evidence before extending the same charter/authority. Obtain the next
 explicit BUILD instruction; this handoff does not start that work.

@@ -34,9 +34,25 @@ has drained its own internal workers.
 Open the PostgreSQL connection only after acquiring ownership. Use a single
 `REPEATABLE READ READ ONLY` transaction; all schema and catalog queries use it.
 The transaction and lease remain held throughout consumption. Every cursor,
-container and root handle closes; the transaction rolls back; the database
-closes; then the lease releases. Failure/cancellation/consumer error follows the
-same ordering. Consumers must cooperate with cancellation and return only after
+container and root handle closes; transaction cleanup finishes; the physical
+connection closes; cancellation callbacks join; then the lease releases.
+Failure/cancellation/consumer error follows the same ordering. The operation
+owns one preconnected driver connection and refuses replacement connections.
+A driver-close completion channel joins automatic rollback/connection release;
+`ErrTxDone`, `ErrConnDone` and `DB.Close` are not completion barriers. Actual
+rollback and driver-close errors are retained, including automatic cleanup.
+
+The pinned Go 1.26.10 / pq v1.11.2 adapter keeps database/sql cancellation and
+its automatic rollback. At the pq boundary, BEGIN omits the unjoined connection
+cancellation watcher. Direct SQL queries internally use short-lived prepared
+statements: pq's statement cancellation path joins its cancellation request
+before the query/rows close returns. Rows and statements both close under the
+transaction. The owned primary socket gets an I/O deadline five seconds after
+operation cancellation, bounding stalled startup, BEGIN and failed cancellation
+transport; cancel requests retain pq's bounded connection context. The dialer
+joins actual socket closure and its callback before lease release. These bounds
+interrupt I/O, never stand in for completion. Cleanup may outlast the operation
+work deadline; ownership is retained until cleanup actually ends. Consumers must cooperate with cancellation and return only after
 their own synchronous consumption ends. PostgreSQL snapshot semantics are from
 [SET TRANSACTION](https://www.postgresql.org/docs/16/sql-set-transaction.html).
 
@@ -53,7 +69,14 @@ configuration, observed catalog, canonical root and checked objects are bound.
 Enumerate all schema-17 tables, including physical files, snapshots/path/member
 rows, logical recipes, chunks/pins, blocks, packed refs, repository config,
 repair attempts/containers/blocks/chunks and retired packed/legacy extents.
-Unknown table/column/type layouts and non-singleton/future schemas refuse.
+Column validation matches exact names and supported types independently of
+physical attribute order, including existing migrations which append columns.
+Missing, renamed, extra or wrong-type columns, unknown relations and
+non-singleton/future schemas refuse. The session explicitly sets and verifies
+`row_security=off`; PostgreSQL refuses reads to which a row policy would apply.
+This grants no bypass and changes no policy/privilege. An already-authorized
+owner can still inspect the full catalog. See PostgreSQL's
+[row-security setting](https://www.postgresql.org/docs/16/runtime-config-client.html#GUC-ROW-SECURITY).
 Validate roots, references, recipe order and size, counters, lifecycle state,
 format/codec requirements and packed encoded membership. Snapshot-only and
 zero-current logical files remain included. Pin-only chunks and unreferenced
@@ -111,3 +134,9 @@ internal telemetry are outside the no-Coldkeep-source-mutation claim.
 SQLite's existing fixed fixtures remain exercised; no passive SQLite adapter,
 `.db` copying or immutable/WAL shortcut is introduced. Supported SQLite backup
 handling is still a decision in the remaining action 2.03 work.
+
+
+The submitted [Phase 1B report](phase1b-result.md) is execution history. Its
+cleanup/layout/visibility claims are qualified by the
+[bounded follow-up result](phase1b-followup-result.md). Parent 2.03 remains ACTIVE;
+recovery copying/completion/import and isolated restoration remain future work.

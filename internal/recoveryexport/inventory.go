@@ -5,6 +5,7 @@ package recoveryexport
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -160,7 +161,7 @@ func resolve(ctx context.Context, c Config) (resolved, error) {
 	quote := func(s string) string { return "'" + strings.NewReplacer("\\", "\\\\", "'", "\\'").Replace(s) + "'" }
 	dsn := "host=" + quote(c.Host) + " port=" + fmt.Sprint(c.Port) + " dbname=" + quote(c.Database) + " user=" + quote(c.User) +
 		" password=" + quote(password) + " sslmode=disable connect_timeout=5 application_name=coldkeep-passive-inventory" +
-		" default_transaction_read_only=on search_path=pg_catalog statement_timeout=10000 lock_timeout=1000 bytea_output=hex"
+		" default_transaction_read_only=on row_security=off search_path=pg_catalog statement_timeout=10000 lock_timeout=1000 bytea_output=hex"
 	config, err := pq.NewConfig(dsn)
 	// Validate the parsed destination too, so an environment change racing
 	// resolution cannot redirect the connection via hostaddr or multiple hosts.
@@ -190,7 +191,10 @@ func Inspect(ctx context.Context, c Config, limits Limits, consume func(context.
 }
 
 // hooks are package-private failure/lifetime instrumentation, never configuration.
-type hooks struct{ event func(string, *sql.Tx) error }
+type hooks struct {
+	event     func(string, *sql.Tx) error
+	connector driver.Connector
+}
 
 func (h *hooks) at(s string, tx *sql.Tx) error {
 	if h != nil && h.event != nil {
@@ -227,10 +231,25 @@ func inspect(ctx context.Context, c Config, l Limits, consume func(context.Conte
 	if err = h.at("acquired", nil); err != nil {
 		return
 	}
-	conn := sql.OpenDB(r.connector)
+	// The dialer owns cancellation of all physical I/O, including startup.
+	dialer := &catalogDialer{ctx: ctx}
+	r.connector.Dialer(dialer)
+	defer func() { err = errors.Join(err, dialer.join(), ctx.Err()) }()
+	var connector driver.Connector = r.connector
+	if h != nil && h.connector != nil {
+		connector = h.connector
+	}
+	session, e := openCatalogSession(ctx, connector)
+	if e != nil {
+		return result, errors.Join(e, ctx.Err())
+	}
+	conn := sql.OpenDB(session)
 	conn.SetMaxOpenConns(1)
 	conn.SetMaxIdleConns(1)
-	defer func() { err = errors.Join(err, conn.Close(), h.at("database-closed", nil)) }()
+	defer func() {
+		err = errors.Join(err, h.at("database-draining", nil))
+		err = errors.Join(err, session.close(conn), h.at("database-closed", nil))
+	}()
 	if err = h.at("database-opened", nil); err != nil {
 		return
 	}
@@ -248,12 +267,14 @@ func inspect(ctx context.Context, c Config, l Limits, consume func(context.Conte
 	if err = h.at("snapshot-opened", tx); err != nil {
 		return
 	}
-	var ro, isolation, database string
+	var ro, isolation, database, rowSecurity string
 	var server int
-	if e = tx.QueryRowContext(ctx, `SELECT current_setting('transaction_read_only'),current_setting('transaction_isolation'),current_database(),current_setting('server_version_num')::integer`).Scan(&ro, &isolation, &database, &server); e != nil {
+	if e = tx.QueryRowContext(ctx, `SELECT current_setting('transaction_read_only'),current_setting('transaction_isolation'),current_database(),current_setting('server_version_num')::integer,current_setting('row_security')`).Scan(&ro, &isolation, &database, &server, &rowSecurity); e != nil {
 		return result, errors.New("catalog settings unavailable")
 	}
-	if ro != "on" || isolation != "repeatable read" || database != c.Database || server < 160000 || server >= 170000 {
+	// row_security=off rejects policy-filtered reads; it does not grant a bypass.
+	// Full-catalog inventory must never silently accept a role-filtered projection.
+	if ro != "on" || isolation != "repeatable read" || database != c.Database || rowSecurity != "off" || server < 160000 || server >= 170000 {
 		return result, ErrUnsupported
 	}
 	inv := &Inventory{Kind: "diagnostic-full-catalog-inventory/v1", Backend: "postgres16", Profile: r.profile, CatalogVersion: 17,
