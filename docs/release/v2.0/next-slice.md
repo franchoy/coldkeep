@@ -1,6 +1,7 @@
 # Phase 3A handoff
 
-Phase 3A unit ACTIVE pending all required qualification. Parent action 2.04 ACTIVE;
+Phase 3A unit COMPLETE within the qualified Linux/PostgreSQL16 profile. See
+[result and exact evidence boundaries](phase3a-result.md). Parent action 2.04 ACTIVE;
 implementation ACTIVE; product gates INCOMPLETE. No later unit is authorized here.
 
 After Phase 3A is qualified and accepted, Phase 3B owns physical root markers,
@@ -14,3 +15,8 @@ only after all three packages and integrated action-level acceptance qualify.
 
 Recommended next settings: GPT-6 Astra / Extra High; record actual settings separately.
 No live switch, push, publication, merge, tag or release is included.
+
+Carry forward two inherited supplemental engine test failures: the stepped
+cancellation test depends on context-call counts, and the architecture guard
+rejects the already accepted proofdaemon import. Both reproduce on the untouched
+accepted Phase 2 followup; neither is reported as passing or fixed in Phase 3A.

@@ -3,7 +3,8 @@
 Current unit: **Phase 3A BUILD**, authorized by
 `coldkeep_phase3a_codex_2026-11-08.md` and the 8 November 2026 user instruction.
 [Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
-product gates INCOMPLETE. Phase 3A unit is ACTIVE pending qualification.
+product gates INCOMPLETE. Phase 3A unit is COMPLETE within its bounded profile;
+[qualification and inherited limitations](phase3a-result.md) are recorded.
 Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
 
 Accepted base: `1229563116f71067c74801516bcd64c92e7b6ed2`, tree
