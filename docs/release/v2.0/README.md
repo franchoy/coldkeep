@@ -2,7 +2,7 @@
 
 Current unit: **Phase 2 follow-up / action 2.02 BUILD**, authorized by
 `coldkeep_phase2_followup_codex_2026-11-08.md` (8 November 2026 follow-up bundle).
-[Current authority](../current.json) records **2.02 ACTIVE**, implementation
+[Current authority](../current.json) records **2.02 COMPLETE**, implementation
 ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
 **1.13.19**, /v2 and profile manual-postgresql-docker remain unchanged.
 
@@ -40,15 +40,17 @@ Required clean-checkpoint validation:
 - Source-bound raw commands, identities, initial failures, predecessor preservation,
   owned cleanup, local commits, replay-verified patches and checksummed evidence.
 
-The submitted [Phase 2 result](phase2-result.md) is preserved. Its local completion
-is held pending P1 restore-destination admission, P2 TCP reachability classification
-and P3 complete-value byte bounds. The follow-up requires fresh counterexamples,
-corrected race tests, integrated native/browser/Docker proof, current oracle,
-Python/authority and build/static checks. Unchanged recovery, broad SQLite/retained
-history and D19 evidence may be reused only with exact source/command/log bindings.
-The follow-up result will record conditional local completion after all criteria
-pass; implementation stays ACTIVE and product gates INCOMPLETE. No 2.04 work.
-Actual model/effort are unknown unless directly observable.
+The submitted [Phase 2 result](phase2-result.md) remains unchanged. The
+[P1–P3 follow-up result](phase2-followup-result.md) records corrected local
+2.02 COMPLETE after all 27 clean-checkpoint qualifying commands passed:
+restore-destination admission, actual TCP classification, complete-value byte
+bounds and fresh integrated native/browser/Docker proof, current oracle,
+Python/authority and build/static checks. Unchanged recovery, broad SQLite/
+retained history and historical D19 evidence is explicitly source-bound reuse.
+Corrected 2.02 awaits review. Implementation stays ACTIVE and product gates
+INCOMPLETE; accepted local-profile 2.03 remains COMPLETE. No 2.04 work began.
+Actual model/effort are unknown; requested GPT-6 Astra / Extra High.
+LOCAL_ACTION_2_02_AUTHORITY_ONLY certifies structural authority, not runtime behavior.
 
 ## Selected first stable profile
 

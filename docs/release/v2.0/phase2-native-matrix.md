@@ -1,7 +1,9 @@
 # Selected native feasibility and dependency decision
 
 This matrix records an engineering pilot; it grants no product/native support.
-Final clean-checkpoint outcomes and artifacts belong to [the result](phase2-result.md).
+The [submitted result](phase2-result.md) is preserved. Corrected P1–P3 and fresh
+clean-checkpoint outcomes are recorded in the [follow-up result](phase2-followup-result.md);
+its source-bound reuse and remaining support limits are explicit.
 
 | Target or behavior | Disposition | Evidence/remaining qualification |
 |---|---|---|
