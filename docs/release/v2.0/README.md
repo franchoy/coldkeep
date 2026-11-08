@@ -2,12 +2,12 @@
 
 Adopted 7 November 2026 (Europe/Madrid). Current unit: **Phase 1D follow-up BUILD** under
 `coldkeep_phase1d_followup_codex_2026-11-08.md` (8 November follow-up bundle).
-[Current authority](../current.json) records **local-profile 2.03 ACTIVE**, implementation
+[Current authority](../current.json) records **local-profile 2.03 COMPLETE**, implementation
 ACTIVE and product gates INCOMPLETE. Application **2.0.0-dev.0**, latest stable
 **1.13.19** and the frozen v1 records retain their identities.
 
-The exact accepted starting HEAD is `d96edea6abb1c2d55152e2020286a08ad959368e`,
-tree `8c30e47284668c86dae8aad55945458111eaed06`. Phase 0, 1A, B1–B3 and C1–C3
+The exact follow-up starting HEAD is `c26f608cdc9e14d62597862ff81c138978f95ab0`,
+tree `3ffa87b30b8bc9b4b15b2ae9775d47aad6d9be92`. Phase 0, 1A, B1–B3 and C1–C3
 are accepted and their reports/fixtures remain byte-identical.
 
 ## Phase 1D scope and validation
@@ -22,8 +22,9 @@ No schema migration, dependency change, adoption, daemon/UI or 2.04 work belongs
 here. No push, PR publication, merge, tag, release or deployment is authorized.
 
 The submitted [Phase 1D result](phase1d-result.md) records D1–D12 evidence.
-Acceptance is held for F1 receipt capacity and F2 lowered inventory duration;
-local-profile completion requires the follow-up instruction’s new and retained criteria. The authority
+F1 receipt capacity and F2 lowered inventory duration are corrected and qualified
+in the [follow-up result](phase1d-followup-result.md); its conditional local-profile
+completion authority is exercised after the new and retained criteria passed. The authority
 validator accepts ACTIVE/COMPLETE structurally under the Phase 1D result;
 `LOCAL_ACTION_2_03_AUTHORITY_ONLY` never certifies runtime evidence or the product.
 Keep 2.02, 2.04–2.13, 2.15, 2.17 and separate publication authorization outstanding.

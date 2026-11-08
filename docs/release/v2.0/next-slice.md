@@ -1,4 +1,4 @@
-# Handoff after Phase 1D
+# Handoff after the Phase 1D F1–F2 follow-up
 
 Phase 1D implements constrained import, actual isolated historical restoration
 and fresh recovery after real live GC under the 8 November 2026 instruction
@@ -6,9 +6,10 @@ and fresh recovery after real live GC under the 8 November 2026 instruction
 `d96edea6abb1c2d55152e2020286a08ad959368e`, tree
 `8c30e47284668c86dae8aad55945458111eaed06`; all predecessors are preserved.
 
-Current action **2.03 ACTIVE** during the F1–F2 correction under
-`coldkeep_phase1d_followup_codex_2026-11-08.md`. Preserve the submitted
-[Phase 1D result](phase1d-result.md) as historical evidence. Structural
+Current action **2.03 COMPLETE** for the Linux/manual PostgreSQL 16 profile after
+the F1–F2 correction under `coldkeep_phase1d_followup_codex_2026-11-08.md`; see the
+[follow-up result](phase1d-followup-result.md). The submitted
+[Phase 1D result](phase1d-result.md) remains byte-identical historical evidence. Structural
 `LOCAL_ACTION_2_03_AUTHORITY_ONLY` diagnostics do not certify runtime recovery.
 Product gates stay **INCOMPLETE**, implementation **ACTIVE**, application
 **2.0.0-dev.0**, latest stable **1.13.19**. Action **2.04 has not begun**.

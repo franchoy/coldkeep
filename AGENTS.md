@@ -21,9 +21,10 @@ Active v2.0 Phase 1D / action 2.03 is authorized in BUILD mode by the
 8 November 2026 constrained-import instruction and `docs/release/v2.0/README.md`.
 The accepted Phase 1C C1–C3 follow-up is preserved. Scope: constrained fresh-target
 import, actual installation-loss recovery and fresh recovery after real live GC.
-Local-profile action 2.03 is ACTIVE during the F1–F2 follow-up under
-`coldkeep_phase1d_followup_codex_2026-11-08.md`. The submitted
-`docs/release/v2.0/phase1d-result.md` remains historical evidence. Product gates stay INCOMPLETE,
+Local-profile action 2.03 is COMPLETE after the F1–F2 correction and qualification
+under `coldkeep_phase1d_followup_codex_2026-11-08.md`; see
+`docs/release/v2.0/phase1d-followup-result.md`. The submitted Phase 1D report
+remains byte-identical historical evidence. Product gates stay INCOMPLETE,
 implementation ACTIVE, and action 2.04 must not begin. No daemon/UI,
 schema migration, real-repository adoption or release publication is authorized.
 Preserve predecessor worktrees and frozen v1 records. Local commits are authorized.
