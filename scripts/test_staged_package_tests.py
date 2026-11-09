@@ -24,6 +24,19 @@ OBSERVER_IDENTITIES = {
                  "TestBindingSessionObservation/canceled-after-zero",
                  "TestBindingSessionObservation/query-deadline")
 }
+OBSERVER_IDENTITIES.update({
+    ("github.com/franchoy/coldkeep/v2/internal/recoveryexport", name)
+    for name in ("TestInventorySessionObservation",
+                 "TestInventorySessionObservation/disappearance",
+                 "TestInventorySessionObservation/held-session",
+                 "TestInventorySessionObservation/query-error",
+                 "TestInventorySessionObservation/canceled-after-zero",
+                 "TestInventorySessionObservation/query-deadline")
+})
+EXECUTION_BOUND_IDENTITIES = {
+    ("github.com/franchoy/coldkeep/v2/internal/recoveryexport", name)
+    for name in ("TestExecutionBounds", "TestExecutionBounds/total-object")
+}
 
 
 class StagingPrerequisiteTests(unittest.TestCase):
@@ -232,15 +245,16 @@ class RecoveryEventContractTests(unittest.TestCase):
     def test_accepted_structural_contract(self):
         identities = events.required_identities()
         self.assertTrue(OBSERVER_IDENTITIES <= identities)
-        self.assertEqual(len(identities), 575)
-        pairs = sorted(identities - OBSERVER_IDENTITIES)
+        self.assertTrue(EXECUTION_BOUND_IDENTITIES <= identities)
+        self.assertEqual(len(identities), 583)
+        pairs = sorted(identities - OBSERVER_IDENTITIES - EXECUTION_BOUND_IDENTITIES)
         actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         self.assertEqual(len(pairs), 569)
         self.assertEqual(actual, "8eb9e04d2061e1c8659cb89a38e43648c0c241d2349900d0bf749503f9f19062")
 
     def test_observer_controls_are_required_in_both_routes(self):
         for checker in (events, passive_events):
-            for identity in OBSERVER_IDENTITIES:
+            for identity in OBSERVER_IDENTITIES | EXECUTION_BOUND_IDENTITIES:
                 for action in ("missing", "skip"):
                     with self.subTest(checker=checker.__name__, identity=identity, action=action):
                         rows = [{"Package": p, "Test": t, "Action": "pass"}
@@ -267,8 +281,10 @@ class PassiveEventContractTests(unittest.TestCase):
     def test_accepted_structural_contract(self):
         identities = passive_events.required_identities()
         self.assertTrue(OBSERVER_IDENTITIES <= identities)
-        self.assertEqual(len(identities), 44)
-        pairs = sorted(identities - OBSERVER_IDENTITIES)
+        self.assertTrue(EXECUTION_BOUND_IDENTITIES <= identities)
+        self.assertEqual(len(identities), 51)
+        new_bound_child = {pair for pair in EXECUTION_BOUND_IDENTITIES if "/" in pair[1]}
+        pairs = sorted(identities - OBSERVER_IDENTITIES - new_bound_child)
         actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         self.assertEqual(len(pairs), 38)
         self.assertEqual(actual, "0b635526686ec50d5076d9393593a701f8037d9b5aaeb92edfdc8d2512010dbb")

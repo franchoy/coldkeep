@@ -169,6 +169,14 @@ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update({
  'TestBindingSessionObservation/query-error',
  'TestBindingSessionObservation/canceled-after-zero',
  'TestBindingSessionObservation/query-deadline',
+ 'TestInventorySessionObservation',
+ 'TestInventorySessionObservation/disappearance',
+ 'TestInventorySessionObservation/held-session',
+ 'TestInventorySessionObservation/query-error',
+ 'TestInventorySessionObservation/canceled-after-zero',
+ 'TestInventorySessionObservation/query-deadline',
+ 'TestExecutionBounds',
+ 'TestExecutionBounds/total-object',
 })
 
 

@@ -15,11 +15,13 @@ import (
 
 func assertNoInventorySessions(t *testing.T, db *sql.DB) {
 	t.Helper()
-	var sessions int
-	must(t, db.QueryRow("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND application_name='coldkeep-passive-inventory'").Scan(&sessions))
-	if sessions != 0 {
-		t.Fatalf("inventory sessions survived return: %d", sessions)
-	}
+	// Inspect already joins rollback, physical driver/socket closure and ownership.
+	// Observe PostgreSQL's subsequent backend teardown with a separate deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	must(t, waitInventoryNoSessions(ctx, func(ctx context.Context) (int, error) {
+		return countInventorySessions(ctx, db)
+	}))
 }
 
 func TestPostgresCanceledQueryClosesSession(t *testing.T) {
