@@ -1,6 +1,6 @@
 # Coldkeep v2.0 active charter
 
-Current unit: **Phase 3B follow-up R1 ACTIVE**, authorized by
+Current unit: **Phase 3B follow-up R1 COMPLETE, awaiting independent review**, authorized by
 `coldkeep_phase3b_followup_codex_2026-11-09.md` and the 9 November 2026 user request.
 [Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
 product gates INCOMPLETE. Phase 3A and A1–A2 are accepted; their reports remain
@@ -10,21 +10,22 @@ tree `9848d2a14478b13dce15212fb8602238331282c4`.
 Current result: [Phase 3B follow-up R1](phase3b-followup-result.md).
 Preserved submission: [Phase 3B qualification](phase3b-result.md).
 Scope and limits: [physical binding contract](physical-binding.md).
-Independent acceptance is held for R1, lossless operator root selection. The
-submitted report cannot discharge R1; only the owning qualified follow-up can.
-Ordinary schema18/19 writers remain refused; every IMPORT_READY target refuses
-binding/source maintenance and activation. Phase 3C remains OUTSTANDING.
+R1 lossless operator root selection is corrected and qualified locally; independent
+acceptance is still pending. The submitted report cannot discharge R1; only its
+owning qualified follow-up can. Ordinary schema18/19 writers remain refused;
+every IMPORT_READY target refuses binding/source maintenance and activation.
+Phase 3C remains OUTSTANDING.
 
-The bounded follow-up reproduces submitted decoder and staged-operator failures,
-corrects raw JSON path fidelity before admission, and freshly qualifies the
-actual operator matrix and all 491 retained recovery requirements plus new R1
-requirements. Fresh gates also include the unchanged 23-case oracle, full
-Python/authority/runner/CI mutations, build, vet, pinned lint, source/dependency
-guards, validation matrix, current and historical authority/governance. Broader
-Phase 2/browser/storage evidence may be reused only with exact checkpoint,
-command/log digests and unchanged source/test/fixture/runner/dependency bounds.
-Inherited engine failures and four disclosed nonqualifying skips remain
-unqualified. Completion clears only R1, never 3C, parent 2.04 or product gates.
+The submitted decoder and actual staged-operator counterexamples reproduced.
+Fresh correction qualification passed 742 recovery race events, all 566 mandatory
+requirements (491 retained + 75 new), the unchanged 23-case oracle and 607 Python
+tests. Authority/runner/CI mutations, build, vet, pinned lint, source/dependency
+guards, validation matrix, current/historical authority and governance passed.
+The first oracle run was interrupted by owned-fixture cleanup; its failure is
+retained and the unchanged fresh rerun passed. Broader Phase2/browser/storage
+results are explicitly reused with original source/log bindings and 598 unchanged
+boundary files/modes. Inherited engine failures and four nonqualifying skips
+remain unqualified. Completion clears only R1, never 3C, 2.04 or product gates.
 
 Requested settings GPT-6 Astra / Extra High; actual model/effort unknown.
 Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.

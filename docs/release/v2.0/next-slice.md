@@ -1,6 +1,6 @@
 # Phase 3B follow-up R1 and deferred Phase 3C handoff
 
-Phase 3B follow-up R1 ACTIVE under
+Phase 3B follow-up R1 COMPLETE, awaiting independent review under
 `coldkeep_phase3b_followup_codex_2026-11-09.md`; see
 [follow-up result](phase3b-followup-result.md), the preserved
 [submitted result](phase3b-result.md) and
@@ -8,12 +8,21 @@ Phase 3B follow-up R1 ACTIVE under
 Parent 2.04 ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
 Phase 3A/A1–A2 accepted reports remain immutable.
 
-Independent Phase 3B acceptance is held for R1, lossless operator root selection.
-Reproduce the malformed-input decoder and staged-operator counterexamples on
-submitted source, correct admission before replacement decoding and qualify
-early refusal plus legitimate-name controls. Preserve all 491 retained recovery
-requirements and add blocking R1 requirements. Only its qualified follow-up
-record can discharge R1; submitted Phase 3B alone cannot.
+R1 is locally corrected and qualified. Submitted decoder and staged-operator
+counterexamples reproduced; the corrected operator refuses malformed input before
+credential use or writes while legitimate/native-byte controls and historical
+recovery succeed. All 566 blocking requirements passed, retaining all 491 prior
+requirements. Independent acceptance remains pending; only the owning follow-up
+record discharges R1 structurally.
+
+After R1 acceptance, the proposed next workflow adjustment is public development
+visibility: preserve existing commit ancestry, prepare `release/v2.0`, a readable
+progress summary and the draft-PR/hosted-check scope. An owning development-
+publication instruction should explicitly replace the current local-only boundary
+while retaining stable-release gates. Recommended settings: GPT-6 Astra / High;
+completion requires reviewable ancestry/status and observed hosted checks when
+publication is authorized. Substantive CI/Codacy or inherited-engine corrections
+use GPT-6 Astra / Extra High, with attributable tests and no weakened gates.
 
 Phase 3C remains OUTSTANDING and a separate unit. After independent review, its scope is
 generation-owned typed membership, exact entry-name encoding, policy provenance
