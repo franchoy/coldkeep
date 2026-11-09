@@ -1,11 +1,11 @@
 # Coldkeep v2.0 active charter
 
-Current unit: **Phase 3A follow-up A1–A2 ACTIVE**, authorized in BUILD mode by
+Current unit: **Phase 3A follow-up A1–A2 COMPLETE, awaiting independent review**, authorized in BUILD mode by
 `coldkeep_phase3a_followup_codex_2026-11-08.md` and the 9 November 2026 user request.
 [Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
 product gates INCOMPLETE. The [submitted Phase 3A report](phase3a-result.md)
 remains immutable; its COMPLETE status does not discharge the A1–A2 correction.
-The [follow-up result](phase3a-followup-result.md) records the superseding outcome.
+The [follow-up result](phase3a-followup-result.md) records the qualified superseding outcome.
 Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
 
 Submitted base: `8dad297a812201f7a0e55e7d2858b3fc7e6fa59b`, tree
