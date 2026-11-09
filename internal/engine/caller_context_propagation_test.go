@@ -5,13 +5,16 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/franchoy/coldkeep/v2/internal/container"
 	"github.com/franchoy/coldkeep/v2/internal/storage"
+	"github.com/mattn/go-sqlite3"
 )
 
 type callerContextProbeKey struct{}
@@ -20,6 +23,7 @@ var errCallerContextProbeStop = errors.New("caller context probe stop")
 
 type callerContextProbe struct {
 	observed chan bool
+	onQuery  func(context.Context)
 }
 
 func (p *callerContextProbe) record(ctx context.Context) {
@@ -61,6 +65,12 @@ func (c *callerContextProbeConn) BeginTx(ctx context.Context, _ driver.TxOptions
 }
 func (c *callerContextProbeConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
 	c.probe.record(ctx)
+	if c.probe.onQuery != nil {
+		c.probe.onQuery(ctx)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	return nil, errCallerContextProbeStop
 }
 func (c *callerContextProbeConn) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
@@ -68,22 +78,6 @@ func (c *callerContextProbeConn) ExecContext(ctx context.Context, _ string, _ []
 	return nil, errCallerContextProbeStop
 }
 func (c *callerContextProbeConn) CheckNamedValue(*driver.NamedValue) error { return nil }
-
-type steppedCancellationContext struct {
-	base      context.Context
-	remaining int
-}
-
-func (c *steppedCancellationContext) Deadline() (time.Time, bool) { return time.Time{}, false }
-func (c *steppedCancellationContext) Done() <-chan struct{}       { return nil }
-func (c *steppedCancellationContext) Value(key any) any           { return c.base.Value(key) }
-func (c *steppedCancellationContext) Err() error {
-	if c.remaining == 0 {
-		return context.Canceled
-	}
-	c.remaining--
-	return nil
-}
 
 type cancellationFinalizeWriter struct {
 	*container.SimulatedWriter
@@ -204,59 +198,151 @@ func TestEngineCallerContextReachesAffectedOperationWork(t *testing.T) {
 	})
 }
 
+// The callbacks observe real public API operations; they do not replace item work.
+// SQLite read observations additionally prove that cancellation does not reach a
+// second target, while the uncancelled control exercises both seeded targets.
 func TestEngineBatchCancellationStopsNewDispatchWithPartialResult(t *testing.T) {
-	newSeededEngine := func(t *testing.T) *DefaultEngine {
-		t.Helper()
-		dbconn := newEngineTestDB(t)
-		if _, err := dbconn.Exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status, chunker_version) VALUES (1, 'first.txt', 0, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 1, 'COMPLETED', 'v1-simple-rolling')`); err != nil {
-			t.Fatalf("seed logical file: %v", err)
-		}
-		if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete) VALUES ('first.txt', 1, 0, CURRENT_TIMESTAMP, 0, 0, TRUE)`); err != nil {
-			t.Fatalf("seed physical file: %v", err)
-		}
-		eng, err := New(Config{DB: dbconn, ContainerDir: t.TempDir()})
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		return eng
+	type outcome struct {
+		summary  BatchSummary
+		statuses []BatchItemStatus
+		err      error
 	}
-
-	for _, failFast := range []bool{false, true} {
-		t.Run("Remove", func(t *testing.T) {
-			eng := newSeededEngine(t)
-			ctx := &steppedCancellationContext{base: context.Background(), remaining: 2}
+	operations := []struct {
+		name string
+		run  func(context.Context, *DefaultEngine, bool, string) outcome
+	}{
+		{"Remove", func(ctx context.Context, eng *DefaultEngine, failFast bool, output string) outcome {
 			result, err := eng.Remove(ctx, RemoveRequest{FileIDs: []int64{1, 2}, DryRun: true, FailFast: failFast})
-			if !errors.Is(err, context.Canceled) || !IsCode(err, ErrorCancelled) {
-				t.Fatalf("Remove error = %v, want cancellation", err)
+			out := outcome{summary: result.Summary, err: err}
+			for _, item := range result.Items {
+				out.statuses = append(out.statuses, item.Status)
 			}
-			if len(result.Items) != 1 || result.Summary.OK != 1 || result.Summary.Skipped != 1 {
-				t.Fatalf("Remove partial result = %+v", result)
+			return out
+		}},
+		{"Restore", func(ctx context.Context, eng *DefaultEngine, failFast bool, output string) outcome {
+			result, err := eng.Restore(ctx, RestoreRequest{FileIDs: []int64{1, 2}, DestinationRoot: output, DryRun: true, FailFast: failFast})
+			out := outcome{summary: result.Summary, err: err}
+			for _, item := range result.Items {
+				out.statuses = append(out.statuses, item.Status)
 			}
-		})
-
-		t.Run("Restore", func(t *testing.T) {
-			eng := newSeededEngine(t)
-			ctx := &steppedCancellationContext{base: context.Background(), remaining: 2}
-			result, err := eng.Restore(ctx, RestoreRequest{FileIDs: []int64{1, 2}, DestinationRoot: t.TempDir(), DryRun: true, FailFast: failFast})
-			if !errors.Is(err, context.Canceled) || !IsCode(err, ErrorCancelled) {
-				t.Fatalf("Restore error = %v, want cancellation", err)
-			}
-			if len(result.Items) != 1 || result.Summary.OK != 1 || result.Summary.Skipped != 1 {
-				t.Fatalf("Restore partial result = %+v", result)
-			}
-		})
-
-		t.Run("RemoveStoredPaths", func(t *testing.T) {
-			eng := newSeededEngine(t)
-			ctx := &steppedCancellationContext{base: context.Background(), remaining: 2}
+			return out
+		}},
+		{"RemoveStoredPaths", func(ctx context.Context, eng *DefaultEngine, failFast bool, output string) outcome {
 			result, err := eng.RemoveStoredPaths(ctx, RemoveStoredPathsRequest{StoredPaths: []string{"first.txt", "second.txt"}, DryRun: true, FailFast: failFast})
-			if !errors.Is(err, context.Canceled) || !IsCode(err, ErrorCancelled) {
-				t.Fatalf("RemoveStoredPaths error = %v, want cancellation", err)
+			out := outcome{summary: result.Summary, err: err}
+			for _, item := range result.Items {
+				out.statuses = append(out.statuses, item.Status)
 			}
-			if len(result.Items) != 1 || result.Summary.OK != 1 {
-				t.Fatalf("RemoveStoredPaths partial result = %+v", result)
+			return out
+		}},
+	}
+	for _, operation := range operations {
+		for _, failFast := range []bool{false, true} {
+			for _, point := range []string{"before", "after_first", "after_first_extra_reads", "during_first", "uncancelled"} {
+				t.Run(fmt.Sprintf("%s/fail_fast_%t/%s", operation.name, failFast, point), func(t *testing.T) {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					var eng *DefaultEngine
+					var reads atomic.Int64
+					if point == "during_first" {
+						conn, probe := newCallerContextProbeDB(t)
+						var err error
+						eng, err = New(Config{DB: conn, ContainerDir: t.TempDir()})
+						if err != nil {
+							t.Fatal(err)
+						}
+						probe.onQuery = func(context.Context) { reads.Add(1); cancel() }
+					} else {
+						conn := newEngineTestDB(t)
+						for i, name := range []string{"first.txt", "second.txt"} {
+							_, err := conn.Exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status, chunker_version) VALUES ($1, $2, 0, $3, 1, 'COMPLETED', 'v1-simple-rolling')`, i+1, name, fmt.Sprintf("%064d", i+1))
+							if err != nil {
+								t.Fatal(err)
+							}
+							_, err = conn.Exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete) VALUES ($1, $2, 0, CURRENT_TIMESTAMP, 0, 0, TRUE)`, name, i+1)
+							if err != nil {
+								t.Fatal(err)
+							}
+						}
+						var err error
+						eng, err = New(Config{DB: conn, ContainerDir: t.TempDir()})
+						if err != nil {
+							t.Fatal(err)
+						}
+						raw, err := conn.Conn(context.Background())
+						if err != nil {
+							t.Fatal(err)
+						}
+						err = raw.Raw(func(value any) error {
+							value.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(action int, _, _, _ string) int {
+								if action == sqlite3.SQLITE_READ {
+									reads.Add(1)
+								}
+								return sqlite3.SQLITE_OK
+							})
+							return nil
+						})
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err = raw.Close(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					completed := 0
+					var firstReads int64
+					eng.batchItemCompleted = func() {
+						completed++
+						if completed == 1 {
+							firstReads = reads.Load()
+						}
+						if point == "after_first_extra_reads" {
+							// Harmless context observation is deliberately independent of cancellation.
+							if err := ctx.Err(); err != nil {
+								t.Fatalf("first item unexpectedly cancelled: %v", err)
+							}
+							_ = ctx.Done()
+							_ = ctx.Err()
+						}
+						if point == "after_first" || point == "after_first_extra_reads" {
+							cancel()
+						}
+					}
+					if point == "before" {
+						cancel()
+					}
+					out := operation.run(ctx, eng, failFast, t.TempDir())
+					if point == "uncancelled" {
+						if out.err != nil || completed != 2 || len(out.statuses) != 2 || out.summary.OK != 2 || out.summary.Failed != 0 || out.summary.Skipped != 0 {
+							t.Fatalf("uncancelled outcome=%+v completed=%d", out, completed)
+						}
+						return
+					}
+					if !errors.Is(out.err, context.Canceled) || !IsCode(out.err, ErrorCancelled) {
+						t.Fatalf("error=%v, want cancelled cause and code", out.err)
+					}
+					if point == "before" {
+						if completed != 0 || len(out.statuses) != 0 || reads.Load() != 0 {
+							t.Fatalf("work before dispatch: outcome=%+v completed=%d reads=%d", out, completed, reads.Load())
+						}
+						return
+					}
+					if completed != 1 || len(out.statuses) != 1 || reads.Load() != firstReads || firstReads == 0 {
+						t.Fatalf("second target reached or first work missing: outcome=%+v completed=%d first_reads=%d final_reads=%d", out, completed, firstReads, reads.Load())
+					}
+					if point == "during_first" {
+						if out.summary.Failed != 1 || out.summary.OK != 0 || out.statuses[0] != BatchItemFailed {
+							t.Fatalf("first failure lost: %+v", out)
+						}
+					} else if out.summary.OK != 1 || out.summary.Failed != 0 || (out.statuses[0] != BatchItemOK && out.statuses[0] != BatchItemPlanned) {
+						t.Fatalf("successful partial result lost: %+v", out)
+					}
+					if operation.name != "RemoveStoredPaths" && out.summary.Skipped != 1 {
+						t.Fatalf("undispatched item lost: %+v", out)
+					}
+				})
 			}
-		})
+		}
 	}
 }
 

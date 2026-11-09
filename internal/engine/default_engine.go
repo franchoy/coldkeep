@@ -48,6 +48,9 @@ type Config struct {
 // It preserves existing command behavior while routing supported operations
 // through typed engine methods and lower domain packages.
 type DefaultEngine struct {
+	// batchItemCompleted is a per-instance observation seam for deterministic
+	// cancellation tests. It runs after an item result is recorded.
+	batchItemCompleted  func()
 	config              Config
 	obs                 *observability.Service
 	snapshotIDGenerator snapshotIDGenerator

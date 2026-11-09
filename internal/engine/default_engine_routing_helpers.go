@@ -335,6 +335,9 @@ func (e *DefaultEngine) removeFileIDs(ctx context.Context, req RemoveRequest) (R
 		}
 		item := e.removeFileID(ctx, req, fileID)
 		appendRemoveItem(&result, item)
+		if e.batchItemCompleted != nil {
+			e.batchItemCompleted()
+		}
 		if err := ctx.Err(); err != nil {
 			finalizeBatchSummary(&result.Summary, len(req.FileIDs))
 			return result, err
@@ -422,6 +425,9 @@ func (e *DefaultEngine) restoreFileIDs(ctx context.Context, req RestoreRequest) 
 		}
 		item := e.restoreFileID(ctx, req, fileID)
 		appendRestoreItem(&result, item)
+		if e.batchItemCompleted != nil {
+			e.batchItemCompleted()
+		}
 		if err := ctx.Err(); err != nil {
 			finalizeBatchSummary(&result.Summary, len(req.FileIDs))
 			return result, err

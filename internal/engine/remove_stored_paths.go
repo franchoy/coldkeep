@@ -142,6 +142,9 @@ func (e *DefaultEngine) removeStoredPaths(ctx context.Context, req RemoveStoredP
 			item = e.removeStoredPath(ctx, target)
 		}
 		appendRemoveStoredPathItem(&result, item)
+		if e.batchItemCompleted != nil {
+			e.batchItemCompleted()
+		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
