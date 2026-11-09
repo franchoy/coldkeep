@@ -1,5 +1,14 @@
 # V2.0 development visibility
 
+Current workflow: the [authorized hosted-CI follow-up](#authorized-hosted-ci-follow-up-9-november-2026),
+with measured local evidence in the [current result](ci-followup-result.md).
+Initial publication at `ac9382c9e620b17b43800c2a5cf0065e9e75446d` is accepted;
+the owner separately adopted the bounded correction and guarded branch update.
+The sections from "Prepared scope and approval" through "Execution guidance"
+preserve the earlier publication proposal at its original checkpoint. Their
+approval, branch-absence and inherited-failure statements are historical.
+The adopted follow-up section below records the current scope; PR #129 stays draft.
+
 ## Prepared scope and approval
 
 The prepared workflow makes existing v2.0 development reviewable on GitHub:
