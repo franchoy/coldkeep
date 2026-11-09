@@ -178,7 +178,8 @@ jobs:
 
   package-tests:
     name: Complete package tests (${{ matrix.codec }})
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 provides the required PostgreSQL 16 client package.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -243,7 +244,8 @@ jobs:
           retention-days: 14
 
   correctness-matrix:
-    runs-on: ubuntu-latest
+    # Keep the dedicated recovery clients on the same provisioned runner family.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false

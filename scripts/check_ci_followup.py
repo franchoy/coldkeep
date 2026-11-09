@@ -31,6 +31,11 @@ def validate(workflow, runner=None, wrappers=None):
             errors.append(description)
 
     packages = section(workflow, 'package-tests', 2)
+    for job in ('package-tests', 'correctness-matrix'):
+        runner_lines = [line for line in section(workflow, job, 2).splitlines()
+                        if line.startswith('    runs-on:')]
+        need(runner_lines == ['    runs-on: ubuntu-24.04'],
+             'PostgreSQL 16 client runner pinned: ' + job)
     execute = step(packages, 'Run complete staged package tests')
     need('codec: [plain, aes-gcm]' in packages, 'complete package matrix retains both codecs')
     need('fetch-depth: 0' in step(packages, 'Checkout'), 'complete package historical checkout')

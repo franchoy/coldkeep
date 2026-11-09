@@ -11,6 +11,17 @@ class FollowupGateTests(unittest.TestCase):
     def test_current_workflow(self):
         self.assertEqual(validate((ROOT / '.github/workflows/ci.yml').read_text()), [])
 
+    def test_postgresql_client_jobs_reject_moving_or_unprovisioned_runners(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        for job in ('package-tests', 'correctness-matrix'):
+            before, after = workflow.split('  ' + job + ':\n', 1)
+            for runner in ('ubuntu-latest', 'ubuntu-26.04', '${{ vars.RUNNER }}'):
+                with self.subTest(job=job, runner=runner):
+                    changed = before + '  ' + job + ':\n' + after.replace(
+                        '    runs-on: ubuntu-24.04\n', '    runs-on: ' + runner + '\n', 1)
+                    self.assertNotEqual(changed, workflow)
+                    self.assertIn('PostgreSQL 16 client runner pinned: ' + job, validate(changed))
+
     def test_package_coverage_and_dependencies_remain_blocking(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         for old, new, expected in [
