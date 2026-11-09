@@ -17,9 +17,9 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 3B / action 2.04 is authorized in BUILD mode by
-`coldkeep_phase3b_codex_2026-11-09.md` and `docs/release/v2.0/README.md`.
-Implement and qualify the complete bounded physical-binding unit in this run.
+The v2.0 Phase 3B / action 2.04 BUILD authorized by
+`coldkeep_phase3b_codex_2026-11-09.md` is COMPLETE, awaiting independent review.
+See `docs/release/v2.0/phase3b-result.md` and the Phase 3C handoff.
 Preserve accepted reports, predecessor worktrees, frozen v1 and all pins.
 Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
 Ordinary schema18/19 writers and IMPORT_READY maintenance/activation refuse.

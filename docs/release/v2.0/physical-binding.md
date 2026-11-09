@@ -1,6 +1,7 @@
 # Phase 3B physical binding contract
 
-Phase 3B BUILD is ACTIVE under `coldkeep_phase3b_codex_2026-11-09.md`.
+Phase 3B BUILD is COMPLETE, awaiting independent review, under
+`coldkeep_phase3b_codex_2026-11-09.md`; see [qualification](phase3b-result.md).
 Parent 2.04 and implementation remain ACTIVE; product gates remain INCOMPLETE.
 This contract precedes implementation. Qualification and actual limits belong
 in the result; this document is not a qualification receipt.
@@ -34,7 +35,8 @@ inode, filesystem type and Linux STATX_MNT_ID_UNIQUE, plus boot ID and mount
 namespace inode. Linux 6.8 or later with the returned UNIQUE mask is required;
 missing unique-mount evidence refuses instead of downgrading. Ordinary mount
 IDs and namespace inodes were observed to be reused during Docker recreation.
-Supported filesystems are ext4, XFS, tmpfs and overlayfs. This is session-bound
+The admission allowlist recognizes ext4, XFS, tmpfs and overlayfs. This run
+observed ext4 and tmpfs; XFS/overlayfs were not separately qualified. This is session-bound
 consistency evidence, not hardware attestation or clone resistance. A reboot,
 namespace change or mount recreation requires explicit reconnect. Same-object
 offline relocation preserves root/control/native-lock objects. Reconnect may
@@ -64,7 +66,8 @@ root/source/checkpoint/credential locations, and have a distinct observed mount
 from the payload. A same-mount sibling refuses before any child creation.
 This proves mount-availability separation only; hardware independence is unknown.
 Status reads bounded installation information without credentials or catalog
-access, reports pending reconciliation/root mismatch, and never initializes.
+access, reports pending reconciliation (including prepared staging) or root
+mismatch, and never initializes.
 An optional checked status also inspects the explicit catalog/key tuple.
 
 Lock order is installation-directory flock, existing canonical-root lease,
@@ -84,7 +87,8 @@ intent and sync its parent. Completion requires all cleanup to succeed.
 
 | Crash cut | Explicit same-request reconciliation |
 | --- | --- |
-| Before durable intent | Prior catalog remains; new preview/apply may retry |
+| Before durable intent, without a staging residue | Prior catalog remains; new preview/apply may retry with a fresh checkpoint |
+| Invalid or partial prepared staging | Prior catalog/control tuple is unchanged; unexplained staging refuses automatic mutation |
 | Intent present, no committed operation | Verify checkpoint and prior plan, execute same operation |
 | Commit response uncertain | Query exact operation/plan; never infer rollback |
 | Committed, marker or descriptor missing/stale | Matching durable intent plus actual catalog permit publication |

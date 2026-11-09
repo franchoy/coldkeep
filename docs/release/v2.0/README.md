@@ -1,19 +1,20 @@
 # Coldkeep v2.0 active charter
 
-Current unit: **Phase 3B ACTIVE**, authorized in BUILD mode by
+Current unit: **Phase 3B COMPLETE, awaiting independent review**, built under
 `coldkeep_phase3b_codex_2026-11-09.md` and the 9 November 2026 user request.
 [Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
 product gates INCOMPLETE. Phase 3A and A1–A2 are accepted; their reports remain
 immutable. Starting HEAD `cf70de06d2ab2da6f64fa7b13fa9610af07e32f2`, tree
 `40297ae58e050d9f1ef36fee5b62954011a28d91`.
 
+Result: [Phase 3B qualification](phase3b-result.md).
 Scope and limits: [physical binding contract](physical-binding.md).
 Ordinary schema18/19 writers remain refused; every IMPORT_READY target refuses
 binding/source maintenance and activation. Phase 3C remains separate.
-Required fresh gates: full recovery/binding race runner retaining all 341
-accepted requirements, unchanged 23-case oracle, full Python suite, authority
-and runner/CI mutations, static/governance checks, affected regressions and full
-Phase 2 native/browser/Docker proof. Inherited engine failures stay unqualified.
+Fresh qualification passed: 667 recovery race events with all 491 mandatory
+events (341 retained), the unchanged 23-case oracle, 586 Python tests, authority
+and runner/CI mutations, static/governance checks, affected regressions and the
+full Phase 2 native/browser/Docker proof. Inherited engine failures stay unqualified.
 
 Requested settings GPT-6 Astra / Extra High; actual model/effort unknown.
 Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
