@@ -15,6 +15,17 @@ import check_passive_test_events as passive_events
 import run_staged_package_tests as runner
 
 
+OBSERVER_IDENTITIES = {
+    ("github.com/franchoy/coldkeep/v2/internal/recoveryexport", name)
+    for name in ("TestBindingSessionObservation",
+                 "TestBindingSessionObservation/disappearance",
+                 "TestBindingSessionObservation/held-session",
+                 "TestBindingSessionObservation/query-error",
+                 "TestBindingSessionObservation/canceled-after-zero",
+                 "TestBindingSessionObservation/query-deadline")
+}
+
+
 class StagingPrerequisiteTests(unittest.TestCase):
     def test_prerequisite_failures_are_closed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -219,10 +230,26 @@ class StagingLifetimeTests(unittest.TestCase):
 
 class RecoveryEventContractTests(unittest.TestCase):
     def test_accepted_structural_contract(self):
-        pairs = sorted(events.required_identities())
+        identities = events.required_identities()
+        self.assertTrue(OBSERVER_IDENTITIES <= identities)
+        self.assertEqual(len(identities), 575)
+        pairs = sorted(identities - OBSERVER_IDENTITIES)
         actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         self.assertEqual(len(pairs), 569)
         self.assertEqual(actual, "8eb9e04d2061e1c8659cb89a38e43648c0c241d2349900d0bf749503f9f19062")
+
+    def test_observer_controls_are_required_in_both_routes(self):
+        for checker in (events, passive_events):
+            for identity in OBSERVER_IDENTITIES:
+                for action in ("missing", "skip"):
+                    with self.subTest(checker=checker.__name__, identity=identity, action=action):
+                        rows = [{"Package": p, "Test": t, "Action": "pass"}
+                                for p, t in checker.required_identities()]
+                        if action == "missing":
+                            rows = [row for row in rows if (row["Package"], row["Test"]) != identity]
+                        else:
+                            next(row for row in rows if (row["Package"], row["Test"]) == identity)["Action"] = "skip"
+                        self.assertEqual(checker.check_events(rows)["status"], "FAIL")
 
     def test_missing_and_skipped_binding_events_fail_broad_route(self):
         for name in ("TestBindingDockerProfile", "TestBindingOldWritersAndReaders"):
@@ -238,7 +265,10 @@ class RecoveryEventContractTests(unittest.TestCase):
 
 class PassiveEventContractTests(unittest.TestCase):
     def test_accepted_structural_contract(self):
-        pairs = sorted(passive_events.required_identities())
+        identities = passive_events.required_identities()
+        self.assertTrue(OBSERVER_IDENTITIES <= identities)
+        self.assertEqual(len(identities), 44)
+        pairs = sorted(identities - OBSERVER_IDENTITIES)
         actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         self.assertEqual(len(pairs), 38)
         self.assertEqual(actual, "0b635526686ec50d5076d9393593a701f8037d9b5aaeb92edfdc8d2512010dbb")

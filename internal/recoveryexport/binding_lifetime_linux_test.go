@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/v2/internal/coordination"
 	"golang.org/x/sys/unix"
@@ -96,11 +97,14 @@ func TestBindingProcessTermination(t *testing.T) {
 }
 func assertBindingNoSessions(t *testing.T, f *fixture) {
 	t.Helper()
-	var n int
-	must(t, f.db.QueryRow("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND application_name LIKE 'coldkeep-%'").Scan(&n))
-	if n != 0 {
-		t.Fatal("owned sessions remain", n)
-	}
+	// Driver/socket closure is already joined by the operation and its barriers.
+	// PostgreSQL processes Terminate asynchronously, so observe server teardown
+	// separately with a fresh deadline even when the operation was canceled.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	must(t, waitBindingNoSessions(ctx, func(ctx context.Context) (int, error) {
+		return countBindingSessions(ctx, f.db)
+	}))
 }
 func bindingContenders(t *testing.T, f *fixture) {
 	t.Helper()

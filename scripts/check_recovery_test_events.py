@@ -160,6 +160,16 @@ for case in 'raw-invalid-utf8 lone-low-surrogate lone-high-surrogate'.split():
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+command for command in ['preview','apply'])
 required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(
  'TestBindingOperatorNativePathControls/'+case for case in 'literal-replacement-rune escaped-replacement-rune paired-surrogates literal-backslash-u whitespace-case-nonascii base64-native-byte'.split())
+# CI follow-up: retain all 566 accepted requirements and add the server-session
+# observation controls; a leaked session or failed observation must stay red.
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update({
+ 'TestBindingSessionObservation',
+ 'TestBindingSessionObservation/disappearance',
+ 'TestBindingSessionObservation/held-session',
+ 'TestBindingSessionObservation/query-error',
+ 'TestBindingSessionObservation/canceled-after-zero',
+ 'TestBindingSessionObservation/query-deadline',
+})
 
 
 def required_identities():
