@@ -1,12 +1,21 @@
-# Phase 3C handoff after Phase 3B BUILD
+# Phase 3B follow-up R1 and deferred Phase 3C handoff
 
-Phase 3B COMPLETE, awaiting independent review under
-`coldkeep_phase3b_codex_2026-11-09.md`; see [result](phase3b-result.md) and
+Phase 3B follow-up R1 ACTIVE under
+`coldkeep_phase3b_followup_codex_2026-11-09.md`; see
+[follow-up result](phase3b-followup-result.md), the preserved
+[submitted result](phase3b-result.md) and
 [physical binding contract](physical-binding.md).
 Parent 2.04 ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
 Phase 3A/A1–A2 accepted reports remain immutable.
 
-Phase 3C remains a separate unit. After independent review, its scope is
+Independent Phase 3B acceptance is held for R1, lossless operator root selection.
+Reproduce the malformed-input decoder and staged-operator counterexamples on
+submitted source, correct admission before replacement decoding and qualify
+early refusal plus legitimate-name controls. Preserve all 491 retained recovery
+requirements and add blocking R1 requirements. Only its qualified follow-up
+record can discharge R1; submitted Phase 3B alone cannot.
+
+Phase 3C remains OUTSTANDING and a separate unit. After independent review, its scope is
 generation-owned typed membership, exact entry-name encoding, policy provenance
 and measured indexed/paginated lookup. It must preserve repository/root/source
 identity, binding revisions and all recovery profiles without treating portable

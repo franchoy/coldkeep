@@ -2540,6 +2540,43 @@ def _unique_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _phase3b_r1_followup_complete(root: Path) -> bool:
+    """Recognize only the bounded R1 completion record, not runtime acceptance."""
+    report = root / "docs/release/v2.0/phase3b-followup-result.md"
+    try:
+        if not report.is_file() or report.is_symlink():
+            return False
+        with report.open("rb") as stream:
+            data = stream.read(65537)
+        if len(data) > 65536:
+            return False
+        text = data.decode("utf-8")
+    except (OSError, UnicodeError):
+        return False
+    required = {
+        "Phase 3B follow-up R1": "COMPLETE, awaiting independent review",
+        "R1 lossless operator root selection": "PASS",
+        "Submitted-source decoder and operator counterexamples": "REPRODUCED",
+        "Fresh recovery/operator qualification": "PASS",
+        "Parent action 2.04": "ACTIVE",
+        "Implementation": "ACTIVE",
+        "Product gates": "INCOMPLETE",
+        "Phase 3C": "OUTSTANDING",
+        "Ordinary schema18/19 writers": "REFUSED",
+        "IMPORT_READY maintenance/activation": "REFUSED",
+        "Publication": "NOT AUTHORIZED",
+        "Governing BUILD": "coldkeep_phase3b_followup_codex_2026-11-09.md",
+    }
+    # Whole field values avoid substring passes (NOT PASS, PASS-pending, or a
+    # conflicting duplicate). Other report prose remains unconstrained.
+    fields: dict[str, list[str]] = {key: [] for key in required}
+    for line in text.splitlines():
+        key, separator, value = line.strip().partition(":")
+        if separator and key in fields:
+            fields[key].append(value.strip())
+    return all(fields[key] == [value] for key, value in required.items())
+
+
 def validate_v2_authority(root: Path, version: str, requested_state: str = "auto") -> ValidationResult:
     """Validate only the adopted development scope, never certify a product release."""
     result = ValidationResult("development", version)
@@ -2608,7 +2645,7 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                     if "2.02-delivery-native-proof" not in result.outstanding_obligations:
                         result.outstanding_obligations.insert(0, "2.02-delivery-native-proof")
         if phase == "2.04":
-            result.outstanding_obligations = ["2.04-phase3a-qualification", "2.04-phase3a-followup-a1-a2", "2.04-phase3b", "2.04-phase3c", "2.05-2.13", "2.15", "2.17", "separate-publication-authorization"]
+            result.outstanding_obligations = ["2.04-phase3a-qualification", "2.04-phase3a-followup-a1-a2", "2.04-phase3b", "2.04-phase3b-followup-r1", "2.04-phase3c", "2.05-2.13", "2.15", "2.17", "separate-publication-authorization"]
             if state.get("phase_status") != "ACTIVE":
                 fail("Phase 3A cannot complete parent 2.04; phase_status must remain ACTIVE")
             report = root / "docs/release/v2.0/phase3a-result.md"
@@ -2651,6 +2688,11 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                     and binding.stat().st_size <= 65536
                     and all(token in binding.read_text() for token in binding_required)):
                 result.outstanding_obligations.remove("2.04-phase3b")
+            # The preserved Phase 3B submission cannot discharge its reviewed
+            # R1 defect. Completion of the owning follow-up clears only R1.
+            if ("2.04-phase3b" not in result.outstanding_obligations
+                    and _phase3b_r1_followup_complete(root)):
+                result.outstanding_obligations.remove("2.04-phase3b-followup-r1")
             for name, token in (("phase1a-result.md", "COMPLETE"), ("phase1d-result.md", "Local-profile action 2.03: COMPLETE"), ("phase2-followup-result.md", "Local action 2.02: COMPLETE")):
                 accepted = root / "docs/release/v2.0" / name
                 if not accepted.is_file() or accepted.is_symlink() or token not in accepted.read_text():

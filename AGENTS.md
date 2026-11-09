@@ -17,9 +17,12 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-The v2.0 Phase 3B / action 2.04 BUILD authorized by
-`coldkeep_phase3b_codex_2026-11-09.md` is COMPLETE, awaiting independent review.
-See `docs/release/v2.0/phase3b-result.md` and the Phase 3C handoff.
+The v2.0 Phase 3B follow-up R1 BUILD authorized by
+`coldkeep_phase3b_followup_codex_2026-11-09.md` is ACTIVE. Independent acceptance
+of submitted Phase 3B is held for lossless operator root selection.
+See `docs/release/v2.0/phase3b-followup-result.md`; preserve the submitted
+`docs/release/v2.0/phase3b-result.md` byte-for-byte. Only a qualified follow-up
+can discharge R1; submitted Phase 3B cannot. Phase 3C stays OUTSTANDING.
 Preserve accepted reports, predecessor worktrees, frozen v1 and all pins.
 Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
 Ordinary schema18/19 writers and IMPORT_READY maintenance/activation refuse.
@@ -38,7 +41,7 @@ fixtures are authorized. No push, publication, merge, tag or release.
 
 ## Validation and handoffs
 
-Use the bounded Phase 3B validation profile in `docs/release/v2.0/README.md`
+Use the bounded Phase 3B follow-up R1 validation profile in `docs/release/v2.0/README.md`
 and `PRE_RELEASE_CHECKLIST.md`. Run focused checks before applicable broader
 gates. Missing hosted or platform evidence is not a pass. The baseline commands:
 

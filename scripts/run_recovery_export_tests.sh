@@ -162,6 +162,26 @@ for which in ['marker','descriptor']:
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in 'missing future truncated oversized duplicate trailing symlink fifo hardlink permissions wrong-identity stale-revision'.split())
 required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add('TestBindingControlAdmission')
+# Phase 3B R1: raw configuration fidelity and actual staged operator behavior.
+for parent,cases in {
+ 'TestRecoveryConfigUnicodeRefusals':'invalid-utf8 overlong-utf8 encoded-surrogate truncated-utf8 lone-low-surrogate lone-high-surrogate high-high low-high high-scalar high-gap-low high-escaped-backslash-low paired-then-low escaped-quote-then-high key-surrogate password-surrogate',
+ 'TestRecoveryConfigExactPathControls':'literal-replacement-rune escaped-replacement-rune paired-surrogates pair-minimum pair-maximum scalar-boundaries literal-backslash-u doubled-backslash-u escaped-quote adjacent-pairs whitespace-case-nonascii standard-escapes base64-native-invalid-utf8',
+ 'TestRecoveryConfigByteBoundary':'exact-value exact-padding excess-value excess-padding excess-trailing-value',
+ 'TestRecoveryConfigSyntaxRefusals':'unknown-field trailing-value trailing-garbage truncated malformed-escape incomplete-unicode nonhex-unicode unescaped-control typed-value',
+ 'TestRecoveryConfigRepresentationPolicy':'both-nonempty both-nonempty-invalid-base64 invalid-base64 plain-only base64-only empty-plain empty-base64 null-plain null-base64',
+}.items():
+ required['github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery'].add(parent)
+ required['github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery'].update(parent+'/'+case for case in cases.split())
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update({
+ 'TestBindingOperatorConfigFidelity','TestBindingOperatorNativePathControls',
+ 'TestBindingOperatorHistoricalRestore','TestBindingOperatorMutationObserver',
+})
+for case in 'raw-invalid-utf8 lone-low-surrogate lone-high-surrogate'.split():
+ parent='TestBindingOperatorConfigFidelity/'+case
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+command for command in ['preview','apply'])
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(
+ 'TestBindingOperatorNativePathControls/'+case for case in 'literal-replacement-rune escaped-replacement-rune paired-surrogates literal-backslash-u whitespace-case-nonascii base64-native-byte'.split())
 passes={(e['Package'],e.get('Test','')) for e in records if e.get('Action')=='pass'}
 failures=[e for e in records if e.get('Action') in ('fail','skip')]
 missing=[p+'/'+t for p,tests in required.items() for t in tests|{''} if (p,t) not in passes]

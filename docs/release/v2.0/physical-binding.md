@@ -113,7 +113,22 @@ Operator commands use the existing private recovery config. `binding-status
 `binding-check -config /private/config.json -installation-directory ...` adds
 catalog/key validation. `binding-source-status` also takes `-source-id`.
 The config can use `payload_root_base64` instead of `payload_root` for native
-bytes outside valid UTF-8; supplying both refuses. The explicit database role
+bytes outside valid UTF-8. The retained selection policy treats a nonempty
+base64 value as the encoded selection and refuses a simultaneously nonempty
+plain value. An absent, null or empty string field contributes no selection;
+other field types refuse. Empty selections still fail the ordinary admission
+checks. Neither spelling trims, normalizes or replaces native path bytes.
+
+The operator reads at most 1 MiB plus one sentinel byte and refuses input over
+1 MiB, including trailing padding. Before typed JSON decoding or credential
+access, it rejects invalid raw UTF-8 and isolated/mismatched escaped UTF-16
+surrogates. Literal U+FFFD, `\ufffd`, valid surrogate pairs and escaped
+backslash-plus-`u` filename text retain ordinary JSON meanings. Unknown fields,
+malformed JSON and trailing input still refuse. This operator-config ceiling
+is separate from unchanged receipt and binding-control limits. See the
+[R1 follow-up](phase3b-followup-result.md) for qualification status.
+
+The explicit database role
 is the credential lookup reference; the raw password and private password-file
 location remain solely in operator custody.
 

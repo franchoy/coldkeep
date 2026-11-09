@@ -574,3 +574,117 @@ class Action204Phase3BAuthorityTests(Action204Phase3AAuthorityTests):
         self.assert_rejected()
         self.change(phase_status="ACTIVE", product_gates="COMPLETE")
         self.assert_rejected()
+
+
+class Action204Phase3BR1AuthorityTests(V2AuthorityFixture):
+    fixture_phase = "2.04"
+
+    def setUp(self):
+        super().setUp()
+        for name in ("phase1a-result.md", "phase1d-result.md", "phase2-followup-result.md",
+                     "phase3a-result.md", "phase3a-followup-result.md", "phase3b-result.md"):
+            shutil.copy2(ROOT / "docs/release/v2.0" / name, self.root / "docs/release/v2.0" / name)
+        self.followup = self.root / "docs/release/v2.0/phase3b-followup-result.md"
+        # Independent literal expectations: deleting the implementation's R1
+        # obligation or a completion requirement must not self-confirm here.
+        self.body = "\n".join((
+            "Phase 3B follow-up R1: COMPLETE, awaiting independent review",
+            "R1 lossless operator root selection: PASS",
+            "Submitted-source decoder and operator counterexamples: REPRODUCED",
+            "Fresh recovery/operator qualification: PASS",
+            "Parent action 2.04: ACTIVE", "Implementation: ACTIVE",
+            "Product gates: INCOMPLETE", "Phase 3C: OUTSTANDING",
+            "Ordinary schema18/19 writers: REFUSED",
+            "IMPORT_READY maintenance/activation: REFUSED",
+            "Publication: NOT AUTHORIZED",
+            "Governing BUILD: coldkeep_phase3b_followup_codex_2026-11-09.md",
+        )) + "\n"
+
+    def assert_r1_outstanding(self):
+        result = release.validate(self.root, "auto")
+        self.assertIn("2.04-phase3b-followup-r1", result.outstanding_obligations)
+        self.assertIn("2.04-phase3c", result.outstanding_obligations)
+        self.assertIn("separate-publication-authorization", result.outstanding_obligations)
+        return result
+
+    def test_submitted_phase3b_cannot_erase_required_r1_obligation(self):
+        before = self.assert_r1_outstanding()
+        self.assertEqual(before.violations, [])
+        self.assertNotIn("2.04-phase3b", before.outstanding_obligations)
+        # Even completion-looking text in the original report is not its owner.
+        submitted = self.root / "docs/release/v2.0/phase3b-result.md"
+        submitted.write_text(submitted.read_text() + "\n" + self.body)
+        self.assertEqual(self.assert_r1_outstanding().violations, [])
+        self.followup.write_text(self.body.replace(
+            "COMPLETE, awaiting independent review", "ACTIVE"))
+        self.assertEqual(self.assert_r1_outstanding().violations, [])
+
+    def test_every_completion_field_is_required_and_semantic(self):
+        for line in self.body.splitlines():
+            key, value = line.split(": ", 1)
+            mutations = (
+                self.body.replace(line + "\n", ""),
+                self.body.replace(line, key + ": UNKNOWN"),
+                self.body.replace(line, key + ": NOT " + value),
+                self.body.replace(line, line + "-pending"),
+                self.body + line + "\n",
+                self.body + key + ": CONFLICT\n",
+            )
+            for index, body in enumerate(mutations):
+                with self.subTest(field=key, mutation=index):
+                    self.followup.write_text(body)
+                    self.assertEqual(self.assert_r1_outstanding().violations, [])
+
+    def test_deleted_missing_or_nonregular_followup_keeps_r1(self):
+        self.followup.write_text(self.body)
+        self.assertNotIn("2.04-phase3b-followup-r1",
+                         release.validate(self.root, "auto").outstanding_obligations)
+        self.followup.unlink()
+        self.assert_r1_outstanding()
+        alternate = self.root / "otherwise-valid-followup.md"
+        alternate.write_text(self.body)
+        self.followup.symlink_to(alternate)
+        self.assert_r1_outstanding()
+        self.followup.unlink()
+        self.followup.mkdir()
+        self.assert_r1_outstanding()
+        self.followup.rmdir()
+        self.followup.write_bytes(self.body.encode() + b"\xff")
+        self.assert_r1_outstanding()
+        self.followup.write_text(self.body + "x" * 65536)
+        self.assert_r1_outstanding()
+
+    def test_valid_followup_clears_exactly_r1_and_keeps_later_authority(self):
+        before = self.assert_r1_outstanding()
+        self.followup.write_text(self.body)
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertEqual(result.outstanding_obligations,
+                         [item for item in before.outstanding_obligations
+                          if item != "2.04-phase3b-followup-r1"])
+        self.assertEqual(result.evidence_scope, "LOCAL_ACTION_2_04_PHASE3A_AUTHORITY_ONLY")
+        for requested in ("pre-release", "released", "post-release-closed"):
+            with self.subTest(requested=requested):
+                self.assertTrue(release.validate(self.root, requested).violations)
+        for change, restore in (
+            ({"phase_status": "COMPLETE"}, {"phase_status": "ACTIVE"}),
+            ({"product_gates": "COMPLETE"}, {"product_gates": "INCOMPLETE"}),
+            ({"implementation": "COMPLETE"}, {"implementation": "ACTIVE"}),
+            ({"phase": "2.05"}, {"phase": "2.04"}),
+        ):
+            with self.subTest(change=change):
+                self.change(**change)
+                self.assert_rejected()
+                self.change(**restore)
+        with patch.dict("os.environ", {"GITHUB_REF": "refs/tags/v2.0.0-dev.0"}):
+            self.assert_rejected()
+
+    def test_r1_cannot_clear_without_qualified_predecessor(self):
+        self.followup.write_text(self.body)
+        for name in ("phase3a-result.md", "phase3a-followup-result.md", "phase3b-result.md"):
+            report = self.root / "docs/release/v2.0" / name
+            original = report.read_bytes()
+            with self.subTest(predecessor=name):
+                report.unlink()
+                self.assert_r1_outstanding()
+                report.write_bytes(original)

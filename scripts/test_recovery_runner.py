@@ -15,6 +15,7 @@ NEW_EVENT = "TestAdoptionOperatorAndDatabaseReservation"
 
 class RecoveryRunnerTests(unittest.TestCase):
     required_event = NEW_EVENT
+    required_package = "github.com/franchoy/coldkeep/v2/internal/recoveryexport"
     def run_mutation(self, mutation):
         with tempfile.TemporaryDirectory(prefix="coldkeep-runner-mutation-") as directory:
             root = Path(directory)
@@ -31,7 +32,7 @@ class RecoveryRunnerTests(unittest.TestCase):
             with patch.object(sys, "argv", ["checker", str(event_file)]):
                 exec("\n".join(source.splitlines()[:boundary - 1]), namespace)
             required = namespace["required"]
-            self.assertIn(self.required_event, required["github.com/franchoy/coldkeep/v2/internal/recoveryexport"])
+            self.assertIn(self.required_event, required[self.required_package])
             records = [{"Action": "pass", "Package": package, "Test": test}
                        for package, tests in required.items() for test in tests | {""}]
             if mutation == "missing":
@@ -101,3 +102,21 @@ class MetadataFollowupRunnerTests(RecoveryRunnerTests):
 
 class BindingRunnerTests(RecoveryRunnerTests):
     required_event = "TestBindingDockerProfile/recreation-requires-reconnect"
+
+
+class BindingConfigRefusalRunnerTests(RecoveryRunnerTests):
+    required_event = "TestBindingOperatorConfigFidelity/lone-low-surrogate/apply"
+
+
+class BindingConfigPositiveRunnerTests(RecoveryRunnerTests):
+    required_event = "TestBindingOperatorNativePathControls/base64-native-byte"
+
+
+class OperatorConfigUnicodeRunnerTests(RecoveryRunnerTests):
+    required_package = "github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery"
+    required_event = "TestRecoveryConfigUnicodeRefusals/invalid-utf8"
+
+
+class OperatorConfigLimitRunnerTests(RecoveryRunnerTests):
+    required_package = "github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery"
+    required_event = "TestRecoveryConfigByteBoundary/excess-padding"

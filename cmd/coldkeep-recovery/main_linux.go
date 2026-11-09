@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -18,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/franchoy/coldkeep/v2/internal/coordination"
 	"github.com/franchoy/coldkeep/v2/internal/recoveryexport"
@@ -181,7 +183,19 @@ func readJSON(path string, v any) error {
 	if e != nil {
 		return e
 	}
-	d := json.NewDecoder(io.LimitReader(f, 1<<20))
+	// Read a sentinel byte as well: a decoder behind a reader limited to the
+	// ceiling cannot distinguish actual EOF from excess trailing whitespace.
+	b, e := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	if e = errors.Join(e, f.Close()); e != nil {
+		return e
+	}
+	if len(b) > 1<<20 {
+		return errors.New("operator configuration limit")
+	}
+	if !losslessConfigUnicode(b) {
+		return errors.New("invalid configuration Unicode")
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	e = d.Decode(v)
 	if e == nil {
@@ -190,7 +204,52 @@ func readJSON(path string, v any) error {
 			e = errors.New("trailing JSON")
 		}
 	}
-	return errors.Join(e, f.Close())
+	return e
+}
+
+// encoding/json replaces invalid UTF-8 and unpaired UTF-16 escapes. Check
+// those representations before decoding any field that can select authority.
+// This bounded linear scan leaves ordinary JSON syntax to the decoder.
+func losslessConfigUnicode(b []byte) bool {
+	if !utf8.Valid(b) {
+		return false
+	}
+	inString := false
+	for i := 0; i < len(b); i++ {
+		switch b[i] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString {
+				continue
+			}
+			if i+1 >= len(b) || b[i+1] != 'u' {
+				i++ // Includes escaped quotes and literal backslashes.
+				continue
+			}
+			unit, ok := configUnicodeEscape(b[i:])
+			if !ok || unit >= 0xdc00 && unit <= 0xdfff {
+				return false
+			}
+			i += 5
+			if unit >= 0xd800 && unit <= 0xdbff {
+				unit, ok = configUnicodeEscape(b[i+1:])
+				if !ok || unit < 0xdc00 || unit > 0xdfff {
+					return false
+				}
+				i += 6
+			}
+		}
+	}
+	return true
+}
+
+func configUnicodeEscape(b []byte) (uint64, bool) {
+	if len(b) < 6 || b[0] != '\\' || b[1] != 'u' {
+		return 0, false
+	}
+	unit, e := strconv.ParseUint(string(b[2:6]), 16, 16)
+	return unit, e == nil
 }
 
 func restore(ctx context.Context, c config, password string, key []byte, selection, output string) (err error) {
