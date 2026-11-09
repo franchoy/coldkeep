@@ -65,6 +65,21 @@ func TestBindingIntentConflicts(t *testing.T) {
 	}
 	_, e = ReconcileBinding(context.Background(), f.config, o)
 	must(t, e)
+	t.Run("pending-staging-status", func(t *testing.T) {
+		pending := path + ".pending"
+		must(t, os.WriteFile(pending, []byte("{"), 0600))
+		defer func() { must(t, os.Remove(pending)) }()
+		before := catalogFingerprint(t, f.db)
+		for _, config := range []*Config{nil, &f.config} {
+			r, e := BindingStatus(context.Background(), o.Request.InstallationDirectory, config)
+			if !errors.Is(e, ErrBindingReconciliation) || r.Status != "reconciliation-required" {
+				t.Fatal(r, e)
+			}
+		}
+		if before != catalogFingerprint(t, f.db) {
+			t.Fatal("passive status changed catalog")
+		}
+	})
 	t.Run("missing-descriptor-no-reconstruction", func(t *testing.T) {
 		must(t, os.Remove(filepath.Join(o.Request.InstallationDirectory, bindingDescriptorName)))
 		_, e := ReconcileBinding(context.Background(), f.config, o)

@@ -140,7 +140,7 @@ for parent,cases in {
  'TestBindingSourceCapacityAndAvailability':'read-only missing empty-substitution',
  'TestBindingRecoveryAdmissionBoundaries':'future mixed wrong-repository malformed-restored-head restore-before-pins export-no-complete',
  'TestBindingCommittedIntentConflicts':'prior-descriptor generation manifest source',
- 'TestBindingIntentConflicts':'future plan request descriptor prior duplicate trailing oversized missing-descriptor-no-reconstruction',
+ 'TestBindingIntentConflicts':'future plan request descriptor prior duplicate trailing oversized pending-staging-status missing-descriptor-no-reconstruction',
  'TestBindingUnsafeControlOwner':'marker descriptor',
  'TestBindingCrashCuts':'after-intent before-ddl during-ddl during-data before-commit after-commit published:root-marker.v1.json published:installation.v1.json before-intent-removal',
  'TestBindingSubstitutedRoots':'absent empty unrelated copied-marker catalog-unavailable weaker-session',

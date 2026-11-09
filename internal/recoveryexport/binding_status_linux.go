@@ -20,20 +20,19 @@ func BindingStatus(ctx context.Context, directory string, c *Config) (result Bin
 		return result, e
 	}
 	defer func() { err = errors.Join(err, installation.close()) }()
+	for _, name := range []string{bindingIntentName, bindingIntentName + ".pending"} {
+		if _, e = installation.root.Lstat(name); !os.IsNotExist(e) {
+			result.Status = "reconciliation-required"
+			return result, errors.Join(e, ErrBindingReconciliation)
+		}
+	}
 	var d BindingDescriptor
 	if e = readBindingFile(ctx, installation, bindingDescriptorName, BindingDescriptorMaxBytes, &d); e != nil {
-		if _, x := installation.root.Lstat(bindingIntentName); x == nil {
-			result.Status = "reconciliation-required"
-		}
 		return result, e
 	}
 	result.Descriptor = d
 	if !validDescriptor(d) || !db.ValidIdentity("repo", d.Marker.RepositoryID) || !db.ValidIdentity("root", d.Marker.RootID) {
 		return result, ErrBindingMismatch
-	}
-	if _, e = installation.root.Lstat(bindingIntentName); !os.IsNotExist(e) {
-		result.Status = "reconciliation-required"
-		return result, errors.Join(e, ErrBindingReconciliation)
 	}
 	path, e := decodeBindingPath(d.RootPathBase64)
 	if e != nil {
