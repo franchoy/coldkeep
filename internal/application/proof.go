@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/franchoy/coldkeep/v2/internal/engine"
 	"github.com/franchoy/coldkeep/v2/internal/storage"
@@ -26,7 +27,7 @@ type proofEngine interface {
 // NewProofOperations constructs the engine over the exact supplied handles.
 // Engine construction retains the ordinary catalog admission checks.
 func NewProofOperations(database *sql.DB, store *storage.StorageContext, containerDir string) (*ProofOperations, error) {
-	if database == nil || store == nil || store.DB != database || containerDir == "" {
+	if database == nil || store == nil || store.DB != database || strings.TrimSpace(containerDir) == "" || store.ContainerDir != containerDir {
 		return nil, errors.New("proof operations require explicit matching database and storage handles")
 	}
 	eng, err := engine.New(engine.Config{DB: database, StoreContext: store, ContainerDir: containerDir})

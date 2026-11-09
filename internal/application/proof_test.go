@@ -176,11 +176,29 @@ func TestProofOperationsBorrowExactHandlesUntilOwnerCloses(t *testing.T) {
 	if connector.opens.Load() != 1 || connector.closes.Load() != 0 || conn.Stats().OpenConnections != 1 {
 		t.Fatalf("borrowed ownership changed: opens=%d closes=%d stats=%+v", connector.opens.Load(), connector.closes.Load(), conn.Stats())
 	}
-	if _, err := NewProofOperations(conn, &storage.StorageContext{}, store.ContainerDir); err == nil {
-		t.Fatal("mismatched borrowed handles admitted")
-	}
-	if err := conn.Ping(); err != nil {
-		t.Fatalf("constructor failure closed caller handle: %v", err)
+	for _, refused := range []struct {
+		name      string
+		store     *storage.StorageContext
+		directory string
+	}{
+		{name: "missing database", store: &storage.StorageContext{ContainerDir: store.ContainerDir}, directory: store.ContainerDir},
+		{name: "missing storage", directory: store.ContainerDir},
+		{name: "empty directory", store: &storage.StorageContext{DB: conn}},
+		{name: "whitespace default fallback", store: &storage.StorageContext{DB: conn, ContainerDir: " \t "}, directory: " \t "},
+		{name: "different directory", store: store, directory: t.TempDir()},
+		{name: "directory bytes differ", store: store, directory: store.ContainerDir + " "},
+	} {
+		t.Run(refused.name, func(t *testing.T) {
+			if _, err := NewProofOperations(conn, refused.store, refused.directory); err == nil {
+				t.Fatal("inexplicit or mismatched borrowed target admitted")
+			}
+			if err := conn.Ping(); err != nil {
+				t.Fatalf("constructor refusal closed caller handle: %v", err)
+			}
+			if connector.opens.Load() != 1 || connector.closes.Load() != 0 {
+				t.Fatalf("constructor refusal changed ownership: opens=%d closes=%d", connector.opens.Load(), connector.closes.Load())
+			}
+		})
 	}
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)

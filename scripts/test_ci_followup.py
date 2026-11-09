@@ -38,6 +38,18 @@ class FollowupGateTests(unittest.TestCase):
             with self.subTest(runner=old):
                 self.assertIn('complete unfiltered package command', validate(workflow, runner.replace(old, new)))
 
+    def test_wrappers_cannot_bypass_staging_or_required_events(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        wrappers = {scope: (ROOT / 'scripts' / name).read_text() for scope, name in
+                    [('packages', 'run_package_tests.sh'), ('recovery', 'run_recovery_export_tests.sh')]}
+        for scope in wrappers:
+            for mutation in ('exec go test -race -count=1 ./internal/engine\n',
+                             wrappers[scope].replace('exec python3', 'echo python3'),
+                             wrappers[scope].replace('--scope ' + scope, '--scope omitted')):
+                with self.subTest(scope=scope, mutation=mutation):
+                    self.assertTrue(any('wrapper delegates' in error for error in
+                                        validate(workflow, wrappers=dict(wrappers, **{scope: mutation}))))
+
     def test_remote_identity_controls_cannot_be_removed(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         for old, new in [

@@ -23,7 +23,7 @@ def step(text, name):
     return anchor + text.split(anchor, 1)[1].split('      - name:', 1)[0] if anchor in text else ''
 
 
-def validate(workflow, runner=None):
+def validate(workflow, runner=None, wrappers=None):
     errors = []
 
     def need(condition, description):
@@ -61,6 +61,16 @@ def validate(workflow, runner=None):
     need('bash scripts/run_recovery_export_tests.sh "$RUNNER_TEMP/integration-diag/recovery-export"' in workflow, 'dedicated recovery gate retained')
     if runner is None:
         runner = (ROOT / 'scripts/run_staged_package_tests.py').read_text()
+    if wrappers is None:
+        wrappers = {scope: (ROOT / 'scripts' / name).read_text() for scope, name in
+                    [('packages', 'run_package_tests.sh'), ('recovery', 'run_recovery_export_tests.sh')]}
+    for scope, body in wrappers.items():
+        active = '\n'.join(line for line in body.splitlines() if line and not line.startswith('#'))
+        expected = '\n'.join(['set -euo pipefail', 'if [ "$#" -ne 1 ]; then',
+                              "  echo 'requires one new output directory' >&2", '  exit 2', 'fi',
+                              'exec python3 "$(dirname -- "$0")/run_staged_package_tests.py" --scope ' + scope + ' --output "$1"'])
+        need(active == expected, 'complete ' + scope + ' wrapper delegates only to staged runner')
+    need(set(wrappers) == {'packages', 'recovery'}, 'both staged wrapper contracts present')
     tree = ast.parse(runner)
     commands = next((ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
                      and any(isinstance(t, ast.Name) and t.id == 'COMMANDS' for t in node.targets)), {})

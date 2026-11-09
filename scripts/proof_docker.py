@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 import urllib.request
-from proof_process import execute
+from proof_process import execute, ProcessCleanupError
 from proof_browser import port
 from proof_tcp import campaign, endpoint as numeric_endpoint
 
@@ -61,13 +61,15 @@ class Commands:
         try:
             result = execute(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, timeout=timeout)
-        except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+        except (OSError, subprocess.TimeoutExpired, KeyboardInterrupt, ProcessCleanupError) as error:
             record['outcome'] = type(error).__name__
+            record['process_cleanup'] = getattr(error, 'process_cleanup', {'complete': isinstance(error, OSError), 'child_not_started': isinstance(error, OSError)})
             output = (getattr(error, 'stdout', None) or b'') + (getattr(error, 'stderr', None) or b'')
             if self.secret.encode() not in output:
                 (self.out / (name + '.log')).write_bytes(output)
             raise CommandFailure(name, record['outcome']) from None
         record.update(outcome='completed', exit_code=result.returncode)
+        record['process_cleanup'] = getattr(result, 'process_cleanup', {'complete': True})
         # Retain no secret-bearing diagnostics, including unexpected tool output.
         stdout, stderr = result.stdout or b'', result.stderr or b''
         if self.secret.encode() in stdout or self.secret.encode() in stderr:
@@ -131,14 +133,18 @@ def cleanup(commands, work, out, label, project, compose, env, image_tags, facts
     for index, tag in enumerate(image_tags):
         facts['owned_image_residuals'][tag] = attempt('image-residuals-' + str(index), lambda tag=tag:
             commands.capture('docker', 'image', 'ls', '-q', '--filter', 'reference=' + tag, name='image-residuals', timeout=20))
+    facts['local_process_cleanup_complete'] = all(record.get('process_cleanup', {}).get('complete', True)
+                                                 for record in commands.records)
     def remove_work():
+        if not facts['local_process_cleanup_complete']:
+            raise RuntimeError('private directory retained for unresolved child ownership')
         if work.parent != out or work.name != 'working' or work.is_symlink():
             raise RuntimeError('owned private directory identity changed')
         shutil.rmtree(work)
     attempt('private-directory', remove_work)
     facts['private_directory_removed'] = not work.exists()
     facts['cleanup_failures'] = failures
-    facts['cleanup_complete'] = (not failures and facts['private_directory_removed']
+    facts['cleanup_complete'] = (not failures and facts['private_directory_removed'] and facts['local_process_cleanup_complete']
         and all(facts[kind + '_residuals'] == '' for kind, _ in selectors)
         and all(value == '' for value in facts['owned_image_residuals'].values()))
 

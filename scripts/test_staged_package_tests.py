@@ -131,6 +131,10 @@ class StagingLifetimeTests(unittest.TestCase):
                     seen.append("go-child")
                     if mutation == "child-start":
                         raise OSError("cannot start child")
+                    if mutation in ("child-timeout", "child-incomplete"):
+                        error = subprocess.TimeoutExpired(args, 0.1)
+                        error.process_cleanup = {"complete": mutation == "child-timeout", "remaining": []}
+                        raise error
                     kwargs["stdout"].write("".join(json.dumps(item) + "\n" for item in passes).encode())
                     return (17 if mutation == "child-exit" else 0), "", ""
                 return 0, "source-identity", ""
@@ -159,13 +163,17 @@ class StagingLifetimeTests(unittest.TestCase):
                 status = runner.run("packages", output)
             facts = json.loads((output / "execution.json").read_text())
             self.assertEqual(unrelated.read_text(), "preserved")
-            self.assertEqual(owned.exists(), mutation == "cleanup-error")
-            self.assertGreater(seen.index("cleanup"), seen.index("go-child"))
+            self.assertEqual(owned.exists(), mutation in ("cleanup-error", "child-incomplete"))
+            if mutation == "child-incomplete":
+                self.assertNotIn("cleanup", seen)
+                self.assertEqual(facts["cleanup"]["readers_retained_reason"], "child process cleanup incomplete")
+            else:
+                self.assertGreater(seen.index("cleanup"), seen.index("go-child"))
             self.assertEqual(facts["exit"], status)
             return status, facts
 
     def test_child_lifetime_and_all_failures_remain_blocking(self):
-        for mutation in ("none", "unrelated-skip", "child-exit", "child-start", "required-skip", "missing-event",
+        for mutation in ("none", "unrelated-skip", "child-exit", "child-start", "child-timeout", "child-incomplete", "required-skip", "missing-event",
                          "cleanup-error", "inventory-error", "residual"):
             with self.subTest(mutation=mutation):
                 status, facts = self.run_case(mutation)

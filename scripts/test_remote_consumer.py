@@ -1,5 +1,4 @@
 """Exercise the actual checkout-free workflow consumer verifier."""
-import copy
 import json
 import os
 from pathlib import Path
@@ -95,6 +94,68 @@ class RemoteConsumerTests(unittest.TestCase):
             self.assertFalse(result['success'])
             self.assertTrue(result['cleanup_complete'])
             self.assertEqual(list(Path(directory).glob('coldkeep-consumer-*')), [])
+
+    def test_full_orchestration_refuses_bad_results_and_missing_binary(self):
+        for fault in ('none', 'missing-json', 'malformed-json', 'wrong-cli', 'missing-binary', 'post-install-upgrade'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                environment = dict(TRIGGER_SHA=self.sha, CANDIDATE_QUERY=self.sha, EVENT_REF_TYPE='branch',
+                                   PUBLIC_REPOSITORY_URL='https://github.com/franchoy/coldkeep.git', RUNNER_TEMP=directory,
+                                   GITHUB_STEP_SUMMARY=str(Path(directory) / 'summary'))
+                selected = None
+                graph_reads = 0
+
+                def native(args, **kwargs):
+                    nonlocal selected, graph_reads
+                    child, cwd = kwargs['env'], kwargs['cwd']
+                    output = ''
+                    if args[:2] == ['go', 'env']:
+                        facts = {key: child.get(key, '') for key in args[3:]}
+                        facts.update(GOVERSION='go1.26.10', GOENV='', GOMOD=str(cwd / 'go.mod') if (cwd / 'go.mod').exists() else os.devnull)
+                        output = json.dumps(facts)
+                    elif args[:4] == ['go', 'list', '-m', '-json']:
+                        output = json.dumps(self.identity)
+                        if args[-1].endswith(self.sha):
+                            output = '' if fault == 'missing-json' else ('{' if fault == 'malformed-json' else output)
+                    elif args[:3] == ['go', 'mod', 'download']:
+                        source = Path(child['GOMODCACHE']) / 'candidate'
+                        source.mkdir()
+                        (source / 'go.mod').write_text('module ' + self.module + '\n')
+                        selected = dict(self.identity, Dir=str(source), GoMod=str(source / 'go.mod'), Sum='h1:sum', GoModSum='h1:mod')
+                        output = json.dumps(selected)
+                    elif args[:4] == ['go', 'mod', 'edit', '-json']:
+                        output = '{}'
+                    elif args[:3] == ['go', 'mod', 'init']:
+                        (cwd / 'go.mod').write_text('module coldkeep-ci-consumer\n')
+                        (cwd / 'go.sum').write_text('fixture\n')
+                    elif args[:5] == ['go', 'list', '-mod=readonly', '-m', '-json']:
+                        graph_reads += 1
+                        candidate = dict(selected)
+                        if graph_reads == 2 and fault == 'post-install-upgrade':
+                            candidate['Version'] = 'v2.0.1'
+                        output = json.dumps(candidate)
+                    elif args[:2] == ['go', 'install']:
+                        if fault != 'missing-binary':
+                            (Path(child['GOBIN']) / ('coldkeep.exe' if os.name == 'nt' else 'coldkeep')).write_bytes(b'fixture binary')
+                    elif args[:3] == ['go', 'version', '-m']:
+                        output = '\n'.join(['coldkeep: go1.26.10', '\tpath\t' + self.module + '/cmd/coldkeep',
+                                            '\tmod\t' + self.module + '\t' + self.version + '\th1:sum', '\tbuild\tCGO_ENABLED=1'])
+                    elif args[-1] == 'version':
+                        if fault == 'missing-binary':
+                            raise FileNotFoundError('binary absent')
+                        output = 'coldkeep version ' + ('wrong' if fault == 'wrong-cli' else '2.0.0-dev.0')
+                    kwargs['stdout'].write(output.encode())
+                    return mock.Mock(returncode=0)
+
+                with mock.patch.dict(os.environ, environment), mock.patch.object(self.scope['subprocess'], 'run', side_effect=native):
+                    if fault == 'none':
+                        self.scope['main']()
+                    else:
+                        with self.assertRaises((ValueError, FileNotFoundError)):
+                            self.scope['main']()
+                result = json.loads((Path(directory) / 'remote-install-evidence/result.json').read_text())
+                self.assertEqual(result['success'], fault == 'none')
+                self.assertTrue(result['cleanup_complete'])
+                self.assertEqual(list(Path(directory).glob('coldkeep-consumer-*')), [])
 
 
 if __name__ == '__main__':

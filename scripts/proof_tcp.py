@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
-from proof_process import execute as execute_group
+from proof_process import execute as execute_group, ProcessCleanupError
 
 CONTROL_NAMES = {'http_200', 'http_403', 'http_404', 'stalled', 'closed',
                  'missing_helper', 'missing_container', 'missing_result', 'malformed_result'}
@@ -81,14 +81,17 @@ def execute(command, out, name):
     try:
         p = execute_group(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=OUTER_SECONDS)
         record = dict(command=command, exit_code=p.returncode, timeout=False,
-                      stdout=p.stdout.decode(errors='replace'), stderr=p.stderr.decode(errors='replace'))
+                      stdout=p.stdout.decode(errors='replace'), stderr=p.stderr.decode(errors='replace'),
+                      process_cleanup=p.process_cleanup)
     except subprocess.TimeoutExpired as error:
         record = dict(command=command, exit_code=None, timeout=True,
                       stdout=(error.stdout or b'').decode(errors='replace'),
-                      stderr=(error.stderr or b'').decode(errors='replace'))
-    except OSError as error:
+                      stderr=(error.stderr or b'').decode(errors='replace'),
+                      process_cleanup=error.process_cleanup)
+    except (OSError, ProcessCleanupError) as error:
         record = dict(command=command, exit_code=None, timeout=False,
-                      stdout='', stderr=type(error).__name__)
+                      stdout='', stderr=type(error).__name__,
+                      process_cleanup=getattr(error, 'process_cleanup', {'complete': True, 'child_not_started': True}))
     record['outer_budget_seconds'] = OUTER_SECONDS
     record['duration_seconds'] = time.monotonic()-start
     (out/(name+'.json')).write_text(json.dumps(record, indent=2)+'\n')

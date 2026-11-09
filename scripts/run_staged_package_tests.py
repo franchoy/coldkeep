@@ -14,6 +14,7 @@ import sys
 import tempfile
 
 from check_recovery_test_events import check_events
+from proof_process import execute
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,42 +38,19 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
-def terminate_child(child):
-    """Join the Go process group before permitting reader cleanup."""
-    try:
-        os.killpg(child.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    if child.poll() is None:
-        try:
-            child.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            pass
-    # A parent can exit after TERM while an inherited process ignores it.
-    try:
-        os.killpg(child.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    child.wait(timeout=10)
-
-
 def command(args, env, *, timeout=60, stdout=None, stderr=None, check=True):
-    child = subprocess.Popen(args, cwd=ROOT, env=env, start_new_session=True,
-                             stdout=stdout or subprocess.PIPE, stderr=stderr or subprocess.PIPE)
-    try:
-        out, err = child.communicate(timeout=timeout)
-    except BaseException:
-        try:
-            terminate_child(child)
-        finally:
-            for stream in (child.stdout, child.stderr):
-                if stream is not None:
-                    stream.close()
-        raise
+    # Long test/build output streams to files; small identity queries use pipes.
+    # The isolated supervisor joins detached descendants before returning.
+    child = execute(args, cwd=ROOT, env=env, stdout=stdout or subprocess.PIPE,
+                    stderr=stderr or subprocess.PIPE, timeout=timeout)
+    if not child.process_cleanup["complete"]:
+        error = RuntimeError("child process cleanup incomplete")
+        error.process_cleanup = child.process_cleanup
+        raise error
     if check and child.returncode:
         # Never echo a subprocess environment or arbitrary output to an exception.
         raise RuntimeError(f"{Path(args[0]).name} failed with exit {child.returncode}")
-    return child.returncode, (out or b"").decode(), (err or b"").decode()
+    return child.returncode, (child.stdout or b"").decode(), (child.stderr or b"").decode()
 
 
 def prerequisites(env, scope):
@@ -238,6 +216,8 @@ def run(scope, output):
             raise ValueError("staged readers changed during child execution")
     except (Exception, KeyboardInterrupt) as error:
         facts["error"] = f"{type(error).__name__}: {error}"
+        if hasattr(error, "process_cleanup"):
+            facts["process_cleanup"] = error.process_cleanup
         print(facts["error"], file=sys.stderr)
         status = status or (130 if isinstance(error, KeyboardInterrupt) else 1)
     finally:
@@ -252,7 +232,11 @@ def run(scope, output):
             except Exception as error:
                 facts["cleanup"]["inventory_error"] = f"{type(error).__name__}: {error}"
                 status = status or 1
-        if readers is not None:
+        if readers is not None and not facts.get("process_cleanup", {"complete": True})["complete"]:
+            facts["cleanup"]["readers_removed"] = False
+            facts["cleanup"]["readers_retained_reason"] = "child process cleanup incomplete"
+            status = status or 1
+        elif readers is not None:
             try:
                 shutil.rmtree(readers)
                 if readers.exists():

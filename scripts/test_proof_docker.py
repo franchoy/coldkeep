@@ -7,13 +7,14 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from urllib.parse import urlparse
 
 import check_phase2_events as events
 import proof_docker as proof
-from proof_process import execute
+from proof_process import execute, ProcessCleanupError
 
 
 class DockerBoundary:
@@ -137,9 +138,15 @@ class DockerCredentialsAndCleanup(unittest.TestCase):
             if name == cleanup_fault:
                 def cleanup_failed(*args, **kwargs):
                     if cleanup_kind == 'timeout':
-                        raise subprocess.TimeoutExpired(command, 1)
+                        error = subprocess.TimeoutExpired(command, 1)
+                        error.process_cleanup = {'complete': True, 'simulated': True}
+                        raise error
                     if cleanup_kind == 'start':
                         raise OSError('injected cleanup start error')
+                    if cleanup_kind == 'uncertain':
+                        error = ProcessCleanupError('injected unresolved descendant')
+                        error.process_cleanup = {'complete': False, 'failures': ['injected unknown process']}
+                        raise error
                     return subprocess.CompletedProcess(command, 1, b'', b'injected cleanup failure')
                 with mock.patch.object(proof, 'execute', side_effect=cleanup_failed):
                     return original(instance, name, command, **kwargs)
@@ -170,7 +177,7 @@ class DockerCredentialsAndCleanup(unittest.TestCase):
                 else:
                     proof.run_proof(out)
             facts = json.loads((out/'docker.json').read_text())
-            self.assertFalse((out/'working').exists())
+            self.assertEqual((out/'working').exists(), cleanup_kind == 'uncertain')
             self.assertEqual(facts['working_secret_scan']['match_count'], 0)
             self.assertEqual(facts['retained_secret_scan']['match_count'], 0)
             self.assertEqual(boundary.containers, {'unrelated-container': 'other'})
@@ -233,6 +240,12 @@ class DockerCredentialsAndCleanup(unittest.TestCase):
         self.assertIsNone(facts['owned_container_residuals'])
         self.assertFalse(facts['cleanup_complete'])
 
+    def test_unresolved_local_child_retains_working_files_and_fails(self):
+        facts, _ = self.exercise(cleanup_fault='compose-cleanup', cleanup_kind='uncertain')
+        self.assertFalse(facts['local_process_cleanup_complete'])
+        self.assertFalse(facts['private_directory_removed'])
+        self.assertFalse(facts['cleanup_complete'])
+
     def test_output_and_argv_credential_refused_without_logging_value(self):
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)
@@ -247,19 +260,50 @@ class DockerCredentialsAndCleanup(unittest.TestCase):
 
 
 class BoundedProcesses(unittest.TestCase):
-    def test_real_timeout_kills_and_joins_child_group(self):
+    def run_tree(self, *, detached, early_exit):
         with tempfile.TemporaryDirectory() as temporary:
             pidfile = Path(temporary)/'child.pid'
             code = ('import subprocess,time,pathlib; '
-                    'p=subprocess.Popen(["sleep","60"]); '
-                    'pathlib.Path(__import__("sys").argv[1]).write_text(str(p.pid)); time.sleep(60)')
-            with self.assertRaises(subprocess.TimeoutExpired):
-                execute([sys.executable, '-c', code, str(pidfile)], timeout=.3,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            pid = int(pidfile.read_text())
-            stat = Path('/proc')/str(pid)/'stat'
-            # A dead orphan can briefly remain a zombie until init reaps it.
-            self.assertTrue(not stat.exists() or stat.read_text().split()[2] == 'Z')
+                    'p=subprocess.Popen(["sleep","60"],start_new_session=' + repr(detached) + '); '
+                    'pathlib.Path(__import__("sys").argv[1]).write_text(str(p.pid)); '
+                    + ('raise SystemExit(7)' if early_exit else 'time.sleep(60)'))
+            unrelated = subprocess.Popen(['sleep', '60'], start_new_session=True)
+            started = time.monotonic()
+            try:
+                if early_exit:
+                    result = execute([sys.executable, '-c', code, str(pidfile)], timeout=5,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    self.assertEqual(result.returncode, 7)
+                    cleanup = result.process_cleanup
+                else:
+                    with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                        execute([sys.executable, '-c', code, str(pidfile)], timeout=1,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    cleanup = caught.exception.process_cleanup
+                self.assertLess(time.monotonic() - started, 6)
+                self.assertTrue(cleanup['complete'], cleanup)
+                self.assertGreaterEqual(cleanup['terminated_count'], 1)
+                self.assertIsNone(unrelated.poll(), 'unrelated process was signalled')
+                pid = int(pidfile.read_text())
+                self.assertFalse((Path('/proc')/str(pid)).exists(), 'owned child was not reaped')
+            finally:
+                unrelated.kill()
+                unrelated.wait(timeout=2)
+
+    def test_real_timeout_kills_and_joins_child_group(self):
+        self.run_tree(detached=False, early_exit=False)
+
+    def test_real_timeout_reaps_detached_session_holding_pipes(self):
+        self.run_tree(detached=True, early_exit=False)
+
+    def test_early_nonzero_parent_exit_reaps_detached_pipe_holder(self):
+        self.run_tree(detached=True, early_exit=True)
+
+    def test_missing_supervisor_report_never_qualifies(self):
+        code = 'import os,signal; os.kill(os.getppid(),signal.SIGKILL)'
+        with self.assertRaises(ProcessCleanupError) as caught:
+            execute([sys.executable, '-c', code], timeout=3, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertFalse(caught.exception.process_cleanup['complete'])
 
 
 if __name__ == '__main__':
