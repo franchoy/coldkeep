@@ -18,14 +18,18 @@ PRODUCT_GATES: INCOMPLETE
 <!-- coldkeep-current-state:end -->
 
 Use the current charter in `docs/release/v2.0/README.md` and the explicitly
-authorized owning BUILD. The bounded R1 correction was independently accepted
-on 9 November 2026; preserve `docs/release/v2.0/phase3b-followup-result.md` and
-its submitted predecessor. The acceptance record and prepared next workflow
-are documented in `docs/release/v2.0/development-visibility.md`. Explicit user
-approval is required before publishing the one development branch and draft PR
-and must be recorded separately. It was not supplied when this proposal was
-prepared. This document supplies no approval; historical local-only run records
-remain unchanged.
+authorized owning BUILD. The current unit is the bounded hosted-CI follow-up
+(M1 installation, E1 cancellation, E2 composition, C1 fixtures and Q1 proof
+credentials/cleanup). On 9 November 2026 the owner adopted its launch prompt,
+including a guarded fast-forward update of existing `release/v2.0` after local
+qualification and independent outgoing review. Initial publication is accepted
+at `ac9382c9e620b17b43800c2a5cf0065e9e75446d`; existing PR #129 stays draft.
+See `docs/release/v2.0/ci-followup-result.md` for measured checkpoint evidence
+and `docs/release/v2.0/next-slice.md` for the remaining handoff. Hosted results
+at the correction's final public head are PENDING and require separate actual
+push/PR observation; local qualification is not hosted success.
+The accepted R1 report and all earlier local-only records remain historical,
+unchanged evidence. This document records the adopted scope, not new authority.
 Preserve accepted reports, predecessor worktrees, frozen v1 and all pins.
 Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
 Phase 3C stays OUTSTANDING. Ordinary schema18/19 writers and IMPORT_READY
@@ -44,10 +48,15 @@ deployment or live installation switch is granted by this workflow.
 
 ## Validation and handoffs
 
-Use the current owning unit's validation profile in `docs/release/v2.0/README.md`
-and `PRE_RELEASE_CHECKLIST.md`. The docs-only development-visibility profile is
-defined in `docs/release/v2.0/development-visibility.md`. Run focused checks before
-applicable broader gates. Missing hosted or platform evidence is not a pass.
+Use the current owning unit's validation profile in `docs/release/v2.0/README.md`,
+`docs/release/v2.0/ci-followup-result.md` and `PRE_RELEASE_CHECKLIST.md`.
+The CI follow-up requires both complete codec package routes with staged real
+fixtures, the dedicated recovery requirements, integrated native/browser/Docker
+proofs, source/identity negative controls and applicable static checks. The measured
+source checkpoints and fresh/reused evidence boundaries are recorded in the
+follow-up result. Missing, skipped or pending required evidence is not a
+pass. Historical publication's docs-only profile must not substitute for this
+implementation qualification.
 The baseline commands:
 
 - `python3 scripts/validate_release_state.py --state auto --json`

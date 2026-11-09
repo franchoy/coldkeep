@@ -2,9 +2,11 @@
 
 Active development: [v2.0 action 2.04](docs/release/v2.0/README.md), selected by
 [docs/release/current.json](docs/release/current.json). The
-[development-visibility contract](docs/release/v2.0/development-visibility.md)
-explains the proposed public development branch, draft PR, preserved history
-and known incomplete gates. Use the owning unit's bounded validation profile.
+[development contract](docs/release/v2.0/development-visibility.md)
+records the public `release/v2.0` branch, existing draft PR #129 and authorized
+bounded CI follow-up. Its [current result](docs/release/v2.0/ci-followup-result.md)
+separates measured local qualification from PENDING corrected-head hosted checks.
+Use that owning unit's bounded validation profile; product gates remain incomplete.
 Full release/publication procedures below remain applicable to their declared
 release scopes; frozen v1 certification is not repeated to begin v2.
 Go/dependency pins and correctness gates remain unchanged.

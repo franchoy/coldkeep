@@ -197,5 +197,5 @@ cleanup, including failure/timeout uncertainty; it makes no guarantee after
 SIGKILL, host loss or unreachable Docker.
 
 Correction qualification and hosted observations are recorded separately in the
-new follow-up result. Parent 2.04 remains ACTIVE, implementation ACTIVE, product
+[new follow-up result](ci-followup-result.md). Parent 2.04 remains ACTIVE, implementation ACTIVE, product
 gates INCOMPLETE and Phase 3C OUTSTANDING.

@@ -4,12 +4,16 @@ Active v2 authority is [action 2.04](docs/release/v2.0/README.md): implementatio
 ACTIVE, product gates INCOMPLETE and Phase 3C OUTSTANDING. Local action and
 follow-up results record their own bounded fresh/reused evidence; preserve them.
 
-The docs-only [development-visibility profile](docs/release/v2.0/development-visibility.md)
-permits preparation of a draft review with known incomplete gates. R1 was
-independently accepted on 9 November 2026; explicit user approval must be
-recorded separately before publishing the prepared branch and draft PR.
-Opening that draft does not establish pre-merge
-CI parity or release readiness. Existing required checks and protections remain.
+The current [CI follow-up result](docs/release/v2.0/ci-followup-result.md)
+records the authorized bounded implementation and its measured local evidence.
+Initial publication is accepted; the owner adopted a guarded update of existing
+`release/v2.0` and draft PR #129 after local qualification and independent review.
+The [development contract](docs/release/v2.0/development-visibility.md) records
+that scope. Corrected-head hosted checks remain PENDING until observed on both
+push and PR events at the actual final public head. The historical docs-only
+publication profile does not substitute for this implementation qualification.
+Neither opening the draft nor local passes establish pre-merge CI parity or
+release readiness; existing required checks and protections remain.
 
 For implementation work, run the owning unit's applicable correctness gates.
 For a ready-for-merge correctness-sensitive PR or a release tag, use the

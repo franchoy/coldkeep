@@ -1,51 +1,54 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **development visibility**, governed by the
-[development-visibility contract](development-visibility.md). Explicit user
-publication approval was not supplied when this proposal was prepared; any
-actual approval must be recorded separately before publication.
-Independent review accepted the bounded R1 correction on **9 November 2026**.
-The prepared scope
-is one `release/v2.0` branch and one draft PR to `main`, preserving phase history.
-This charter does not grant that approval or authorize further implementation.
+Current workflow: **bounded hosted-CI follow-up**, governed by the adopted
+`coldkeep_v2_ci_followup_codex_2026-11-09.md` BUILD and the
+[development contract](development-visibility.md). The owner explicitly adopted
+its implementation and guarded fast-forward scope on 9 November 2026.
+Initial publication is accepted at
+`ac9382c9e620b17b43800c2a5cf0065e9e75446d`; continue the existing `release/v2.0`
+branch and draft PR #129 after required local qualification and independent
+outgoing review. No new PR or renewed initial-publication approval is needed.
 
-The last implementation unit, **Phase 3B follow-up R1**, is locally COMPLETE
-under `coldkeep_phase3b_followup_codex_2026-11-09.md` and the 9 November 2026 user request.
-[Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
-product gates INCOMPLETE. Phase 3A and A1–A2 are accepted; their reports remain
-immutable. Submitted starting HEAD `cd5f9f9ac96b963f46fe6c24b7e38e0c2b525e69`,
-tree `9848d2a14478b13dce15212fb8602238331282c4`.
+Current result: [CI follow-up](ci-followup-result.md).
+Current handoff: [remaining qualification and deferred Phase 3C](next-slice.md).
+The measured code checkpoint is `4282b4360056ad91aa7ab79d46b1803f6c946e5d`,
+tree `28c55e5d6e773e077d75ec19659674e101cc0c33`.
+M1 remote consumption, E1 cancellation, E2 application composition, C1 fixture
+staging and Q1 credential/cleanup corrections are implemented. Fresh integrated
+native/browser/packaging/PostgreSQL proof passed. Plain complete packages passed
+with all 566 required tests plus three package passes; their 139 unrelated test
+skips and three packages without test files remain explicitly recorded.
+Both codec routes, dedicated recovery and the unchanged current/D19 23-case
+oracles pass locally. The recovery timeout-only follow-up at
+`4efa9e38a10d026f809a70a47f93dc882b2ae47f` and its final qualification are
+recorded separately in the result. Hosted corrected-head checks are PENDING
+and require actual push and PR observations after publication.
+These local results do not certify unrun gates or a product release.
 
-Current result: [Phase 3B follow-up R1](phase3b-followup-result.md).
-Preserved submission: [Phase 3B qualification](phase3b-result.md).
-Scope and limits: [physical binding contract](physical-binding.md).
-R1 lossless operator root selection is corrected, qualified locally and independently
-accepted at HEAD `815f812a5027dad4f03c88ae30b97c77ad01b8e0`, tree
-`6dc1296efe72083014d34febe1e9f57944489419`. The acceptance record is in the
-development-visibility contract; it adds no runtime rerun or publication authority.
-The submitted report cannot discharge R1; only its owning qualified follow-up can. Ordinary schema18/19 writers remain refused;
-every IMPORT_READY target refuses binding/source maintenance and activation.
-Phase 3C remains OUTSTANDING.
+[Current authority](../current.json) remains **2.04 ACTIVE**, implementation
+ACTIVE and product gates INCOMPLETE. Phase 3C stays OUTSTANDING and needs its
+own authorized BUILD. Ordinary schema18/19 writers remain refused; every
+IMPORT_READY target refuses binding/source maintenance and activation.
 
-The submitted decoder and actual staged-operator counterexamples reproduced.
-Fresh correction qualification passed 742 recovery race events, all 566 mandatory
-requirements (491 retained + 75 new), the unchanged 23-case oracle and 607 Python
-tests. Authority/runner/CI mutations, build, vet, pinned lint, source/dependency
-guards, validation matrix, current/historical authority and governance passed.
-The first oracle run was interrupted by owned-fixture cleanup; its failure is
-retained and the unchanged fresh rerun passed. Broader Phase2/browser/storage
-results are explicitly reused with original source/log bindings and 598 unchanged
-boundary files/modes. Inherited engine failures and four nonqualifying skips
-remain unqualified. Completion clears only R1, never 3C, 2.04 or product gates.
+The preceding **Phase 3B follow-up R1** is COMPLETE and independently accepted
+on 9 November 2026. Its [accepted result](phase3b-followup-result.md),
+[preserved submission](phase3b-result.md), [physical binding contract](physical-binding.md)
+and earlier Phase 3A/A1–A2 records remain unchanged. R1 acceptance is bound to
+HEAD `815f812a5027dad4f03c88ae30b97c77ad01b8e0`, tree
+`6dc1296efe72083014d34febe1e9f57944489419`; its submitted predecessor was
+`cd5f9f9ac96b963f46fe6c24b7e38e0c2b525e69`, tree
+`9848d2a14478b13dce15212fb8602238331282c4`.
+The R1 report's original failures, skips and reused evidence remain historical
+facts; the current follow-up records fresh corrections separately.
 
-Requested settings GPT-6 Astra / Extra High; actual model/effort unknown.
-Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
+Requested settings: GPT-6 Astra / Extra High; actual settings are recorded only
+where observable. Version 2.0.0-dev.0, `/v2`, latest stable 1.13.19 and the
+manual-postgresql-docker profile remain unchanged.
 LOCAL_ACTION_2_04_PHASE3A_AUTHORITY_ONLY is structural authority only.
-The R1 BUILD authorized no remote action; its report remains immutable. The
-prepared development-publication scope requires separate explicit user approval.
-No merge, tag, release, protection change, deployment or live installation switch
-is granted. `separate-publication-authorization` remains an outstanding validator
-obligation; documentation and a development push do not certify a product release.
+The adopted branch-update authorization grants no merge, ready-for-review
+transition, tag, release, protection/default-branch change, deployment or live
+installation switch. `separate-publication-authorization` remains a validator
+obligation; a development push does not certify product-release gates.
 
 ## Selected first stable profile
 

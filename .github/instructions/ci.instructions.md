@@ -14,12 +14,14 @@ PRODUCT_GATES: INCOMPLETE
 <!-- coldkeep-current-state:end -->
 
 Use `docs/release/v2.0/README.md` and the current explicitly authorized BUILD
-for execution scope. The prepared development-visibility scope is documented in
-`docs/release/v2.0/development-visibility.md`; documentation alone grants no
-remote authority. Publishing one `release/v2.0` branch and one draft PR to `main`
-requires explicit user approval recorded separately. That approval was not
-supplied when this proposal was prepared. The R1 correction was independently
-accepted on 9 November 2026; see that contract.
+for execution scope. The owner adopted the bounded M1/E1/E2/C1/Q1 CI follow-up
+on 9 November 2026, including a guarded fast-forward of existing `release/v2.0`
+after local qualification and independent review. PR #129 remains draft.
+`docs/release/v2.0/ci-followup-result.md` is the shared current evidence record;
+corrected-head hosted checks remain PENDING until both push and PR observations
+bind the actual final public head. `development-visibility.md` records the adopted
+scope; documentation alone grants no additional authority. Accepted R1 and
+prior publication records retain their historical source/evidence boundaries.
 Accepted 2.01, bounded 2.02 and local-profile 2.03 remain COMPLETE. Parent 2.04
 and implementation stay ACTIVE; product gates INCOMPLETE; Phase 3C OUTSTANDING.
 Preserve phase results, predecessor worktrees, frozen v1 and every dependency

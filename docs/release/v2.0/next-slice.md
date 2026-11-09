@@ -16,17 +16,33 @@ requirements. Independent source/patch/raw-evidence review accepted the bounded
 correction; it did not rerun the runtime suite. Only the owning follow-up record
 discharges R1 structurally.
 
-The prepared next workflow is [development visibility](development-visibility.md).
-Preserve the accepted commit ancestry, prepare `release/v2.0` with the reviewed
-docs-only update, and prepare one draft PR to `main`. R1 acceptance is recorded
-in that contract. Explicit user approval of this exact publication scope was not
-supplied when the proposal was prepared; record any later approval separately
-before publication. Neither this handoff nor the R1 report supplies that approval.
-After approval, the owning BUILD may publish the prepared branch and draft PR
-and observe hosted checks in the same run. No extra closure-only run is required.
-Recommended settings: GPT-6 Astra / High. Substantive CI/Codacy or inherited-engine
-corrections use GPT-6 Astra / Extra High in a separately bounded unit, with
-attributable tests and no weakened gates.
+The current workflow is the authorized [bounded CI follow-up](ci-followup-result.md).
+Initial development publication at `ac9382c9e620b17b43800c2a5cf0065e9e75446d`
+is accepted; continue existing `release/v2.0` and draft PR #129. The owner adopted
+the new bounded launch prompt, including the guarded fast-forward after local
+qualification and independent outgoing review, on 9 November 2026.
+The [development contract](development-visibility.md) records that scope.
+
+Implemented code checkpoint: `4282b4360056ad91aa7ab79d46b1803f6c946e5d`,
+tree `28c55e5d6e773e077d75ec19659674e101cc0c33`.
+Fresh integrated native/browser/packaging/PostgreSQL proof and plain complete
+package qualification passed. Plain retained all 566 mandatory test identities
+and three package passes; unrelated skips remain explicitly unqualified.
+Both codec routes, dedicated recovery and both fixed 23-case reader oracles
+pass locally. The measured recovery timeout-only follow-up at
+`4efa9e38a10d026f809a70a47f93dc882b2ae47f` is qualified separately; its result
+and the exact source boundaries are recorded in the current result.
+Before the guarded update, complete final outgoing review, preservation and
+patch reconstruction. Recheck the expected public ref, main and PR state at
+publication; do not overwrite remote drift.
+
+Corrected-head hosted status is PENDING. Observe both push and PR workflows,
+all required/downstream jobs, Linux/macOS/Windows exact-source installation,
+CodeQL analysis and findings, and latest Codacy at the actual final public head.
+Final external evidence must bind those results without treating local passes
+as hosted success. Preserve failures and distinguish skipped/pending/unknown.
+Bounded hosted follow-up corrections stay within M1/E1/E2/C1/Q1; unrelated
+product work requires its own scope. Keep PR #129 draft and auto-merge disabled.
 
 Phase 3C remains OUTSTANDING and needs its own authorized BUILD. Its scope is
 generation-owned typed membership, exact entry-name encoding, policy provenance
@@ -38,8 +54,9 @@ Ordinary schema18/19 writers remain refused. Every IMPORT_READY target continues
 to refuse binding/source maintenance and activation, including v3; malformed or
 unknown receipts do not permit mutation. Ready-target activation and ordinary
 writer admission require their later adoption/ownership qualification. No live
-switch or capture enablement follows from this unit. Remote publication requires
-the separate approval described above.
+switch or capture enablement follows from this unit. The adopted authorization
+covers only the guarded development-branch update and hosted observation
+described above.
 
 Carry the session-bound unique-mount profile, explicit reconnect after changed
 mount/boot/namespace, strict control budgets, exact native-byte paths and joined
@@ -48,6 +65,7 @@ independence, real reboot/unmount and cross-filesystem transfer remain unqualifi
 
 Recommended settings: GPT-6 Astra / Extra High for the whole next authorized unit;
 record observable settings separately and use unknown when unavailable.
-Carry inherited unqualified TestEngineBatchCancellationStopsNewDispatchWithPartialResult
-and TestEngineDependencyDirection, plus the four disclosed nonqualifying skips;
-do not report the whole engine package green or weaken architecture guards.
+The two previously failing engine checks have fresh correction evidence in the
+CI follow-up result; the architecture guard remains unchanged. Carry the exact
+remaining opt-in/platform/helper skips from each current command rather than
+reusing the predecessor's skip count or claiming every engine/backend case ran.

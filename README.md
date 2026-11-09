@@ -61,10 +61,16 @@ the bounded local evidence below.
 | 2.04 | Active: identity adoption and bounded physical binding qualified locally; Phase 3B R1 accepted on 9 November 2026; Phase 3C outstanding. |
 | v2.0 product | Incomplete; later product, support and release gates remain open. |
 
-The [development-visibility contract](docs/release/v2.0/development-visibility.md)
-describes the preserved commit history, proposed draft PR and approval boundary.
-It also records the inherited engine failures and platform limits. Local phase
-completion does not establish a release-ready product or a green hosted suite.
+The preserved development history is public on `release/v2.0` and
+[draft PR #129](https://github.com/franchoy/coldkeep/pull/129). The authorized
+bounded CI correction is described in the
+[development contract](docs/release/v2.0/development-visibility.md) and
+[measured follow-up result](docs/release/v2.0/ci-followup-result.md).
+Both complete codec package routes, dedicated recovery, fixed product oracle
+and integrated proof are locally qualified in that record. Hosted correction
+checks are PENDING until observed at the actual pushed head.
+Local phase completion does not establish a release-ready product or a green
+hosted suite; Phase 3C and product gates remain incomplete.
 The embedded daemon remains an internal proof and needs the
 [prepared-asset build](docs/release/v2.0/phase2-build.md).
 
