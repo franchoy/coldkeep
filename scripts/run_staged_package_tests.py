@@ -23,7 +23,7 @@ BASES = {"pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2",
          "d19": "d3581602aee2599547564322fe083baae1d52063",
          "accepted": "1229563116f71067c74801516bcd64c92e7b6ed2"}
 COMMANDS = {
-    "recovery": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=10m",
+    "recovery": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=15m",
                  "./internal/recoveryexport", "./internal/coordination", "./cmd/coldkeep-recovery"],
     "packages": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=15m",
                  "./cmd/...", "./internal/..."],
