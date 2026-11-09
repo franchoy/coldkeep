@@ -269,6 +269,39 @@ class DockerCredentialsAndCleanup(unittest.TestCase):
                     commands.run('output', ['tool'])
             self.assertEqual(proof.scan_files(out, secret)['match_count'], 0)
 
+    def test_combined_credential_output_is_refused_before_logging(self):
+        for returncode in (0, 7):
+            for capture in (False, True):
+                with self.subTest(returncode=returncode, capture=capture):
+                    with tempfile.TemporaryDirectory() as temporary:
+                        out = Path(temporary)
+                        secret = proof.secrets.token_hex(32)
+                        commands = proof.Commands(out, {}, secret)
+                        split = len(secret) // 2
+                        result = subprocess.CompletedProcess(
+                            ['tool'], returncode, secret[:split].encode(), secret[split:].encode())
+                        with mock.patch.object(proof, 'execute', return_value=result):
+                            with self.assertRaisesRegex(proof.CommandFailure, 'credential in child output refused'):
+                                commands.call('combined-output', ['tool'], capture=capture)
+                        self.assertFalse((out/'combined-output.log').exists())
+                        self.assertEqual(proof.scan_files(out, secret)['match_count'], 0)
+                        self.assertEqual(commands.records[-1]['outcome'], 'credential output refused')
+
+    def test_combined_credential_timeout_output_is_not_logged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            secret = proof.secrets.token_hex(32)
+            commands = proof.Commands(out, {}, secret)
+            split = len(secret) // 2
+            error = subprocess.TimeoutExpired(
+                ['tool'], 1, output=secret[:split].encode(), stderr=secret[split:].encode())
+            error.process_cleanup = {'complete': True, 'simulated': True}
+            with mock.patch.object(proof, 'execute', side_effect=error):
+                with self.assertRaisesRegex(proof.CommandFailure, 'TimeoutExpired'):
+                    commands.run('combined-timeout', ['tool'])
+            self.assertFalse((out/'combined-timeout.log').exists())
+            self.assertEqual(proof.scan_files(out, secret)['match_count'], 0)
+
 
 class BoundedProcesses(unittest.TestCase):
     def run_tree(self, *, detached, early_exit):

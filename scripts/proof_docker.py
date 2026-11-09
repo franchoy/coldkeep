@@ -72,11 +72,12 @@ class Commands:
         record['process_cleanup'] = getattr(result, 'process_cleanup', {'complete': True})
         # Retain no secret-bearing diagnostics, including unexpected tool output.
         stdout, stderr = result.stdout or b'', result.stderr or b''
-        if self.secret.encode() in stdout or self.secret.encode() in stderr:
+        output = stdout + stderr
+        if self.secret.encode() in output:
             record['outcome'] = 'credential output refused'
             raise CommandFailure(name, 'credential in child output refused')
         if not capture or result.returncode:
-            (self.out / (name + '.log')).write_bytes(stdout + stderr)
+            (self.out / (name + '.log')).write_bytes(output)
         if check and result.returncode:
             raise CommandFailure(name, 'nonzero exit ' + str(result.returncode))
         return stdout.decode().strip() if capture else result.returncode
