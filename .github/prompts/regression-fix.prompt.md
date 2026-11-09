@@ -13,10 +13,10 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 3A / action 2.04 is authorized in BUILD mode by
-`coldkeep_phase3a_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
-Scope: explicit PostgreSQL identity adoption, writer admission and recovery
-continuity. Accepted 2.01, local-profile 2.03 and corrected 2.02 remain COMPLETE.
+Active v2.0 Phase 3A follow-up A1–A2 / action 2.04 is authorized in BUILD mode by
+`coldkeep_phase3a_followup_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
+Scope: exact relation-bound identity constraint admission and metadata bounds
+before deparsing/transfer. Preserve the submitted Phase 3A report. Accepted 2.01, local-profile 2.03 and corrected 2.02 remain COMPLETE.
 Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
 No Phase 3B/3C or real-installation switch is authorized. SQLite adoption refuses.
 All dependency pins and checksums remain fixed, including Go 1.26.10. Local commits and owned disposable
@@ -78,7 +78,7 @@ Identify and state:
   plan remains historical evidence.
 - v1.13.15 remains published stable and immutable; planned v1 feature and
   architecture work remains closed and frozen.
-- Keep v2 implementation within the adopted Phase 3A identity/recovery unit; SQLite-first defaults
+- Keep v2 implementation within the Phase 3A A1–A2 constraint follow-up; SQLite-first defaults
   require their later owning phase.
 - Do not change public APIs, schemas, storage formats, or repository formats.
 - New v1 product/runtime work requires separate explicit authority; keep any

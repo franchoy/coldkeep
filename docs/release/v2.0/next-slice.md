@@ -1,10 +1,12 @@
-# Phase 3A handoff
+# Phase 3A follow-up handoff
 
-Phase 3A unit COMPLETE within the qualified Linux/PostgreSQL16 profile. See
-[result and exact evidence boundaries](phase3a-result.md). Parent action 2.04 ACTIVE;
+Phase 3A follow-up A1–A2 ACTIVE under
+`coldkeep_phase3a_followup_codex_2026-11-08.md`. The submitted
+[report](phase3a-result.md) is preserved; it cannot discharge this follow-up.
+See the [follow-up result](phase3a-followup-result.md). Parent action 2.04 ACTIVE;
 implementation ACTIVE; product gates INCOMPLETE. No later unit is authorized here.
 
-After Phase 3A is qualified and accepted, Phase 3B owns physical root markers,
+After the Phase 3A follow-up is qualified and independently accepted, Phase 3B owns physical root markers,
 expected-volume evidence/confidence, source/root relocation and revisioned rebind,
 and missing/substituted empty-mount refusal. Ordinary schema18 mutation remains
 fenced until that physical admission is qualified.

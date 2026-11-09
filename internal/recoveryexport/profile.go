@@ -1,11 +1,7 @@
 package recoveryexport
 
 import (
-	"context"
-	"database/sql"
-	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/franchoy/coldkeep/v2/internal/db"
 )
@@ -126,31 +122,4 @@ func validateIdentity(i *Inventory) error {
 		}
 	}
 	return nil
-}
-
-// Identity constraints must be validated and non-deferrable. Exact definitions
-// are checked against the version-specific PostgreSQL profile below.
-func validateIdentityConstraints(ctx context.Context, tx *sql.Tx) error {
-	rows, e := tx.QueryContext(ctx, `SELECT c.conname,c.contype::text,c.convalidated,c.condeferrable,pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname='public' AND t.relname IN ('repository_identity','storage_root_identity','device_identity','source_identity','adoption_operation','legacy_snapshot_origin') ORDER BY c.conname LIMIT 101`)
-	if e != nil {
-		return ErrUnsupported
-	}
-	count := 0
-	for rows.Next() {
-		var name, kind, def string
-		var valid, deferred bool
-		if e = rows.Scan(&name, &kind, &valid, &deferred, &def); e != nil {
-			break
-		}
-		count++
-		if !valid || deferred || identityConstraints[name] != strings.ReplaceAll(def, "REFERENCES public.", "REFERENCES ") {
-			e = fmt.Errorf("%w: identity constraint %s", ErrUnsupported, name)
-			break
-		}
-	}
-	e = joinRows(e, rows)
-	if e == nil && count != len(identityConstraints) {
-		return fmt.Errorf("%w: identity constraint set", ErrUnsupported)
-	}
-	return e
 }

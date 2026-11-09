@@ -89,3 +89,11 @@ else:
 
 class RetainedRecoveryRunnerTests(RecoveryRunnerTests):
     required_event = "TestRecoveryPostLiveGC"
+
+
+class ConstraintFollowupRunnerTests(RecoveryRunnerTests):
+    required_event = "TestPhase3AFollowupA1IdentityConstraintSet/foreign-key-relocated"
+
+
+class MetadataFollowupRunnerTests(RecoveryRunnerTests):
+    required_event = "TestPhase3AFollowupA2ConstraintMetadataBound/compressed-small"

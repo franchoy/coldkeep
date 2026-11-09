@@ -491,6 +491,7 @@ class Action204Phase3AAuthorityTests(V2AuthorityFixture):
         result = release.validate(self.root, "auto")
         self.assertEqual(result.violations, [])
         self.assertNotIn("2.04-phase3a-qualification", result.outstanding_obligations)
+        self.assertIn("2.04-phase3a-followup-a1-a2", result.outstanding_obligations)
         self.assertIn("2.04-phase3b", result.outstanding_obligations)
         self.assertIn("2.04-phase3c", result.outstanding_obligations)
         self.change(phase_status="COMPLETE")
@@ -510,4 +511,38 @@ class Action204Phase3AAuthorityTests(V2AuthorityFixture):
     def test_predecessor_and_publication_fences(self):
         self.assertTrue(release.validate(self.root, "released").violations)
         (self.root / "docs/release/v2.0/phase2-followup-result.md").unlink()
+        self.assert_rejected()
+
+    def test_followup_clears_only_its_qualified_obligation(self):
+        shutil.copy2(ROOT / "docs/release/v2.0/phase3a-result.md",
+                     self.root / "docs/release/v2.0/phase3a-result.md")
+        followup = self.root / "docs/release/v2.0/phase3a-followup-result.md"
+        body = ("Phase 3A follow-up A1–A2: COMPLETE, awaiting independent review\n"
+                "Parent action 2.04: ACTIVE\nImplementation: ACTIVE\nProduct gates: INCOMPLETE\n"
+                "coldkeep_phase3a_followup_codex_2026-11-08.md\n"
+                "A1 exact relation-bound constraint set: PASS\n"
+                "A2 bounded metadata before deparsing/transfer: PASS\n"
+                "Fresh recovery qualification: PASS\n")
+        before = release.validate(self.root, "auto")
+        self.assertEqual(before.violations, [])
+        self.assertIn("2.04-phase3a-followup-a1-a2", before.outstanding_obligations)
+        for text in (body.replace("COMPLETE, awaiting", "ACTIVE, awaiting"),
+                     body.replace("A2 bounded metadata before deparsing/transfer: PASS", ""),
+                     body.replace("Fresh recovery qualification: PASS", ""), "x" * 65537):
+            followup.write_text(text)
+            self.assertIn("2.04-phase3a-followup-a1-a2",
+                          release.validate(self.root, "auto").outstanding_obligations)
+        followup.write_text(body)
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertEqual(result.outstanding_obligations,
+                         [x for x in before.outstanding_obligations if x != "2.04-phase3a-followup-a1-a2"])
+        self.assertIn("2.04-phase3b", result.outstanding_obligations)
+        self.assertIn("2.04-phase3c", result.outstanding_obligations)
+        self.assertTrue(release.validate(self.root, "released").violations)
+        self.change(phase_status="COMPLETE")
+        self.assert_rejected()
+        self.change(phase_status="ACTIVE", product_gates="COMPLETE")
+        self.assert_rejected()
+        self.change(product_gates="INCOMPLETE", phase="2.05")
         self.assert_rejected()

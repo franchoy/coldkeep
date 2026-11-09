@@ -115,6 +115,21 @@ for parent,cases in {
 }.items():
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in cases.split())
+# A1/A2 follow-up: retain the complete submitted set above and require each
+# semantic case below in the same blocking runner and race-enabled Go child.
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update({
+ 'TestPhase3AFollowupCanonicalRecovery','TestPhase3AFollowupMetadataEnvelope',
+ 'TestPhase3AFollowupA2ExportRefusal','TestPhase3AFollowupRestoreBeforePins',
+})
+for parent,cases in {
+ 'TestPhase3AFollowupA1IdentityConstraintSet':'valid foreign-key-relocated duplicate-check-padding',
+ 'TestPhase3AFollowupA1AdmissionBoundaries':'export-no-complete import-no-ready',
+ 'TestPhase3AFollowupA2ConstraintMetadataBound':'valid oversized-existing-name oversized-unexpected-name compressed-small',
+ 'TestPhase3AFollowupConstraintRefusals':'missing extra wrong-kind wrong-definition not-validated deferrable no-inherit many-records',
+ 'TestPhase3AFollowupMetadataCleanup':'preflight definition',
+}.items():
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in cases.split())
 passes={(e['Package'],e.get('Test','')) for e in records if e.get('Action')=='pass'}
 failures=[e for e in records if e.get('Action') in ('fail','skip')]
 missing=[p+'/'+t for p,tests in required.items() for t in tests|{''} if (p,t) not in passes]

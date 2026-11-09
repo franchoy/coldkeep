@@ -1,33 +1,32 @@
 # Coldkeep v2.0 active charter
 
-Current unit: **Phase 3A BUILD**, authorized by
-`coldkeep_phase3a_codex_2026-11-08.md` and the 8 November 2026 user instruction.
+Current unit: **Phase 3A follow-up A1–A2 ACTIVE**, authorized in BUILD mode by
+`coldkeep_phase3a_followup_codex_2026-11-08.md` and the 9 November 2026 user request.
 [Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
-product gates INCOMPLETE. Phase 3A unit is COMPLETE within its bounded profile;
-[qualification and inherited limitations](phase3a-result.md) are recorded.
+product gates INCOMPLETE. The [submitted Phase 3A report](phase3a-result.md)
+remains immutable; its COMPLETE status does not discharge the A1–A2 correction.
+The [follow-up result](phase3a-followup-result.md) records the superseding outcome.
 Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
 
-Accepted base: `1229563116f71067c74801516bcd64c92e7b6ed2`, tree
-`883f1a4a27db1c5eb747c76e5d77bb4379ef5f78`. The supplied acceptance closes P1–P3
-and local 2.02. Accepted 2.01, local-profile 2.03 and corrected 2.02 reports are
-preserved byte-for-byte. Preserve predecessors, frozen v1 and dependency pins.
+Submitted base: `8dad297a812201f7a0e55e7d2858b3fc7e6fa59b`, tree
+`12c62b2a8313efa874b57e37b9dd8558fff6fc69`. Accepted 2.01, local-profile 2.03,
+corrected 2.02 and all predecessor reports/refs/worktrees remain preserved.
+Scope: exact relation-bound schema18 constraint admission and bounded metadata
+before deparsing/transfer. No persisted schema or payload/package/receipt changes.
+Ordinary schema17 and SQLite behavior remain. Physical binding remains unqualified;
+ordinary schema18 writers refuse. Phase 3B/3C are not authorized in this run.
 
-Scope: additive PostgreSQL identity lineage, explicit recovery-bound adoption,
-incompatible-writer refusal and recovery of schema18. Ordinary schema17 and
-SQLite proof behavior remain. Adopted identities are physically unbound;
-ordinary mutation remains refused. Phase 3B/3C are not authorized by this unit.
-
-Required fresh gates: new adoption/recovery race suite; retained recovery gate
-(all 244 named requirements); applicable DB/storage/snapshot/restore regressions;
-unchanged 23-case oracle; full Phase 2 integrated proof (85 Go/38 PostgreSQL cases,
-15/3 critical outputs, nine TCP controls and native/Docker browser journeys);
-full Python and authority tests; build/vet/pinned lint, dependency/source checks
-and local CI audit/mutations. Historical D19 evidence reuse requires exact source
-and original command/log binding. No changed recovery contract may reuse old runs.
+Required fresh gates: full recovery/adoption/coordination/operator race runner
+retaining all 313 mandatory requirements plus the follow-up cases; unchanged
+23-case current oracle; full Python and focused authority/runner mutations;
+build/vet/pinned lint, dependency/source guards, historical/current authority,
+local CI audit and applicable mutations. Unchanged Phase 2 integrated and broader
+regressions may be reused only with exact source/dependency and original
+command/log bindings. Changed recovery/profile evidence must run fresh.
 
 Requested settings GPT-6 Astra / Extra High; actual model/effort unknown.
 LOCAL_ACTION_2_04_PHASE3A_AUTHORITY_ONLY is structural authority only.
-A qualified Phase 3A may complete its unit while parent 2.04 remains ACTIVE.
+A qualified follow-up clears only A1–A2 while parent 2.04 remains ACTIVE.
 No push, publication, merge, tag, release or live installation switch.
 
 ## Selected first stable profile

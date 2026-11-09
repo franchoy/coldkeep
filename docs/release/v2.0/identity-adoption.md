@@ -113,3 +113,39 @@ transaction faults do not claim power-loss durability.
 Technical references: [PostgreSQL16 snapshot lifetime](https://www.postgresql.org/docs/16/functions-admin.html),
 [transaction rollback](https://www.postgresql.org/docs/16/sql-rollback.html) and
 [constraint definitions](https://www.postgresql.org/docs/16/sql-altertable.html).
+
+## Constraint admission envelope (A1–A2 follow-up)
+
+Schema18 admission binds each of the 53 constraints to its explicit public
+relation and name, kind, validated/nondeferrable/local/uninherited status and
+canonical definition. Missing, duplicate, relocated and extra entries refuse
+before the inventory consumer, export completion, import readiness or restore
+pin bookkeeping. Named-column matching continues to tolerate physical order.
+
+Constraint metadata has a separate fixed envelope: at most 54 bounded metadata
+rows are observed, only 53 exact supported records can be admitted, and each
+record has at most 4,096 bytes of uncompressed variable metadata. The aggregate
+admitted raw input is at most 217,088 bytes. Existing catalog-row, receipt and
+caller-selected lower budgets keep their original meanings and ceilings.
+
+The guard checks the original pg_constraint Datums for conbin, conkey, confkey,
+conpfeqop, conppeqop, conffeqop, confdelsetcols and conexclop. It rejects compression
+and sums conservative pg_column_size + 4 bounds before casting or deparsing.
+Bounded uncompressed external storage is permitted; compressed metadata is
+unsupported. Migration-created and dump/imported canonical profiles are qualified.
+This is not a claim that every PostgreSQL storage representation is supported.
+
+The complete metadata set must pass before definition work starts. A repeated
+row-dependent CASE guard encloses each server-side definition comparison; only
+booleans reach the driver. Rows and statements close before the next query,
+and cancellation/physical cleanup remain inside the existing ownership interval.
+The bound covers admitted variable input and transfer, not total backend memory
+or arbitrary privileged extensions/hostile SQL. Trusted operator dump semantics
+and the cooperative local profile remain unchanged.
+
+PostgreSQL 16.15 source confirms that [pg_column_size and compression inspection](https://github.com/postgres/postgres/blob/REL_16_15/src/backend/utils/adt/varlena.c)
+read the original Datum; [toast_datum_size](https://github.com/postgres/postgres/blob/REL_16_15/src/backend/access/common/detoast.c)
+uses the external stored length, and [compression detection](https://github.com/postgres/postgres/blob/REL_16_15/src/backend/access/common/toast_compression.c)
+reads inline/external headers. The separate compression refusal makes the size
+bound conservative for admitted inputs. [CASE evaluation](https://www.postgresql.org/docs/16/functions-conditional.html)
+keeps the row-dependent deparser inside the admitted branch.

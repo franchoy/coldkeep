@@ -13,10 +13,10 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 3A / action 2.04 is authorized in BUILD mode by
-`coldkeep_phase3a_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
-Scope: explicit PostgreSQL identity adoption, writer admission and recovery
-continuity. Accepted 2.01, local-profile 2.03 and corrected 2.02 remain COMPLETE.
+Active v2.0 Phase 3A follow-up A1–A2 / action 2.04 is authorized in BUILD mode by
+`coldkeep_phase3a_followup_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
+Scope: exact relation-bound identity constraint admission and metadata bounds
+before deparsing/transfer. Preserve the submitted Phase 3A report. Accepted 2.01, local-profile 2.03 and corrected 2.02 remain COMPLETE.
 Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
 No Phase 3B/3C or real-installation switch is authorized. SQLite adoption refuses.
 All dependency pins and checksums remain fixed, including Go 1.26.10. Local commits and owned disposable
@@ -130,7 +130,7 @@ NONPASS with no GitHub Release; its passing bounded evidence does not certify
 the v1.13.19 certificate. The completed 10-phase plan and exact 34-path
 boundary remain historical evidence:
 
-- keep v2 work within the adopted Phase 3A identity/recovery unit; no SQLite-first product-default behavior;
+- keep v2 work within the Phase 3A A1–A2 constraint follow-up; no SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;
 - do not introduce product features;
 - do not perform broad refactors;
@@ -138,5 +138,5 @@ boundary remain historical evidence:
 - do not remove PostgreSQL compatibility;
 - keep changes within the separately authorized plan and allowlist.
 
-V2 Phase 3A identity/recovery work is authorized under the active charter. Work beyond this unit
+V2 Phase 3A A1–A2 constraint correction is authorized under the active charter. Work beyond this unit
 and SQLite-first product defaults require their later owning phase.
