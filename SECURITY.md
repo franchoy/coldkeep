@@ -1,10 +1,11 @@
 # Security Policy
 
-Phase 3A adds explicit PostgreSQL17-to-18 identity adoption and exact recovery
-profiles. See [identity/adoption contract](docs/release/v2.0/identity-adoption.md).
-Parent 2.04 remains ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
-Ordinary schema18 mutation and SQLite adoption are refused. Run the complete
-fresh recovery/adoption gate plus the retained Phase 2 proof and fixed oracle.
+V2 development includes explicit identity adoption, bounded physical binding
+and exact recovery profiles. See the [identity/adoption contract](docs/release/v2.0/identity-adoption.md)
+and [physical binding contract](docs/release/v2.0/physical-binding.md).
+Parent 2.04 and implementation remain ACTIVE; product gates INCOMPLETE.
+Ordinary schema18/19 writers and IMPORT_READY maintenance/activation are refused.
+SQLite adoption, later product support and a live installation switch are unqualified.
 
 
 ## Status
@@ -50,17 +51,18 @@ product change, or v2 implementation.
 Planned v1 feature and architecture work remains closed and frozen. Existing
 security and crash-consistency limitations below are unchanged.
 
-Active v2.0 Phase 1B / action 2.03 is authorized in BUILD mode by the accepted
-8 November 2026 passive/inventory instruction and `docs/release/v2.0/README.md`.
-`docs/release/current.json` remains current authority; parent action 2.03 stays
-ACTIVE. Scope: passive existing-repository opening and a quiesced full-catalog
-recovery inventory, plus the accepted CI-audit correction. Phase 1A / 2.01 is
-accepted complete and preserved. Latest stable remains v1.13.19; frozen
-`docs/release/v1*/` records retain their historical bytes. No package copy,
-completion/import protocol, daemon/UI, schema, capture or migration belongs to
-this unit. Product gates and full action 2.03 remain incomplete.
-No push, PR publication, merge, tag, release or deployment is authorized.
-Dependency/toolchain versions remain pinned. Preserve user changes and data.
+Active v2 authority is [docs/release/current.json](docs/release/current.json),
+with the current scope in [the charter](docs/release/v2.0/README.md). Actions
+2.01, bounded 2.02 and local-profile 2.03 are complete; 2.04 remains active.
+The [development-visibility contract](docs/release/v2.0/development-visibility.md)
+records the 9 November 2026 R1 acceptance and prepares one public development
+branch and draft PR, requiring explicit user approval recorded separately.
+That approval was not supplied when this proposal was prepared. The contract
+grants no approval itself and changes neither the stable release's security
+claims nor the v2 product gates.
+No merge, tag, release, protection change, deployment or live switch is granted.
+Frozen `docs/release/v1*/` records, phase results, dependency/toolchain pins,
+predecessor worktrees, user changes and data remain preserved.
 
 The published v1 engine is suitable for controlled production environments where:
 

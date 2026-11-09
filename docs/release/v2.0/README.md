@@ -1,7 +1,16 @@
 # Coldkeep v2.0 active charter
 
-Current unit: **Phase 3B follow-up R1 COMPLETE, awaiting independent review**, authorized by
-`coldkeep_phase3b_followup_codex_2026-11-09.md` and the 9 November 2026 user request.
+Current workflow: **development visibility**, governed by the
+[development-visibility contract](development-visibility.md). Explicit user
+publication approval was not supplied when this proposal was prepared; any
+actual approval must be recorded separately before publication.
+Independent review accepted the bounded R1 correction on **9 November 2026**.
+The prepared scope
+is one `release/v2.0` branch and one draft PR to `main`, preserving phase history.
+This charter does not grant that approval or authorize further implementation.
+
+The last implementation unit, **Phase 3B follow-up R1**, is locally COMPLETE
+under `coldkeep_phase3b_followup_codex_2026-11-09.md` and the 9 November 2026 user request.
 [Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
 product gates INCOMPLETE. Phase 3A and A1–A2 are accepted; their reports remain
 immutable. Submitted starting HEAD `cd5f9f9ac96b963f46fe6c24b7e38e0c2b525e69`,
@@ -10,9 +19,11 @@ tree `9848d2a14478b13dce15212fb8602238331282c4`.
 Current result: [Phase 3B follow-up R1](phase3b-followup-result.md).
 Preserved submission: [Phase 3B qualification](phase3b-result.md).
 Scope and limits: [physical binding contract](physical-binding.md).
-R1 lossless operator root selection is corrected and qualified locally; independent
-acceptance is still pending. The submitted report cannot discharge R1; only its
-owning qualified follow-up can. Ordinary schema18/19 writers remain refused;
+R1 lossless operator root selection is corrected, qualified locally and independently
+accepted at HEAD `815f812a5027dad4f03c88ae30b97c77ad01b8e0`, tree
+`6dc1296efe72083014d34febe1e9f57944489419`. The acceptance record is in the
+development-visibility contract; it adds no runtime rerun or publication authority.
+The submitted report cannot discharge R1; only its owning qualified follow-up can. Ordinary schema18/19 writers remain refused;
 every IMPORT_READY target refuses binding/source maintenance and activation.
 Phase 3C remains OUTSTANDING.
 
@@ -30,7 +41,11 @@ remain unqualified. Completion clears only R1, never 3C, 2.04 or product gates.
 Requested settings GPT-6 Astra / Extra High; actual model/effort unknown.
 Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
 LOCAL_ACTION_2_04_PHASE3A_AUTHORITY_ONLY is structural authority only.
-No push, publication, merge, tag, release or live installation switch.
+The R1 BUILD authorized no remote action; its report remains immutable. The
+prepared development-publication scope requires separate explicit user approval.
+No merge, tag, release, protection change, deployment or live installation switch
+is granted. `separate-publication-authorization` remains an outstanding validator
+obligation; documentation and a development push do not certify a product release.
 
 ## Selected first stable profile
 

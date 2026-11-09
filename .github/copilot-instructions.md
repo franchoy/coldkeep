@@ -13,15 +13,18 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Active v2.0 Phase 3A follow-up A1–A2 / action 2.04 is authorized in BUILD mode by
-`coldkeep_phase3a_followup_codex_2026-11-08.md` and `docs/release/v2.0/README.md`.
-Scope: exact relation-bound identity constraint admission and metadata bounds
-before deparsing/transfer. Preserve the submitted Phase 3A report. Accepted 2.01, local-profile 2.03 and corrected 2.02 remain COMPLETE.
-Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
-No Phase 3B/3C or real-installation switch is authorized. SQLite adoption refuses.
-All dependency pins and checksums remain fixed, including Go 1.26.10. Local commits and owned disposable
-fixtures are authorized. Preserve predecessor worktrees and frozen v1 records.
-No push, PR publication, merge, tag, release or deployment is authorized.
+Use `docs/release/v2.0/README.md` and the current explicitly authorized BUILD
+for execution scope. The prepared development-visibility scope is documented in
+`docs/release/v2.0/development-visibility.md`; documentation alone grants no
+remote authority. Publishing one `release/v2.0` branch and one draft PR to `main`
+requires explicit user approval recorded separately. That approval was not
+supplied when this proposal was prepared. The R1 correction was independently
+accepted on 9 November 2026; see that contract.
+Accepted 2.01, bounded 2.02 and local-profile 2.03 remain COMPLETE. Parent 2.04
+and implementation stay ACTIVE; product gates INCOMPLETE; Phase 3C OUTSTANDING.
+Preserve phase results, predecessor worktrees, frozen v1 and every dependency
+pin. Ordinary schema18/19 writers and IMPORT_READY activation remain refused.
+No merge, tag, release, protection change, deployment or live switch is granted.
 Preserve user changes and data.
 
 
@@ -46,7 +49,7 @@ publication predecessor; v1.13.15 remains published stable and immutable.
 For future work:
 
 - treat v1.13.14 as immutable historical release state;
-- keep v2 work within the Phase 3A A1–A2 constraint follow-up; no SQLite-first product-default behavior;
+- keep v2 work within the current explicitly authorized unit; no SQLite-first product-default behavior;
 - do not change public APIs, schema, storage format, or repository format;
 - do not perform broad refactors;
 - keep fixes narrow and separately planned;

@@ -1,32 +1,20 @@
 # Pre-release Checklist
 
-Phase 3A adds explicit PostgreSQL17-to-18 identity adoption and exact recovery
-profiles. See [identity/adoption contract](docs/release/v2.0/identity-adoption.md).
-Parent 2.04 remains ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
-Ordinary schema18 mutation and SQLite adoption are refused. Run the complete
-fresh recovery/adoption gate plus the retained Phase 2 proof and fixed oracle.
+Active v2 authority is [action 2.04](docs/release/v2.0/README.md): implementation
+ACTIVE, product gates INCOMPLETE and Phase 3C OUTSTANDING. Local action and
+follow-up results record their own bounded fresh/reused evidence; preserve them.
 
-The P1–P3 follow-up makes restore-root aliases, complete scalar byte bounds and
-TCP reachability controls mandatory in that gate. Its selected fresh/reuse
-schedule is recorded in the charter; all 244 recovery requirements remain intact.
+The docs-only [development-visibility profile](docs/release/v2.0/development-visibility.md)
+permits preparation of a draft review with known incomplete gates. R1 was
+independently accepted on 9 November 2026; explicit user approval must be
+recorded separately before publishing the prepared branch and draft PR.
+Opening that draft does not establish pre-merge
+CI parity or release readiness. Existing required checks and protections remain.
 
+For implementation work, run the owning unit's applicable correctness gates.
+For a ready-for-merge correctness-sensitive PR or a release tag, use the
+applicable full profile below. Frozen v1 certification and all pins remain.
 
-Phase 2 / action 2.02 adds the bounded internal delivery/native-feasibility
-profile in [the current charter](docs/release/v2.0/README.md). Required evidence
-includes packaged browser/engine restoration, owned runtime/security bounds,
-real SQLite persistence, PostgreSQL Docker and the retained 244-event recovery
-gate and 23-case oracle. Full Python and CI enforcement mutations are fresh.
-Product gates remain INCOMPLETE; native support and later actions are unqualified.
-
-
-Active development: [v2.0 Phase 1D / action 2.03](docs/release/v2.0/README.md), selected by
-[docs/release/current.json](docs/release/current.json). Its local profile is COMPLETE;
-see [the Phase 1D result](docs/release/v2.0/phase1d-result.md). Use its bounded local
-validation profile for this phase. Full release/publication procedures below
-remain applicable to their declared release scopes; frozen v1 certification
-is not repeated to begin v2. Go/dependency pins and correctness gates remain.
-
-Use this checklist before opening a correctness-sensitive PR or cutting a release tag.
 
 Audience:
 
@@ -52,8 +40,9 @@ Choose the lightest profile that honestly matches the work being validated.
 
 ### Profile A - Pre-PR CI-parity gate
 
-Use this before opening a PR. It is the standard local "full-system green"
-path intended to minimize GitHub CI failures before review.
+Use this before declaring a correctness-sensitive PR ready for merge. It is
+the standard local "full-system green" path. The bounded development-visibility
+draft profile above does not claim this profile has passed.
 
 Run:
 

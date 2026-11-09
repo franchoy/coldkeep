@@ -1,10 +1,13 @@
 # Contributing to coldkeep
 
-Active development: [v2.0 Phase 1B / action 2.03](docs/release/v2.0/README.md), selected by
-[docs/release/current.json](docs/release/current.json). Use its bounded local
-validation profile for this phase. Full release/publication procedures below
-remain applicable to their declared release scopes; frozen v1 certification
-is not repeated to begin v2. Go/dependency pins and correctness gates remain.
+Active development: [v2.0 action 2.04](docs/release/v2.0/README.md), selected by
+[docs/release/current.json](docs/release/current.json). The
+[development-visibility contract](docs/release/v2.0/development-visibility.md)
+explains the proposed public development branch, draft PR, preserved history
+and known incomplete gates. Use the owning unit's bounded validation profile.
+Full release/publication procedures below remain applicable to their declared
+release scopes; frozen v1 certification is not repeated to begin v2.
+Go/dependency pins and correctness gates remain unchanged.
 
 Thank you for your interest in contributing to coldkeep.
 

@@ -18,7 +18,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 ## Project Status
 
-![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
+![v2 development CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg?branch=release%2Fv2.0)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Status](https://img.shields.io/badge/status-v1.13.19%20stable%20v1.x%20closed-blue)
@@ -48,13 +48,32 @@ independently installable.
 
 
 
-Active development is **2.0.0-dev.0**, bounded to [v2.0 Phase 1C / action 2.03](docs/release/v2.0/README.md).
+Active development is **2.0.0-dev.0**. The [v2.0 charter](docs/release/v2.0/README.md)
+records **action 2.04 ACTIVE** and **product gates INCOMPLETE**. The development
+CI badge refers specifically to `release/v2.0`; hosted status is separate from
+the bounded local evidence below.
+
+| Work | Current scope and status |
+| --- | --- |
+| 2.01 | Baseline fixtures, compatibility ledger and product contracts complete. |
+| 2.02 | Internal delivery and selected Linux feasibility proof complete. |
+| 2.03 | Linux/manual PostgreSQL recovery profile complete. |
+| 2.04 | Active: identity adoption and bounded physical binding qualified locally; Phase 3B R1 accepted on 9 November 2026; Phase 3C outstanding. |
+| v2.0 product | Incomplete; later product, support and release gates remain open. |
+
+The [development-visibility contract](docs/release/v2.0/development-visibility.md)
+describes the preserved commit history, proposed draft PR and approval boundary.
+It also records the inherited engine failures and platform limits. Local phase
+completion does not establish a release-ready product or a green hosted suite.
+The embedded daemon remains an internal proof and needs the
+[prepared-asset build](docs/release/v2.0/phase2-build.md).
+
 Latest published stable remains **v1.13.19**, source-only, immutable at
 D19 `d3581602aee2599547564322fe083baae1d52063`, tag object
 `60b6878114f936b295c415605e8af31def2aba5a`, GitHub Release `431395975`.
 The [frozen closure](docs/release/v1.13/v1.13.19-post-publication-closure.md)
-retains its certification and predecessor qualifications. V2 product gates
-are incomplete; no v2 release or support qualification is claimed.
+retains its certification and predecessor qualifications. No v2 release or
+support qualification is claimed.
 
 ## Historical release-state narrative through v1.13.14
 
