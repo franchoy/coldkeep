@@ -19,9 +19,9 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/franchoy/coldkeep/v2/internal/application"
 	"github.com/franchoy/coldkeep/v2/internal/coordination"
 	"github.com/franchoy/coldkeep/v2/internal/db"
-	"github.com/franchoy/coldkeep/v2/internal/engine"
 	"github.com/franchoy/coldkeep/v2/internal/snapshot"
 	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
@@ -170,7 +170,7 @@ type Runtime struct {
 	catalog    *sql.DB
 	connection *joinedConnector
 	storage    *storage.StorageContext
-	engine     engine.Engine
+	operations *application.ProofOperations
 	entries    []entry
 	gate       chan struct{}
 	closeOnce  sync.Once
@@ -235,14 +235,14 @@ func Open(c Config) (r *Runtime, err error) {
 		return r, errors.New("fixture_key_required")
 	}
 	r.storage = &storage.StorageContext{DB: r.catalog, ContainerDir: id.CanonicalPath}
-	r.engine, err = engine.New(engine.Config{DB: r.catalog, ContainerDir: id.CanonicalPath, StoreContext: r.storage})
+	r.operations, err = application.NewProofOperations(r.catalog, r.storage, id.CanonicalPath)
 	if err != nil {
 		return r, errors.New("engine_open_failed")
 	}
-	if _, e := r.engine.Verify(context.Background(), engine.VerifyRequest{Level: "deep", Target: "system"}); e != nil {
+	if e := r.operations.Verify(context.Background()); e != nil {
 		return r, errors.New("fixture_catalog_payload_key_mismatch")
 	}
-	history, e := r.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: c.Snapshot, Query: engine.SnapshotQuery{Limit: MaxEntries + 1}})
+	history, e := r.operations.Snapshot(context.Background(), application.ProofSnapshotRequest{SnapshotID: c.Snapshot, Limit: MaxEntries + 1})
 	if e != nil {
 		return r, errors.New("history_unavailable")
 	}
@@ -391,11 +391,11 @@ func (r *Runtime) restore(id string) RestoreResult {
 		return RestoreResult{Outcome: "refused", Code: "unknown_entry", Detail: "Select an entry from this session's history."}
 	}
 	// A fresh, operator-selected output root; exact historical path, no overwrite.
-	result, e := r.engine.SnapshotRestore(context.Background(), engine.SnapshotRestoreRequest{SnapshotID: r.cfg.Snapshot, Paths: []string{selected.Name}, Destination: engine.SnapshotRestoreDestination{Mode: engine.SnapshotRestoreDestinationPrefix, Path: r.cfg.RestoreRoot}, Metadata: engine.SnapshotRestoreMetadataStrict})
+	result, e := r.operations.Restore(context.Background(), application.ProofRestoreRequest{SnapshotID: r.cfg.Snapshot, StoredPath: selected.Name, DestinationRoot: r.cfg.RestoreRoot})
 	if e != nil {
 		return RestoreResult{Outcome: "failed_or_partial", Code: "restore_failed", Detail: "Restore failed. Bytes may be visible or metadata incomplete; inspect the operator output before retrying."}
 	}
-	if result.RestoredFiles != 1 || len(result.Warnings) != 0 {
+	if result.RestoredFiles != 1 || result.WarningCount != 0 {
 		return RestoreResult{Outcome: "failed_or_partial", Code: "restore_incomplete", Detail: "The engine did not confirm one complete file with selected metadata."}
 	}
 	return RestoreResult{Outcome: "completed", Code: "restored", Detail: "Content verified by the engine and installed with selected metadata. Independent reread is a separate proof."}

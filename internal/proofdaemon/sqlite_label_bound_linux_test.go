@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/application"
 )
 
 func TestProofReviewRejectsOversizedNULLabelBeforeHistory(t *testing.T) {
@@ -42,9 +42,9 @@ func TestProofReviewRejectsOversizedNULLabelBeforeHistory(t *testing.T) {
 			defer func() { must(t, runtime.Close()) }()
 		}
 		if openErr == nil {
-			history, err := runtime.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: c.Snapshot})
+			history, err := runtime.operations.Snapshot(context.Background(), application.ProofSnapshotRequest{SnapshotID: c.Snapshot, Limit: MaxEntries + 1})
 			historyErr = err
-			observedLabelBytes = len(history.Snapshot.Label)
+			observedLabelBytes = len(history.Label)
 		}
 		t.Fatalf("want ErrBounds before engine reads; scalar envelope=%v; Open=%v; SnapshotShow=%v; observed label bytes=%d; SQL LENGTH=%d, stored bytes=%d", envelopeErr, openErr, historyErr, observedLabelBytes, reportedCharacters, storedBytes)
 	}
@@ -97,9 +97,9 @@ func TestProofReviewLabelBoundaryControls(t *testing.T) {
 			runtime, err := Open(c)
 			must(t, err)
 			defer func() { must(t, runtime.Close()) }()
-			history, err := runtime.engine.SnapshotShow(context.Background(), engine.SnapshotShowRequest{SnapshotID: c.Snapshot})
+			history, err := runtime.operations.Snapshot(context.Background(), application.ProofSnapshotRequest{SnapshotID: c.Snapshot, Limit: MaxEntries + 1})
 			must(t, err)
-			if history.Snapshot.Label != tc.label {
+			if history.Label != tc.label {
 				t.Fatal("valid bounded label was changed or truncated")
 			}
 		})
