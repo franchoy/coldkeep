@@ -134,7 +134,7 @@ def cleanup(commands, work, out, label, project, compose, env, image_tags, facts
         facts['owned_image_residuals'][tag] = attempt('image-residuals-' + str(index), lambda tag=tag:
             commands.capture('docker', 'image', 'ls', '-q', '--filter', 'reference=' + tag, name='image-residuals', timeout=20))
     facts['local_process_cleanup_complete'] = all(record.get('process_cleanup', {}).get('complete', True)
-                                                 for record in commands.records)
+                                                 for record in commands.records + facts.get('tcp_process_cleanup', []))
     def remove_work():
         if not facts['local_process_cleanup_complete']:
             raise RuntimeError('private directory retained for unresolved child ownership')
@@ -282,7 +282,8 @@ def run_proof(output):
         host_targets=[numeric_endpoint(x,int(endpoint.split(':')[1])) for x in ips]+[numeric_endpoint('::1',int(endpoint.split(':')[1]))]
         facts['exposure_targets']=targets
         facts['host_exposure_targets']=host_targets
-        facts['tcp']=campaign(ROOT,out,work,facts['daemon_image'],probe_network,label,targets,host_targets)
+        facts['tcp']=campaign(ROOT,out,work,facts['daemon_image'],probe_network,label,targets,host_targets,
+                              process_records=facts.setdefault('tcp_process_cleanup', []))
         facts['network']=json.loads(capture('docker','network','inspect',network))[0]
         facts['events']=['postgres_embedded_browser_restore','nonroot_fixed_mounts_bounded_tmp','missing_mount_refused','loopback_only_publication','browser_closed_container_kept_lease','container_second_owner_refused','cli_image_runs']
         # Retained CLI actually reads this PostgreSQL catalog through its own path.

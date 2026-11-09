@@ -120,7 +120,7 @@ class DockerBoundary:
 
 
 class DockerCredentialsAndCleanup(unittest.TestCase):
-    def exercise(self, *, stage=None, fault='after', cleanup_fault=None, cleanup_kind='nonzero'):
+    def exercise(self, *, stage=None, fault='after', cleanup_fault=None, cleanup_kind='nonzero', campaign_uncertain=False):
         boundary = DockerBoundary()
         original = proof.Commands.call
         injected = []
@@ -163,7 +163,12 @@ class DockerCredentialsAndCleanup(unittest.TestCase):
             with contextlib.ExitStack() as stack:
                 stack.enter_context(mock.patch.object(proof, 'execute', side_effect=boundary))
                 stack.enter_context(mock.patch.object(proof.Commands, 'call', call))
-                stack.enter_context(mock.patch.object(proof, 'campaign', return_value={}))
+                def campaign(*args, **kwargs):
+                    if campaign_uncertain:
+                        kwargs['process_records'].append({'stage': 'tcp-observation', 'process_cleanup': {'complete': False}})
+                        raise ValueError('injected TCP process ownership uncertainty')
+                    return {}
+                stack.enter_context(mock.patch.object(proof, 'campaign', side_effect=campaign))
                 stack.enter_context(mock.patch.object(proof, 'port', return_value=18766))
                 stack.enter_context(mock.patch.object(proof.os, 'getuid', return_value=1000))
                 response = stack.enter_context(mock.patch.object(proof.urllib.request, 'urlopen'))
@@ -171,13 +176,13 @@ class DockerCredentialsAndCleanup(unittest.TestCase):
                 stack.enter_context(mock.patch.dict(os.environ, {'PGHOSTADDR': '192.0.2.99',
                     'PGSERVICE': 'poison', 'PGPASSWORD': 'unrelated-ambient', 'DB_PASSWORD': 'ambient-cli'}))
                 stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
-                if stage or cleanup_fault:
+                if stage or cleanup_fault or campaign_uncertain:
                     with self.assertRaises(RuntimeError):
                         proof.run_proof(out)
                 else:
                     proof.run_proof(out)
             facts = json.loads((out/'docker.json').read_text())
-            self.assertEqual((out/'working').exists(), cleanup_kind == 'uncertain')
+            self.assertEqual((out/'working').exists(), cleanup_kind == 'uncertain' or campaign_uncertain)
             self.assertEqual(facts['working_secret_scan']['match_count'], 0)
             self.assertEqual(facts['retained_secret_scan']['match_count'], 0)
             self.assertEqual(boundary.containers, {'unrelated-container': 'other'})
@@ -242,6 +247,12 @@ class DockerCredentialsAndCleanup(unittest.TestCase):
 
     def test_unresolved_local_child_retains_working_files_and_fails(self):
         facts, _ = self.exercise(cleanup_fault='compose-cleanup', cleanup_kind='uncertain')
+        self.assertFalse(facts['local_process_cleanup_complete'])
+        self.assertFalse(facts['private_directory_removed'])
+        self.assertFalse(facts['cleanup_complete'])
+
+    def test_tcp_child_uncertainty_reaches_outer_cleanup(self):
+        facts, _ = self.exercise(campaign_uncertain=True)
         self.assertFalse(facts['local_process_cleanup_complete'])
         self.assertFalse(facts['private_directory_removed'])
         self.assertFalse(facts['cleanup_complete'])
