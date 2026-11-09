@@ -4,6 +4,8 @@ services:
     image: "${PROOF_IMAGE:?}"
     user: "${PROOF_UID:?}:${PROOF_GID:?}"
     read_only: true
+    environment:
+      - PGPASSWORD
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 64

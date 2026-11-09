@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+from proof_process import execute as execute_group
 
 CONTROL_NAMES = {'http_200', 'http_403', 'http_404', 'stalled', 'closed',
                  'missing_helper', 'missing_container', 'missing_result', 'malformed_result'}
@@ -78,13 +79,16 @@ def require_confined(result):
 def execute(command, out, name):
     start = time.monotonic()
     try:
-        p = subprocess.run(command, capture_output=True, timeout=OUTER_SECONDS)
+        p = execute_group(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=OUTER_SECONDS)
         record = dict(command=command, exit_code=p.returncode, timeout=False,
                       stdout=p.stdout.decode(errors='replace'), stderr=p.stderr.decode(errors='replace'))
     except subprocess.TimeoutExpired as error:
         record = dict(command=command, exit_code=None, timeout=True,
                       stdout=(error.stdout or b'').decode(errors='replace'),
                       stderr=(error.stderr or b'').decode(errors='replace'))
+    except OSError as error:
+        record = dict(command=command, exit_code=None, timeout=False,
+                      stdout='', stderr=type(error).__name__)
     record['outer_budget_seconds'] = OUTER_SECONDS
     record['duration_seconds'] = time.monotonic()-start
     (out/(name+'.json')).write_text(json.dumps(record, indent=2)+'\n')
@@ -137,7 +141,9 @@ def campaign(root, out, work, image, network, label, targets, host_targets):
     env = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', CGO_ENABLED='0')
     build = ['go', 'build', '-trimpath', '-buildvcs=false', '-o', str(binary), './scripts/proofprobe']
     with (out/'tcp-build.log').open('wb') as log:
-        subprocess.run(build, cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+        result = execute_group(build, cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=180)
+        if result.returncode:
+            raise InvalidProof('probe build failed')
     binary.chmod(0o555)
     container = network+'-tcp'
     facts = {'controls': {}, 'observations': [], 'host_observations': [], 'container': container,
