@@ -52,7 +52,8 @@ class FollowupGateTests(unittest.TestCase):
     def test_wrappers_cannot_bypass_staging_or_required_events(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         wrappers = {scope: (ROOT / 'scripts' / name).read_text() for scope, name in
-                    [('packages', 'run_package_tests.sh'), ('recovery', 'run_recovery_export_tests.sh')]}
+                    [('packages', 'run_package_tests.sh'), ('recovery', 'run_recovery_export_tests.sh'),
+                     ('passive', 'run_passive_inventory_tests.sh')]}
         for scope in wrappers:
             for mutation in ('exec go test -race -count=1 ./internal/engine\n',
                              wrappers[scope].replace('exec python3', 'echo python3'),
@@ -60,6 +61,22 @@ class FollowupGateTests(unittest.TestCase):
                 with self.subTest(scope=scope, mutation=mutation):
                     self.assertTrue(any('wrapper delegates' in error for error in
                                         validate(workflow, wrappers=dict(wrappers, **{scope: mutation}))))
+
+    def test_passive_inventory_requires_complete_prerequisites_and_selection(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        anchor = '      - name: Run passive inventory PostgreSQL contracts\n'
+        before, after = workflow.split(anchor, 1)
+        for old, new in [('COLDKEEP_PHASE1C_TEST: 1', 'COLDKEEP_PHASE1C_TEST: 0'),
+                         ('COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump', 'COLDKEEP_PG_DUMP: /missing'),
+                         ('bash scripts/run_passive_inventory_tests.sh', 'go test ./internal/coordination')]:
+            with self.subTest(mutation=old):
+                changed = before + anchor + after.replace(old, new, 1)
+                self.assertTrue(any('passive inventory' in error for error in validate(changed)))
+        changed = workflow.replace(anchor, anchor + '        continue-on-error: true\n')
+        self.assertIn('passive inventory remains blocking in plain matrix', validate(changed))
+        runner = (ROOT / 'scripts/run_staged_package_tests.py').read_text()
+        self.assertIn('passive inventory selection and staging budget retained',
+                      validate(workflow, runner.replace('"^TestRecovery"', '"TestBinding"')))
 
     def test_remote_identity_controls_cannot_be_removed(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()

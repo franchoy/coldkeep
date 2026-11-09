@@ -246,7 +246,7 @@ jobs:
   correctness-matrix:
     # Keep the dedicated recovery clients on the same provisioned runner family.
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -792,10 +792,20 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Install recovery PostgreSQL 16 clients
+        if: ${{ matrix.codec == 'plain' }}
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+
       - name: Run passive inventory PostgreSQL contracts
         if: ${{ matrix.codec == 'plain' }}
         env:
           COLDKEEP_PHASE1B_TEST: 1
+          COLDKEEP_PHASE1C_TEST: 1
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: ''
+          COLDKEEP_RECOVERY_IMAGE: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+          COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump
+          COLDKEEP_PG_RESTORE: /usr/lib/postgresql/16/bin/pg_restore
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -803,10 +813,6 @@ jobs:
           DB_NAME: coldkeep
           DB_SSLMODE: disable
         run: bash scripts/run_passive_inventory_tests.sh "$RUNNER_TEMP/integration-diag/passive-inventory"
-
-      - name: Install recovery PostgreSQL 16 clients
-        if: ${{ matrix.codec == 'plain' }}
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
 
       - name: Run recovery copy PostgreSQL contracts
         if: ${{ matrix.codec == 'plain' }}

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 
+from check_passive_test_events import check_events as check_passive_events
 from check_recovery_test_events import check_events
 from proof_process import execute
 
@@ -23,6 +24,8 @@ BASES = {"pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2",
          "d19": "d3581602aee2599547564322fe083baae1d52063",
          "accepted": "1229563116f71067c74801516bcd64c92e7b6ed2"}
 COMMANDS = {
+    "passive": ["go", "test", "-race", "-count=1", "-p=1", "-skip", "^TestRecovery", "-json", "-timeout=15m",
+                "./internal/recoveryexport", "./internal/coordination"],
     "recovery": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=15m",
                  "./internal/recoveryexport", "./internal/coordination", "./cmd/coldkeep-recovery"],
     "packages": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=15m",
@@ -206,7 +209,7 @@ def run(scope, output):
             status = command(COMMANDS[scope], env, timeout=2400, stdout=out, stderr=err, check=False)[0]
         facts["go_exit"] = status
         events = [json.loads(line) for line in (output / "go.jsonl").read_text().splitlines() if line.strip()]
-        result = check_events(events, broad=scope == "packages")
+        result = check_passive_events(events) if scope == "passive" else check_events(events, broad=scope == "packages")
         write_json(output / "acceptance-events.json", result)
         print(json.dumps(result))
         if result["status"] != "PASS" and not status:

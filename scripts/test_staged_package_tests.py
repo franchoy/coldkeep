@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import check_recovery_test_events as events
+import check_passive_test_events as passive_events
 import run_staged_package_tests as runner
 
 
@@ -51,12 +52,14 @@ class StagingPrerequisiteTests(unittest.TestCase):
                             version = "16.14"
                         return 0, f"{Path(args[0]).name} (PostgreSQL) {version}\n", ""
 
-                    with patch.object(runner, "command", side_effect=command), patch.object(runner.os, "getuid", return_value=1000):
-                        if mutation == "none":
-                            self.assertEqual(runner.prerequisites(env, "packages")["clients"]["dump"], "16.15")
-                        else:
-                            with self.assertRaises((ValueError, RuntimeError)):
-                                runner.prerequisites(env, "packages")
+                    for scope in ("packages", "passive"):
+                        with self.subTest(scope=scope), patch.object(runner, "command", side_effect=command), \
+                             patch.object(runner.os, "getuid", return_value=1000):
+                            if mutation == "none":
+                                self.assertEqual(runner.prerequisites(env, scope)["clients"]["dump"], "16.15")
+                            else:
+                                with self.assertRaises((ValueError, RuntimeError)):
+                                    runner.prerequisites(env, scope)
 
     def test_reader_provenance_refusals(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -105,7 +108,7 @@ class StagingPrerequisiteTests(unittest.TestCase):
 
 
 class StagingLifetimeTests(unittest.TestCase):
-    def run_case(self, mutation):
+    def run_case(self, mutation, scope="packages"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "out"
@@ -114,20 +117,26 @@ class StagingLifetimeTests(unittest.TestCase):
             unrelated = root / "unrelated"
             unrelated.write_text("preserved")
             seen = []
+            checker = passive_events if scope == "passive" else events
             passes = [{"Package": package, "Test": test, "Action": "pass"}
-                      for package, test in events.required_identities()]
+                      for package, test in checker.required_identities()]
             if mutation == "required-skip":
                 passes[0]["Action"] = "skip"
             if mutation == "missing-event":
                 passes.pop()
             if mutation == "unrelated-skip":
                 passes.append({"Package": "unrelated/platform", "Test": "platform-only", "Action": "skip"})
+            if mutation in ("binding-failure", "binding-skip"):
+                passes.append({"Package": "github.com/franchoy/coldkeep/v2/internal/recoveryexport",
+                               "Test": "TestBindingDockerProfile", "Action": "fail" if mutation == "binding-failure" else "skip"})
+            if mutation == "missing-package":
+                passes = [event for event in passes if event["Test"]]
 
             def command(args, env, **kwargs):
                 if args[:2] == ["go", "test"]:
                     self.assertTrue(owned.exists())
                     self.assertEqual(Path(env["COLDKEEP_RECOVERY_READER"]).parent, owned)
-                    self.assertEqual(args, runner.COMMANDS["packages"])
+                    self.assertEqual(args, runner.COMMANDS[scope])
                     seen.append("go-child")
                     if mutation == "child-start":
                         raise OSError("cannot start child")
@@ -160,7 +169,7 @@ class StagingLifetimeTests(unittest.TestCase):
                  patch.object(runner, "verify_readers", return_value={"reader": "verified"}), \
                  patch.object(runner.tempfile, "mkdtemp", return_value=str(owned)), \
                  patch.object(runner.shutil, "rmtree", side_effect=cleanup):
-                status = runner.run("packages", output)
+                status = runner.run(scope, output)
             facts = json.loads((output / "execution.json").read_text())
             self.assertEqual(unrelated.read_text(), "preserved")
             self.assertEqual(owned.exists(), mutation in ("cleanup-error", "child-incomplete"))
@@ -196,6 +205,17 @@ class StagingLifetimeTests(unittest.TestCase):
                 os.kill(int(pid_file.read_text()), 0)
             self.assertFalse(marker.exists())
 
+    def test_passive_scope_keeps_readers_and_every_failure_blocking(self):
+        for mutation in ("none", "unrelated-skip", "child-exit", "child-start", "child-timeout", "child-incomplete",
+                         "required-skip", "missing-event", "missing-package", "binding-failure", "binding-skip",
+                         "cleanup-error", "inventory-error", "residual"):
+            with self.subTest(mutation=mutation):
+                status, facts = self.run_case(mutation, scope="passive")
+                self.assertEqual(status == 0, mutation == "none")
+                self.assertEqual(facts["scope"], "passive")
+                if mutation == "child-exit":
+                    self.assertEqual(status, 17)
+
 
 class RecoveryEventContractTests(unittest.TestCase):
     def test_accepted_structural_contract(self):
@@ -214,3 +234,24 @@ class RecoveryEventContractTests(unittest.TestCase):
                     else:
                         next(row for row in rows if row["Test"] == name)["Action"] = "skip"
                     self.assertEqual(events.check_events(rows, broad=True)["status"], "FAIL")
+
+
+class PassiveEventContractTests(unittest.TestCase):
+    def test_accepted_structural_contract(self):
+        pairs = sorted(passive_events.required_identities())
+        actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+        self.assertEqual(len(pairs), 38)
+        self.assertEqual(actual, "0b635526686ec50d5076d9393593a701f8037d9b5aaeb92edfdc8d2512010dbb")
+
+    def test_passive_command_retains_selection_and_serializes_packages(self):
+        self.assertEqual(runner.COMMANDS["passive"], [
+            "go", "test", "-race", "-count=1", "-p=1", "-skip", "^TestRecovery", "-json", "-timeout=15m",
+            "./internal/recoveryexport", "./internal/coordination"])
+
+    def test_every_mandatory_identity_and_package_pass_is_required(self):
+        records = [{"Package": p, "Test": t, "Action": "pass"} for p, t in passive_events.required_identities()]
+        for index, record in enumerate(records):
+            with self.subTest(identity=(record["Package"], record["Test"])):
+                result = passive_events.check_events(records[:index] + records[index + 1:])
+                self.assertEqual(result["status"], "FAIL")
+                self.assertEqual(result["missing"], [record["Package"] + "/" + record["Test"]])

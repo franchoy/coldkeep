@@ -64,22 +64,42 @@ def validate(workflow, runner=None, wrappers=None):
     need("PACKAGE_TESTS_RESULT: ${{ needs['package-tests'].result }}" in aggregate, 'complete package aggregate result')
     need('[ "${PACKAGE_TESTS_RESULT}" != "success" ] ||' in aggregate, 'complete package aggregate rejects non-success')
     need('bash scripts/run_recovery_export_tests.sh "$RUNNER_TEMP/integration-diag/recovery-export"' in workflow, 'dedicated recovery gate retained')
+    correctness = section(workflow, 'correctness-matrix', 2)
+    passive_name = 'Run passive inventory PostgreSQL contracts'
+    clients_name = 'Install recovery PostgreSQL 16 clients'
+    passive = step(correctness, passive_name)
+    clients = step(correctness, clients_name)
+    need('    timeout-minutes: 40\n' in correctness, 'serial staged correctness campaign budget')
+    need('        run: bash scripts/run_passive_inventory_tests.sh "$RUNNER_TEMP/integration-diag/passive-inventory"\n' in passive,
+         'passive inventory staged command retained')
+    need('        if: ${{ matrix.codec == \'plain\' }}\n' in passive and
+         not re.search(r'continue-on-error|\|\| true|; true', passive), 'passive inventory remains blocking in plain matrix')
+    need('postgresql-client-16' in clients and clients_name in correctness and passive_name in correctness
+         and correctness.index(clients_name) < correctness.index(passive_name), 'matched clients precede passive inventory')
+    for value in ('COLDKEEP_PHASE1B_TEST: 1', 'COLDKEEP_PHASE1C_TEST: 1', 'COLDKEEP_CODEC: plain',
+                  "COLDKEEP_KEY: ''", 'COLDKEEP_RECOVERY_IMAGE: ' + image,
+                  'COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump',
+                  'COLDKEEP_PG_RESTORE: /usr/lib/postgresql/16/bin/pg_restore'):
+        need(value in passive, 'passive inventory prerequisite: ' + value.split(':', 1)[0])
     if runner is None:
         runner = (ROOT / 'scripts/run_staged_package_tests.py').read_text()
     if wrappers is None:
         wrappers = {scope: (ROOT / 'scripts' / name).read_text() for scope, name in
-                    [('packages', 'run_package_tests.sh'), ('recovery', 'run_recovery_export_tests.sh')]}
+                    [('packages', 'run_package_tests.sh'), ('recovery', 'run_recovery_export_tests.sh'),
+                     ('passive', 'run_passive_inventory_tests.sh')]}
     for scope, body in wrappers.items():
         active = '\n'.join(line for line in body.splitlines() if line and not line.startswith('#'))
         expected = '\n'.join(['set -euo pipefail', 'if [ "$#" -ne 1 ]; then',
                               "  echo 'requires one new output directory' >&2", '  exit 2', 'fi',
                               'exec python3 "$(dirname -- "$0")/run_staged_package_tests.py" --scope ' + scope + ' --output "$1"'])
         need(active == expected, 'complete ' + scope + ' wrapper delegates only to staged runner')
-    need(set(wrappers) == {'packages', 'recovery'}, 'both staged wrapper contracts present')
+    need(set(wrappers) == {'packages', 'recovery', 'passive'}, 'all three staged wrapper contracts present')
     tree = ast.parse(runner)
     commands = next((ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
                      and any(isinstance(t, ast.Name) and t.id == 'COMMANDS' for t in node.targets)), {})
     need(commands.get('packages') == ['go', 'test', '-race', '-count=1', '-p=1', '-json', '-timeout=15m', './cmd/...', './internal/...'], 'complete unfiltered package command')
+    need(commands.get('passive') == ['go', 'test', '-race', '-count=1', '-p=1', '-skip', '^TestRecovery', '-json', '-timeout=15m',
+                                    './internal/recoveryexport', './internal/coordination'], 'passive inventory selection and staging budget retained')
 
     remote = section(workflow, 'remote-candidate-install', 2)
     consumer = step(remote, 'Install exact public candidate through an isolated consumer')

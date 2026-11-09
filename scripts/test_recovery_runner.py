@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from check_recovery_test_events import required
+from check_passive_test_events import required as passive_required
 from run_staged_package_tests import IMAGE
 
 
@@ -16,6 +17,8 @@ NEW_EVENT = "TestAdoptionOperatorAndDatabaseReservation"
 
 
 class RecoveryRunnerTests(unittest.TestCase):
+    required_events = required
+    runner = RUNNER
     required_event = NEW_EVENT
     required_package = "github.com/franchoy/coldkeep/v2/internal/recoveryexport"
     def run_mutation(self, mutation):
@@ -23,9 +26,9 @@ class RecoveryRunnerTests(unittest.TestCase):
             root = Path(directory)
             event_file = root / "events.jsonl"
             event_file.write_text("")
-            self.assertIn(self.required_event, required[self.required_package])
+            self.assertIn(self.required_event, self.required_events[self.required_package])
             records = [{"Action": "pass", "Package": package, "Test": test}
-                       for package, tests in required.items() for test in tests | {""}]
+                       for package, tests in self.required_events.items() for test in tests | {""}]
             if mutation == "missing":
                 records = [e for e in records if e["Test"] != self.required_event]
             if mutation == "skip":
@@ -66,7 +69,7 @@ else:
                        COLDKEEP_PG_DUMP=str(fake / "pg_dump"), COLDKEEP_PG_RESTORE=str(fake / "pg_restore"),
                        COLDKEEP_RECOVERY_IMAGE=IMAGE, SYNTHETIC_EVENTS=str(event_file),
                        SYNTHETIC_EXIT="17" if mutation == "child-exit" else "0")
-            result = subprocess.run(["bash", str(RUNNER), str(root / "out")], cwd=ROOT, env=env,
+            result = subprocess.run(["bash", str(self.runner), str(root / "out")], cwd=ROOT, env=env,
                                     capture_output=True, text=True, timeout=30)
             return result
 
@@ -121,3 +124,9 @@ class OperatorConfigUnicodeRunnerTests(RecoveryRunnerTests):
 class OperatorConfigLimitRunnerTests(RecoveryRunnerTests):
     required_package = "github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery"
     required_event = "TestRecoveryConfigByteBoundary/excess-padding"
+
+
+class PassiveRunnerTests(RecoveryRunnerTests):
+    required_events = passive_required
+    runner = ROOT / "scripts/run_passive_inventory_tests.sh"
+    required_event = "TestCatalogRowSecurityCannotHideClosure/filtered-reader-refused"
