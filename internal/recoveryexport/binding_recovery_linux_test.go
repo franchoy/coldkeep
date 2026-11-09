@@ -50,6 +50,14 @@ func TestBindingIndependentRecovery(t *testing.T) {
 			q := nextBinding(t, f, o, BindingSourceRegister, id, source, 0)
 			_, e = ApplyBinding(context.Background(), f.config, q)
 			must(t, e)
+			// Recover real historical files after the drained offline relocation,
+			// as well as after the subsequent explicit incarnation advance.
+			moved := f.root + " relocated history"
+			must(t, os.Rename(f.root, moved))
+			f.root, f.config.PayloadRoot = moved, moved
+			q = nextBinding(t, f, o, BindingRelocate, "", "", 0)
+			_, e = ApplyBinding(context.Background(), f.config, q)
+			must(t, e)
 			q = nextBinding(t, f, o, BindingReconnect, "", "", 0)
 			_, e = ApplyBinding(context.Background(), f.config, q)
 			must(t, e)
