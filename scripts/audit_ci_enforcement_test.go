@@ -1663,18 +1663,18 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 		sourceEnv   string
 	}{
 		{
-			name:        "SQLite plain package command",
-			anchor:      "      - name: Test packages (plain codec)\n",
-			old:         "go test -race -count=1 ./cmd/... ./internal/...",
+			name:        "complete package staging command",
+			anchor:      "      - name: Run complete staged package tests\n",
+			old:         "bash scripts/run_package_tests.sh",
 			replacement: "go test -race -count=1 ./internal/...",
-			wantMessage: "SQLite quality plain package command",
+			wantMessage: "complete package staging command",
 		},
 		{
-			name:        "SQLite AES-GCM package command",
-			anchor:      "      - name: Test packages (aes-gcm codec)\n",
-			old:         "go test -race -count=1 ./cmd/... ./internal/...",
-			replacement: "go test -race -count=1 ./cmd/...",
-			wantMessage: "SQLite quality AES-GCM package command",
+			name:        "complete package codec selection",
+			anchor:      "      - name: Run complete staged package tests\n",
+			old:         "COLDKEEP_CODEC: ${{ matrix.codec }}",
+			replacement: "COLDKEEP_CODEC: plain",
+			wantMessage: "complete package codec selection",
 		},
 		{
 			name:        "Phase 17 PostgreSQL mutation marker",

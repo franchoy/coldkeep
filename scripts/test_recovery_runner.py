@@ -1,11 +1,13 @@
 """Exercise the real blocking runner with synthetic Go event/process mutations."""
-import ast
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+
+from check_recovery_test_events import required
+from run_staged_package_tests import IMAGE
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,17 +23,6 @@ class RecoveryRunnerTests(unittest.TestCase):
             root = Path(directory)
             event_file = root / "events.jsonl"
             event_file.write_text("")
-            source = RUNNER.read_text().split("<<'PY' || status=$?\n", 1)[1].split("\nPY\n", 1)[0]
-            tree = ast.parse(source)
-            boundary = next(node.lineno for node in tree.body if isinstance(node, ast.Assign)
-                            and any(isinstance(t, ast.Name) and t.id == "passes" for t in node.targets))
-            # Evaluate only the required-event declarations, before the checker.
-            namespace = {}
-            import sys
-            from unittest.mock import patch
-            with patch.object(sys, "argv", ["checker", str(event_file)]):
-                exec("\n".join(source.splitlines()[:boundary - 1]), namespace)
-            required = namespace["required"]
             self.assertIn(self.required_event, required[self.required_package])
             records = [{"Action": "pass", "Package": package, "Test": test}
                        for package, tests in required.items() for test in tests | {""}]
@@ -48,7 +39,9 @@ import os,sys,pathlib
 if sys.argv[1:]==['env','GOVERSION']:
  print('go1.26.10')
 elif sys.argv[1]=='build':
- pathlib.Path(sys.argv[sys.argv.index('-o')+1]).write_text('synthetic reader identity')
+ output=pathlib.Path(sys.argv[sys.argv.index('-o')+1])
+ output.write_text('synthetic reader identity')
+ output.chmod(0o700)
 elif sys.argv[1]=='test':
  print(pathlib.Path(os.environ['SYNTHETIC_EVENTS']).read_text(),end='')
  sys.exit(int(os.environ['SYNTHETIC_EXIT']))
@@ -57,13 +50,21 @@ else:
 """)
             go.chmod(0o700)
             docker = fake / "docker"
-            docker.write_text("#!/bin/sh\nprintf 'synthetic image identity\\n'\n")
+            image_json = json.dumps([{"Id": "sha256:" + "1" * 64, "RepoDigests": [IMAGE]}])
+            docker.write_text("#!/usr/bin/env python3\nimport sys\nif sys.argv[1]=='image': print(" + repr(image_json) + ")\n")
             docker.chmod(0o700)
+            for name in ("pg_dump", "pg_restore"):
+                client = fake / name
+                client.write_text("#!/bin/sh\nprintf '" + name + " (PostgreSQL) 16.15\\n'\n")
+                client.chmod(0o700)
+            psql = fake / "psql"
+            psql.write_text("#!/usr/bin/env python3\nprint('{\"databases\": [], \"roles\": [], \"sessions\": []}')\n")
+            psql.chmod(0o700)
             env = dict(os.environ, PATH=str(fake) + os.pathsep + os.environ["PATH"],
                        COLDKEEP_PHASE1B_TEST="1", COLDKEEP_PHASE1C_TEST="1",
                        DB_HOST="127.0.0.1", DB_PORT="1", DB_USER="synthetic", DB_PASSWORD="synthetic",
-                       COLDKEEP_PG_DUMP="/synthetic/pg_dump", COLDKEEP_PG_RESTORE="/synthetic/pg_restore",
-                       COLDKEEP_RECOVERY_IMAGE="synthetic", SYNTHETIC_EVENTS=str(event_file),
+                       COLDKEEP_PG_DUMP=str(fake / "pg_dump"), COLDKEEP_PG_RESTORE=str(fake / "pg_restore"),
+                       COLDKEEP_RECOVERY_IMAGE=IMAGE, SYNTHETIC_EVENTS=str(event_file),
                        SYNTHETIC_EXIT="17" if mutation == "child-exit" else "0")
             result = subprocess.run(["bash", str(RUNNER), str(root / "out")], cwd=ROOT, env=env,
                                     capture_output=True, text=True, timeout=30)

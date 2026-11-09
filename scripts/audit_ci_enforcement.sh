@@ -1456,20 +1456,19 @@ check_local_workflow() {
   upload_v5_count=$(grep -c 'actions/upload-artifact@v5' "$WORKFLOW_FILE" || true)
   upload_v6_count=$(grep -c 'actions/upload-artifact@v6' "$WORKFLOW_FILE" || true)
   upload_v7_count=$(grep -c 'actions/upload-artifact@v7' "$WORKFLOW_FILE" || true)
-  if [[ "$upload_v7_count" -ne 7 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
-    echo "[audit] ERROR: required CI expects exactly seven upload-artifact@v7 uses and zero v5/v6 uses" >&2
+  if [[ "$upload_v7_count" -ne 9 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
+    echo "[audit] ERROR: required CI expects exactly nine upload-artifact@v7 uses and zero v5/v6 uses" >&2
     check_status=1
   else
-    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly seven times"
+    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly nine times"
   fi
+  python3 "$REPO_ROOT/scripts/check_ci_followup.py" "$WORKFLOW_FILE" || check_status=1
   quality_block="$(extract_job_block quality)"
   if [[ -z "$quality_block" ]]; then
     echo "[audit] ERROR: missing quality job block content" >&2
     check_status=1
   else
     quality_checkout_block="$(extract_step_block_from_content "$quality_block" "Checkout")"
-    quality_plain_block="$(extract_step_block_from_content "$quality_block" "Test packages (plain codec)")"
-    quality_aes_gcm_block="$(extract_step_block_from_content "$quality_block" "Test packages (aes-gcm codec)")"
     validator_test_block="$(extract_step_block_from_content "$quality_block" "Test release-state validator")"
     python_suite_block="$(extract_step_block_from_content "$quality_block" "Run complete Python validation suite")"
     product_fixture_block="$(extract_step_block_from_content "$quality_block" "Run product baseline fixtures")"
@@ -1493,10 +1492,6 @@ check_local_workflow() {
     require_content_pattern "$validator_real_block" 'refs/tags/v' 'release-state validator tag condition' || check_status=1
     require_content_pattern "$validator_real_block" 'github\.event_name == .pull_request.' 'release-state validator pull-request condition' || check_status=1
     require_content_pattern "$validator_real_block" 'github\.head_ref' 'release-state validator pull-request head condition' || check_status=1
-    require_content_pattern "$quality_plain_block" '^          COLDKEEP_CODEC: plain$' 'SQLite quality plain codec environment' || check_status=1
-    require_content_pattern "$quality_plain_block" '^        run: go test -race -count=1 \./cmd/\.\.\. \./internal/\.\.\.$' 'SQLite quality plain package command' || check_status=1
-    require_content_pattern "$quality_aes_gcm_block" '^          COLDKEEP_CODEC: aes-gcm$' 'SQLite quality AES-GCM codec environment' || check_status=1
-    require_content_pattern "$quality_aes_gcm_block" '^        run: go test -race -count=1 \./cmd/\.\.\. \./internal/\.\.\.$' 'SQLite quality AES-GCM package command' || check_status=1
     if grep -Eq 'continue-on-error|\|\| true' <<<"$validator_test_block$validator_real_block$python_suite_block"; then
       echo "[audit] ERROR: release-state and Python validation steps must remain blocking" >&2
       check_status=1
@@ -1504,7 +1499,7 @@ check_local_workflow() {
       echo "[audit] ok: release-state and Python validation steps are blocking"
     fi
   fi
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, package-tests\]' 'smoke job depends on quality, correctness-matrix and package-tests' || check_status=1
   local phase2_block phase2_tools phase2_browser
   phase2_block="$(extract_step_block_from_content "$quality_block" "Run Phase 2 delivery proof")"
   phase2_tools="$(extract_step_block_from_content "$quality_block" "Setup Phase 2 frontend tools")"
@@ -1870,7 +1865,7 @@ check_local_workflow() {
   require_content_pattern "$product_container_block" 'name:\s*Smoke product image' 'product container runs the version smoke' || check_status=1
   require_content_pattern "$devcontainer_block" 'validate_phase3_contracts\.py' 'development container runs the static safety contract' || check_status=1
   require_content_pattern "$devcontainer_block" 'post-create\.sh' 'development container runs its bootstrap' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer\]' 'required gate depends on security and hosted reproducibility jobs' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, package-tests, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer\]' 'required gate depends on security and hosted reproducibility jobs' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'CORRECTNESS_MATRIX_RESULT:\s*\$\{\{ needs\['\''correctness-matrix'\''\]\.result \}\}' 'required gate captures correctness-matrix result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT:\s*\$\{\{ needs\.vulnerability\.result \}\}' 'required gate captures vulnerability result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SOURCE_INSTALL_RESULT:\s*\$\{\{ needs\['\''source-install'\''\]\.result \}\}' 'required gate captures source-install result' || check_status=1

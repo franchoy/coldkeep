@@ -162,17 +162,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Test packages (plain codec)
-        env:
-          COLDKEEP_CODEC: plain
-        run: go test -race -count=1 ./cmd/... ./internal/...
-
-      - name: Test packages (aes-gcm codec)
-        env:
-          COLDKEEP_CODEC: aes-gcm
-          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
-        run: go test -race -count=1 ./cmd/... ./internal/...
-
       - name: Validate deterministic chunker benchmark tests (CI-fast)
         run: >-
           go test -race -count=1 ./internal/chunk/benchmark
@@ -186,6 +175,72 @@ jobs:
 
       - name: Build CLI
         run: go build -o coldkeep ./cmd/coldkeep
+
+  package-tests:
+    name: Complete package tests (${{ matrix.codec }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        codec: [plain, aes-gcm]
+    services:
+      postgres:
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+        env:
+          POSTGRES_USER: coldkeep
+          POSTGRES_PASSWORD: coldkeep
+          POSTGRES_DB: coldkeep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coldkeep -d coldkeep"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.10'
+          check-latest: false
+          cache: true
+      - name: Setup package frontend tools
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.2'
+      - name: Prepare embedded assets for complete package tests
+        run: python3 scripts/prepare_daemon.py
+      - name: Install package PostgreSQL 16 clients
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+      - name: Run complete staged package tests
+        env:
+          COLDKEEP_CODEC: ${{ matrix.codec }}
+          COLDKEEP_KEY: ${{ matrix.codec == 'aes-gcm' && env.COLDKEEP_AES_GCM_FIXTURE_HEX || '' }}
+          COLDKEEP_PHASE1B_TEST: 1
+          COLDKEEP_PHASE1C_TEST: 1
+          COLDKEEP_RECOVERY_IMAGE: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+          COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump
+          COLDKEEP_PG_RESTORE: /usr/lib/postgresql/16/bin/pg_restore
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: bash scripts/run_package_tests.sh "$RUNNER_TEMP/package-tests"
+      - name: Upload complete package evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-tests-${{ matrix.codec }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/package-tests/*
+          if-no-files-found: error
+          retention-days: 14
 
   correctness-matrix:
     runs-on: ubuntu-latest
@@ -792,7 +847,7 @@ jobs:
 
   legacy-compatibility:
     runs-on: ubuntu-latest
-    needs: quality
+    needs: [quality, package-tests]
     timeout-minutes: 20
     services:
       postgres:
@@ -1196,7 +1251,7 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
-    needs: [quality, correctness-matrix]
+    needs: [quality, correctness-matrix, package-tests]
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -1258,7 +1313,7 @@ jobs:
   benchmark-integrity:
     name: Benchmark integrity (${{ matrix.profile }})
     runs-on: ubuntu-24.04
-    needs: quality
+    needs: [quality, package-tests]
     timeout-minutes: 30
     services:
       postgres:
@@ -1383,7 +1438,7 @@ jobs:
   benchmark-timing-advisory:
     name: Benchmark timing advisory (${{ matrix.profile }})
     runs-on: ubuntu-24.04
-    needs: quality
+    needs: [quality, package-tests]
     timeout-minutes: 20
     services:
       postgres:
@@ -1545,7 +1600,7 @@ jobs:
   critical-coverage-report:
     name: critical coverage report
     runs-on: ubuntu-latest
-    needs: quality
+    needs: [quality, package-tests]
     timeout-minutes: 15
 
     steps:
@@ -1724,8 +1779,173 @@ jobs:
           check-latest: false
           cache: false
 
-      - name: Install exact public candidate outside a module (Unix)
-        if: runner.os != 'Windows'
+      - name: Install exact public candidate through an isolated consumer
+        if: github.ref_type != 'tag'
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+          import tempfile
+
+          MODULE = 'github.com/franchoy/coldkeep/v2'
+          COMMAND = MODULE + '/cmd/coldkeep'
+
+          def require(condition, message):
+              if not condition:
+                  raise ValueError(message)
+
+          def inside(path, parent):
+              return Path(path).resolve().is_relative_to(Path(parent).resolve())
+
+          def origin(info, expected):
+              require(info.get('Path') == MODULE and not info.get('Error') and not info.get('Replace'), 'module identity or replacement')
+              require(re.fullmatch(r'v2\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', info.get('Version', '')), 'noncanonical module version')
+              provenance = info.get('Origin', {})
+              require(provenance.get('VCS') == 'git', 'module origin VCS')
+              require(provenance.get('URL', '').removesuffix('.git') == 'https://github.com/franchoy/coldkeep', 'module origin repository')
+              require(provenance.get('Hash') == expected, 'full module origin mismatch')
+
+          def directives(info):
+              require(not info.get('Replace') and not info.get('Exclude'), 'replace/exclude directives refused')
+
+          def decode_stream(raw):
+              decoder = json.JSONDecoder()
+              values = []
+              while raw.strip():
+                  value, end = decoder.raw_decode(raw.lstrip())
+                  values.append(value)
+                  raw = raw.lstrip()[end:]
+              return values
+
+          def graph(raw, version, download, cache):
+              values = decode_stream(raw)
+              require(not any(x.get('Error') or x.get('Replace') for x in values), 'graph error or replacement')
+              candidates = [x for x in values if x.get('Path') == MODULE]
+              require(len(candidates) == 1, 'candidate graph cardinality')
+              candidate = candidates[0]
+              require(candidate.get('Version') == version and candidate.get('Main', False) is False, 'selected candidate version/main mismatch')
+              require(candidate.get('Dir') == download['Dir'] and inside(candidate['Dir'], cache), 'selected candidate source outside downloaded cache')
+              require(candidate.get('GoMod') == download['GoMod'], 'selected candidate go.mod mismatch')
+              for field in ('Sum', 'GoModSum'):
+                  if candidate.get(field):
+                      require(candidate[field] == download[field], 'selected candidate checksum mismatch')
+
+          def binary_identity(raw, version, checksum):
+              lines = raw.splitlines()
+              require(lines and lines[0].endswith(': go1.26.10'), 'binary compiler identity mismatch')
+              fields = [line.strip().split('\t') for line in lines[1:]]
+              require(['path', COMMAND] in fields, 'binary command identity mismatch')
+              require(not any(row and row[0] == '=>' for row in fields), 'binary replacement refused')
+              modules = [row for row in fields if row and row[0] == 'mod']
+              require(len(modules) == 1 and modules[0][1:3] == [MODULE, version], 'binary module identity mismatch')
+              require(len(modules[0]) == 4 and modules[0][3] == checksum, 'binary checksum mismatch')
+              require(['build', 'CGO_ENABLED=1'] in fields, 'binary CGO identity mismatch')
+
+          def main():
+              expected = os.environ['TRIGGER_SHA']
+              require(re.fullmatch(r'[0-9a-f]{40}', expected), 'trigger must be a full commit SHA')
+              require(os.environ['CANDIDATE_QUERY'] == expected, 'query must equal independent trigger SHA')
+              require(os.environ['EVENT_REF_TYPE'] != 'tag', 'consumer method is only for non-tag candidates')
+              require(os.environ['PUBLIC_REPOSITORY_URL'] == 'https://github.com/franchoy/coldkeep.git', 'unexpected public repository')
+              evidence = Path(os.environ['RUNNER_TEMP']) / 'remote-install-evidence'
+              evidence.mkdir(mode=0o700)
+              root = Path(tempfile.mkdtemp(prefix='coldkeep-consumer-', dir=os.environ['RUNNER_TEMP'])).resolve()
+              environment = {k: v for k, v in os.environ.items() if not k.startswith(('GO', 'CGO_', 'GIT_CONFIG_'))}
+              environment.update(GOTOOLCHAIN='local', GOENV='off', GOFLAGS='', GOWORK='off', GOPROXY='direct',
+                                 GOSUMDB='sum.golang.org', GONOSUMDB='', GOPRIVATE='', GONOPROXY='', CGO_ENABLED='1',
+                                 GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', CC='gcc' if os.name == 'nt' else 'cc')
+              for variable, name in [('GOBIN', 'bin'), ('GOMODCACHE', 'mod'), ('GOCACHE', 'cache'), ('GOPATH', 'gopath')]:
+                  directory = root / name
+                  directory.mkdir(mode=0o700)
+                  environment[variable] = str(directory)
+              cwd = root
+              status = {'expected_sha': expected, 'method': 'isolated remote consumer', 'success': False}
+
+              def command(label, args):
+                  with (evidence / (label + '.stdout')).open('wb') as output, (evidence / (label + '.stderr')).open('wb') as error:
+                      result = subprocess.run(args, cwd=cwd, env=environment, stdout=output, stderr=error, timeout=1200)
+                  require(result.returncode == 0, label + ' command failed: ' + str(result.returncode))
+                  return (evidence / (label + '.stdout')).read_text(encoding='utf-8')
+
+              def go_environment(label, consumer=None):
+                  effective = json.loads(command(label, ['go', 'env', '-json', 'GOVERSION', 'GOTOOLCHAIN', 'GOENV', 'GOWORK', 'GOMOD',
+                                                         'GOMODCACHE', 'GOCACHE', 'GOPATH', 'GOBIN', 'GOFLAGS', 'GOPROXY', 'GOSUMDB', 'CGO_ENABLED', 'GOOS', 'GOARCH', 'CC']))
+                  for key in ('GOTOOLCHAIN', 'GOENV', 'GOWORK', 'GOMODCACHE', 'GOCACHE', 'GOPATH', 'GOBIN', 'GOFLAGS', 'GOPROXY', 'GOSUMDB', 'CGO_ENABLED', 'CC'):
+                      require(effective[key] == ('' if key == 'GOENV' else environment[key]), 'effective Go environment mismatch: ' + key)
+                  require(effective['GOVERSION'] == 'go1.26.10', 'Go toolchain mismatch')
+                  if consumer is None:
+                      require(effective['GOMOD'].lower() in ('', os.devnull.lower()), 'ambient parent module refused')
+                  else:
+                      require(Path(effective['GOMOD']).resolve() == consumer / 'go.mod', 'consumer go.mod selection mismatch')
+                  return effective
+
+              try:
+                  require(not (root / 'go.mod').exists() and not (root / 'go.work').exists(), 'installation root is not empty')
+                  initial_env = go_environment('environment-before')
+                  command('compiler', [environment['CC'], '--version'])
+                  resolved = json.loads(command('resolve', ['go', 'list', '-m', '-json', MODULE + '@' + expected]))
+                  origin(resolved, expected)
+                  version = resolved['Version']
+                  download = json.loads(command('download', ['go', 'mod', 'download', '-json', MODULE + '@' + version]))
+                  require(download.get('Path') == MODULE and download.get('Version') == version and not download.get('Error'), 'download identity mismatch')
+                  require(download.get('Sum') and download.get('GoModSum'), 'download checksums missing')
+                  require(inside(download['Dir'], environment['GOMODCACHE']) and inside(download['GoMod'], environment['GOMODCACHE']), 'download outside private cache')
+                  if download.get('Origin'):
+                      origin(download, expected)
+                  directives(json.loads(command('download-go-mod', ['go', 'mod', 'edit', '-json', download['GoMod']])))
+                  shutil.copyfile(download['GoMod'], evidence / 'downloaded.go.mod')
+                  consumer = root / 'consumer'
+                  consumer.mkdir(mode=0o700)
+                  cwd = consumer
+                  command('consumer-init', ['go', 'mod', 'init', 'coldkeep-ci-consumer'])
+                  command('consumer-require', ['go', 'mod', 'edit', '-require=' + MODULE + '@' + version])
+                  go_environment('environment-consumer', consumer)
+                  directives(json.loads(command('consumer-before', ['go', 'mod', 'edit', '-json'])))
+                  # Materialize the pruned graph before checking its actual selected source.
+                  command('prepare-graph', ['go', 'list', '-mod=mod', '-deps', COMMAND])
+                  graph(command('graph-before', ['go', 'list', '-mod=readonly', '-m', '-json', 'all']), version, download, environment['GOMODCACHE'])
+                  command('install', ['go', 'install', '-mod=readonly', COMMAND])
+                  graph(command('graph-after', ['go', 'list', '-mod=readonly', '-m', '-json', 'all']), version, download, environment['GOMODCACHE'])
+                  directives(json.loads(command('consumer-after', ['go', 'mod', 'edit', '-json'])))
+                  final_origin = json.loads(command('resolve-after', ['go', 'list', '-m', '-json', MODULE + '@' + version]))
+                  origin(final_origin, expected)
+                  require(final_origin['Version'] == version, 'post-install version mismatch')
+                  for field in ('Sum', 'GoModSum'):
+                      if final_origin.get(field):
+                          require(final_origin[field] == download[field], 'post-install checksum mismatch')
+                  go_environment('environment-after', consumer)
+                  binary = Path(environment['GOBIN']) / ('coldkeep.exe' if os.name == 'nt' else 'coldkeep')
+                  require(command('binary-version', [str(binary), 'version']).strip() == 'coldkeep version 2.0.0-dev.0', 'binary application version mismatch')
+                  binary_identity(command('binary-build-info', ['go', 'version', '-m', str(binary)]), version, download['Sum'])
+                  shutil.copyfile(consumer / 'go.mod', evidence / 'consumer.go.mod')
+                  shutil.copyfile(consumer / 'go.sum', evidence / 'consumer.go.sum')
+                  status.update(success=True, resolved_version=version, origin=final_origin['Origin'], sum=download['Sum'],
+                                binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(), platform=initial_env)
+              finally:
+                  # Only the freshly created private root is removed; retain small evidence on failure.
+                  try:
+                      def writable_remove(function, path, _error):
+                          os.chmod(path, 0o700)
+                          function(path)
+                      for directory, _dirs, _files in os.walk(root):
+                          os.chmod(directory, 0o700)
+                      shutil.rmtree(root, onerror=writable_remove)
+                      status['cleanup_complete'] = not root.exists()
+                  finally:
+                      (evidence / 'result.json').write_text(json.dumps(status, indent=2) + '\n')
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                  summary.write(json.dumps(status, indent=2) + '\n')
+
+          if __name__ == '__main__':
+              main()
+
+      - name: Install exact public tag outside a module (Unix)
+        if: runner.os != 'Windows' && github.ref_type == 'tag'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1801,8 +2021,8 @@ jobs:
             echo 'EOF'
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Install exact public candidate outside a module (Windows)
-        if: runner.os == 'Windows'
+      - name: Install exact public tag outside a module (Windows)
+        if: runner.os == 'Windows' && github.ref_type == 'tag'
         shell: pwsh
         run: |
           if ((go env GOVERSION) -ne 'go1.26.10') { throw 'Go version drift' }
@@ -1890,6 +2110,15 @@ jobs:
           "GOARCH=$(go env GOARCH)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           'C_COMPILER=gcc' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
+      - name: Upload remote consumer identity evidence
+        if: ${{ always() && github.ref_type != 'tag' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: remote-consumer-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/remote-install-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+
   product-container:
     name: Product container (linux/${{ matrix.arch }})
     runs-on: ubuntu-latest
@@ -1962,13 +2191,14 @@ jobs:
   ci-required:
     name: CI Required Gate
     runs-on: ubuntu-latest
-    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer]
+    needs: [quality, correctness-matrix, package-tests, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer]
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
       - name: Evaluate upstream jobs
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
+          PACKAGE_TESTS_RESULT: ${{ needs['package-tests'].result }}
           CORRECTNESS_MATRIX_RESULT: ${{ needs['correctness-matrix'].result }}
           INTEGRATION_STRESS_RESULT: ${{ needs['integration-stress'].result }}
           INTEGRATION_LONG_RUN_RESULT: ${{ needs['integration-long-run'].result }}
@@ -1985,6 +2215,7 @@ jobs:
           DEVCONTAINER_RESULT: ${{ needs.devcontainer.result }}
         run: |
           echo "quality=${QUALITY_RESULT}"
+          echo "package-tests=${PACKAGE_TESTS_RESULT}"
           echo "correctness-matrix=${CORRECTNESS_MATRIX_RESULT}"
           echo "integration-stress=${INTEGRATION_STRESS_RESULT}"
           echo "integration-long-run=${INTEGRATION_LONG_RUN_RESULT}"
@@ -2001,6 +2232,7 @@ jobs:
           echo "devcontainer=${DEVCONTAINER_RESULT}"
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
+             [ "${PACKAGE_TESTS_RESULT}" != "success" ] || \
              [ "${CORRECTNESS_MATRIX_RESULT}" != "success" ] || \
              [ "${INTEGRATION_STRESS_RESULT}" != "success" ] || \
              [ "${INTEGRATION_LONG_RUN_RESULT}" != "success" ] || \

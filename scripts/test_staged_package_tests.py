@@ -1,0 +1,208 @@
+"""Qualify staging refusal, process lifetime, event scope and cleanup failures."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import check_recovery_test_events as events
+import run_staged_package_tests as runner
+
+
+class StagingPrerequisiteTests(unittest.TestCase):
+    def test_prerequisite_failures_are_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("pg_dump", "pg_restore"):
+                (root / name).write_text("fixture")
+                (root / name).chmod(0o700)
+            good = dict(DB_HOST="127.0.0.1", DB_PORT="1", DB_USER="fixture", DB_PASSWORD="fixture",
+                        COLDKEEP_PHASE1B_TEST="1", COLDKEEP_PHASE1C_TEST="1", COLDKEEP_CODEC="plain",
+                        COLDKEEP_PG_DUMP=str(root / "pg_dump"), COLDKEEP_PG_RESTORE=str(root / "pg_restore"),
+                        COLDKEEP_RECOVERY_IMAGE=runner.IMAGE)
+            for mutation in ("none", "missing-flag", "missing-client", "wrong-client", "mismatched-client",
+                             "missing-image", "wrong-image", "wrong-digest", "image-unavailable", "wrong-go"):
+                with self.subTest(mutation=mutation):
+                    env = dict(good)
+                    if mutation == "missing-flag":
+                        env.pop("COLDKEEP_PHASE1C_TEST")
+                    if mutation == "missing-client":
+                        env["COLDKEEP_PG_DUMP"] = str(root / "missing")
+                    if mutation in ("wrong-image", "missing-image"):
+                        env["COLDKEEP_RECOVERY_IMAGE"] = "postgres:latest" if mutation == "wrong-image" else ""
+
+                    def command(args, _env):
+                        if args[0] == "go":
+                            return 0, "go1.26.9" if mutation == "wrong-go" else "go1.26.10", ""
+                        if args[0] == "docker":
+                            if mutation == "image-unavailable":
+                                raise RuntimeError("image inspect failed")
+                            digest = "postgres@sha256:wrong" if mutation == "wrong-digest" else runner.IMAGE
+                            return 0, json.dumps([{"Id": "sha256:" + "1" * 64, "RepoDigests": [digest]}]), ""
+                        version = "16.15"
+                        if mutation == "wrong-client":
+                            version = "15.9"
+                        if mutation == "mismatched-client" and args[0].endswith("pg_restore"):
+                            version = "16.14"
+                        return 0, f"{Path(args[0]).name} (PostgreSQL) {version}\n", ""
+
+                    with patch.object(runner, "command", side_effect=command), patch.object(runner.os, "getuid", return_value=1000):
+                        if mutation == "none":
+                            self.assertEqual(runner.prerequisites(env, "packages")["clients"]["dump"], "16.15")
+                        else:
+                            with self.assertRaises((ValueError, RuntimeError)):
+                                runner.prerequisites(env, "packages")
+
+    def test_reader_provenance_refusals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            phase = root / "phase3a"
+            phase.mkdir()
+            source = phase / "accepted"
+            source.mkdir()
+            original = b"accepted immutable source\n"
+            (source / "original.go").write_bytes(original)
+            blob = hashlib.sha1(b"blob " + str(len(original)).encode() + b"\0" + original).hexdigest()
+            binaries = [phase / "accepted-writer", phase / "accepted-reader", phase / "current-writer", root / "coldkeep-recovery"]
+            for binary in binaries:
+                binary.write_text("source verified executable")
+                binary.chmod(0o700)
+            good = {"accepted": {"commit": "accepted-commit", "tree": "accepted-tree",
+                                 "original_source_hashes": {"original.go": hashlib.sha256(original).hexdigest()},
+                                 "writer_sha256": runner.digest(binaries[0]), "reader_sha256": runner.digest(binaries[1])},
+                    "current_writer_sha256": runner.digest(binaries[2])}
+
+            def command(args, _env):
+                return (0, "accepted-tree\n", "") if args[1] == "rev-parse" else (0, f"100644 blob {blob}\toriginal.go\0", "")
+
+            report = root / "provenance.json"
+            for mutation in ("none", "wrong-commit", "wrong-tree", "missing-source", "changed-source", "wrong-binary", "missing-reader"):
+                with self.subTest(mutation=mutation):
+                    value = json.loads(json.dumps(good))
+                    if mutation == "wrong-commit":
+                        value["accepted"]["commit"] = "other-commit"
+                    if mutation == "wrong-tree":
+                        value["accepted"]["tree"] = "other-tree"
+                    if mutation == "missing-source":
+                        value["accepted"]["original_source_hashes"] = {}
+                    if mutation == "wrong-binary":
+                        value["accepted"]["reader_sha256"] = "0" * 64
+                    (source / "original.go").write_bytes(b"changed" if mutation == "changed-source" else original)
+                    if mutation == "missing-reader":
+                        binaries[1].unlink()
+                    report.write_text(json.dumps(value))
+                    with patch.object(runner, "BASES", {"accepted": "accepted-commit"}), patch.object(runner, "command", side_effect=command):
+                        if mutation == "none":
+                            self.assertEqual(len(runner.verify_readers(root, report, {})), 4)
+                        else:
+                            with self.assertRaises((ValueError, FileNotFoundError)):
+                                runner.verify_readers(root, report, {})
+
+
+class StagingLifetimeTests(unittest.TestCase):
+    def run_case(self, mutation):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            owned = root / "owned-readers"
+            owned.mkdir()
+            unrelated = root / "unrelated"
+            unrelated.write_text("preserved")
+            seen = []
+            passes = [{"Package": package, "Test": test, "Action": "pass"}
+                      for package, test in events.required_identities()]
+            if mutation == "required-skip":
+                passes[0]["Action"] = "skip"
+            if mutation == "missing-event":
+                passes.pop()
+            if mutation == "unrelated-skip":
+                passes.append({"Package": "unrelated/platform", "Test": "platform-only", "Action": "skip"})
+
+            def command(args, env, **kwargs):
+                if args[:2] == ["go", "test"]:
+                    self.assertTrue(owned.exists())
+                    self.assertEqual(Path(env["COLDKEEP_RECOVERY_READER"]).parent, owned)
+                    self.assertEqual(args, runner.COMMANDS["packages"])
+                    seen.append("go-child")
+                    if mutation == "child-start":
+                        raise OSError("cannot start child")
+                    kwargs["stdout"].write("".join(json.dumps(item) + "\n" for item in passes).encode())
+                    return (17 if mutation == "child-exit" else 0), "", ""
+                return 0, "source-identity", ""
+
+            def inventory(_env):
+                seen.append("inventory")
+                if seen.count("inventory") == 2 and mutation == "inventory-error":
+                    raise RuntimeError("residual observation unavailable")
+                return {"containers": ["residual"] if seen.count("inventory") == 2 and mutation == "residual" else []}
+
+            remove = shutil.rmtree
+
+            def cleanup(path):
+                self.assertIn("go-child", seen)
+                seen.append("cleanup")
+                if mutation == "cleanup-error":
+                    raise OSError("owned cleanup failed")
+                remove(path)
+
+            with patch.object(runner, "prerequisites", return_value={}), \
+                 patch.object(runner, "resource_inventory", side_effect=inventory), \
+                 patch.object(runner, "command", side_effect=command), \
+                 patch.object(runner, "verify_readers", return_value={"reader": "verified"}), \
+                 patch.object(runner.tempfile, "mkdtemp", return_value=str(owned)), \
+                 patch.object(runner.shutil, "rmtree", side_effect=cleanup):
+                status = runner.run("packages", output)
+            facts = json.loads((output / "execution.json").read_text())
+            self.assertEqual(unrelated.read_text(), "preserved")
+            self.assertEqual(owned.exists(), mutation == "cleanup-error")
+            self.assertGreater(seen.index("cleanup"), seen.index("go-child"))
+            self.assertEqual(facts["exit"], status)
+            return status, facts
+
+    def test_child_lifetime_and_all_failures_remain_blocking(self):
+        for mutation in ("none", "unrelated-skip", "child-exit", "child-start", "required-skip", "missing-event",
+                         "cleanup-error", "inventory-error", "residual"):
+            with self.subTest(mutation=mutation):
+                status, facts = self.run_case(mutation)
+                self.assertEqual(status == 0, mutation in ("none", "unrelated-skip"))
+                if mutation == "child-exit":
+                    self.assertEqual(status, 17)
+                if mutation == "inventory-error":
+                    self.assertIn("inventory_error", facts["cleanup"])
+
+    def test_real_subprocess_timeout_joins_before_return(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "late-write"
+            pid_file = Path(directory) / "pid"
+            code = ("import time,pathlib,os;pathlib.Path(" + repr(str(pid_file)) + ").write_text(str(os.getpid()));"
+                    "time.sleep(2);pathlib.Path(" + repr(str(marker)) + ").write_text('late')")
+            with self.assertRaises(subprocess.TimeoutExpired):
+                runner.command([sys.executable, "-c", code], os.environ.copy(), timeout=0.3)
+            self.assertTrue(pid_file.exists())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), 0)
+            self.assertFalse(marker.exists())
+
+
+class RecoveryEventContractTests(unittest.TestCase):
+    def test_accepted_structural_contract(self):
+        pairs = sorted(events.required_identities())
+        actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+        self.assertEqual(len(pairs), 569)
+        self.assertEqual(actual, "8eb9e04d2061e1c8659cb89a38e43648c0c241d2349900d0bf749503f9f19062")
+
+    def test_missing_and_skipped_binding_events_fail_broad_route(self):
+        for name in ("TestBindingDockerProfile", "TestBindingOldWritersAndReaders"):
+            for action in ("missing", "skip"):
+                with self.subTest(name=name, action=action):
+                    rows = [{"Package": p, "Test": t, "Action": "pass"} for p, t in events.required_identities()]
+                    if action == "missing":
+                        rows = [row for row in rows if row["Test"] != name]
+                    else:
+                        next(row for row in rows if row["Test"] == name)["Action"] = "skip"
+                    self.assertEqual(events.check_events(rows, broad=True)["status"], "FAIL")

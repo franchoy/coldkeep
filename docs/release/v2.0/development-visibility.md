@@ -153,3 +153,49 @@ are visible, their identities/URLs are recorded, hosted states are truthfully
 observed, and `main`, tags, releases, installations and predecessor worktrees
 remain preserved. It does not require concealing or repairing all hosted
 findings inside this docs-only unit, and does not complete action 2.04.
+
+## Authorized hosted-CI follow-up (9 November 2026)
+
+The initial development publication is accepted at
+`ac9382c9e620b17b43800c2a5cf0065e9e75446d`. The owner explicitly adopted the
+bounded CI launch prompt on 9 November 2026: M1 remote installation, E1
+cancellation, E2 application composition, C1 complete package prerequisites
+and Q1 proof credentials/cleanup. Local qualification and independent outgoing
+review must pass before a guarded fast-forward update of `release/v2.0`.
+PR #129 stays draft; main, tags, releases and product boundaries remain unchanged.
+
+For non-tag development candidates, the remote installation gate now creates a
+fresh disposable consumer module with private empty caches outside any checkout.
+It resolves the full public PR-head/push SHA, verifies the public Git origin,
+requires the exact resolved version, and installs the CLI without an `@` suffix.
+The selected module graph is checked before and after installation; the full
+origin, module sums, application/compiler identity and binary metadata must
+agree. The same inline Python implementation runs on all three operating systems.
+The separately retained Bash/PowerShell semantic-tag routes use version-suffixed
+installation and independent peeled-tag authority.
+
+This is exact published-source consumption through an isolated consumer.
+Standalone `go install github.com/franchoy/coldkeep/v2/cmd/coldkeep@SHA` remains
+an observed unsupported development path: the pinned Go outside-module installer
+performs a separate `latest` deprecation lookup, unavailable for the current
+untagged `/v2` branch. Stable v1.13.19 installation instructions are unchanged.
+A successful local test against the already public accepted commit does not
+qualify unpublished corrections; both hosted events must qualify their actual
+new public head.
+
+Complete plain/AES-GCM command/internal tests have a required matrix with real
+PostgreSQL, matched clients and source-verified readers retained for each entire
+Go command. The dedicated recovery gate retains all 566 accepted test identities
+plus its three package-pass events. Both routes remain blocking downstream.
+
+Proof credentials use password-free configuration URLs and per-child environment
+channels: PGPASSWORD for fixture/daemon, DB_PASSWORD for the retained CLI and
+POSTGRES_PASSWORD for container initialization. Environment delivery is not
+encryption; relevant processes, privileged observers and Docker metadata can
+expose the value. Qualification covers observed private-file removal and owned
+cleanup, including failure/timeout uncertainty; it makes no guarantee after
+SIGKILL, host loss or unreachable Docker.
+
+Correction qualification and hosted observations are recorded separately in the
+new follow-up result. Parent 2.04 remains ACTIVE, implementation ACTIVE, product
+gates INCOMPLETE and Phase 3C OUTSTANDING.
