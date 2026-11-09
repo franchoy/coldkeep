@@ -1,32 +1,23 @@
 # Coldkeep v2.0 active charter
 
-Current unit: **Phase 3A follow-up A1–A2 COMPLETE, awaiting independent review**, authorized in BUILD mode by
-`coldkeep_phase3a_followup_codex_2026-11-08.md` and the 9 November 2026 user request.
+Current unit: **Phase 3B ACTIVE**, authorized in BUILD mode by
+`coldkeep_phase3b_codex_2026-11-09.md` and the 9 November 2026 user request.
 [Current authority](../current.json): **2.04 ACTIVE**, implementation ACTIVE,
-product gates INCOMPLETE. The [submitted Phase 3A report](phase3a-result.md)
-remains immutable; its COMPLETE status does not discharge the A1–A2 correction.
-The [follow-up result](phase3a-followup-result.md) records the qualified superseding outcome.
-Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
+product gates INCOMPLETE. Phase 3A and A1–A2 are accepted; their reports remain
+immutable. Starting HEAD `cf70de06d2ab2da6f64fa7b13fa9610af07e32f2`, tree
+`40297ae58e050d9f1ef36fee5b62954011a28d91`.
 
-Submitted base: `8dad297a812201f7a0e55e7d2858b3fc7e6fa59b`, tree
-`12c62b2a8313efa874b57e37b9dd8558fff6fc69`. Accepted 2.01, local-profile 2.03,
-corrected 2.02 and all predecessor reports/refs/worktrees remain preserved.
-Scope: exact relation-bound schema18 constraint admission and bounded metadata
-before deparsing/transfer. No persisted schema or payload/package/receipt changes.
-Ordinary schema17 and SQLite behavior remain. Physical binding remains unqualified;
-ordinary schema18 writers refuse. Phase 3B/3C are not authorized in this run.
-
-Required fresh gates: full recovery/adoption/coordination/operator race runner
-retaining all 313 mandatory requirements plus the follow-up cases; unchanged
-23-case current oracle; full Python and focused authority/runner mutations;
-build/vet/pinned lint, dependency/source guards, historical/current authority,
-local CI audit and applicable mutations. Unchanged Phase 2 integrated and broader
-regressions may be reused only with exact source/dependency and original
-command/log bindings. Changed recovery/profile evidence must run fresh.
+Scope and limits: [physical binding contract](physical-binding.md).
+Ordinary schema18/19 writers remain refused; every IMPORT_READY target refuses
+binding/source maintenance and activation. Phase 3C remains separate.
+Required fresh gates: full recovery/binding race runner retaining all 341
+accepted requirements, unchanged 23-case oracle, full Python suite, authority
+and runner/CI mutations, static/governance checks, affected regressions and full
+Phase 2 native/browser/Docker proof. Inherited engine failures stay unqualified.
 
 Requested settings GPT-6 Astra / Extra High; actual model/effort unknown.
+Version 2.0.0-dev.0, /v2, latest stable 1.13.19 and manual-postgresql-docker remain.
 LOCAL_ACTION_2_04_PHASE3A_AUTHORITY_ONLY is structural authority only.
-A qualified follow-up clears only A1–A2 while parent 2.04 remains ACTIVE.
 No push, publication, merge, tag, release or live installation switch.
 
 ## Selected first stable profile

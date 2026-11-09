@@ -3,7 +3,8 @@
 This is the bounded Linux/PostgreSQL16 `manual-postgresql-docker` development
 profile. Parent 2.04 remains ACTIVE. Ordinary schema17 behavior and the SQLite
 proof remain supported; SQLite identity adoption is refused. Phase 3B physical
-binding and Phase 3C capture membership are not implemented.
+binding is defined separately in [physical-binding.md](physical-binding.md);
+it does not change schema18 semantics. Phase 3C remains outstanding.
 
 ## Identity and provenance
 

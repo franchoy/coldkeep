@@ -1,10 +1,14 @@
 # Compatibility Contract
 
-Phase 3A adds explicit PostgreSQL17-to-18 identity adoption and exact recovery
-profiles. See [identity/adoption contract](docs/release/v2.0/identity-adoption.md).
+Phase 3A adds explicit PostgreSQL17-to-18 identity adoption; Phase 3B adds
+checkpointed 18-to-19 physical binding with a separate exact recovery profile.
+See [identity/adoption](docs/release/v2.0/identity-adoption.md) and
+[physical binding](docs/release/v2.0/physical-binding.md).
 Parent 2.04 remains ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
-Ordinary schema18 mutation and SQLite adoption are refused. Run the complete
-fresh recovery/adoption gate plus the retained Phase 2 proof and fixed oracle.
+Ordinary schema18/19 mutation and SQLite adoption are refused. Schema17/package1,
+schema18/package2 and schema19/package3 have distinct exact reader/receipt
+contracts. IMPORT_READY maintenance and activation refuse for every profile.
+Run the complete fresh recovery/binding gate, Phase 2 proof and fixed oracle.
 
 
 This document defines what coldkeep guarantees across versions, especially for

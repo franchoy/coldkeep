@@ -421,7 +421,7 @@ func restoreImport(ctx context.Context, r resolved, pkg string, dest *generation
 }
 
 func admitImport(m Manifest, inv *Inventory) error {
-	if inv.CatalogVersion == 18 && inv.Catalog["repository_identity"][0].s("repository_id") != m.RepositoryID {
+	if inv.CatalogVersion >= 18 && inv.Catalog["repository_identity"][0].s("repository_id") != m.RepositoryID {
 		return ErrCorrupt
 	}
 	if inv.CatalogVersion != m.CatalogVersion || inv.Rows != m.CatalogRows || len(profileTables(inv.CatalogVersion)) != m.Tables || inv.Reader != m.Reader || inv.KeyRequired != m.KeyRequired || inv.KeyReference != m.KeyReference || len(inv.Objects)+1 != len(m.Members) {

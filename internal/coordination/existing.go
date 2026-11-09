@@ -29,6 +29,7 @@ type existingLease struct {
 	native      *nativeLockHandle
 	reservation processReservationResource
 	closed      bool
+	lost        bool
 	releaseErr  error
 }
 
@@ -87,12 +88,13 @@ func AcquireExisting(ctx context.Context, identity Identity) (ExistingLease, err
 }
 
 func (l *existingLease) check() error {
-	if l.closed {
+	if l.closed || l.lost {
 		return ErrOwnershipLost
 	}
 	for i, path := range l.paths {
 		info, err := os.Lstat(path)
 		if err != nil || !os.SameFile(l.infos[i], info) || info.Mode() != l.infos[i].Mode() {
+			l.lost = true
 			return ErrOwnershipLost
 		}
 	}

@@ -8,10 +8,6 @@ import (
 	"os"
 )
 
-// ImportReceiptMaxObjects is bounded by the existing 20,000 catalog rows and
-// directory entries, and 20,001 package members (one is the archive).
-const ImportReceiptMaxObjects = 20000
-
 // ImportReceiptMaxBytes preserves the admitted inventory capacity: Objects is
 // already serialized inside the <=32 MiB diagnostic. The remaining receipt
 // fields fit in 64 KiB: root and host each have <=4096 bytes (at most 6x JSON

@@ -394,7 +394,7 @@ func ValidateRestoreOwned(ctx context.Context, c Config, lease coordination.Exis
 		if inv.CatalogVersion == 17 && receipt.RepositoryID != "" {
 			return ErrCorrupt
 		}
-		if inv.CatalogVersion == 18 && receipt.RepositoryID != inv.Catalog["repository_identity"][0].s("repository_id") {
+		if inv.CatalogVersion >= 18 && receipt.RepositoryID != inv.Catalog["repository_identity"][0].s("repository_id") {
 			return ErrCorrupt
 		}
 		return nil

@@ -107,7 +107,7 @@ func exportOwned(ctx context.Context, c Config, o ExportOptions, h *exportHooks,
 			return ErrUnsupported
 		}
 		manifest = Manifest{Version: profilePackage(inv.CatalogVersion), Generation: result.Generation, ApplicationVersion: version.String(), CatalogVersion: inv.CatalogVersion, Selection: "full-catalog", CutTime: time.Now().UTC().Format(time.RFC3339Nano), Snapshot: snapshot, LegacyRootHash: inv.RootHash, Reader: inv.Reader, KeyRequired: inv.KeyRequired, KeyReference: inv.KeyReference, KeyCustody: "unknown", ReaderCustody: "unknown", Independence: "unknown", Database: requirements, CatalogRows: inv.Rows, Tables: len(profileTables(inv.CatalogVersion)), Excluded: inv.Uncataloged}
-		if inv.CatalogVersion == 18 {
+		if inv.CatalogVersion >= 18 {
 			manifest.RepositoryID = inv.Catalog["repository_identity"][0].s("repository_id")
 		}
 		if len(inv.Objects)+1 > o.Limits.Members {

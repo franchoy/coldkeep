@@ -27,16 +27,17 @@ import (
 )
 
 type config struct {
-	Host         string `json:"host"`
-	Port         uint16 `json:"port"`
-	Database     string `json:"database"`
-	User         string `json:"user"`
-	PayloadRoot  string `json:"payload_root"`
-	PasswordFile string `json:"password_file"`
-	KeyFile      string `json:"key_file"`
-	KeyReference string `json:"key_reference"`
-	PGDump       string `json:"pg_dump"`
-	PGRestore    string `json:"pg_restore"`
+	PayloadRootBase64 string `json:"payload_root_base64"`
+	Host              string `json:"host"`
+	Port              uint16 `json:"port"`
+	Database          string `json:"database"`
+	User              string `json:"user"`
+	PayloadRoot       string `json:"payload_root"`
+	PasswordFile      string `json:"password_file"`
+	KeyFile           string `json:"key_file"`
+	KeyReference      string `json:"key_reference"`
+	PGDump            string `json:"pg_dump"`
+	PGRestore         string `json:"pg_restore"`
 }
 
 func main() {
@@ -61,6 +62,12 @@ func run() error {
 	operation := fs.String("operation-id", "", "typed adoption request identity")
 	plan := fs.String("plan-sha256", "", "reviewed preview digest")
 	checkpoint := fs.String("checkpoint", "", "fresh independent pre-adoption generation path")
+	installation := fs.String("installation-directory", "", "existing private directory on a separate mount")
+	action := fs.String("binding-action", "", "bind, relocate, rebind, source-register, source-rebind or source-disable")
+	revision := fs.Int64("expected-revision", 0, "reviewed current root binding revision")
+	sourceID := fs.String("source-id", "", "distinct typed configured source ID")
+	sourcePath := fs.String("source-path-base64", "", "exact absolute source path bytes in base64")
+	sourceRevision := fs.Int64("expected-source-revision", 0, "reviewed source revision")
 	snap := fs.String("snapshot", "", "exact selected snapshot ID")
 	out := fs.String("output", "", "fresh absolute restore output directory")
 	if e := fs.Parse(os.Args[2:]); e != nil {
@@ -78,9 +85,23 @@ func run() error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(r)
 	}
+	if os.Args[1] == "binding-status" {
+		r, e := recoveryexport.BindingStatus(ctx, *installation, nil)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	}
 	var c config
 	if e := readJSON(*cfgPath, &c); e != nil {
 		return e
+	}
+	if c.PayloadRootBase64 != "" {
+		if c.PayloadRoot != "" {
+			return recoveryexport.ErrConfiguration
+		}
+		path, e := recoveryexport.DecodeBindingPath(c.PayloadRootBase64)
+		if e != nil {
+			return e
+		}
+		c.PayloadRoot = path
 	}
 	password, e := privateBytes(c.PasswordFile, 4096)
 	if e != nil {
@@ -104,7 +125,22 @@ func run() error {
 	if key != nil {
 		d.Key = func(context.Context) ([]byte, error) { return key, nil }
 	}
+	request := recoveryexport.BindingRequest{Action: recoveryexport.BindingAction(*action), InstallationDirectory: *installation, ExpectedSchema: *expectedSchema, ExpectedRevision: *revision, OperationID: *operation, SourceID: *sourceID, SourcePathBase64: *sourcePath, ExpectedSourceRevision: *sourceRevision}
 	switch os.Args[1] {
+	case "binding-source-status":
+		r, e := recoveryexport.SourceBindingStatus(ctx, *installation, recoveryexport.Config(d), *sourceID)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "binding-check":
+		selected := recoveryexport.Config(d)
+		r, e := recoveryexport.BindingStatus(ctx, *installation, &selected)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "binding-preview":
+		r, e := recoveryexport.PreviewBinding(ctx, recoveryexport.Config(d), request, recoveryexport.DefaultLimits())
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "binding-apply", "binding-reconcile":
+		o := recoveryexport.BindingOptions{Request: request, PlanSHA256: *plan, Export: recoveryexport.ExportOptions{Destination: *checkpoint, Tools: recoveryexport.Tools{PGDump: c.PGDump, PGRestore: c.PGRestore}, Limits: recoveryexport.DefaultExportLimits(), InventoryLimits: recoveryexport.DefaultLimits()}}
+		r, e := recoveryexport.ApplyBinding(ctx, recoveryexport.Config(d), o)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
 	case "adopt-preview":
 		r, e := recoveryexport.PreviewAdoption(ctx, recoveryexport.Config(d), recoveryexport.DefaultLimits())
 		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
@@ -181,7 +217,7 @@ func restore(ctx context.Context, c config, password string, key []byte, selecti
 	if e = errors.Join(e, root.Close()); e != nil {
 		return e
 	}
-	if (receipt.Kind != "coldkeep-import-ready/v1" && receipt.Kind != "coldkeep-import-ready/v2") || receipt.TargetRootHash != id.Hash || receipt.Database != c.Database || receipt.Role != c.User || receipt.Host != c.Host || receipt.Port != c.Port || receipt.KeyRequired != (len(key) > 0) || receipt.KeyReference != c.KeyReference {
+	if (receipt.Kind != "coldkeep-import-ready/v1" && receipt.Kind != "coldkeep-import-ready/v2" && receipt.Kind != "coldkeep-import-ready/v3") || receipt.TargetRootHash != id.Hash || receipt.Database != c.Database || receipt.Role != c.User || receipt.Host != c.Host || receipt.Port != c.Port || receipt.KeyRequired != (len(key) > 0) || receipt.KeyReference != c.KeyReference {
 		return errors.New("ready receipt/target/key mismatch")
 	}
 	for _, v := range os.Environ() {

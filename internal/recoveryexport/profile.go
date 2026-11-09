@@ -19,9 +19,13 @@ func profileTables(version int) []tableSpec {
 	switch version {
 	case 17:
 		return catalogTables
-	case 18:
+	case 18, 19:
 		result := append([]tableSpec(nil), catalogTables...)
-		return append(result, identityTables...)
+		result = append(result, identityTables...)
+		if version == 19 {
+			result = append(result, bindingTables...)
+		}
+		return result
 	default:
 		return nil
 	}
@@ -32,6 +36,8 @@ func profileReader(version int) string {
 		return importReader
 	case 18:
 		return identityReader
+	case 19:
+		return bindingReader
 	default:
 		return ""
 	}
@@ -42,6 +48,8 @@ func profilePackage(version int) int {
 		return 1
 	case 18:
 		return 2
+	case 19:
+		return 3
 	default:
 		return 0
 	}
@@ -52,6 +60,8 @@ func profileReceipt(version int) string {
 		return "coldkeep-import-ready/v1"
 	case 18:
 		return "coldkeep-import-ready/v2"
+	case 19:
+		return "coldkeep-import-ready/v3"
 	default:
 		return ""
 	}
@@ -70,7 +80,7 @@ func validateIdentity(i *Inventory) error {
 	if i.CatalogVersion == 17 {
 		return nil
 	}
-	if i.CatalogVersion != 18 {
+	if i.CatalogVersion != 18 && i.CatalogVersion != 19 {
 		return ErrUnsupported
 	}
 	for _, t := range identityTables[:5] {
@@ -121,5 +131,5 @@ func validateIdentity(i *Inventory) error {
 			return graphError("legacy snapshot lineage")
 		}
 	}
-	return nil
+	return validateBindingGraph(i)
 }

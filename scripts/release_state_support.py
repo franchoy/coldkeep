@@ -2637,6 +2637,20 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                     and followup.stat().st_size <= 65536
                     and all(token in followup.read_text() for token in followup_required)):
                 result.outstanding_obligations.remove("2.04-phase3a-followup-a1-a2")
+            binding = root / "docs/release/v2.0/phase3b-result.md"
+            binding_required = (
+                "Phase 3B unit: COMPLETE, awaiting independent review",
+                "Parent action 2.04: ACTIVE", "Implementation: ACTIVE", "Product gates: INCOMPLETE",
+                "coldkeep_phase3b_codex_2026-11-09.md",
+                "Physical binding qualification: PASS", "Fresh recovery qualification: PASS",
+                "Fresh integrated qualification: PASS", "Ordinary schema18/19 writers: REFUSED",
+                "IMPORT_READY maintenance/activation: REFUSED", "Phase 3C: OUTSTANDING",
+            )
+            if ("2.04-phase3a-followup-a1-a2" not in result.outstanding_obligations
+                    and binding.is_file() and not binding.is_symlink()
+                    and binding.stat().st_size <= 65536
+                    and all(token in binding.read_text() for token in binding_required)):
+                result.outstanding_obligations.remove("2.04-phase3b")
             for name, token in (("phase1a-result.md", "COMPLETE"), ("phase1d-result.md", "Local-profile action 2.03: COMPLETE"), ("phase2-followup-result.md", "Local action 2.02: COMPLETE")):
                 accepted = root / "docs/release/v2.0" / name
                 if not accepted.is_file() or accepted.is_symlink() or token not in accepted.read_text():

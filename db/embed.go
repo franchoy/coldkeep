@@ -10,4 +10,6 @@ var (
 	PostgresSchema string
 	//go:embed adoption_postgres.sql
 	AdoptionPostgres string
+	//go:embed binding_postgres.sql
+	BindingPostgres string
 )

@@ -100,7 +100,7 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 		}
 		for k, want := range strings.Fields(spec.types) {
 			got := shape[spec.name][columns[k]]
-			allowed := map[string]string{"int": "|int4|int8|", "time": "|timestamp|timestamptz|", "float": "|float4|float8|", "text": "|text|", "bytea": "|bytea|", "bool": "|bool|"}
+			allowed := map[string]string{"int": "|int4|int8|", "int4": "|int4|", "int8": "|int8|", "time": "|timestamp|timestamptz|", "float": "|float4|float8|", "text": "|text|", "bytea": "|bytea|", "bool": "|bool|"}
 			if !strings.Contains(allowed[want], "|"+got+"|") {
 				return fmt.Errorf("%w: column types for %s", ErrUnsupported, spec.name)
 			}
@@ -163,13 +163,20 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 	if len(inv.Catalog["schema_version"]) != 1 {
 		return fmt.Errorf("%w: schema singleton", ErrUnsupported)
 	}
-	if version == 18 {
-		for _, spec := range identityTables {
+	if version == 18 || version == 19 {
+		exact := append([]tableSpec(nil), identityTables...)
+		if version == 19 {
+			exact = append(exact, bindingTables...)
+		}
+		for _, spec := range exact {
 			for _, col := range strings.Fields(spec.required) {
 				if !nonnull[spec.name][col] {
 					return fmt.Errorf("%w: identity NOT NULL constraint", ErrUnsupported)
 				}
 			}
+		}
+		if version == 19 {
+			return validateBindingConstraints(ctx, tx)
 		}
 		return validateIdentityConstraints(ctx, tx)
 	}

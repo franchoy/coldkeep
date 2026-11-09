@@ -9,7 +9,7 @@ import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BASES = {"d19": "d3581602aee2599547564322fe083baae1d52063",
+BASES = {"pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2", "d19": "d3581602aee2599547564322fe083baae1d52063",
          "accepted": "1229563116f71067c74801516bcd64c92e7b6ed2"}
 HARNESS = '''package main
 import (
@@ -62,8 +62,8 @@ def main():
         harness.mkdir()
         (harness / "main.go").write_text(HARNESS.replace("MODULE", module))
         subprocess.run(["go", "build", "-o", str(output / (label + "-writer")), "./cmd/phase3a-admission-probe"], cwd=source, env=env, check=True)
-        if label == "accepted":
-            subprocess.run(["go", "build", "-o", str(output / "accepted-reader"), "./cmd/coldkeep-recovery"], cwd=source, env=env, check=True)
+        if label in ("accepted", "pre3b"):
+            subprocess.run(["go", "build", "-o", str(output / (label + "-reader")), "./cmd/coldkeep-recovery"], cwd=source, env=env, check=True)
         assert all(digest(source / name) == expected for name, expected in original.items())
         records[label] = dict(commit=commit, tree=subprocess.check_output(["git", "rev-parse", commit + "^{tree}"], cwd=ROOT, text=True).strip(),
                               original_source_hashes=original, harness_sha256=digest(harness / "main.go"), writer_sha256=digest(output / (label + "-writer")))
@@ -71,7 +71,8 @@ def main():
     # its package only; go build receives that source file inside the module.
     # The checked-in current probe is test support, never a product distribution.
     subprocess.run(["go", "build", "-o", str(output / "current-writer"), "./scripts/admissionprobe"], cwd=ROOT, env=env, check=True)
-    records["accepted"]["reader_sha256"] = digest(output / "accepted-reader")
+    for label in ("accepted", "pre3b"):
+        records[label]["reader_sha256"] = digest(output / (label + "-reader"))
     records["current_writer_sha256"] = digest(output / "current-writer")
     report.write_text(json.dumps(records, indent=2) + "\n")
 

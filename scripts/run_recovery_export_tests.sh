@@ -22,7 +22,7 @@ export COLDKEEP_RECOVERY_READER="$reader_dir/coldkeep-recovery"
 sha256sum "$COLDKEEP_RECOVERY_READER" >"$output/staged-reader.sha256"
 docker image inspect "$COLDKEEP_RECOVERY_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' >"$output/recovery-image.txt"
 status=0
-go test -race -count=1 -json -timeout=6m ./internal/recoveryexport ./internal/coordination ./cmd/coldkeep-recovery >"$output/go.jsonl" 2>"$output/go.stderr" || status=$?
+go test -race -count=1 -json -timeout=10m ./internal/recoveryexport ./internal/coordination ./cmd/coldkeep-recovery >"$output/go.jsonl" 2>"$output/go.stderr" || status=$?
 python3 - "$output/go.jsonl" <<'PY' || status=$?
 import json,sys
 from pathlib import Path
@@ -130,6 +130,38 @@ for parent,cases in {
 }.items():
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in cases.split())
+# Phase 3B requirements remain in this ordinary blocking race invocation.
+required['github.com/franchoy/coldkeep/v2/internal/coordination'].add('TestExistingLeaseLossNeverRevives')
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update({
+ 'TestBindingMigrationAndRecovery','TestBindingSourcesAndOfflineRelocation',
+ 'TestBindingExactPathsAndBudgets','TestBindingReservationsThroughPublication','TestBindingNativeByteRootMapping',
+})
+for parent,cases in {
+ 'TestBindingSourceCapacityAndAvailability':'read-only missing empty-substitution',
+ 'TestBindingRecoveryAdmissionBoundaries':'future mixed wrong-repository malformed-restored-head restore-before-pins export-no-complete',
+ 'TestBindingCommittedIntentConflicts':'prior-descriptor generation manifest source',
+ 'TestBindingIntentConflicts':'future plan request descriptor prior duplicate trailing oversized missing-descriptor-no-reconstruction',
+ 'TestBindingUnsafeControlOwner':'marker descriptor',
+ 'TestBindingCrashCuts':'after-intent before-ddl during-ddl during-data before-commit after-commit published:root-marker.v1.json published:installation.v1.json before-intent-removal',
+ 'TestBindingSubstitutedRoots':'absent empty unrelated copied-marker catalog-unavailable weaker-session',
+ 'TestBindingEarlyRefusals':'same-mount-descriptor descriptor-under-root unsafe-directory wrong-db wrong-key ambient stale-plan stale-revision retained-v1 retained-v2 retained-v3 retained-malformed deadline catalog-budget checkpoint-budget',
+ 'TestBindingSchemaAdmission':'column type nullability missing relocated duplicate wrong-kind wrong-definition not-valid deferrable compressed head lineage oversized',
+ 'TestBindingActiveSubstitution':'root control lock',
+ 'TestBindingProcessTermination':'before-intent after-intent before-commit after-commit published:root-marker.v1.json published:installation.v1.json',
+ 'TestBindingExportCleanup':'rollback credential child',
+ 'TestBindingCleanupJoins':'inspection migration cancellation rollback-error close-error',
+ 'TestBindingPublicationFailures':'file-write: file-sync: file-rename: directory-sync: file-close:',
+ 'TestBindingIndependentRecovery':'plaintext=true plaintext=false',
+ 'TestBindingOldWritersAndReaders':'schema17 schema18 schema19',
+ 'TestBindingDockerProfile':'non-root-readonly-source recreation-requires-reconnect empty-substitute missing-bind-source',
+}.items():
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in cases.split())
+for which in ['marker','descriptor']:
+ parent='TestBindingControlAdmission/'+which
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
+ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in 'missing future truncated oversized duplicate trailing symlink fifo hardlink permissions wrong-identity stale-revision'.split())
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add('TestBindingControlAdmission')
 passes={(e['Package'],e.get('Test','')) for e in records if e.get('Action')=='pass'}
 failures=[e for e in records if e.get('Action') in ('fail','skip')]
 missing=[p+'/'+t for p,tests in required.items() for t in tests|{''} if (p,t) not in passes]

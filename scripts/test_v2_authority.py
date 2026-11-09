@@ -546,3 +546,31 @@ class Action204Phase3AAuthorityTests(V2AuthorityFixture):
         self.assert_rejected()
         self.change(product_gates="INCOMPLETE", phase="2.05")
         self.assert_rejected()
+
+
+class Action204Phase3BAuthorityTests(Action204Phase3AAuthorityTests):
+    def test_binding_cannot_close_parent_or_membership(self):
+        for name in ("phase3a-result.md", "phase3a-followup-result.md"):
+            shutil.copy2(ROOT / "docs/release/v2.0" / name, self.root / "docs/release/v2.0" / name)
+        report = self.root / "docs/release/v2.0/phase3b-result.md"
+        body = "\n".join((
+            "Phase 3B unit: COMPLETE, awaiting independent review", "Parent action 2.04: ACTIVE",
+            "Implementation: ACTIVE", "Product gates: INCOMPLETE", "coldkeep_phase3b_codex_2026-11-09.md",
+            "Physical binding qualification: PASS", "Fresh recovery qualification: PASS",
+            "Fresh integrated qualification: PASS", "Ordinary schema18/19 writers: REFUSED",
+            "IMPORT_READY maintenance/activation: REFUSED", "Phase 3C: OUTSTANDING"))
+        self.assertIn("2.04-phase3b", release.validate(self.root, "auto").outstanding_obligations)
+        for line in body.splitlines():
+            report.write_text(body.replace(line, ""))
+            self.assertIn("2.04-phase3b", release.validate(self.root, "auto").outstanding_obligations)
+        report.write_text(body + "x" * 65536)
+        self.assertIn("2.04-phase3b", release.validate(self.root, "auto").outstanding_obligations)
+        report.write_text(body)
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertNotIn("2.04-phase3b", result.outstanding_obligations)
+        self.assertIn("2.04-phase3c", result.outstanding_obligations)
+        self.change(phase_status="COMPLETE")
+        self.assert_rejected()
+        self.change(phase_status="ACTIVE", product_gates="COMPLETE")
+        self.assert_rejected()

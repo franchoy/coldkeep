@@ -1,17 +1,14 @@
 package recoveryexport
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
-	"strings"
 	"syscall"
 	"time"
 
@@ -21,7 +18,6 @@ import (
 const packageVersion = 1
 
 var safeMember = regexp.MustCompile(`^(catalog\.dump|object-[0-9]{6}\.bin)$`)
-var ErrPackage = errors.New("invalid or incomplete recovery generation")
 
 type ExportLimits struct {
 	ArchiveBytes, ManifestBytes, TotalBytes int64
@@ -151,102 +147,7 @@ func openRegular(root *os.Root, name string) (*os.File, error) {
 	}
 	return f, nil
 }
-func strictJSON(ctx context.Context, b []byte, v any, membersLimit int) error {
-	d := json.NewDecoder(bytes.NewReader(b))
-	var walk func(int, int) error
-	walk = func(depth, arrayLimit int) error {
-		if e := ctx.Err(); e != nil {
-			return e
-		}
-		if depth > 12 {
-			return ErrLimit
-		}
-		token, e := d.Token()
-		if e != nil {
-			return e
-		}
-		if s, ok := token.(string); ok && len(s) > 4096 {
-			return ErrLimit
-		}
-		delim, ok := token.(json.Delim)
-		if !ok {
-			return nil
-		}
-		switch delim {
-		case '{':
-			seen := map[string]bool{}
-			for d.More() {
-				key, e := d.Token()
-				if e != nil {
-					return e
-				}
-				s, ok := key.(string)
-				if !ok || seen[s] || len(s) > 128 {
-					return ErrPackage
-				}
-				// encoding/json matches struct fields case-insensitively,
-				// including Unicode simple folds. Refuse aliases of a key
-				// already seen so the two passes have one interpretation.
-				for prior := range seen {
-					if strings.EqualFold(s, prior) {
-						return ErrPackage
-					}
-				}
-				seen[s] = true
-				if len(seen) > 64 {
-					return ErrLimit
-				}
-				childLimit := -1
-				if depth == 0 {
-					switch {
-					case strings.EqualFold(s, "members"):
-						childLimit = membersLimit
-					case strings.EqualFold(s, "objects"):
-						childLimit = ImportReceiptMaxObjects
-					case strings.EqualFold(s, "uncataloged_excluded"):
-						childLimit = DefaultLimits().DirectoryEntries
-					}
-				}
-				if e = walk(depth+1, childLimit); e != nil {
-					return e
-				}
-			}
-		case '[':
-			for count := 0; d.More(); count++ {
-				// Enforce slice caps before typed allocation (manifest Members,
-				// Excluded, or readiness Objects), including lowered caps.
-				if arrayLimit >= 0 && count >= arrayLimit {
-					return ErrLimit
-				}
-				if e = walk(depth+1, -1); e != nil {
-					return e
-				}
-			}
-		default:
-			return ErrPackage
-		}
-		_, e = d.Token()
-		return e
-	}
-	if e := walk(0, -1); e != nil {
-		return errors.Join(ErrPackage, e)
-	}
-	if _, e := d.Token(); e != io.EOF {
-		return ErrPackage
-	}
-	if e := ctx.Err(); e != nil {
-		return errors.Join(ErrPackage, e)
-	}
-	d = json.NewDecoder(bytes.NewReader(b))
-	d.DisallowUnknownFields()
-	if e := d.Decode(v); e != nil {
-		return errors.Join(ErrPackage, e)
-	}
-	if e := ctx.Err(); e != nil {
-		return errors.Join(ErrPackage, e)
-	}
-	return nil
-}
+
 func hashFile(ctx context.Context, f *os.File, max int64) (int64, string, error) {
 	h := sha256.New()
 	n, e := copyBounded(ctx, h, f, max, nil)
@@ -294,7 +195,7 @@ func checkGeneration(ctx context.Context, root *os.Root, l ExportLimits, complet
 	if err = strictJSON(ctx, raw, &m, l.Members); err != nil {
 		return
 	}
-	if (m.CatalogVersion == 17 && m.RepositoryID != "") || (m.CatalogVersion == 18 && !db.ValidIdentity("repo", m.RepositoryID)) {
+	if (m.CatalogVersion == 17 && m.RepositoryID != "") || ((m.CatalogVersion == 18 || m.CatalogVersion == 19) && !db.ValidIdentity("repo", m.RepositoryID)) {
 		err = ErrPackage
 		return
 	}

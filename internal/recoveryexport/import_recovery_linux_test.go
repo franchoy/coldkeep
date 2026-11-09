@@ -135,7 +135,7 @@ func proofDocker(t *testing.T, input string, args ...string) []byte {
 	return b
 }
 
-func isolatedRecovery(t *testing.T, f *fixture, o ExportOptions, files []expectedRecoveryFile, stagedKey, label string) {
+func isolatedRecovery(t *testing.T, f *fixture, o ExportOptions, files []expectedRecoveryFile, stagedKey, label string, unavailable ...string) {
 	t.Helper()
 	image := os.Getenv("COLDKEEP_RECOVERY_IMAGE")
 	reader := os.Getenv("COLDKEEP_RECOVERY_READER")
@@ -145,8 +145,12 @@ func isolatedRecovery(t *testing.T, f *fixture, o ExportOptions, files []expecte
 	checkedProfile, e := Check(context.Background(), o.Destination, o.Limits)
 	must(t, e)
 	var expectedLineage string
-	if checkedProfile.Manifest.CatalogVersion == 18 {
-		must(t, f.db.QueryRow(identityLineageQuery).Scan(&expectedLineage))
+	lineageQuery := identityLineageQuery
+	if checkedProfile.Manifest.CatalogVersion == 19 {
+		lineageQuery = bindingLineageQuery()
+	}
+	if checkedProfile.Manifest.CatalogVersion >= 18 {
+		must(t, f.db.QueryRow(lineageQuery).Scan(&expectedLineage))
 	}
 	name := fmt.Sprintf("ck-phase1d-recovery-%d-%d", os.Getpid(), fixtureSeq.Add(1))
 	containerID := strings.TrimSpace(string(proofDocker(t, "", "run", "-d", "--name", name, "--label", "coldkeep.disposable=phase1d-recovery", "--memory", "1g", "--cpus", "2", "--tmpfs", "/var/lib/postgresql/data:rw,size=768m", "-e", "POSTGRES_USER", "-e", "POSTGRES_PASSWORD", "-e", "POSTGRES_DB", image)))
@@ -207,6 +211,10 @@ IFS= read -r PGPASSWORD < /custody/password || :
 export PGPASSWORD PGCONNECT_TIMEOUT=2
 if /usr/lib/postgresql/16/bin/psql -X --no-password -h 127.0.0.1 -p "$4" -U recovery_owner -d "$5" -c 'SELECT 1'; then exit 1; fi
 printf 'original catalog and original filesystem paths inaccessible in recovery namespace\n'`, "check", f.root, wd, filepath.Join(wd, "../storage/testdata/compress_v1_18_supplemental/manifest.json"), strconv.Itoa(int(f.config.Port)), f.config.Database)
+	if len(unavailable) > 0 {
+		args := append([]string{"-c", `for p in "$@"; do test ! -e "$p" || exit 1; done`, "binding-originals"}, unavailable...)
+		run("/bin/sh", args...)
+	}
 	opts := importOptionsFor(t, o)
 	before := treeFingerprint(t, o.Destination)
 	var capacityFailure string
@@ -277,7 +285,7 @@ test ! -e /recovered/capacity-payload/.coldkeep-control/IMPORT_READY`, "capacity
 	}
 	var recoveredLineage any
 	if expectedLineage != "" {
-		observed := proofDocker(t, "", "exec", containerID, "psql", "-X", "-t", "-A", "-U", "ck_recovery_admin", "-d", "recovery_target", "-c", identityLineageQuery)
+		observed := proofDocker(t, "", "exec", containerID, "psql", "-X", "-t", "-A", "-U", "ck_recovery_admin", "-d", "recovery_target", "-c", lineageQuery)
 		var expected any
 		must(t, json.Unmarshal([]byte(expectedLineage), &expected))
 		must(t, json.Unmarshal(observed, &recoveredLineage))

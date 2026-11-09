@@ -44,10 +44,14 @@ var identityConstraintRawBytes, identityConstraintUncompressed = func() (string,
 }()
 
 func validateIdentityConstraints(ctx context.Context, tx *sql.Tx) error {
+	return validateExactConstraints(ctx, tx, identityConstraints, identityConstraintRelations)
+}
+
+func validateExactConstraints(ctx context.Context, tx *sql.Tx, constraints map[identityConstraintKey]identityConstraintSpec, relations string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT c.oid::bigint,c.conrelid::bigint,
  t.relname,c.conname,c.contype::text,(`+identityConstraintStatus+`),
  `+identityConstraintUncompressed+`,`+identityConstraintRawBytes+
-		identityConstraintRelations+` LIMIT $1`, len(identityConstraints)+1)
+		relations+` LIMIT $1`, len(constraints)+1)
 	if err != nil {
 		return errors.Join(ErrUnsupported, ctx.Err())
 	}
@@ -55,9 +59,9 @@ func validateIdentityConstraints(ctx context.Context, tx *sql.Tx) error {
 		key           identityConstraintKey
 		oid, relation int64
 	}
-	admitted := make([]admittedConstraint, 0, len(identityConstraints))
-	seen := make(map[identityConstraintKey]bool, len(identityConstraints))
-	remaining := int64(len(identityConstraints)) * identityConstraintMetadataBytes
+	admitted := make([]admittedConstraint, 0, len(constraints))
+	seen := make(map[identityConstraintKey]bool, len(constraints))
+	remaining := int64(len(constraints)) * identityConstraintMetadataBytes
 	for rows.Next() {
 		var item admittedConstraint
 		var kind string
@@ -66,8 +70,8 @@ func validateIdentityConstraints(ctx context.Context, tx *sql.Tx) error {
 		if err = rows.Scan(&item.oid, &item.relation, &item.key.table, &item.key.name, &kind, &supported, &uncompressed, &size); err != nil {
 			break
 		}
-		spec, exists := identityConstraints[item.key]
-		if !exists || seen[item.key] || spec.kind != kind || !supported || len(admitted) >= len(identityConstraints) {
+		spec, exists := constraints[item.key]
+		if !exists || seen[item.key] || spec.kind != kind || !supported || len(admitted) >= len(constraints) {
 			err = fmt.Errorf("%w: identity constraint set/status", ErrUnsupported)
 			break
 		}
@@ -84,7 +88,7 @@ func validateIdentityConstraints(ctx context.Context, tx *sql.Tx) error {
 	if err = joinRows(err, rows); err != nil {
 		return errors.Join(err, ctx.Err())
 	}
-	for key := range identityConstraints {
+	for key := range constraints {
 		if !seen[key] {
 			return fmt.Errorf("%w: identity constraint set", ErrUnsupported)
 		}
@@ -95,7 +99,7 @@ func validateIdentityConstraints(ctx context.Context, tx *sql.Tx) error {
  THEN replace(pg_catalog.pg_get_constraintdef(c.oid,false),'REFERENCES public.','REFERENCES ')=$5
  ELSE false END FROM pg_catalog.pg_constraint c WHERE c.oid=$1::oid`
 	for _, item := range admitted {
-		spec := identityConstraints[item.key]
+		spec := constraints[item.key]
 		var matches bool
 		// CASE attaches the raw-input guard to the actual row being deparsed.
 		// Return only a boolean, never arbitrary definition text or diagnostics.

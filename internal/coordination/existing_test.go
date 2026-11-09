@@ -81,6 +81,47 @@ func TestExistingLeasePreparationAndMetadata(t *testing.T) {
 	}
 }
 
+func TestExistingLeaseLossNeverRevives(t *testing.T) {
+	root := t.TempDir()
+	p, e := PrepareControlNamespace(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(p.LockArtifactPath, nil, 0600); e != nil {
+		t.Fatal(e)
+	}
+	id, e := ResolveIdentity(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	lease, e := AcquireExisting(context.Background(), id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Rename(p.LockArtifactPath, p.LockArtifactPath+".retained"); e != nil {
+		t.Fatal(e)
+	}
+	if !errors.Is(lease.Check(), ErrOwnershipLost) {
+		t.Fatal("missing lock accepted")
+	}
+	if e = os.Rename(p.LockArtifactPath+".retained", p.LockArtifactPath); e != nil {
+		t.Fatal(e)
+	}
+	if !errors.Is(lease.Check(), ErrOwnershipLost) {
+		t.Fatal("old handle revived")
+	}
+	if !errors.Is(lease.Release(), ErrOwnershipLost) {
+		t.Fatal("loss not retained through cleanup")
+	}
+	lease, e = AcquireExisting(context.Background(), id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = lease.Release(); e != nil {
+		t.Fatal(e)
+	}
+}
+
 func TestExistingLeaseLegacyContention(t *testing.T) {
 	if mode := os.Getenv("CK_EXISTING_CHILD"); mode != "" {
 		root := os.Getenv("CK_EXISTING_ROOT")

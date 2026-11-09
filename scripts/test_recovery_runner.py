@@ -97,3 +97,7 @@ class ConstraintFollowupRunnerTests(RecoveryRunnerTests):
 
 class MetadataFollowupRunnerTests(RecoveryRunnerTests):
     required_event = "TestPhase3AFollowupA2ConstraintMetadataBound/compressed-small"
+
+
+class BindingRunnerTests(RecoveryRunnerTests):
+    required_event = "TestBindingDockerProfile/recreation-requires-reconnect"
