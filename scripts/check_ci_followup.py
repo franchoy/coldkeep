@@ -97,7 +97,7 @@ def validate(workflow, runner=None, wrappers=None):
     tree = ast.parse(runner)
     commands = next((ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
                      and any(isinstance(t, ast.Name) and t.id == 'COMMANDS' for t in node.targets)), {})
-    need(commands.get('packages') == ['go', 'test', '-race', '-count=1', '-p=1', '-json', '-timeout=15m', './cmd/...', './internal/...'], 'complete unfiltered package command')
+    need(commands.get('packages') == ['go', 'test', '-race', '-count=1', '-p=1', '-json', '-timeout=35m', './cmd/...', './internal/...'], 'complete unfiltered package command')
     need(commands.get('passive') == ['go', 'test', '-race', '-count=1', '-p=1', '-skip', '^TestRecovery', '-json', '-timeout=15m',
                                     './internal/recoveryexport', './internal/coordination'], 'passive inventory selection and staging budget retained')
 

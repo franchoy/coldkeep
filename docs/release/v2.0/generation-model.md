@@ -148,6 +148,6 @@ Two complete plaintext runs reached the original 15-minute recovery-package
 timeout without an earlier assertion failure, including a controlled retry on
 a fresh equivalent PostgreSQL server. The retained 64-source checkpoint case
 took 271.76 and 272.21 seconds, compared with 82.90 in dedicated qualification.
-The larger aggregate suite budget is explicit; the slowdown's cause is not
+The larger per-package test budget is explicit; the slowdown's cause is not
 established. No test removal, partial-run acceptance or product-limit relaxation
 is justified by this adjustment.

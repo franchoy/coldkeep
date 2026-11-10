@@ -45,7 +45,7 @@ class FollowupGateTests(unittest.TestCase):
                 changed = before + '  ' + job + ':\n' + after.replace(', package-tests', '', 1)
                 self.assertIn('complete package downstream dependency: ' + job, validate(changed))
         runner = (ROOT / 'scripts/run_staged_package_tests.py').read_text()
-        for old, new in [('"./cmd/...", "./internal/..."', '"./internal/engine"'), ('"-race",', ''), ('"-count=1",', ''), ('"-p=1",', '')]:
+        for old, new in [('"./cmd/...", "./internal/..."', '"./internal/engine"'), ('"-race",', ''), ('"-count=1",', ''), ('"-p=1",', ''), ('"-timeout=35m"', '"-timeout=0"')]:
             with self.subTest(runner=old):
                 self.assertIn('complete unfiltered package command', validate(workflow, runner.replace(old, new)))
 

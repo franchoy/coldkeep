@@ -206,20 +206,42 @@ func TestRecoveryUpgradeJoinedCleanup(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if kind == "deadline" {
-				ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+				// The five-second barrier wait must admit migration before this
+				// real deadline expires; checkpoint time is not the cleanup seam.
+				ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 			}
 			done := make(chan struct{})
 			var opErr error
 			go func() { _, opErr = applyUpgrade(ctx, f.config, o, h); close(done) }()
 			defer func() { gates.allowRollback.fire(); gates.allowClose.fire(); awaitCleanup(t, done) }()
-			awaitCleanup(t, gates.rollbackStarted.ch)
+			select {
+			case <-gates.rollbackStarted.ch:
+			case <-done:
+				t.Fatalf("upgrade returned before migration rollback barrier: %v", opErr)
+			case <-time.After(5 * time.Second):
+				t.Fatal("migration rollback barrier timed out")
+			}
+			if kind == "deadline" && ctx.Err() != nil {
+				t.Fatalf("deadline expired before rollback was held: %v", ctx.Err())
+			}
 			bindingContenders(t, f)
 			if kind == "cancel" {
 				cancel()
 			}
 			if kind == "deadline" {
 				<-ctx.Done()
+				if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					t.Fatalf("real deadline did not expire: %v", ctx.Err())
+				}
+			}
+			if kind == "cancel" || kind == "deadline" {
+				bindingContenders(t, f)
+				select {
+				case <-done:
+					t.Fatal("returned before rollback joined")
+				default:
+				}
 			}
 			gates.allowRollback.fire()
 			awaitCleanup(t, gates.closeStarted.ch)
