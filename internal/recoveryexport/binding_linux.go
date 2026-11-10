@@ -68,6 +68,12 @@ func openBindingSession(ctx context.Context, c Config, q BindingRequest, checkpo
 	if ctx == nil || !validBindingRequest(q) {
 		return nil, ErrConfiguration
 	}
+	return openMaintenanceSession(ctx, c, q.InstallationDirectory, q.SourcePathBase64, checkpoint, h)
+}
+
+// The shared lifetime owns installation, canonical root and database aliases.
+// Request semantics remain with each separately versioned maintenance protocol.
+func openMaintenanceSession(ctx context.Context, c Config, installation, sourcePathBase64, checkpoint string, h *bindingHooks) (s *bindingSession, err error) {
 	if _, e := EncodeBindingPath(c.PayloadRoot); e != nil {
 		return nil, e
 	}
@@ -79,7 +85,7 @@ func openBindingSession(ctx context.Context, c Config, q BindingRequest, checkpo
 		}
 	}()
 	var e error
-	s.installation, e = openBindingDirectory(q.InstallationDirectory, true)
+	s.installation, e = openBindingDirectory(installation, true)
 	if e != nil {
 		return s, fmt.Errorf("binding installation directory: %w", e)
 	}
@@ -111,8 +117,8 @@ func openBindingSession(ctx context.Context, c Config, q BindingRequest, checkpo
 		return s, fmt.Errorf("binding root evidence: %w", e)
 	}
 	sourcePath := ""
-	if q.SourcePathBase64 != "" {
-		sourcePath, e = decodeBindingPath(q.SourcePathBase64)
+	if sourcePathBase64 != "" {
+		sourcePath, e = decodeBindingPath(sourcePathBase64)
 		if e != nil {
 			return s, e
 		}

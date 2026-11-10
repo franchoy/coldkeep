@@ -18,23 +18,18 @@ PRODUCT_GATES: INCOMPLETE
 <!-- coldkeep-current-state:end -->
 
 Use the current charter in `docs/release/v2.0/README.md` and the explicitly
-authorized owning BUILD. The current unit is the bounded hosted-CI follow-up
-(M1 installation, E1 cancellation, E2 composition, C1 fixtures and Q1 proof
-credentials/cleanup). On 9 November 2026 the owner adopted its launch prompt,
-including a guarded fast-forward update of existing `release/v2.0` after local
-qualification and independent outgoing review. Initial publication is accepted
-at `ac9382c9e620b17b43800c2a5cf0065e9e75446d`; existing PR #129 stays draft.
-See `docs/release/v2.0/ci-followup-result.md` for measured checkpoint evidence
-and `docs/release/v2.0/next-slice.md` for the remaining handoff. Hosted results
-at the correction's final public head are PENDING and require separate actual
-push/PR observation; local qualification is not hosted success.
-The accepted R1 report and all earlier local-only records remain historical,
-unchanged evidence. This document records the adopted scope, not new authority.
-Preserve accepted reports, predecessor worktrees, frozen v1 and all pins.
-Parent 2.04 stays ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
-Phase 3C stays OUTSTANDING. Ordinary schema18/19 writers and IMPORT_READY
-maintenance/activation refuse. No merge, tag, release, protection change,
-deployment or live installation switch is granted by this workflow.
+adopted `coldkeep_phase3c1_build_2026-11-09.md`. The current unit is Phase 3C1:
+exact schema20 generation model, checkpointed 19-to-20 upgrade and recovery
+continuity. Owner adoption on 10 November 2026 authorizes bounded implementation,
+qualification, sequential commits, independent outgoing review and guarded
+fast-forward of existing `release/v2.0`, then actual-head hosted observation.
+PR #129 stays draft. The [CI bridge](docs/release/v2.0/ci-acceptance-bridge.md)
+records closure at accepted `3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`.
+Preserve all predecessor worktrees, evidence and historical result files.
+Parent 2.04 and Phase 3C remain ACTIVE; Phase 3C2 OUTSTANDING; implementation
+ACTIVE; product gates INCOMPLETE. Ordinary schema18/19/20 writers, reclamation,
+capture/publication and IMPORT_READY maintenance/activation remain refused.
+No merge, tag, release, protection change, deployment or live switch is granted.
 
 ## Correctness rules
 
@@ -50,7 +45,7 @@ deployment or live installation switch is granted by this workflow.
 
 Use the current owning unit's validation profile in `docs/release/v2.0/README.md`,
 `docs/release/v2.0/ci-followup-result.md` and `PRE_RELEASE_CHECKLIST.md`.
-The CI follow-up requires both complete codec package routes with staged real
+The Phase 3C1 BUILD requires fresh affected complete codec routes with staged real
 fixtures, the dedicated recovery requirements, integrated native/browser/Docker
 proofs, source/identity negative controls and applicable static checks. The measured
 source checkpoints and fresh/reused evidence boundaries are recorded in the

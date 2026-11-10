@@ -20,14 +20,14 @@ from proof_process import execute
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = "postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825"
-BASES = {"pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2",
+BASES = {"pre3c": "3aa9cae7b15037e6f51c22311e2b2ee0c0178b86","pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2",
          "d19": "d3581602aee2599547564322fe083baae1d52063",
          "accepted": "1229563116f71067c74801516bcd64c92e7b6ed2"}
 COMMANDS = {
     "passive": ["go", "test", "-race", "-count=1", "-p=1", "-skip", "^TestRecovery", "-json", "-timeout=15m",
                 "./internal/recoveryexport", "./internal/coordination"],
     "recovery": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=15m",
-                 "./internal/recoveryexport", "./internal/coordination", "./cmd/coldkeep-recovery"],
+                 "./internal/recoveryexport", "./internal/coordination", "./cmd/coldkeep-recovery", "./internal/generation"],
     "packages": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=15m",
                  "./cmd/...", "./internal/..."],
 }

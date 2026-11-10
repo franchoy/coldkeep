@@ -1,71 +1,45 @@
-# Development visibility and deferred Phase 3C handoff
+# Phase 3C2 handoff
 
-Phase 3B follow-up R1 is COMPLETE and independently accepted on 9 November 2026.
-Its historical BUILD was `coldkeep_phase3b_followup_codex_2026-11-09.md`; see
-[follow-up result](phase3b-followup-result.md), the preserved
-[submitted result](phase3b-result.md) and
-[physical binding contract](physical-binding.md).
-Parent 2.04 ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
-Phase 3A/A1–A2 accepted reports remain immutable.
+Phase 3C1 is the currently adopted bounded implementation unit; see its
+[result](phase3c1-result.md) for measured qualification and the exact source
+checkpoint. [CI follow-up acceptance](ci-acceptance-bridge.md) closes the stale
+CI handoff at `3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`. All preceding result
+files remain unchanged point-in-time evidence.
 
-R1 is locally corrected and qualified. Submitted decoder and staged-operator
-counterexamples reproduced; the corrected operator refuses malformed input before
-credential use or writes while legitimate/native-byte controls and historical
-recovery succeed. All 566 blocking requirements passed, retaining all 491 prior
-requirements. Independent source/patch/raw-evidence review accepted the bounded
-correction; it did not rerun the runtime suite. Only the owning follow-up record
-discharges R1 structurally.
+Parent action 2.04: ACTIVE. Phase 3C: ACTIVE. Phase 3C2: OUTSTANDING.
+Implementation: ACTIVE. Product gates: INCOMPLETE. Keep PR #129 draft,
+`release/v2.0` as the development branch, main and stable v1.13.19 unchanged.
 
-The current workflow is the authorized [bounded CI follow-up](ci-followup-result.md).
-Initial development publication at `ac9382c9e620b17b43800c2a5cf0065e9e75446d`
-is accepted; continue existing `release/v2.0` and draft PR #129. The owner adopted
-the new bounded launch prompt, including the guarded fast-forward after local
-qualification and independent outgoing review, on 9 November 2026.
-The [development contract](development-visibility.md) records that scope.
+C2 must use the exact generation IDs, source/binding provenance and raw names in
+[generation-model.md](generation-model.md). It owns bounded typed indexed reads,
+keyset pagination and DTO round trips, followed by integrated action closure.
+It must not browse by loading Inventory.Catalog and slicing or by OFFSET.
+Proposed measured ceilings: 100 returned/101 fetched rows, 4-KiB cursor and
+1-MiB encoded response, with finite caller context. Bind each cursor to exact
+repository/source/generation/parent, query version/filter/order, fixed watermark
+and final unique key. Refuse cross-scope and stale cursors. Test delayed commit
+below a watermark; a sequence alone is not commit order. Measure EXPLAIN
+(ANALYZE, BUFFERS), rows, response bytes and allocation at increasing sizes,
+including equal keys, insertion between pages, cancellation and maximum names.
+No API authorization, cursor secret or capture/publication receipt is invented.
 
-Implemented code checkpoint: `4282b4360056ad91aa7ab79d46b1803f6c946e5d`,
-tree `28c55e5d6e773e077d75ec19659674e101cc0c33`.
-Fresh integrated native/browser/packaging/PostgreSQL proof and plain complete
-package qualification passed. Plain retained all 566 mandatory test identities
-and three package passes; unrelated skips remain explicitly unqualified.
-Both codec routes, dedicated recovery and both fixed 23-case reader oracles
-pass locally. The measured recovery timeout-only follow-up at
-`4efa9e38a10d026f809a70a47f93dc882b2ae47f` is qualified separately; its result
-and the exact source boundaries are recorded in the current result.
-Before the guarded update, complete final outgoing review, preservation and
-patch reconstruction. Recheck the expected public ref, main and PR state at
-publication; do not overwrite remote drift.
+Only a later adopted C2 BUILD may add integrated authority transition. Preserve
+3A/3B owning reports, require owning C1/C2 results, and add negative tests proving
+that old reports or declarations cannot clear 2.04. Current structural support
+can clear only C1; parent 3C and C2 remain outstanding obligations.
 
-Corrected-head hosted status is PENDING. Observe both push and PR workflows,
-all required/downstream jobs, Linux/macOS/Windows exact-source installation,
-CodeQL analysis and findings, and latest Codacy at the actual final public head.
-Final external evidence must bind those results without treating local passes
-as hosted success. Preserve failures and distinguish skipped/pending/unknown.
-Bounded hosted follow-up corrections stay within M1/E1/E2/C1/Q1; unrelated
-product work requires its own scope. Keep PR #129 draft and auto-merge disabled.
+All schema20 ordinary writers, GC, repair and deletion remain fenced. Generation
+reference preservation proves recovery while reclamation is fenced; it does not
+prove schema20 live-GC survival. The later publication owner must integrate the
+common reachability predicate before activation. All IMPORT_READY targets,
+including v4/malformed/future receipts, remain recovery-only. Capture, durable
+jobs, product generation restore and UI remain with later owners.
 
-Phase 3C remains OUTSTANDING and needs its own authorized BUILD. Its scope is
-generation-owned typed membership, exact entry-name encoding, policy provenance
-and measured indexed/paginated lookup. It must preserve repository/root/source
-identity, binding revisions and all recovery profiles without treating portable
-history as local physical authority.
+Carry the Linux/PostgreSQL16 session-bound physical profile and exact prior
+profiles; no Windows/native-byte runtime, physical-media authenticity, hardware
+independence, real reboot/unmount or cross-filesystem transfer is newly qualified.
+Retain source-bound reuse and genuine skips from their owning evidence.
 
-Ordinary schema18/19 writers remain refused. Every IMPORT_READY target continues
-to refuse binding/source maintenance and activation, including v3; malformed or
-unknown receipts do not permit mutation. Ready-target activation and ordinary
-writer admission require their later adoption/ownership qualification. No live
-switch or capture enablement follows from this unit. The adopted authorization
-covers only the guarded development-branch update and hosted observation
-described above.
-
-Carry the session-bound unique-mount profile, explicit reconnect after changed
-mount/boot/namespace, strict control budgets, exact native-byte paths and joined
-cleanup reservations. Physical media authenticity, hardware failure-domain
-independence, real reboot/unmount and cross-filesystem transfer remain unqualified.
-
-Recommended settings: GPT-6 Astra / Extra High for the whole next authorized unit;
-record observable settings separately and use unknown when unavailable.
-The two previously failing engine checks have fresh correction evidence in the
-CI follow-up result; the architecture guard remains unchanged. Carry the exact
-remaining opt-in/platform/helper skips from each current command rather than
-reusing the predecessor's skip count or claiming every engine/backend case ran.
+Recommended C2 settings: GPT-6 Astra / Extra High for the read-consistency and
+integration proof. Record requested and observable actual settings separately;
+use unknown when actual settings are unavailable. C2 requires its own adoption.

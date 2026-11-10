@@ -149,6 +149,9 @@ func isolatedRecovery(t *testing.T, f *fixture, o ExportOptions, files []expecte
 	if checkedProfile.Manifest.CatalogVersion == 19 {
 		lineageQuery = bindingLineageQuery()
 	}
+	if checkedProfile.Manifest.CatalogVersion == 20 {
+		lineageQuery = generationLineageQuery()
+	}
 	if checkedProfile.Manifest.CatalogVersion >= 18 {
 		must(t, f.db.QueryRow(lineageQuery).Scan(&expectedLineage))
 	}

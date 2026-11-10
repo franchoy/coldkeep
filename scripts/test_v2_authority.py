@@ -688,3 +688,30 @@ class Action204Phase3BR1AuthorityTests(V2AuthorityFixture):
                 report.unlink()
                 self.assert_r1_outstanding()
                 report.write_bytes(original)
+
+
+class Phase3C1AuthorityTests(Action204Phase3BR1AuthorityTests):
+    def test_c1_only_clears_its_own_obligation(self):
+        self.followup.write_text(self.body)
+        before = release.validate(self.root, "auto")
+        self.assertEqual(before.violations, [])
+        report = self.root / "docs/release/v2.0/phase3c1-result.md"
+        report.write_text("\n".join((
+            "Phase 3C1 unit: COMPLETE", "Parent action 2.04: ACTIVE",
+            "Phase 3C2: OUTSTANDING", "Implementation: ACTIVE",
+            "Product gates: INCOMPLETE", "coldkeep_phase3c1_build_2026-11-09.md",
+            "Generation model and upgrade qualification: PASS",
+            "Fresh schema20 recovery qualification: PASS")))
+        result = release.validate(self.root, "auto")
+        self.assertEqual(result.violations, [])
+        self.assertNotIn("2.04-phase3c1", result.outstanding_obligations)
+        for token in ("2.04-phase3c", "2.04-phase3c2", "2.17", "separate-publication-authorization"):
+            self.assertIn(token, result.outstanding_obligations)
+        original = report.read_text()
+        for token in original.splitlines():
+            with self.subTest(missing=token):
+                report.write_text(original.replace(token, "missing"))
+                self.assertIn("2.04-phase3c1", release.validate(self.root, "auto").outstanding_obligations)
+        report.write_text(original)
+        self.change(phase_status="COMPLETE")
+        self.assert_rejected()

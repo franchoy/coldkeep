@@ -14,10 +14,14 @@ type RootID string
 type DeviceID string
 type SourceID string
 type AdoptionID string
+type GenerationID string
+type EntryID string
+type PolicyID string
+type UpgradeID string
 
 var ErrIdentityKind = errors.New("unsupported identity kind")
 
-var identityPattern = regexp.MustCompile(`^(repo|root|device|source|adopt)_[0-9a-f]{32}$`)
+var identityPattern = regexp.MustCompile(`^(repo|root|device|source|adopt|generation|entry|policy|upgrade)_[0-9a-f]{32}$`)
 
 func ValidIdentity(kind, value string) bool {
 	return len(value) == len(kind)+33 && identityPattern.MatchString(value) && value[:len(kind)] == kind

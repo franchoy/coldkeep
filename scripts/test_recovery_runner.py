@@ -130,3 +130,7 @@ class PassiveRunnerTests(RecoveryRunnerTests):
     required_events = passive_required
     runner = ROOT / "scripts/run_passive_inventory_tests.sh"
     required_event = "TestCatalogRowSecurityCannotHideClosure/filtered-reader-refused"
+
+
+class Phase3C1RecoveryRunnerTests(RecoveryRunnerTests):
+    required_event = "TestRecoveryUpgradeLostCommitResponse"

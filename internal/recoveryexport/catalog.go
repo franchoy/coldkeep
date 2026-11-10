@@ -85,6 +85,11 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 	if err = tx.QueryRowContext(ctx, `SELECT catalog_version FROM public.schema_version LIMIT 1`).Scan(&version); err != nil || profileTables(version) == nil {
 		return fmt.Errorf("%w: schema version", ErrUnsupported)
 	}
+	if version == 20 {
+		if err = validateGenerationRelations(ctx, tx); err != nil {
+			return err
+		}
+	}
 	inv.CatalogVersion = version
 	inv.Reader = profileReader(version)
 	tables := profileTables(version)
@@ -115,6 +120,9 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 		conditions := []string{"false"}
 		for _, col := range strings.Fields(spec.variable) {
 			conditions = append(conditions, "octet_length("+pqIdent(col)+")>4096")
+		}
+		if version == 20 && spec.name == "generation_entry" {
+			conditions = append(conditions, "octet_length(component)>255")
 		}
 		q := `SELECT CASE WHEN ` + strings.Join(conditions, " OR ") + ` THEN NULL ELSE row_to_json(t)::text END FROM public.` + pqIdent(spec.name) + ` t LIMIT $1`
 		rows, err = tx.QueryContext(ctx, q, inv.Limits.Rows-inv.Rows+1)
@@ -163,10 +171,13 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 	if len(inv.Catalog["schema_version"]) != 1 {
 		return fmt.Errorf("%w: schema singleton", ErrUnsupported)
 	}
-	if version == 18 || version == 19 {
+	if version == 18 || version == 19 || version == 20 {
 		exact := append([]tableSpec(nil), identityTables...)
-		if version == 19 {
+		if version == 19 || version == 20 {
 			exact = append(exact, bindingTables...)
+		}
+		if version == 20 {
+			exact = append(exact, generationTables...)
 		}
 		for _, spec := range exact {
 			for _, col := range strings.Fields(spec.required) {
@@ -174,6 +185,17 @@ func readCatalog(ctx context.Context, tx *sql.Tx, inv *Inventory, h *hooks) erro
 					return fmt.Errorf("%w: identity NOT NULL constraint", ErrUnsupported)
 				}
 			}
+		}
+		if version == 20 {
+			for _, spec := range generationTables {
+				for _, col := range strings.Fields(spec.columns) {
+					want := strings.Contains(" "+spec.required+" ", " "+col+" ")
+					if nonnull[spec.name][col] != want {
+						return fmt.Errorf("%w: generation column nullability", ErrUnsupported)
+					}
+				}
+			}
+			return validateGenerationConstraints(ctx, tx)
 		}
 		if version == 19 {
 			return validateBindingConstraints(ctx, tx)
@@ -241,6 +263,9 @@ func strIndex(rows []Row, key string) (map[string]Row, error) {
 
 func validateGraph(ctx context.Context, i *Inventory) error {
 	if e := validateIdentity(i); e != nil {
+		return e
+	}
+	if e := validateGenerationGraph(ctx, i); e != nil {
 		return e
 	}
 	c := i.Catalog

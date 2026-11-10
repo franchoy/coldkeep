@@ -42,7 +42,7 @@ func bindingRowEvidence(r Row, source bool) (BindingEvidence, error) {
 	return e, nil
 }
 func validateBindingGraph(i *Inventory) error {
-	if i.CatalogVersion != 19 {
+	if i.CatalogVersion != 19 && i.CatalogVersion != 20 {
 		return nil
 	}
 	bad := func() error { return graphError("binding lineage") }
@@ -203,7 +203,7 @@ func validateBindingGraph(i *Inventory) error {
 	return nil
 }
 func currentBindingDescriptor(i *Inventory, locator BindingLocator) (BindingDescriptor, error) {
-	if i.CatalogVersion != 19 {
+	if i.CatalogVersion != 19 && i.CatalogVersion != 20 {
 		return BindingDescriptor{}, ErrUnsupported
 	}
 	return bindingDescriptorAt(i, locator, i.Catalog["root_binding_head"][0].n("revision"))

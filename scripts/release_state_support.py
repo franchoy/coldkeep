@@ -2645,7 +2645,7 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                     if "2.02-delivery-native-proof" not in result.outstanding_obligations:
                         result.outstanding_obligations.insert(0, "2.02-delivery-native-proof")
         if phase == "2.04":
-            result.outstanding_obligations = ["2.04-phase3a-qualification", "2.04-phase3a-followup-a1-a2", "2.04-phase3b", "2.04-phase3b-followup-r1", "2.04-phase3c", "2.05-2.13", "2.15", "2.17", "separate-publication-authorization"]
+            result.outstanding_obligations = ["2.04-phase3a-qualification", "2.04-phase3a-followup-a1-a2", "2.04-phase3b", "2.04-phase3b-followup-r1", "2.04-phase3c", "2.04-phase3c1", "2.04-phase3c2", "2.05-2.13", "2.15", "2.17", "separate-publication-authorization"]
             if state.get("phase_status") != "ACTIVE":
                 fail("Phase 3A cannot complete parent 2.04; phase_status must remain ACTIVE")
             report = root / "docs/release/v2.0/phase3a-result.md"
@@ -2693,6 +2693,17 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
             if ("2.04-phase3b" not in result.outstanding_obligations
                     and _phase3b_r1_followup_complete(root)):
                 result.outstanding_obligations.remove("2.04-phase3b-followup-r1")
+            # C1 is a subordinate unit. Its report never clears C2 or the parent.
+            c1 = root / "docs/release/v2.0/phase3c1-result.md"
+            c1_tokens = ("Phase 3C1 unit: COMPLETE", "Parent action 2.04: ACTIVE",
+                         "Phase 3C2: OUTSTANDING", "Implementation: ACTIVE",
+                         "Product gates: INCOMPLETE", "coldkeep_phase3c1_build_2026-11-09.md",
+                         "Generation model and upgrade qualification: PASS",
+                         "Fresh schema20 recovery qualification: PASS")
+            if ("2.04-phase3b-followup-r1" not in result.outstanding_obligations
+                    and c1.is_file() and not c1.is_symlink() and c1.stat().st_size <= 65536
+                    and all(token in c1.read_text() for token in c1_tokens)):
+                result.outstanding_obligations.remove("2.04-phase3c1")
             for name, token in (("phase1a-result.md", "COMPLETE"), ("phase1d-result.md", "Local-profile action 2.03: COMPLETE"), ("phase2-followup-result.md", "Local action 2.02: COMPLETE")):
                 accepted = root / "docs/release/v2.0" / name
                 if not accepted.is_file() or accepted.is_symlink() or token not in accepted.read_text():

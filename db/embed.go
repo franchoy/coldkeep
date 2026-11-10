@@ -12,4 +12,8 @@ var (
 	AdoptionPostgres string
 	//go:embed binding_postgres.sql
 	BindingPostgres string
+	//go:embed generation_postgres.sql
+	GenerationPostgres string
+	//go:embed generation_fence_postgres.sql
+	GenerationFencePostgres string
 )

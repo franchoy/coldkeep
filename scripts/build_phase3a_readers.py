@@ -9,23 +9,10 @@ import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BASES = {"pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2", "d19": "d3581602aee2599547564322fe083baae1d52063",
+BASES = {"pre3c": "3aa9cae7b15037e6f51c22311e2b2ee0c0178b86","pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2", "d19": "d3581602aee2599547564322fe083baae1d52063",
          "accepted": "1229563116f71067c74801516bcd64c92e7b6ed2"}
-HARNESS = '''package main
-import (
- "context"
- "fmt"
- "os"
- "MODULE/internal/storage"
- "MODULE/internal/engine"
-)
-func main(){if e:=run();e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}}
-func run()error{
- sc,e:=storage.OpenLocalStorage(os.Getenv("COLDKEEP_STORAGE_DIR"));if e!=nil{return e};defer func(){_ = sc.Close()}()
- eng,e:=engine.New(engine.Config{DB:sc.DB,ContainerDir:sc.ContainerDir,StoreContext:&sc});if e!=nil{return e}
- _,e=eng.SetConfiguration(context.Background(),engine.SetConfigurationRequest{Key:engine.ConfigurationKey("compression"),Value:"none"});return e
-}
-'''
+HARNESS = (ROOT / 'scripts/admissionprobe/main.go').read_text().replace('github.com/franchoy/coldkeep/v2', 'MODULE')
+
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -62,7 +49,7 @@ def main():
         harness.mkdir()
         (harness / "main.go").write_text(HARNESS.replace("MODULE", module))
         subprocess.run(["go", "build", "-o", str(output / (label + "-writer")), "./cmd/phase3a-admission-probe"], cwd=source, env=env, check=True)
-        if label in ("accepted", "pre3b"):
+        if label in ("accepted", "pre3b", "pre3c"):
             subprocess.run(["go", "build", "-o", str(output / (label + "-reader")), "./cmd/coldkeep-recovery"], cwd=source, env=env, check=True)
         assert all(digest(source / name) == expected for name, expected in original.items())
         records[label] = dict(commit=commit, tree=subprocess.check_output(["git", "rev-parse", commit + "^{tree}"], cwd=ROOT, text=True).strip(),
@@ -71,7 +58,7 @@ def main():
     # its package only; go build receives that source file inside the module.
     # The checked-in current probe is test support, never a product distribution.
     subprocess.run(["go", "build", "-o", str(output / "current-writer"), "./scripts/admissionprobe"], cwd=ROOT, env=env, check=True)
-    for label in ("accepted", "pre3b"):
+    for label in ("accepted", "pre3b", "pre3c"):
         records[label]["reader_sha256"] = digest(output / (label + "-reader"))
     records["current_writer_sha256"] = digest(output / "current-writer")
     report.write_text(json.dumps(records, indent=2) + "\n")

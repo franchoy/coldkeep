@@ -180,6 +180,46 @@ required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update({
 })
 
 
+# Phase 3C1 adds requirements; all 580 accepted recovery identities stay intact.
+required['github.com/franchoy/coldkeep/v2/internal/generation'] = {
+    'TestExactNames', 'TestSelectorRefusals', 'TestSelectorLimits',
+    'TestPolicyGrammarAndImmutability', 'TestPolicyLimits', 'TestPolicyMaximumDescriptor',
+}
+required['github.com/franchoy/coldkeep/v2/internal/generation'].update(
+    'TestSelectorRefusals/' + case for case in
+    'empty duplicate unknown case-alias surrogate low-surrogate native-json base64-tail base64-newline trailing padding dot dotdot slash absolute nul component-over'.split())
+for parent, cases in {
+    'TestRecoveryUpgradeMigration': '',
+    'TestRecoveryUpgradeFaults': 'before-checkpoint before-intent file-rename:binding-intent.v1.json after-intent before-ddl during-ddl during-data before-commit after-commit before-intent-removal cleanup',
+    'TestRecoveryUpgradeIdentityRefusals': 'schema repository root revision plan foreign-intent partial-staging missing-marker missing-descriptor marker-staging descriptor-staging import-v4 import-future',
+    'TestRecoveryUpgradeOldIntentFence': 'file-rename:binding-intent.v1.json after-intent',
+    'TestRecoveryUpgradeJoinedCleanup': 'rollback close cancel deadline',
+    'TestRecoveryUpgradeExportCleanup': 'credential child',
+    'TestRecoveryUpgradeLostCommitResponse': '',
+    'TestRecoveryUpgradeAliasReservation': '',
+    'TestRecoveryUpgradeCheckpointRepository': '',
+    'TestRecoveryUpgradeOperator': '',
+    'TestRecoveryGenerationD19BorrowedMutation': '',
+    'TestRecoveryGenerationD19PositiveOperations': 'store-new store-reuse gc repair',
+    'TestRecoveryGenerationReaderCleanup': 'cancellation rollback-error close-error',
+    'TestRecoveryGenerationD19Operations': 'store-new store-reuse gc repair',
+    'TestRecoveryGenerationFenceAdmission': 'missing disabled extra-earlier changed-body oversized-body legacy-body',
+    'TestRecoveryGenerationFenceStatements': 'empty-update pin-without-authority sequence-insert truncate delete jump other-column unchanged delete-with-authority',
+    'TestRecoveryGenerationModel': '',
+    'TestRecoveryGenerationConstraints': 'duplicate-root file-parent directory-recipe file-missing-recipe dangling-recipe excluded-recipe component-over traversal slash nul foreign-parent policy-mutation source-substitution published successful-capture',
+    'TestRecoveryGenerationHierarchyLimits': '',
+    'TestRecoveryGenerationAdmissionBounds': 'constraint-removed extra-column substituted-check oversized-constraint zero-column-table optional-not-null',
+    'TestRecoveryGenerationRoundTrip': 'plaintext=true plaintext=false',
+    'TestRecoveryGenerationWriters': 'd19/borrowed=0 d19/borrowed=1 pre3c/borrowed=0 pre3c/borrowed=1 current/borrowed=0 current/borrowed=1',
+    'TestRecoveryGenerationImmutableRevisions': '',
+    'TestRecoveryGenerationMaximumPolicy': '',
+    'TestRecoveryGenerationRLSAndFieldGuards': 'component policy',
+    'TestRecoveryGenerationProfileRefusals': 'package reader future-schema repository',
+}.items():
+    required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
+    required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent + '/' + case for case in cases.split())
+
+
 def required_identities():
     return {(package, test) for package, tests in required.items() for test in tests | {""}}
 

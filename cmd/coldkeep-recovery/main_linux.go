@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,7 +24,6 @@ import (
 	"github.com/franchoy/coldkeep/v2/internal/recoveryexport"
 	"github.com/franchoy/coldkeep/v2/internal/snapshot"
 	"github.com/franchoy/coldkeep/v2/internal/storage"
-	"github.com/lib/pq"
 )
 
 type config struct {
@@ -70,6 +68,8 @@ func run() error {
 	sourceID := fs.String("source-id", "", "distinct typed configured source ID")
 	sourcePath := fs.String("source-path-base64", "", "exact absolute source path bytes in base64")
 	sourceRevision := fs.Int64("expected-source-revision", 0, "reviewed source revision")
+	repositoryID := fs.String("repository-id", "", "exact repository identity for schema upgrade")
+	rootID := fs.String("root-id", "", "exact root identity for schema upgrade")
 	snap := fs.String("snapshot", "", "exact selected snapshot ID")
 	out := fs.String("output", "", "fresh absolute restore output directory")
 	if e := fs.Parse(os.Args[2:]); e != nil {
@@ -129,6 +129,15 @@ func run() error {
 	}
 	request := recoveryexport.BindingRequest{Action: recoveryexport.BindingAction(*action), InstallationDirectory: *installation, ExpectedSchema: *expectedSchema, ExpectedRevision: *revision, OperationID: *operation, SourceID: *sourceID, SourcePathBase64: *sourcePath, ExpectedSourceRevision: *sourceRevision}
 	switch os.Args[1] {
+	case "upgrade-preview":
+		q := recoveryexport.UpgradeRequest{InstallationDirectory: *installation, ExpectedSchema: *expectedSchema, RepositoryID: *repositoryID, RootID: *rootID, ExpectedRevision: *revision, OperationID: *operation}
+		r, e := recoveryexport.PreviewUpgrade(ctx, recoveryexport.Config(d), q, recoveryexport.DefaultLimits())
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "upgrade-apply", "upgrade-reconcile":
+		q := recoveryexport.UpgradeRequest{InstallationDirectory: *installation, ExpectedSchema: *expectedSchema, RepositoryID: *repositoryID, RootID: *rootID, ExpectedRevision: *revision, OperationID: *operation}
+		o := recoveryexport.UpgradeOptions{Request: q, PlanSHA256: *plan, Export: recoveryexport.ExportOptions{Destination: *checkpoint, Tools: recoveryexport.Tools{PGDump: c.PGDump, PGRestore: c.PGRestore}, Limits: recoveryexport.DefaultExportLimits(), InventoryLimits: recoveryexport.DefaultLimits()}}
+		r, e := recoveryexport.ApplyUpgrade(ctx, recoveryexport.Config(d), o)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
 	case "binding-source-status":
 		r, e := recoveryexport.SourceBindingStatus(ctx, *installation, recoveryexport.Config(d), *sourceID)
 		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
@@ -276,7 +285,7 @@ func restore(ctx context.Context, c config, password string, key []byte, selecti
 	if e = errors.Join(e, root.Close()); e != nil {
 		return e
 	}
-	if (receipt.Kind != "coldkeep-import-ready/v1" && receipt.Kind != "coldkeep-import-ready/v2" && receipt.Kind != "coldkeep-import-ready/v3") || receipt.TargetRootHash != id.Hash || receipt.Database != c.Database || receipt.Role != c.User || receipt.Host != c.Host || receipt.Port != c.Port || receipt.KeyRequired != (len(key) > 0) || receipt.KeyReference != c.KeyReference {
+	if (receipt.Kind != "coldkeep-import-ready/v1" && receipt.Kind != "coldkeep-import-ready/v2" && receipt.Kind != "coldkeep-import-ready/v3" && receipt.Kind != "coldkeep-import-ready/v4") || receipt.TargetRootHash != id.Hash || receipt.Database != c.Database || receipt.Role != c.User || receipt.Host != c.Host || receipt.Port != c.Port || receipt.KeyRequired != (len(key) > 0) || receipt.KeyReference != c.KeyReference {
 		return errors.New("ready receipt/target/key mismatch")
 	}
 	for _, v := range os.Environ() {
@@ -290,34 +299,22 @@ func restore(ctx context.Context, c config, password string, key []byte, selecti
 		}
 		defer func() { err = errors.Join(err, os.Unsetenv("COLDKEEP_KEY")) }()
 	}
-	quote := func(v string) string { return "'" + strings.NewReplacer("\\", "\\\\", "'", "\\'").Replace(v) + "'" }
-	pc, e := pq.NewConfig("host=" + quote(c.Host) + " port=" + strconv.Itoa(int(c.Port)) + " dbname=" + quote(c.Database) + " user=" + quote(c.User) + " password=" + quote(password) + " sslmode=disable connect_timeout=5 application_name=coldkeep-recovery-reader default_transaction_read_only=off row_security=off statement_timeout=60000 lock_timeout=1000")
-	if e != nil {
-		return errors.New("explicit reader connection invalid")
-	}
-	connector, e := pq.NewConnectorConfig(pc)
-	if e != nil {
-		return errors.New("reader connector invalid")
-	}
-	db := sql.OpenDB(connector)
-	db.SetMaxOpenConns(1)
 	lease, e := coordination.AcquireExisting(ctx, id)
 	if e != nil {
-		return errors.Join(e, db.Close())
+		return e
 	}
-	defer func() { err = errors.Join(err, db.Close(), lease.Release()) }()
-	var oid, pinsBefore, pinsAfter int64
-	if e = db.QueryRowContext(ctx, "SELECT oid::bigint FROM pg_database WHERE datname=current_database()").Scan(&oid); e != nil || oid != receipt.DatabaseOID {
-		return errors.New("reader database identity changed")
-	}
+	defer func() { err = errors.Join(err, lease.Release()) }()
+	var pinsBefore, pinsAfter int64
 	validation := recoveryexport.Config{Backend: "postgres", Profile: "manual-postgresql-docker", Transport: "local-plaintext", Host: c.Host, Port: c.Port, Database: c.Database, User: c.User, PayloadRoot: c.PayloadRoot, KeyReference: c.KeyReference, Password: func(context.Context) (string, error) { return password, nil }}
 	if key != nil {
 		validation.Key = func(context.Context) ([]byte, error) { return key, nil }
 	}
-	// The admission session consumes the explicit resolved key and joins cleanup.
-	if e = recoveryexport.ValidateRestoreOwned(ctx, validation, lease, receipt); e != nil {
+	reader, e := recoveryexport.OpenRecoverySession(ctx, validation, lease, receipt)
+	if e != nil {
 		return e
 	}
+	defer func() { err = errors.Join(err, reader.Close()) }()
+	db := reader.DB
 	if e = db.QueryRowContext(ctx, "SELECT COALESCE(sum(pin_count),0) FROM chunk").Scan(&pinsBefore); e != nil {
 		return e
 	}

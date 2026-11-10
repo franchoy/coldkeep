@@ -1,34 +1,23 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **bounded hosted-CI follow-up**, governed by the adopted
-`coldkeep_v2_ci_followup_codex_2026-11-09.md` BUILD and the
-[development contract](development-visibility.md). The owner explicitly adopted
-its implementation and guarded fast-forward scope on 9 November 2026.
-Initial publication is accepted at
-`ac9382c9e620b17b43800c2a5cf0065e9e75446d`; continue the existing `release/v2.0`
-branch and draft PR #129 after required local qualification and independent
-outgoing review. No new PR or renewed initial-publication approval is needed.
+Current workflow: **Phase 3C1 generation model and recovery continuity**, under
+`coldkeep_phase3c1_build_2026-11-09.md`, adopted by the owner on 10 November 2026.
+The [accepted CI bridge](ci-acceptance-bridge.md) supersedes the historical
+follow-up's pending hosted summary without changing its original result.
 
-Current result: [CI follow-up](ci-followup-result.md).
-Current handoff: [remaining qualification and deferred Phase 3C](next-slice.md).
-The measured code checkpoint is `4282b4360056ad91aa7ab79d46b1803f6c946e5d`,
-tree `28c55e5d6e773e077d75ec19659674e101cc0c33`.
-M1 remote consumption, E1 cancellation, E2 application composition, C1 fixture
-staging and Q1 credential/cleanup corrections are implemented. Fresh integrated
-native/browser/packaging/PostgreSQL proof passed. Plain complete packages passed
-with all 566 required tests plus three package passes; their 139 unrelated test
-skips and three packages without test files remain explicitly recorded.
-Both codec routes, dedicated recovery and the unchanged current/D19 23-case
-oracles pass locally. The recovery timeout-only follow-up at
-`4efa9e38a10d026f809a70a47f93dc882b2ae47f` and its final qualification are
-recorded separately in the result. Hosted corrected-head checks are PENDING
-and require actual push and PR observations after publication.
-These local results do not certify unrun gates or a product release.
+Current contract: [generation model and checkpointed upgrade](generation-model.md).
+Current result: [Phase 3C1](phase3c1-result.md).
+Current handoff: [Phase 3C2](next-slice.md).
+The isolated unit starts from accepted HEAD
+`3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`, tree
+`adc4d66e98030259d55a8856934d33e0d657f491`. Its authorized guarded fast-forward
+continues `release/v2.0` and draft PR #129 after local qualification and
+independent outgoing review, followed by both actual-head hosted events.
 
 [Current authority](../current.json) remains **2.04 ACTIVE**, implementation
-ACTIVE and product gates INCOMPLETE. Phase 3C stays OUTSTANDING and needs its
-own authorized BUILD. Ordinary schema18/19 writers remain refused; every
-IMPORT_READY target refuses binding/source maintenance and activation.
+ACTIVE and product gates INCOMPLETE. Phase 3C remains ACTIVE; Phase 3C2 is
+OUTSTANDING. Ordinary schema18/19/20 writers and every IMPORT_READY target's
+maintenance/activation remain refused. This is no capture/publication gate.
 
 The preceding **Phase 3B follow-up R1** is COMPLETE and independently accepted
 on 9 November 2026. Its [accepted result](phase3b-followup-result.md),

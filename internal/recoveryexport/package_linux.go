@@ -195,7 +195,7 @@ func checkGeneration(ctx context.Context, root *os.Root, l ExportLimits, complet
 	if err = strictJSON(ctx, raw, &m, l.Members); err != nil {
 		return
 	}
-	if (m.CatalogVersion == 17 && m.RepositoryID != "") || ((m.CatalogVersion == 18 || m.CatalogVersion == 19) && !db.ValidIdentity("repo", m.RepositoryID)) {
+	if (m.CatalogVersion == 17 && m.RepositoryID != "") || ((m.CatalogVersion == 18 || m.CatalogVersion == 19 || m.CatalogVersion == 20) && !db.ValidIdentity("repo", m.RepositoryID)) {
 		err = ErrPackage
 		return
 	}
