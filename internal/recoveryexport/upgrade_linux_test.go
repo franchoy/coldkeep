@@ -397,7 +397,12 @@ func staleUpgradeCheckpoint(t *testing.T) {
 	stale := exportOptions(t)
 	old, e := Export(context.Background(), f.config, stale)
 	must(t, e)
-	execSQL(t, f.db, `INSERT INTO repository_config(key,value) VALUES('compression','zstd') ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`)
+	var priorCompression string
+	must(t, f.db.QueryRow(`SELECT value FROM repository_config WHERE key='compression'`).Scan(&priorCompression))
+	if priorCompression != "zstd" {
+		t.Fatal("stale checkpoint positive fixture changed", priorCompression)
+	}
+	execSQL(t, f.db, `UPDATE repository_config SET value='none' WHERE key='compression'`)
 	o := upgradeOptions(t, f, b)
 	_, e = applyUpgrade(context.Background(), f.config, o, &bindingHooks{event: func(stage string, _ *sql.Tx) error {
 		if stage == "after-intent" {
