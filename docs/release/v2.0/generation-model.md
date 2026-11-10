@@ -79,6 +79,16 @@ unknown fields refuse. Evaluation belongs to action 2.10.
 Explicit `upgrade-preview`, `upgrade-apply`, `upgrade-reconcile` require exact
 schema19, repository/root/binding revision and an `upgrade_` operation ID.
 Apply binds the reviewed digest and a fresh independently checked checkpoint.
+Fresh Apply creates that package itself under owned Export; it does not accept
+a caller-supplied checkpoint. Export dumps its owned database snapshot, and Check
+independently verifies package member bytes and profile. The installed intent
+pins generation and exact manifest SHA-256, including every member digest, to
+the current catalog/prior plan. Retry verifies these pins; stale same-repository
+package substitution with an intact intent refuses. Current catalog/plan are
+rechecked before and within the DDL transaction. Check does not independently
+restore and semantically reread catalog.dump. Rewriting both a package and its
+owned intent does not confer supported authority; privileged local tampering
+is outside this cooperative-owner protocol.
 The existing installation/root/database ownership lifetime covers checkpoint
 export, physical SQL/driver/child/credential cleanup, transaction, postvalidation
 and intent cleanup. Marker and descriptor bytes are preserved unchanged.

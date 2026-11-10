@@ -359,6 +359,7 @@ func TestRecoveryUpgradeAliasReservation(t *testing.T) {
 	}
 }
 func TestRecoveryUpgradeCheckpointRepository(t *testing.T) {
+	staleUpgradeCheckpoint(t)
 	f, b, o := upgradeFixture(t)
 	_, e := applyUpgrade(context.Background(), f.config, o, &bindingHooks{event: func(stage string, _ *sql.Tx) error {
 		if stage == "after-intent" {
@@ -388,6 +389,43 @@ func TestRecoveryUpgradeCheckpointRepository(t *testing.T) {
 		t.Fatal("changed source")
 	}
 }
+
+// This scenario is part of the mandatory repository/checkpoint identity case.
+func staleUpgradeCheckpoint(t *testing.T) {
+	t.Helper()
+	f, b, _ := upgradeFixture(t)
+	stale := exportOptions(t)
+	old, e := Export(context.Background(), f.config, stale)
+	must(t, e)
+	execSQL(t, f.db, `INSERT INTO repository_config(key,value) VALUES('compression','zstd') ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`)
+	o := upgradeOptions(t, f, b)
+	_, e = applyUpgrade(context.Background(), f.config, o, &bindingHooks{event: func(stage string, _ *sql.Tx) error {
+		if stage == "after-intent" {
+			return errors.New("checkpoint cut")
+		}
+		return nil
+	}})
+	if e == nil {
+		t.Fatal("missing checkpoint cut")
+	}
+	path := filepath.Join(b.Request.InstallationDirectory, bindingIntentName)
+	intent, e := os.ReadFile(path)
+	must(t, e)
+	saved := filepath.Join(t.TempDir(), "fresh-checkpoint")
+	must(t, os.Rename(o.Export.Destination, saved))
+	must(t, copyTreeForImport(stale.Destination, o.Export.Destination))
+	before := catalogFingerprint(t, f.db)
+	if _, e = ReconcileUpgrade(context.Background(), f.config, o); !errors.Is(e, ErrPackage) {
+		t.Fatal("stale same-repository checkpoint admitted", e)
+	}
+	after, e := os.ReadFile(path)
+	must(t, e)
+	if string(after) != string(intent) || catalogFingerprint(t, f.db) != before {
+		t.Fatal("stale checkpoint changed intent or source")
+	}
+	t.Logf("SCENARIO stale same-repository checkpoint generation=%s with intact fresh intent: refused before schema mutation", old.Generation)
+}
+
 func TestRecoveryUpgradeOperator(t *testing.T) {
 	f, _, o := upgradeFixture(t)
 	config := readerConfig(t, Destination(f.config))
