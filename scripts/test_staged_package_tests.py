@@ -246,8 +246,14 @@ class RecoveryEventContractTests(unittest.TestCase):
         identities = events.required_identities()
         self.assertTrue(OBSERVER_IDENTITIES <= identities)
         self.assertTrue(EXECUTION_BOUND_IDENTITIES <= identities)
-        self.assertEqual(len(identities), 583)
-        pairs = sorted(identities - OBSERVER_IDENTITIES - EXECUTION_BOUND_IDENTITIES)
+        # Preserve the exact accepted identities while permitting the explicitly
+        # scoped C1 additions. Counts alone cannot hide an inherited removal or
+        # substitution: the frozen predecessor digest still binds every name.
+        inherited = {(package, test) for package, test in identities
+                     if package != "github.com/franchoy/coldkeep/v2/internal/generation"
+                     and not test.startswith(("TestRecoveryUpgrade", "TestRecoveryGeneration"))}
+        self.assertEqual(len(inherited), 583)
+        pairs = sorted(inherited - OBSERVER_IDENTITIES - EXECUTION_BOUND_IDENTITIES)
         actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         self.assertEqual(len(pairs), 569)
         self.assertEqual(actual, "8eb9e04d2061e1c8659cb89a38e43648c0c241d2349900d0bf749503f9f19062")
