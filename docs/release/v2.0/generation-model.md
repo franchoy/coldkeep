@@ -133,3 +133,21 @@ replacement is forbidden by the owned physical-session adapter. Ordinary constru
 writers never receive it. This is a cooperative compatibility fence against
 untouched ordinary code, not a security boundary against a database owner or
 hostile SQL. Generation-only recovery uses the same owned reader seam privately.
+
+## Qualification runtime
+
+Dedicated passive and recovery routes retain their 15-minute Go package limit.
+Complete codec qualification allows 35 minutes per Go package within the
+unchanged 40-minute whole-child supervisor. These are test-harness budgets;
+product deadlines, resource ceilings, required identities and race/count/p=1
+selection are unchanged. The whole route, event checker and cleanup must pass.
+Other packages consume the same 40-minute budget, so the full 35-minute
+allowance is not guaranteed to be available to any one package.
+
+Two complete plaintext runs reached the original 15-minute recovery-package
+timeout without an earlier assertion failure, including a controlled retry on
+a fresh equivalent PostgreSQL server. The retained 64-source checkpoint case
+took 271.76 and 272.21 seconds, compared with 82.90 in dedicated qualification.
+The larger aggregate suite budget is explicit; the slowdown's cause is not
+established. No test removal, partial-run acceptance or product-limit relaxation
+is justified by this adjustment.

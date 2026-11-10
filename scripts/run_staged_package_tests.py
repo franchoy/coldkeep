@@ -28,7 +28,9 @@ COMMANDS = {
                 "./internal/recoveryexport", "./internal/coordination"],
     "recovery": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=15m",
                  "./internal/recoveryexport", "./internal/coordination", "./cmd/coldkeep-recovery", "./internal/generation"],
-    "packages": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=15m",
+    # Full codec qualification remains inside the 40-minute child supervisor.
+    # This per-package allowance is subordinate to that aggregate deadline.
+    "packages": ["go", "test", "-race", "-count=1", "-p=1", "-json", "-timeout=35m",
                  "./cmd/...", "./internal/..."],
 }
 
