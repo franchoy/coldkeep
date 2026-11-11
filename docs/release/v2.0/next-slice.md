@@ -2,7 +2,8 @@
 
 Phase 3C1 is the currently adopted bounded implementation unit; see its
 [result](phase3c1-result.md) for measured qualification and the exact source
-checkpoint. [CI follow-up acceptance](ci-acceptance-bridge.md) closes the stale
+checkpoint and the current [Go security-maintenance result](phase3c1-security-maintenance.md)
+for its fresh compiler-bound qualification. [CI follow-up acceptance](ci-acceptance-bridge.md) closes the stale
 CI handoff at `3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`. All preceding result
 files remain unchanged point-in-time evidence.
 

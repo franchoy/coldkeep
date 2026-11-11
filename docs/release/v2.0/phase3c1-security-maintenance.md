@@ -1,7 +1,8 @@
 # Phase 3C1 bounded Go security maintenance
 
-Status: implementation checkpoint; affected qualification and hosted acceptance
-are PENDING. Phase 3C1 is not complete.
+Status: **LOCALLY QUALIFIED**; independent final outgoing review and hosted
+acceptance are **PENDING** at this source checkpoint. Phase 3C1 is not complete
+until the external actual-head acceptance receipt closes it under BUILD section 7.
 
 The owner authorized this bounded follow-up on 11 November 2026 after both
 actual-head CI events at `e6922c95da8edb22b775ac13b831baefb023b14a` failed their
@@ -34,12 +35,51 @@ The remote consumer's reviewed-body checksum changes for exactly its two
 compiler assertions; isolation, origin, selected graph, binary and cleanup
 checks remain byte-identical otherwise.
 
-Fresh compiler provenance and rebuilds of all current and historical-source
-readers are required. Historical reader source bytes stay unchanged. Every
-Go-affected local route, prepared native/browser/Docker proof, installation,
-security scan and enforcement suite must be requalified. Prior Go 1.26.10
-executions remain valid records of their original inputs and are not evidence
-of Go 1.26.11 execution.
+All fourteen affected local obligations passed fresh with the verified task-local
+Go 1.26.11 compiler at `05471b56c0231309bb07627d205c503f2744a51c`, tree
+`3794bb730852d5d1c863561481c0f9f2a0eb2d0d`. The source remained clean and frozen
+through the sequential queue. Nine standalone current/historical reader/writer
+binaries and each staged route's nine binaries were rebuilt with fresh hashes
+and Go build metadata. All original historical reader source bytes were checked
+unchanged; standalone and per-route binary hashes are recorded separately.
+
+| Fresh route | Passed tests / packages | Required tests / packages | Unrelated test / package skips | Wall seconds |
+| --- | --- | --- | --- | --- |
+| recovery | 896 / 4 | 722 / 4 | 0 / 0 | 623.958 |
+| plain | 4722 / 46 | 722 / 4 | 139 / 3 | 854.135 |
+| aes | 4722 / 46 | 722 / 4 | 139 / 3 | 804.543 |
+| passive | 465 / 2 | 49 / 2 | 0 / 0 | 363.184 |
+
+The required event checkers recomputed every mandatory identity from raw Go JSON.
+Both schema20 recovery leaves, generation-only recipe references, exact native
+names, ownership joins, SQL lifecycle/cleanup and isolated historical restores
+passed. Staged reader hashes and resource inventories matched before/after;
+each exact owned PostgreSQL fixture was disposed. AC was observed online before
+each route, with no reconfirmation or agent power-policy change. The dedicated
+recovery/passive 15-minute package bounds, full-codec 35-minute bounds and
+2,400-second supervisor remained unchanged. Product and fixture limits stayed
+fixed. No partial run or projected timeout result was accepted.
+
+Fresh static/build/vet/module/lint and governance checks passed; Windows passed
+compilation only. Prepared assets/native build and integrated Phase2 proof passed
+85 native and 38 PostgreSQL cases, two browser profiles, four build/install
+packaging cases, TCP boundaries, credential controls and owned-resource cleanup.
+Current and unchanged D19-source oracles each returned the expected 23 outcomes:
+12 restored, nine refused and two limits. The complete 658-test Python suite and
+Go enforcement suite passed. Govulncheck v1.7.0, itself built with Go 1.26.11,
+passed detailed, JSON and blocking scans with no vulnerabilities found. Tool,
+compiler, binary, original source and generated asset provenance is retained.
+
+Only this measured maintenance result and the current handoff link change after
+the qualification commit. Exact Git bytes/modes bind every unaffected runtime,
+test, harness, dependency, frontend and build input to that commit. Final static
+and governance checks, independent review, patch replay and publication gates
+must also pass on this documentation successor. Prior Go 1.26.10 executions
+remain valid records of their original inputs and are not reused as evidence of
+Go 1.26.11 execution. All failed attempts remain retained, including the earlier
+e6922c95 hosted attempt's 84 logs and 35 artifacts, its four blocking scan failures
+and two aggregate CI failures. The original 91-command ledger and approval stay
+unchanged; the maintenance ledger adds fresh outcomes and explicit diagnostics.
 
 The language floor remains **Go 1.25.0**, module identity remains `/v2`, and
 third-party dependency versions and sums are unchanged. Test identities,
