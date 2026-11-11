@@ -46,8 +46,8 @@ def main():
         return
     os.environ['GOTOOLCHAIN'] = 'local'
     os.environ['GOWORK'] = 'off'
-    if run('go', 'env', 'GOVERSION') != 'go1.26.10':
-        raise SystemExit('Go 1.26.10 required')
+    if run('go', 'env', 'GOVERSION') != 'go1.26.11':
+        raise SystemExit('Go 1.26.11 required')
     if run('node', '--version') != 'v24.22.2' or run('npm', '--version') != '11.19.1':
         raise SystemExit('prepared build requires Node 24.22.2 / npm 11.19.1')
     dirty = bool(run('git', 'status', '--porcelain=v1', '--untracked-files=all'))

@@ -1578,14 +1578,18 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             governance.require_markers(Path("AGENTS.md"), mutated, (marker,)), []
         )
 
+        # Frozen v1 authority above is read from historical_v18_text. The
+        # container contract below intentionally checks active development files.
         expected_digest = (
-            "sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af"
+            "sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0"
         )
         for relative in (Path("Dockerfile"), Path(".devcontainer/Dockerfile")):
             text = (governance.ROOT / relative).read_text(encoding="utf-8")
-            self.assertIn(f"golang:1.26.10-bookworm@{expected_digest}", text)
+            self.assertIn(f"golang:1.26.11-bookworm@{expected_digest}", text)
 
     def test_v18_container_pin_mutations_fail_the_real_contract(self) -> None:
+        # Retain this regression identity; its subject is the active contract,
+        # while frozen v1 pin expectations are verified through historical roots.
         paths = (
             Path("scripts/validate_phase3_contracts.py"),
             Path("Dockerfile"),
@@ -1598,20 +1602,20 @@ class FinalSnapshotGovernanceTests(unittest.TestCase):
             Path(".devcontainer/devcontainer.json"),
         )
         cases = (
-            (Path("Dockerfile"), "632dff7351799a5a", "032dff7351799a5a"),
+            (Path("Dockerfile"), "dc40a13b6130464", "0c40a13b6130464"),
             (
                 Path(".devcontainer/Dockerfile"),
-                "632dff7351799a5a",
-                "032dff7351799a5a",
+                "dc40a13b6130464",
+                "0c40a13b6130464",
             ),
             (
                 Path("scripts/validate_phase3_contracts.py"),
-                '"product builder": (dockerfile, rf"golang:1\\.26\\.10-bookworm',
+                '"product builder": (dockerfile, rf"golang:1\\.26\\.11-bookworm',
                 '"product builder": (dockerfile, rf"golang:1\\.26\\.9-bookworm',
             ),
             (
                 Path("scripts/validate_phase3_contracts.py"),
-                '"development base": (dev_dockerfile, rf"golang:1\\.26\\.10-bookworm',
+                '"development base": (dev_dockerfile, rf"golang:1\\.26\\.11-bookworm',
                 '"development base": (dev_dockerfile, rf"golang:1\\.26\\.9-bookworm',
             ),
         )

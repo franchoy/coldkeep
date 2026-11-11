@@ -23,6 +23,10 @@ exact schema20 generation model, checkpointed 19-to-20 upgrade and recovery
 continuity. Owner adoption on 10 November 2026 authorizes bounded implementation,
 qualification, sequential commits, independent outgoing review and guarded
 fast-forward of existing `release/v2.0`, then actual-head hosted observation.
+Owner adoption on 11 November 2026 additionally authorizes bounded Go 1.26.11
+security maintenance for GO-2026-6859, verified exact toolchain/image pins,
+fresh affected qualification, independent review and another guarded update.
+Frozen v1 contracts and historical evidence retain their original toolchains.
 PR #129 stays draft. The [CI bridge](docs/release/v2.0/ci-acceptance-bridge.md)
 records closure at accepted `3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`.
 Preserve all predecessor worktrees, evidence and historical result files.
@@ -59,7 +63,7 @@ The baseline commands:
 - `python3 -m unittest discover -s scripts -p 'test_*.py' -v`
 - `bash scripts/audit_ci_enforcement.sh --local-only`
 
-Use Go 1.26.10 with `GOTOOLCHAIN=local`; language floor remains Go 1.25.
+Use Go 1.26.11 with `GOTOOLCHAIN=local`; language floor remains Go 1.25.
 Inspect TestMain and use a dedicated disposable PostgreSQL server and storage.
 Never run tests against a user repository/catalog. Preserve PostgreSQL and
 SQLite compatibility within their existing qualified bounds.

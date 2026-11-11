@@ -1,6 +1,6 @@
 # Prepared internal daemon builds
 
-Use exact Go 1.26.10 with `GOTOOLCHAIN=local GOWORK=off`, Node 24.22.2 and npm
+Use exact Go 1.26.11 with `GOTOOLCHAIN=local GOWORK=off`, Node 24.22.2 and npm
 11.19.1. These are build/test tools; the installed program needs no Node process.
 The lockfile pins React/react-dom 19.3.1, TypeScript 7.0.2, Vite 8.3.6, React type
 packages 19.3.0 and Playwright 1.65.0. See [notices](../../../web/THIRD_PARTY_NOTICES.md).

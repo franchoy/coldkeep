@@ -74,6 +74,11 @@ hosted suite; Phase 3C and product gates remain incomplete.
 The embedded daemon remains an internal proof and needs the
 [prepared-asset build](docs/release/v2.0/phase2-build.md).
 
+Active v2 development builds use exact Go **1.26.11** with `GOTOOLCHAIN=local`
+and the unchanged Go 1.25.0 language floor. The v1.13.19 installation instructions
+below retain their frozen Go 1.26.10 certification; they are not the active v2
+build profile. See the [v2 build instructions](docs/release/v2.0/phase2-build.md).
+
 Latest published stable remains **v1.13.19**, source-only, immutable at
 D19 `d3581602aee2599547564322fe083baae1d52063`, tag object
 `60b6878114f936b295c415605e8af31def2aba5a`, GitHub Release `431395975`.

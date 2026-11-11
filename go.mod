@@ -2,7 +2,7 @@ module github.com/franchoy/coldkeep/v2
 
 go 1.25.0
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require github.com/lib/pq v1.11.2
 

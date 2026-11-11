@@ -98,6 +98,10 @@ promotes a section into the active gate for a special release.
 
 Install these before claiming CI parity locally:
 
+- Go 1.26.11 exactly with `GOTOOLCHAIN=local` for active v2 development,
+  including blocking scans for GO-2026-6859. Historical v1 certification below
+  retains its original compiler and evidence.
+
 - Go 1.26.10 exactly for v1.13.19 tag-certification recovery. The module language floor
   remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
 - Retain fixed-toolchain identity and both detailed and blocking

@@ -59,10 +59,10 @@ class RemoteConsumerTests(unittest.TestCase):
                     self.scope['graph'](encode(invalid), self.version, download, cache)
 
     def test_exact_binary_fields(self):
-        value = '\n'.join(['coldkeep: go1.26.10', '\tpath\t' + self.module + '/cmd/coldkeep',
+        value = '\n'.join(['coldkeep: go1.26.11', '\tpath\t' + self.module + '/cmd/coldkeep',
                            '\tmod\t' + self.module + '\t' + self.version + '\th1:sum', '\tbuild\tCGO_ENABLED=1'])
         self.scope['binary_identity'](value, self.version, 'h1:sum')
-        for wrong in [value.replace('go1.26.10', 'go1.26.9'), value.replace('/cmd/coldkeep', '/cmd/other'),
+        for wrong in [value.replace('go1.26.11', 'go1.26.9'), value.replace('/cmd/coldkeep', '/cmd/other'),
                       value.replace(self.version, '(devel)'), value.replace(self.version, self.version + '0'),
                       value.replace('h1:sum', 'h1:wrong'), value.replace('CGO_ENABLED=1', 'CGO_ENABLED=0'),
                       value + '\n\t=>\t/local', '', value.replace('\th1:sum', '')]:
@@ -110,7 +110,7 @@ class RemoteConsumerTests(unittest.TestCase):
                     output = ''
                     if args[:2] == ['go', 'env']:
                         facts = {key: child.get(key, '') for key in args[3:]}
-                        facts.update(GOVERSION='go1.26.10', GOENV='', GOMOD=str(cwd / 'go.mod') if (cwd / 'go.mod').exists() else os.devnull)
+                        facts.update(GOVERSION='go1.26.11', GOENV='', GOMOD=str(cwd / 'go.mod') if (cwd / 'go.mod').exists() else os.devnull)
                         output = json.dumps(facts)
                     elif args[:4] == ['go', 'list', '-m', '-json']:
                         output = json.dumps(self.identity)
@@ -137,7 +137,7 @@ class RemoteConsumerTests(unittest.TestCase):
                         if fault != 'missing-binary':
                             (Path(child['GOBIN']) / ('coldkeep.exe' if os.name == 'nt' else 'coldkeep')).write_bytes(b'fixture binary')
                     elif args[:3] == ['go', 'version', '-m']:
-                        output = '\n'.join(['coldkeep: go1.26.10', '\tpath\t' + self.module + '/cmd/coldkeep',
+                        output = '\n'.join(['coldkeep: go1.26.11', '\tpath\t' + self.module + '/cmd/coldkeep',
                                             '\tmod\t' + self.module + '\t' + self.version + '\th1:sum', '\tbuild\tCGO_ENABLED=1'])
                     elif args[-1] == 'version':
                         if fault == 'missing-binary':

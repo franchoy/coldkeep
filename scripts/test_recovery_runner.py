@@ -40,7 +40,7 @@ class RecoveryRunnerTests(unittest.TestCase):
             go.write_text("""#!/usr/bin/env python3
 import os,sys,pathlib
 if sys.argv[1:]==['env','GOVERSION']:
- print('go1.26.10')
+ print('go1.26.11')
 elif sys.argv[1]=='build':
  output=pathlib.Path(sys.argv[sys.argv.index('-o')+1])
  output.write_text('synthetic reader identity')

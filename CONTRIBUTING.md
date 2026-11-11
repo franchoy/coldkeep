@@ -89,6 +89,10 @@ This focus preserves system reliability as the primary delivery criterion.
 
 ## Development Requirements
 
+- Go 1.26.11 exactly with `GOTOOLCHAIN=local` for active v2 development;
+  the language floor remains Go 1.25.0. Historical certification paths below
+  retain their original compilers.
+
 - Go 1.26.7 exactly with `GOTOOLCHAIN=local` for the certified v1.13.15 path
   (`go 1.25` remains the module language floor)
 - Go 1.26.10 exactly with `GOTOOLCHAIN=local` for the current v1.13.19
@@ -108,7 +112,7 @@ If this is your first change, do not start with the full release checklist.
 Use this shorter loop first:
 
 1. Read `README.md`, then skim `ARCHITECTURE.md` for the invariants your change could affect.
-2. Verify `go version` reports Go 1.26.10 and set `GOTOOLCHAIN=local`.
+2. Verify `go version` reports Go 1.26.11 for active v2 development and set `GOTOOLCHAIN=local`.
 3. Start PostgreSQL with `docker compose up -d coldkeep_postgres`.
 4. Build the binary with `go build -o coldkeep ./cmd/coldkeep`.
 5. Run one health command such as `./coldkeep doctor`.

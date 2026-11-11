@@ -28,6 +28,10 @@ Preserve phase results, predecessor worktrees, frozen v1 and every dependency
 pin. Ordinary schema18/19 writers and IMPORT_READY activation remain refused.
 No merge, tag, release, protection change, deployment or live switch is granted.
 Preserve user changes and data.
+The owner adopted bounded Go 1.26.11 security maintenance on 11 November 2026.
+Active v2 builds, installations and scans use that exact compiler and verified
+image digests; all historical v1 compiler assertions and third-party dependency
+versions remain unchanged. Blocking security checks remain required.
 
 
 Coldkeep CI exists to protect correctness, determinism, and release confidence.

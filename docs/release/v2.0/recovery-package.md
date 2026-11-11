@@ -52,7 +52,7 @@ Point `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` exclusively at a disposable
 PostgreSQL 16 server with database/role creation privileges for fixture setup.
 Set `COLDKEEP_PHASE1B_TEST=1`, `COLDKEEP_PHASE1C_TEST=1`,
 `COLDKEEP_PG_DUMP=/absolute/16/bin/pg_dump` and the matched `COLDKEEP_PG_RESTORE`.
-Put installed Go 1.26.10 on PATH and pass one **absent** evidence directory.
+Put installed Go 1.26.11 on PATH and pass one **absent** evidence directory.
 Also set an explicit `COLDKEEP_RECOVERY_IMAGE` PostgreSQL 16 image digest already
 available to Docker. The runner builds a separately staged static reader and
 performs production export/import, isolated file restoration, live-GC recovery
@@ -210,7 +210,7 @@ cross-run resume, automatic cleanup of arbitrary paths or live pins are used.
 
 ## Constrained import and actual recovery
 
-Build the narrow adapter in the reviewed checkout with pinned Go 1.26.10:
+Build the narrow adapter in the reviewed checkout with pinned Go 1.26.11:
 
 ```bash
 GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0 go build -o /separate/tools/coldkeep-recovery ./cmd/coldkeep-recovery

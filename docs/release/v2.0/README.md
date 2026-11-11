@@ -5,8 +5,15 @@ Current workflow: **Phase 3C1 generation model and recovery continuity**, under
 The [accepted CI bridge](ci-acceptance-bridge.md) supersedes the historical
 follow-up's pending hosted summary without changing its original result.
 
+Current execution uses exact Go 1.26.11 with `GOTOOLCHAIN=local`, under the
+owner's bounded security-maintenance adoption on 11 November 2026 for
+GO-2026-6859. Language floor 1.25.0, third-party dependencies, historical records
+and all Phase 3C2/product boundaries remain unchanged. Historical execution
+profiles below retain their original compiler identities.
+
 Current contract: [generation model and checkpointed upgrade](generation-model.md).
-Current result: [Phase 3C1](phase3c1-result.md).
+Current result: [Phase 3C1](phase3c1-result.md), with the separately authorized
+[Go security-maintenance follow-up](phase3c1-security-maintenance.md).
 Current handoff: [Phase 3C2](next-slice.md).
 The isolated unit starts from accepted HEAD
 `3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`, tree

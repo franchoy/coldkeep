@@ -63,7 +63,7 @@ class StagingPrerequisiteTests(unittest.TestCase):
 
                     def command(args, _env):
                         if args[0] == "go":
-                            return 0, "go1.26.9" if mutation == "wrong-go" else "go1.26.10", ""
+                            return 0, "go1.26.9" if mutation == "wrong-go" else "go1.26.11", ""
                         if args[0] == "docker":
                             if mutation == "image-unavailable":
                                 raise RuntimeError("image inspect failed")

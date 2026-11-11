@@ -72,8 +72,8 @@ def prerequisites(env, scope):
             raise ValueError("full packages require plain or aes-gcm codec")
         if env["COLDKEEP_CODEC"] == "aes-gcm" and not env.get("COLDKEEP_KEY"):
             raise ValueError("AES-GCM fixture key required")
-    if command(["go", "env", "GOVERSION"], env)[1].strip() != "go1.26.10":
-        raise ValueError("Go 1.26.10 required")
+    if command(["go", "env", "GOVERSION"], env)[1].strip() != "go1.26.11":
+        raise ValueError("Go 1.26.11 required")
     versions = {}
     for label in ("dump", "restore"):
         path = Path(env.get("COLDKEEP_PG_" + label.upper(), ""))

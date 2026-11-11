@@ -27,7 +27,7 @@ and the evidence runner rejects skipped/missing cases. UID/GID, ACL/xattr,
 invalid UTF-8, empty-directory capture and Windows/macOS destination behavior
 are not qualified by this set. The source-linked baseline ledger records owners.
 
-From the repository root, with pinned Go 1.26.10 on PATH and a C compiler:
+From the repository root, with pinned Go 1.26.11 on PATH and a C compiler:
 
 ```sh
 python3 scripts/run_product_fixtures.py --reader baseline --output /tmp/ck-fixtures-baseline-new

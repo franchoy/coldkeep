@@ -87,8 +87,8 @@ def main():
     env = {k: v for k, v in os.environ.items() if not k.startswith(("COLDKEEP_", "DB_"))}
     env.update(GOTOOLCHAIN="local", GOWORK="off", CGO_ENABLED="1")
     go_version = subprocess.check_output([args.go, "version"], env=env, text=True).strip()
-    if "go1.26.10 " not in go_version:
-        raise ValueError(f"requires pinned go1.26.10, observed {go_version}")
+    if "go1.26.11 " not in go_version:
+        raise ValueError(f"requires pinned go1.26.11, observed {go_version}")
     source = ROOT
     revision = git("rev-parse", "HEAD")
     baseline_blobs = None

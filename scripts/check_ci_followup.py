@@ -10,7 +10,7 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[1]
 # Bind the reviewed inline installer, including every refusal and native exit.
 # Runtime verifier mutations separately exercise its origin/graph/binary checks.
-CONSUMER_SHA256 = '625b7a0e2b7485dba87930987f433e0763210e170e4d47ac7704edc04ca3882b'
+CONSUMER_SHA256 = 'd5ea961b26f881942dd594e562474c179a804e9fe24a2f262e96160fd856d62b'
 
 
 def section(text, name, indent):
@@ -39,7 +39,7 @@ def validate(workflow, runner=None, wrappers=None):
     execute = step(packages, 'Run complete staged package tests')
     need('codec: [plain, aes-gcm]' in packages, 'complete package matrix retains both codecs')
     need('fetch-depth: 0' in step(packages, 'Checkout'), 'complete package historical checkout')
-    need("go-version: '1.26.10'" in step(packages, 'Setup Go'), 'complete package pinned Go')
+    need("go-version: '1.26.11'" in step(packages, 'Setup Go'), 'complete package pinned Go')
     need('run: python3 scripts/prepare_daemon.py\n' in step(packages, 'Prepare embedded assets for complete package tests'), 'complete package embedded preparation')
     need('postgresql-client-16' in step(packages, 'Install package PostgreSQL 16 clients'), 'complete package matched clients')
     need('        run: bash scripts/run_package_tests.sh "$RUNNER_TEMP/package-tests"\n' in execute, 'complete package staging command')
