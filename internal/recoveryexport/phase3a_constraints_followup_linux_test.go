@@ -200,7 +200,7 @@ const phase3aFollowupLargeLiteralBytes = 1 << 20
 
 type phase3aFollowupMetadataStats struct {
 	queries, rows, maxValueBytes int
-	definitions                  int
+	definitions, definitionRows  int
 	maxColumn                    string
 }
 
@@ -295,6 +295,9 @@ func (r *phase3aFollowupProbeRows) Next(dest []driver.Value) error {
 	r.probe.mu.Lock()
 	defer r.probe.mu.Unlock()
 	r.probe.stats.rows++
+	if r.definition {
+		r.probe.stats.definitionRows++
+	}
 	for index, value := range dest {
 		size := 0
 		switch value := value.(type) {

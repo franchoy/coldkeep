@@ -11,10 +11,11 @@ import (
 type identityConstraintKey struct{ table, name string }
 type identityConstraintSpec struct{ kind, definition string }
 
-// Separate from catalog-row serialization limits: <=53 admitted records, each
-// with <=4096 bytes of uncompressed variable input (<=217088 bytes in total).
+// Separate from catalog-row serialization limits: each source-defined exact set
+// admits at most its own count, with <=4096 uncompressed variable bytes per row.
+// The identity-only profile has 53 records (<=217088 bytes in total).
 // Names are PostgreSQL name values (<=63 bytes); definitions never cross the
-// driver boundary. The overflow observation is a bounded 54th metadata row.
+// driver boundary. Enumeration observes at most one additional overflow row.
 const identityConstraintMetadataBytes int64 = 4096
 
 const identityConstraintRelations = `
@@ -93,22 +94,53 @@ func validateExactConstraints(ctx context.Context, tx *sql.Tx, constraints map[i
 			return fmt.Errorf("%w: identity constraint set", ErrUnsupported)
 		}
 	}
-	query := `SELECT CASE WHEN c.conrelid=$2::oid AND c.conname=$3::name
- AND c.contype::text=$4 AND (` + identityConstraintStatus + `)
- AND ` + identityConstraintUncompressed + ` AND ` + identityConstraintRawBytes + `<=$6
- THEN replace(pg_catalog.pg_get_constraintdef(c.oid,false),'REFERENCES public.','REFERENCES ')=$5
- ELSE false END FROM pg_catalog.pg_constraint c WHERE c.oid=$1::oid`
+	// The expected set is source-defined and bounded by the first-stage limit.
+	// Check it in one direct query: a separate prepared query for every member
+	// needlessly repeats driver/cancellation setup and cleanup thousands of times
+	// over checkpointed source operations. No server definition text is returned.
+	values := make([]string, 0, len(admitted))
+	args := make([]any, 0, len(admitted)*5+1)
 	for _, item := range admitted {
 		spec := constraints[item.key]
+		n := len(args)
+		values = append(values, fmt.Sprintf("($%d::oid,$%d::oid,$%d::name,$%d::text,$%d::text)", n+1, n+2, n+3, n+4, n+5))
+		args = append(args, item.oid, item.relation, item.key.name, spec.kind, spec.definition)
+	}
+	if len(values) == 0 {
+		return fmt.Errorf("%w: empty identity constraint set", ErrUnsupported)
+	}
+	args = append(args, identityConstraintMetadataBytes)
+	query := `SELECT CASE WHEN c.conrelid=e.relation AND c.conname=e.name
+ AND c.contype::text=e.kind AND (` + identityConstraintStatus + `)
+ AND ` + identityConstraintUncompressed + ` AND ` + identityConstraintRawBytes + fmt.Sprintf(` <= $%d
+ THEN replace(pg_catalog.pg_get_constraintdef(c.oid,false),'REFERENCES public.','REFERENCES ')=e.definition
+ ELSE false END FROM (VALUES `, len(args)) + strings.Join(values, ",") + `) AS e(oid,relation,name,kind,definition)
+ LEFT JOIN pg_catalog.pg_constraint c ON c.oid=e.oid`
+	rows, err = tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return errors.Join(ErrUnsupported, ctx.Err())
+	}
+	count := 0
+	valid := true
+	for rows.Next() {
 		var matches bool
-		// CASE attaches the raw-input guard to the actual row being deparsed.
-		// Return only a boolean, never arbitrary definition text or diagnostics.
-		if err = tx.QueryRowContext(ctx, query, item.oid, item.relation, item.key.name, spec.kind, spec.definition, identityConstraintMetadataBytes).Scan(&matches); err != nil {
-			return errors.Join(ErrUnsupported, ctx.Err())
+		if err = rows.Scan(&matches); err != nil {
+			break
 		}
-		if !matches {
-			return fmt.Errorf("%w: identity constraint definition", ErrUnsupported)
+		count++
+		if !matches || count > len(admitted) {
+			valid = false
+			break
 		}
+	}
+	// CASE still guards the exact row being deparsed. A missing OID produces
+	// false through the LEFT JOIN, and every expected member must yield a row.
+	// Join the physical rows, statement and cancellation transport before return.
+	if err = joinRows(err, rows); err != nil {
+		return errors.Join(ErrUnsupported, ctx.Err())
+	}
+	if !valid || count != len(admitted) {
+		return fmt.Errorf("%w: identity constraint definition", ErrUnsupported)
 	}
 	return ctx.Err()
 }

@@ -119,8 +119,31 @@ func TestPhase3AFollowupCanonicalRecovery(t *testing.T) {
 	p := &phase3aFollowupMetadataProbe{}
 	r, e = inspect(context.Background(), Config(d), DefaultLimits(), noConsume, phase3aFollowupObserve(p))
 	must(t, e)
-	if !r.Complete || p.snapshot().definitions != 53 {
+	if !r.Complete || p.snapshot().definitions != 1 || p.snapshot().definitionRows != 53 {
 		t.Fatalf("restored canonical profile not fully checked: %+v", p.snapshot())
+	}
+	// Every member must participate in the exact comparison, including whichever
+	// row the server emits last. Perturb each expected definition independently
+	// against the real unchanged catalog; a single mismatch must refuse.
+	expected := make(map[identityConstraintKey]identityConstraintSpec, len(identityConstraints))
+	for key, spec := range identityConstraints {
+		expected[key] = spec
+	}
+	for key, spec := range identityConstraints {
+		altered := spec
+		altered.definition += " /* deliberately noncanonical */"
+		expected[key] = altered
+		tx, beginErr := conn.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+		must(t, beginErr)
+		checkErr := validateExactConstraints(context.Background(), tx, expected, identityConstraintRelations)
+		must(t, tx.Rollback())
+		if !errors.Is(checkErr, ErrUnsupported) {
+			t.Fatalf("constraint %s.%s mismatch admitted: %v", key.table, key.name, checkErr)
+		}
+		expected[key] = spec
+	}
+	if phase3aFollowupConstraintState(t, f.db) != phase3aFollowupConstraintState(t, conn) {
+		t.Fatal("definition comparisons changed the restored catalog")
 	}
 }
 

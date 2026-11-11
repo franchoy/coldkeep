@@ -109,6 +109,22 @@ deparsing. RLS/filtered views and all future profiles refuse. Recovery exports
 carry portable history, never physical authority. All IMPORT_READY files,
 including malformed/future receipts, prevent upgrade and binding maintenance.
 
+Constraint admission has two joined stages for profiles 18, 19 and 20, whose
+source-defined sets contain 53, 94 and 145 constraints. First enumerate at most
+the expected count plus one, admit the entire exact relation/name/kind/status
+set, and enforce uncompressed raw inputs of at most 4096 bytes per member and
+the corresponding aggregate bound. Finish those rows and their statement before
+deparsing anything. Then send only the admitted OIDs/relations/names and compiled
+expected kinds/definitions through typed parameters in one bounded VALUES query.
+A left join on the constraint OID retains missing members as false results.
+Each member keeps its own status/compression/raw-size CASE guard before the
+server deparser. Only Booleans return; every expected row must be present and
+true. False results, scan/iteration errors and cancellation still join physical
+rows, statement and cancellation cleanup before returning. Deparser errors
+remain sanitized, and a canceled context cannot succeed after buffered rows.
+This reduces repeated admission queries; it does not add a browsing API or
+change the exact catalog, metadata or caller-selected ceilings.
+
 The result must separately qualify plaintext/encrypted round trips, isolated
 historical restore and generation-only recipe recovery while reclamation stays
 fenced. Phase 3C2 owns public indexed/keyset reads and integrated action closure;
@@ -151,3 +167,14 @@ took 271.76 and 272.21 seconds, compared with 82.90 in dedicated qualification.
 The larger per-package test budget is explicit; the slowdown's cause is not
 established. No test removal, partial-run acceptance or product-limit relaxation
 is justified by this adjustment.
+
+The first complete AES run under that budget also timed out: all upgrade cases
+passed, but the last retained row-security case did not complete before the
+35-minute package limit. Its failed result and owned-resource cleanup delta are
+retained. A bounded diagnostic of the 64-source case recorded 37,260 guarded
+per-constraint comparison queries. PostgreSQL reported zero JIT time; reducing
+Go scheduler concurrency from its observed default of 16 to four did not improve
+that sample. The second-stage batching above addresses measured repeated query
+work while retaining the same checks and cleanup protocol. It requires fresh
+qualification across the affected profiles; neither diagnostic samples nor the
+nearly complete AES run establish a pass. The 35/40-minute bounds stay unchanged.
