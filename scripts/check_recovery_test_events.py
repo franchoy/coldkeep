@@ -351,6 +351,11 @@ C2_REQUIRED['github.com/franchoy/coldkeep/v2/internal/recoveryexport'] += [
     'TestRecoveryReadPageBoundaries/lowered-deadline',
     'TestRecoveryReadPageBoundaries/oversized-database-component',
 ] + ['TestRecoveryReadPageBoundaries/members-' + str(n) for n in (0, 1, 100, 101, 200, 201)]
+C2_REQUIRED['github.com/franchoy/coldkeep/v2/internal/recoveryexport'] += [
+    'TestRecoveryReadWriteBoundary',
+] + ['TestRecoveryReadWriteBoundary/' + case for case in (
+    'ddl', 'lock', 'wrong-file', 'wrong-function', 'row-write', 'dynamic-query',
+    'extra-argument', 'bootstrap', 'wrong-receiver')]
 for package, tests in C2_REQUIRED.items():
     required[package].update(tests)
 
