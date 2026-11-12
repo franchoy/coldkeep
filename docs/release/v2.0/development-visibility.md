@@ -1,13 +1,18 @@
 # V2.0 development visibility
 
-Current workflow: the [authorized hosted-CI follow-up](#authorized-hosted-ci-follow-up-9-november-2026),
-with measured local evidence in the [current result](ci-followup-result.md).
-Initial publication at `ac9382c9e620b17b43800c2a5cf0065e9e75446d` is accepted;
-the owner separately adopted the bounded correction and guarded branch update.
-The sections from "Prepared scope and approval" through "Execution guidance"
-preserve the earlier publication proposal at its original checkpoint. Their
-approval, branch-absence and inherited-failure statements are historical.
-The adopted follow-up section below records the current scope; PR #129 stays draft.
+Current workflow: the owner-adopted **Phase 3C2 BUILD**. See the
+[accepted C1 bridge](phase3c1-acceptance-bridge.md), [C2 result](phase3c2-result.md)
+and [read contract](generation-read.md). C2 local qualification and exact outgoing
+review precede the authorized guarded branch update and both hosted events.
+PR #129 stays draft; main and stable v1.13.19 stay unchanged. Overall
+implementation remains ACTIVE and product gates INCOMPLETE. Local 2.04 completion
+is conditional on the integrated criteria; later product gates remain open.
+
+Everything below preserves the original Phase 3B visibility proposal and its
+later hosted-CI correction as historical context. Its branch-absence, approval,
+inherited engine failures and old requirement counts are point-in-time facts,
+not current blockers or the C2 qualification profile. The adopted C2 update
+includes only the existing PR body's current progress/evidence/next-work text.
 
 ## Prepared scope and approval
 

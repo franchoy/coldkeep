@@ -1,50 +1,35 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **Phase 3C1 generation model and recovery continuity**, under
-`coldkeep_phase3c1_build_2026-11-09.md`, adopted by the owner on 10 November 2026.
-The [accepted CI bridge](ci-acceptance-bridge.md) supersedes the historical
-follow-up's pending hosted summary without changing its original result.
+Current workflow: **Phase 3C2 bounded reads and integrated local 2.04 closure**,
+under the owner-adopted `coldkeep_phase3c2_build_2026-11-12.md`.
+The [accepted C1 bridge](phase3c1-acceptance-bridge.md) closes C1 at
+`06bde38380dd3a42be5c180beb99bf1aa509b8ac`, tree
+`aeaf5281562064c7e4abe940376d1df3dd757669`, without rewriting historical reports.
+The earlier [CI bridge](ci-acceptance-bridge.md), 3A/A1–A2 and 3B/R1 records
+remain preserved. C2 runs in its separate worktree.
 
-Current execution uses exact Go 1.26.11 with `GOTOOLCHAIN=local`, under the
-owner's bounded security-maintenance adoption on 11 November 2026 for
-GO-2026-6859. Language floor 1.25.0, third-party dependencies, historical records
-and all Phase 3C2/product boundaries remain unchanged. Historical execution
-profiles below retain their original compiler identities.
+Current contracts: [C1 generation model](generation-model.md),
+[C2 bounded reads and optional index](generation-read.md).
+Current result: [Phase 3C2](phase3c2-result.md).
+Current handoff: [bounded action 2.05 preparation](next-slice.md).
+Exact Go 1.26.11 / GOTOOLCHAIN=local, Go language floor 1.25.0, dependencies,
+version 2.0.0-dev.0, module /v2 and latest stable 1.13.19 remain unchanged.
+Requested settings: GPT-6 Astra / Extra High; actual settings only if observable.
 
-Current contract: [generation model and checkpointed upgrade](generation-model.md).
-Current result: [Phase 3C1](phase3c1-result.md), with the separately authorized
-[Go security-maintenance follow-up](phase3c1-security-maintenance.md).
-Current handoff: [Phase 3C2](next-slice.md).
-The isolated unit starts from accepted HEAD
-`3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`, tree
-`adc4d66e98030259d55a8856934d33e0d657f491`. Its authorized guarded fast-forward
-continues `release/v2.0` and draft PR #129 after local qualification and
-independent outgoing review, followed by both actual-head hosted events.
+[Current authority](../current.json) remains 2.04 ACTIVE while qualification
+continues. Conditional integrated local completion requires the source-bound
+owning result plus exact accepted predecessor reports and bridge. The validator
+checks structural authority; it does not certify SQL/runtime or hosted success.
+Implementation remains ACTIVE and product gates INCOMPLETE in either case.
+All later obligations, including separate product-publication authorization,
+remain. Schema20/package4 and all writer/reclamation/import-activation fences
+remain intact. Indexed model browse is not committed product backup history.
 
-[Current authority](../current.json) remains **2.04 ACTIVE**, implementation
-ACTIVE and product gates INCOMPLETE. Phase 3C remains ACTIVE; Phase 3C2 is
-OUTSTANDING. Ordinary schema18/19/20 writers and every IMPORT_READY target's
-maintenance/activation remain refused. This is no capture/publication gate.
-
-The preceding **Phase 3B follow-up R1** is COMPLETE and independently accepted
-on 9 November 2026. Its [accepted result](phase3b-followup-result.md),
-[preserved submission](phase3b-result.md), [physical binding contract](physical-binding.md)
-and earlier Phase 3A/A1–A2 records remain unchanged. R1 acceptance is bound to
-HEAD `815f812a5027dad4f03c88ae30b97c77ad01b8e0`, tree
-`6dc1296efe72083014d34febe1e9f57944489419`; its submitted predecessor was
-`cd5f9f9ac96b963f46fe6c24b7e38e0c2b525e69`, tree
-`9848d2a14478b13dce15212fb8602238331282c4`.
-The R1 report's original failures, skips and reused evidence remain historical
-facts; the current follow-up records fresh corrections separately.
-
-Requested settings: GPT-6 Astra / Extra High; actual settings are recorded only
-where observable. Version 2.0.0-dev.0, `/v2`, latest stable 1.13.19 and the
-manual-postgresql-docker profile remain unchanged.
-LOCAL_ACTION_2_04_PHASE3A_AUTHORITY_ONLY is structural authority only.
-The adopted branch-update authorization grants no merge, ready-for-review
-transition, tag, release, protection/default-branch change, deployment or live
-installation switch. `separate-publication-authorization` remains a validator
-obligation; a development push does not certify product-release gates.
+The adopted sequence includes local qualification, sequential commits, exact
+independent outgoing review, guarded update of existing `release/v2.0`, bounded
+PR #129 body refresh and observation of both actual-head hosted events. PR stays
+draft. No merge, tag, release, protection/default-branch change, deployment,
+live switch or action 2.05 implementation is authorized.
 
 ## Selected first stable profile
 

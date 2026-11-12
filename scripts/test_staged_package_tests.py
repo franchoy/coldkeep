@@ -42,8 +42,63 @@ FIXTURE_IDENTITIES = {
     for name in events.FIXTURE_HYGIENE
 }
 
+C2_IDENTITIES = {(package, name) for package, names in events.C2_REQUIRED.items() for name in names}
+
 
 class StagingPrerequisiteTests(unittest.TestCase):
+    def test_accepted_c1_is_an_additional_required_untouched_role(self):
+        import build_phase3a_readers as builder
+        expected = {"c1": "06bde38380dd3a42be5c180beb99bf1aa509b8ac",
+                    "pre3c": "3aa9cae7b15037e6f51c22311e2b2ee0c0178b86",
+                    "pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2",
+                    "d19": "d3581602aee2599547564322fe083baae1d52063",
+                    "accepted": "1229563116f71067c74801516bcd64c92e7b6ed2"}
+        self.assertEqual(runner.BASES, expected)
+        self.assertEqual(builder.BASES, expected)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "phase3a/c1"
+            source.mkdir(parents=True)
+            original = b"untouched C1 source\n"
+            blob = hashlib.sha1(b"blob " + str(len(original)).encode() + b"\0" + original).hexdigest()
+            source_file = source / "original.go"
+            binary = root / "phase3a/c1-reader"
+            current = root / "phase3a/current-writer"
+            operator = root / "coldkeep-recovery"
+            report = root / "provenance.json"
+            for mutation in ("none", "missing-role", "wrong-commit", "wrong-tree", "missing-source",
+                             "changed-source", "changed-mode", "changed-binary", "missing-binary",
+                             "wrong-compiler-record", "wrong-compiler-binary"):
+                with self.subTest(mutation=mutation):
+                    source_file.write_bytes(original if mutation != "changed-source" else b"substitution")
+                    source_file.chmod(0o755 if mutation == "changed-mode" else 0o644)
+                    for path in (binary, current, operator):
+                        path.write_bytes(b"binary")
+                        path.chmod(0o700)
+                    value = {"c1": {"commit": expected["c1"], "tree": "c1-tree", "compiler": "go1.26.11",
+                                    "original_source_hashes": {"original.go": hashlib.sha256(original).hexdigest()},
+                                    "reader_sha256": runner.digest(binary)},
+                             "current_writer_sha256": runner.digest(current)}
+                    if mutation == "missing-role": value.pop("c1")
+                    if mutation == "wrong-commit": value["c1"]["commit"] = expected["pre3c"]
+                    if mutation == "wrong-tree": value["c1"]["tree"] = "other-tree"
+                    if mutation == "missing-source": value["c1"]["original_source_hashes"] = {}
+                    if mutation == "changed-binary": binary.write_bytes(b"changed")
+                    if mutation == "missing-binary": binary.unlink()
+                    if mutation == "wrong-compiler-record": value["c1"]["compiler"] = "go1.26.10"
+                    report.write_text(json.dumps(value))
+                    def command(args, _env):
+                        if args[:2] == ["go", "version"]:
+                            return 0, str(binary) + (": go1.26.10\n" if mutation == "wrong-compiler-binary" else ": go1.26.11\n"), ""
+                        return (0, "c1-tree\n", "") if args[1] == "rev-parse" else (0, f"100644 blob {blob}\toriginal.go\0", "")
+                    with patch.object(runner, "BASES", {"c1": expected["c1"]}), patch.object(runner, "command", side_effect=command):
+                        if mutation == "none":
+                            self.assertEqual(set(runner.verify_readers(root, report, {})),
+                                             {"c1-reader", "current-writer", "coldkeep-recovery"})
+                        else:
+                            with self.assertRaises((ValueError, OSError)):
+                                runner.verify_readers(root, report, {})
+
     def test_prerequisite_failures_are_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -55,7 +110,7 @@ class StagingPrerequisiteTests(unittest.TestCase):
                         COLDKEEP_PG_DUMP=str(root / "pg_dump"), COLDKEEP_PG_RESTORE=str(root / "pg_restore"),
                         COLDKEEP_RECOVERY_IMAGE=runner.IMAGE)
             for mutation in ("none", "missing-flag", "missing-client", "wrong-client", "mismatched-client",
-                             "missing-image", "wrong-image", "wrong-digest", "image-unavailable", "wrong-go"):
+                             "missing-image", "wrong-image", "wrong-digest", "image-unavailable", "wrong-go", "wrong-node"):
                 with self.subTest(mutation=mutation):
                     env = dict(good)
                     if mutation == "missing-flag":
@@ -68,6 +123,8 @@ class StagingPrerequisiteTests(unittest.TestCase):
                     def command(args, _env):
                         if args[0] == "go":
                             return 0, "go1.26.9" if mutation == "wrong-go" else "go1.26.11", ""
+                        if args[0] == "node":
+                            return 0, "v1.0.0" if mutation == "wrong-node" else "v24.22.2", ""
                         if args[0] == "docker":
                             if mutation == "image-unavailable":
                                 raise RuntimeError("image inspect failed")
@@ -83,7 +140,7 @@ class StagingPrerequisiteTests(unittest.TestCase):
                     for scope in ("packages", "passive"):
                         with self.subTest(scope=scope), patch.object(runner, "command", side_effect=command), \
                              patch.object(runner.os, "getuid", return_value=1000):
-                            if mutation == "none":
+                            if mutation == "none" or (mutation == "wrong-node" and scope == "passive"):
                                 self.assertEqual(runner.prerequisites(env, scope)["clients"]["dump"], "16.15")
                             else:
                                 with self.assertRaises((ValueError, RuntimeError)):
@@ -195,7 +252,7 @@ class StagingLifetimeTests(unittest.TestCase):
             with patch.object(runner, "prerequisites", return_value={}), \
                  patch.object(runner, "resource_inventory", side_effect=inventory), \
                  patch.object(runner, "command", side_effect=command), \
-                 patch.object(runner, "verify_readers", return_value={"reader": "verified"}), \
+                 patch.object(runner, "verify_readers", side_effect=[{"c1-reader": "verified"}, {"c1-reader": "changed" if mutation == "changed-c1-during-child" else "verified"}]), \
                  patch.object(runner.tempfile, "mkdtemp", return_value=str(owned)), \
                  patch.object(runner.shutil, "rmtree", side_effect=cleanup):
                 status = runner.run(scope, output)
@@ -212,7 +269,7 @@ class StagingLifetimeTests(unittest.TestCase):
 
     def test_child_lifetime_and_all_failures_remain_blocking(self):
         for mutation in ("none", "unrelated-skip", "child-exit", "child-start", "child-timeout", "child-incomplete", "required-skip", "missing-event",
-                         "cleanup-error", "inventory-error", "residual", "residual-volume"):
+                         "cleanup-error", "inventory-error", "residual", "residual-volume", "changed-c1-during-child"):
             with self.subTest(mutation=mutation):
                 status, facts = self.run_case(mutation)
                 self.assertEqual(status == 0, mutation in ("none", "unrelated-skip"))
@@ -254,7 +311,7 @@ class RecoveryEventContractTests(unittest.TestCase):
         # Preserve the exact accepted identities while permitting the explicitly
         # scoped C1 additions. Counts alone cannot hide an inherited removal or
         # substitution: the frozen predecessor digest still binds every name.
-        inherited = {(package, test) for package, test in identities - FIXTURE_IDENTITIES
+        inherited = {(package, test) for package, test in identities - FIXTURE_IDENTITIES - C2_IDENTITIES
                      if package != "github.com/franchoy/coldkeep/v2/internal/generation"
                      and not test.startswith(("TestRecoveryUpgrade", "TestRecoveryGeneration"))}
         self.assertEqual(len(inherited), 583)
@@ -262,6 +319,24 @@ class RecoveryEventContractTests(unittest.TestCase):
         actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         self.assertEqual(len(pairs), 569)
         self.assertEqual(actual, "8eb9e04d2061e1c8659cb89a38e43648c0c241d2349900d0bf749503f9f19062")
+
+    def test_every_accepted_c1_requirement_is_retained_exactly(self):
+        pairs = sorted(events.required_identities() - FIXTURE_IDENTITIES - C2_IDENTITIES)
+        self.assertEqual(len(pairs), 726)
+        self.assertEqual(hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest(),
+                         "ca0f0c1619544bdb5ee5a1d3176095337a8295c20e14cdda2f8c451e1ad8ff65")
+
+    def test_each_c2_requirement_blocks_missing_skip_and_failure(self):
+        good = [{"Package": package, "Test": name, "Action": "pass"} for package, name in events.required_identities()]
+        self.assertEqual(len(C2_IDENTITIES), 112)
+        for package, name in C2_IDENTITIES:
+            for action in ("missing", "skip", "fail"):
+                with self.subTest(name=name, action=action):
+                    changed = [event for event in good if (event["Package"], event["Test"]) != (package, name)]
+                    if action != "missing":
+                        changed.append({"Package": package, "Test": name, "Action": action})
+                    self.assertEqual(events.check_events(changed)["status"], "FAIL")
+                    self.assertEqual(events.check_events(changed, broad=True)["status"], "FAIL")
 
     def test_observer_controls_are_required_in_both_routes(self):
         for checker in (events, passive_events):

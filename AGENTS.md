@@ -17,23 +17,22 @@ PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-Use the current charter in `docs/release/v2.0/README.md` and the explicitly
-adopted `coldkeep_phase3c1_build_2026-11-09.md`. The current unit is Phase 3C1:
-exact schema20 generation model, checkpointed 19-to-20 upgrade and recovery
-continuity. Owner adoption on 10 November 2026 authorizes bounded implementation,
-qualification, sequential commits, independent outgoing review and guarded
-fast-forward of existing `release/v2.0`, then actual-head hosted observation.
-Owner adoption on 11 November 2026 additionally authorizes bounded Go 1.26.11
-security maintenance for GO-2026-6859, verified exact toolchain/image pins,
-fresh affected qualification, independent review and another guarded update.
-Frozen v1 contracts and historical evidence retain their original toolchains.
-PR #129 stays draft. The [CI bridge](docs/release/v2.0/ci-acceptance-bridge.md)
-records closure at accepted `3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`.
-Preserve all predecessor worktrees, evidence and historical result files.
-Parent 2.04 and Phase 3C remain ACTIVE; Phase 3C2 OUTSTANDING; implementation
-ACTIVE; product gates INCOMPLETE. Ordinary schema18/19/20 writers, reclamation,
-capture/publication and IMPORT_READY maintenance/activation remain refused.
-No merge, tag, release, protection change, deployment or live switch is granted.
+Use the current charter in `docs/release/v2.0/README.md` and the owner-adopted
+`coldkeep_phase3c2_build_2026-11-12.md`. The current unit is Phase 3C2:
+bounded installed reads, exact DTOs, snapshot pagination, optional physical
+read-index preparation and integrated local-profile action 2.04 qualification.
+The [accepted C1 bridge](docs/release/v2.0/phase3c1-acceptance-bridge.md) binds
+C1 acceptance and actual hosted outcomes at `06bde38380dd3a42be5c180beb99bf1aa509b8ac`.
+Preserve every original predecessor report, worktree, ref and evidence directory.
+Owner adoption authorizes sequential local commits, independent review of the
+exact outgoing source/evidence, guarded fast-forward of existing `release/v2.0`,
+bounded current-status body refresh of draft PR #129 and both actual-head hosted
+events. Do not request the same authorization again. PR #129 stays draft.
+C2/3C/2.04 remain ACTIVE until all integrated local criteria pass. Conditional
+local completion leaves implementation ACTIVE and product gates INCOMPLETE.
+Ordinary schema18/19/20 writers, reclamation, capture/publication and IMPORT_READY
+maintenance/activation remain refused. No merge, tag, release, protection change,
+deployment, live switch or action 2.05 implementation is granted.
 
 ## Correctness rules
 
@@ -49,7 +48,7 @@ No merge, tag, release, protection change, deployment or live switch is granted.
 
 Use the current owning unit's validation profile in `docs/release/v2.0/README.md`,
 `docs/release/v2.0/ci-followup-result.md` and `PRE_RELEASE_CHECKLIST.md`.
-The Phase 3C1 BUILD requires fresh affected complete codec routes with staged real
+The Phase 3C2 BUILD requires fresh affected complete codec routes with staged real
 fixtures, the dedicated recovery requirements, integrated native/browser/Docker
 proofs, source/identity negative controls and applicable static checks. The measured
 source checkpoints and fresh/reused evidence boundaries are recorded in the

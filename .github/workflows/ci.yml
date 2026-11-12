@@ -815,6 +815,12 @@ jobs:
           DB_SSLMODE: disable
         run: bash scripts/run_passive_inventory_tests.sh "$RUNNER_TEMP/integration-diag/passive-inventory"
 
+      - name: Setup generation DTO JSON consumer
+        if: ${{ matrix.codec == 'plain' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.2'
+
       - name: Run recovery copy PostgreSQL contracts
         if: ${{ matrix.codec == 'plain' }}
         env:

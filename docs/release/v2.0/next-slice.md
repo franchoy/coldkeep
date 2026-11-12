@@ -1,46 +1,32 @@
-# Phase 3C2 handoff
+# Next bounded handoff: action 2.05 preparation
 
-Phase 3C1 is the currently adopted bounded implementation unit; see its
-[result](phase3c1-result.md) for measured qualification and the exact source
-checkpoint and the current [Go security-maintenance result](phase3c1-security-maintenance.md)
-for its fresh compiler-bound qualification. [CI follow-up acceptance](ci-acceptance-bridge.md) closes the stale
-CI handoff at `3aa9cae7b15037e6f51c22311e2b2ee0c0178b86`. All preceding result
-files remain unchanged point-in-time evidence.
+The current adopted work is [Phase 3C2](phase3c2-result.md); its integrated local
+2.04 criteria and both reviewed actual-head hosted events must finish before
+final C2 acceptance. The [C1 acceptance bridge](phase3c1-acceptance-bridge.md)
+preserves its exact public identity and historical results.
 
-Parent action 2.04: ACTIVE. Phase 3C: ACTIVE. Phase 3C2: OUTSTANDING.
-Implementation: ACTIVE. Product gates: INCOMPLETE. Keep PR #129 draft,
-`release/v2.0` as the development branch, main and stable v1.13.19 unchanged.
+Next work is bounded **action 2.05 runtime/daemon ownership planning and build
+preparation**, requiring its own adoption. Do not implement action 2.05 in C2.
+Prepare a concrete scope around the existing physical binding, lease/admission,
+joined cleanup, unavailable-state and imported-target fences. Identify owning
+runtime transitions and qualifications before opening new writer authority.
+No durable jobs, product capture/publication, generation restore, HTTP/UI or
+reclamation activation follows automatically from indexed model browsing.
 
-C2 must use the exact generation IDs, source/binding provenance and raw names in
-[generation-model.md](generation-model.md). It owns bounded typed indexed reads,
-keyset pagination and DTO round trips, followed by integrated action closure.
-It must not browse by loading Inventory.Catalog and slicing or by OFFSET.
-Proposed measured ceilings: 100 returned/101 fetched rows, 4-KiB cursor and
-1-MiB encoded response, with finite caller context. Bind each cursor to exact
-repository/source/generation/parent, query version/filter/order, fixed watermark
-and final unique key. Refuse cross-scope and stale cursors. Test delayed commit
-below a watermark; a sequence alone is not commit order. Measure EXPLAIN
-(ANALYZE, BUFFERS), rows, response bytes and allocation at increasing sizes,
-including equal keys, insertion between pages, cancellation and maximum names.
-No API authorization, cursor secret or capture/publication receipt is invented.
+Keep schema20/package4, version 2.0.0-dev.0, /v2, exact Go1.26.11 and all existing
+pins. Main, stable v1.13.19, predecessor worktrees/evidence and draft PR #129
+remain preserved. Ordinary schema18/19/20 writers/GC/repair/deletion and every
+IMPORT_READY target's maintenance/activation stay refused. Later ownership
+must integrate common reachability before any live reclamation activation.
 
-Only a later adopted C2 BUILD may add integrated authority transition. Preserve
-3A/3B owning reports, require owning C1/C2 results, and add negative tests proving
-that old reports or declarations cannot clear 2.04. Current structural support
-can clear only C1; parent 3C and C2 remain outstanding obligations.
+The supported C2 boundary is installed Linux/PostgreSQL16 metadata reads,
+bounded owned snapshots, exact DTOs and recovery continuity. It adds no Windows
+native-byte runtime, broader native delivery, hardware/media authenticity,
+failure-domain independence, real reboot/unmount, cross-filesystem transfer,
+schema20 live-GC survival or user-facing generation restore.
 
-All schema20 ordinary writers, GC, repair and deletion remain fenced. Generation
-reference preservation proves recovery while reclamation is fenced; it does not
-prove schema20 live-GC survival. The later publication owner must integrate the
-common reachability predicate before activation. All IMPORT_READY targets,
-including v4/malformed/future receipts, remain recovery-only. Capture, durable
-jobs, product generation restore and UI remain with later owners.
-
-Carry the Linux/PostgreSQL16 session-bound physical profile and exact prior
-profiles; no Windows/native-byte runtime, physical-media authenticity, hardware
-independence, real reboot/unmount or cross-filesystem transfer is newly qualified.
-Retain source-bound reuse and genuine skips from their owning evidence.
-
-Recommended C2 settings: GPT-6 Astra / Extra High for the read-consistency and
-integration proof. Record requested and observable actual settings separately;
-use unknown when actual settings are unavailable. C2 requires its own adoption.
+Recommended execution and independent review: **GPT-6 Astra / Extra High**, for
+runtime ownership, cancellation and shutdown reasoning. Record requested and
+observable actual settings separately; unknown remains unknown. Completion of
+the next preparation means a reviewable bounded BUILD and evidence matrix;
+implementation requires that BUILD's adoption and cannot be inferred from C2.

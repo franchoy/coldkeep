@@ -2646,8 +2646,6 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                         result.outstanding_obligations.insert(0, "2.02-delivery-native-proof")
         if phase == "2.04":
             result.outstanding_obligations = ["2.04-phase3a-qualification", "2.04-phase3a-followup-a1-a2", "2.04-phase3b", "2.04-phase3b-followup-r1", "2.04-phase3c", "2.04-phase3c1", "2.04-phase3c2", "2.05-2.13", "2.15", "2.17", "separate-publication-authorization"]
-            if state.get("phase_status") != "ACTIVE":
-                fail("Phase 3A cannot complete parent 2.04; phase_status must remain ACTIVE")
             report = root / "docs/release/v2.0/phase3a-result.md"
             if report.is_file() and not report.is_symlink() and report.stat().st_size <= 65536:
                 text = report.read_text()
@@ -2708,6 +2706,13 @@ def validate_v2_authority(root: Path, version: str, requested_state: str = "auto
                 accepted = root / "docs/release/v2.0" / name
                 if not accepted.is_file() or accepted.is_symlink() or token not in accepted.read_text():
                     fail("2.04 requires preserved accepted predecessor report: " + name)
+            if state.get("phase_status") == "COMPLETE":
+                from phase3c2_authority import complete
+                if not complete(root):
+                    fail("2.04 COMPLETE requires exact integrated C2 local qualification and accepted predecessors")
+                else:
+                    result.evidence_scope = "LOCAL_ACTION_2_04_INTEGRATED_AUTHORITY_ONLY"
+                    result.outstanding_obligations = ["2.05-2.13", "2.15", "2.17", "separate-publication-authorization"]
         expected = {
             "schema": "coldkeep-active-development/v1", "family": "v2.0",
             "version": version, "state": "development", "phase": phase,

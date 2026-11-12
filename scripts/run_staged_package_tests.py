@@ -20,7 +20,7 @@ from proof_process import execute
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = "postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825"
-BASES = {"pre3c": "3aa9cae7b15037e6f51c22311e2b2ee0c0178b86","pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2",
+BASES = {"c1": "06bde38380dd3a42be5c180beb99bf1aa509b8ac", "pre3c": "3aa9cae7b15037e6f51c22311e2b2ee0c0178b86","pre3b": "cf70de06d2ab2da6f64fa7b13fa9610af07e32f2",
          "d19": "d3581602aee2599547564322fe083baae1d52063",
          "accepted": "1229563116f71067c74801516bcd64c92e7b6ed2"}
 COMMANDS = {
@@ -74,6 +74,8 @@ def prerequisites(env, scope):
             raise ValueError("AES-GCM fixture key required")
     if command(["go", "env", "GOVERSION"], env)[1].strip() != "go1.26.11":
         raise ValueError("Go 1.26.11 required")
+    if scope in ("recovery", "packages") and command(["node", "--version"], env)[1].strip() != "v24.22.2":
+        raise ValueError("pinned Node v24.22.2 required for exact DTO consumer")
     versions = {}
     for label in ("dump", "restore"):
         path = Path(env.get("COLDKEEP_PG_" + label.upper(), ""))
@@ -131,9 +133,14 @@ def verify_readers(readers, report, env):
             executable = bool(source.stat().st_mode & 0o111)
             if digest(source) != expected or blob != expected_blob or executable != (mode == "100755"):
                 raise ValueError(f"changed {label} historical source")
-        for kind in ("writer", "reader") if label != "d19" else ("writer",):
+        kinds = ("reader",) if label == "c1" else (("writer", "reader") if label != "d19" else ("writer",))
+        for kind in kinds:
             path = readers / "phase3a" / (label + "-" + kind)
             hashes[path.name] = verify_binary(path, record.get(kind + "_sha256"))
+            if label == "c1":
+                version = command(["go", "version", "-m", str(path)], env)[1].splitlines()
+                if record.get("compiler") != "go1.26.11" or not version or not version[0].endswith(": go1.26.11"):
+                    raise ValueError("accepted C1 reader compiler provenance mismatch")
     path = readers / "phase3a/current-writer"
     hashes[path.name] = verify_binary(path, provenance.get("current_writer_sha256"))
     path = readers / "coldkeep-recovery"
