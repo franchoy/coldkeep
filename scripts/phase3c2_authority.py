@@ -16,7 +16,7 @@ CHECKS = {
 # Qualification inputs are executable source, tests, embedded inputs, fixtures,
 # tool configuration and workflow/staging source. Docs may follow separately.
 INPUT_ROOTS = ("cmd", "internal", "db", "tests", "scripts", "web", "assets", "deploy", "testdata", ".github/workflows")
-INPUT_FILES = ("go.mod", "go.sum", ".golangci.yml", "Makefile", "Dockerfile")
+INPUT_FILES = ("go.mod", "go.sum", ".golangci.yml", "Makefile", "Dockerfile", ".dockerignore", ".gitattributes")
 IGNORED_DIRS = {"__pycache__", "node_modules", ".git", "dist", "build", ".cache"}
 
 
@@ -30,6 +30,12 @@ def input_digest(root: Path) -> str:
         while pending:
             for path in pending.pop().iterdir():
                 if path.name in IGNORED_DIRS:
+                    continue
+                # Prepared assets are ignored build outputs; their exact binary
+                # and manifest provenance is qualified separately by Phase2.
+                # Keep the tracked source placeholder in this source digest.
+                relative = path.relative_to(root).as_posix()
+                if relative.startswith("internal/webui/assets/") and relative != "internal/webui/assets/UNPREPARED":
                     continue
                 mode = path.lstat().st_mode
                 if stat.S_ISLNK(mode):

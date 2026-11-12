@@ -131,3 +131,12 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
                 (self.root / "internal/added.go").unlink(missing_ok=True)
         (self.directory / "unrelated-status.md").write_text("Documentation successor\n")
         self.assertEqual(release.validate(self.root, "auto").violations, [])
+
+    def test_generated_assets_are_artifact_evidence_not_source_authority(self):
+        assets = self.root / "internal/webui/assets"
+        assets.mkdir(parents=True)
+        (assets / "generated.js").write_text("synthetic prepared output")
+        self.assertEqual(release.validate(self.root, "auto").violations, [])
+        # The tracked placeholder remains a source input.
+        (assets / "UNPREPARED").write_text("source placeholder")
+        self.assert_rejected()
