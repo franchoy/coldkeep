@@ -5,6 +5,10 @@ import json
 from pathlib import Path
 
 
+FIXTURE_HYGIENE = {'TestBindingDockerFixtureHygiene'} | {
+    'TestBindingDockerFixtureHygiene/' + case for case in
+    ('success', 'early-exit', 'unexpected-persistent-mount', 'foreign-owner', 'cleanup-failure')}
+
 required={
  'github.com/franchoy/coldkeep/v2/internal/recoveryexport':{
  'TestRecoveryExportRoundTrip/plaintext=false','TestRecoveryExportRoundTrip/plaintext=true',
@@ -42,6 +46,7 @@ required={
  'github.com/franchoy/coldkeep/v2/internal/coordination':{
  'TestPrepareExisting','TestPrepareExistingChildContention','TestExistingLeasePreparationAndMetadata',
  'TestExistingLeaseLegacyContention','TestExistingLeaseUnsafeAndLost'}}
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(FIXTURE_HYGIENE)
 for parent, cases in {
  'TestRecoveryImportReceiptPublicationBudget': 'bytes objects compatible',
  'TestRecoveryOwnedInventoryDeadline': 'earlier-parent lower-inventory expired-parent',

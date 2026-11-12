@@ -37,30 +37,27 @@ func TestBindingDockerProfile(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(private, "key"), []byte(hex.EncodeToString(f.key)), 0600))
 	cfg := map[string]any{"host": f.config.Host, "port": f.config.Port, "database": f.config.Database, "user": f.config.User, "payload_root": "/payload", "password_file": "/private/password", "key_file": "/private/key", "key_reference": f.config.KeyReference, "pg_dump": "/usr/lib/postgresql/16/bin/pg_dump", "pg_restore": "/usr/lib/postgresql/16/bin/pg_restore"}
 	must(t, os.WriteFile(filepath.Join(private, "config.json"), []byte(bindingJSON(cfg)), 0600))
-	name := fmt.Sprintf("ck-phase3b-binding-%d-%d", os.Getpid(), fixtureSeq.Add(1))
+	name := ""
 	cid := ""
 	docker := func(args ...string) ([]byte, error) { return exec.Command("docker", args...).CombinedOutput() }
+	var owned *bindingDockerFixture
 	stop := func() {
-		if cid != "" {
-			out, e := docker("rm", "-f", cid)
-			if e != nil {
-				t.Fatalf("owned cleanup %v %s", e, out)
-			}
+		if owned != nil {
+			must(t, owned.stop())
 			cid = ""
 		}
 	}
 	defer stop()
 	start := func(t *testing.T, root string) {
-		args := []string{"run", "-d", "--name", name, "--label", "coldkeep.disposable=phase3b-binding", "--network", "host", "--read-only", "--memory", "256m", "--cpus", "2", "--tmpfs", "/tmp:rw,size=64m", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())}
-		for _, m := range []string{"type=bind,src=" + root + ",dst=/payload", "type=bind,src=" + installation + ",dst=/installation", "type=bind,src=" + checkpoints + ",dst=/checkpoints", "type=bind,src=" + source + ",dst=/source,readonly", "type=bind,src=" + private + ",dst=/private,readonly", "type=bind,src=" + tools + ",dst=/tools,readonly"} {
-			args = append(args, "--mount", m)
-		}
-		args = append(args, "--entrypoint", "/bin/sleep", image, "300")
-		out, e := docker(args...)
-		if e != nil {
-			t.Fatalf("container start %v %s", e, out)
-		}
-		cid = strings.TrimSpace(string(out))
+		owned = newBindingDockerFixture(t, []bindingFixtureMount{
+			{Source: root, Destination: "/payload", RW: true},
+			{Source: installation, Destination: "/installation", RW: true},
+			{Source: checkpoints, Destination: "/checkpoints", RW: true},
+			{Source: source, Destination: "/source"},
+			{Source: private, Destination: "/private"},
+			{Source: tools, Destination: "/tools"},
+		})
+		cid, name = owned.id, owned.name
 	}
 	call := func(t *testing.T, args ...string) (BindingResult, error) {
 		command := append([]string{"exec", cid, "/usr/bin/env", "-i", "PATH=/usr/lib/postgresql/16/bin:/usr/bin:/bin", "LC_ALL=C", "/tools/reader"}, args...)
@@ -152,7 +149,7 @@ func TestBindingDockerProfile(t *testing.T) {
 	})
 	t.Run("missing-bind-source", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "missing")
-		out, e := docker("run", "--rm", "--mount", "type=bind,src="+missing+",dst=/source,readonly", "--entrypoint", "/bin/true", image)
+		out, e := docker("run", "--rm", "--tmpfs", "/var/lib/postgresql/data:rw,size=1m", "--mount", "type=bind,src="+missing+",dst=/source,readonly", "--entrypoint", "/bin/true", image)
 		if e == nil || !strings.Contains(string(out), "bind source path does not exist") {
 			t.Fatalf("missing bind control %v %s", e, out)
 		}

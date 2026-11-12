@@ -37,6 +37,10 @@ EXECUTION_BOUND_IDENTITIES = {
     ("github.com/franchoy/coldkeep/v2/internal/recoveryexport", name)
     for name in ("TestExecutionBounds", "TestExecutionBounds/total-object")
 }
+FIXTURE_IDENTITIES = {
+    ("github.com/franchoy/coldkeep/v2/internal/recoveryexport", name)
+    for name in events.FIXTURE_HYGIENE
+}
 
 
 class StagingPrerequisiteTests(unittest.TestCase):
@@ -176,7 +180,8 @@ class StagingLifetimeTests(unittest.TestCase):
                 seen.append("inventory")
                 if seen.count("inventory") == 2 and mutation == "inventory-error":
                     raise RuntimeError("residual observation unavailable")
-                return {"containers": ["residual"] if seen.count("inventory") == 2 and mutation == "residual" else []}
+                return {"containers": ["residual"] if seen.count("inventory") == 2 and mutation == "residual" else [],
+                        "volumes": ["residual-volume"] if seen.count("inventory") == 2 and mutation == "residual-volume" else []}
 
             remove = shutil.rmtree
 
@@ -207,7 +212,7 @@ class StagingLifetimeTests(unittest.TestCase):
 
     def test_child_lifetime_and_all_failures_remain_blocking(self):
         for mutation in ("none", "unrelated-skip", "child-exit", "child-start", "child-timeout", "child-incomplete", "required-skip", "missing-event",
-                         "cleanup-error", "inventory-error", "residual"):
+                         "cleanup-error", "inventory-error", "residual", "residual-volume"):
             with self.subTest(mutation=mutation):
                 status, facts = self.run_case(mutation)
                 self.assertEqual(status == 0, mutation in ("none", "unrelated-skip"))
@@ -232,7 +237,7 @@ class StagingLifetimeTests(unittest.TestCase):
     def test_passive_scope_keeps_readers_and_every_failure_blocking(self):
         for mutation in ("none", "unrelated-skip", "child-exit", "child-start", "child-timeout", "child-incomplete",
                          "required-skip", "missing-event", "missing-package", "binding-failure", "binding-skip",
-                         "cleanup-error", "inventory-error", "residual"):
+                         "cleanup-error", "inventory-error", "residual", "residual-volume"):
             with self.subTest(mutation=mutation):
                 status, facts = self.run_case(mutation, scope="passive")
                 self.assertEqual(status == 0, mutation == "none")
@@ -249,7 +254,7 @@ class RecoveryEventContractTests(unittest.TestCase):
         # Preserve the exact accepted identities while permitting the explicitly
         # scoped C1 additions. Counts alone cannot hide an inherited removal or
         # substitution: the frozen predecessor digest still binds every name.
-        inherited = {(package, test) for package, test in identities
+        inherited = {(package, test) for package, test in identities - FIXTURE_IDENTITIES
                      if package != "github.com/franchoy/coldkeep/v2/internal/generation"
                      and not test.startswith(("TestRecoveryUpgrade", "TestRecoveryGeneration"))}
         self.assertEqual(len(inherited), 583)
@@ -260,15 +265,15 @@ class RecoveryEventContractTests(unittest.TestCase):
 
     def test_observer_controls_are_required_in_both_routes(self):
         for checker in (events, passive_events):
-            for identity in OBSERVER_IDENTITIES | EXECUTION_BOUND_IDENTITIES:
-                for action in ("missing", "skip"):
+            for identity in OBSERVER_IDENTITIES | EXECUTION_BOUND_IDENTITIES | FIXTURE_IDENTITIES:
+                for action in ("missing", "skip", "fail"):
                     with self.subTest(checker=checker.__name__, identity=identity, action=action):
                         rows = [{"Package": p, "Test": t, "Action": "pass"}
                                 for p, t in checker.required_identities()]
                         if action == "missing":
                             rows = [row for row in rows if (row["Package"], row["Test"]) != identity]
                         else:
-                            next(row for row in rows if (row["Package"], row["Test"]) == identity)["Action"] = "skip"
+                            next(row for row in rows if (row["Package"], row["Test"]) == identity)["Action"] = action
                         self.assertEqual(checker.check_events(rows)["status"], "FAIL")
 
     def test_missing_and_skipped_binding_events_fail_broad_route(self):
@@ -288,9 +293,10 @@ class PassiveEventContractTests(unittest.TestCase):
         identities = passive_events.required_identities()
         self.assertTrue(OBSERVER_IDENTITIES <= identities)
         self.assertTrue(EXECUTION_BOUND_IDENTITIES <= identities)
-        self.assertEqual(len(identities), 51)
+        self.assertTrue(FIXTURE_IDENTITIES <= identities)
+        self.assertEqual(len(identities - FIXTURE_IDENTITIES), 51)
         new_bound_child = {pair for pair in EXECUTION_BOUND_IDENTITIES if "/" in pair[1]}
-        pairs = sorted(identities - OBSERVER_IDENTITIES - new_bound_child)
+        pairs = sorted(identities - OBSERVER_IDENTITIES - new_bound_child - FIXTURE_IDENTITIES)
         actual = hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
         self.assertEqual(len(pairs), 38)
         self.assertEqual(actual, "0b635526686ec50d5076d9393593a701f8037d9b5aaeb92edfdc8d2512010dbb")

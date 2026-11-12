@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+from check_recovery_test_events import FIXTURE_HYGIENE
 
 
 required={
@@ -34,6 +35,7 @@ required={
  'TestPlaintextWithoutKeyAndMixedRecipe','TestNoTransientSourceMutation','TestPassiveCallBoundary','TestPinOnlyAndUnreferencedContainer'},
  'github.com/franchoy/coldkeep/v2/internal/coordination':{
  'TestExistingLeasePreparationAndMetadata','TestExistingLeaseLegacyContention','TestExistingLeaseUnsafeAndLost'}}
+required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(FIXTURE_HYGIENE)
 # Keep every accepted passive identity and require the same new observer controls
 # reached by this route's unchanged package/test selection.
 required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update({

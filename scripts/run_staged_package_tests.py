@@ -174,7 +174,9 @@ def resource_inventory(env):
         raise ValueError("malformed fixture database inventory")
     containers = command(["docker", "container", "ls", "-a", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}"], env)[1]
     networks = command(["docker", "network", "ls", "--no-trunc", "--format", "{{.ID}}\t{{.Name}}"], env)[1]
-    return dict(database, containers=sorted(containers.splitlines()), networks=sorted(networks.splitlines()))
+    volumes = command(["docker", "volume", "ls", "--format", "{{.Name}}\t{{.Driver}}"], env)[1]
+    return dict(database, containers=sorted(containers.splitlines()), networks=sorted(networks.splitlines()),
+                volumes=sorted(volumes.splitlines()))
 
 
 def run(scope, output):
