@@ -2,6 +2,7 @@
 import hashlib
 import json
 import shutil
+import subprocess
 
 import phase3c2_authority as c2
 import validate_release_state as release
@@ -136,7 +137,36 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
         assets = self.root / "internal/webui/assets"
         assets.mkdir(parents=True)
         (assets / "generated.js").write_text("synthetic prepared output")
+        # Without Git ownership metadata, extra assets are source inputs.
+        self.assert_rejected()
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         self.assertEqual(release.validate(self.root, "auto").violations, [])
+        subprocess.run(["git", "-C", str(self.root), "add", "-f", "internal/webui/assets/generated.js"], check=True)
+        self.assert_rejected()
+        subprocess.run(["git", "-C", str(self.root), "rm", "--cached", "-q", "internal/webui/assets/generated.js"], check=True)
+        self.assertEqual(release.validate(self.root, "auto").violations, [])
+        # Source/test additions are never treated as generated web outputs.
+        source = assets / "probe_test.go"
+        source.write_text("package probe\n")
+        self.assert_rejected()
+        subprocess.run(["git", "-C", str(self.root), "add", "-f", "internal/webui/assets/probe_test.go"], check=True)
+        self.assert_rejected()
+        subprocess.run(["git", "-C", str(self.root), "rm", "-f", "-q", "internal/webui/assets/probe_test.go"], check=True)
         # The tracked placeholder remains a source input.
         (assets / "UNPREPARED").write_text("source placeholder")
         self.assert_rejected()
+
+    def test_tracked_input_under_generated_directory_binds_bytes_and_modes(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        generated = self.root / "web/dist/generated.js"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("generated output")
+        self.assertEqual(release.validate(self.root, "auto").violations, [])
+        subprocess.run(["git", "-C", str(self.root), "add", "-f", "web/dist/generated.js"], check=True)
+        self.assert_rejected()
+        before = c2.input_digest(self.root)
+        generated.write_text("changed tracked bytes")
+        self.assertNotEqual(c2.input_digest(self.root), before)
+        before = c2.input_digest(self.root)
+        generated.chmod(0o755)
+        self.assertNotEqual(c2.input_digest(self.root), before)
