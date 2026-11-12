@@ -17,8 +17,13 @@ CHECKS = {
 }
 # Qualification inputs are executable source, tests, embedded inputs, fixtures,
 # tool configuration and workflow/staging source. Docs may follow separately.
-INPUT_ROOTS = ("cmd", "internal", "db", "tests", "scripts", "web", "assets", "deploy", "testdata", ".github/workflows")
-INPUT_FILES = ("go.mod", "go.sum", ".golangci.yml", "Makefile", "Dockerfile", ".dockerignore", ".gitattributes")
+INPUT_ROOTS = ("cmd", "internal", "db", "tests", "scripts", "web", "assets", "deploy", "testdata",
+               ".github/workflows", ".devcontainer", "benchmarks", "samples", "samples_edge_cases")
+# The OpenAPI document is executable frontend/contract input despite its docs
+# location. Keep ordinary status documents outside this execution boundary.
+INPUT_FILES = ("go.mod", "go.sum", ".golangci.yml", "Makefile", "Dockerfile", ".dockerignore",
+               ".gitattributes", "docker-compose.yml", ".env.example",
+               "docs/release/v2.0/proof-openapi.json")
 IGNORED_DIRS = {"__pycache__", ".git"}
 GENERATED_WEB_SUFFIXES = {".html", ".js", ".css", ".json", ".svg", ".png", ".jpg", ".webp", ".woff", ".woff2"}
 

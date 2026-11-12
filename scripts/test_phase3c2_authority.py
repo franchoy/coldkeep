@@ -21,6 +21,16 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
         for name in c2.INPUT_ROOTS:
             (self.root / name).mkdir(parents=True, exist_ok=True)
         (self.root / "internal/model.go").write_text("package fixture\n")
+        shutil.copy2(ROOT / "docs/release/v2.0/proof-openapi.json", self.directory / "proof-openapi.json")
+        self.execution_inputs = (
+            ".devcontainer/Dockerfile", "docker-compose.yml", ".env.example",
+            "benchmarks/v1.9/regression-thresholds.yaml", "samples/probe.txt",
+            "samples_edge_cases/probe.txt",
+        )
+        for name in self.execution_inputs:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic execution input\n")
         self.record = {
             "schema": "coldkeep-phase3c2-local-qualification/v1",
             "accepted_c1": "06bde38380dd3a42be5c180beb99bf1aa509b8ac",
@@ -132,6 +142,40 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
                 (self.root / "internal/added.go").unlink(missing_ok=True)
         (self.directory / "unrelated-status.md").write_text("Documentation successor\n")
         self.assertEqual(release.validate(self.root, "auto").violations, [])
+
+    def assert_execution_input_bound(self, name):
+        path = self.root / name
+        original, mode = path.read_bytes(), path.stat().st_mode & 0o777
+        for mutation in ("bytes", "mode", "missing"):
+            with self.subTest(input=name, mutation=mutation):
+                if mutation == "bytes":
+                    path.write_bytes(original + b"\n")
+                elif mutation == "mode":
+                    path.chmod(mode | 0o111)
+                else:
+                    path.unlink()
+                self.assert_rejected()
+                path.write_bytes(original)
+                path.chmod(mode)
+                self.assertEqual(release.validate(self.root, "auto").violations, [])
+
+    def test_executable_frontend_schema_is_bound_despite_docs_location(self):
+        self.assert_execution_input_bound("docs/release/v2.0/proof-openapi.json")
+        (self.directory / "status-note.md").write_text("Ordinary documentation successor\n")
+        self.assertEqual(release.validate(self.root, "auto").violations, [])
+
+    def test_build_benchmark_and_sample_inputs_bind_changes_and_additions(self):
+        for name in self.execution_inputs:
+            self.assert_execution_input_bound(name)
+        for name in (".devcontainer/added.env", "benchmarks/paired/reference-v1.13.json",
+                     "samples/added.txt", "samples_edge_cases/added.txt"):
+            with self.subTest(addition=name):
+                path = self.root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("new execution input\n")
+                self.assert_rejected()
+                path.unlink()
+                self.assertEqual(release.validate(self.root, "auto").violations, [])
 
     def test_generated_assets_are_artifact_evidence_not_source_authority(self):
         assets = self.root / "internal/webui/assets"
