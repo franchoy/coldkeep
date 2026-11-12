@@ -339,6 +339,18 @@ C2_REQUIRED = {'github.com/franchoy/coldkeep/v2/internal/generation': ['TestGene
                                                              'TestRecoveryReadQueryWork/records-100',
                                                              'TestRecoveryReadQueryWork/records-1000',
                                                              'TestRecoveryReadQueryWork/records-5000']}
+C2_REQUIRED['github.com/franchoy/coldkeep/v2/internal/generation'] += [
+    'TestGenerationDTORefusals/response-limit', 'TestGenerationDTORefusals/negative-response-limit']
+C2_REQUIRED['github.com/franchoy/coldkeep/v2/internal/recoveryexport'] += [
+    'TestRecoveryReadPageBoundaries',
+    'TestRecoveryReadPageBoundaries/empty-source-versus-missing',
+    'TestRecoveryReadPageBoundaries/empty-parent-versus-missing',
+    'TestRecoveryReadPageBoundaries/caller-response-limit',
+    'TestRecoveryReadPageBoundaries/lowered-rows',
+    'TestRecoveryReadPageBoundaries/lowered-bytes',
+    'TestRecoveryReadPageBoundaries/lowered-deadline',
+    'TestRecoveryReadPageBoundaries/oversized-database-component',
+] + ['TestRecoveryReadPageBoundaries/members-' + str(n) for n in (0, 1, 100, 101, 200, 201)]
 for package, tests in C2_REQUIRED.items():
     required[package].update(tests)
 

@@ -41,6 +41,8 @@ class RecoveryRunnerTests(unittest.TestCase):
 import os,sys,pathlib
 if sys.argv[1:]==['env','GOVERSION']:
  print('go1.26.11')
+elif sys.argv[1:3]==['version','-m']:
+ print(sys.argv[3]+': go1.26.11')
 elif sys.argv[1]=='build':
  output=pathlib.Path(sys.argv[sys.argv.index('-o')+1])
  output.write_text('synthetic reader identity')
@@ -52,6 +54,9 @@ else:
  sys.exit(99)
 """)
             go.chmod(0o700)
+            node = fake / "node"
+            node.write_text("#!/bin/sh\nprintf 'v24.22.2\\n'\n")
+            node.chmod(0o700)
             docker = fake / "docker"
             image_json = json.dumps([{"Id": "sha256:" + "1" * 64, "RepoDigests": [IMAGE]}])
             docker.write_text("#!/usr/bin/env python3\nimport sys\nif sys.argv[1]=='image': print(" + repr(image_json) + ")\n")

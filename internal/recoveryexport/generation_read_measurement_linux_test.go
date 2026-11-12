@@ -20,6 +20,7 @@ type measuredReadQuery struct {
 }
 type measuredReadPage struct {
 	Query, Position                                string
+	DataQueries, ReservationQueries                int
 	Selected, Distractors, Returned, ResponseBytes int
 	AllocatedBytes, Allocations                    uint64
 	ElapsedNS                                      int64
@@ -110,7 +111,7 @@ func TestRecoveryReadQueryWork(t *testing.T) {
 							position = "middle"
 						}
 						if position != "" {
-							m := measuredReadPage{Query: query, Position: position, Selected: size, Distractors: size, Returned: n, ResponseBytes: len(serialized), AllocatedBytes: end.TotalAlloc - start.TotalAlloc, Allocations: end.Mallocs - start.Mallocs, ElapsedNS: elapsed.Nanoseconds()}
+							m := measuredReadPage{DataQueries: len(captured), ReservationQueries: 2, Query: query, Position: position, Selected: size, Distractors: size, Returned: n, ResponseBytes: len(serialized), AllocatedBytes: end.TotalAlloc - start.TotalAlloc, Allocations: end.Mallocs - start.Mallocs, ElapsedNS: elapsed.Nanoseconds()}
 							for _, observed := range captured {
 								var plan []byte
 								must(t, f.db.QueryRowContext(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+observed.SQL, observed.Args...).Scan(&plan))
@@ -148,7 +149,7 @@ func TestRecoveryReadQueryWork(t *testing.T) {
 					if e != nil {
 						return e
 					}
-					pages = append(pages, measuredReadPage{Query: query, Position: "limit-one", Selected: size, Distractors: size, Returned: 1, ResponseBytes: len(raw), AllocatedBytes: end.TotalAlloc - start.TotalAlloc, Allocations: end.Mallocs - start.Mallocs, ElapsedNS: elapsed.Nanoseconds()})
+					pages = append(pages, measuredReadPage{DataQueries: len(captured), ReservationQueries: 2, Query: query, Position: "limit-one", Selected: size, Distractors: size, Returned: 1, ResponseBytes: len(raw), AllocatedBytes: end.TotalAlloc - start.TotalAlloc, Allocations: end.Mallocs - start.Mallocs, ElapsedNS: elapsed.Nanoseconds()})
 				}
 				for _, index := range []int{1, size / 2, size} {
 					entryRequest := readRequest(q, sources[0], gens[0], generation.QueryEntry)
@@ -168,7 +169,7 @@ func TestRecoveryReadQueryWork(t *testing.T) {
 						if err != nil {
 							return err
 						}
-						m := measuredReadPage{Query: query, Position: fmt.Sprintf("entry-%d", index), Selected: size, Distractors: size, Returned: 1, ResponseBytes: len(raw), AllocatedBytes: end.TotalAlloc - start.TotalAlloc, Allocations: end.Mallocs - start.Mallocs, ElapsedNS: elapsed.Nanoseconds()}
+						m := measuredReadPage{DataQueries: len(captured), ReservationQueries: 2, Query: query, Position: fmt.Sprintf("entry-%d", index), Selected: size, Distractors: size, Returned: 1, ResponseBytes: len(raw), AllocatedBytes: end.TotalAlloc - start.TotalAlloc, Allocations: end.Mallocs - start.Mallocs, ElapsedNS: elapsed.Nanoseconds()}
 						for _, observed := range captured {
 							var plan []byte
 							must(t, f.db.QueryRowContext(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+observed.SQL, observed.Args...).Scan(&plan))
@@ -208,7 +209,7 @@ func TestRecoveryReadQueryWork(t *testing.T) {
 		}
 	}
 	if report := os.Getenv("COLDKEEP_PHASE1D_REPORT_DIR"); report != "" {
-		raw, e := json.MarshalIndent(map[string]any{"profile": "installed Linux/PostgreSQL16 schema20; standard planner settings", "fixture": "50/500/2500 selected generations plus same-count source distractors; same-count root and other-parent entries; original fixture rows retained", "pages": pages, "openings": openings, "timing": "observations, not latency guarantees"}, "", "  ")
+		raw, e := json.MarshalIndent(map[string]any{"profile": "installed Linux/PostgreSQL16 schema20; standard planner settings", "fixture": "50/500/2500 selected generations plus same-count source distractors; same-count root and other-parent entries; original fixture rows retained", "pages": pages, "openings": openings, "timing": "observations, not latency guarantees", "query_accounting": "Plans capture parameterized data queries only. Each successful Read also performs two inherited reservation-check SELECT EXISTS queries over pg_locks on its separate non-data connection. Their time/allocation is included in Read metrics; their global-lock work is not qualified as indexed data-page work."}, "", "  ")
 		must(t, e)
 		must(t, os.WriteFile(filepath.Join(report, "generation-read-query-work.json"), raw, 0600))
 	}

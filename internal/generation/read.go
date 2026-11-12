@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"regexp"
 	"strconv"
 )
+
+var ErrResponseLimit = errors.New("generation response exceeds caller byte limit")
 
 const (
 	PageMembers        = 100
@@ -53,20 +56,21 @@ type Reader interface {
 }
 
 type Request struct {
-	Version      int       `json:"version"`
-	Query        string    `json:"query"`
-	RepositoryID string    `json:"repository_id"`
-	SourceID     string    `json:"source_id"`
-	GenerationID string    `json:"generation_id"`
-	ParentID     *string   `json:"parent_id"`
-	EntryID      string    `json:"entry_id"`
-	Selector     *Selector `json:"selector"`
-	Limit        int       `json:"limit"`
-	Cursor       string    `json:"cursor"`
+	Version       int       `json:"version"`
+	Query         string    `json:"query"`
+	RepositoryID  string    `json:"repository_id"`
+	SourceID      string    `json:"source_id"`
+	GenerationID  string    `json:"generation_id"`
+	ParentID      *string   `json:"parent_id"`
+	EntryID       string    `json:"entry_id"`
+	Selector      *Selector `json:"selector"`
+	Limit         int       `json:"limit"`
+	ResponseLimit int       `json:"response_limit"`
+	Cursor        string    `json:"cursor"`
 }
 
 func (q Request) Validate() error {
-	if q.Version != 1 || !ValidID("repo", q.RepositoryID) || !ValidID("source", q.SourceID) || q.Limit < 0 || q.Limit > PageMembers || len(q.Cursor) > CursorBytes {
+	if q.Version != 1 || !ValidID("repo", q.RepositoryID) || !ValidID("source", q.SourceID) || q.Limit < 0 || q.Limit > PageMembers || q.ResponseLimit < 0 || q.ResponseLimit > ResponseBytes || len(q.Cursor) > CursorBytes {
 		return ErrInvalid
 	}
 	if q.Query != QueryGenerations && !ValidID("generation", q.GenerationID) {
@@ -120,6 +124,13 @@ func (q Request) PageLimit() int {
 		return DefaultPageMembers
 	}
 	return q.Limit
+}
+
+func (q Request) ResponseByteLimit() int {
+	if q.ResponseLimit == 0 {
+		return ResponseBytes
+	}
+	return q.ResponseLimit
 }
 
 type MetadataDTO struct {
@@ -183,7 +194,7 @@ func validDigest(s string) bool {
 		return false
 	}
 	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
@@ -385,7 +396,7 @@ func strictDTO(b []byte, limit int, v any) error {
 }
 
 func dtoKey(k string) bool {
-	return oneOf(k, "version", "query", "repository_id", "source_id", "generation_id", "parent_id", "entry_id", "selector", "limit", "cursor",
+	return oneOf(k, "version", "query", "repository_id", "source_id", "generation_id", "parent_id", "entry_id", "selector", "limit", "response_limit", "cursor",
 		"kind", "components", "mode", "mtime_ns", "source_revision", "policy_id", "policy_sha256", "started_ns", "ended_ns", "scan_state", "outcome", "publication_receipt",
 		"component_base64", "logical_file_id", "metadata", "generation", "root", "policy_base64", "entry", "generations", "entries", "detail", "selection", "next_cursor",
 		"view", "order", "upper", "last")

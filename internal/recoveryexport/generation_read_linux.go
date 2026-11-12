@@ -180,7 +180,11 @@ func (v *generationReadView) Read(caller context.Context, q generation.Request) 
 		err = errors.Join(ctx.Err(), caller.Err(), v.s.checkReadDescriptor(v.descriptor))
 	}
 	if err == nil {
-		_, err = generation.EncodeResponse(out)
+		var encoded []byte
+		encoded, err = generation.EncodeResponse(out)
+		if err == nil && len(encoded) > q.ResponseByteLimit() {
+			err = generation.ErrResponseLimit
+		}
 	}
 	if err != nil {
 		return generation.Response{}, err

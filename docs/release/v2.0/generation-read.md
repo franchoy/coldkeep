@@ -31,11 +31,17 @@ or commit order. Children use raw BYTEA components and the existing exact
 generation/parent/component unique index. SQL includes the fixed parent in its
 ordering so root/null-parent pages can use that index. Requests have no optional
 filters or alternate sorts. Pages issue parameterized SQL, never slice Inventory
-or use OFFSET. Auxiliary identity/watermark/selector queries are measured too.
+or use OFFSET. Auxiliary identity/watermark/selector data queries are measured too. Each
+successful Read also makes two inherited ownership-reservation checks on the
+separate non-data connection. Their time/allocation is included; saved EXPLAIN
+plans cover data queries only. Global pg_locks work is not an indexed page-work
+claim.
 Server CASE guards cap variable fields before driver transfer.
 
 Defaults are 50 returned members, hard maximum 100 and limit+1 sentinel at most
-101. Cursor/request/response ceilings are 4 KiB/16 KiB/1 MiB. Existing raw-name
+101. Optional request `response_limit` defaults to 1 MiB and may only lower
+that ceiling. A response, including a single item, exceeding it returns explicit
+`ErrResponseLimit` with no successful response. Cursor/request/response ceilings are 4 KiB/16 KiB/1 MiB. Existing raw-name
 limits remain 255-byte component, 3,072-byte path and 128 components; policies
 remain 4,096 bytes/32 rules. Canonical base64 preserves native POSIX bytes;
 display text is not identity. Signed int64 timestamps/revisions/logical IDs use

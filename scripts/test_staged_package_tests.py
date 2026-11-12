@@ -328,7 +328,7 @@ class RecoveryEventContractTests(unittest.TestCase):
 
     def test_each_c2_requirement_blocks_missing_skip_and_failure(self):
         good = [{"Package": package, "Test": name, "Action": "pass"} for package, name in events.required_identities()]
-        self.assertEqual(len(C2_IDENTITIES), 112)
+        self.assertEqual(len(C2_IDENTITIES), 128)
         for package, name in C2_IDENTITIES:
             for action in ("missing", "skip", "fail"):
                 with self.subTest(name=name, action=action):

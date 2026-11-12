@@ -70,17 +70,19 @@ func TestGenerationDTORefusals(t *testing.T) {
 		t.Fatal(e)
 	}
 	cases := map[string][]byte{
-		"duplicate":       bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1),
-		"unknown":         bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":1,"filter":"anything"`), 1),
-		"case-alias":      bytes.Replace(raw, []byte(`"version":1`), []byte(`"Version":1`), 1),
-		"alias-duplicate": bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":1,"Version":1`), 1),
-		"surrogate":       bytes.Replace(raw, []byte(`"cursor":""`), []byte(`"cursor":"\ud800"`), 1),
-		"low-surrogate":   bytes.Replace(raw, []byte(`"cursor":""`), []byte(`"cursor":"\udfff"`), 1),
-		"invalid-utf8":    append(append([]byte{}, raw...), 0xff),
-		"trailing":        append(append([]byte{}, raw...), []byte(` {}`)...),
-		"request-bytes":   append(append([]byte{}, raw...), bytes.Repeat([]byte(" "), RequestBytes-len(raw)+1)...),
-		"limit":           bytes.Replace(raw, []byte(`"limit":0`), []byte(`"limit":101`), 1),
-		"version":         bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":2`), 1),
+		"duplicate":               bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1),
+		"unknown":                 bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":1,"filter":"anything"`), 1),
+		"case-alias":              bytes.Replace(raw, []byte(`"version":1`), []byte(`"Version":1`), 1),
+		"alias-duplicate":         bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":1,"Version":1`), 1),
+		"surrogate":               bytes.Replace(raw, []byte(`"cursor":""`), []byte(`"cursor":"\ud800"`), 1),
+		"low-surrogate":           bytes.Replace(raw, []byte(`"cursor":""`), []byte(`"cursor":"\udfff"`), 1),
+		"invalid-utf8":            append(append([]byte{}, raw...), 0xff),
+		"trailing":                append(append([]byte{}, raw...), []byte(` {}`)...),
+		"request-bytes":           append(append([]byte{}, raw...), bytes.Repeat([]byte(" "), RequestBytes-len(raw)+1)...),
+		"limit":                   bytes.Replace(raw, []byte(`"limit":0`), []byte(`"limit":101`), 1),
+		"version":                 bytes.Replace(raw, []byte(`"version":1`), []byte(`"version":2`), 1),
+		"response-limit":          bytes.Replace(raw, []byte(`"response_limit":0`), []byte(`"response_limit":1048577`), 1),
+		"negative-response-limit": bytes.Replace(raw, []byte(`"response_limit":0`), []byte(`"response_limit":-1`), 1),
 	}
 	for name, b := range cases {
 		t.Run(name, func(t *testing.T) {
