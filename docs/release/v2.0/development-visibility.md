@@ -2,11 +2,12 @@
 
 Current workflow: the owner-adopted **Phase 3C2 BUILD**. See the
 [accepted C1 bridge](phase3c1-acceptance-bridge.md), [C2 result](phase3c2-result.md)
-and [read contract](generation-read.md). C2 local qualification and exact outgoing
-review precede the authorized guarded branch update and both hosted events.
+and [read contract](generation-read.md). C2, Phase3C and local-profile 2.04 are
+locally COMPLETE. Exact outgoing independent review precedes the authorized
+guarded branch update; both actual-head hosted events remain pending in this
+point-in-time source record. The final external receipt records their outcomes.
 PR #129 stays draft; main and stable v1.13.19 stay unchanged. Overall
-implementation remains ACTIVE and product gates INCOMPLETE. Local 2.04 completion
-is conditional on the integrated criteria; later product gates remain open.
+implementation remains ACTIVE and product gates INCOMPLETE; later gates stay open.
 
 Everything below preserves the original Phase 3B visibility proposal and its
 later hosted-CI correction as historical context. Its branch-absence, approval,

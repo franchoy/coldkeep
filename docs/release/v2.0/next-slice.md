@@ -1,8 +1,9 @@
 # Next bounded handoff: action 2.05 preparation
 
-The current adopted work is [Phase 3C2](phase3c2-result.md); its integrated local
-2.04 criteria and both reviewed actual-head hosted events must finish before
-final C2 acceptance. The [C1 acceptance bridge](phase3c1-acceptance-bridge.md)
+[Phase 3C2](phase3c2-result.md), Phase3C and local-profile 2.04 are locally
+COMPLETE. Exact outgoing review and both actual-head hosted events remain
+conditions of final C2 acceptance; their terminal outcomes belong to the final
+external receipt. The [C1 acceptance bridge](phase3c1-acceptance-bridge.md)
 preserves its exact public identity and historical results.
 
 Next work is bounded **action 2.05 runtime/daemon ownership planning and build

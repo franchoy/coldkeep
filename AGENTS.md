@@ -28,8 +28,10 @@ Owner adoption authorizes sequential local commits, independent review of the
 exact outgoing source/evidence, guarded fast-forward of existing `release/v2.0`,
 bounded current-status body refresh of draft PR #129 and both actual-head hosted
 events. Do not request the same authorization again. PR #129 stays draft.
-C2/3C/2.04 remain ACTIVE until all integrated local criteria pass. Conditional
-local completion leaves implementation ACTIVE and product gates INCOMPLETE.
+C2/3C/local-profile 2.04 are COMPLETE on the integrated local evidence recorded
+in the owning result. Exact outgoing review and both actual-head hosted events
+remain additional conditions of final C2 acceptance. Implementation stays ACTIVE
+and product gates INCOMPLETE.
 Ordinary schema18/19/20 writers, reclamation, capture/publication and IMPORT_READY
 maintenance/activation remain refused. No merge, tag, release, protection change,
 deployment, live switch or action 2.05 implementation is granted.
