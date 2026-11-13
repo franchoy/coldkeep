@@ -10,17 +10,18 @@ remain preserved. C2 runs in its separate worktree.
 
 Current contracts: [C1 generation model](generation-model.md),
 [C2 bounded reads and optional index](generation-read.md).
-Current result: [Phase 3C2](phase3c2-result.md).
+Current result: [C2-G1 follow-up](phase3c2-followup-result.md); the original
+[Phase 3C2 result](phase3c2-result.md) remains a preserved point-in-time record.
 Current handoff: [bounded action 2.05 preparation](next-slice.md).
 Exact Go 1.26.11 / GOTOOLCHAIN=local, Go language floor 1.25.0, dependencies,
 version 2.0.0-dev.0, module /v2 and latest stable 1.13.19 remain unchanged.
 Requested settings: GPT-6 Astra / Extra High; actual settings only if observable.
 
-[Current authority](../current.json) keeps local-profile 2.04 ACTIVE while the
-C2-G1 provenance follow-up completes affected qualification. The original C2
-local completion report and its qualification remain preserved point-in-time
-evidence; they cannot clear the new follow-up obligation. Exact outgoing independent review and both
-actual-head hosted events remain conditions of final C2 acceptance. The validator
+[Current authority](../current.json) records local-profile 2.04 COMPLETE on
+the source-bound C2-G1 follow-up result, fresh affected qualification and
+explicit unchanged-runtime reuse. Original C2 and predecessor reports remain
+preserved and cannot alone clear the follow-up obligation. Exact outgoing
+independent review and both actual-head hosted events remain conditions of final C2 acceptance. The validator
 checks structural authority; it does not certify SQL/runtime or hosted success.
 Implementation remains ACTIVE and product gates INCOMPLETE.
 All later obligations, including separate product-publication authorization,

@@ -1,10 +1,10 @@
 # Next bounded handoff: action 2.05 preparation
 
-[Phase 3C2](phase3c2-result.md), Phase3C and local-profile 2.04 are locally
-COMPLETE. Exact outgoing review and both actual-head hosted events remain
+[C2-G1 follow-up](phase3c2-followup-result.md), Phase3C and local-profile
+2.04 are locally COMPLETE. Exact outgoing review and both actual-head hosted events remain
 conditions of final C2 acceptance; their terminal outcomes belong to the final
-external receipt. The [C1 acceptance bridge](phase3c1-acceptance-bridge.md)
-preserves its exact public identity and historical results.
+external receipt, including final scoped cleanup and archive delivery. The
+[C1 acceptance bridge](phase3c1-acceptance-bridge.md) preserves its exact public identity and historical results.
 
 Next work is bounded **action 2.05 runtime/daemon ownership planning and build
 preparation**, requiring its own adoption. Do not implement action 2.05 in C2.

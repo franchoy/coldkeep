@@ -1,7 +1,7 @@
 # V2.0 development visibility
 
 Current workflow: the owner-adopted **Phase 3C2 BUILD**. See the
-[accepted C1 bridge](phase3c1-acceptance-bridge.md), [C2 result](phase3c2-result.md)
+[accepted C1 bridge](phase3c1-acceptance-bridge.md), [C2-G1 result](phase3c2-followup-result.md)
 and [read contract](generation-read.md). C2, Phase3C and local-profile 2.04 are
 locally COMPLETE. Exact outgoing independent review precedes the authorized
 guarded branch update; both actual-head hosted events remain pending in this
