@@ -9,7 +9,16 @@ import subprocess
 
 C1 = "06bde38380dd3a42be5c180beb99bf1aa509b8ac"
 PREDECESSORS = {'phase1a-result.md': 'd1ac381791f35903bed3c9521c62017a2998bb2761113f4165c23cdeaae189c5', 'phase1d-result.md': '53375480f3772ea74571b8414168f5793a179a76bdf5b1751513ab11c96bdbcf', 'phase2-result.md': 'b96fd8f311e6d482c53f1e40f081d980678fc6f1173965adcc5279820528a1fa', 'phase2-followup-result.md': '176dbcd8f193bc3945eca8f5d13297e5648e05b89077c01c53f71d587ff93e60', 'phase3a-result.md': 'bb50da22c6638bb38351d01979f26c2c27e8c091fdb2a6e1d864f214feb3fe23', 'phase3a-followup-result.md': '1dec3603ba74d662681600d97316d85f610054ed06c17dc17e8902f5771e1407', 'phase3b-result.md': 'e8e1a39d27fd66c39fb984212b15cc7a3bb446eb6a76e17e01f82855228961c3', 'phase3b-followup-result.md': '7926c9def7ec4777effbcc306b5eefa1d41522370cc62968ff5e91d0261816ff', 'ci-acceptance-bridge.md': 'ed46ed4e73bdb5be745a710e28abfa30726bb7eae12cc8ff73849b3498179ed1', 'phase3c1-result.md': '5bf85f43c663bd09bcff9420e35066b521856db0cdd14c429a6a55e510d7d484', 'phase3c1-security-maintenance.md': 'c31e12399b71f5e1be1a4e4b565eaf4baf8a3654579ccdfcc2a55c2c4a3d5484', 'phase3c1-acceptance-bridge.md': '7f39c2e3827c7ef26c8ced82aeffdf237c0ed42ff679c6f48dab675621b082ce'}
+# Preserve the reviewed green checkpoint as immutable predecessor evidence.
+PREDECESSORS.update({
+    "phase3c2-result.md": "0d4956865ada5fead72e21c9ff7553d3425d247e4cadab667b7a6564ceedbfe4",
+    "phase3c2-qualification.json": "aa8527c9295fd8f2d094804a489e0d79aa7b9656a65bc82a51f6a56e26698444",
+})
+RESULT = "phase3c2-followup-result.md"
+QUALIFICATION = "phase3c2-followup-qualification.json"
+
 CHECKS = {
+    "provenance-regressions", "real-staged-admission", "source-reuse-accounting",
     "focused-race", "recovery", "passive", "plain-packages", "aes-gcm-packages",
     "current-oracle", "d19-oracle", "python", "go-ci-enforcement", "build-vet-lint",
     "dependency-boundaries", "ci-audit-mutations", "phase2-integrated", "reachable-vulnerability",
@@ -117,7 +126,7 @@ def complete(root: Path) -> bool:
         for name, expected in PREDECESSORS.items():
             if hashlib.sha256(bounded(directory / name)).hexdigest() != expected:
                 return False
-        raw = bounded(directory / "phase3c2-qualification.json")
+        raw = bounded(directory / QUALIFICATION)
         record = json.loads(raw, object_pairs_hook=unique)
         if not isinstance(record, dict) or set(record) != {
                 "schema", "accepted_c1", "head", "tree", "input_sha256", "compiler", "checks"}:
@@ -140,7 +149,7 @@ def complete(root: Path) -> bool:
             "IMPORT_READY maintenance/activation": "REFUSED", "Action 2.05": "NOT IMPLEMENTED",
         }
         fields = {key: [] for key in required}
-        for line in bounded(directory / "phase3c2-result.md").decode("utf-8").splitlines():
+        for line in bounded(directory / RESULT).decode("utf-8").splitlines():
             key, separator, value = line.strip().partition(":")
             if separator and key in fields:
                 fields[key].append(value.strip())

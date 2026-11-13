@@ -36,11 +36,7 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
             "accepted_c1": "06bde38380dd3a42be5c180beb99bf1aa509b8ac",
             "head": "1" * 40, "tree": "2" * 40,
             "input_sha256": c2.input_digest(self.root), "compiler": "go1.26.11",
-            "checks": {key: "PASS" for key in (
-                "focused-race", "recovery", "passive", "plain-packages", "aes-gcm-packages",
-                "current-oracle", "d19-oracle", "python", "go-ci-enforcement", "build-vet-lint",
-                "dependency-boundaries", "ci-audit-mutations", "phase2-integrated",
-                "reachable-vulnerability", "index-continuity", "query-work", "dto-consumer", "fixture-cleanup")},
+            "checks": {key: "PASS" for key in c2.CHECKS},
         }
         self.raw = (json.dumps(self.record) + "\n").encode()
         self.body = "\n".join((
@@ -54,8 +50,8 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
             "Ordinary schema18/19/20 writers and reclamation: REFUSED",
             "IMPORT_READY maintenance/activation: REFUSED", "Action 2.05: NOT IMPLEMENTED",
         )) + "\n"
-        self.result = self.directory / "phase3c2-result.md"
-        self.qualification = self.directory / "phase3c2-qualification.json"
+        self.result = self.directory / c2.RESULT
+        self.qualification = self.directory / c2.QUALIFICATION
         self.result.write_text(self.body)
         self.qualification.write_bytes(self.raw)
         self.change(phase_status="COMPLETE")
@@ -113,6 +109,13 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
                 path.write_bytes(data + b"\nConflicting completion\n")
                 self.assert_rejected()
                 path.write_bytes(data)
+
+    def test_original_c2_result_cannot_clear_followup(self):
+        self.result.write_bytes((self.directory / "phase3c2-result.md").read_bytes())
+        self.assert_rejected()
+        self.result.write_text(self.body)
+        self.qualification.write_bytes((self.directory / "phase3c2-qualification.json").read_bytes())
+        self.assert_rejected()
 
     def test_c1_or_old_reports_cannot_close_c2(self):
         self.result.unlink()

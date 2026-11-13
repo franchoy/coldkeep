@@ -136,16 +136,25 @@ def verify_readers(readers, report, env):
         kinds = ("reader",) if label == "c1" else (("writer", "reader") if label != "d19" else ("writer",))
         for kind in kinds:
             path = readers / "phase3a" / (label + "-" + kind)
-            hashes[path.name] = verify_binary(path, record.get(kind + "_sha256"))
+            hashes[path.name] = verify_provenance_binary(path, record.get(kind + "_sha256"))
             if label == "c1":
                 version = command(["go", "version", "-m", str(path)], env)[1].splitlines()
                 if record.get("compiler") != "go1.26.11" or not version or not version[0].endswith(": go1.26.11"):
                     raise ValueError("accepted C1 reader compiler provenance mismatch")
     path = readers / "phase3a/current-writer"
-    hashes[path.name] = verify_binary(path, provenance.get("current_writer_sha256"))
+    hashes[path.name] = verify_provenance_binary(path, provenance.get("current_writer_sha256"))
     path = readers / "coldkeep-recovery"
+    # The current operator is built here and observed before/after the child;
+    # unlike provenance-owned roles, it has no separate expected-digest record.
     hashes[path.name] = verify_binary(path)
     return hashes
+
+
+def verify_provenance_binary(path, expected):
+    """Require the recorded executable identity before observing owned bytes."""
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError("missing or invalid staged reader executable digest")
+    return verify_binary(path, expected)
 
 
 def verify_binary(path, expected=None):

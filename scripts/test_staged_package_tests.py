@@ -68,7 +68,9 @@ class StagingPrerequisiteTests(unittest.TestCase):
             report = root / "provenance.json"
             for mutation in ("none", "missing-role", "wrong-commit", "wrong-tree", "missing-source",
                              "changed-source", "changed-mode", "changed-binary", "missing-binary",
-                             "wrong-compiler-record", "wrong-compiler-binary"):
+                             "wrong-compiler-record", "wrong-compiler-binary",
+                             "missing-digest", "null-digest", "empty-digest", "short-digest",
+                             "uppercase-digest", "nonhex-digest", "nonstring-digest"):
                 with self.subTest(mutation=mutation):
                     source_file.write_bytes(original if mutation != "changed-source" else b"substitution")
                     source_file.chmod(0o755 if mutation == "changed-mode" else 0o644)
@@ -86,6 +88,19 @@ class StagingPrerequisiteTests(unittest.TestCase):
                     if mutation == "changed-binary": binary.write_bytes(b"changed")
                     if mutation == "missing-binary": binary.unlink()
                     if mutation == "wrong-compiler-record": value["c1"]["compiler"] = "go1.26.10"
+                    if mutation.endswith("-digest"):
+                        # A same-compiler substitute must never become the role's
+                        # new expected identity when its recorded digest is absent.
+                        original_digest = value["c1"]["reader_sha256"]
+                        malformed = {"null-digest": None, "empty-digest": "",
+                                     "short-digest": original_digest[:-1],
+                                     "uppercase-digest": original_digest.upper(),
+                                     "nonhex-digest": "g" * 64, "nonstring-digest": 1}
+                        if mutation == "missing-digest":
+                            del value["c1"]["reader_sha256"]
+                        else:
+                            value["c1"]["reader_sha256"] = malformed[mutation]
+                        binary.write_bytes(b"same-compiler substituted reader")
                     report.write_text(json.dumps(value))
                     def command(args, _env):
                         if args[:2] == ["go", "version"]:
@@ -169,9 +184,27 @@ class StagingPrerequisiteTests(unittest.TestCase):
                 return (0, "accepted-tree\n", "") if args[1] == "rev-parse" else (0, f"100644 blob {blob}\toriginal.go\0", "")
 
             report = root / "provenance.json"
-            for mutation in ("none", "wrong-commit", "wrong-tree", "missing-source", "changed-source", "wrong-binary", "missing-reader"):
+            for mutation in ("none", "wrong-commit", "wrong-tree", "missing-source", "changed-source", "wrong-binary",
+                             "missing-writer-digest", "null-writer-digest", "missing-reader-digest",
+                             "null-reader-digest", "missing-current-writer-digest", "null-current-writer-digest",
+                             "missing-reader"):
                 with self.subTest(mutation=mutation):
                     value = json.loads(json.dumps(good))
+                    for binary in binaries:
+                        binary.write_text("source verified executable")
+                        binary.chmod(0o700)
+                    if mutation.endswith("-digest"):
+                        role = mutation.split("-", 1)[1].removesuffix("-digest")
+                        owner, field, binary = {
+                            "writer": (value["accepted"], "writer_sha256", binaries[0]),
+                            "reader": (value["accepted"], "reader_sha256", binaries[1]),
+                            "current-writer": (value, "current_writer_sha256", binaries[2]),
+                        }[role]
+                        if mutation.startswith("missing-"):
+                            del owner[field]
+                        else:
+                            owner[field] = None
+                        binary.write_text("substituted executable")
                     if mutation == "wrong-commit":
                         value["accepted"]["commit"] = "other-commit"
                     if mutation == "wrong-tree":
@@ -190,6 +223,27 @@ class StagingPrerequisiteTests(unittest.TestCase):
                         else:
                             with self.assertRaises((ValueError, FileNotFoundError)):
                                 runner.verify_readers(root, report, {})
+
+
+    def test_current_operator_hash_has_no_separate_provenance_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            writer = root / "phase3a/current-writer"
+            writer.parent.mkdir()
+            operator = root / "coldkeep-recovery"
+            for path in (writer, operator):
+                path.write_bytes(b"current executable")
+                path.chmod(0o700)
+            report = root / "provenance.json"
+            report.write_text(json.dumps({"current_writer_sha256": runner.digest(writer)}))
+            with patch.object(runner, "BASES", {}):
+                before = runner.verify_readers(root, report, {})
+                self.assertEqual(before["coldkeep-recovery"], runner.digest(operator))
+                operator.write_bytes(b"new current operator bytes")
+                after = runner.verify_readers(root, report, {})
+                self.assertEqual(after["coldkeep-recovery"], runner.digest(operator))
+                self.assertNotEqual(before["coldkeep-recovery"], after["coldkeep-recovery"])
+                self.assertEqual(before["current-writer"], after["current-writer"])
 
 
 class StagingLifetimeTests(unittest.TestCase):

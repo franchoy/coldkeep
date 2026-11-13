@@ -28,6 +28,8 @@ Owner adoption authorizes sequential local commits, independent review of the
 exact outgoing source/evidence, guarded fast-forward of existing `release/v2.0`,
 bounded current-status body refresh of draft PR #129 and both actual-head hosted
 events. Do not request the same authorization again. PR #129 stays draft.
+The C2-G1 follow-up remains pending until its new source-bound qualification
+and owning follow-up result are present; the original C2 reports are preserved.
 C2/3C/local-profile 2.04 are COMPLETE on the integrated local evidence recorded
 in the owning result. Exact outgoing review and both actual-head hosted events
 remain additional conditions of final C2 acceptance. Implementation stays ACTIVE
