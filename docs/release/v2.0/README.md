@@ -16,9 +16,10 @@ Exact Go 1.26.11 / GOTOOLCHAIN=local, Go language floor 1.25.0, dependencies,
 version 2.0.0-dev.0, module /v2 and latest stable 1.13.19 remain unchanged.
 Requested settings: GPT-6 Astra / Extra High; actual settings only if observable.
 
-[Current authority](../current.json) records local-profile 2.04 COMPLETE, with
-C2 and Phase3C locally complete on the source-bound owning result and preserved
-accepted predecessor reports/bridges. Exact outgoing independent review and both
+[Current authority](../current.json) keeps local-profile 2.04 ACTIVE while the
+C2-G1 provenance follow-up completes affected qualification. The original C2
+local completion report and its qualification remain preserved point-in-time
+evidence; they cannot clear the new follow-up obligation. Exact outgoing independent review and both
 actual-head hosted events remain conditions of final C2 acceptance. The validator
 checks structural authority; it does not certify SQL/runtime or hosted success.
 Implementation remains ACTIVE and product gates INCOMPLETE.
