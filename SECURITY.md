@@ -7,7 +7,6 @@ Parent 2.04 and implementation remain ACTIVE; product gates INCOMPLETE.
 Ordinary schema18/19 writers and IMPORT_READY maintenance/activation are refused.
 SQLite adoption, later product support and a live installation switch are unqualified.
 
-
 ## Status
 
 <!-- coldkeep-current-state:start -->

@@ -46,8 +46,6 @@ Action 2.02 adds an [internal fixture daemon proof](docs/release/v2.0/phase2-bui
 with embedded UI. Product/native gates remain incomplete; the existing CLI remains
 independently installable.
 
-
-
 Active development is **2.0.0-dev.0**. The [v2.0 charter](docs/release/v2.0/README.md)
 records **action 2.04 ACTIVE** and **product gates INCOMPLETE**. The development
 CI badge refers specifically to `release/v2.0`; hosted status is separate from

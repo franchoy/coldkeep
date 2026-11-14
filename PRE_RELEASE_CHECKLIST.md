@@ -19,7 +19,6 @@ For implementation work, run the owning unit's applicable correctness gates.
 For a ready-for-merge correctness-sensitive PR or a release tag, use the
 applicable full profile below. Frozen v1 certification and all pins remain.
 
-
 Audience:
 
 - Maintainers preparing a release or a release candidate

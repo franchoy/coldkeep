@@ -33,7 +33,6 @@ Active v2 builds, installations and scans use that exact compiler and verified
 image digests; all historical v1 compiler assertions and third-party dependency
 versions remain unchanged. Blocking security checks remain required.
 
-
 Coldkeep CI exists to protect correctness, determinism, and release confidence.
 
 Coldkeep is a correctness-first cold storage engine. The primary invariant is: never lose user data.

@@ -54,13 +54,13 @@ deployment, live switch or action 2.05 implementation is granted.
 
 Use the current owning unit's validation profile in `docs/release/v2.0/README.md`,
 `docs/release/v2.0/ci-followup-result.md` and `PRE_RELEASE_CHECKLIST.md`.
-The Phase 3C2 BUILD requires fresh affected complete codec routes with staged real
-fixtures, the dedicated recovery requirements, integrated native/browser/Docker
-proofs, source/identity negative controls and applicable static checks. The measured
-source checkpoints and fresh/reused evidence boundaries are recorded in the
-follow-up result. Missing, skipped or pending required evidence is not a
-pass. Historical publication's docs-only profile must not substitute for this
-implementation qualification.
+The Phase 3C2 build mode (`BUILD`) requires fresh affected complete codec routes
+with staged real fixtures, the dedicated recovery requirements, integrated
+native/browser/Docker proofs, source/identity negative controls and applicable
+static checks. The measured source checkpoints and fresh/reused evidence
+boundaries are recorded in the follow-up result. Missing, skipped or pending
+required evidence is not a pass. Historical publication's docs-only profile must
+not substitute for this implementation qualification.
 The baseline commands:
 
 - `python3 scripts/validate_release_state.py --state auto --json`
@@ -78,7 +78,8 @@ reasoning effort, execution scope, rationale and completion criteria. This is
 personal execution guidance, never a paid-model contributor requirement or CI
 gate. Do not change account settings or permanent global configuration.
 
-Respect each phase's `PLAN` or `BUILD` mode. Stop on scope expansion, unexpected
-dependency movement or newly discovered private security impact. The adopted
-v2 identity transition is authorized, not unexpected release drift. Future
-product gates remain incomplete; this unit grants no later action authority.
+Respect each phase's planning mode (`PLAN`) or build mode (`BUILD`). Stop on
+scope expansion, unexpected dependency movement or newly discovered private
+security impact. The adopted v2 identity transition is authorized, not
+unexpected release drift. Future product gates remain incomplete; this unit
+grants no later action authority.

@@ -29,7 +29,6 @@ pin. Ordinary schema18/19 writers and IMPORT_READY activation remain refused.
 No merge, tag, release, protection change, deployment or live switch is granted.
 Preserve user changes and data.
 
-
 You are helping improve Coldkeep test coverage.
 
 Coldkeep is a correctness-first cold storage engine. The primary invariant is: never lose user data.

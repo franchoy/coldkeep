@@ -29,7 +29,6 @@ pin. Ordinary schema18/19 writers and IMPORT_READY activation remain refused.
 No merge, tag, release, protection change, deployment or live switch is granted.
 Preserve user changes and data.
 
-
 Coldkeep is a correctness-first cold storage engine. The primary invariant is: never lose user data.
 
 Correctness, determinism, crash safety, GC safety, restore safety, verification integrity, and compatibility are more important than style, abstraction, or brevity.
@@ -81,7 +80,6 @@ authority; v1 closure is frozen historical evidence. The completed 10-phase cont
 start new v1 product work or mutate a tag or Release without separate explicit
 authority. Stop on scope expansion, unexpected dependency movement,
 release-identity drift, or newly discovered private security impact.
-
 
 Codacy is signal, not authority.
 Do not chase style-only or generic maintainability warnings at the expense of correctness.

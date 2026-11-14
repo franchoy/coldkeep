@@ -10,7 +10,6 @@ schema18/package2 and schema19/package3 have distinct exact reader/receipt
 contracts. IMPORT_READY maintenance and activation refuse for every profile.
 Run the complete fresh recovery/binding gate, Phase 2 proof and fixed oracle.
 
-
 This document defines what coldkeep guarantees across versions, especially for
 chunker evolution and restore behavior.
 

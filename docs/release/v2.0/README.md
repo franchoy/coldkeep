@@ -1,38 +1,29 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **Phase 3C2 bounded reads and integrated local 2.04 closure**,
-under the owner-adopted `coldkeep_phase3c2_build_2026-11-12.md`.
-The [accepted C1 bridge](phase3c1-acceptance-bridge.md) closes C1 at
-`06bde38380dd3a42be5c180beb99bf1aa509b8ac`, tree
-`aeaf5281562064c7e4abe940376d1df3dd757669`, without rewriting historical reports.
-The earlier [CI bridge](ci-acceptance-bridge.md), 3A/A1–A2 and 3B/R1 records
-remain preserved. C2 runs in its separate worktree.
-
-Current contracts: [C1 generation model](generation-model.md),
-[C2 bounded reads and optional index](generation-read.md).
-Current result: [C2-G1 follow-up](phase3c2-followup-result.md); the original
-[Phase 3C2 result](phase3c2-result.md) remains a preserved point-in-time record.
-Current handoff: [bounded action 2.05 preparation](next-slice.md).
-Exact Go 1.26.11 / GOTOOLCHAIN=local, Go language floor 1.25.0, dependencies,
-version 2.0.0-dev.0, module /v2 and latest stable 1.13.19 remain unchanged.
-Requested settings: GPT-6 Astra / Extra High; actual settings only if observable.
-
-[Current authority](../current.json) records local-profile 2.04 COMPLETE on
-the source-bound C2-G1 follow-up result, fresh affected qualification and
-explicit unchanged-runtime reuse. Original C2 and predecessor reports remain
-preserved and cannot alone clear the follow-up obligation. Exact outgoing
-independent review and both actual-head hosted events remain conditions of final C2 acceptance. The validator
-checks structural authority; it does not certify SQL/runtime or hosted success.
+Current workflow: **C2-Q1 bounded source-quality follow-up**, under the
+owner-adopted `coldkeep_phase3c2_quality_q1_build_2026-11-14.md`.
+The unit targets 11 documentation findings and 18 generation maintainability
+findings. Candidate local phase status is ACTIVE pending fresh qualification.
+C2-G1 remains accepted historical work; final Phase 3C2 is WITHHELD_CODACY.
 Implementation remains ACTIVE and product gates INCOMPLETE.
-All later obligations, including separate product-publication authorization,
-remain. Schema20/package4 and all writer/reclamation/import-activation fences
-remain intact. Indexed model browse is not committed product backup history.
 
-The adopted sequence includes local qualification, sequential commits, exact
-independent outgoing review, guarded update of existing `release/v2.0`, bounded
-PR #129 body refresh and observation of both actual-head hosted events. PR stays
-draft. No merge, tag, release, protection/default-branch change, deployment,
-live switch or action 2.05 implementation is authorized.
+Current contracts: [generation model](generation-model.md) and
+[bounded reads](generation-read.md). The original [C2 result](phase3c2-result.md)
+and [C2-G1 follow-up](phase3c2-followup-result.md), their qualifications and all
+other predecessor records remain immutable. They cannot certify changed Q1
+execution inputs. [Current authority](../current.json) binds the new owning
+result after qualification; structural checks do not certify hosted acceptance.
+Current handoff: [remaining C2 quality work](next-slice.md).
+
+The adopted sequence authorizes isolated implementation, fresh qualification,
+sequential commits, exact-source independent review, one guarded fast-forward
+of `release/v2.0`, a bounded current-status refresh of draft PR #129 and both
+actual-head hosted events. Main, stable v1.13.19, predecessor worktrees and
+sealed evidence remain preserved. No Codacy settings/ignores, extra native
+reanalysis, support messages, merge, release or action 2.05 implementation.
+Schema20/package4, writer/reclamation/import-activation fences, 2.0.0-dev.0,
+module /v2, Go 1.26.11 / GOTOOLCHAIN=local, language floor 1.25 and all pins stay.
+Requested settings: GPT-6 Astra / Extra High; actual parent settings unknown.
 
 ## Selected first stable profile
 
