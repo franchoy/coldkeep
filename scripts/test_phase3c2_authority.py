@@ -43,8 +43,8 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
             "Phase 3C2: COMPLETE", "Phase 3C: COMPLETE", "Local-profile action 2.04: COMPLETE",
             "Implementation: ACTIVE", "Product gates: INCOMPLETE",
             "Profile: installed Linux/PostgreSQL16 schema20",
-            "Governing BUILD: coldkeep_phase3c2_quality_q1_build_2026-11-14.md",
-            "Quality unit C2-Q1: COMPLETE", "Final Phase 3C2 acceptance: WITHHELD_CODACY",
+            "Governing BUILD: coldkeep_phase3c2_quality_q1_r1_build_2026-11-14.md",
+            "Quality unit C2-Q1-R1: COMPLETE", "Final Phase 3C2 acceptance: WITHHELD_CODACY",
             "Accepted C1: 06bde38380dd3a42be5c180beb99bf1aa509b8ac",
             "Qualification HEAD: " + "1" * 40, "Qualification tree: " + "2" * 40,
             "Qualification SHA-256: " + hashlib.sha256(self.raw).hexdigest(),
@@ -125,6 +125,25 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
         self.qualification.write_bytes((self.directory / "phase3c2-followup-qualification.json").read_bytes())
         self.assert_rejected()
         self.qualification.unlink()
+        self.assert_rejected()
+
+    def test_q1_records_cannot_clear_r1_or_supply_a_fallback(self):
+        # A fully accepted Q1 remains historical even beside valid R1 inputs.
+        self.result.write_bytes((self.directory / "phase3c2-quality-q1-result.md").read_bytes())
+        self.assert_rejected()
+        self.result.write_text(self.body)
+        self.qualification.write_bytes((self.directory / "phase3c2-quality-q1-qualification.json").read_bytes())
+        self.assert_rejected()
+        self.qualification.write_bytes(self.raw)
+        self.result.write_text(self.body.replace("Quality unit C2-Q1-R1", "Quality unit C2-Q1"))
+        self.assert_rejected()
+        self.result.write_text(self.body.replace("quality_q1_r1_build", "quality_q1_build"))
+        self.assert_rejected()
+        self.result.write_text(self.body)
+        self.qualification.unlink()
+        self.assert_rejected()
+        self.qualification.write_bytes(self.raw)
+        self.result.unlink()
         self.assert_rejected()
 
     def test_c1_or_old_reports_cannot_close_c2(self):

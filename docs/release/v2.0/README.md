@@ -1,19 +1,20 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q1 bounded source-quality follow-up**, under the
-owner-adopted `coldkeep_phase3c2_quality_q1_build_2026-11-14.md`.
-The unit targets 11 documentation findings and 18 generation maintainability
-findings. Local-profile 2.04 and C2-Q1 are COMPLETE on fresh qualification.
-C2-G1 remains accepted historical work; final Phase 3C2 is WITHHELD_CODACY.
-Implementation remains ACTIVE and product gates INCOMPLETE.
+Current workflow: **C2-Q1-R1 file organization and definition recognition**, under
+owner-adopted `coldkeep_phase3c2_quality_q1_r1_build_2026-11-14.md`.
+The unit targets exactly the generation file-length report and the two BUILD/PLAN
+recognition reports. R1 is ACTIVE pending fresh source-bound qualification.
+C2-Q1 is an accepted qualified published checkpoint, not clearance of all 29
+previous targets. C2-G1 remains accepted historical work; final Phase 3C2 is
+WITHHELD_CODACY. Implementation remains ACTIVE and product gates INCOMPLETE.
 
 Current contracts: [generation model](generation-model.md) and
-[bounded reads](generation-read.md). The original [C2 result](phase3c2-result.md)
-and [C2-G1 follow-up](phase3c2-followup-result.md), their qualifications and all
-other predecessor records remain immutable. They cannot certify changed Q1
-execution inputs. [Current authority](../current.json) binds the new owning
-result after qualification; structural checks do not certify hosted acceptance.
-Current result: [C2-Q1 local qualification](phase3c2-quality-q1-result.md).
+[bounded reads](generation-read.md). The original [C2 result](phase3c2-result.md),
+[C2-G1 follow-up](phase3c2-followup-result.md) and [Q1 result](phase3c2-quality-q1-result.md),
+their six result/qualification files and all predecessor records remain immutable.
+They cannot certify changed R1 execution inputs. [Current authority](../current.json)
+binds the new owning result after qualification; structural checks do not certify
+hosted acceptance. Current result: [C2-Q1-R1 qualification](phase3c2-quality-q1-r1-result.md).
 Current handoff: [remaining C2 quality work](next-slice.md).
 
 The adopted sequence authorizes isolated implementation, fresh qualification,
@@ -24,7 +25,9 @@ sealed evidence remain preserved. No Codacy settings/ignores, extra native
 reanalysis, support messages, merge, release or action 2.05 implementation.
 Schema20/package4, writer/reclamation/import-activation fences, 2.0.0-dev.0,
 module /v2, Go 1.26.11 / GOTOOLCHAIN=local, language floor 1.25 and all pins stay.
-Requested settings: GPT-6 Astra / Extra High; actual parent settings unknown.
+Requested implementation and review settings: GPT-6 Astra / Extra High.
+Observable invocation selectors are recorded separately; actual backend settings
+are unknown without runtime telemetry.
 
 ## Selected first stable profile
 

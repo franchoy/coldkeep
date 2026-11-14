@@ -18,8 +18,12 @@ PREDECESSORS.update({
     "phase3c2-followup-result.md": "1c4432d09194f93ff5afbc802ae998a237c8c2a78a538db099672c8edb5adeae",
     "phase3c2-followup-qualification.json": "b0ef1929cfd71291e2c20559172c2bef3851fda5f62948a925a98c540a046df5",
 })
-RESULT = "phase3c2-quality-q1-result.md"
-QUALIFICATION = "phase3c2-quality-q1-qualification.json"
+PREDECESSORS.update({
+    "phase3c2-quality-q1-result.md": "cbbe84c29f018d97bf7dbf570d34b74ed38272effae85a702c0e53b71ba55be0",
+    "phase3c2-quality-q1-qualification.json": "2c19f301477374a74603f7620c57bf4a0eaae78a449ead9ab07b10d8b86ffa96",
+})
+RESULT = "phase3c2-quality-q1-r1-result.md"
+QUALIFICATION = "phase3c2-quality-q1-r1-qualification.json"
 
 CHECKS = {
     "provenance-regressions", "real-staged-admission", "source-reuse-accounting",
@@ -147,8 +151,8 @@ def complete(root: Path) -> bool:
             "Phase 3C2": "COMPLETE", "Phase 3C": "COMPLETE",
             "Local-profile action 2.04": "COMPLETE", "Implementation": "ACTIVE",
             "Product gates": "INCOMPLETE", "Profile": "installed Linux/PostgreSQL16 schema20",
-            "Governing BUILD": "coldkeep_phase3c2_quality_q1_build_2026-11-14.md",
-            "Quality unit C2-Q1": "COMPLETE", "Final Phase 3C2 acceptance": "WITHHELD_CODACY", "Accepted C1": C1,
+            "Governing BUILD": "coldkeep_phase3c2_quality_q1_r1_build_2026-11-14.md",
+            "Quality unit C2-Q1-R1": "COMPLETE", "Final Phase 3C2 acceptance": "WITHHELD_CODACY", "Accepted C1": C1,
             "Qualification HEAD": record["head"], "Qualification tree": record["tree"],
             "Qualification SHA-256": hashlib.sha256(raw).hexdigest(),
             "Ordinary schema18/19/20 writers and reclamation": "REFUSED",
