@@ -44,6 +44,33 @@ FIXTURE_IDENTITIES = {
 
 C2_IDENTITIES = {(package, name) for package, names in events.C2_REQUIRED.items() for name in names}
 
+# Keep the Q2 additions explicit and independent of checker construction when
+# excluding them from the frozen predecessor identity comparisons.
+Q2_IDENTITIES = {
+    ("github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery", name)
+    for name in (
+        "TestRecoveryPublicOperationsBeforeConfig",
+        "TestRecoveryPublicOperationsBeforeConfig/check",
+        "TestRecoveryPublicOperationsBeforeConfig/check-closed-output",
+        "TestRecoveryPublicOperationsBeforeConfig/binding-status",
+        "TestRecoveryPublicOperationsBeforeConfig/binding-status-closed-output",
+        "TestRecoveryUnknownOperationAdmission",
+        "TestRecoveryUnknownOperationAdmission/path",
+        "TestRecoveryUnknownOperationAdmission/password",
+        "TestRecoveryUnknownOperationAdmission/key-file",
+        "TestRecoveryUnknownOperationAdmission/key-decode",
+        "TestRecoveryUnknownOperationAdmission/dispatch",
+        "TestRecoveryUnknownOperationAdmission/config",
+        "TestRecoveryPrivateCredentialAdmission",
+        "TestRecoveryPrivateCredentialAdmission/missing",
+        "TestRecoveryPrivateCredentialAdmission/directory",
+        "TestRecoveryPrivateCredentialAdmission/symlink",
+        "TestRecoveryPrivateCredentialAdmission/permissions",
+        "TestRecoveryPrivateCredentialAdmission/oversize",
+        "TestRecoveryPrivateCredentialExactBytes",
+    )
+}
+
 
 class StagingPrerequisiteTests(unittest.TestCase):
     def test_accepted_c1_is_an_additional_required_untouched_role(self):
@@ -362,10 +389,14 @@ class RecoveryEventContractTests(unittest.TestCase):
         identities = events.required_identities()
         self.assertTrue(OBSERVER_IDENTITIES <= identities)
         self.assertTrue(EXECUTION_BOUND_IDENTITIES <= identities)
+        self.assertEqual(len(Q2_IDENTITIES), 19)
+        self.assertTrue(Q2_IDENTITIES <= identities)
+        self.assertFalse(Q2_IDENTITIES & (FIXTURE_IDENTITIES | C2_IDENTITIES))
         # Preserve the exact accepted identities while permitting the explicitly
-        # scoped C1 additions. Counts alone cannot hide an inherited removal or
+        # scoped additions. Counts alone cannot hide an inherited removal or
         # substitution: the frozen predecessor digest still binds every name.
-        inherited = {(package, test) for package, test in identities - FIXTURE_IDENTITIES - C2_IDENTITIES
+        inherited = {(package, test)
+                     for package, test in identities - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES
                      if package != "github.com/franchoy/coldkeep/v2/internal/generation"
                      and not test.startswith(("TestRecoveryUpgrade", "TestRecoveryGeneration"))}
         self.assertEqual(len(inherited), 583)
@@ -375,7 +406,7 @@ class RecoveryEventContractTests(unittest.TestCase):
         self.assertEqual(actual, "8eb9e04d2061e1c8659cb89a38e43648c0c241d2349900d0bf749503f9f19062")
 
     def test_every_accepted_c1_requirement_is_retained_exactly(self):
-        pairs = sorted(events.required_identities() - FIXTURE_IDENTITIES - C2_IDENTITIES)
+        pairs = sorted(events.required_identities() - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES)
         self.assertEqual(len(pairs), 726)
         self.assertEqual(hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest(),
                          "ca0f0c1619544bdb5ee5a1d3176095337a8295c20e14cdda2f8c451e1ad8ff65")
