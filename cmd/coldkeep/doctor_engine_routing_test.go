@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/application"
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/application"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 func TestRunDoctorCommandUsesOneEngineOperationAndPreservesJSON(t *testing.T) {

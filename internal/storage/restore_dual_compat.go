@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
 )
 
 // DualCompatChunkResolver implements dual v1.7/v1.8 chunk resolution.

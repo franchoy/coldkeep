@@ -109,7 +109,7 @@ class RequiredTestEventsTests(unittest.TestCase):
         events = self.complete_events(profile)
         for event in events:
             if event.get("Test") == test_name:
-                event["Package"] = "github.com/franchoy/coldkeep/internal/verify"
+                event["Package"] = "github.com/franchoy/coldkeep/v2/internal/verify"
         self.assert_rejected(profile, events, message="required run count mismatch")
 
     def test_ck015_rejects_contradictory_terminal_event(self):
@@ -141,7 +141,7 @@ class RequiredTestEventsTests(unittest.TestCase):
         test_name = checker.PROFILES[profile]["tests"][0]
         for event in events:
             if event.get("Test") == test_name:
-                event["Package"] = "github.com/franchoy/coldkeep/internal/verify"
+                event["Package"] = "github.com/franchoy/coldkeep/v2/internal/verify"
         self.assert_rejected(profile, events, message="required run count mismatch")
 
     def test_rejects_pass_without_run(self):

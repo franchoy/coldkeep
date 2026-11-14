@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/coordination"
-	"github.com/franchoy/coldkeep/internal/observability"
-	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/coordination"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/recovery"
 )
 
 func TestRunCLIRealCoordinatorWrapsRestoreVerifyAndGCOnLinux(t *testing.T) {

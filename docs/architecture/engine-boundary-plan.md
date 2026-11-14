@@ -4,6 +4,10 @@ This document records the current Engine/Catalog/CLI architecture and the
 remaining product-boundary direction. It is a current-state architectural
 document rather than a frozen public contract or a historical release report.
 
+Active train: [v2.0 Phase 1A / action 2.01](../release/v2.0/README.md), governed by
+[../release/current.json](../release/current.json). Module identity changes
+to `/v2`; existing engine boundaries and stored data contracts are preserved.
+
 ## Boundary rules
 
 ```

@@ -3,8 +3,8 @@ package chunk
 import (
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
-	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
+	"github.com/franchoy/coldkeep/v2/internal/chunk/fastcdc"
+	"github.com/franchoy/coldkeep/v2/internal/chunk/simplecdc"
 )
 
 type Registry struct {

@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 func TestEngineListAndSearchFiles(t *testing.T) {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 func TestValidationErrorsRemainOutsideUnsupportedClassification(t *testing.T) {

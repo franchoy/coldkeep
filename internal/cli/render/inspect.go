@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
 )
 
 func (HumanRenderer) RenderInspect(w io.Writer, r *InspectResult) error {

@@ -3,7 +3,7 @@ package storage
 import (
 	"database/sql"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
 )
 
 // Repository is the storage-layer persistence handle used by StoreService.

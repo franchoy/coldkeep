@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
 )
 
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun

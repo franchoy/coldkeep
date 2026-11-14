@@ -1,27 +1,24 @@
 # Security Policy
 
+V2 development includes explicit identity adoption, bounded physical binding
+and exact recovery profiles. See the [identity/adoption contract](docs/release/v2.0/identity-adoption.md)
+and [physical binding contract](docs/release/v2.0/physical-binding.md).
+Parent 2.04 and implementation remain ACTIVE; product gates INCOMPLETE.
+Ordinary schema18/19 writers and IMPORT_READY maintenance/activation are refused.
+SQLite adoption, later product support and a live installation switch are unqualified.
+
 ## Status
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.19
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
-RELEASE_STATE: POST_RELEASE_CLOSED
-TRACKED_PUBLICATION_MATERIAL: FROZEN
-V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
-V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
-CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
-FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 15/15
-V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
-V1_13_19_PUBLICATION: COMPLETE
-V1_X: CLOSED_AND_FROZEN
-V2_IMPLEMENTATION: NOT_STARTED
+SOURCE_VERSION: 2.0.0-dev.0
+RELEASE_FAMILY: v2.0
+RELEASE_STATE: development
+CURRENT_PHASE: 2.04
+CURRENT_AUTHORITY: docs/release/current.json
+LATEST_STABLE: 1.13.19
+V2_IMPLEMENTATION: ACTIVE
+PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
@@ -53,12 +50,20 @@ product change, or v2 implementation.
 Planned v1 feature and architecture work remains closed and frozen. Existing
 security and crash-consistency limitations below are unchanged.
 
-v1.13.14, v1.13.15, and the v1.13.16 failed-publication disposition remain
-immutable historical release state. V2 planning
-review is authorized. V2 implementation has not started and requires a
-separate plan.
+Active v2 authority is [docs/release/current.json](docs/release/current.json),
+with the current scope in [the charter](docs/release/v2.0/README.md). Actions
+2.01, bounded 2.02 and local-profile 2.03 are complete; 2.04 remains active.
+The [development-visibility contract](docs/release/v2.0/development-visibility.md)
+records the 9 November 2026 R1 acceptance and prepares one public development
+branch and draft PR, requiring explicit user approval recorded separately.
+That approval was not supplied when this proposal was prepared. The contract
+grants no approval itself and changes neither the stable release's security
+claims nor the v2 product gates.
+No merge, tag, release, protection change, deployment or live switch is granted.
+Frozen `docs/release/v1*/` records, phase results, dependency/toolchain pins,
+predecessor worktrees, user changes and data remain preserved.
 
-It is suitable for controlled production environments where:
+The published v1 engine is suitable for controlled production environments where:
 
 - operational assumptions are respected (supported database-backend
     correctness, filesystem durability)
@@ -231,6 +236,17 @@ integrity checks can be bypassed.
 ------------------------------------------------------------------------
 
 ## Known Security Limitations
+
+Action 2.01 records these limits in the source-linked
+[baseline ledger](docs/release/v2.0/baseline-compatibility.md). Process interruption
+checks do not prove sudden-power-loss durability. Existing opening may ensure
+schema or run recovery, and restore may mutate temporary pins; those paths are
+not evidence of passive inspection. The fixture harness uses disposable copies,
+separate public test-key references and expected refusals, never user data.
+Restore alone is not a full compatibility verdict: the observed metadata-only
+future-block-version gap is recorded alongside the verifier's rejection.
+No security/storage behavior is changed in 2.01. Future package import and
+independent restoration remain required before schema additions.
 
 - Crash consistency is incomplete.
 - Filesystem state and database state may temporarily diverge.

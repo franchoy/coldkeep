@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/db"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	storagecompression "github.com/franchoy/coldkeep/v2/internal/storage/compression"
 	_ "github.com/mattn/go-sqlite3"
 )
 

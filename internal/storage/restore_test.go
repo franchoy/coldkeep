@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/pathsafe"
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
 

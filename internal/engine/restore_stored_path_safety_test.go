@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/tests/utils/testgate"
 )
 
 func requirePathAbsent(t *testing.T, path string) {

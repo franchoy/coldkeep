@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	testutils "github.com/franchoy/coldkeep/tests/utils"
+	testutils "github.com/franchoy/coldkeep/v2/tests/utils"
 )
 
 func TestWriteConcurrentInvariantManifestG6DisabledWithoutPreservation(t *testing.T) {

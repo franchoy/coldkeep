@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 func TestRestoreDryRunByIDThroughEngine(t *testing.T) {

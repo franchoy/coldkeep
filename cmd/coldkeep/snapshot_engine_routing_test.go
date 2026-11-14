@@ -15,8 +15,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	dbpkg "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/storage"
+	dbpkg "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 // openSnapshotRoutingDB opens an in-memory SQLite DB with coldkeep schema.

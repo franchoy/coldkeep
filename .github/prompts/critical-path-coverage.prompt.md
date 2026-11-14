@@ -2,26 +2,32 @@
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.19
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
-RELEASE_STATE: POST_RELEASE_CLOSED
-TRACKED_PUBLICATION_MATERIAL: FROZEN
-V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
-V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
-CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
-FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 15/15
-V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
-V1_13_19_PUBLICATION: COMPLETE
-V1_X: CLOSED_AND_FROZEN
-V2_IMPLEMENTATION: NOT_STARTED
+SOURCE_VERSION: 2.0.0-dev.0
+RELEASE_FAMILY: v2.0
+RELEASE_STATE: development
+CURRENT_PHASE: 2.04
+CURRENT_AUTHORITY: docs/release/current.json
+LATEST_STABLE: 1.13.19
+V2_IMPLEMENTATION: ACTIVE
+PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
+
+Use `docs/release/v2.0/README.md` and the current explicitly authorized BUILD
+for execution scope. The owner adopted the bounded M1/E1/E2/C1/Q1 CI follow-up
+on 9 November 2026, including a guarded fast-forward of existing `release/v2.0`
+after local qualification and independent review. PR #129 remains draft.
+`docs/release/v2.0/ci-followup-result.md` is the shared current evidence record;
+corrected-head hosted checks remain PENDING until both push and PR observations
+bind the actual final public head. `development-visibility.md` records the adopted
+scope; documentation alone grants no additional authority. Accepted R1 and
+prior publication records retain their historical source/evidence boundaries.
+Accepted 2.01, bounded 2.02 and local-profile 2.03 remain COMPLETE. Parent 2.04
+and implementation stay ACTIVE; product gates INCOMPLETE; Phase 3C OUTSTANDING.
+Preserve phase results, predecessor worktrees, frozen v1 and every dependency
+pin. Ordinary schema18/19 writers and IMPORT_READY activation remain refused.
+No merge, tag, release, protection change, deployment or live switch is granted.
+Preserve user changes and data.
 
 You are helping improve Coldkeep test coverage.
 
@@ -128,7 +134,7 @@ NONPASS with no GitHub Release; its passing bounded evidence does not certify
 the v1.13.19 certificate. The completed 10-phase plan and exact 34-path
 boundary remain historical evidence:
 
-- do not implement v2 or SQLite-first product-default behavior;
+- keep v2 work within the current explicitly authorized unit; no SQLite-first product-default behavior;
 - do not change public APIs, schemas, storage formats, or repository formats;
 - do not introduce product features;
 - do not perform broad refactors;
@@ -136,5 +142,5 @@ boundary remain historical evidence:
 - do not remove PostgreSQL compatibility;
 - keep changes within the separately authorized plan and allowlist.
 
-V2 planning review is authorized, but v2 implementation and SQLite-first
-product defaults require a separate plan.
+Follow the current charter and owning BUILD for the bounded v2 scope. Work
+beyond that unit and SQLite-first product defaults require their later owning phase.

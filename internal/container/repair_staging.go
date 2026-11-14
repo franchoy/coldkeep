@@ -10,9 +10,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/fsx"
-	"github.com/franchoy/coldkeep/internal/utils_hash"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
+	"github.com/franchoy/coldkeep/v2/internal/utils_hash"
 )
 
 var (

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	idb "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/tests/testdb"
+	idb "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/tests/testdb"
 	_ "github.com/mattn/go-sqlite3"
 )
 

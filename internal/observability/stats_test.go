@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/tests/testdb"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/tests/testdb"
 )
 
 type traceCollectorSink struct {

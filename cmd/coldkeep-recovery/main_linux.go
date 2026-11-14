@@ -1,0 +1,370 @@
+// coldkeep-recovery is the bounded Linux operator adapter for package-v1 import
+// and constrained schema17/18 snapshot restoration, with explicit adoption.
+// Ordinary startup never initializes or adopts a catalog.
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/franchoy/coldkeep/v2/internal/coordination"
+	"github.com/franchoy/coldkeep/v2/internal/recoveryexport"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+)
+
+type config struct {
+	PayloadRootBase64 string `json:"payload_root_base64"`
+	Host              string `json:"host"`
+	Port              uint16 `json:"port"`
+	Database          string `json:"database"`
+	User              string `json:"user"`
+	PayloadRoot       string `json:"payload_root"`
+	PasswordFile      string `json:"password_file"`
+	KeyFile           string `json:"key_file"`
+	KeyReference      string `json:"key_reference"`
+	PGDump            string `json:"pg_dump"`
+	PGRestore         string `json:"pg_restore"`
+}
+
+func main() {
+	if e := run(); e != nil {
+		fmt.Fprintln(os.Stderr, e)
+		os.Exit(1)
+	}
+}
+func run() error {
+	if len(os.Args) < 2 {
+		return errors.New("usage: coldkeep-recovery check|import|restore|adopt-preview|adopt-apply [explicit options]; see recovery-package.md")
+	}
+	fs := flag.NewFlagSet(os.Args[1], flag.ContinueOnError)
+	pkg := fs.String("package", "", "completed generation path")
+	cfgPath := fs.String("config", "", "private explicit destination JSON")
+	gen := fs.String("generation", "", "trusted generation identity")
+	digest := fs.String("manifest-sha256", "", "trusted exact manifest SHA-256")
+	trusted := fs.Bool("trusted-operator-backup", false, "consent to execute this trusted operator backup")
+	exclusive := fs.Bool("exclusive-target", false, "operator controls exclusive access to dedicated target")
+	capacity := fs.Int64("database-capacity-bytes", 0, "dedicated PostgreSQL heap/index/temp/WAL budget")
+	expectedSchema := fs.Int("expected-schema", 0, "explicit adoption source schema")
+	operation := fs.String("operation-id", "", "typed adoption request identity")
+	plan := fs.String("plan-sha256", "", "reviewed preview digest")
+	checkpoint := fs.String("checkpoint", "", "fresh independent pre-adoption generation path")
+	installation := fs.String("installation-directory", "", "existing private directory on a separate mount")
+	action := fs.String("binding-action", "", "bind, relocate, rebind, source-register, source-rebind or source-disable")
+	revision := fs.Int64("expected-revision", 0, "reviewed current root binding revision")
+	sourceID := fs.String("source-id", "", "distinct typed configured source ID")
+	sourcePath := fs.String("source-path-base64", "", "exact absolute source path bytes in base64")
+	sourceRevision := fs.Int64("expected-source-revision", 0, "reviewed source revision")
+	repositoryID := fs.String("repository-id", "", "exact repository identity for schema upgrade")
+	rootID := fs.String("root-id", "", "exact root identity for schema upgrade")
+	snap := fs.String("snapshot", "", "exact selected snapshot ID")
+	out := fs.String("output", "", "fresh absolute restore output directory")
+	if e := fs.Parse(os.Args[2:]); e != nil {
+		return e
+	}
+	if fs.NArg() != 0 {
+		return errors.New("unexpected arguments")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if os.Args[1] == "check" {
+		r, e := recoveryexport.Check(ctx, *pkg, recoveryexport.DefaultExportLimits())
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(r)
+	}
+	if os.Args[1] == "binding-status" {
+		r, e := recoveryexport.BindingStatus(ctx, *installation, nil)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	}
+	var c config
+	if e := readJSON(*cfgPath, &c); e != nil {
+		return e
+	}
+	if c.PayloadRootBase64 != "" {
+		if c.PayloadRoot != "" {
+			return recoveryexport.ErrConfiguration
+		}
+		path, e := recoveryexport.DecodeBindingPath(c.PayloadRootBase64)
+		if e != nil {
+			return e
+		}
+		c.PayloadRoot = path
+	}
+	password, e := privateBytes(c.PasswordFile, 4096)
+	if e != nil {
+		return e
+	}
+	defer clear(password)
+	var key []byte
+	if c.KeyFile != "" {
+		raw, e := privateBytes(c.KeyFile, 64)
+		if e != nil {
+			return e
+		}
+		key, e = hex.DecodeString(string(raw))
+		clear(raw)
+		if e != nil || len(key) != 32 {
+			return recoveryexport.ErrKeyUnavailable
+		}
+		defer clear(key)
+	}
+	d := recoveryexport.Destination{Backend: "postgres", Profile: "manual-postgresql-docker", Transport: "local-plaintext", Host: c.Host, Port: c.Port, Database: c.Database, User: c.User, PayloadRoot: c.PayloadRoot, Password: func(context.Context) (string, error) { return string(password), nil }, KeyReference: c.KeyReference}
+	if key != nil {
+		d.Key = func(context.Context) ([]byte, error) { return key, nil }
+	}
+	request := recoveryexport.BindingRequest{Action: recoveryexport.BindingAction(*action), InstallationDirectory: *installation, ExpectedSchema: *expectedSchema, ExpectedRevision: *revision, OperationID: *operation, SourceID: *sourceID, SourcePathBase64: *sourcePath, ExpectedSourceRevision: *sourceRevision}
+	switch os.Args[1] {
+	case "upgrade-preview":
+		q := recoveryexport.UpgradeRequest{InstallationDirectory: *installation, ExpectedSchema: *expectedSchema, RepositoryID: *repositoryID, RootID: *rootID, ExpectedRevision: *revision, OperationID: *operation}
+		r, e := recoveryexport.PreviewUpgrade(ctx, recoveryexport.Config(d), q, recoveryexport.DefaultLimits())
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "upgrade-apply", "upgrade-reconcile":
+		q := recoveryexport.UpgradeRequest{InstallationDirectory: *installation, ExpectedSchema: *expectedSchema, RepositoryID: *repositoryID, RootID: *rootID, ExpectedRevision: *revision, OperationID: *operation}
+		o := recoveryexport.UpgradeOptions{Request: q, PlanSHA256: *plan, Export: recoveryexport.ExportOptions{Destination: *checkpoint, Tools: recoveryexport.Tools{PGDump: c.PGDump, PGRestore: c.PGRestore}, Limits: recoveryexport.DefaultExportLimits(), InventoryLimits: recoveryexport.DefaultLimits()}}
+		r, e := recoveryexport.ApplyUpgrade(ctx, recoveryexport.Config(d), o)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "binding-source-status":
+		r, e := recoveryexport.SourceBindingStatus(ctx, *installation, recoveryexport.Config(d), *sourceID)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "binding-check":
+		selected := recoveryexport.Config(d)
+		r, e := recoveryexport.BindingStatus(ctx, *installation, &selected)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "binding-preview":
+		r, e := recoveryexport.PreviewBinding(ctx, recoveryexport.Config(d), request, recoveryexport.DefaultLimits())
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "binding-apply", "binding-reconcile":
+		o := recoveryexport.BindingOptions{Request: request, PlanSHA256: *plan, Export: recoveryexport.ExportOptions{Destination: *checkpoint, Tools: recoveryexport.Tools{PGDump: c.PGDump, PGRestore: c.PGRestore}, Limits: recoveryexport.DefaultExportLimits(), InventoryLimits: recoveryexport.DefaultLimits()}}
+		r, e := recoveryexport.ApplyBinding(ctx, recoveryexport.Config(d), o)
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "adopt-preview":
+		r, e := recoveryexport.PreviewAdoption(ctx, recoveryexport.Config(d), recoveryexport.DefaultLimits())
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "adopt-apply":
+		r, e := recoveryexport.ApplyAdoption(ctx, recoveryexport.Config(d), recoveryexport.AdoptionOptions{ExpectedSchema: *expectedSchema, OperationID: *operation, PlanSHA256: *plan, Export: recoveryexport.ExportOptions{Destination: *checkpoint, Tools: recoveryexport.Tools{PGDump: c.PGDump, PGRestore: c.PGRestore}, Limits: recoveryexport.DefaultExportLimits(), InventoryLimits: recoveryexport.DefaultLimits()}})
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "import":
+		r, e := recoveryexport.Import(ctx, d, recoveryexport.ImportOptions{Package: *pkg, Generation: *gen, ManifestSHA256: *digest, TrustedOperatorBackup: *trusted, ExclusiveTarget: *exclusive, DatabaseCapacityBytes: *capacity, Tools: recoveryexport.Tools{PGDump: c.PGDump, PGRestore: c.PGRestore}, Limits: recoveryexport.DefaultExportLimits(), InventoryLimits: recoveryexport.DefaultLimits()})
+		return errors.Join(e, json.NewEncoder(os.Stdout).Encode(r))
+	case "restore":
+		return restore(ctx, c, string(password), key, *snap, *out)
+	default:
+		return errors.New("unknown recovery operation")
+	}
+}
+func privateBytes(path string, max int64) ([]byte, error) {
+	info, e := os.Lstat(path)
+	if e != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > max {
+		return nil, errors.New("private regular credential file required")
+	}
+	f, e := os.Open(path)
+	if e != nil {
+		return nil, e
+	}
+	after, e := f.Stat()
+	if e != nil || !os.SameFile(info, after) {
+		return nil, errors.Join(errors.New("credential identity changed"), f.Close())
+	}
+	b, e := io.ReadAll(io.LimitReader(f, max+1))
+	e = errors.Join(e, f.Close())
+	if int64(len(b)) > max {
+		return nil, errors.New("credential limit")
+	}
+	return b, e
+}
+func readJSON(path string, v any) error {
+	f, e := os.Open(path)
+	if e != nil {
+		return e
+	}
+	// Read a sentinel byte as well: a decoder behind a reader limited to the
+	// ceiling cannot distinguish actual EOF from excess trailing whitespace.
+	b, e := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	if e = errors.Join(e, f.Close()); e != nil {
+		return e
+	}
+	if len(b) > 1<<20 {
+		return errors.New("operator configuration limit")
+	}
+	if !losslessConfigUnicode(b) {
+		return errors.New("invalid configuration Unicode")
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	e = d.Decode(v)
+	if e == nil {
+		var extra any
+		if d.Decode(&extra) != io.EOF {
+			e = errors.New("trailing JSON")
+		}
+	}
+	return e
+}
+
+// encoding/json replaces invalid UTF-8 and unpaired UTF-16 escapes. Check
+// those representations before decoding any field that can select authority.
+// This bounded linear scan leaves ordinary JSON syntax to the decoder.
+func losslessConfigUnicode(b []byte) bool {
+	if !utf8.Valid(b) {
+		return false
+	}
+	inString := false
+	for i := 0; i < len(b); i++ {
+		switch b[i] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString {
+				continue
+			}
+			if i+1 >= len(b) || b[i+1] != 'u' {
+				i++ // Includes escaped quotes and literal backslashes.
+				continue
+			}
+			unit, ok := configUnicodeEscape(b[i:])
+			if !ok || unit >= 0xdc00 && unit <= 0xdfff {
+				return false
+			}
+			i += 5
+			if unit >= 0xd800 && unit <= 0xdbff {
+				unit, ok = configUnicodeEscape(b[i+1:])
+				if !ok || unit < 0xdc00 || unit > 0xdfff {
+					return false
+				}
+				i += 6
+			}
+		}
+	}
+	return true
+}
+
+func configUnicodeEscape(b []byte) (uint64, bool) {
+	if len(b) < 6 || b[0] != '\\' || b[1] != 'u' {
+		return 0, false
+	}
+	unit, e := strconv.ParseUint(string(b[2:6]), 16, 16)
+	return unit, e == nil
+}
+
+func restore(ctx context.Context, c config, password string, key []byte, selection, output string) (err error) {
+	if selection == "" || !filepath.IsAbs(output) || filepath.Clean(output) != output {
+		return errors.New("explicit snapshot and fresh absolute output required")
+	}
+	id, e := coordination.ResolveIdentity(c.PayloadRoot)
+	if e != nil {
+		return e
+	}
+	parent, e := filepath.EvalSymlinks(filepath.Dir(output))
+	if e != nil || parent != filepath.Dir(output) {
+		return errors.New("unsafe output parent")
+	}
+	rel, e := filepath.Rel(id.CanonicalPath, output)
+	if e != nil || rel == "." || rel != ".." && !strings.HasPrefix(rel, "../") {
+		return errors.New("output overlaps payload root")
+	}
+	root, e := os.OpenRoot(id.CanonicalPath)
+	if e != nil {
+		return e
+	}
+	receipt, e := recoveryexport.ReadImportReceipt(ctx, root)
+	if e = errors.Join(e, root.Close()); e != nil {
+		return e
+	}
+	if (receipt.Kind != "coldkeep-import-ready/v1" && receipt.Kind != "coldkeep-import-ready/v2" && receipt.Kind != "coldkeep-import-ready/v3" && receipt.Kind != "coldkeep-import-ready/v4") || receipt.TargetRootHash != id.Hash || receipt.Database != c.Database || receipt.Role != c.User || receipt.Host != c.Host || receipt.Port != c.Port || receipt.KeyRequired != (len(key) > 0) || receipt.KeyReference != c.KeyReference {
+		return errors.New("ready receipt/target/key mismatch")
+	}
+	for _, v := range os.Environ() {
+		if strings.HasPrefix(v, "PG") || strings.HasPrefix(v, "PQGO_DEBUG=") || strings.HasPrefix(v, "COLDKEEP_KEY=") {
+			return errors.New("ambient database/key settings refused")
+		}
+	}
+	if len(key) > 0 {
+		if e = os.Setenv("COLDKEEP_KEY", hex.EncodeToString(key)); e != nil {
+			return e
+		}
+		defer func() { err = errors.Join(err, os.Unsetenv("COLDKEEP_KEY")) }()
+	}
+	lease, e := coordination.AcquireExisting(ctx, id)
+	if e != nil {
+		return e
+	}
+	defer func() { err = errors.Join(err, lease.Release()) }()
+	var pinsBefore, pinsAfter int64
+	validation := recoveryexport.Config{Backend: "postgres", Profile: "manual-postgresql-docker", Transport: "local-plaintext", Host: c.Host, Port: c.Port, Database: c.Database, User: c.User, PayloadRoot: c.PayloadRoot, KeyReference: c.KeyReference, Password: func(context.Context) (string, error) { return password, nil }}
+	if key != nil {
+		validation.Key = func(context.Context) ([]byte, error) { return key, nil }
+	}
+	reader, e := recoveryexport.OpenRecoverySession(ctx, validation, lease, receipt)
+	if e != nil {
+		return e
+	}
+	defer func() { err = errors.Join(err, reader.Close()) }()
+	db := reader.DB
+	if e = db.QueryRowContext(ctx, "SELECT COALESCE(sum(pin_count),0) FROM chunk").Scan(&pinsBefore); e != nil {
+		return e
+	}
+	entries, e := snapshot.ListSnapshotFiles(ctx, db, selection, 20000, nil)
+	if e != nil {
+		return e
+	}
+	if e = os.Mkdir(output, 0700); e != nil {
+		return e
+	}
+	sc := storage.StorageContext{DB: db, ContainerDir: id.CanonicalPath}
+	// The established snapshot wrapper checks cancellation between files. Run
+	// this adapter in an owned, time-bounded child for in-flight cancellation.
+	r, e := snapshot.RestoreSnapshot(ctx, db, selection, nil, snapshot.RestoreSnapshotOptions{DestinationMode: storage.RestoreDestinationPrefix, Destination: output, StorageContext: &sc, StrictMetadata: true})
+	if e != nil {
+		return e
+	}
+	if e = db.QueryRowContext(ctx, "SELECT COALESCE(sum(pin_count),0) FROM chunk").Scan(&pinsAfter); e != nil {
+		return e
+	}
+	if pinsBefore != pinsAfter {
+		return errors.New("reader pins unbalanced")
+	}
+	type fileResult struct {
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+		Mode   uint32 `json:"mode"`
+		MTime  string `json:"mtime"`
+	}
+	files := []fileResult{}
+	for _, p := range r.OutputPaths {
+		rel, e := filepath.Rel(output, p)
+		if e != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+			return errors.New("restore containment failure")
+		}
+		f, e := os.Open(p)
+		if e != nil {
+			return e
+		}
+		h := sha256.New()
+		_, e = io.Copy(h, f)
+		info, x := f.Stat()
+		e = errors.Join(e, x, f.Close())
+		if e != nil {
+			return e
+		}
+		files = append(files, fileResult{rel, hex.EncodeToString(h.Sum(nil)), uint32(info.Mode().Perm()), info.ModTime().UTC().Format(time.RFC3339Nano)})
+	}
+	if e = lease.Check(); e != nil {
+		return e
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{"snapshot": selection, "selection": entries, "files": files, "pins_before": pinsBefore, "pins_after": pinsAfter, "warnings": r.Warnings, "target": receipt.Database, "reader": receipt.Reader})
+}

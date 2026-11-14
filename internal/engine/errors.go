@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
 )
 
 // ErrorCode is the renderer- and backend-neutral classification of an engine

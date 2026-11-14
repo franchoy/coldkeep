@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 type preparedRemoveStoredPathTarget struct {
@@ -142,6 +142,9 @@ func (e *DefaultEngine) removeStoredPaths(ctx context.Context, req RemoveStoredP
 			item = e.removeStoredPath(ctx, target)
 		}
 		appendRemoveStoredPathItem(&result, item)
+		if e.batchItemCompleted != nil {
+			e.batchItemCompleted()
+		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}

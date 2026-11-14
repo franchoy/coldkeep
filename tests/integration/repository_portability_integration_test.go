@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/container"
-	dbpkg "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/pathsafe"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	dbpkg "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
 

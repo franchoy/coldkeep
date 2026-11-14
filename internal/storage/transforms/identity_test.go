@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/storage/transforms"
-	"github.com/franchoy/coldkeep/internal/storage/transforms/aesgcm"
+	"github.com/franchoy/coldkeep/v2/internal/storage/transforms"
+	"github.com/franchoy/coldkeep/v2/internal/storage/transforms/aesgcm"
 )
 
 func TestIdentityTransform_RoundTrip(t *testing.T) {

@@ -12,9 +12,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/franchoy/coldkeep/internal/container"
-	internaldb "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	internaldb "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 // TestGCDryRunThroughEngineEmptyDB verifies that a dry-run GC on an empty

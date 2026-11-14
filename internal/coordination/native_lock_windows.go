@@ -16,6 +16,14 @@ const (
 )
 
 func acquireNativeLockPlatform(lockPath string) (*nativeLockHandle, error) {
+	return openNativeLockPlatform(lockPath, false)
+}
+
+func acquireExistingNativeLockPlatform(lockPath string) (*nativeLockHandle, error) {
+	return openNativeLockPlatform(lockPath, true)
+}
+
+func openNativeLockPlatform(lockPath string, existing bool) (*nativeLockHandle, error) {
 	if err := inspectWindowsNativeLockArtifact(lockPath); err != nil {
 		return nil, err
 	}
@@ -24,12 +32,18 @@ func acquireNativeLockPlatform(lockPath string) (*nativeLockHandle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("coordination: encode native repository lock path: %w", err)
 	}
+	disposition := uint32(windows.OPEN_ALWAYS)
+	access := uint32(windows.GENERIC_READ | windows.GENERIC_WRITE)
+	if existing {
+		disposition = windows.OPEN_EXISTING
+		access = windows.GENERIC_READ
+	}
 	handle, err := windows.CreateFile(
 		path,
-		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		access,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil,
-		windows.OPEN_ALWAYS,
+		disposition,
 		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT,
 		0,
 	)

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/utils_env"
+	"github.com/franchoy/coldkeep/v2/internal/utils_env"
 	_ "github.com/lib/pq"
 )
 

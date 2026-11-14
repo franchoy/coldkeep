@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/execution"
+	"github.com/franchoy/coldkeep/v2/internal/execution"
 )
 
 const (

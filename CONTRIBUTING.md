@@ -1,5 +1,16 @@
 # Contributing to coldkeep
 
+Active development: [v2.0 action 2.04](docs/release/v2.0/README.md), selected by
+[docs/release/current.json](docs/release/current.json). The
+[development contract](docs/release/v2.0/development-visibility.md)
+records the public `release/v2.0` branch, existing draft PR #129 and authorized
+bounded CI follow-up. Its [current result](docs/release/v2.0/ci-followup-result.md)
+separates measured local qualification from PENDING corrected-head hosted checks.
+Use that owning unit's bounded validation profile; product gates remain incomplete.
+Full release/publication procedures below remain applicable to their declared
+release scopes; frozen v1 certification is not repeated to begin v2.
+Go/dependency pins and correctness gates remain unchanged.
+
 Thank you for your interest in contributing to coldkeep.
 
 coldkeep v1.x is a correctness-first storage engine.
@@ -78,6 +89,10 @@ This focus preserves system reliability as the primary delivery criterion.
 
 ## Development Requirements
 
+- Go 1.26.11 exactly with `GOTOOLCHAIN=local` for active v2 development;
+  the language floor remains Go 1.25.0. Historical certification paths below
+  retain their original compilers.
+
 - Go 1.26.7 exactly with `GOTOOLCHAIN=local` for the certified v1.13.15 path
   (`go 1.25` remains the module language floor)
 - Go 1.26.10 exactly with `GOTOOLCHAIN=local` for the current v1.13.19
@@ -97,7 +112,7 @@ If this is your first change, do not start with the full release checklist.
 Use this shorter loop first:
 
 1. Read `README.md`, then skim `ARCHITECTURE.md` for the invariants your change could affect.
-2. Verify `go version` reports Go 1.26.10 and set `GOTOOLCHAIN=local`.
+2. Verify `go version` reports Go 1.26.11 for active v2 development and set `GOTOOLCHAIN=local`.
 3. Start PostgreSQL with `docker compose up -d coldkeep_postgres`.
 4. Build the binary with `go build -o coldkeep ./cmd/coldkeep`.
 5. Run one health command such as `./coldkeep doctor`.

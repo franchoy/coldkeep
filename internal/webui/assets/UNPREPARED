@@ -1,0 +1,2 @@
+Run scripts/prepare_daemon.py before building the internal daemon.
+This placeholder preserves independent CLI builds and missing-asset diagnostics.

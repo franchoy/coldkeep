@@ -3,7 +3,7 @@ package main
 import (
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/coordination"
+	"github.com/franchoy/coldkeep/v2/internal/coordination"
 )
 
 // repositoryCoordinationPolicy is the Phase 11 command classification consumed

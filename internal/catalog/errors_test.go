@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
 )
 
 func TestCatalogErrorCauseIsPrivateButPreservesErrorsIs(t *testing.T) {

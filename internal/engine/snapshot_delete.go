@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
 )
 
 type preparedSnapshotDeleteRequest struct {

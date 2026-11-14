@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 func (s *Service) ListCurrentFiles(ctx context.Context, page CurrentFilePage) ([]CurrentFileRef, error) {

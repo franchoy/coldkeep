@@ -1,6 +1,6 @@
 package chunk
 
-import "github.com/franchoy/coldkeep/internal/chunk/shared"
+import "github.com/franchoy/coldkeep/v2/internal/chunk/shared"
 
 // Info is the shared chunk metadata contract returned by all chunkers.
 type Info = shared.Info

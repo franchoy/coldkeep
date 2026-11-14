@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	idb "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/iodebug"
-	"github.com/franchoy/coldkeep/internal/pathsafe"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	idb "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/iodebug"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 // Snapshot represents an immutable point-in-time snapshot of a set of files.
