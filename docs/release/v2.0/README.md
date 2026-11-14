@@ -3,7 +3,7 @@
 Current workflow: **C2-Q1-R1 file organization and definition recognition**, under
 owner-adopted `coldkeep_phase3c2_quality_q1_r1_build_2026-11-14.md`.
 The unit targets exactly the generation file-length report and the two BUILD/PLAN
-recognition reports. R1 is ACTIVE pending fresh source-bound qualification.
+recognition reports. Local-profile 2.04 and R1 are COMPLETE on fresh source-bound qualification.
 C2-Q1 is an accepted qualified published checkpoint, not clearance of all 29
 previous targets. C2-G1 remains accepted historical work; final Phase 3C2 is
 WITHHELD_CODACY. Implementation remains ACTIVE and product gates INCOMPLETE.

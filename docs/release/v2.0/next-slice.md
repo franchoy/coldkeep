@@ -1,6 +1,6 @@
-# Next bounded handoff: C2-Q1-R1 qualification and observation
+# Next bounded handoff: C2-Q1-R1 outgoing review and hosted observation
 
-C2-Q1-R1 is ACTIVE pending fresh qualification of exactly three subjects: the
+C2-Q1-R1 is locally COMPLETE on fresh qualification of exactly three subjects: the
 generation file-length finding and BUILD/PLAN recognition. The governing BUILD
 is `coldkeep_phase3c2_quality_q1_r1_build_2026-11-14.md`; see the
 [R1 owning result](phase3c2-quality-q1-r1-result.md). Exact outgoing review and
