@@ -131,6 +131,43 @@ class OperatorConfigLimitRunnerTests(RecoveryRunnerTests):
     required_event = "TestRecoveryConfigByteBoundary/excess-padding"
 
 
+class OperatorQ2RunnerTests(RecoveryRunnerTests):
+    required_package = "github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery"
+    required_event = "TestRecoveryPublicOperationsBeforeConfig/check"
+
+    def test_every_q2_identity_is_enforced(self):
+        # Independent exact identities: deriving these from the checker would
+        # allow accidental requirement removal to erase its own mutation probe.
+        identities = (
+            'TestRecoveryPublicOperationsBeforeConfig',
+            'TestRecoveryPublicOperationsBeforeConfig/check',
+            'TestRecoveryPublicOperationsBeforeConfig/check-closed-output',
+            'TestRecoveryPublicOperationsBeforeConfig/binding-status',
+            'TestRecoveryPublicOperationsBeforeConfig/binding-status-closed-output',
+            'TestRecoveryUnknownOperationAdmission',
+            'TestRecoveryUnknownOperationAdmission/path',
+            'TestRecoveryUnknownOperationAdmission/password',
+            'TestRecoveryUnknownOperationAdmission/key-file',
+            'TestRecoveryUnknownOperationAdmission/key-decode',
+            'TestRecoveryUnknownOperationAdmission/dispatch',
+            'TestRecoveryUnknownOperationAdmission/config',
+            'TestRecoveryPrivateCredentialAdmission',
+            'TestRecoveryPrivateCredentialAdmission/missing',
+            'TestRecoveryPrivateCredentialAdmission/directory',
+            'TestRecoveryPrivateCredentialAdmission/symlink',
+            'TestRecoveryPrivateCredentialAdmission/permissions',
+            'TestRecoveryPrivateCredentialAdmission/oversize',
+            'TestRecoveryPrivateCredentialExactBytes',
+        )
+        for identity in identities:
+            for mutation in ("missing", "skip"):
+                with self.subTest(identity=identity, mutation=mutation):
+                    self.required_event = identity
+                    result = self.run_mutation(mutation)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn(identity, result.stdout)
+
+
 class PassiveRunnerTests(RecoveryRunnerTests):
     required_events = passive_required
     runner = ROOT / "scripts/run_passive_inventory_tests.sh"

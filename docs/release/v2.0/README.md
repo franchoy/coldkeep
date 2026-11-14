@@ -1,20 +1,21 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q1-R1 file organization and definition recognition**, under
-owner-adopted `coldkeep_phase3c2_quality_q1_r1_build_2026-11-14.md`.
-The unit targets exactly the generation file-length report and the two BUILD/PLAN
-recognition reports. Local-profile 2.04 and R1 are COMPLETE on fresh source-bound qualification.
-C2-Q1 is an accepted qualified published checkpoint, not clearance of all 29
-previous targets. C2-G1 remains accepted historical work; final Phase 3C2 is
+Current workflow: **C2-Q2 recovery-command maintainability**, under
+owner-adopted `coldkeep_phase3c2_quality_q2_build_2026-11-14.md`.
+The unit targets exactly eight Lizard findings at six recovery-command sites.
+Q2 qualification is INCOMPLETE until its fresh source-bound evidence completes.
+C2-Q1-R1 is an accepted COMPLETE checkpoint for its bounded correction and hosted
+observation. C2-G1 and Q1 remain accepted historical work; final Phase 3C2 is
 WITHHELD_CODACY. Implementation remains ACTIVE and product gates INCOMPLETE.
 
 Current contracts: [generation model](generation-model.md) and
 [bounded reads](generation-read.md). The original [C2 result](phase3c2-result.md),
-[C2-G1 follow-up](phase3c2-followup-result.md) and [Q1 result](phase3c2-quality-q1-result.md),
-their six result/qualification files and all predecessor records remain immutable.
-They cannot certify changed R1 execution inputs. [Current authority](../current.json)
-binds the new owning result after qualification; structural checks do not certify
-hosted acceptance. Current result: [C2-Q1-R1 qualification](phase3c2-quality-q1-r1-result.md).
+[C2-G1 follow-up](phase3c2-followup-result.md), [Q1 result](phase3c2-quality-q1-result.md)
+and [R1 result](phase3c2-quality-q1-r1-result.md), their eight result/qualification
+files and all predecessor records remain immutable. They cannot certify changed
+Q2 execution inputs. [Current authority](../current.json) binds the new owning
+result after qualification; structural checks do not certify hosted acceptance.
+Current result: [C2-Q2 qualification](phase3c2-quality-q2-result.md).
 Current handoff: [remaining C2 quality work](next-slice.md).
 
 The adopted sequence authorizes isolated implementation, fresh qualification,

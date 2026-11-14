@@ -114,31 +114,37 @@ func TestRecoveryReceiptCancellation(t *testing.T) {
 	}
 }
 
+func receiptRegularInputFixture(t *testing.T, kind string) string {
+	t.Helper()
+	root := t.TempDir()
+	control := filepath.Join(root, ".coldkeep-control")
+	if e := os.Mkdir(control, 0700); e != nil {
+		t.Fatal(e)
+	}
+	source := filepath.Join(root, "source")
+	path := filepath.Join(control, "IMPORT_READY")
+	if e := os.WriteFile(source, []byte(`{"objects":[]}`), 0600); e != nil {
+		t.Fatal(e)
+	}
+	var e error
+	switch kind {
+	case "symlink":
+		e = os.Symlink(source, path)
+	case "hardlink":
+		e = os.Link(source, path)
+	case "directory":
+		e = os.Mkdir(path, 0700)
+	}
+	if e != nil {
+		t.Fatal(e)
+	}
+	return root
+}
+
 func TestRecoveryReceiptRegularInput(t *testing.T) {
 	for _, kind := range []string{"symlink", "hardlink", "directory"} {
 		t.Run(kind, func(t *testing.T) {
-			root := t.TempDir()
-			control := filepath.Join(root, ".coldkeep-control")
-			if e := os.Mkdir(control, 0700); e != nil {
-				t.Fatal(e)
-			}
-			source := filepath.Join(root, "source")
-			path := filepath.Join(control, "IMPORT_READY")
-			if e := os.WriteFile(source, []byte(`{"objects":[]}`), 0600); e != nil {
-				t.Fatal(e)
-			}
-			var e error
-			switch kind {
-			case "symlink":
-				e = os.Symlink(source, path)
-			case "hardlink":
-				e = os.Link(source, path)
-			case "directory":
-				e = os.Mkdir(path, 0700)
-			}
-			if e != nil {
-				t.Fatal(e)
-			}
+			root := receiptRegularInputFixture(t, kind)
 			a, e := os.OpenRoot(root)
 			if e != nil {
 				t.Fatal(e)

@@ -145,6 +145,16 @@ for which in ['marker','descriptor']:
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add(parent)
  required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(parent+'/'+case for case in 'missing future truncated oversized duplicate trailing symlink fifo hardlink permissions wrong-identity stale-revision'.split())
 required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].add('TestBindingControlAdmission')
+# Q2 decomposes the operator admission/lifetime owners. These real command and
+# filesystem controls remain mandatory in recovery and complete codec routes.
+for parent, cases in {
+ 'TestRecoveryPublicOperationsBeforeConfig': 'check check-closed-output binding-status binding-status-closed-output',
+ 'TestRecoveryUnknownOperationAdmission': 'path password key-file key-decode dispatch config',
+ 'TestRecoveryPrivateCredentialAdmission': 'missing directory symlink permissions oversize',
+ 'TestRecoveryPrivateCredentialExactBytes': '',
+}.items():
+ required['github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery'].add(parent)
+ required['github.com/franchoy/coldkeep/v2/cmd/coldkeep-recovery'].update(parent+'/'+case for case in cases.split())
 # Phase 3B R1: raw configuration fidelity and actual staged operator behavior.
 for parent,cases in {
  'TestRecoveryConfigUnicodeRefusals':'invalid-utf8 overlong-utf8 encoded-surrogate truncated-utf8 lone-low-surrogate lone-high-surrogate high-high low-high high-scalar high-gap-low high-escaped-backslash-low paired-then-low escaped-quote-then-high key-surrogate password-surrogate',

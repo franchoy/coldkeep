@@ -46,12 +46,17 @@ func recoveryReceiptScaleFixture(t *testing.T) (config, recoveryexport.ImportRec
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkReceiptScaleBudget(t, r, b)
+	return c, r, b
+}
+
+func checkReceiptScaleBudget(t *testing.T, r recoveryexport.ImportReceipt, b []byte) {
+	t.Helper()
 	if len(b) <= 1<<20 || int64(len(b)) > recoveryexport.DefaultLimits().DiagnosticBytes ||
 		len(r.Objects)+5 > recoveryexport.DefaultLimits().Rows ||
 		len(r.Objects)+1 > recoveryexport.DefaultExportLimits().Members {
 		t.Fatalf("bad bounded scale fixture: bytes=%d objects=%d", len(b), len(r.Objects))
 	}
-	return c, r, b
 }
 
 func TestRecoveryReaderReceiptWithinAdvertisedScale(t *testing.T) {
