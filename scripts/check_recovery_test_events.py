@@ -339,6 +339,9 @@ C2_REQUIRED = {'github.com/franchoy/coldkeep/v2/internal/generation': ['TestGene
                                                              'TestRecoveryReadQueryWork/records-100',
                                                              'TestRecoveryReadQueryWork/records-1000',
                                                              'TestRecoveryReadQueryWork/records-5000']}
+# Q1 helper boundaries remain mandatory in recovery and complete codec routes.
+C2_REQUIRED['github.com/franchoy/coldkeep/v2/internal/generation'] += [
+    'TestGenerationUnicodeBoundaries', 'TestGenerationValidationShortCircuit']
 C2_REQUIRED['github.com/franchoy/coldkeep/v2/internal/generation'] += [
     'TestGenerationDTORefusals/response-limit', 'TestGenerationDTORefusals/negative-response-limit']
 C2_REQUIRED['github.com/franchoy/coldkeep/v2/internal/recoveryexport'] += [

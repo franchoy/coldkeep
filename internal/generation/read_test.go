@@ -97,26 +97,7 @@ func TestGenerationDTORefusals(t *testing.T) {
 	q.Query = QuerySelector
 	for _, name := range []string{"base64", "dot", "dotdot", "nul", "slash", "count", "component"} {
 		t.Run(name, func(t *testing.T) {
-			s := selector([]byte("a"))
-			switch name {
-			case "base64":
-				s.Components[0] = "YR=="
-			case "dot":
-				s = selector([]byte("."))
-			case "dotdot":
-				s = selector([]byte(".."))
-			case "nul":
-				s = selector([]byte{0})
-			case "slash":
-				s = selector([]byte("a/b"))
-			case "count":
-				s.Components = make([]string, Depth+1)
-				for i := range s.Components {
-					s.Components[i] = "YQ=="
-				}
-			case "component":
-				s = selector(bytes.Repeat([]byte("a"), 256))
-			}
+			s := refusedSelector(name)
 			q.Selector = &s
 			b, _ := json.Marshal(q)
 			if _, e := DecodeRequest(b); e == nil {
@@ -124,34 +105,12 @@ func TestGenerationDTORefusals(t *testing.T) {
 			}
 		})
 	}
-	r := testReadResponse()
-	r.Entries = make([]EntryDTO, 101)
-	if _, e = EncodeResponse(r); e == nil {
-		t.Fatal("response count overrun")
-	}
-	r = testReadResponse()
-	raw, e = EncodeResponse(r)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if _, e = DecodeResponse(append(raw, bytes.Repeat([]byte(" "), ResponseBytes-len(raw))...)); e != nil {
-		t.Fatal("exact response byte boundary", e)
-	}
-	if _, e = DecodeResponse(append(raw, bytes.Repeat([]byte(" "), ResponseBytes-len(raw)+1)...)); e == nil {
-		t.Fatal("response byte overrun")
-	}
+	assertResponseByteBounds(t)
 }
 
 func TestGenerationDTODecimal(t *testing.T) {
 	for _, n := range []int64{math.MinInt64, -9007199254740993, -1, 0, 1, 9007199254740991, 9007199254740992, 9007199254740993, math.MaxInt64} {
-		b, e := json.Marshal(Decimal(n))
-		if e != nil || string(b) != strconv.Quote(strconv.FormatInt(n, 10)) {
-			t.Fatal(n, e)
-		}
-		var got Decimal
-		if json.Unmarshal(b, &got) != nil || int64(got) != n {
-			t.Fatal(n)
-		}
+		assertDecimalRoundTrip(t, n)
 	}
 	for _, s := range []string{`0`, `null`, `""`, `"01"`, `"-0"`, `"+1"`, `"1.0"`, `"1e3"`, `" 1"`, `"9223372036854775808"`, `"-9223372036854775809"`, `"\u0031"`} {
 		t.Run(s, func(t *testing.T) {
@@ -184,25 +143,7 @@ func TestGenerationDTOJSONConsumer(t *testing.T) {
 		t.Fatal("pinned Node 24.22.2 required", e)
 	}
 	for _, n := range []int64{math.MinInt64, -9007199254740993, -1, 0, 9007199254740991, 9007199254740992, 9007199254740993, math.MaxInt64} {
-		r := testReadResponse()
-		v := Decimal(n)
-		id := Decimal(9007199254740993)
-		r.Entries[0].LogicalFileID = &id
-		r.Entries[0].Metadata.MtimeNS = &v
-		b, e := EncodeResponse(r)
-		if e != nil {
-			t.Fatal(e)
-		}
-		cmd := exec.Command("node", "-e", `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const x=JSON.parse(s),e=x.entries[0];if(typeof e.logical_file_id!=='string'||BigInt(e.logical_file_id).toString()!==e.logical_file_id||typeof e.metadata.mtime_ns!=='string'||BigInt(e.metadata.mtime_ns).toString()!==e.metadata.mtime_ns)process.exit(2);process.stdout.write(JSON.stringify(x));});`)
-		cmd.Stdin = bytes.NewReader(b)
-		out, e := cmd.Output()
-		if e != nil {
-			t.Fatal(e)
-		}
-		again, e := DecodeResponse(out)
-		if e != nil || !reflect.DeepEqual(r, again) {
-			t.Fatal("JavaScript lost integer identity", e)
-		}
+		assertNodeRoundTrip(t, n)
 	}
 }
 
@@ -242,5 +183,88 @@ func TestGenerationCursorCodec(t *testing.T) {
 				t.Fatal("invalid cursor admitted")
 			}
 		})
+	}
+}
+
+func refusedSelector(name string) Selector {
+	s := selector([]byte("a"))
+	switch name {
+	case "base64":
+		s.Components[0] = "YR=="
+	case "dot":
+		s = selector([]byte("."))
+	case "dotdot":
+		s = selector([]byte(".."))
+	case "nul":
+		s = selector([]byte{0})
+	case "slash":
+		s = selector([]byte("a/b"))
+	case "count":
+		s.Components = repeatedComponents(Depth + 1)
+	case "component":
+		s = selector(bytes.Repeat([]byte("a"), 256))
+	}
+	return s
+}
+func repeatedComponents(n int) []string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = "YQ=="
+	}
+	return parts
+}
+
+func assertResponseByteBounds(t *testing.T) {
+	t.Helper()
+	r := testReadResponse()
+	r.Entries = make([]EntryDTO, 101)
+	if _, e := EncodeResponse(r); e == nil {
+		t.Fatal("response count overrun")
+	}
+	r = testReadResponse()
+	raw, e := EncodeResponse(r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = DecodeResponse(append(raw, bytes.Repeat([]byte(" "), ResponseBytes-len(raw))...)); e != nil {
+		t.Fatal("exact response byte boundary", e)
+	}
+	if _, e = DecodeResponse(append(raw, bytes.Repeat([]byte(" "), ResponseBytes-len(raw)+1)...)); e == nil {
+		t.Fatal("response byte overrun")
+	}
+}
+
+func assertDecimalRoundTrip(t *testing.T, n int64) {
+	t.Helper()
+	b, e := json.Marshal(Decimal(n))
+	if e != nil || string(b) != strconv.Quote(strconv.FormatInt(n, 10)) {
+		t.Fatal(n, e)
+	}
+	var got Decimal
+	if json.Unmarshal(b, &got) != nil || int64(got) != n {
+		t.Fatal(n)
+	}
+}
+
+func assertNodeRoundTrip(t *testing.T, n int64) {
+	t.Helper()
+	r := testReadResponse()
+	v := Decimal(n)
+	id := Decimal(9007199254740993)
+	r.Entries[0].LogicalFileID = &id
+	r.Entries[0].Metadata.MtimeNS = &v
+	b, e := EncodeResponse(r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	cmd := exec.Command("node", "-e", `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const x=JSON.parse(s),e=x.entries[0];if(typeof e.logical_file_id!=='string'||BigInt(e.logical_file_id).toString()!==e.logical_file_id||typeof e.metadata.mtime_ns!=='string'||BigInt(e.metadata.mtime_ns).toString()!==e.metadata.mtime_ns)process.exit(2);process.stdout.write(JSON.stringify(x));});`)
+	cmd.Stdin = bytes.NewReader(b)
+	out, e := cmd.Output()
+	if e != nil {
+		t.Fatal(e)
+	}
+	again, e := DecodeResponse(out)
+	if e != nil || !reflect.DeepEqual(r, again) {
+		t.Fatal("JavaScript lost integer identity", e)
 	}
 }

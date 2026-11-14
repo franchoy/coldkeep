@@ -14,8 +14,12 @@ PREDECESSORS.update({
     "phase3c2-result.md": "0d4956865ada5fead72e21c9ff7553d3425d247e4cadab667b7a6564ceedbfe4",
     "phase3c2-qualification.json": "aa8527c9295fd8f2d094804a489e0d79aa7b9656a65bc82a51f6a56e26698444",
 })
-RESULT = "phase3c2-followup-result.md"
-QUALIFICATION = "phase3c2-followup-qualification.json"
+PREDECESSORS.update({
+    "phase3c2-followup-result.md": "1c4432d09194f93ff5afbc802ae998a237c8c2a78a538db099672c8edb5adeae",
+    "phase3c2-followup-qualification.json": "b0ef1929cfd71291e2c20559172c2bef3851fda5f62948a925a98c540a046df5",
+})
+RESULT = "phase3c2-quality-q1-result.md"
+QUALIFICATION = "phase3c2-quality-q1-qualification.json"
 
 CHECKS = {
     "provenance-regressions", "real-staged-admission", "source-reuse-accounting",
@@ -23,6 +27,7 @@ CHECKS = {
     "current-oracle", "d19-oracle", "python", "go-ci-enforcement", "build-vet-lint",
     "dependency-boundaries", "ci-audit-mutations", "phase2-integrated", "reachable-vulnerability",
     "index-continuity", "query-work", "dto-consumer", "fixture-cleanup",
+    "documentation-quality", "generation-metrics",
 }
 # Qualification inputs are executable source, tests, embedded inputs, fixtures,
 # tool configuration and workflow/staging source. Docs may follow separately.
@@ -142,7 +147,8 @@ def complete(root: Path) -> bool:
             "Phase 3C2": "COMPLETE", "Phase 3C": "COMPLETE",
             "Local-profile action 2.04": "COMPLETE", "Implementation": "ACTIVE",
             "Product gates": "INCOMPLETE", "Profile": "installed Linux/PostgreSQL16 schema20",
-            "Governing BUILD": "coldkeep_phase3c2_build_2026-11-12.md", "Accepted C1": C1,
+            "Governing BUILD": "coldkeep_phase3c2_quality_q1_build_2026-11-14.md",
+            "Quality unit C2-Q1": "COMPLETE", "Final Phase 3C2 acceptance": "WITHHELD_CODACY", "Accepted C1": C1,
             "Qualification HEAD": record["head"], "Qualification tree": record["tree"],
             "Qualification SHA-256": hashlib.sha256(raw).hexdigest(),
             "Ordinary schema18/19/20 writers and reclamation": "REFUSED",

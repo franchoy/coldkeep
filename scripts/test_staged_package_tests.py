@@ -382,7 +382,10 @@ class RecoveryEventContractTests(unittest.TestCase):
 
     def test_each_c2_requirement_blocks_missing_skip_and_failure(self):
         good = [{"Package": package, "Test": name, "Action": "pass"} for package, name in events.required_identities()]
-        self.assertEqual(len(C2_IDENTITIES), 138)
+        self.assertEqual(len(C2_IDENTITIES), 140)
+        self.assertTrue({("github.com/franchoy/coldkeep/v2/internal/generation", name)
+                         for name in ("TestGenerationUnicodeBoundaries",
+                                      "TestGenerationValidationShortCircuit")} <= C2_IDENTITIES)
         for package, name in C2_IDENTITIES:
             for action in ("missing", "skip", "fail"):
                 with self.subTest(name=name, action=action):

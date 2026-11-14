@@ -70,50 +70,77 @@ type Request struct {
 }
 
 func (q Request) Validate() error {
-	if q.Version != 1 || !ValidID("repo", q.RepositoryID) || !ValidID("source", q.SourceID) || q.Limit < 0 || q.Limit > PageMembers || q.ResponseLimit < 0 || q.ResponseLimit > ResponseBytes || len(q.Cursor) > CursorBytes {
-		return ErrInvalid
-	}
-	if q.Query != QueryGenerations && !ValidID("generation", q.GenerationID) {
-		return ErrInvalid
-	}
-	if q.ParentID != nil && !ValidID("entry", *q.ParentID) {
+	if !q.validEnvelope() || !q.validScope() {
 		return ErrInvalid
 	}
 	switch q.Query {
 	case QueryGenerations:
-		if q.GenerationID != "" || q.ParentID != nil || q.EntryID != "" || q.Selector != nil {
-			return ErrInvalid
-		}
+		return q.validateGenerations()
 	case QueryChildren:
-		if q.EntryID != "" || q.Selector != nil {
-			return ErrInvalid
-		}
+		return q.validateChildren()
 	case QueryDetail, QueryEntry, QuerySelector:
-		if q.Limit != 0 || q.Cursor != "" || q.ParentID != nil {
-			return ErrInvalid
-		}
-		if q.Query == QueryEntry {
-			if !ValidID("entry", q.EntryID) || q.Selector != nil {
-				return ErrInvalid
-			}
-		} else if q.EntryID != "" {
-			return ErrInvalid
-		}
-		if q.Query == QuerySelector {
-			if q.Selector == nil {
-				return ErrInvalid
-			}
-			if _, err := q.Selector.Bytes(); err != nil {
-				return err
-			}
-			b, err := json.Marshal(q.Selector)
-			if err != nil || len(b) > SelectorBytes {
-				return ErrInvalid
-			}
-		} else if q.Selector != nil {
-			return ErrInvalid
-		}
+		return q.validateSingle()
 	default:
+		return ErrInvalid
+	}
+}
+
+func (q Request) validateGenerations() error {
+	if q.GenerationID != "" || q.ParentID != nil || q.EntryID != "" || q.Selector != nil {
+		return ErrInvalid
+	}
+	return nil
+}
+func (q Request) validateChildren() error {
+	if q.EntryID != "" || q.Selector != nil {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func (q Request) validEnvelope() bool {
+	if q.Version != 1 || !ValidID("repo", q.RepositoryID) || !ValidID("source", q.SourceID) {
+		return false
+	}
+	return q.validLimits()
+}
+func (q Request) validLimits() bool {
+	return q.Limit >= 0 && q.Limit <= PageMembers && q.ResponseLimit >= 0 && q.ResponseLimit <= ResponseBytes && len(q.Cursor) <= CursorBytes
+}
+func (q Request) validScope() bool {
+	if q.Query != QueryGenerations && !ValidID("generation", q.GenerationID) {
+		return false
+	}
+	return q.ParentID == nil || ValidID("entry", *q.ParentID)
+}
+func (q Request) validateSingle() error {
+	if q.Limit != 0 || q.Cursor != "" || q.ParentID != nil {
+		return ErrInvalid
+	}
+	if q.Query == QueryEntry {
+		if !ValidID("entry", q.EntryID) || q.Selector != nil {
+			return ErrInvalid
+		}
+	} else if q.EntryID != "" {
+		return ErrInvalid
+	}
+	return q.validateSelector()
+}
+func (q Request) validateSelector() error {
+	if q.Query != QuerySelector {
+		if q.Selector != nil {
+			return ErrInvalid
+		}
+		return nil
+	}
+	if q.Selector == nil {
+		return ErrInvalid
+	}
+	if _, err := q.Selector.Bytes(); err != nil {
+		return err
+	}
+	b, err := json.Marshal(q.Selector)
+	if err != nil || len(b) > SelectorBytes {
 		return ErrInvalid
 	}
 	return nil
@@ -185,10 +212,16 @@ type Response struct {
 
 func validMetadata(m MetadataDTO) bool { return m.Mode == nil || *m.Mode <= 4095 }
 func validGeneration(g GenerationDTO, repo, source string) bool {
-	return ValidID("generation", g.ID) && g.RepositoryID == repo && g.SourceID == source && g.SourceRevision > 0 && ValidID("policy", g.PolicyID) && validDigest(g.PolicySHA256) &&
-		(g.StartedNS == nil || *g.StartedNS >= 0) && (g.EndedNS == nil || g.StartedNS != nil && *g.EndedNS >= *g.StartedNS) && g.PublicationReceipt == nil &&
+	return validGenerationIdentity(g, repo, source) && validGenerationTimes(g) && g.PublicationReceipt == nil &&
 		oneOf(g.ScanState, "unknown", "pending", "partial", "enumerated") && oneOf(g.Outcome, "unknown", "incomplete", "failed")
 }
+func validGenerationIdentity(g GenerationDTO, repo, source string) bool {
+	return ValidID("generation", g.ID) && g.RepositoryID == repo && g.SourceID == source && g.SourceRevision > 0 && ValidID("policy", g.PolicyID) && validDigest(g.PolicySHA256)
+}
+func validGenerationTimes(g GenerationDTO) bool {
+	return (g.StartedNS == nil || *g.StartedNS >= 0) && (g.EndedNS == nil || g.StartedNS != nil && *g.EndedNS >= *g.StartedNS)
+}
+
 func validDigest(s string) bool {
 	if len(s) != 64 {
 		return false
@@ -220,12 +253,30 @@ func component(s string) ([]byte, error) {
 }
 func validEntry(e EntryDTO, gid string) bool {
 	_, err := component(e.ComponentBase64)
-	return err == nil && e.GenerationID == gid && ValidID("entry", e.ID) && (e.ParentID == nil || ValidID("entry", *e.ParentID)) && validMetadata(e.Metadata) &&
-		oneOf(e.Kind, "file", "directory") && oneOf(e.Outcome, "stored", "excluded", "missing", "unreadable", "unstable", "unsupported") &&
+	return err == nil && e.GenerationID == gid && ValidID("entry", e.ID) && (e.ParentID == nil || ValidID("entry", *e.ParentID)) && validMetadata(e.Metadata) && validEntryOutcome(e)
+}
+func validEntryOutcome(e EntryDTO) bool {
+	return oneOf(e.Kind, "file", "directory") && oneOf(e.Outcome, "stored", "excluded", "missing", "unreadable", "unstable", "unsupported") &&
 		((e.LogicalFileID != nil) == (e.Kind == "file" && e.Outcome == "stored")) && (e.LogicalFileID == nil || *e.LogicalFileID > 0)
 }
 
 func (r Response) Validate() error {
+	if !r.validEnvelope() || !r.validCursor() {
+		return ErrInvalid
+	}
+	switch r.Query {
+	case QueryGenerations:
+		return r.validateGenerations()
+	case QueryChildren:
+		return r.validateChildren()
+	case QueryDetail:
+		return r.validateDetail()
+	case QueryEntry, QuerySelector:
+		return r.validateSelection()
+	}
+	return nil
+}
+func (r Response) validEnvelope() bool {
 	q := Request{Version: 1, Query: r.Query, RepositoryID: r.RepositoryID, SourceID: r.SourceID, GenerationID: r.GenerationID, ParentID: r.ParentID}
 	if r.Query == QueryEntry && r.Selection != nil {
 		q.EntryID = r.Selection.Entry.ID
@@ -233,58 +284,73 @@ func (r Response) Validate() error {
 	if r.Query == QuerySelector && r.Selection != nil {
 		q.Selector = &r.Selection.Selector
 	}
-	if q.Validate() != nil || r.Kind != ModelRecords || len(r.Generations) > PageMembers || len(r.Entries) > PageMembers || len(r.NextCursor) > CursorBytes {
+	return q.Validate() == nil && r.validBounds()
+}
+func (r Response) validBounds() bool {
+	return r.Kind == ModelRecords && len(r.Generations) <= PageMembers && len(r.Entries) <= PageMembers && len(r.NextCursor) <= CursorBytes
+}
+func sameParent(a, b *string) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
+}
+func (r Response) validCursor() bool {
+	if r.NextCursor == "" {
+		return true
+	}
+	c, err := DecodeCursor(r.NextCursor)
+	return err == nil && c.Query == r.Query && c.RepositoryID == r.RepositoryID && c.SourceID == r.SourceID && c.GenerationID == r.GenerationID && sameParent(c.ParentID, r.ParentID)
+}
+func (r Response) validateGenerations() error {
+	if r.Generations == nil || r.Entries != nil || r.Detail != nil || r.Selection != nil {
 		return ErrInvalid
 	}
-	if r.NextCursor != "" {
-		c, err := DecodeCursor(r.NextCursor)
-		if err != nil || c.Query != r.Query || c.RepositoryID != r.RepositoryID || c.SourceID != r.SourceID || c.GenerationID != r.GenerationID ||
-			(c.ParentID == nil) != (r.ParentID == nil) || c.ParentID != nil && *c.ParentID != *r.ParentID {
+	for _, g := range r.Generations {
+		if !validGeneration(g, r.RepositoryID, r.SourceID) {
 			return ErrInvalid
 		}
 	}
-	switch r.Query {
-	case QueryGenerations:
-		if r.Generations == nil || r.Entries != nil || r.Detail != nil || r.Selection != nil {
+	return nil
+}
+func (r Response) validateChildren() error {
+	if r.Entries == nil || r.Generations != nil || r.Detail != nil || r.Selection != nil {
+		return ErrInvalid
+	}
+	for _, e := range r.Entries {
+		if !validEntry(e, r.GenerationID) || !sameParent(e.ParentID, r.ParentID) {
 			return ErrInvalid
 		}
-		for _, g := range r.Generations {
-			if !validGeneration(g, r.RepositoryID, r.SourceID) {
-				return ErrInvalid
-			}
-		}
-	case QueryChildren:
-		if r.Entries == nil || r.Generations != nil || r.Detail != nil || r.Selection != nil {
-			return ErrInvalid
-		}
-		for _, e := range r.Entries {
-			if !validEntry(e, r.GenerationID) || (e.ParentID == nil) != (r.ParentID == nil) || e.ParentID != nil && *e.ParentID != *r.ParentID {
-				return ErrInvalid
-			}
-		}
-	case QueryDetail:
-		if r.Detail == nil || r.Selection != nil || r.Generations != nil || r.Entries != nil || r.NextCursor != "" {
-			return ErrInvalid
-		}
-		d := r.Detail
-		if !validGeneration(d.Generation, r.RepositoryID, r.SourceID) || d.Generation.ID != r.GenerationID || !validMetadata(d.Root) || len(d.PolicyBase64) > base64.StdEncoding.EncodedLen(PolicyBytes) {
-			return ErrInvalid
-		}
-		b, e := base64.StdEncoding.Strict().DecodeString(d.PolicyBase64)
-		if e != nil || base64.StdEncoding.EncodeToString(b) != d.PolicyBase64 || Digest(b) != d.Generation.PolicySHA256 {
-			return ErrInvalid
-		}
-		if _, e = DecodePolicy(b); e != nil {
-			return e
-		}
-	case QueryEntry, QuerySelector:
-		if r.Selection == nil || r.Detail != nil || r.Generations != nil || r.Entries != nil || r.NextCursor != "" || !validEntry(r.Selection.Entry, r.GenerationID) {
-			return ErrInvalid
-		}
-		b, e := r.Selection.Selector.Bytes()
-		if e != nil || base64.StdEncoding.EncodeToString(b[len(b)-1]) != r.Selection.Entry.ComponentBase64 {
-			return ErrInvalid
-		}
+	}
+	return nil
+}
+func (r Response) validateDetail() error {
+	if r.Detail == nil || r.Selection != nil || r.Generations != nil || r.Entries != nil || r.NextCursor != "" {
+		return ErrInvalid
+	}
+	return r.Detail.validate(r.RepositoryID, r.SourceID, r.GenerationID)
+}
+func (d DetailDTO) validate(repo, source, gid string) error {
+	if !validGeneration(d.Generation, repo, source) || d.Generation.ID != gid || !validMetadata(d.Root) || len(d.PolicyBase64) > base64.StdEncoding.EncodedLen(PolicyBytes) {
+		return ErrInvalid
+	}
+	return d.validatePolicy()
+}
+func (d DetailDTO) validatePolicy() error {
+	b, e := base64.StdEncoding.Strict().DecodeString(d.PolicyBase64)
+	if e != nil || base64.StdEncoding.EncodeToString(b) != d.PolicyBase64 || Digest(b) != d.Generation.PolicySHA256 {
+		return ErrInvalid
+	}
+	_, e = DecodePolicy(b)
+	return e
+}
+func (r Response) validateSelection() error {
+	if r.Selection == nil || r.Detail != nil || r.Generations != nil || r.Entries != nil || r.NextCursor != "" || !validEntry(r.Selection.Entry, r.GenerationID) {
+		return ErrInvalid
+	}
+	return r.Selection.validateSelector()
+}
+func (s SelectionDTO) validateSelector() error {
+	b, e := s.Selector.Bytes()
+	if e != nil || base64.StdEncoding.EncodeToString(b[len(b)-1]) != s.Entry.ComponentBase64 {
+		return ErrInvalid
 	}
 	return nil
 }
@@ -329,59 +395,7 @@ func strictDTO(b []byte, limit int, v any) error {
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.UseNumber()
-	var walk func(int, string) error
-	walk = func(depth int, field string) error {
-		if depth > 12 {
-			return ErrInvalid
-		}
-		tok, e := d.Token()
-		if e != nil {
-			return ErrInvalid
-		}
-		if s, ok := tok.(string); ok && len(s) > RequestBytes {
-			return ErrInvalid
-		}
-		if delim, ok := tok.(json.Delim); ok {
-			switch delim {
-			case '{':
-				seen := map[string]bool{}
-				for d.More() {
-					key, e := d.Token()
-					if e != nil {
-						return ErrInvalid
-					}
-					k, ok := key.(string)
-					if !ok || seen[k] || !dtoKey(k) || len(seen) >= 32 {
-						return ErrInvalid
-					}
-					seen[k] = true
-					if e = walk(depth+1, k); e != nil {
-						return e
-					}
-				}
-			case '[':
-				cap := PageMembers
-				if field == "components" {
-					cap = Depth
-				}
-				for n := 0; d.More(); n++ {
-					if n >= cap {
-						return ErrInvalid
-					}
-					if e = walk(depth+1, ""); e != nil {
-						return e
-					}
-				}
-			default:
-				return ErrInvalid
-			}
-			if _, e = d.Token(); e != nil {
-				return ErrInvalid
-			}
-		}
-		return nil
-	}
-	if walk(0, "") != nil {
+	if walkDTO(d, 0, "") != nil {
 		return ErrInvalid
 	}
 	if _, e := d.Token(); e != io.EOF {
@@ -391,6 +405,73 @@ func strictDTO(b []byte, limit int, v any) error {
 	d.DisallowUnknownFields()
 	if d.Decode(v) != nil {
 		return ErrInvalid
+	}
+	return nil
+}
+
+func walkDTO(d *json.Decoder, depth int, field string) error {
+	if depth > 12 {
+		return ErrInvalid
+	}
+	tok, e := d.Token()
+	if e != nil {
+		return ErrInvalid
+	}
+	if s, ok := tok.(string); ok && len(s) > RequestBytes {
+		return ErrInvalid
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	if walkDTOContainer(d, depth, field, delim) != nil {
+		return ErrInvalid
+	}
+	if _, e = d.Token(); e != nil {
+		return ErrInvalid
+	}
+	return nil
+}
+func walkDTOContainer(d *json.Decoder, depth int, field string, delim json.Delim) error {
+	switch delim {
+	case '{':
+		return walkDTOObject(d, depth)
+	case '[':
+		return walkDTOArray(d, depth, field)
+	default:
+		return ErrInvalid
+	}
+}
+func walkDTOObject(d *json.Decoder, depth int) error {
+	seen := map[string]bool{}
+	for d.More() {
+		key, e := d.Token()
+		if e != nil {
+			return ErrInvalid
+		}
+		k, ok := key.(string)
+		if !ok || seen[k] || !dtoKey(k) || len(seen) >= 32 {
+			return ErrInvalid
+		}
+		seen[k] = true
+		if e = walkDTO(d, depth+1, k); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+func walkDTOArray(d *json.Decoder, depth int, field string) error {
+	cap := PageMembers
+	if field == "components" {
+		cap = Depth
+	}
+	for n := 0; d.More(); n++ {
+		if n >= cap {
+			return ErrInvalid
+		}
+		if e := walkDTO(d, depth+1, ""); e != nil {
+			return e
+		}
 	}
 	return nil
 }
@@ -423,12 +504,22 @@ func (c Cursor) valid() bool {
 		return false
 	}
 	if c.Query == QueryGenerations {
-		return c.Order == "opaque-id-C-v1" && c.GenerationID == "" && c.ParentID == nil && c.EntryID == "" && ValidID("generation", c.Upper) && ValidID("generation", c.Last) && c.Last <= c.Upper
+		return c.validGenerationOrder()
 	}
+	return c.validChildOrder()
+}
+func (c Cursor) validGenerationOrder() bool {
+	return c.Order == "opaque-id-C-v1" && c.GenerationID == "" && c.ParentID == nil && c.EntryID == "" && ValidID("generation", c.Upper) && ValidID("generation", c.Last) && c.Last <= c.Upper
+}
+func (c Cursor) validChildOrder() bool {
 	upper, e := component(c.Upper)
 	last, f := component(c.Last)
-	return c.Query == QueryChildren && c.Order == "raw-component-v1" && ValidID("generation", c.GenerationID) && (c.ParentID == nil || ValidID("entry", *c.ParentID)) && ValidID("entry", c.EntryID) && e == nil && f == nil && bytes.Compare(last, upper) <= 0
+	return c.validChildScope() && e == nil && f == nil && bytes.Compare(last, upper) <= 0
 }
+func (c Cursor) validChildScope() bool {
+	return c.Query == QueryChildren && c.Order == "raw-component-v1" && ValidID("generation", c.GenerationID) && (c.ParentID == nil || ValidID("entry", *c.ParentID)) && ValidID("entry", c.EntryID)
+}
+
 func EncodeCursor(c Cursor) (string, error) {
 	if !c.valid() {
 		return "", ErrInvalid

@@ -90,11 +90,7 @@ func TestPolicyGrammarAndImmutability(t *testing.T) {
 	}
 	original := append([]byte(nil), b...)
 	digest := Digest(b)
-	p.Intent = "archival-import"
-	next, e := p.Canonical()
-	if e != nil || bytes.Equal(b, next) || digest == Digest(next) || !bytes.Equal(original, b) {
-		t.Fatal("policy revision")
-	}
+	assertPolicyRevision(t, p, b, original, digest)
 	for _, bad := range [][]byte{append(b, ' '), bytes.Replace(b, []byte(`"version":1`), []byte(`"version":2`), 1), bytes.Replace(b, []byte(`"include"`), []byte(`"execute"`), 1), bytes.Replace(b, []byte(`"capture"`), []byte(`"unknown"`), 1), bytes.Replace(b, []byte(`"version":1`), []byte(`"version":1,"secret":"x"`), 1)} {
 		if _, e = DecodePolicy(bad); e == nil {
 			t.Fatal("invalid policy accepted")
@@ -152,5 +148,14 @@ func TestPolicyMaximumDescriptor(t *testing.T) {
 	p.Rules[9].Selection = selector(bytes.Repeat([]byte("a"), 108))
 	if _, e = p.Canonical(); e == nil {
 		t.Fatal("canonical descriptor overflow")
+	}
+}
+
+func assertPolicyRevision(t *testing.T, p Policy, b, original []byte, digest string) {
+	t.Helper()
+	p.Intent = "archival-import"
+	next, e := p.Canonical()
+	if e != nil || bytes.Equal(b, next) || digest == Digest(next) || !bytes.Equal(original, b) {
+		t.Fatal("policy revision")
 	}
 }

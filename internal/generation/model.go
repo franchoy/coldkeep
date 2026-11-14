@@ -4,7 +4,6 @@ package generation
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -47,12 +46,9 @@ func (s Selector) Bytes() ([][]byte, error) {
 	result := make([][]byte, 0, len(s.Components))
 	size := 0
 	for _, part := range s.Components {
-		if len(part) > base64.StdEncoding.EncodedLen(ComponentBytes) {
-			return nil, ErrInvalid
-		}
-		b, e := base64.StdEncoding.Strict().DecodeString(part)
-		if e != nil || !ValidComponent(b) || base64.StdEncoding.EncodeToString(b) != part {
-			return nil, ErrInvalid
+		b, e := component(part)
+		if e != nil {
+			return nil, e
 		}
 		if len(result) > 0 {
 			size++
@@ -74,27 +70,39 @@ func DecodeSelector(b []byte) (Selector, error) {
 	return s, e
 }
 func (p Policy) Canonical() ([]byte, error) {
-	if p.Version != 1 || p.SelectionVersion != 1 || (p.Intent != "capture" && p.Intent != "archival-import") || (p.Scope != "source-root" && p.Scope != "selected") || p.Rules == nil || len(p.Rules) > PolicyRules {
+	if !p.validEnvelope() {
 		return nil, ErrInvalid
 	}
-	include := false
-	for _, rule := range p.Rules {
-		if rule.Action != "include" && rule.Action != "exclude" {
-			return nil, ErrInvalid
-		}
-		if _, e := rule.Selection.Bytes(); e != nil {
-			return nil, e
-		}
-		include = include || rule.Action == "include"
-	}
-	if p.Scope == "selected" && !include {
-		return nil, ErrInvalid
+	if e := p.validateRules(); e != nil {
+		return nil, e
 	}
 	b, e := json.Marshal(p)
 	if e != nil || len(b) > PolicyBytes {
 		return nil, ErrInvalid
 	}
 	return b, nil
+}
+func (p Policy) validEnvelope() bool {
+	if p.Version != 1 || p.SelectionVersion != 1 {
+		return false
+	}
+	return oneOf(p.Intent, "capture", "archival-import") && oneOf(p.Scope, "source-root", "selected") && p.Rules != nil && len(p.Rules) <= PolicyRules
+}
+func (p Policy) validateRules() error {
+	include := false
+	for _, rule := range p.Rules {
+		if rule.Action != "include" && rule.Action != "exclude" {
+			return ErrInvalid
+		}
+		if _, e := rule.Selection.Bytes(); e != nil {
+			return e
+		}
+		include = include || rule.Action == "include"
+	}
+	if p.Scope == "selected" && !include {
+		return ErrInvalid
+	}
+	return nil
 }
 func DecodePolicy(b []byte) (Policy, error) {
 	var p Policy

@@ -43,7 +43,8 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
             "Phase 3C2: COMPLETE", "Phase 3C: COMPLETE", "Local-profile action 2.04: COMPLETE",
             "Implementation: ACTIVE", "Product gates: INCOMPLETE",
             "Profile: installed Linux/PostgreSQL16 schema20",
-            "Governing BUILD: coldkeep_phase3c2_build_2026-11-12.md",
+            "Governing BUILD: coldkeep_phase3c2_quality_q1_build_2026-11-14.md",
+            "Quality unit C2-Q1: COMPLETE", "Final Phase 3C2 acceptance: WITHHELD_CODACY",
             "Accepted C1: 06bde38380dd3a42be5c180beb99bf1aa509b8ac",
             "Qualification HEAD: " + "1" * 40, "Qualification tree: " + "2" * 40,
             "Qualification SHA-256: " + hashlib.sha256(self.raw).hexdigest(),
@@ -115,6 +116,15 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
         self.assert_rejected()
         self.result.write_text(self.body)
         self.qualification.write_bytes((self.directory / "phase3c2-qualification.json").read_bytes())
+        self.assert_rejected()
+
+    def test_g1_records_cannot_clear_quality_successor(self):
+        self.result.write_bytes((self.directory / "phase3c2-followup-result.md").read_bytes())
+        self.assert_rejected()
+        self.result.write_text(self.body)
+        self.qualification.write_bytes((self.directory / "phase3c2-followup-qualification.json").read_bytes())
+        self.assert_rejected()
+        self.qualification.unlink()
         self.assert_rejected()
 
     def test_c1_or_old_reports_cannot_close_c2(self):
