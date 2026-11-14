@@ -3,7 +3,7 @@
 Current workflow: **C2-Q1 bounded source-quality follow-up**, under the
 owner-adopted `coldkeep_phase3c2_quality_q1_build_2026-11-14.md`.
 The unit targets 11 documentation findings and 18 generation maintainability
-findings. Candidate local phase status is ACTIVE pending fresh qualification.
+findings. Local-profile 2.04 and C2-Q1 are COMPLETE on fresh qualification.
 C2-G1 remains accepted historical work; final Phase 3C2 is WITHHELD_CODACY.
 Implementation remains ACTIVE and product gates INCOMPLETE.
 
@@ -13,6 +13,7 @@ and [C2-G1 follow-up](phase3c2-followup-result.md), their qualifications and all
 other predecessor records remain immutable. They cannot certify changed Q1
 execution inputs. [Current authority](../current.json) binds the new owning
 result after qualification; structural checks do not certify hosted acceptance.
+Current result: [C2-Q1 local qualification](phase3c2-quality-q1-result.md).
 Current handoff: [remaining C2 quality work](next-slice.md).
 
 The adopted sequence authorizes isolated implementation, fresh qualification,

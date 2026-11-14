@@ -2,7 +2,9 @@
 
 C2-Q1 targets 11 documentation and 18 generation findings, with fresh source
 qualification, independent outgoing review and actual-head hosted observation.
-Its local phase status is ACTIVE until qualification supports completion.
+Its local phase status is COMPLETE on fresh source-bound qualification;
+see [C2-Q1 result](phase3c2-quality-q1-result.md). Independent outgoing review
+and actual-head hosted outcomes are retained in the external final receipt.
 C2-G1 remains accepted; final Phase 3C2 remains WITHHELD_CODACY. Implementation
 is ACTIVE and product gates INCOMPLETE. Do not start action 2.05.
 
