@@ -3,7 +3,10 @@
 Current workflow: **C2-Q2 recovery-command maintainability**, under
 owner-adopted `coldkeep_phase3c2_quality_q2_build_2026-11-14.md`.
 The unit targets exactly eight Lizard findings at six recovery-command sites.
-Q2 qualification is INCOMPLETE until its fresh source-bound evidence completes.
+Q2 fresh integrated local qualification is COMPLETE at the source checkpoint
+5957ff5bd8d27047a907c52e851e5ec6512379f1. Exact outgoing review and both
+actual-head hosted/native observations remain acceptance conditions. Native
+status is pending at this local completion; see the source-bound owning result.
 C2-Q1-R1 is an accepted COMPLETE checkpoint for its bounded correction and hosted
 observation. C2-G1 and Q1 remain accepted historical work; final Phase 3C2 is
 WITHHELD_CODACY. Implementation remains ACTIVE and product gates INCOMPLETE.
@@ -14,7 +17,7 @@ Current contracts: [generation model](generation-model.md) and
 and [R1 result](phase3c2-quality-q1-r1-result.md), their eight result/qualification
 files and all predecessor records remain immutable. They cannot certify changed
 Q2 execution inputs. [Current authority](../current.json) binds the new owning
-result after qualification; structural checks do not certify hosted acceptance.
+result after fresh qualification; structural checks do not certify hosted acceptance.
 Current result: [C2-Q2 qualification](phase3c2-quality-q2-result.md).
 Current handoff: [remaining C2 quality work](next-slice.md).
 
