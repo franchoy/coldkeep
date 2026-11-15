@@ -1,44 +1,47 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q4 existing lease and native-open quality**, under the
-owner-adopted `coldkeep_phase3c2_quality_q4_build_2026-11-15.md`. Resolve exactly
-eight Lizard subjects in existing-lease acquisition/tests and the Unix native
-opener. Acquisition, ownership transfer and cleanup stay visible in
-`AcquireExisting`; Unix changes only extract the existing pure flags decision.
-The actual Q4 owner is INCOMPLETE until genuine fresh qualification and independent
-review pass. Final Phase 3C2 remains WITHHELD_CODACY; implementation ACTIVE;
-product gates INCOMPLETE; action 2.05 NOT IMPLEMENTED.
+Current workflow: **C2-Q4 local qualification complete; outgoing and terminal
+review pending**, under the owner-adopted
+`coldkeep_phase3c2_quality_q4_build_2026-11-15.md` and the separately recorded
+continuation amendments in the [current result](phase3c2-quality-q4-result.md).
+All 26 local obligations passed independent review at implementation
+`870094af4dcd5705f3a0de31bcd67cc967cd6e8d`, tree `8ec834272d6550dff132c584869033d83d301040`.
+The result-only finalization preserves all 896 execution inputs, SHA-256
+`fad695e431e32ea7fb206787e47d144e8d48ac7165bd90e2aafb505f83ea9ea3`.
 
-Accepted Q3 is published at `f9c5a0887bbb91c73b2c8323377b1d594a3b7b40`, with
-55 Added native subjects and six historical Fixed. All fourteen historical C2
-result/qualification records and earlier predecessors remain immutable.
-See the [current result](phase3c2-quality-q4-result.md),
-[bounded handoff](next-slice.md), [generation model](generation-model.md),
+Completed same-Q4 race/recovery/passive/plain/AES/oracle/Python/static evidence
+and completed first-continuation Phase 2 are retained with exact raw bindings.
+The original missing observation and failed pre-mutation null attempt remain
+unchanged. The external observer correction passed nine inert controls and a
+fresh real missing-then-null pair; both exact refusals and owned cleanup passed.
+The current pinned vulnerability scan reports no vulnerabilities. Synthetic
+Python projection fields did not complete the actual owner; genuine local
+evidence and independent review preceded these four finalization documents.
+
+Exact outgoing review and actual-root completed-owner checks precede the original
+single guarded release/v2.0 fast-forward from accepted Q3
+`f9c5a0887bbb91c73b2c8323377b1d594a3b7b40`. Actual published-head CI/CodeQL,
+full Python/staged/native-platform evidence and complete semantic native review
+remain later gates before one guarded PR #129 current-status update. All eight
+Q4 targets must disappear without replacements; account for 47 other Added,
+fifteen prior absences and six historical Fixed subjects. No future result is
+claimed here, and an aggregate issue count is insufficient.
+
+Final Phase 3C2 remains WITHHELD_CODACY; implementation ACTIVE; product gates
+INCOMPLETE; action 2.05 NOT IMPLEMENTED; PR #129 open/draft. Fourteen historical
+C2 records and twelve earlier protected records remain exact. Optional skips,
+compile-only/platform, TCP timeout/refusal, query, benchmark, process-visibility
+and physical-independence limits remain in the owning result. The denied optional
+rule collection stays unused and global rule coverage stays UNKNOWN.
+
+See the [bounded handoff](next-slice.md), [generation model](generation-model.md),
 [bounded reads](generation-read.md) and [current authority](../current.json).
-
-This production change requires fresh full coordination, recovery, passive,
-plain/AES packages, Phase 2, current/D19 oracles, Python/authority and applicable
-static/enforcement/vulnerability qualification. All 25 previous checks remain;
-`existing-lease-metrics-equivalence` is the 26th. The independent NON-OWNING
-Python projection changes exactly two synthetic owner documents; synthetic PASS
-fields cannot complete the actual owner. Preserve optional skips, timeout/refusal
-distinctions, benchmark limits and unknown physical failure-domain independence.
-Historical runtime passes remain references. Darwin amd64/arm64 and Windows
-amd64 coordination-test cross-compiles are COMPILE_ONLY; hosted native selectors
-do not establish complete ExistingLease runtime coverage on those platforms.
-
-Exact outgoing independent review precedes one expected-tip-guarded fast-forward
-of `release/v2.0`. Independently reviewed terminal hosted/native evidence precedes
-one preimage-guarded current-status body update of open draft PR #129. All eight
-targets must disappear without replacements; account for the other 47 Added and
-six historical Fixed subjects. Conditional 55-to-47 movement is not acceptance.
-Preserve main, stable v1.13.19, predecessor worktrees and sealed evidence.
-No provider changes, manual reanalysis, merge, release, installation switch,
-ordinary-writer/reclamation activation or action 2.05 implementation is authorized.
-Schema20/package4, IMPORT_READY fences, 2.0.0-dev.0, module /v2, Go 1.26.11 /
-GOTOOLCHAIN=local, language floor 1.25 and all existing pins remain unchanged.
+Preserve main/stable, refs/worktrees, sealed evidence, schema20/package4,
+IMPORT_READY fences, source2.0.0-dev.0, module/v2 and all compiler/tool/image pins.
+No provider changes, reanalysis, suppression, merge, release/tag, installation
+switch, writer/reclamation activation or later quality-queue work is authorized.
 Requested implementation and independent review: GPT-6 Astra / Extra High.
-Actual backend settings remain unknown without runtime telemetry.
+Observable backend telemetry remains UNKNOWN.
 
 ## Selected first stable profile
 
