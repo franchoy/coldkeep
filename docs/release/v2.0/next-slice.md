@@ -1,69 +1,73 @@
-# Current bounded handoff: C2-Q5 implementation and qualification
+# Current bounded handoff: C2-Q5 local completion and terminal workflow
 
-The owner-adopted governing instruction is
+The owner-adopted governing instruction remains
 `coldkeep_phase3c2_quality_q5_build_2026-11-15.md`, SHA-256
 `cacd8d3cf6784a0fe8d846bf5741d73d6ec02c8bc071573c5aef0dc01f303667`.
-The [Q5 owner](phase3c2-quality-q5-result.md) remains INCOMPLETE. The accepted Q4
-published predecessor is `00c00df04c6689fcdcb0813b6601da760ddda8bd`, tree
-`8a1babccc1bfa2b9b0a41691b6d4a1bc7c5eec7b`; its original raw evidence and completed
-publication/PR actions remain preserved. Its 896-input SHA-256
-`fad695e431e32ea7fb206787e47d144e8d48ac7165bd90e2aafb505f83ea9ea3`
-is historical evidence, not the new Q5 execution-input identity.
+The [Q5 owner](phase3c2-quality-q5-result.md) is locally COMPLETE at implementation
+`d5a08db8c8689ea5d8f71e41a90f07f3270eeff8`, tree `6a7e3d47041e16097ef64c02206d77c42d48064b`.
+All 27 genuine obligations passed independent local review: seven fresh, eight
+retained and twelve composed. This separate four-document result preserves all
+896 execution inputs, SHA-256
+`25cd238de1f8e87f560d19d8c8dd29270a3728a8ad27c1df81e9837a46e7ef43`.
 
-Complete the bounded five-subject/two-test-file maintainability unit. Preserve
-all proof requests/results, real SQLite fixtures and ownership observations,
-caller contexts, and the complete 30-case batch-cancellation matrix. The allowed
-support changes select Q5, protect the accepted Q4 pair, retain all 26 checks
-and add proof-caller-context-metrics-equivalence as the exact 27th. Preserve all
-prior authority obligations and explicit Q4/missing-only-new-check refusals.
-No production, checked-in runner, workflow, dependency, schema or pin edits are
-included.
+Each fresh complete application/engine plain and AES-GCM race route passed 847
+identities, all 57 target-file cases, the 30-case batch matrix and 53 PostgreSQL
+identities. Full Python projection 691, focused authority 22, event enforcement
+17, Go-CI 397, all 83 target metric bodies/24 protected guards and current
+static/documentation/vulnerability checks passed. Independent equivalence review
+preserves requests, predicates, live observations, real fixture work and cleanup
+ordering. The projection stayed non-owning, and the genuine owner stayed
+incomplete until both independent approvals and the complete ledger existed.
 
-Qualify complete application and engine packages freshly under race/count1/p1,
-sequentially for plain and AES-GCM, using Go 1.26.11, GOTOOLCHAIN=local and owned
-explicit PostgreSQL16 with COLDKEEP_TEST_DB=1. Keep 35-minute package and
-2,400-second aggregate bounds and frozen complete expected event identities.
-Run the complete source-derived Python projection and focused authority tests,
-current support/static/metric/scan checks and independent assertion/fixture
-review. The non-owning projection may change only the two current Q5 owner
-documents; genuine Q5 must still refuse while incomplete. Retained Q4 evidence
-needs exact raw bindings and unchanged dependency boundaries. Preserve failures
-and original timestamps; never relabel a retained route as fresh Q5 execution.
+The genuine ledger qualification/check-ledger.json, SHA-256
+`b0ae9ec51a55717587618891fd13de590b29d1bf3f2fa6bfdc56d36f856b2164`, binds all raw references
+and original timestamps. Each codec composes the fresh affected package results
+with 4,112 accepted unaffected Q4 passes, excluding all old application/engine
+runtime. Retained Q4 routes keep implementation
+`870094af4dcd5705f3a0de31bcd67cc967cd6e8d` and historical input SHA-256
+`fad695e431e32ea7fb206787e47d144e8d48ac7165bd90e2aafb505f83ea9ea3`;
+no retained all-package command becomes a fresh Q5 execution. Preserve the failed
+readiness/bootstrap/recorder/reviewer attempts and their independently reviewed
+external corrections. Owned cleanup and local preservation passed with stated
+process-visibility and known-value-scan limits.
 
-Genuine 27-row local evidence and independent approval precede separate
-four-document finalization. Run actual-root completed-owner checks, replay
-aggregate/ordered patches and obtain independent exact outgoing approval.
-Only then use one guarded fast-forward from
+Run actual-root completed-owner release/authority/governance checks, inspect
+aggregate/ordered patch replay and obtain independent exact outgoing approval.
+Only then use the adopted single guarded fast-forward from
 `00c00df04c6689fcdcb0813b6601da760ddda8bd`, with immutable outgoing SHA, separate
-ancestry proof, atomic expected-tip protection, verified single-branch destination,
-disabled tag following and durable intent/outcome. Reconcile uncertain results;
-never repeat a successful push. No extra corrective publication is included.
+ancestry proof, atomic expected-tip protection, verified same read/push
+single-branch destination, disabled tag following, fresh PR/main/tag/ref checks
+and durable exclusive intent/outcome. Reconcile uncertain results; never repeat
+a successful push. No extra corrective publication is included.
 
 Observe both actual-head CI events, both CodeQL workflows and separate findings,
-full actual hosted Python and staged routes, native platform selection, complete
-job/log/artifact inventories, consumer/provenance/continuity/query/proof/cleanup
-records and benchmark integrity separately from timing. Require all five Q5
-subjects absent, all 42 other Added subjects accounted for, all 23 prior absences
-retained and six historical Fixed records separate. Map moved SQL/other subjects
-semantically; count-only movement is insufficient. Overall Codacy may remain
-failed for the other 42 subjects.
+full actual-checkout Python and staged package/recovery/passive routes, native
+platform selection, complete job/log/artifact inventories and source/reader,
+consumer, continuity/query, Phase2/browser/TCP/packaging and cleanup evidence.
+Require all 57 target-file identities and the complete 30-case matrix in
+applicable hosted streams. Keep benchmark integrity separate from timing.
+Require all five exact Q5 native subjects absent, all 42 other Added subjects
+accounted for, all 23 prior absences retained and six historical Fixed records
+separate. Map moved SQL/other subjects semantically; count-only movement is
+insufficient. Overall Codacy may remain failed for the other 42 subjects.
 
-After independent terminal approval, independently review and perform the one
-body-only change to PR #129's coldkeep-c2-hosted current-status block with an
-immediate exact preimage guard and readback, preserving outside text, title,
-base, head and open/draft state. Required failure or missing mandatory evidence
-holds terminal acceptance and the PR update. The denied optional collection
+After independent hosted/native terminal approval, independently review and
+perform the single body-only update to PR #129's coldkeep-c2-hosted current-status
+block with an immediate exact preimage guard and readback. Preserve outside text,
+title, base, head and open/draft state. Required failure or missing mandatory
+evidence holds terminal acceptance and that PR update. Outgoing and hosted/native
+acceptance are pending in this local record. The denied optional collection
 remains unused; no token, settings, reanalysis or access workaround is included.
 Global rule coverage remains UNKNOWN.
 
-Preserve all existing optional skip/no-test, compile-only/platform, TCP, query,
-benchmark and physical-independence limits. Keep sixteen historical C2 records,
-twelve earlier protected records, refs/worktrees, main/stable and sealed evidence.
-Final Phase 3C2 acceptance stays WITHHELD_CODACY; implementation ACTIVE; product
-gates INCOMPLETE; action 2.05 NOT IMPLEMENTED; PR #129 open/draft. No merge,
+Preserve optional skip/no-test, compile-only/platform, TCP, query, benchmark and
+physical-independence limits. Keep all sixteen historical C2 records and twelve
+earlier records, main/stable, refs/worktrees and sealed predecessors. Complete
+final preservation/known-value scanning and portable independently verified
+evidence delivery, then stop; later quality work requires a separately adopted
+unit. Final Phase 3C2 acceptance stays WITHHELD_CODACY; implementation ACTIVE;
+product gates INCOMPLETE; action 2.05 NOT IMPLEMENTED; PR #129 open/draft. No merge,
 release/tag, installation switch, ordinary-writer activation or live/user repair,
-maintenance or reclamation. Deliver this bounded unit's independently verified
-archive and stop; later quality work requires a separately adopted unit.
-Requested implementation and independent review: GPT-6 Astra / Extra High.
-Observable backend telemetry remains UNKNOWN. Astra / High is only for a
-separate observation-only session.
+maintenance or reclamation is authorized. Requested implementation and
+independent review: GPT-6 Astra / Extra High. Observable backend telemetry
+remains UNKNOWN. Astra / High is only for a separate observation-only session.
