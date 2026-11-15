@@ -1,58 +1,69 @@
-# Current bounded handoff: C2-Q4 local completion and terminal workflow
+# Current bounded handoff: C2-Q5 implementation and qualification
 
-The original governing instruction remains
-`coldkeep_phase3c2_quality_q4_build_2026-11-15.md`.
-The adopted first continuation is
-`coldkeep_phase3c2_quality_q4_continuation_2026-11-15.md`, SHA-256
-`3a0cc09c274a4dc4844007e2debefe800379d090cc8f0b7f79077739d2584581`.
-The adopted observer repair/completion amendment is
-`coldkeep_phase3c2_quality_q4_observer_repair_and_finish_2026-11-15.md`, SHA-256
-`224fd81ba7b6177b8ac058df7fbaf9661be3704738a584d8b758bc24d0b1cac3`.
-Both are separate amendments to the unchanged original governing BUILD.
+The owner-adopted governing instruction is
+`coldkeep_phase3c2_quality_q5_build_2026-11-15.md`, SHA-256
+`cacd8d3cf6784a0fe8d846bf5741d73d6ec02c8bc071573c5aef0dc01f303667`.
+The [Q5 owner](phase3c2-quality-q5-result.md) remains INCOMPLETE. The accepted Q4
+published predecessor is `00c00df04c6689fcdcb0813b6601da760ddda8bd`, tree
+`8a1babccc1bfa2b9b0a41691b6d4a1bc7c5eec7b`; its original raw evidence and completed
+publication/PR actions remain preserved. Its 896-input SHA-256
+`fad695e431e32ea7fb206787e47d144e8d48ac7165bd90e2aafb505f83ea9ea3`
+is historical evidence, not the new Q5 execution-input identity.
 
-The [Q4 owner](phase3c2-quality-q4-result.md) and all 26 genuine local obligations
-passed independent review at `870094af4dcd5705f3a0de31bcd67cc967cd6e8d`, tree
-`8ec834272d6550dff132c584869033d83d301040`. This result-only finalization preserves the
-896-input SHA-256 `fad695e431e32ea7fb206787e47d144e8d48ac7165bd90e2aafb505f83ea9ea3`.
-Completed same-Q4 execution and first-continuation Phase 2 remain bound to their
-original raw records. The repaired fresh real missing/null pair and current
-vulnerability scan pass. All prior failed attempts, labels, timestamps and limits
-remain; no old incomplete ledger is rewritten.
+Complete the bounded five-subject/two-test-file maintainability unit. Preserve
+all proof requests/results, real SQLite fixtures and ownership observations,
+caller contexts, and the complete 30-case batch-cancellation matrix. The allowed
+support changes select Q5, protect the accepted Q4 pair, retain all 26 checks
+and add proof-caller-context-metrics-equivalence as the exact 27th. Preserve all
+prior authority obligations and explicit Q4/missing-only-new-check refusals.
+No production, checked-in runner, workflow, dependency, schema or pin edits are
+included.
 
-Finish actual-root completed-owner authority/release/governance and applicable
-checks, aggregate/ordered patch replay and independent exact outgoing review.
-Only then use the original one guarded fast-forward from
-`f9c5a0887bbb91c73b2c8323377b1d594a3b7b40`, with immutable outgoing SHA, separate
-ancestry proof, atomic expected-tip guard, verified single-branch destination,
-disabled tag following and durable intent/outcome. Reconcile any uncertain
-result; never repeat a successful push. No extra corrective publication exists.
+Qualify complete application and engine packages freshly under race/count1/p1,
+sequentially for plain and AES-GCM, using Go 1.26.11, GOTOOLCHAIN=local and owned
+explicit PostgreSQL16 with COLDKEEP_TEST_DB=1. Keep 35-minute package and
+2,400-second aggregate bounds and frozen complete expected event identities.
+Run the complete source-derived Python projection and focused authority tests,
+current support/static/metric/scan checks and independent assertion/fixture
+review. The non-owning projection may change only the two current Q5 owner
+documents; genuine Q5 must still refuse while incomplete. Retained Q4 evidence
+needs exact raw bindings and unchanged dependency boundaries. Preserve failures
+and original timestamps; never relabel a retained route as fresh Q5 execution.
+
+Genuine 27-row local evidence and independent approval precede separate
+four-document finalization. Run actual-root completed-owner checks, replay
+aggregate/ordered patches and obtain independent exact outgoing approval.
+Only then use one guarded fast-forward from
+`00c00df04c6689fcdcb0813b6601da760ddda8bd`, with immutable outgoing SHA, separate
+ancestry proof, atomic expected-tip protection, verified single-branch destination,
+disabled tag following and durable intent/outcome. Reconcile uncertain results;
+never repeat a successful push. No extra corrective publication is included.
 
 Observe both actual-head CI events, both CodeQL workflows and separate findings,
 full actual hosted Python and staged routes, native platform selection, complete
 job/log/artifact inventories, consumer/provenance/continuity/query/proof/cleanup
-records and benchmark integrity separately from timing. Compare the complete
-native PR and published-head-to-main inventories: eight Q4 targets absent,
-47 other Added subjects accounted for, all fifteen earlier target absences
-retained and six historical Fixed records separate, without unexplained new or
-replacement subjects including Python support. Count-only movement is not
-acceptance; overall Codacy may remain failed for the other 47 subjects.
+records and benchmark integrity separately from timing. Require all five Q5
+subjects absent, all 42 other Added subjects accounted for, all 23 prior absences
+retained and six historical Fixed records separate. Map moved SQL/other subjects
+semantically; count-only movement is insufficient. Overall Codacy may remain
+failed for the other 42 subjects.
 
-After independent terminal approval, perform the original one body-only change
-to PR #129's coldkeep-c2-hosted current-status block with an immediate exact
-preimage guard and readback, preserving all outside text/title/base/open/draft
-state. A genuine required failure or missing mandatory evidence holds terminal
-acceptance and the PR update; preserve the concrete outcome and deliver evidence.
-The denied optional collection remains unused; no token/settings/reanalysis or
-access workaround is authorized, and global rule coverage remains UNKNOWN.
+After independent terminal approval, independently review and perform the one
+body-only change to PR #129's coldkeep-c2-hosted current-status block with an
+immediate exact preimage guard and readback, preserving outside text, title,
+base, head and open/draft state. Required failure or missing mandatory evidence
+holds terminal acceptance and the PR update. The denied optional collection
+remains unused; no token, settings, reanalysis or access workaround is included.
+Global rule coverage remains UNKNOWN.
 
-Preserve all stated optional skip, compile-only/platform, TCP, query, benchmark
-and physical-independence limits; the non-owning Python projection remains only
-parser evidence. Keep fourteen historical C2 records, twelve earlier protected
-records, refs/worktrees, main/stable and sealed predecessors. Final Phase 3C2
-acceptance stays WITHHELD_CODACY; implementation ACTIVE; product gates INCOMPLETE;
-action 2.05 NOT IMPLEMENTED; PR #129 open/draft. No merge, release/tag, installation
-switch, ordinary-writer activation or live/user repair, maintenance or reclamation.
-Deliver this bounded unit's independently verified archive and stop; the remaining
-quality queue requires separate work. Requested implementation/independent review:
-GPT-6 Astra / Extra High. Observable backend telemetry remains UNKNOWN. Astra /
-High is only for a separate observation-only session.
+Preserve all existing optional skip/no-test, compile-only/platform, TCP, query,
+benchmark and physical-independence limits. Keep sixteen historical C2 records,
+twelve earlier protected records, refs/worktrees, main/stable and sealed evidence.
+Final Phase 3C2 acceptance stays WITHHELD_CODACY; implementation ACTIVE; product
+gates INCOMPLETE; action 2.05 NOT IMPLEMENTED; PR #129 open/draft. No merge,
+release/tag, installation switch, ordinary-writer activation or live/user repair,
+maintenance or reclamation. Deliver this bounded unit's independently verified
+archive and stop; later quality work requires a separately adopted unit.
+Requested implementation and independent review: GPT-6 Astra / Extra High.
+Observable backend telemetry remains UNKNOWN. Astra / High is only for a
+separate observation-only session.

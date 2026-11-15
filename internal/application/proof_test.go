@@ -64,9 +64,7 @@ func TestProofOperationsExactRequestsAndResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	history, err := p.Snapshot(ctx, ProofSnapshotRequest{SnapshotID: id, Limit: 257})
-	if err != nil || history.Label != label || len(history.Files) != 2 || history.Files[0].StoredPath != path || history.Files[0].Size == nil || *history.Files[0].Size != size || history.Files[1].Size != nil {
-		t.Fatalf("history projection lost exact or nullable fields: %+v, %v", history, err)
-	}
+	assertProofSnapshotExact(t, history, err, label, path, size)
 	restored, err := p.Restore(ctx, ProofRestoreRequest{SnapshotID: id, StoredPath: path, DestinationRoot: destination})
 	if err != nil || restored.RestoredFiles != 1 || restored.WarningCount != 1 {
 		t.Fatalf("restore projection lost partial/warning state: %+v, %v", restored, err)
@@ -170,12 +168,7 @@ func TestProofOperationsBorrowExactHandlesUntilOwnerCloses(t *testing.T) {
 	if err := operations.Verify(context.Background()); err != nil {
 		t.Fatalf("explicit empty SQLite fixture: %v", err)
 	}
-	if err := conn.Ping(); err != nil {
-		t.Fatalf("borrowed handle closed: %v", err)
-	}
-	if connector.opens.Load() != 1 || connector.closes.Load() != 0 || conn.Stats().OpenConnections != 1 {
-		t.Fatalf("borrowed ownership changed: opens=%d closes=%d stats=%+v", connector.opens.Load(), connector.closes.Load(), conn.Stats())
-	}
+	assertProofBorrowedHandlesOpen(t, conn, connector)
 	for _, refused := range []struct {
 		name      string
 		store     *storage.StorageContext
@@ -203,6 +196,28 @@ func TestProofOperationsBorrowExactHandlesUntilOwnerCloses(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
 	}
+	assertProofOperationsAfterOwnerClose(t, operations, connector)
+}
+
+func assertProofSnapshotExact(t *testing.T, history ProofSnapshot, err error, label, path string, size int64) {
+	t.Helper()
+	if err != nil || history.Label != label || len(history.Files) != 2 || history.Files[0].StoredPath != path || history.Files[0].Size == nil || *history.Files[0].Size != size || history.Files[1].Size != nil {
+		t.Fatalf("history projection lost exact or nullable fields: %+v, %v", history, err)
+	}
+}
+
+func assertProofBorrowedHandlesOpen(t *testing.T, conn *sql.DB, connector *proofBorrowedConnector) {
+	t.Helper()
+	if err := conn.Ping(); err != nil {
+		t.Fatalf("borrowed handle closed: %v", err)
+	}
+	if connector.opens.Load() != 1 || connector.closes.Load() != 0 || conn.Stats().OpenConnections != 1 {
+		t.Fatalf("borrowed ownership changed: opens=%d closes=%d stats=%+v", connector.opens.Load(), connector.closes.Load(), conn.Stats())
+	}
+}
+
+func assertProofOperationsAfterOwnerClose(t *testing.T, operations *ProofOperations, connector *proofBorrowedConnector) {
+	t.Helper()
 	if connector.closes.Load() != 1 {
 		t.Fatalf("physical owner close count=%d", connector.closes.Load())
 	}

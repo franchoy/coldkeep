@@ -1,38 +1,43 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q4 local qualification complete; outgoing and terminal
-review pending**, under the owner-adopted
-`coldkeep_phase3c2_quality_q4_build_2026-11-15.md` and the separately recorded
-continuation amendments in the [current result](phase3c2-quality-q4-result.md).
-All 26 local obligations passed independent review at implementation
-`870094af4dcd5705f3a0de31bcd67cc967cd6e8d`, tree `8ec834272d6550dff132c584869033d83d301040`.
-The result-only finalization preserves all 896 execution inputs, SHA-256
-`fad695e431e32ea7fb206787e47d144e8d48ac7165bd90e2aafb505f83ea9ea3`.
+Current workflow: **C2-Q5 bounded implementation and qualification in progress**,
+under the owner-adopted `coldkeep_phase3c2_quality_q5_build_2026-11-15.md`.
+The [current result](phase3c2-quality-q5-result.md) and its source-bound
+qualification remain INCOMPLETE. Genuine complete local evidence and independent
+review must precede their separate finalization; synthetic parser projections
+cannot complete this owner.
 
-Completed same-Q4 race/recovery/passive/plain/AES/oracle/Python/static evidence
-and completed first-continuation Phase 2 are retained with exact raw bindings.
-The original missing observation and failed pre-mutation null attempt remain
-unchanged. The external observer correction passed nine inert controls and a
-fresh real missing-then-null pair; both exact refusals and owned cleanup passed.
-The current pinned vulnerability scan reports no vulnerabilities. Synthetic
-Python projection fields did not complete the actual owner; genuine local
-evidence and independent review preceded these four finalization documents.
+Q4 is the accepted published predecessor at
+`00c00df04c6689fcdcb0813b6601da760ddda8bd`, tree
+`8a1babccc1bfa2b9b0a41691b6d4a1bc7c5eec7b`. Its 896-input SHA-256
+`fad695e431e32ea7fb206787e47d144e8d48ac7165bd90e2aafb505f83ea9ea3`
+remains a historical binding. The accepted Q4 owner pair is protected unchanged;
+there are now sixteen historical C2 records and twelve earlier protected records.
+Completed Q4 publication and PR actions are preserved historical actions.
 
-Exact outgoing review and actual-root completed-owner checks precede the original
-single guarded release/v2.0 fast-forward from accepted Q3
-`f9c5a0887bbb91c73b2c8323377b1d594a3b7b40`. Actual published-head CI/CodeQL,
-full Python/staged/native-platform evidence and complete semantic native review
-remain later gates before one guarded PR #129 current-status update. All eight
-Q4 targets must disappear without replacements; account for 47 other Added,
-fifteen prior absences and six historical Fixed subjects. No future result is
-claimed here, and an aggregate issue count is insufficient.
+Q5 addresses five Lizard subjects in the existing proof-adapter and caller-context
+Go tests. It preserves exact requests/results, real SQLite ownership, caller
+contexts and all 30 batch-cancellation cases. Production code, workflows,
+checked-in runners and tool/module/image pins remain unchanged. All 26 prior
+local obligations remain, plus proof-caller-context-metrics-equivalence. Fresh
+complete application/engine race runs under both codecs, current support checks,
+whole-file metrics and independent assertion/fixture review are required.
+Permitted Q4 evidence retains its original source, time, raw records and explicit
+unchanged dependency boundaries; it is never relabeled as fresh Q5 execution.
+
+Independent local approval precedes the four-document finalization. Actual-root
+completed-owner checks and independent exact outgoing review precede one guarded
+release/v2.0 fast-forward from the accepted Q4 tip. Both actual-head hosted events
+and complete native review remain later gates before one guarded PR #129
+current-status update. All five Q5 subjects must disappear without unexplained
+replacements, with all 42 other Added subjects accounted for, all 23 prior target
+absences retained and six historical Fixed records kept separate.
 
 Final Phase 3C2 remains WITHHELD_CODACY; implementation ACTIVE; product gates
-INCOMPLETE; action 2.05 NOT IMPLEMENTED; PR #129 open/draft. Fourteen historical
-C2 records and twelve earlier protected records remain exact. Optional skips,
-compile-only/platform, TCP timeout/refusal, query, benchmark, process-visibility
-and physical-independence limits remain in the owning result. The denied optional
-rule collection stays unused and global rule coverage stays UNKNOWN.
+INCOMPLETE; action 2.05 NOT IMPLEMENTED; PR #129 open/draft. Existing optional-skip,
+compile-only/native-platform, TCP, query, benchmark, process-visibility and
+physical-independence limits remain. The denied optional rule collection stays
+unused and global rule coverage remains UNKNOWN.
 
 See the [bounded handoff](next-slice.md), [generation model](generation-model.md),
 [bounded reads](generation-read.md) and [current authority](../current.json).
