@@ -46,6 +46,21 @@ required={
  'github.com/franchoy/coldkeep/v2/internal/coordination':{
  'TestPrepareExisting','TestPrepareExistingChildContention','TestExistingLeasePreparationAndMetadata',
  'TestExistingLeaseLegacyContention','TestExistingLeaseUnsafeAndLost'}}
+# Q3 makes preparation admission and refusal cleanup explicit blocking evidence.
+required['github.com/franchoy/coldkeep/v2/internal/coordination'].update({
+ 'TestPrepareExisting/control-symlink',
+ 'TestPrepareExisting/lock-symlink',
+ 'TestPrepareExisting/lock-directory',
+ 'TestPrepareExisting/owner-symlink',
+ 'TestPrepareExistingContextAdmission',
+ 'TestPrepareExistingContextAdmission/nil',
+ 'TestPrepareExistingContextAdmission/canceled-existing',
+ 'TestPrepareExistingContextAdmission/canceled-missing',
+ 'TestPrepareExistingRefusalCleanup',
+ 'TestPrepareExistingRefusalCleanup/control-symlink',
+ 'TestPrepareExistingRefusalCleanup/owner-symlink',
+ 'TestPrepareExistingFinalCancellationReleasesOwnership',
+})
 required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(FIXTURE_HYGIENE)
 for parent, cases in {
  'TestRecoveryImportReceiptPublicationBudget': 'bytes objects compatible',

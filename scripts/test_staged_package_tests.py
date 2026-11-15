@@ -72,6 +72,26 @@ Q2_IDENTITIES = {
 }
 
 
+# Independent explicit additions preserve the predecessor identity digests.
+Q3_IDENTITIES = {
+    ("github.com/franchoy/coldkeep/v2/internal/coordination", name)
+    for name in (
+        'TestPrepareExisting/control-symlink',
+        'TestPrepareExisting/lock-symlink',
+        'TestPrepareExisting/lock-directory',
+        'TestPrepareExisting/owner-symlink',
+        'TestPrepareExistingContextAdmission',
+        'TestPrepareExistingContextAdmission/nil',
+        'TestPrepareExistingContextAdmission/canceled-existing',
+        'TestPrepareExistingContextAdmission/canceled-missing',
+        'TestPrepareExistingRefusalCleanup',
+        'TestPrepareExistingRefusalCleanup/control-symlink',
+        'TestPrepareExistingRefusalCleanup/owner-symlink',
+        'TestPrepareExistingFinalCancellationReleasesOwnership',
+    )
+}
+
+
 class StagingPrerequisiteTests(unittest.TestCase):
     def test_accepted_c1_is_an_additional_required_untouched_role(self):
         import build_phase3a_readers as builder
@@ -385,6 +405,24 @@ class StagingLifetimeTests(unittest.TestCase):
 
 
 class RecoveryEventContractTests(unittest.TestCase):
+    def test_q3_preparation_cases_are_required_in_both_recovery_routes(self):
+        self.assertEqual(len(Q3_IDENTITIES), 12)
+        self.assertTrue(Q3_IDENTITIES <= events.required_identities())
+        self.assertFalse(Q3_IDENTITIES & (Q2_IDENTITIES | FIXTURE_IDENTITIES | C2_IDENTITIES))
+        good = [{"Package": package, "Test": name, "Action": action}
+                for package, name in sorted(events.required_identities())
+                for action in ("run", "pass")]
+        good += [{"Package": package, "Action": "pass"} for package in events.required]
+        for broad in (False, True):
+            self.assertEqual(events.check_events(good, broad=broad)["status"], "PASS")
+            for package, name in Q3_IDENTITIES:
+                for mutation in ("missing", "skip", "fail"):
+                    with self.subTest(broad=broad, name=name, mutation=mutation):
+                        changed = [row for row in good if (row["Package"], row.get("Test")) != (package, name)]
+                        actions = {"missing": (), "skip": ("run", "skip"), "fail": ("run", "fail")}[mutation]
+                        changed += [{"Package": package, "Test": name, "Action": action} for action in actions]
+                        self.assertEqual(events.check_events(changed, broad=broad)["status"], "FAIL")
+
     def test_accepted_structural_contract(self):
         identities = events.required_identities()
         self.assertTrue(OBSERVER_IDENTITIES <= identities)
@@ -396,7 +434,7 @@ class RecoveryEventContractTests(unittest.TestCase):
         # scoped additions. Counts alone cannot hide an inherited removal or
         # substitution: the frozen predecessor digest still binds every name.
         inherited = {(package, test)
-                     for package, test in identities - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES
+                     for package, test in identities - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES - Q3_IDENTITIES
                      if package != "github.com/franchoy/coldkeep/v2/internal/generation"
                      and not test.startswith(("TestRecoveryUpgrade", "TestRecoveryGeneration"))}
         self.assertEqual(len(inherited), 583)
@@ -406,7 +444,7 @@ class RecoveryEventContractTests(unittest.TestCase):
         self.assertEqual(actual, "8eb9e04d2061e1c8659cb89a38e43648c0c241d2349900d0bf749503f9f19062")
 
     def test_every_accepted_c1_requirement_is_retained_exactly(self):
-        pairs = sorted(events.required_identities() - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES)
+        pairs = sorted(events.required_identities() - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES - Q3_IDENTITIES)
         self.assertEqual(len(pairs), 726)
         self.assertEqual(hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest(),
                          "ca0f0c1619544bdb5ee5a1d3176095337a8295c20e14cdda2f8c451e1ad8ff65")

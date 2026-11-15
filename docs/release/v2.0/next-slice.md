@@ -1,34 +1,26 @@
-# Current bounded handoff: C2-Q2-R1 outgoing review and hosted observation
+# Current bounded handoff: C2-Q3 implementation and fresh qualification
 
-The owner-adopted `coldkeep_phase3c2_quality_q2_r1_build_2026-11-15.md` governs this
-single stdout-helper correction. [Local qualification](phase3c2-quality-q2-r1-result.md)
-is COMPLETE at `f816a589a60f032630cb2ebc2b5504bcc09b286d`, tree `ebd55bd0c7c94b50e78ec52905b1293c249517ed`,
-with input digest `ddf44b8381164fe355e9cc308da5670379b2e9f179fe4eae6663c2de71cce23f`.
-All 24 checks pass with an independently reviewed fresh/reused/composed ledger.
-Only the test helper, exact authority support and active documentation changed;
-production, existing Go assertions, ten historical owner records and pins remain.
+The owner-adopted `coldkeep_phase3c2_quality_q3_build_2026-11-15.md` governs the
+six-subject coordination preparation unit. Accepted entry is
+`fcb680b35ac35a39dc2c1de8239a2e66ad22fdb3`, tree
+`16c887e58872e701d8f095f0ebaa5b6e0bd9d84e`.
 
-Fresh local command race runs pass all 102 identities under both codecs. The
-exact-body harness qualifies large output, real closed-writer errors and panic/
-fatal unwind. All 682 Python identities pass in the adopted independent NON-OWNING
-two-document projection; its fixtures cannot complete the actual owner. Unchanged
-lower-layer Q2 evidence retains its original source/binary/log provenance. No old
-full route is labeled fresh at the successor head. Preserve failed attempts and
-all inherited optional-skip, timeout, timing and physical-independence limits.
+[Local qualification](phase3c2-quality-q3-result.md) is INCOMPLETE. Complete all
+25 genuine checks on the clean implementation, including full fresh affected
+runtime routes, the non-owning Python projection and actual-owner refusal.
+Keep all twelve historical C2 records and earlier source/evidence protections.
+Independent exact outgoing review and ordered/aggregate patch replay precede
+the single guarded fast-forward from the accepted remote tip. Both actual-head
+CI and CodeQL events and complete native subject accounting remain required.
+Only after independent terminal review, update PR #129's current-status section
+once with an immediate preimage guard and readback. Keep it open and draft.
 
-Review the exact result-only outgoing source/tree, replay every ordered/aggregate
-patch tree/mode, and verify actual-root authority and cleanup/preservation. Then
-perform the one expected-tip-guarded release/v2.0 fast-forward from
-1ed272f6bdbbf546b5039bbf9e76777be6b47e43 and the preimage-guarded bounded current-status
-update of draft PR #129. Both complete hosted CI events, CodeQL and actual hosted
-Python/staged routes must qualify freshly. Compare all 62 native baseline subjects
-and six historical Fixed records; 62-to-61 is conditional, never promised.
+Final Phase 3C2 acceptance: WITHHELD_CODACY
+Implementation: ACTIVE
+Product gates: INCOMPLETE
+Action 2.05: NOT IMPLEMENTED
 
-Final Phase 3C2 stays WITHHELD_CODACY, implementation ACTIVE, product gates
-INCOMPLETE and action 2.05 NOT IMPLEMENTED. Preserve main, stable v1.13.19, PR open/
-draft state and all predecessor evidence. No provider disposition, manual reanalysis,
-merge, release, installation switch, writer/reclamation activation or deferred
-coordination work follows. After terminal observation, deliver checksummed evidence
-and a separately adoptable next bounded proposal from the actual residual queue.
-Requested implementation and independent review: GPT-6 Astra / Extra High; actual
-backend settings remain unknown without telemetry.
+No automatic continuation into other findings or later product work. Preserve
+failed attempts and all optional-skip, timeout, timing and physical-independence
+limits. Requested implementation/review settings: GPT-6 Astra / Extra High;
+actual backend settings are unknown without telemetry.

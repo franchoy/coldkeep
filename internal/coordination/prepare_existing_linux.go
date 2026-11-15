@@ -11,19 +11,9 @@ import (
 // Stop legacy writers/maintenance first. This is not repair of a lost live lock.
 // It never creates the payload root or changes owner metadata or existing locks.
 func PrepareExisting(ctx context.Context, payloadRoot string) (err error) {
-	if ctx == nil {
-		return ErrRepositoryIdentityInvalid
-	}
-	if err = ctx.Err(); err != nil {
-		return
-	}
-	id, err := ResolveIdentity(payloadRoot)
+	id, info, err := prepareExistingIdentity(ctx, payloadRoot)
 	if err != nil {
 		return err
-	}
-	info, err := os.Lstat(id.CanonicalPath)
-	if err != nil || !info.IsDir() {
-		return ErrRepositoryIdentityInvalid
 	}
 	reservation, err := reserveProductionProcessIdentity(id)
 	if err != nil {
@@ -35,13 +25,52 @@ func PrepareExisting(ctx context.Context, payloadRoot string) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
-	if err = root.Mkdir(ControlDirectoryName, 0700); err != nil && !os.IsExist(err) {
+	control, err := prepareExistingControl(root)
+	if err != nil {
 		return err
+	}
+	lockPath := filepath.Join(id.CanonicalPath, ControlDirectoryName, LockArtifactName)
+	native, err := prepareExistingNativeLock(lockPath)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, native.release()) }()
+	return checkPreparedExisting(ctx, payloadRoot, id, info, control, lockPath, native)
+}
+
+func prepareExistingIdentity(ctx context.Context, payloadRoot string) (Identity, os.FileInfo, error) {
+	if ctx == nil {
+		return Identity{}, nil, ErrRepositoryIdentityInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return Identity{}, nil, err
+	}
+	id, err := ResolveIdentity(payloadRoot)
+	if err != nil {
+		return Identity{}, nil, err
+	}
+	info, err := os.Lstat(id.CanonicalPath)
+	if err != nil || !info.IsDir() {
+		return Identity{}, nil, ErrRepositoryIdentityInvalid
+	}
+	return id, info, nil
+}
+
+func prepareExistingControl(root *os.Root) (os.FileInfo, error) {
+	if err := root.Mkdir(ControlDirectoryName, 0700); err != nil && !os.IsExist(err) {
+		return nil, err
 	}
 	control, err := root.Lstat(ControlDirectoryName)
 	if err != nil || !control.IsDir() {
-		return ErrRepositoryIdentityInvalid
+		return nil, ErrRepositoryIdentityInvalid
 	}
+	if err = checkExistingPreparationOwner(root); err != nil {
+		return nil, err
+	}
+	return control, nil
+}
+
+func checkExistingPreparationOwner(root *os.Root) error {
 	owner, err := root.Lstat(filepath.Join(ControlDirectoryName, OwnerMetadataName))
 	if err == nil && !owner.Mode().IsRegular() {
 		return ErrRepositoryIdentityInvalid
@@ -49,19 +78,20 @@ func PrepareExisting(ctx context.Context, payloadRoot string) (err error) {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	lockPath := filepath.Join(id.CanonicalPath, ControlDirectoryName, LockArtifactName)
-	var native *nativeLockHandle
-	if _, e := os.Lstat(lockPath); e == nil {
-		native, err = acquireExistingNativeLockPlatform(lockPath)
-	} else if os.IsNotExist(e) {
-		native, err = acquireNativeLockPlatform(lockPath)
+	return nil
+}
+
+func prepareExistingNativeLock(lockPath string) (*nativeLockHandle, error) {
+	if _, err := os.Lstat(lockPath); err == nil {
+		return acquireExistingNativeLockPlatform(lockPath)
+	} else if os.IsNotExist(err) {
+		return acquireNativeLockPlatform(lockPath)
 	} else {
-		return e
+		return nil, err
 	}
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, native.release()) }()
+}
+
+func checkPreparedExisting(ctx context.Context, payloadRoot string, id Identity, info, control os.FileInfo, lockPath string, native *nativeLockHandle) error {
 	lock, err := os.Lstat(lockPath)
 	if err != nil {
 		return err
@@ -69,15 +99,26 @@ func PrepareExisting(ctx context.Context, payloadRoot string) (err error) {
 	if !native.matchesArtifact(lock) {
 		return ErrOwnershipLost
 	}
-	for path, want := range map[string]os.FileInfo{id.CanonicalPath: info, filepath.Join(id.CanonicalPath, ControlDirectoryName): control, lockPath: lock} {
-		got, e := os.Lstat(path)
-		if e != nil || !os.SameFile(want, got) || want.Mode() != got.Mode() {
-			return ErrOwnershipLost
-		}
+	if err = checkExistingPreparationArtifacts(map[string]os.FileInfo{
+		id.CanonicalPath: info,
+		filepath.Join(id.CanonicalPath, ControlDirectoryName): control,
+		lockPath: lock,
+	}); err != nil {
+		return err
 	}
-	final, e := ResolveIdentity(payloadRoot)
-	if e != nil || final != id {
+	final, err := ResolveIdentity(payloadRoot)
+	if err != nil || final != id {
 		return ErrOwnershipLost
 	}
 	return ctx.Err()
+}
+
+func checkExistingPreparationArtifacts(want map[string]os.FileInfo) error {
+	for path, expected := range want {
+		got, err := os.Lstat(path)
+		if err != nil || !os.SameFile(expected, got) || expected.Mode() != got.Mode() {
+			return ErrOwnershipLost
+		}
+	}
+	return nil
 }

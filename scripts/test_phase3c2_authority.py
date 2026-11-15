@@ -43,8 +43,8 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
             "Phase 3C2: COMPLETE", "Phase 3C: COMPLETE", "Local-profile action 2.04: COMPLETE",
             "Implementation: ACTIVE", "Product gates: INCOMPLETE",
             "Profile: installed Linux/PostgreSQL16 schema20",
-            "Governing BUILD: coldkeep_phase3c2_quality_q2_r1_build_2026-11-15.md",
-            "Quality unit C2-Q2-R1: COMPLETE", "Final Phase 3C2 acceptance: WITHHELD_CODACY",
+            "Governing BUILD: coldkeep_phase3c2_quality_q3_build_2026-11-15.md",
+            "Quality unit C2-Q3: COMPLETE", "Final Phase 3C2 acceptance: WITHHELD_CODACY",
             "Accepted C1: 06bde38380dd3a42be5c180beb99bf1aa509b8ac",
             "Qualification HEAD: " + "1" * 40, "Qualification tree: " + "2" * 40,
             "Qualification SHA-256: " + hashlib.sha256(self.raw).hexdigest(),
@@ -135,9 +135,9 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
         self.qualification.write_bytes((self.directory / "phase3c2-quality-q1-qualification.json").read_bytes())
         self.assert_rejected()
         self.qualification.write_bytes(self.raw)
-        self.result.write_text(self.body.replace("Quality unit C2-Q2-R1", "Quality unit C2-Q1"))
+        self.result.write_text(self.body.replace("Quality unit C2-Q3", "Quality unit C2-Q1"))
         self.assert_rejected()
-        self.result.write_text(self.body.replace("quality_q2_r1_build", "quality_q1_build"))
+        self.result.write_text(self.body.replace("quality_q3_build", "quality_q1_build"))
         self.assert_rejected()
         self.result.write_text(self.body)
         self.qualification.unlink()
@@ -154,9 +154,9 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
         self.qualification.write_bytes((self.directory / "phase3c2-quality-q1-r1-qualification.json").read_bytes())
         self.assert_rejected()
         self.qualification.write_bytes(self.raw)
-        self.result.write_text(self.body.replace("Quality unit C2-Q2-R1", "Quality unit C2-Q1-R1"))
+        self.result.write_text(self.body.replace("Quality unit C2-Q3", "Quality unit C2-Q1-R1"))
         self.assert_rejected()
-        self.result.write_text(self.body.replace("quality_q2_r1_build", "quality_q1_r1_build"))
+        self.result.write_text(self.body.replace("quality_q3_build", "quality_q1_r1_build"))
         self.assert_rejected()
         self.result.write_text(self.body)
         self.qualification.unlink()
@@ -173,12 +173,12 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
         self.qualification.write_bytes((self.directory / "phase3c2-quality-q2-qualification.json").read_bytes())
         self.assert_rejected()
         self.qualification.write_bytes(self.raw)
-        unit = "Quality unit C2-Q2-R1: COMPLETE"
+        unit = "Quality unit C2-Q3: COMPLETE"
         for replacement in ("", "Quality unit C2-Q2: COMPLETE", unit + " pending", unit + "\n" + unit):
             with self.subTest(unit=replacement):
                 self.result.write_text(self.body.replace(unit, replacement))
                 self.assert_rejected()
-        self.result.write_text(self.body.replace("quality_q2_r1_build_2026-11-15", "quality_q2_build_2026-11-14"))
+        self.result.write_text(self.body.replace("quality_q3_build_2026-11-15", "quality_q2_build_2026-11-14"))
         self.assert_rejected()
         self.result.write_text(self.body)
         source = self.root / "internal/model.go"
@@ -192,6 +192,53 @@ class IntegratedC2AuthorityTests(V2AuthorityFixture):
         self.qualification.write_bytes(self.raw)
         self.result.unlink()
         self.assert_rejected()
+
+    def test_q2_r1_records_cannot_complete_q3_or_supply_a_fallback(self):
+        self.result.write_bytes((self.directory / "phase3c2-quality-q2-r1-result.md").read_bytes())
+        self.assert_rejected()
+        self.result.write_text(self.body)
+        self.qualification.write_bytes((self.directory / "phase3c2-quality-q2-r1-qualification.json").read_bytes())
+        self.assert_rejected()
+        self.qualification.write_bytes(self.raw)
+        self.result.write_text(self.body.replace("Quality unit C2-Q3", "Quality unit C2-Q2-R1"))
+        self.assert_rejected()
+        self.result.write_text(self.body.replace("quality_q3_build", "quality_q2_r1_build"))
+        self.assert_rejected()
+        self.result.write_text(self.body)
+        self.assertTrue(c2.complete(self.root))
+        self.result.unlink()
+        self.assert_rejected()
+        self.result.write_text(self.body)
+        self.qualification.unlink()
+        self.assert_rejected()
+
+    def test_missing_only_coordination_preparation_check_refuses_q3(self):
+        self.assertTrue(c2.complete(self.root))
+        value = json.loads(self.raw)
+        self.assertEqual(len(value["checks"]), 25)
+        del value["checks"]["coordination-preparation-metrics-equivalence"]
+        self.assertEqual(len(value["checks"]), 24)
+        raw = (json.dumps(value) + "\n").encode()
+        self.qualification.write_bytes(raw)
+        self.result.write_text(self.body.replace(hashlib.sha256(self.raw).hexdigest(), hashlib.sha256(raw).hexdigest()))
+        self.assertFalse(c2.complete(self.root))
+        self.assert_rejected()
+        self.qualification.write_bytes(self.raw)
+        self.result.write_text(self.body)
+        self.assertTrue(c2.complete(self.root))
+
+    def test_all_twelve_historical_c2_records_are_hash_required(self):
+        expected = {
+            prefix + suffix
+            for prefix in ("phase3c2", "phase3c2-followup", "phase3c2-quality-q1",
+                           "phase3c2-quality-q1-r1", "phase3c2-quality-q2", "phase3c2-quality-q2-r1")
+            for suffix in ("-result.md", "-qualification.json")
+        }
+        self.assertEqual(len(expected), 12)
+        self.assertEqual({name for name in c2.PREDECESSORS if name.startswith("phase3c2")}, expected)
+        for name in expected:
+            with self.subTest(name=name):
+                self.assertEqual(c2.PREDECESSORS[name], hashlib.sha256((self.directory / name).read_bytes()).hexdigest())
 
     def test_c1_or_old_reports_cannot_close_c2(self):
         self.result.unlink()
