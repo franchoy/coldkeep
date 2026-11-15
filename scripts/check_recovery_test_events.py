@@ -61,6 +61,27 @@ required['github.com/franchoy/coldkeep/v2/internal/coordination'].update({
  'TestPrepareExistingRefusalCleanup/owner-symlink',
  'TestPrepareExistingFinalCancellationReleasesOwnership',
 })
+# Q4 binds retained existing-lease subcases and meaningful admission/native cases.
+required['github.com/franchoy/coldkeep/v2/internal/coordination'].update({
+ 'TestExistingLeaseLegacyContention/existing',
+ 'TestExistingLeaseLegacyContention/legacy',
+ 'TestExistingLeaseUnsafeAndLost/control-symlink',
+ 'TestExistingLeaseUnsafeAndLost/lock-symlink',
+ 'TestExistingLeaseUnsafeAndLost/lock-directory',
+ 'TestExistingLeaseUnsafeAndLost/owner-symlink',
+ 'TestExistingLeaseUnsafeAndLost/lost',
+ 'TestExistingLeaseContextAdmission',
+ 'TestExistingLeaseContextAdmission/nil-invalid',
+ 'TestExistingLeaseContextAdmission/canceled-invalid',
+ 'TestExistingLeaseContextAdmission/canceled-missing',
+ 'TestExistingLeaseContextAdmission/canceled-unprepared',
+ 'TestExistingLeaseNativeFailureReleasesReservation',
+ 'TestExistingLeaseFinalCancellationReleasesOwnership',
+ 'TestNativeLockExistingPreservesReadOnlyArtifact',
+ 'TestNativeLockExistingMissingRefusesCreation',
+ 'TestNativeLockExistingContentionAndReacquire',
+ 'TestNativeLockExistingLeaseCancellationAndLoss',
+})
 required['github.com/franchoy/coldkeep/v2/internal/recoveryexport'].update(FIXTURE_HYGIENE)
 for parent, cases in {
  'TestRecoveryImportReceiptPublicationBudget': 'bytes objects compatible',

@@ -92,6 +92,32 @@ Q3_IDENTITIES = {
 }
 
 
+# Explicit Q4 additions are independent of checker construction.
+Q4_IDENTITIES = {
+    ("github.com/franchoy/coldkeep/v2/internal/coordination", name)
+    for name in (
+        'TestExistingLeaseLegacyContention/existing',
+        'TestExistingLeaseLegacyContention/legacy',
+        'TestExistingLeaseUnsafeAndLost/control-symlink',
+        'TestExistingLeaseUnsafeAndLost/lock-symlink',
+        'TestExistingLeaseUnsafeAndLost/lock-directory',
+        'TestExistingLeaseUnsafeAndLost/owner-symlink',
+        'TestExistingLeaseUnsafeAndLost/lost',
+        'TestExistingLeaseContextAdmission',
+        'TestExistingLeaseContextAdmission/nil-invalid',
+        'TestExistingLeaseContextAdmission/canceled-invalid',
+        'TestExistingLeaseContextAdmission/canceled-missing',
+        'TestExistingLeaseContextAdmission/canceled-unprepared',
+        'TestExistingLeaseNativeFailureReleasesReservation',
+        'TestExistingLeaseFinalCancellationReleasesOwnership',
+        'TestNativeLockExistingPreservesReadOnlyArtifact',
+        'TestNativeLockExistingMissingRefusesCreation',
+        'TestNativeLockExistingContentionAndReacquire',
+        'TestNativeLockExistingLeaseCancellationAndLoss',
+    )
+}
+
+
 class StagingPrerequisiteTests(unittest.TestCase):
     def test_accepted_c1_is_an_additional_required_untouched_role(self):
         import build_phase3a_readers as builder
@@ -405,6 +431,25 @@ class StagingLifetimeTests(unittest.TestCase):
 
 
 class RecoveryEventContractTests(unittest.TestCase):
+    def test_q4_existing_lease_cases_are_required_in_both_recovery_routes(self):
+        self.assertEqual(len(Q4_IDENTITIES), 18)
+        self.assertTrue(Q4_IDENTITIES <= events.required_identities())
+        self.assertFalse(Q4_IDENTITIES & (Q2_IDENTITIES | Q3_IDENTITIES | FIXTURE_IDENTITIES | C2_IDENTITIES))
+        for broad in (False, True):
+            good = [{"Package": p, "Test": t, "Action": "pass"} for p, t in events.required_identities()]
+            self.assertEqual(events.check_events(good, broad=broad)["status"], "PASS")
+            for identity in Q4_IDENTITIES:
+                self.assert_q4_identity_refuses(good, identity, broad)
+
+    def assert_q4_identity_refuses(self, good, identity, broad):
+        package, name = identity
+        for mutation in ("missing", "skip", "fail"):
+            with self.subTest(broad=broad, name=name, mutation=mutation):
+                changed = [row for row in good if (row["Package"], row.get("Test")) != identity]
+                if mutation != "missing":
+                    changed.append({"Package": package, "Test": name, "Action": mutation})
+                self.assertEqual(events.check_events(changed, broad=broad)["status"], "FAIL")
+
     def test_q3_preparation_cases_are_required_in_both_recovery_routes(self):
         self.assertEqual(len(Q3_IDENTITIES), 12)
         self.assertTrue(Q3_IDENTITIES <= events.required_identities())
@@ -434,7 +479,7 @@ class RecoveryEventContractTests(unittest.TestCase):
         # scoped additions. Counts alone cannot hide an inherited removal or
         # substitution: the frozen predecessor digest still binds every name.
         inherited = {(package, test)
-                     for package, test in identities - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES - Q3_IDENTITIES
+                     for package, test in identities - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES - Q3_IDENTITIES - Q4_IDENTITIES
                      if package != "github.com/franchoy/coldkeep/v2/internal/generation"
                      and not test.startswith(("TestRecoveryUpgrade", "TestRecoveryGeneration"))}
         self.assertEqual(len(inherited), 583)
@@ -444,7 +489,7 @@ class RecoveryEventContractTests(unittest.TestCase):
         self.assertEqual(actual, "8eb9e04d2061e1c8659cb89a38e43648c0c241d2349900d0bf749503f9f19062")
 
     def test_every_accepted_c1_requirement_is_retained_exactly(self):
-        pairs = sorted(events.required_identities() - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES - Q3_IDENTITIES)
+        pairs = sorted(events.required_identities() - FIXTURE_IDENTITIES - C2_IDENTITIES - Q2_IDENTITIES - Q3_IDENTITIES - Q4_IDENTITIES)
         self.assertEqual(len(pairs), 726)
         self.assertEqual(hashlib.sha256(json.dumps(pairs, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest(),
                          "ca0f0c1619544bdb5ee5a1d3176095337a8295c20e14cdda2f8c451e1ad8ff65")

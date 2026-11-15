@@ -34,8 +34,12 @@ PREDECESSORS.update({
     "phase3c2-quality-q2-r1-result.md": "c767cdaa3b1da9f29cc0b2f927b225644965b930ca5fd6e9563a066c1646834d",
     "phase3c2-quality-q2-r1-qualification.json": "1134e37abc399a6c04fa84220cea283a14bf4aff3b36eeb580c5fca985ac5802",
 })
-RESULT = "phase3c2-quality-q3-result.md"
-QUALIFICATION = "phase3c2-quality-q3-qualification.json"
+PREDECESSORS.update({
+    "phase3c2-quality-q3-result.md": "1004fd6d907e5511fc178774042c0b4c4ca7b146980ee38022922d4dc203d934",
+    "phase3c2-quality-q3-qualification.json": "79c7967f77ffa9f96b4f4734404b818a5ced754553b8a03d1674127549c525cf",
+})
+RESULT = "phase3c2-quality-q4-result.md"
+QUALIFICATION = "phase3c2-quality-q4-qualification.json"
 
 CHECKS = {
     "provenance-regressions", "real-staged-admission", "source-reuse-accounting",
@@ -44,7 +48,7 @@ CHECKS = {
     "dependency-boundaries", "ci-audit-mutations", "phase2-integrated", "reachable-vulnerability",
     "index-continuity", "query-work", "dto-consumer", "fixture-cleanup",
     "documentation-quality", "generation-metrics", "recovery-command-metrics-equivalence",
-    "coordination-preparation-metrics-equivalence",
+    "coordination-preparation-metrics-equivalence", "existing-lease-metrics-equivalence",
 }
 # Qualification inputs are executable source, tests, embedded inputs, fixtures,
 # tool configuration and workflow/staging source. Docs may follow separately.
@@ -164,8 +168,8 @@ def complete(root: Path) -> bool:
             "Phase 3C2": "COMPLETE", "Phase 3C": "COMPLETE",
             "Local-profile action 2.04": "COMPLETE", "Implementation": "ACTIVE",
             "Product gates": "INCOMPLETE", "Profile": "installed Linux/PostgreSQL16 schema20",
-            "Governing BUILD": "coldkeep_phase3c2_quality_q3_build_2026-11-15.md",
-            "Quality unit C2-Q3": "COMPLETE", "Final Phase 3C2 acceptance": "WITHHELD_CODACY", "Accepted C1": C1,
+            "Governing BUILD": "coldkeep_phase3c2_quality_q4_build_2026-11-15.md",
+            "Quality unit C2-Q4": "COMPLETE", "Final Phase 3C2 acceptance": "WITHHELD_CODACY", "Accepted C1": C1,
             "Qualification HEAD": record["head"], "Qualification tree": record["tree"],
             "Qualification SHA-256": hashlib.sha256(raw).hexdigest(),
             "Ordinary schema18/19/20 writers and reclamation": "REFUSED",

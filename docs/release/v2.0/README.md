@@ -1,34 +1,37 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q3 coordination preparation quality**, under owner-adopted
-`coldkeep_phase3c2_quality_q3_build_2026-11-15.md`. Resolve only the six Lizard
-subjects around `PrepareExisting` and its tests, retaining resource ownership,
-physical identity checks, refused states, joined cleanup errors and real child
-contention. C2-Q3 local qualification is COMPLETE at `8cd7bc472bfe05bc6dc5246953b537fe074fbb27`,
-with all 25 checks supported by fresh applicable evidence and independent review.
-Exact outgoing and terminal hosted/native review remain subsequent conditions. Final Phase 3C2 remains
-WITHHELD_CODACY; implementation ACTIVE; product gates INCOMPLETE.
+Current workflow: **C2-Q4 existing lease and native-open quality**, under the
+owner-adopted `coldkeep_phase3c2_quality_q4_build_2026-11-15.md`. Resolve exactly
+eight Lizard subjects in existing-lease acquisition/tests and the Unix native
+opener. Acquisition, ownership transfer and cleanup stay visible in
+`AcquireExisting`; Unix changes only extract the existing pure flags decision.
+The actual Q4 owner is INCOMPLETE until genuine fresh qualification and independent
+review pass. Final Phase 3C2 remains WITHHELD_CODACY; implementation ACTIVE;
+product gates INCOMPLETE; action 2.05 NOT IMPLEMENTED.
 
-Accepted Q2-R1 is published at `fcb680b35ac35a39dc2c1de8239a2e66ad22fdb3`,
-with 61 Added native subjects and six historical Fixed. All twelve historical
-C2 result/qualification records and earlier predecessors remain immutable.
-See the [current result](phase3c2-quality-q3-result.md),
+Accepted Q3 is published at `f9c5a0887bbb91c73b2c8323377b1d594a3b7b40`, with
+55 Added native subjects and six historical Fixed. All fourteen historical C2
+result/qualification records and earlier predecessors remain immutable.
+See the [current result](phase3c2-quality-q4-result.md),
 [bounded handoff](next-slice.md), [generation model](generation-model.md),
 [bounded reads](generation-read.md) and [current authority](../current.json).
 
-Production coordination changes require fresh full coordination, recovery,
-passive, plain/AES packages, Phase 2, current/D19 oracles, Python/authority and
-applicable static/enforcement/vulnerability qualification. All 24 previous checks
-remain required, plus `coordination-preparation-metrics-equivalence` as the 25th.
-The independent NON-OWNING Python projection changes exactly two synthetic owner
-documents; synthetic PASS fields cannot complete the actual owner. Preserve
-optional skips, timeout/refusal distinctions, benchmark limits and unknown
-physical failure-domain independence. Historical runtime passes remain references.
+This production change requires fresh full coordination, recovery, passive,
+plain/AES packages, Phase 2, current/D19 oracles, Python/authority and applicable
+static/enforcement/vulnerability qualification. All 25 previous checks remain;
+`existing-lease-metrics-equivalence` is the 26th. The independent NON-OWNING
+Python projection changes exactly two synthetic owner documents; synthetic PASS
+fields cannot complete the actual owner. Preserve optional skips, timeout/refusal
+distinctions, benchmark limits and unknown physical failure-domain independence.
+Historical runtime passes remain references. Darwin amd64/arm64 and Windows
+amd64 coordination-test cross-compiles are COMPILE_ONLY; hosted native selectors
+do not establish complete ExistingLease runtime coverage on those platforms.
 
 Exact outgoing independent review precedes one expected-tip-guarded fast-forward
 of `release/v2.0`. Independently reviewed terminal hosted/native evidence precedes
-one preimage-guarded current-status body update of open draft PR #129. Compare
-all native subjects and check for replacements; 61-to-55 is conditional.
+one preimage-guarded current-status body update of open draft PR #129. All eight
+targets must disappear without replacements; account for the other 47 Added and
+six historical Fixed subjects. Conditional 55-to-47 movement is not acceptance.
 Preserve main, stable v1.13.19, predecessor worktrees and sealed evidence.
 No provider changes, manual reanalysis, merge, release, installation switch,
 ordinary-writer/reclamation activation or action 2.05 implementation is authorized.

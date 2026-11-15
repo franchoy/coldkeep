@@ -23,10 +23,7 @@ func openNativeLockPlatform(lockPath string, existing bool) (*nativeLockHandle, 
 		return nil, err
 	}
 
-	flags := unix.O_RDWR | unix.O_CREAT | unix.O_CLOEXEC | unix.O_NOFOLLOW
-	if existing {
-		flags = unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
-	}
+	flags := nativeLockOpenFlags(existing)
 	fd, err := unix.Open(lockPath, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("coordination: open native repository lock: %w", err)
@@ -58,6 +55,13 @@ func openNativeLockPlatform(lockPath string, existing bool) (*nativeLockHandle, 
 			return releaseNativeLockFile(file, fd)
 		},
 	}, nil
+}
+
+func nativeLockOpenFlags(existing bool) int {
+	if existing {
+		return unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
+	}
+	return unix.O_RDWR | unix.O_CREAT | unix.O_CLOEXEC | unix.O_NOFOLLOW
 }
 
 func inspectNativeLockArtifact(lockPath string) error {

@@ -36,36 +36,11 @@ type existingLease struct {
 // AcquireExisting refuses an unprepared repository without creating anything.
 // Its caller must close all operation resources before Release.
 func AcquireExisting(ctx context.Context, identity Identity) (ExistingLease, error) {
-	if ctx == nil {
-		return nil, errors.New("coordination: context required")
-	}
-	if err := ctx.Err(); err != nil {
+	if err := validateExistingLeaseAdmission(ctx, identity); err != nil {
 		return nil, err
 	}
-	if err := ValidateIdentity(identity); err != nil {
-		return nil, err
-	}
-	control := filepath.Join(identity.CanonicalPath, ControlDirectoryName)
-	paths := []string{identity.CanonicalPath, control, filepath.Join(control, LockArtifactName)}
-	infos := make([]os.FileInfo, 0, len(paths))
-	for i, path := range paths {
-		info, err := os.Lstat(path)
-		if os.IsNotExist(err) {
-			return nil, ErrPreparationRequired
-		}
-		if err != nil {
-			return nil, fmt.Errorf("%w: inspect existing coordination material", ErrRepositoryIdentityInvalid)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || (i < 2 && !info.IsDir()) || (i == 2 && !info.Mode().IsRegular()) {
-			return nil, fmt.Errorf("%w: unsafe existing coordination material", ErrRepositoryIdentityInvalid)
-		}
-		infos = append(infos, info)
-	}
-	if info, err := os.Lstat(filepath.Join(control, OwnerMetadataName)); err == nil {
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("%w: unsafe owner metadata", ErrRepositoryIdentityInvalid)
-		}
-	} else if !os.IsNotExist(err) {
+	paths, infos, err := inspectExistingLeaseMaterial(identity)
+	if err != nil {
 		return nil, err
 	}
 	reservation, err := reserveProductionProcessIdentity(identity)
@@ -85,6 +60,54 @@ func AcquireExisting(ctx context.Context, identity Identity) (ExistingLease, err
 		return nil, errors.Join(err, l.Release())
 	}
 	return l, nil
+}
+
+func validateExistingLeaseAdmission(ctx context.Context, identity Identity) error {
+	if ctx == nil {
+		return errors.New("coordination: context required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ValidateIdentity(identity)
+}
+
+func inspectExistingLeaseMaterial(identity Identity) ([]string, []os.FileInfo, error) {
+	control := filepath.Join(identity.CanonicalPath, ControlDirectoryName)
+	paths := []string{identity.CanonicalPath, control, filepath.Join(control, LockArtifactName)}
+	infos := make([]os.FileInfo, 0, len(paths))
+	for i, path := range paths {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			return nil, nil, ErrPreparationRequired
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: inspect existing coordination material", ErrRepositoryIdentityInvalid)
+		}
+		if unsafeExistingLeaseMaterial(info, i) {
+			return nil, nil, fmt.Errorf("%w: unsafe existing coordination material", ErrRepositoryIdentityInvalid)
+		}
+		infos = append(infos, info)
+	}
+	if err := checkExistingLeaseOwner(control); err != nil {
+		return nil, nil, err
+	}
+	return paths, infos, nil
+}
+
+func unsafeExistingLeaseMaterial(info os.FileInfo, i int) bool {
+	return info.Mode()&os.ModeSymlink != 0 || (i < 2 && !info.IsDir()) || (i == 2 && !info.Mode().IsRegular())
+}
+
+func checkExistingLeaseOwner(control string) error {
+	if info, err := os.Lstat(filepath.Join(control, OwnerMetadataName)); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%w: unsafe owner metadata", ErrRepositoryIdentityInvalid)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (l *existingLease) check() error {
