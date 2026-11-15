@@ -7,7 +7,9 @@ pipe and concurrent draining. Production code and existing test assertions stay
 unchanged. Q2 implementation and local/hosted qualification are independently
 accepted at `1ed272f6bdbbf546b5039bbf9e76777be6b47e43`; its native result has
 62 Added subjects, including this helper finding, and six historical Fixed.
-C2-Q2-R1 local qualification is INCOMPLETE. Final Phase 3C2 remains
+C2-Q2-R1 local qualification is COMPLETE at `f816a589a60f032630cb2ebc2b5504bcc09b286d`,
+with an independently reviewed fresh/reused/composed ledger. Hosted/native
+observation remains a subsequent acceptance condition. Final Phase 3C2 remains
 WITHHELD_CODACY, implementation ACTIVE, product gates INCOMPLETE.
 
 Current contracts: [generation model](generation-model.md) and
