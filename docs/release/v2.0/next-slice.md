@@ -1,26 +1,34 @@
-# Current bounded handoff: C2-Q3 implementation and fresh qualification
+# Current bounded handoff: C2-Q3 outgoing and hosted/native review
 
-The owner-adopted `coldkeep_phase3c2_quality_q3_build_2026-11-15.md` governs the
-six-subject coordination preparation unit. Accepted entry is
-`fcb680b35ac35a39dc2c1de8239a2e66ad22fdb3`, tree
-`16c887e58872e701d8f095f0ebaa5b6e0bd9d84e`.
+The owner-adopted `coldkeep_phase3c2_quality_q3_build_2026-11-15.md` controls this
+bounded unit. [Local qualification](phase3c2-quality-q3-result.md) is COMPLETE at
+`8cd7bc472bfe05bc6dc5246953b537fe074fbb27`, tree `262f574d75979b9fed7a61ddb0e2e8e1df8262f5`,
+input SHA-256 `9aa1138289e5825e09962a7a5021bd9a4503b9372f759664415f6b44b68813cf`.
+All 25 checks have fresh applicable evidence and independent review. Actual-root
+authority/governance, exact outgoing review, aggregate/ordered replay and final
+preservation follow this result-only checkpoint. The real owner remained incomplete
+until that genuine ledger passed independent review.
 
-[Local qualification](phase3c2-quality-q3-result.md) is INCOMPLETE. Complete all
-25 genuine checks on the clean implementation, including full fresh affected
-runtime routes, the non-owning Python projection and actual-owner refusal.
-Keep all twelve historical C2 records and earlier source/evidence protections.
-Independent exact outgoing review and ordered/aggregate patch replay precede
-the single guarded fast-forward from the accepted remote tip. Both actual-head
-CI and CodeQL events and complete native subject accounting remain required.
-Only after independent terminal review, update PR #129's current-status section
-once with an immediate preimage guard and readback. Keep it open and draft.
+The single guarded release/v2.0 fast-forward must still require accepted tip
+fcb680b35ac35a39dc2c1de8239a2e66ad22fdb3, immutable outgoing SHA, ancestry, unchanged
+main/stable identities and open draft PR #129. Preserve durable intent/outcome;
+never repeat a successful push. Both actual-head CI events, both CodeQL workflows
+and findings, all actual hosted Python/staged profiles, downloaded logs/artifacts,
+continuity/query/provenance and browser/TCP controls require terminal review.
 
-Final Phase 3C2 acceptance: WITHHELD_CODACY
-Implementation: ACTIVE
-Product gates: INCOMPLETE
-Action 2.05: NOT IMPLEMENTED
+Compare the complete native 61 Added / six historical Fixed baseline semantically.
+Resolve exactly the six Q3 subjects without replacement/helper findings, preserve
+the other 55 subjects and prior Q2/Q2-R1 target absence, and retain all errors and
+analysis limits. Conditional 61-to-55 movement is not an acceptance shortcut.
+After independent terminal review, perform only the one preimage-guarded PR
+current-status body update and verify readback. Preserve title, base, surrounding
+text and draft/open state. Then deliver compact checksummed evidence and stop.
 
-No automatic continuation into other findings or later product work. Preserve
-failed attempts and all optional-skip, timeout, timing and physical-independence
-limits. Requested implementation/review settings: GPT-6 Astra / Extra High;
-actual backend settings are unknown without telemetry.
+Final Phase 3C2 acceptance stays WITHHELD_CODACY; implementation ACTIVE, product
+gates INCOMPLETE and action 2.05 NOT IMPLEMENTED. Preserve 12 historical C2 records,
+earlier history, refs, worktrees, sealed archives and unrelated resources. No merge,
+release/tag, provider disposition, manual reanalysis, installation switch, ordinary
+writer activation or live/user repair/maintenance/reclamation is authorized.
+Requested implementation/independent review: GPT-6 Astra / Extra High. Actual
+backend settings remain unknown without telemetry. Observation-only continuation
+may request Astra / High; requested selectors are separate from observed settings.
