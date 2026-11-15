@@ -17,26 +17,43 @@ import (
 // operations or introducing credential/session hooks.
 func runRecoveryOutput(t *testing.T, args []string, closed bool) (string, error) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "stdout")
-	f, e := os.Create(path)
+	reader, writer, e := os.Pipe()
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer f.Close()
+	var captured struct {
+		bytes []byte
+		err   error
+	}
+	done := make(chan struct{})
+	go func() {
+		captured.bytes, captured.err = io.ReadAll(reader)
+		captured.err = errors.Join(captured.err, reader.Close())
+		close(done)
+	}()
+	previousArgs, previousOutput := os.Args, os.Stdout
+	defer func() {
+		os.Args, os.Stdout = previousArgs, previousOutput
+		_ = writer.Close()
+		<-done
+	}()
+	os.Args, os.Stdout = append([]string{"coldkeep-recovery"}, args...), writer
 	if closed {
-		if e = f.Close(); e != nil {
+		if e = writer.Close(); e != nil {
 			t.Fatal(e)
 		}
 	}
-	previousArgs, previousOutput := os.Args, os.Stdout
-	os.Args, os.Stdout = append([]string{"coldkeep-recovery"}, args...), f
-	defer func() { os.Args, os.Stdout = previousArgs, previousOutput }()
 	err := run()
-	b, e := os.ReadFile(path)
-	if e != nil {
-		t.Fatal(e)
+	if !closed {
+		if e = writer.Close(); e != nil {
+			t.Fatal(e)
+		}
 	}
-	return string(b), err
+	<-done
+	if captured.err != nil {
+		t.Fatal(captured.err)
+	}
+	return string(captured.bytes), err
 }
 
 func TestRecoveryPublicOperationsBeforeConfig(t *testing.T) {

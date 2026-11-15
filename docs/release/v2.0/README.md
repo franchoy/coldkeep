@@ -1,37 +1,41 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q2 recovery-command maintainability**, under
-owner-adopted `coldkeep_phase3c2_quality_q2_build_2026-11-14.md`.
-The unit targets exactly eight Lizard findings at six recovery-command sites.
-Q2 fresh integrated local qualification is COMPLETE at the source checkpoint
-5957ff5bd8d27047a907c52e851e5ec6512379f1. Exact outgoing review and both
-actual-head hosted/native observations remain acceptance conditions. Native
-status is pending at this local completion; see the source-bound owning result.
-C2-Q1-R1 is an accepted COMPLETE checkpoint for its bounded correction and hosted
-observation. C2-G1 and Q1 remain accepted historical work; final Phase 3C2 is
-WITHHELD_CODACY. Implementation remains ACTIVE and product gates INCOMPLETE.
+Current workflow: **C2-Q2-R1 owned stdout capture**, under owner-adopted
+`coldkeep_phase3c2_quality_q2_r1_build_2026-11-15.md`. The bounded unit addresses
+native test-helper finding `f0d116b38b69c795c62c99eae72fcee8` with an anonymous
+pipe and concurrent draining. Production code and existing test assertions stay
+unchanged. Q2 implementation and local/hosted qualification are independently
+accepted at `1ed272f6bdbbf546b5039bbf9e76777be6b47e43`; its native result has
+62 Added subjects, including this helper finding, and six historical Fixed.
+C2-Q2-R1 local qualification is INCOMPLETE. Final Phase 3C2 remains
+WITHHELD_CODACY, implementation ACTIVE, product gates INCOMPLETE.
 
 Current contracts: [generation model](generation-model.md) and
-[bounded reads](generation-read.md). The original [C2 result](phase3c2-result.md),
-[C2-G1 follow-up](phase3c2-followup-result.md), [Q1 result](phase3c2-quality-q1-result.md)
-and [R1 result](phase3c2-quality-q1-r1-result.md), their eight result/qualification
-files and all predecessor records remain immutable. They cannot certify changed
-Q2 execution inputs. [Current authority](../current.json) binds the new owning
-result after fresh qualification; structural checks do not certify hosted acceptance.
-Current result: [C2-Q2 qualification](phase3c2-quality-q2-result.md).
-Current handoff: [remaining C2 quality work](next-slice.md).
+[bounded reads](generation-read.md). All ten C2/C2-G1/Q1/R1/Q2 historical
+result/qualification records and earlier predecessors remain immutable.
+[Current authority](../current.json) binds the successor only after genuine
+qualification and independent review; structural checks do not certify runtime
+or hosted acceptance. See the [current result](phase3c2-quality-q2-r1-result.md)
+and [bounded handoff](next-slice.md).
 
-The adopted sequence authorizes isolated implementation, fresh qualification,
-sequential commits, exact-source independent review, one guarded fast-forward
-of `release/v2.0`, a bounded current-status refresh of draft PR #129 and both
-actual-head hosted events. Main, stable v1.13.19, predecessor worktrees and
-sealed evidence remain preserved. No Codacy settings/ignores, extra native
-reanalysis, support messages, merge, release or action 2.05 implementation.
+The adopted sequence authorizes isolated implementation, fresh command-package
+race tests under both existing codecs, pipe lifetime controls, Python/authority
+and applicable enforcement/static checks. Unchanged lower-layer evidence may be
+reused only with complete source/mode/path-set/log bindings. A per-check ledger
+labels fresh, reused and composed results; retained executions keep Q2 provenance.
+The independent NON-OWNING Python clone changes exactly two synthetic owner
+documents, and cannot complete the actual owner. All 24 checks remain required.
+
+Exact outgoing independent review precedes one expected-tip-guarded fast-forward
+of `release/v2.0`, a bounded current-status update of draft PR #129 and fresh
+complete push/PR CI and CodeQL observation. Compare all 62 native subjects;
+62-to-61 is conditional. Main, stable v1.13.19, predecessor worktrees and sealed
+evidence remain preserved. No provider changes, manual reanalysis, merge,
+release, installation switch, deferred coordination or action 2.05 implementation.
 Schema20/package4, writer/reclamation/import-activation fences, 2.0.0-dev.0,
 module /v2, Go 1.26.11 / GOTOOLCHAIN=local, language floor 1.25 and all pins stay.
-Requested implementation and review settings: GPT-6 Astra / Extra High.
-Observable invocation selectors are recorded separately; actual backend settings
-are unknown without runtime telemetry.
+Requested implementation and independent review: GPT-6 Astra / Extra High.
+Actual backend settings remain unknown without runtime telemetry.
 
 ## Selected first stable profile
 
