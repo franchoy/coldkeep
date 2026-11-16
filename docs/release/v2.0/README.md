@@ -1,58 +1,35 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q5 local qualification complete; outgoing and terminal
-review pending**, under the owner-adopted
-`coldkeep_phase3c2_quality_q5_build_2026-11-15.md`.
-The [current result](phase3c2-quality-q5-result.md) records all 27 independently
-approved local obligations: seven fresh, eight retained and twelve composed.
-Qualifying implementation `d5a08db8c8689ea5d8f71e41a90f07f3270eeff8`, tree
-`6a7e3d47041e16097ef64c02206d77c42d48064b`, retains 896 execution inputs with SHA-256
-`25cd238de1f8e87f560d19d8c8dd29270a3728a8ad27c1df81e9837a46e7ef43` through this separate
-four-document finalization.
+Current workflow: **C2-Q5-R1 local qualification complete; outgoing and terminal
+review pending**, under `coldkeep_phase3c2_quality_q5_r1_build_2026-11-15.md`.
+The [current result](phase3c2-quality-q5-r1-result.md) binds all 28 independently
+approved obligations: seven fresh, eight retained and thirteen composed.
+Qualifying implementation `656910df2f7dd9865ac1328ca77426b517528291`, tree `5aa832cee962bee2a592fd158d68cd48feafc8a3`, retains input SHA-256
+`a4080bc0611869293bce8b9cff780faf9cc1ddb9924c4c4f849832e7ab10f4b6` across 896 inputs through four-document finalization.
 
-The two Go test refactors preserve exact proof requests/results, borrowed SQLite
-ownership, caller contexts and all 30 batch-cancellation cases. Each fresh plain
-and AES-GCM application/engine route passed 847 identities, including all 57
-target-file cases and 53 PostgreSQL identities. The full non-owning Python
-projection passed 691 identities; focused authority 22, event enforcement 17 and
-Go-CI 397 passed. Pinned whole-file metrics cover all 83 bodies and 24 protected
-guard files. Current static, documentation and vulnerability checks passed.
-Genuine local evidence and both independent approvals preceded the completed
-ledger and these documents; synthetic projection fields never completed Q5.
+Only the cancellation fixture helper uses explicit equivalent values. Fresh full
+engine race runs pass 837 tests under each codec, including 53 PostgreSQL
+identities and all 30 cancellation cases. Application ten and Q4 unaffected
+4,112 tests per codec remain historical/composed. Python projection 693,
+authority 24, staged enforcement 17, Go CI 397, metrics and current static/scan
+checks pass. Synthetic projection fields never completed this owner.
 
-Each codec row separately retains 4,112 unaffected Q4 passes, excluding all old
-application/engine results. Other accepted Q4 routes keep original source,
-timestamps, raw records and exact dependency boundaries. The accepted published
-Q4 predecessor is `00c00df04c6689fcdcb0813b6601da760ddda8bd`; its result pair remains
-immutable within sixteen historical C2 and twelve earlier protected records.
-Production code, workflows, checked-in runners and all pins remain unchanged.
-Failed fixture/recorder/reviewer attempts and independently reviewed corrections
-remain preserved; no historical all-package command is relabeled as fresh Q5.
+All 30 protected records remain exact. Held Q5 remains terminally held in its
+immutable original delivery. Genuine local review precedes actual-root checks,
+independent outgoing/patch review and one guarded successor publication. Both
+fresh hosted events and complete native review precede the conditional PR update.
+The two new SQL targets must close; account separately for the companion, other
+41 subjects, 28 prior absences and six historical Fixed. Totals alone do not pass.
 
-Actual-root completed-owner checks and independent exact outgoing review precede
-one guarded release/v2.0 fast-forward from the accepted Q4 tip. Both actual-head
-hosted events and complete native review remain later gates before one guarded
-PR #129 current-status update. All five Q5 subjects must disappear without
-unexplained replacements; account for 42 other Added subjects, retain all 23
-prior absences and keep six historical Fixed records separate. No outgoing,
-published or hosted/native acceptance is claimed by this local result.
-
-Final Phase 3C2 remains WITHHELD_CODACY; implementation ACTIVE; product gates
-INCOMPLETE; action 2.05 NOT IMPLEMENTED; PR #129 open/draft. Optional-skip/no-test,
-compile-only/native-platform, TCP, query, benchmark, process-visibility and
-physical-independence limits remain. Owned fixtures, projection and tooling
-roots have disposal evidence; local preservation and the scoped known-value
-scan passed. Final delivery scanning remains required. The denied optional
-rule collection stays unused and global rule coverage remains UNKNOWN.
+Final Phase3C2 WITHHELD_CODACY; implementation ACTIVE; product gates INCOMPLETE;
+action2.05 NOT IMPLEMENTED; PR #129 open/draft. Source, schemas, pins, ordinary
+writer/reclamation and IMPORT_READY fences remain unchanged. No later quality
+unit, merge, release/tag or installation switch is included. Preserve historical
+scope and optional/platform/physical-independence limits. Actual backend settings
+remain UNKNOWN; requested implementation/review is GPT-6 Astra / Extra High.
 
 See the [bounded handoff](next-slice.md), [generation model](generation-model.md),
 [bounded reads](generation-read.md) and [current authority](../current.json).
-Preserve main/stable, refs/worktrees, sealed evidence, schema20/package4,
-IMPORT_READY fences, source2.0.0-dev.0, module/v2 and all compiler/tool/image pins.
-No provider changes, reanalysis, suppression, merge, release/tag, installation
-switch, writer/reclamation activation or later quality-queue work is authorized.
-Requested implementation and independent review: GPT-6 Astra / Extra High.
-Observable backend telemetry remains UNKNOWN.
 
 ## Selected first stable profile
 
