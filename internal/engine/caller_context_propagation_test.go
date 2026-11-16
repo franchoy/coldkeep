@@ -301,12 +301,20 @@ func batchCancellationEngineForDB(t *testing.T, conn *sql.DB) *DefaultEngine {
 
 func seedBatchCancellationTargets(t *testing.T, conn *sql.DB) {
 	t.Helper()
-	for i, name := range []string{"first.txt", "second.txt"} {
-		_, err := conn.Exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status, chunker_version) VALUES ($1, $2, 0, $3, 1, 'COMPLETED', 'v1-simple-rolling')`, i+1, name, fmt.Sprintf("%064d", i+1))
+	targets := []struct {
+		id   int
+		name string
+		hash string
+	}{
+		{1, "first.txt", "0000000000000000000000000000000000000000000000000000000000000001"},
+		{2, "second.txt", "0000000000000000000000000000000000000000000000000000000000000002"},
+	}
+	for _, target := range targets {
+		_, err := conn.Exec(`INSERT INTO logical_file (id, original_name, total_size, file_hash, ref_count, status, chunker_version) VALUES ($1, $2, 0, $3, 1, 'COMPLETED', 'v1-simple-rolling')`, target.id, target.name, target.hash)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = conn.Exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete) VALUES ($1, $2, 0, CURRENT_TIMESTAMP, 0, 0, TRUE)`, name, i+1)
+		_, err = conn.Exec(`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete) VALUES ($1, $2, 0, CURRENT_TIMESTAMP, 0, 0, TRUE)`, target.name, target.id)
 		if err != nil {
 			t.Fatal(err)
 		}
