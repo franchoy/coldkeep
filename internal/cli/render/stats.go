@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
 )
 
 type StatsResult = observability.StatsResult

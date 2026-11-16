@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
-	verifypkg "github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	storagecompression "github.com/franchoy/coldkeep/v2/internal/storage/compression"
+	verifypkg "github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 type chunkGraphRef struct {

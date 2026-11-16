@@ -1,6 +1,23 @@
 # Pre-release Checklist
 
-Use this checklist before opening a correctness-sensitive PR or cutting a release tag.
+Active v2 authority is [action 2.04](docs/release/v2.0/README.md): implementation
+ACTIVE, product gates INCOMPLETE and Phase 3C OUTSTANDING. Local action and
+follow-up results record their own bounded fresh/reused evidence; preserve them.
+
+The current [CI follow-up result](docs/release/v2.0/ci-followup-result.md)
+records the authorized bounded implementation and its measured local evidence.
+Initial publication is accepted; the owner adopted a guarded update of existing
+`release/v2.0` and draft PR #129 after local qualification and independent review.
+The [development contract](docs/release/v2.0/development-visibility.md) records
+that scope. Corrected-head hosted checks remain PENDING until observed on both
+push and PR events at the actual final public head. The historical docs-only
+publication profile does not substitute for this implementation qualification.
+Neither opening the draft nor local passes establish pre-merge CI parity or
+release readiness; existing required checks and protections remain.
+
+For implementation work, run the owning unit's applicable correctness gates.
+For a ready-for-merge correctness-sensitive PR or a release tag, use the
+applicable full profile below. Frozen v1 certification and all pins remain.
 
 Audience:
 
@@ -26,8 +43,9 @@ Choose the lightest profile that honestly matches the work being validated.
 
 ### Profile A - Pre-PR CI-parity gate
 
-Use this before opening a PR. It is the standard local "full-system green"
-path intended to minimize GitHub CI failures before review.
+Use this before declaring a correctness-sensitive PR ready for merge. It is
+the standard local "full-system green" path. The bounded development-visibility
+draft profile above does not claim this profile has passed.
 
 Run:
 
@@ -78,6 +96,10 @@ promotes a section into the active gate for a special release.
 ## Required local tools
 
 Install these before claiming CI parity locally:
+
+- Go 1.26.11 exactly with `GOTOOLCHAIN=local` for active v2 development,
+  including blocking scans for GO-2026-6859. Historical v1 certification below
+  retains its original compiler and evidence.
 
 - Go 1.26.10 exactly for v1.13.19 tag-certification recovery. The module language floor
   remains Go 1.25; use `GOTOOLCHAIN=local` for release evidence.
@@ -302,7 +324,7 @@ python3 scripts/validate_release_state.py --state auto
 
 go build -o coldkeep ./cmd/coldkeep
 
-expected_version="1.13.19"
+expected_version="2.0.0-dev.0"
 
 human_version=$(./coldkeep version)
 if [ "$human_version" != "coldkeep version $expected_version" ]; then
@@ -330,7 +352,8 @@ fi
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
-Expected: the built CLI reports exactly 1.13.19 in both human and JSON modes.
+Expected: the active development CLI reports exactly 2.0.0-dev.0 in both human
+and JSON modes. The published stable v1.13.19 identity is separate.
 A version mismatch blocks Profile A and release approval.
 
 Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
@@ -448,7 +471,7 @@ status_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.statu
 metadata_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.metadata"
 selector='^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$'
 profile=ck015-initial-lookup-sqlite
-package=github.com/franchoy/coldkeep/internal/storage
+package=github.com/franchoy/coldkeep/v2/internal/storage
 for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
   if [ -e "$target" ]; then
     echo "refusing to reuse CK-015 SQLite evidence path: $target" >&2
@@ -538,7 +561,7 @@ status_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.statu
 metadata_file="$COLDKEEP_PROFILE_A_EVIDENCE_DIR/required-test-events/$prefix.metadata"
 selector='^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$'
 profile=ck015-initial-lookup-postgres
-package=github.com/franchoy/coldkeep/internal/storage
+package=github.com/franchoy/coldkeep/v2/internal/storage
 for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
   if [ -e "$target" ]; then
     echo "refusing to reuse CK-015 PostgreSQL evidence path: $target" >&2

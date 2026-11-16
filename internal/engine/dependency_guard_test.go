@@ -24,7 +24,7 @@ type goListPackage struct {
 // This guard prevents architecture drift as more CLI commands are routed through
 // the engine over time.
 func TestEngineDependencyDirection(t *testing.T) {
-	const module = "github.com/franchoy/coldkeep"
+	const module = "github.com/franchoy/coldkeep/v2"
 	const enginePkg = module + "/internal/engine"
 	const catalogPkg = module + "/internal/catalog"
 	const cliPkg = module + "/cmd/coldkeep"
@@ -45,15 +45,22 @@ func TestEngineDependencyDirection(t *testing.T) {
 	}
 
 	dec := json.NewDecoder(strings.NewReader(string(out)))
+	observed := make(map[string]bool)
 	for dec.More() {
 		var pkg goListPackage
 		if err := dec.Decode(&pkg); err != nil {
 			t.Fatalf("decode go list output: %v", err)
 		}
+		observed[pkg.ImportPath] = true
 		checkEngineNotDependsOnCLI(t, pkg, enginePkg, cliPkg)
 		checkDomainNotImportsEngine(t, pkg, module, enginePkg, applicationPkg)
 		checkCLINotImportsCatalog(t, pkg, cliPkg, catalogPkg)
 		checkApplicationCompositionImports(t, pkg, module, applicationPkg, enginePkg)
+	}
+	for _, required := range []string{enginePkg, catalogPkg, cliPkg, applicationPkg} {
+		if !observed[required] {
+			t.Errorf("architecture guard did not observe required package %s", required)
+		}
 	}
 }
 

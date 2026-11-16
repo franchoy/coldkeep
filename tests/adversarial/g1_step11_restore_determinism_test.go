@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
-	testutils "github.com/franchoy/coldkeep/tests/utils"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
+	corebenchmark "github.com/franchoy/coldkeep/v2/internal/benchmark"
+	testutils "github.com/franchoy/coldkeep/v2/tests/utils"
+	"github.com/franchoy/coldkeep/v2/tests/utils/testgate"
 )
 
 type step11Dataset struct {

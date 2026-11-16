@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/db"
 )
 
 const (

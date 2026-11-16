@@ -13,6 +13,8 @@ from typing import Optional
 
 from release_state_support import (
     CHANGELOG_HEADING,
+    CURRENT_AUTHORITY_PATH,
+    SEMVER_TEXT,
     DiagnosticRecorder,
     Document,
     FINAL_SNAPSHOT_SPECS,
@@ -77,6 +79,8 @@ from release_state_support import (
     validate_root,
     v1_context_scope,
     version_from_release,
+    version_core,
+    validate_v2_authority,
 )
 
 
@@ -163,7 +167,7 @@ def heading_versions(doc: Document) -> list[tuple[int, str, str]]:
 
 
 def release_paths(version: str) -> tuple[str, str]:
-    major, minor, _ = version.split(".")
+    major, minor, _ = version_core(version)
     directory = f"docs/release/v{major}.{minor}"
     return directory, f"v{version}"
 
@@ -174,7 +178,7 @@ def active_docs(
     result: ValidationResult,
 ) -> dict[str, Optional[Document]]:
     directory, stem = release_paths(version)
-    major, minor, _ = version.split(".")
+    major, minor, _ = version_core(version)
     paths = {
         "version_test": "internal/version/version_test.go", "checklist": "PRE_RELEASE_CHECKLIST.md",
         "changelog": "CHANGELOG.md", "readme": "README.md", "release_readme": f"{directory}/README.md",
@@ -645,7 +649,7 @@ def _progression_reference_material(
 def check_ckrs002(version: str, doc: Optional[Document], result: ValidationResult) -> None:
     if not doc:
         return
-    matches = re.findall(r'"(\d+\.\d+\.\d+)"', "\n".join(doc.lines))
+    matches = re.findall(rf'"({SEMVER_TEXT})"', "\n".join(doc.lines))
     if len(matches) != 1 or matches[0] != version:
         found = matches[0] if len(matches) == 1 else "missing or ambiguous"
         result.add("CKRS002", doc.path, 0, f"version test expects {found}; source version is {version}")
@@ -1582,12 +1586,19 @@ def validate(
     root: Path,
     requested_state: str,
     diagnostic: Optional[DiagnosticRecorder] = None,
+    authority: str = "auto",
 ) -> ValidationResult:
     result = ValidationResult(None, None)
     version = parse_source_version(root, result)
     result.active_version = version
     if version is None:
         return result
+    if authority == "historical-v1":
+        if version_core(version)[0] != "1" or "-" in version or (root / CURRENT_AUTHORITY_PATH).exists():
+            result.add("CKRS021", CURRENT_AUTHORITY_PATH, 0, "historical-v1 requires a frozen v1 checkout without active v2 authority")
+            return result
+    elif (root / CURRENT_AUTHORITY_PATH).exists() or version_core(version)[0] != "1":
+        return validate_v2_authority(root, version, requested_state)
     docs = active_docs(root, version, result)
     boundaries, boundary_detail = parse_lifecycle_boundaries(docs["contract"])
     declaration, declaration_detail = parse_lifecycle_declaration(
@@ -2058,6 +2069,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate Coldkeep release-state documentation and local Git context.")
     parser.add_argument("--json", action="store_true", help="emit one JSON result object")
     parser.add_argument("--repo-root", help="repository root to validate")
+    parser.add_argument("--authority", choices=("auto", "historical-v1"), default="auto", help="explicit frozen-v1 route requires a historical checkout")
     parser.add_argument("--state", choices=("auto", *STATES), default="auto", help="lifecycle state (default: auto)")
     parser.add_argument(
         "--diagnostic-json",
@@ -2122,7 +2134,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         root = validate_root(args.repo_root)
         if diagnostic is not None:
             diagnostic.bind_sources(root, Path(__file__).resolve())
-        result = validate(root, args.state, diagnostic)
+        result = validate(root, args.state, diagnostic, args.authority)
         status = emit(result, args.json)
         write_diagnostic(
             resolved_state=result.state,

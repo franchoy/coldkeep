@@ -6,9 +6,9 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 // These seams exist only so pre-v1.13.12 CLI compatibility tests can keep

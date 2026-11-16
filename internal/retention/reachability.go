@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/graph"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/graph"
 )
 
 // ProtectionOptions controls which retained snapshots participate in a

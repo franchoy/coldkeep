@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/gc"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/gc"
 )
 
 const SimulationKindGC = "gc"

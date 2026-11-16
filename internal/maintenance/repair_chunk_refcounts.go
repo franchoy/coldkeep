@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/db"
 )
 
 // RepairChunkLiveRefCountsResult captures the outcome of recomputing

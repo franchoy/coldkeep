@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 func TestRestoreSnapshotCreateUsesCanonicalDarwinSourceWithRawTempSelectionBase(t *testing.T) {

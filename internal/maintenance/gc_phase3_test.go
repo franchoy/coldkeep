@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
 	_ "github.com/mattn/go-sqlite3"
 )
 

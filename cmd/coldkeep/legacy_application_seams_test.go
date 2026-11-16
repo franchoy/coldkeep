@@ -12,12 +12,12 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/application"
-	"github.com/franchoy/coldkeep/internal/batch"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/application"
+	"github.com/franchoy/coldkeep/v2/internal/batch"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext

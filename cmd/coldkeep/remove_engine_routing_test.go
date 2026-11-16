@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/batch"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/batch"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 func TestRemoveByIDEngineRoutingJSON(t *testing.T) {

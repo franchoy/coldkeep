@@ -10,6 +10,9 @@ import (
 
 const currentCatalogSchemaVersion = 17
 
+// Ordinary writers remain limited to schema17 until physical binding qualifies.
+var ErrIdentityBindingRequired = errors.New("identity binding required")
+
 type schemaMetadataRepresentation uint8
 
 const (
@@ -179,6 +182,9 @@ func inspectPostgresSchemaMetadata(ctx context.Context, dbconn schemaMetadataQue
 	if columnName == "catalog_version" {
 		if maximum.Int64 < currentCatalogSchemaVersion {
 			return schemaMetadataState{}, fmt.Errorf("fenced postgres catalog_version %d is below required version %d", maximum.Int64, currentCatalogSchemaVersion)
+		}
+		if maximum.Int64 == 18 {
+			return schemaMetadataState{}, fmt.Errorf("%w: fenced postgres catalog_version 18 is a future version for ordinary writers", ErrIdentityBindingRequired)
 		}
 		if maximum.Int64 > currentCatalogSchemaVersion {
 			return schemaMetadataState{}, fmt.Errorf("fenced postgres catalog_version %d is a future version", maximum.Int64)

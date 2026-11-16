@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	dbschema "github.com/franchoy/coldkeep/db"
+	dbschema "github.com/franchoy/coldkeep/v2/db"
 )
 
 const requiredPostgresSchemaVersion = 17

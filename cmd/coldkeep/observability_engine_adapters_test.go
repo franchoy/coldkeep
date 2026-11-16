@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 func TestEngineValueToAnyPreservesIntegerBoundaries(t *testing.T) {

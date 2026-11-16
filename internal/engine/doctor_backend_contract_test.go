@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/testutil/backendtest"
 )
 
 func TestEngineDoctorAcrossBackends(t *testing.T) {

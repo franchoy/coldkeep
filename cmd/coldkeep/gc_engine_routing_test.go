@@ -14,7 +14,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 // injectGCRoutingDB injects dbconn into loadDefaultStorageContextPhase for the

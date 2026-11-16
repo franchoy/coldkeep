@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/graph"
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/graph"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 func (s *Service) Inspect(ctx context.Context, entity EntityType, id string, opts InspectOptions) (*InspectResult, error) {

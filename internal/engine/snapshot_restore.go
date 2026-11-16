@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 type preparedSnapshotRestoreRequest struct {

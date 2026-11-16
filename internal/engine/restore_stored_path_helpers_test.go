@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	dbpkg "github.com/franchoy/coldkeep/internal/db"
+	dbpkg "github.com/franchoy/coldkeep/v2/internal/db"
 
 	_ "github.com/lib/pq"
 )

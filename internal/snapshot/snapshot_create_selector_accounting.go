@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
 )
 
 type snapshotCreateSelectorKind uint8

@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/fsx"
-	"github.com/franchoy/coldkeep/internal/fsx/faultfs"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
+	"github.com/franchoy/coldkeep/v2/internal/fsx/faultfs"
 )
 
 func TestGarbageCollectWorkersBoundConcurrencyAndPreserveOrder(t *testing.T) {

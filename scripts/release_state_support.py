@@ -16,8 +16,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Optional
 
 
-SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
-CHANGELOG_HEADING = re.compile(r"^## (?:v|\[)(\d+\.\d+\.\d+)(?:\]|\b)(.*)$")
+SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+SEMVER_PRE_ID = rf"(?:{SEMVER_NUMBER}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+SEMVER_TEXT = rf"{SEMVER_NUMBER}\.{SEMVER_NUMBER}\.{SEMVER_NUMBER}(?:-{SEMVER_PRE_ID}(?:\.{SEMVER_PRE_ID})*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+SEMVER = re.compile(rf"^{SEMVER_TEXT}$")
+CHANGELOG_HEADING = re.compile(rf"^## (?:v|\[)({SEMVER_TEXT})(?:\]|(?=\s|$))(.*)$")
 PHASE_HEADING = re.compile(r"^## Phase (\d+)\b")
 METADATA = re.compile(r"^\*\*(Release|Status|Branch|Phase status):\*\*\s*(.*)$")
 LIFECYCLE_BOUNDARY = re.compile(
@@ -771,19 +774,13 @@ class DiagnosticRecorder:
         """Measure loaded implementation bytes once at startup."""
         self.root = root
         try:
-            version_source = (root / "internal/version/version.go").read_text(
-                encoding="utf-8"
-            )
-            version_match = re.search(
-                r"(?m)^\s*Major\s*=\s*(\d+)\s*$.*?"
-                r"^\s*Minor\s*=\s*(\d+)\s*$.*?"
-                r"^\s*Patch\s*=\s*(\d+)\s*$",
-                version_source,
-                re.DOTALL,
-            )
-            source_version = (
-                ".".join(version_match.groups()) if version_match else None
-            )
+            source_version = parse_source_version(root, ValidationResult(None, None))
+            if source_version is not None and version_core(source_version)[0] == "2":
+                self.source_paths = (
+                    "scripts/validate_release_state.py", "scripts/release_state_support.py",
+                    "internal/version/version.go", "go.mod", CURRENT_AUTHORITY_PATH,
+                    "docs/release/v2.0/README.md",
+                )
             if source_version in self._FINAL_SNAPSHOT_SOURCE_PATHS:
                 self.source_paths = self._FINAL_SNAPSHOT_SOURCE_PATHS[
                     source_version
@@ -2411,27 +2408,38 @@ def validate_root(value: Optional[str]) -> Path:
 
 
 def parse_source_version(root: Path, result: ValidationResult) -> Optional[str]:
-    """Parse the three authoritative Go version constants."""
+    """Parse the complete source identity; never discard a prerelease suffix."""
     path = "internal/version/version.go"
     text = (root / path).read_text(encoding="utf-8")
     parts: list[str] = []
     for name in ("Major", "Minor", "Patch"):
-        matches = re.findall(rf"(?m)^\s*{name}\s*=\s*([^\s/]+)", text)
-        valid = (
-            len(matches) == 1
-            and re.fullmatch(r"\d+", matches[0]) is not None
-            and int(matches[0]) >= 0
-        )
-        if not valid:
+        declarations = re.findall(rf"(?m)^[ \t]*(?:const[ \t]+)?{name}\b([^\n]*)", text)
+        literal = re.fullmatch(rf"[ \t]*=[ \t]*({SEMVER_NUMBER})[ \t]*(?://[^\n]*)?",
+                               declarations[0]) if len(declarations) == 1 else None
+        if literal is None:
             result.add(
                 "CKRS001",
                 path,
                 0,
-                "source version must contain exactly one integer Major, Minor, and Patch declaration",
+                "source version must contain exactly one decimal literal declaration for each of Major, Minor, and Patch",
             )
             return None
-        parts.append(matches[0])
+        parts.append(literal.group(1))
     version = ".".join(parts)
+    declarations = re.findall(r'(?m)^\s*(?:const\s+)?Prerelease\b([^\n]*)', text)
+    if int(parts[0]) >= 2 and not declarations:
+        result.add("CKRS001", path, 0, "v2+ source requires an explicit Prerelease literal (empty for stable)")
+        return None
+    if declarations:
+        if len(declarations) != 1 or re.fullmatch(r'\s*=\s*"[^"\n]*"\s*(?://[^\n]*)?', declarations[0]) is None:
+            result.add("CKRS001", path, 0, "Prerelease must be one literal string")
+            return None
+        prerelease = declarations[0].split('"')[1]
+        if prerelease:
+            version += "-" + prerelease
+            if "+" in prerelease:
+                result.add("CKRS001", path, 0, "build provenance must be separate from Prerelease")
+                return None
     if not SEMVER.fullmatch(version):
         result.add(
             "CKRS001",
@@ -2445,10 +2453,330 @@ def parse_source_version(root: Path, result: ValidationResult) -> Optional[str]:
 
 def version_from_release(value: str) -> Optional[tuple[str, str]]:
     """Parse version and title from a release metadata field."""
-    match = re.search(r"`?(v\d+\.\d+\.\d+)\s+—\s+([^`]+?)`?$", value)
+    match = re.fullmatch(rf"`?(v{SEMVER_TEXT})\s+—\s+([^`]+?)`?", value)
     if not match:
         return None
     return match.group(1)[1:], match.group(2).strip()
+
+
+CURRENT_AUTHORITY_PATH = "docs/release/current.json"
+V2_MIRRORS = (
+    "AGENTS.md", ".github/copilot-instructions.md",
+    ".github/instructions/ci.instructions.md",
+    ".github/prompts/critical-path-coverage.prompt.md",
+    ".github/prompts/regression-fix.prompt.md", "README.md", "SECURITY.md",
+)
+
+
+def version_core(version: str) -> tuple[str, str, str]:
+    if SEMVER.fullmatch(version) is None:
+        raise ValueError(f"invalid semantic version: {version!r}")
+    return tuple(version.split("+", 1)[0].split("-", 1)[0].split("."))
+
+
+def release_channel(version: str) -> str:
+    version_core(version)
+    identity = version.split("+", 1)[0]
+    return identity.split("-", 1)[1].split(".", 1)[0] if "-" in identity else "stable"
+
+
+def validate_distribution_identity(version: str, module: str, tag: str | None = None,
+                                   artifact_version: str | None = None) -> list[str]:
+    """Exact identity check usable before release packaging exists."""
+    try:
+        major, _, _ = version_core(version)
+    except ValueError as exc:
+        return [str(exc)]
+    expected = "github.com/franchoy/coldkeep" + (f"/v{major}" if int(major) >= 2 else "")
+    errors = []
+    if module != expected:
+        errors.append(f"module must be {expected}")
+    if tag is not None and tag != "v" + version:
+        errors.append("tag must equal the complete source version")
+    if artifact_version is not None and artifact_version != version:
+        errors.append("artifact must equal the complete source version")
+    return errors
+
+
+def frozen_v1_digest(root: Path) -> str:
+    """Bind exact historical release paths and bytes, including additions/removals."""
+    def require_directory(path: Path) -> None:
+        if not stat.S_ISDIR(path.lstat().st_mode):
+            raise ValueError(f"historical path must be a real directory: {path.relative_to(root)}")
+
+    release_root = root / "docs/release"
+    for path in (root / "docs", release_root):
+        require_directory(path)
+    pending = [path for path in release_root.iterdir() if path.name.startswith("v1")]
+    for path in pending:
+        require_directory(path)
+    files: list[Path] = []
+    while pending:
+        directory = pending.pop()
+        for path in directory.iterdir():
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"historical symlink: {path.relative_to(root)}")
+            if stat.S_ISDIR(mode):
+                pending.append(path)
+            elif stat.S_ISREG(mode):
+                files.append(path)
+            else:
+                raise ValueError(f"historical file must be regular: {path.relative_to(root)}")
+
+    digest = hashlib.sha256()
+    for path in sorted(files):
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def _unique_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate authority key: {key}")
+        result[key] = value
+    return result
+
+
+def _phase3b_r1_followup_complete(root: Path) -> bool:
+    """Recognize only the bounded R1 completion record, not runtime acceptance."""
+    report = root / "docs/release/v2.0/phase3b-followup-result.md"
+    try:
+        if not report.is_file() or report.is_symlink():
+            return False
+        with report.open("rb") as stream:
+            data = stream.read(65537)
+        if len(data) > 65536:
+            return False
+        text = data.decode("utf-8")
+    except (OSError, UnicodeError):
+        return False
+    required = {
+        "Phase 3B follow-up R1": "COMPLETE, awaiting independent review",
+        "R1 lossless operator root selection": "PASS",
+        "Submitted-source decoder and operator counterexamples": "REPRODUCED",
+        "Fresh recovery/operator qualification": "PASS",
+        "Parent action 2.04": "ACTIVE",
+        "Implementation": "ACTIVE",
+        "Product gates": "INCOMPLETE",
+        "Phase 3C": "OUTSTANDING",
+        "Ordinary schema18/19 writers": "REFUSED",
+        "IMPORT_READY maintenance/activation": "REFUSED",
+        "Publication": "NOT AUTHORIZED",
+        "Governing BUILD": "coldkeep_phase3b_followup_codex_2026-11-09.md",
+    }
+    # Whole field values avoid substring passes (NOT PASS, PASS-pending, or a
+    # conflicting duplicate). Other report prose remains unconstrained.
+    fields: dict[str, list[str]] = {key: [] for key in required}
+    for line in text.splitlines():
+        key, separator, value = line.strip().partition(":")
+        if separator and key in fields:
+            fields[key].append(value.strip())
+    return all(fields[key] == [value] for key, value in required.items())
+
+
+def validate_v2_authority(root: Path, version: str, requested_state: str = "auto") -> ValidationResult:
+    """Validate only the adopted development scope, never certify a product release."""
+    result = ValidationResult("development", version)
+    result.artifact_state = "development"
+    result.evidence_scope = "UNRESOLVED_ACTIVE_SCOPE"
+    result.outstanding_obligations = ["2.01-2.13", "2.15", "2.17", "separate-publication-authorization"]
+
+    def fail(message: str, path: str = CURRENT_AUTHORITY_PATH) -> None:
+        result.add("CKRS021", path, 0, message)
+
+    try:
+        path = root / CURRENT_AUTHORITY_PATH
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 16384:
+            raise ValueError("one bounded regular current authority file is required")
+        state = json.loads(path.read_text(), object_pairs_hook=_unique_json_pairs)
+        scopes = {"0": "LOCAL_PHASE0_AUTHORITY_ONLY", "2.01": "LOCAL_ACTION_2_01_AUTHORITY_ONLY",
+                  "2.02": "LOCAL_ACTION_2_02_AUTHORITY_ONLY",
+                  "2.03": "LOCAL_ACTION_2_03_AUTHORITY_ONLY",
+                  "2.04": "LOCAL_ACTION_2_04_PHASE3A_AUTHORITY_ONLY"}
+        phase = state.get("phase") if isinstance(state, dict) else None
+        if not isinstance(phase, str) or phase not in scopes:
+            raise ValueError("active phase must be exactly 0, 2.01, 2.02, 2.03 or bounded 2.04")
+        result.evidence_scope = scopes[phase]
+        if phase == "2.01" and state.get("phase_status") == "COMPLETE":
+            result.outstanding_obligations = ["2.02-2.13", "2.15", "2.17", "separate-publication-authorization"]
+        if phase == "2.03":
+            result.outstanding_obligations = ["2.03-recovery-copy-completion-import-isolated-restoration", "2.02", "2.04-2.13", "2.15", "2.17", "separate-publication-authorization"]
+            if state.get("phase_status") == "COMPLETE":
+                # This is structural local authority, never runtime certification.
+                report = root / "docs/release/v2.0/phase1d-result.md"
+                required = ("Local-profile action 2.03: COMPLETE",
+                            "Profile: Linux/manual PostgreSQL 16",
+                            "Product gates: INCOMPLETE", "Implementation: ACTIVE",
+                            "coldkeep_phase1d_codex_2026-11-08.md")
+                if (not report.is_file() or report.is_symlink() or report.stat().st_size > 65536
+                        or any(token not in report.read_text() for token in required)):
+                    fail("2.03 COMPLETE requires the owning Phase 1D local-profile result")
+                else:
+                    result.outstanding_obligations.remove("2.03-recovery-copy-completion-import-isolated-restoration")
+        if phase == "2.02":
+            result.outstanding_obligations = ["2.02-delivery-native-proof", "2.04-2.13", "2.15", "2.17", "separate-publication-authorization"]
+            if state.get("phase_status") == "COMPLETE":
+                # Structural authority only: actual executions are reviewed separately.
+                report = root / "docs/release/v2.0/phase2-result.md"
+                required = ("Local action 2.02: COMPLETE — internal delivery and Linux feasibility proof",
+                            "Product gates: INCOMPLETE", "Implementation: ACTIVE",
+                            "coldkeep_phase2_codex_2026-11-08.md",
+                            "Packaged process: PASS", "Authenticated engine journey: PASS",
+                            "Linux SQLite and PostgreSQL Docker: PASS")
+                if (not report.is_file() or report.is_symlink() or report.stat().st_size > 65536
+                        or any(token not in report.read_text() for token in required)):
+                    fail("2.02 COMPLETE requires its owning bounded Phase 2 result")
+                else:
+                    result.outstanding_obligations.remove("2.02-delivery-native-proof")
+                followup = root / "docs/release/v2.0/phase2-followup-result.md"
+                followup_required = (
+                    "Local action 2.02: COMPLETE — internal delivery and Linux feasibility proof",
+                    "Product gates: INCOMPLETE", "Implementation: ACTIVE",
+                    "coldkeep_phase2_followup_codex_2026-11-08.md",
+                    "P1 restore destination: PASS", "P2 TCP classification: PASS",
+                    "P3 complete-value byte bounds: PASS", "Fresh integrated qualification: PASS",
+                )
+                if (not followup.is_file() or followup.is_symlink() or followup.stat().st_size > 65536
+                        or any(token not in followup.read_text() for token in followup_required)):
+                    fail("2.02 COMPLETE also requires its owning P1–P3 follow-up result")
+                    if "2.02-delivery-native-proof" not in result.outstanding_obligations:
+                        result.outstanding_obligations.insert(0, "2.02-delivery-native-proof")
+        if phase == "2.04":
+            result.outstanding_obligations = ["2.04-phase3a-qualification", "2.04-phase3a-followup-a1-a2", "2.04-phase3b", "2.04-phase3b-followup-r1", "2.04-phase3c", "2.04-phase3c1", "2.04-phase3c2", "2.05-2.13", "2.15", "2.17", "separate-publication-authorization"]
+            report = root / "docs/release/v2.0/phase3a-result.md"
+            if report.is_file() and not report.is_symlink() and report.stat().st_size <= 65536:
+                text = report.read_text()
+                required = ("Phase 3A unit: COMPLETE", "Parent action 2.04: ACTIVE",
+                            "Product gates: INCOMPLETE", "Implementation: ACTIVE",
+                            "coldkeep_phase3a_codex_2026-11-08.md",
+                            "Identity/adoption/recovery qualification: PASS")
+                if all(token in text for token in required):
+                    result.outstanding_obligations.remove("2.04-phase3a-qualification")
+            # The preserved submission is not evidence for the later A1/A2
+            # correction. Only its bounded follow-up can discharge this duty.
+            followup = root / "docs/release/v2.0/phase3a-followup-result.md"
+            followup_required = (
+                "Phase 3A follow-up A1–A2: COMPLETE, awaiting independent review",
+                "Parent action 2.04: ACTIVE", "Implementation: ACTIVE",
+                "Product gates: INCOMPLETE",
+                "coldkeep_phase3a_followup_codex_2026-11-08.md",
+                "A1 exact relation-bound constraint set: PASS",
+                "A2 bounded metadata before deparsing/transfer: PASS",
+                "Fresh recovery qualification: PASS",
+            )
+            if ("2.04-phase3a-qualification" not in result.outstanding_obligations
+                    and followup.is_file() and not followup.is_symlink()
+                    and followup.stat().st_size <= 65536
+                    and all(token in followup.read_text() for token in followup_required)):
+                result.outstanding_obligations.remove("2.04-phase3a-followup-a1-a2")
+            binding = root / "docs/release/v2.0/phase3b-result.md"
+            binding_required = (
+                "Phase 3B unit: COMPLETE, awaiting independent review",
+                "Parent action 2.04: ACTIVE", "Implementation: ACTIVE", "Product gates: INCOMPLETE",
+                "coldkeep_phase3b_codex_2026-11-09.md",
+                "Physical binding qualification: PASS", "Fresh recovery qualification: PASS",
+                "Fresh integrated qualification: PASS", "Ordinary schema18/19 writers: REFUSED",
+                "IMPORT_READY maintenance/activation: REFUSED", "Phase 3C: OUTSTANDING",
+            )
+            if ("2.04-phase3a-followup-a1-a2" not in result.outstanding_obligations
+                    and binding.is_file() and not binding.is_symlink()
+                    and binding.stat().st_size <= 65536
+                    and all(token in binding.read_text() for token in binding_required)):
+                result.outstanding_obligations.remove("2.04-phase3b")
+            # The preserved Phase 3B submission cannot discharge its reviewed
+            # R1 defect. Completion of the owning follow-up clears only R1.
+            if ("2.04-phase3b" not in result.outstanding_obligations
+                    and _phase3b_r1_followup_complete(root)):
+                result.outstanding_obligations.remove("2.04-phase3b-followup-r1")
+            # C1 is a subordinate unit. Its report never clears C2 or the parent.
+            c1 = root / "docs/release/v2.0/phase3c1-result.md"
+            c1_tokens = ("Phase 3C1 unit: COMPLETE", "Parent action 2.04: ACTIVE",
+                         "Phase 3C2: OUTSTANDING", "Implementation: ACTIVE",
+                         "Product gates: INCOMPLETE", "coldkeep_phase3c1_build_2026-11-09.md",
+                         "Generation model and upgrade qualification: PASS",
+                         "Fresh schema20 recovery qualification: PASS")
+            if ("2.04-phase3b-followup-r1" not in result.outstanding_obligations
+                    and c1.is_file() and not c1.is_symlink() and c1.stat().st_size <= 65536
+                    and all(token in c1.read_text() for token in c1_tokens)):
+                result.outstanding_obligations.remove("2.04-phase3c1")
+            for name, token in (("phase1a-result.md", "COMPLETE"), ("phase1d-result.md", "Local-profile action 2.03: COMPLETE"), ("phase2-followup-result.md", "Local action 2.02: COMPLETE")):
+                accepted = root / "docs/release/v2.0" / name
+                if not accepted.is_file() or accepted.is_symlink() or token not in accepted.read_text():
+                    fail("2.04 requires preserved accepted predecessor report: " + name)
+            if state.get("phase_status") == "COMPLETE":
+                from phase3c2_authority import complete
+                if not complete(root):
+                    fail("2.04 COMPLETE requires exact integrated C2 local qualification and accepted predecessors")
+                else:
+                    result.evidence_scope = "LOCAL_ACTION_2_04_INTEGRATED_AUTHORITY_ONLY"
+                    result.outstanding_obligations = ["2.05-2.13", "2.15", "2.17", "separate-publication-authorization"]
+        expected = {
+            "schema": "coldkeep-active-development/v1", "family": "v2.0",
+            "version": version, "state": "development", "phase": phase,
+            "profile": "manual-postgresql-docker", "latest_stable": "1.13.19",
+            "charter": "docs/release/v2.0/README.md", "stable_target": "2.0.0",
+            "stable_gate": "2.17", "module": "github.com/franchoy/coldkeep/v2",
+            "product_gates": "INCOMPLETE", "implementation": "ACTIVE",
+        }
+        if not isinstance(state, dict) or set(state) != set(expected) | {"phase_status", "historical_base", "frozen_v1_sha256"}:
+            raise ValueError("unknown or missing authority fields")
+        for key, value in expected.items():
+            if state.get(key) != value:
+                fail(f"{key} must be {value!r}")
+        if version_core(version)[:2] != ("2", "0") or release_channel(version) not in {"dev", "alpha", "beta", "rc"}:
+            fail("active development requires a v2.0 development/prerelease identity")
+        if state.get("phase_status") not in {"ACTIVE", "COMPLETE"}:
+            fail("phase_status must be ACTIVE or COMPLETE; product gates stay incomplete")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(state.get("historical_base"))):
+            fail("historical_base must identify the actual frozen Git launch revision")
+        if frozen_v1_digest(root) != state.get("frozen_v1_sha256"):
+            fail("frozen v1 release paths/bytes changed")
+        module_text = (root / "go.mod").read_text()
+        modules = re.findall(r"(?m)^module (\S+)$", module_text)
+        for message in validate_distribution_identity(version, modules[0] if len(modules) == 1 else ""):
+            fail(message, "go.mod")
+        charter = root / expected["charter"]
+        if not charter.is_file() or charter.is_symlink():
+            fail("selected charter must be a regular file")
+        mirror = {
+            "SOURCE_VERSION": version, "RELEASE_FAMILY": "v2.0",
+            "RELEASE_STATE": "development", "CURRENT_PHASE": phase,
+            "CURRENT_AUTHORITY": CURRENT_AUTHORITY_PATH, "LATEST_STABLE": "1.13.19",
+            "V2_IMPLEMENTATION": "ACTIVE", "PRODUCT_GATES": "INCOMPLETE",
+        }
+        for relative in V2_MIRRORS:
+            text = (root / relative).read_text()
+            blocks = re.findall(r"<!-- coldkeep-current-state:start -->\s*```text\n(.*?)\n```\s*<!-- coldkeep-current-state:end -->", text, re.S)
+            actual = [f"{key}: {value}" for key, value in mirror.items()]
+            if len(blocks) != 1 or blocks[0].splitlines() != actual:
+                fail("current-state mirror must exactly match selected v2 authority", relative)
+            if relative in V2_MIRRORS[:5]:
+                prose = " ".join(text.split())
+                if "never lose user data" not in prose:
+                    fail("active provider must preserve the primary correctness invariant", relative)
+                if re.search(r"(?i)(?:do not implement v2|v2 implementation has not started|v2 implementation(?: and SQLite-first product defaults)? require[sd]? a separate plan)", prose):
+                    fail("active provider contradicts the adopted development authority", relative)
+        agents = " ".join((root / "AGENTS.md").read_text().split())
+        for invariant in (
+            "GC must never delete reachable data.",
+            "Restore must not write outside its intended destination.",
+            "Verify must fail closed on inconsistent catalog or storage state.",
+            "Recovery must not legitimize corrupt mappings.",
+            "Packed and legacy storage behavior must remain aligned.",
+        ):
+            if invariant not in agents:
+                fail(f"required correctness rule missing: {invariant}", "AGENTS.md")
+        if requested_state not in {"auto", "development"}:
+            fail("active development cannot validate a release/publication state")
+        env = github_context()
+        if env.get("GITHUB_REF", "").startswith("refs/tags/") or env.get("GITHUB_REF_TYPE") == "tag":
+            fail("active development does not authorize or certify tag publication")
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        fail(str(exc))
+    return result
 
 
 def phase_blocks(doc: Document) -> list[tuple[int, int, list[str]]]:

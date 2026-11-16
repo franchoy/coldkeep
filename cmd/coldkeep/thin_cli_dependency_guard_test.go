@@ -45,19 +45,19 @@ func TestProductionCLIUsesOnlyApplicationAndEngineExecutionBoundaries(t *testing
 		"main.go:parseSnapshotRestorePrefixSelectors:snapshot.NormalizeSnapshotPath":           true,
 	}
 	allowedImports := map[string]bool{
-		"init.go:github.com/franchoy/coldkeep/internal/storage":                                true,
-		"init.go:github.com/franchoy/coldkeep/internal/storage/compression":                    true,
-		"main.go:github.com/franchoy/coldkeep/internal/db":                                     true,
-		"main.go:github.com/franchoy/coldkeep/internal/gc":                                     true,
-		"main.go:github.com/franchoy/coldkeep/internal/maintenance":                            true,
-		"main.go:github.com/franchoy/coldkeep/internal/observability":                          true,
-		"main.go:github.com/franchoy/coldkeep/internal/recovery":                               true,
-		"main.go:github.com/franchoy/coldkeep/internal/snapshot":                               true,
-		"main.go:github.com/franchoy/coldkeep/internal/storage":                                true,
-		"main.go:github.com/franchoy/coldkeep/internal/verify":                                 true,
-		"observability_engine_adapters.go:github.com/franchoy/coldkeep/internal/observability": true,
-		"stored_path_engine_adapters.go:github.com/franchoy/coldkeep/internal/recovery":        true,
-		"stored_path_engine_adapters.go:github.com/franchoy/coldkeep/internal/storage":         true,
+		"init.go:github.com/franchoy/coldkeep/v2/internal/storage":                                true,
+		"init.go:github.com/franchoy/coldkeep/v2/internal/storage/compression":                    true,
+		"main.go:github.com/franchoy/coldkeep/v2/internal/db":                                     true,
+		"main.go:github.com/franchoy/coldkeep/v2/internal/gc":                                     true,
+		"main.go:github.com/franchoy/coldkeep/v2/internal/maintenance":                            true,
+		"main.go:github.com/franchoy/coldkeep/v2/internal/observability":                          true,
+		"main.go:github.com/franchoy/coldkeep/v2/internal/recovery":                               true,
+		"main.go:github.com/franchoy/coldkeep/v2/internal/snapshot":                               true,
+		"main.go:github.com/franchoy/coldkeep/v2/internal/storage":                                true,
+		"main.go:github.com/franchoy/coldkeep/v2/internal/verify":                                 true,
+		"observability_engine_adapters.go:github.com/franchoy/coldkeep/v2/internal/observability": true,
+		"stored_path_engine_adapters.go:github.com/franchoy/coldkeep/v2/internal/recovery":        true,
+		"stored_path_engine_adapters.go:github.com/franchoy/coldkeep/v2/internal/storage":         true,
 	}
 	used := make(map[string]bool)
 	usedImports := make(map[string]bool)
@@ -166,15 +166,15 @@ func isGuardedCLIPackage(name string) bool {
 
 func isGuardedCLIImport(path string) bool {
 	for _, prefix := range []string{
-		"github.com/franchoy/coldkeep/internal/catalog",
-		"github.com/franchoy/coldkeep/internal/db",
-		"github.com/franchoy/coldkeep/internal/gc",
-		"github.com/franchoy/coldkeep/internal/maintenance",
-		"github.com/franchoy/coldkeep/internal/observability",
-		"github.com/franchoy/coldkeep/internal/recovery",
-		"github.com/franchoy/coldkeep/internal/snapshot",
-		"github.com/franchoy/coldkeep/internal/storage",
-		"github.com/franchoy/coldkeep/internal/verify",
+		"github.com/franchoy/coldkeep/v2/internal/catalog",
+		"github.com/franchoy/coldkeep/v2/internal/db",
+		"github.com/franchoy/coldkeep/v2/internal/gc",
+		"github.com/franchoy/coldkeep/v2/internal/maintenance",
+		"github.com/franchoy/coldkeep/v2/internal/observability",
+		"github.com/franchoy/coldkeep/v2/internal/recovery",
+		"github.com/franchoy/coldkeep/v2/internal/snapshot",
+		"github.com/franchoy/coldkeep/v2/internal/storage",
+		"github.com/franchoy/coldkeep/v2/internal/verify",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true

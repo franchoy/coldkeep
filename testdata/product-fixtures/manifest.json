@@ -1,0 +1,525 @@
+{
+  "schema": "coldkeep-product-fixtures/v1",
+  "baseline_reader": {
+    "version": "1.13.19",
+    "commit": "d3581602aee2599547564322fe083baae1d52063",
+    "catalog": 17
+  },
+  "retained_source": "internal/storage/testdata/compress_v1_18_supplemental",
+  "retained_writer": "550374d40d102bb5cbb5184799ef9b03fdaeefac",
+  "assets": [
+    {
+      "path": "internal/storage/testdata/compress_v1_18_supplemental/catalog.db",
+      "sha256": "390c30fd4c60e62462dedab0475aef25cc1b144b9372c86a54595af9f03aead6",
+      "bytes": 286720
+    },
+    {
+      "path": "internal/storage/testdata/compress_v1_18_supplemental/containers/container_1793438959614749875_30289991014867281.bin",
+      "sha256": "02be128169c7452f15af5c2c47ba5215f16d82b7c6c1f38ca59bb7c31aaf244b",
+      "bytes": 465751
+    },
+    {
+      "path": "internal/storage/testdata/compress_v1_18_supplemental/manifest.json",
+      "sha256": "c5f0450742229751fc1c05b8f89bbc0227090ab9e0d430544645a4ab6cc3bb32",
+      "bytes": 4014
+    }
+  ],
+  "key_references": {
+    "retained-compress-test-key": "Public disposable test key in retained_source/manifest.json:aes_key_hex; copied only to test process environment; never emitted in results",
+    "unavailable": "Intentionally empty COLDKEEP_KEY, distinct from corrupt data"
+  },
+  "builder_sources": [
+    "internal/storage/restore_step8_test.go",
+    "internal/storage/store_test.go:writeReusableTestContainerFileWithPayload",
+    "internal/storage/compress_dependency_compat_test.go",
+    "internal/snapshot/snapshot_test.go"
+  ],
+  "fixtures": [
+    {
+      "id": "retained-empty-none-plain",
+      "setup": "retained-copy",
+      "operation": "restore",
+      "file_id": 1,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "empty",
+        "empty"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "size": 0
+          }
+        ],
+        "metadata": "not selected; content-only retained fixture"
+      }
+    },
+    {
+      "id": "retained-tiny-zstd-plain-l1",
+      "setup": "retained-copy",
+      "operation": "restore",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "packed",
+        "literal",
+        "{'storage_codec': 'none', 'compression_codec': 'none', 'compression_level': None, 'block_count': 1}"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+            "size": 4
+          }
+        ],
+        "metadata": "not selected; content-only retained fixture"
+      }
+    },
+    {
+      "id": "retained-small-none-aes",
+      "setup": "retained-copy",
+      "operation": "restore",
+      "file_id": 3,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "packed",
+        "deterministic-noise",
+        "{'storage_codec': 'aes-gcm', 'compression_codec': 'none', 'compression_level': None, 'block_count': 1}"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "6b1d4bfe25f0144686cade6a6f77f222e6ef929b949a9d688e418d56dd3af609",
+            "size": 4096
+          }
+        ],
+        "metadata": "not selected; content-only retained fixture"
+      }
+    },
+    {
+      "id": "retained-compressible-zstd-plain-l1",
+      "setup": "retained-copy",
+      "operation": "restore",
+      "file_id": 4,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "packed",
+        "repeated-text",
+        "{'storage_codec': 'none', 'compression_codec': 'zstd', 'compression_level': 1, 'block_count': 1}"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "4d18e266c17e7efc1617632a2dca08f75923711c9ef814cea1265df797286f09",
+            "size": 262144
+          }
+        ],
+        "metadata": "not selected; content-only retained fixture"
+      }
+    },
+    {
+      "id": "retained-incompressible-zstd-aes-l3",
+      "setup": "retained-copy",
+      "operation": "restore",
+      "file_id": 5,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "packed",
+        "deterministic-noise",
+        "{'storage_codec': 'aes-gcm', 'compression_codec': 'none', 'compression_level': None, 'block_count': 1}"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "3c7762a35e19754d73dfe53ef5d929c51974c32368bd59a6d725fa5da5777be3",
+            "size": 262144
+          }
+        ],
+        "metadata": "not selected; content-only retained fixture"
+      }
+    },
+    {
+      "id": "retained-compressible-zstd-aes-l9",
+      "setup": "retained-copy",
+      "operation": "restore",
+      "file_id": 6,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "packed",
+        "repeated-text",
+        "{'storage_codec': 'aes-gcm', 'compression_codec': 'zstd', 'compression_level': 9, 'block_count': 1}"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "9617b1c61f17f60cc0f63c915fca166a8335af0c173e1efe25211cc351e656a9",
+            "size": 262144
+          }
+        ],
+        "metadata": "not selected; content-only retained fixture"
+      }
+    },
+    {
+      "id": "retained-multi-packed-zstd-plain-l3",
+      "setup": "retained-copy",
+      "operation": "restore",
+      "file_id": 7,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "packed",
+        "structured-compressible",
+        "{'storage_codec': 'none', 'compression_codec': 'zstd', 'compression_level': 3, 'block_count': 3}"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "a9abaef479fd8a58bda0527e7f927d37233017152ed9db1760817800c3c41236",
+            "size": 3145728
+          }
+        ],
+        "metadata": "not selected; content-only retained fixture"
+      }
+    },
+    {
+      "id": "legacy-plain",
+      "setup": "legacy-plain",
+      "operation": "restore",
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "legacy-block-v1",
+        "container-major-0",
+        "plain"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "62ce1e5d0b30b41b5e258dcc4ed4886fe76496092388d0cab869a0b9e6353367",
+            "size": 35
+          }
+        ],
+        "metadata": "not selected; content-only legacy builder"
+      }
+    },
+    {
+      "id": "legacy-aes-gcm",
+      "setup": "legacy-aes-gcm",
+      "operation": "restore",
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "legacy-block-v1",
+        "container-major-0",
+        "aes-gcm"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "62ce1e5d0b30b41b5e258dcc4ed4886fe76496092388d0cab869a0b9e6353367",
+            "size": 35
+          }
+        ],
+        "metadata": "not selected; content-only legacy builder"
+      }
+    },
+    {
+      "id": "mixed-legacy-packed",
+      "setup": "mixed",
+      "operation": "restore",
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "mixed-recipe",
+        "legacy-block-v1",
+        "packed-v1"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "4f6c24808e4002d0299b8857c7f24412c2a15a93e3f3ff0a407e42e4e27666bf",
+            "size": 39
+          }
+        ],
+        "metadata": "not selected; content-only mixed recipe"
+      }
+    },
+    {
+      "id": "inherited-snapshot-history",
+      "setup": "snapshots",
+      "operation": "snapshot-restore",
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "two-versions",
+        "inherited-snapshots",
+        "mode",
+        "mtime"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "older/history.txt",
+            "sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+            "size": 4
+          },
+          {
+            "path": "newer/history.txt",
+            "sha256": "6b1d4bfe25f0144686cade6a6f77f222e6ef929b949a9d688e418d56dd3af609",
+            "size": 4096
+          }
+        ],
+        "metadata": "mode=0640; mtime=2020-01-02T03:04:05Z; Linux only"
+      }
+    },
+    {
+      "id": "native-name-representations",
+      "setup": "names",
+      "operation": "snapshot-restore",
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "case-pair",
+        "NFC-NFD",
+        "embedded-newline",
+        "Linux"
+      ],
+      "expected": {
+        "outcome": "RESTORED",
+        "outputs": [
+          {
+            "path": "names/Case.txt",
+            "sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+            "size": 4
+          },
+          {
+            "path": "names/case.txt",
+            "sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+            "size": 4
+          },
+          {
+            "path": "names/café.txt",
+            "sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+            "size": 4
+          },
+          {
+            "path": "names/café.txt",
+            "sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+            "size": 4
+          },
+          {
+            "path": "names/line\nbreak.txt",
+            "sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+            "size": 4
+          }
+        ],
+        "metadata": "mode=0640; mtime=2020-01-02T03:04:05Z; Linux only"
+      }
+    },
+    {
+      "id": "missing-payload",
+      "setup": "missing",
+      "operation": "restore",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "missing-payload"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "no such file",
+        "outputs": [],
+        "metadata": "no destination published; no source repair"
+      }
+    },
+    {
+      "id": "truncated-payload",
+      "setup": "truncated",
+      "operation": "restore",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "truncated-payload"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "payload read exceeds limit",
+        "outputs": [],
+        "metadata": "no destination published; no source repair"
+      }
+    },
+    {
+      "id": "corrupt-payload",
+      "setup": "corrupt",
+      "operation": "restore",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "corrupt-payload"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "mismatch",
+        "outputs": [],
+        "metadata": "no destination published; no source repair"
+      }
+    },
+    {
+      "id": "future-packed-format",
+      "setup": "future-block",
+      "operation": "verify-fast",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "future-packed-format"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "metadata_invalid",
+        "outputs": [],
+        "metadata": "no destination published; no source repair"
+      }
+    },
+    {
+      "id": "future-catalog",
+      "setup": "future-schema",
+      "operation": "schema-inspect",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "future-catalog"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "future version",
+        "outputs": [],
+        "metadata": "no destination published; no source repair"
+      }
+    },
+    {
+      "id": "key-unavailable",
+      "setup": "missing-key",
+      "operation": "restore",
+      "file_id": 3,
+      "key_ref": "unavailable",
+      "coverage": [
+        "key-unavailable"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "COLDKEEP_KEY",
+        "outputs": [],
+        "metadata": "no destination published; no source repair"
+      }
+    },
+    {
+      "id": "interrupted-logical-file",
+      "setup": "processing",
+      "operation": "restore",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "interrupted-logical-file"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "logical file id 2 not found",
+        "outputs": [],
+        "metadata": "no destination published; no source repair"
+      }
+    },
+    {
+      "id": "trailing-space-name",
+      "setup": "name-reject",
+      "operation": "normalize-snapshot-path",
+      "coverage": [
+        "unsupported-native-name"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "whitespace",
+        "outputs": [],
+        "metadata": "no repository open or mutation"
+      }
+    },
+    {
+      "id": "legacy-backslash-normalization",
+      "setup": "name-normalization",
+      "operation": "normalize-snapshot-path",
+      "coverage": [
+        "known-baseline-name-loss"
+      ],
+      "expected": {
+        "outcome": "KNOWN_LIMIT",
+        "normalized_name": "back/slash.txt",
+        "outputs": [],
+        "metadata": "backslash is reinterpreted as separator; not lossless Unix capture"
+      }
+    },
+    {
+      "id": "restore-future-block-metadata",
+      "setup": "future-block",
+      "operation": "restore",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "future-packed-format"
+      ],
+      "expected": {
+        "outcome": "KNOWN_LIMIT",
+        "outputs": [
+          {
+            "path": "restored.bin",
+            "sha256": "8950abfda7b727630760dd35bcf5c3daa7631aff223a90f7728c0d2521dde10c",
+            "size": 4
+          }
+        ],
+        "metadata": "content restores with unsupported catalog block-version metadata when encoded CKBL is v1; verifier is required"
+      }
+    },
+    {
+      "id": "future-encoded-block-format",
+      "setup": "retained-copy",
+      "operation": "decode-packed",
+      "file_id": 2,
+      "key_ref": "retained-compress-test-key",
+      "coverage": [
+        "future CKBL header refusal"
+      ],
+      "expected": {
+        "outcome": "REFUSED",
+        "error_contains": "unsupported",
+        "outputs": [],
+        "metadata": "no destination published; no source repair"
+      }
+    }
+  ],
+  "development_findings": [
+    {
+      "probe": "initial restore of future packed metadata",
+      "observed": "restore succeeded for actual encoded v1 block",
+      "resolution": "Preserved as a KNOWN_LIMIT fixture; VerifyRepositoryFast supplies metadata refusal, DecodeBlock independently supplies encoded-version refusal. No payload oracle changed."
+    },
+    {
+      "probe": "initial refusal wording",
+      "observed": "truncation is bounded-read limit refusal; PROCESSING logical file is reported not found by restore adapter",
+      "resolution": "Recorded precise source-backed refusal boundaries; no fixture content regenerated."
+    }
+  ]
+}

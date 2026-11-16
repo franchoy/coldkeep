@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
 )
 
 // RestoreService provides restore operations with pluggable chunk resolution.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/fsx/secureinstall"
+	"github.com/franchoy/coldkeep/v2/internal/fsx/secureinstall"
 )
 
 // The name intentionally extends an existing cross-platform selector so the

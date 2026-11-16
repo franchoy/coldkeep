@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/testutil/backendtest"
 )
 
 const phase10ContainerOperationTimeout = 5 * time.Second

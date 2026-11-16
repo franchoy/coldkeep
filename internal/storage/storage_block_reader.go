@@ -8,12 +8,12 @@ import (
 	"log"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/iodebug"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
-	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/iodebug"
+	storagecompression "github.com/franchoy/coldkeep/v2/internal/storage/compression"
+	storagemetadata "github.com/franchoy/coldkeep/v2/internal/storage/metadata"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 // StorageBlockReader implements blocks.BlockReader for reading blocks from storage.

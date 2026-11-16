@@ -1,0 +1,20 @@
+{
+  "name": "coldkeep-internal-proof-ui",
+  "version": "2.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.19.1",
+  "engines": {"node": ">=24.22.2 <25", "npm": "11.19.1"},
+  "scripts": {
+    "types": "python3 ../scripts/generate_proof_types.py --check",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters && node scripts/lint.mjs",
+    "build": "npm run types && npm run lint && vite build",
+    "browser": "node scripts/browser-proof.mjs"
+  },
+  "dependencies": {"react": "19.3.1", "react-dom": "19.3.1"},
+  "devDependencies": {
+    "@types/react": "19.3.0", "@types/react-dom": "19.3.0",
+    "typescript": "7.0.2", "vite": "8.3.6", "playwright": "1.65.0"
+  }
+}

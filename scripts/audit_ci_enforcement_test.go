@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/pathsafe"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
 )
 
 func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.T) {
@@ -34,6 +34,27 @@ func TestAuditCIEnforcementLocalWorkflowRequiresCrossPlatformInNeeds(t *testing.
 	stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
 	if !strings.Contains(stderr, "required gate depends on security and hosted reproducibility jobs") {
 		t.Fatalf("expected missing cross-platform dependency error, got:\n%s", stderr)
+	}
+}
+
+func TestAuditCIEnforcementRequiresProductFixtures(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeql := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	fixtureCommand := `        run: python3 scripts/run_product_fixtures.py --reader current --output "$RUNNER_TEMP/product-fixtures"`
+	for _, mutation := range []string{
+		strings.Replace(workflow, "scripts/run_product_fixtures.py --reader current", "scripts/missing_fixtures.py --reader current", 1),
+		strings.Replace(workflow, "      - name: Run product baseline fixtures\n", "      - name: Run product baseline fixtures\n        if: false\n", 1),
+		strings.Replace(workflow, "      - name: Run product baseline fixtures\n", "      - name: Run product baseline fixtures\n        continue-on-error: true\n", 1),
+		strings.Replace(workflow, fixtureCommand, fixtureCommand+" || true", 1),
+		strings.Replace(workflow, fixtureCommand, fixtureCommand+"; true", 1),
+	} {
+		if mutation == workflow {
+			t.Fatal("product fixture gate mutation was not applied")
+		}
+		output := runAuditLocalOnly(t, mutation, codeql, true)
+		if !strings.Contains(output, "product fixture oracle") {
+			t.Fatalf("missing fixture gate diagnostic: %s", output)
+		}
 	}
 }
 
@@ -144,42 +165,42 @@ func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T
 		{
 			name: "Unix binary compiler restored to old patch",
 			mutate: func(value string) string {
-				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.10$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'`, 1)
+				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.11$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.7$'`, 1)
 			},
 			wantMessage: "Unix remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Unix binary compiler wildcard",
 			mutate: func(value string) string {
-				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.10$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.x$'`, 1)
+				return strings.Replace(value, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.11$'`, `head -n 1 binary-build-info.txt | grep -E ': go1\.26\.x$'`, 1)
 			},
 			wantMessage: "Unix remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Unix binary compiler proof removed",
 			mutate: func(value string) string {
-				return strings.Replace(value, "          head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.10$'\n", "", 1)
+				return strings.Replace(value, "          head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.11$'\n", "", 1)
 			},
 			wantMessage: "Unix remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Windows binary compiler restored to old patch",
 			mutate: func(value string) string {
-				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.10$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }`, 1)
+				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.11$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.7$') { throw 'binary Go toolchain identity mismatch' }`, 1)
 			},
 			wantMessage: "Windows remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Windows binary compiler wildcard",
 			mutate: func(value string) string {
-				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.10$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.x$') { throw 'binary Go toolchain identity mismatch' }`, 1)
+				return strings.Replace(value, `if ($buildInfo[0] -notmatch ': go1\.26\.11$') { throw 'binary Go toolchain identity mismatch' }`, `if ($buildInfo[0] -notmatch ': go1\.26\.x$') { throw 'binary Go toolchain identity mismatch' }`, 1)
 			},
 			wantMessage: "Windows remote candidate installation proves binary compiler identity",
 		},
 		{
 			name: "Windows binary compiler proof removed",
 			mutate: func(value string) string {
-				return strings.Replace(value, "          if ($buildInfo[0] -notmatch ': go1\\.26\\.10$') { throw 'binary Go toolchain identity mismatch' }\n", "", 1)
+				return strings.Replace(value, "          if ($buildInfo[0] -notmatch ': go1\\.26\\.11$') { throw 'binary Go toolchain identity mismatch' }\n", "", 1)
 			},
 			wantMessage: "Windows remote candidate installation proves binary compiler identity",
 		},
@@ -188,8 +209,8 @@ func TestAuditCIEnforcementRequiresRemoteExactCandidateInstallation(t *testing.T
 			mutate: func(value string) string {
 				return strings.Replace(
 					value,
-					"    steps:\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.10'\n          check-latest: false\n          cache: false",
-					"    steps:\n      - uses: actions/checkout@v6\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.10'\n          check-latest: false\n          cache: false",
+					"    steps:\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.11'\n          check-latest: false\n          cache: false",
+					"    steps:\n      - uses: actions/checkout@v6\n      - name: Setup Go\n        uses: actions/setup-go@v6\n        with:\n          go-version: '1.26.11'\n          check-latest: false\n          cache: false",
 					1,
 				)
 			},
@@ -246,14 +267,14 @@ func TestAuditCIEnforcementRejectsStaleApplicationVersion(t *testing.T) {
 		{
 			name:     "source-install",
 			next:     "remote-candidate-install",
-			anchor:   "coldkeep version 1.13.19",
+			anchor:   "coldkeep version 2.0.0-dev.0",
 			expected: "coldkeep version 1.13.17",
 			message:  "source installation proves binary identity",
 		},
 		{
 			name:     "remote-candidate-install",
 			next:     "product-container",
-			anchor:   "coldkeep version 1.13.19",
+			anchor:   "coldkeep version 2.0.0-dev.0",
 			expected: "coldkeep version 1.13.17",
 			message:  "remote candidate installation proves binary identity",
 		},
@@ -423,12 +444,12 @@ func TestAuditCIEnforcementRequiresCertifiedToolchainEverywhere(t *testing.T) {
 		"stale patch":    "go-version: '1.26.9'",
 	} {
 		t.Run(name, func(t *testing.T) {
-			mutated := strings.Replace(workflow, "go-version: '1.26.10'", replacement, 1)
+			mutated := strings.Replace(workflow, "go-version: '1.26.11'", replacement, 1)
 			if mutated == workflow {
 				t.Fatal("certified CI toolchain fixture not found")
 			}
 			stderr := runAuditLocalOnly(t, mutated, codeqlWorkflow, true)
-			if !strings.Contains(stderr, "every required CI setup-go step must pin Go 1.26.10 exactly") {
+			if !strings.Contains(stderr, "every required CI setup-go step must pin Go 1.26.11 exactly") {
 				t.Fatalf("expected exact CI toolchain failure, got:\n%s", stderr)
 			}
 		})
@@ -488,7 +509,7 @@ func TestAuditCIEnforcementRequiresPinnedBenchmarkCalibrationToolchain(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mutated := strings.Replace(baselineWorkflow, "go-version: '1.26.10'", tt.replacement, 1)
+			mutated := strings.Replace(baselineWorkflow, "go-version: '1.26.11'", tt.replacement, 1)
 			if mutated == baselineWorkflow {
 				t.Fatal("benchmark calibration toolchain fixture was not mutated")
 			}
@@ -538,7 +559,7 @@ func mutateBenchmarkIntegrityGoVersion(t *testing.T, workflow, replacement strin
 	}
 	end := start + 1 + endRelative
 	block := workflow[start:end]
-	mutatedBlock := strings.Replace(block, "go-version: '1.26.10'", replacement, 1)
+	mutatedBlock := strings.Replace(block, "go-version: '1.26.11'", replacement, 1)
 	if mutatedBlock == block {
 		t.Fatal("benchmark-integrity toolchain fixture was not mutated")
 	}
@@ -1642,18 +1663,18 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 		sourceEnv   string
 	}{
 		{
-			name:        "SQLite plain package command",
-			anchor:      "      - name: Test packages (plain codec)\n",
-			old:         "go test -race -count=1 ./cmd/... ./internal/...",
+			name:        "complete package staging command",
+			anchor:      "      - name: Run complete staged package tests\n",
+			old:         "bash scripts/run_package_tests.sh",
 			replacement: "go test -race -count=1 ./internal/...",
-			wantMessage: "SQLite quality plain package command",
+			wantMessage: "complete package staging command",
 		},
 		{
-			name:        "SQLite AES-GCM package command",
-			anchor:      "      - name: Test packages (aes-gcm codec)\n",
-			old:         "go test -race -count=1 ./cmd/... ./internal/...",
-			replacement: "go test -race -count=1 ./cmd/...",
-			wantMessage: "SQLite quality AES-GCM package command",
+			name:        "complete package codec selection",
+			anchor:      "      - name: Run complete staged package tests\n",
+			old:         "COLDKEEP_CODEC: ${{ matrix.codec }}",
+			replacement: "COLDKEEP_CODEC: plain",
+			wantMessage: "complete package codec selection",
 		},
 		{
 			name:        "Phase 17 PostgreSQL mutation marker",
@@ -1747,8 +1768,8 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 		},
 		{
 			name:        "correctness package binding",
-			old:         "github.com/franchoy/coldkeep/tests/integration",
-			replacement: "github.com/franchoy/coldkeep/tests/adversarial",
+			old:         "github.com/franchoy/coldkeep/v2/tests/integration",
+			replacement: "github.com/franchoy/coldkeep/v2/tests/adversarial",
 			wantMessage: "required-event profiles bind integration package",
 			sourcePath:  filepath.Join("scripts", "check_required_test_events.py"),
 			sourceEnv:   "COLDKEEP_REQUIRED_TEST_EVENTS_FILE",
@@ -1882,8 +1903,8 @@ func TestAuditCIEnforcementRejectsPhase18RequiredProofMutations(t *testing.T) {
 		{
 			name:        "adversarial package binding",
 			anchor:      "      - name: Run adversarial validation (G1–G17)\n",
-			old:         "github.com/franchoy/coldkeep/tests/adversarial",
-			replacement: "github.com/franchoy/coldkeep/tests/integration",
+			old:         "github.com/franchoy/coldkeep/v2/tests/adversarial",
+			replacement: "github.com/franchoy/coldkeep/v2/tests/integration",
 			wantMessage: "adversarial coordination execution proof binds the adversarial package",
 		},
 		{
@@ -2994,7 +3015,7 @@ func runCK015SyntheticWrapperCase(t *testing.T, name, kind, profile, body string
 	writeExecutableFixture(t, filepath.Join(stubDir, "go"), `#!/usr/bin/env bash
 set -eu
 if [ "$#" -eq 1 ] && [ "$1" = version ]; then
-  printf '%s\n' 'go version go1.26.10 linux/amd64'
+  printf '%s\n' 'go version go1.26.11 linux/amd64'
   exit 0
 fi
 if [ "$#" -ne 9 ] || [ "$1" != test ] || [ "$2" != -race ] || [ "$3" != -count=1 ] || [ "$4" != -p=1 ] || [ "$5" != -parallel=1 ] || [ "$6" != -json ] || [ "$7" != ./internal/storage ] || [ "$8" != -run ]; then
@@ -3007,7 +3028,7 @@ if [ "$9" != "$CK015_EXPECTED_SELECTOR" ]; then
   printf 'unexpected CK-015 selector: %s\n' "$9" >&2
   exit 98
 fi
-package=github.com/franchoy/coldkeep/internal/storage
+package=github.com/franchoy/coldkeep/v2/internal/storage
 printf '{"Action":"start","Package":"%s"}\n' "$package"
 case "$CK015_EXPECTED_PROFILE" in
   ck015-initial-lookup-sqlite)
@@ -4041,4 +4062,49 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("getwd: %v", err)
 	}
 	return filepath.Dir(root)
+}
+
+func TestAuditCIEnforcementRequiresRecoveryCopy(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeql := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	command := `        run: bash scripts/run_recovery_export_tests.sh "$RUNNER_TEMP/integration-diag/recovery-export"`
+	for _, mutation := range []string{
+		strings.Replace(workflow, "          COLDKEEP_RECOVERY_IMAGE: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825\n", "", 1),
+		strings.Replace(workflow, "scripts/run_recovery_export_tests.sh", "scripts/missing_recovery.sh", 1),
+		strings.Replace(workflow, "      - name: Run recovery copy PostgreSQL contracts\n", "      - name: Run recovery copy PostgreSQL contracts\n        continue-on-error: true\n", 1),
+		strings.Replace(workflow, command, command+" || true", 1),
+		strings.Replace(workflow, command, command+"; true", 1),
+		strings.Replace(workflow, "      - name: Run recovery copy PostgreSQL contracts\n        if: ${{ matrix.codec == 'plain' }}", "      - name: Run recovery copy PostgreSQL contracts\n        if: false", 1),
+	} {
+		if mutation == workflow {
+			t.Fatal("recovery gate mutation absent")
+		}
+		output := runAuditLocalOnly(t, mutation, codeql, true)
+		if !strings.Contains(output, "recovery copy contract") {
+			t.Fatalf("missing recovery gate diagnostic: %s", output)
+		}
+	}
+}
+
+func TestAuditCIEnforcementRequiresPhase2Proof(t *testing.T) {
+	workflow := readRepoFile(t, filepath.Join(".github", "workflows", "ci.yml"))
+	codeql := readRepoFile(t, filepath.Join(".github", "workflows", "codeql.yml"))
+	command := `        run: python3 scripts/run_phase2_proof.py --output "$RUNNER_TEMP/phase2-proof"`
+	for _, mutation := range []string{
+		strings.Replace(workflow, "scripts/run_phase2_proof.py", "scripts/missing_phase2.py", 1),
+		strings.Replace(workflow, "      - name: Run Phase 2 delivery proof\n", "      - name: Run Phase 2 delivery proof\n        if: false\n", 1),
+		strings.Replace(workflow, "      - name: Run Phase 2 delivery proof\n", "      - name: Run Phase 2 delivery proof\n        continue-on-error: true\n", 1),
+		strings.Replace(workflow, command, command+" || true", 1),
+		strings.Replace(workflow, command, command+"; true", 1),
+		strings.Replace(workflow, "          node-version: '24.22.2'", "          node-version: '18'", 1),
+		strings.Replace(workflow, "          node web/node_modules/playwright/cli.js install --with-deps chromium", "          true", 1),
+	} {
+		if mutation == workflow {
+			t.Fatal("Phase 2 mutation absent")
+		}
+		output := runAuditLocalOnly(t, mutation, codeql, true)
+		if !strings.Contains(output, "Phase 2 delivery proof") {
+			t.Fatalf("missing Phase 2 diagnostic: %s", output)
+		}
+	}
 }

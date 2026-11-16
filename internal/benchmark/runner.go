@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/execution"
+	"github.com/franchoy/coldkeep/v2/internal/execution"
 )
 
 // BenchmarkCase defines one benchmark scenario execution unit.

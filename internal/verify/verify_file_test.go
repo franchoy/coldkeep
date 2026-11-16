@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 // TestVerifyFileStandardRejectsEmptyLogicalFileChunkerVersion confirms that

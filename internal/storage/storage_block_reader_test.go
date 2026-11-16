@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/db"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	storagecompression "github.com/franchoy/coldkeep/v2/internal/storage/compression"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 	_ "github.com/mattn/go-sqlite3"
 )
 

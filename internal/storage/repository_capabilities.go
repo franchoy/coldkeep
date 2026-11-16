@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	repositorycaps "github.com/franchoy/coldkeep/internal/repository/capabilities"
+	repositorycaps "github.com/franchoy/coldkeep/v2/internal/repository/capabilities"
 )
 
 // RepositoryCapabilities is the internal capability surface used by storage

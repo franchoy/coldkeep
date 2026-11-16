@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/graph"
+	"github.com/franchoy/coldkeep/v2/internal/graph"
 )
 
 type Service struct {

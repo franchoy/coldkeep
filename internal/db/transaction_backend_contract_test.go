@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/testutil/backendtest"
 )
 
 func TestBackendTransactionCommitRollbackAcrossBackends(t *testing.T) {

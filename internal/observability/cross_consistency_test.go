@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/gc"
+	"github.com/franchoy/coldkeep/v2/internal/gc"
 )
 
 // TestCrossConsistency_StatsAndInspectAgreeOnChunkCount verifies that

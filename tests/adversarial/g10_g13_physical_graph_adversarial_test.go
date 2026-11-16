@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	testutils "github.com/franchoy/coldkeep/tests/utils"
-	"github.com/franchoy/coldkeep/tests/utils/testgate"
+	testutils "github.com/franchoy/coldkeep/v2/tests/utils"
+	"github.com/franchoy/coldkeep/v2/tests/utils/testgate"
 )
 
 // storeCLIAsync is safe to call from goroutines—returns an error instead of calling t.Fatal.

@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
 )
 
 // StoreService owns store-path dependencies that must be resolved once per

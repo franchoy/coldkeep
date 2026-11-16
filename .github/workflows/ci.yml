@@ -28,7 +28,8 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The complete Python/browser/proof route reached the original 20-minute limit.
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -74,7 +75,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -109,6 +110,20 @@ jobs:
       - name: Enforce versioned row writer scope
         run: bash scripts/check_versioned_row_writers.sh
 
+      - name: Setup Phase 2 frontend tools
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.2'
+
+      - name: Install Phase 2 browser tooling
+        run: |
+          test "$(npm --version)" = 11.19.1
+          npm --prefix web ci --ignore-scripts
+          node web/node_modules/playwright/cli.js install --with-deps chromium
+
+      - name: Run Phase 2 delivery proof
+        run: python3 scripts/run_phase2_proof.py --output "$RUNNER_TEMP/phase2-proof"
+
       - name: Test candidate lint gate contract
         run: go test -count=1 ./scripts -run '^TestCandidateLintGate'
           
@@ -120,16 +135,33 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test packages (plain codec)
-        env:
-          COLDKEEP_CODEC: plain
-        run: go test -race -count=1 ./cmd/... ./internal/...
+      - name: Run product baseline fixtures
+        run: python3 scripts/run_product_fixtures.py --reader current --output "$RUNNER_TEMP/product-fixtures"
 
-      - name: Test packages (aes-gcm codec)
-        env:
-          COLDKEEP_CODEC: aes-gcm
-          COLDKEEP_KEY: ${{ env.COLDKEEP_AES_GCM_FIXTURE_HEX }}
-        run: go test -race -count=1 ./cmd/... ./internal/...
+      - name: Upload product fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-fixtures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/product-fixtures/execution.json
+            ${{ runner.temp }}/product-fixtures/fixture-results.json
+            ${{ runner.temp }}/product-fixtures/go-test.jsonl
+            ${{ runner.temp }}/product-fixtures/go-test.stderr
+            ${{ runner.temp }}/phase2-proof/*.log
+            ${{ runner.temp }}/phase2-proof/*.json
+            ${{ runner.temp }}/phase2-proof/*.jsonl
+            ${{ runner.temp }}/phase2-proof/*.stderr
+            ${{ runner.temp }}/phase2-proof/browser/*.json
+            ${{ runner.temp }}/phase2-proof/browser/*.log
+            ${{ runner.temp }}/phase2-proof/browser/*.png
+            ${{ runner.temp }}/phase2-proof/packaging/*.json
+            ${{ runner.temp }}/phase2-proof/packaging/*.log
+            ${{ runner.temp }}/phase2-proof/docker/*.json
+            ${{ runner.temp }}/phase2-proof/docker/*.log
+            ${{ runner.temp }}/phase2-proof/docker/*.png
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Validate deterministic chunker benchmark tests (CI-fast)
         run: >-
@@ -145,9 +177,77 @@ jobs:
       - name: Build CLI
         run: go build -o coldkeep ./cmd/coldkeep
 
+  package-tests:
+    name: Complete package tests (${{ matrix.codec }})
+    # Ubuntu 24.04 provides the required PostgreSQL 16 client package.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        codec: [plain, aes-gcm]
+    services:
+      postgres:
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+        env:
+          POSTGRES_USER: coldkeep
+          POSTGRES_PASSWORD: coldkeep
+          POSTGRES_DB: coldkeep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coldkeep -d coldkeep"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.11'
+          check-latest: false
+          cache: true
+      - name: Setup package frontend tools
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.2'
+      - name: Prepare embedded assets for complete package tests
+        run: python3 scripts/prepare_daemon.py
+      - name: Install package PostgreSQL 16 clients
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+      - name: Run complete staged package tests
+        env:
+          COLDKEEP_CODEC: ${{ matrix.codec }}
+          COLDKEEP_KEY: ${{ matrix.codec == 'aes-gcm' && env.COLDKEEP_AES_GCM_FIXTURE_HEX || '' }}
+          COLDKEEP_PHASE1B_TEST: 1
+          COLDKEEP_PHASE1C_TEST: 1
+          COLDKEEP_RECOVERY_IMAGE: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+          COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump
+          COLDKEEP_PG_RESTORE: /usr/lib/postgresql/16/bin/pg_restore
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: bash scripts/run_package_tests.sh "$RUNNER_TEMP/package-tests"
+      - name: Upload complete package evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-tests-${{ matrix.codec }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/package-tests/*
+          if-no-files-found: error
+          retention-days: 14
+
   correctness-matrix:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Keep the dedicated recovery clients on the same provisioned runner family.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -170,6 +270,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Clean test storage
         run: bash scripts/clean_test_storage.sh
@@ -177,7 +279,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -319,7 +421,7 @@ jobs:
           metadata_file="$diag_dir/$prefix.metadata"
           selector='^(TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupPartialScanErrorStopsStoreBeforeFallbackSQLite|TestCKV11316015InitialLookupErrNoRowsPreservesNewObjectStoreSQLite|TestCKV11316015InitialLookupSupportedStatusRoutingSQLite)$'
           profile=ck015-initial-lookup-sqlite
-          package=github.com/franchoy/coldkeep/internal/storage
+          package=github.com/franchoy/coldkeep/v2/internal/storage
 
           for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
             if [ -e "$target" ]; then
@@ -438,7 +540,7 @@ jobs:
           metadata_file="$diag_dir/$prefix.metadata"
           selector='^(TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback|TestCKV11316015PostgresOpenLocalStorageRepairAndRecovery|TestCKV11316015PostgresRepairPublisherLocksChunkBeforeAuthorityMutation|TestCKV11316015PostgresRepairCompetitorWinsChunkLockBeforePublication|TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies)$'
           profile=ck015-initial-lookup-postgres
-          package=github.com/franchoy/coldkeep/internal/storage
+          package=github.com/franchoy/coldkeep/v2/internal/storage
           postgres_image='postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825'
 
           for target in "$json_file" "$go_stderr_file" "$checker_stdout_file" "$checker_stderr_file" "$status_file" "$metadata_file"; do
@@ -563,10 +665,10 @@ jobs:
 
           output_file = sys.argv[1]
           expected = {
-              "github.com/franchoy/coldkeep/internal/testutil/backendtest": [
+              "github.com/franchoy/coldkeep/v2/internal/testutil/backendtest": [
                   r"^TestForEachSQLiteFixture/postgres$",
               ],
-              "github.com/franchoy/coldkeep/internal/catalog": [
+              "github.com/franchoy/coldkeep/v2/internal/catalog": [
                   r"^TestCatalogContractFindLogicalFileAcrossBackends/postgres$",
                   r"^TestCatalogContractFindPhysicalFilesAcrossBackends/postgres$",
                   r"^TestCatalogContractCurrentFileQueriesAcrossBackends/postgres$",
@@ -579,7 +681,7 @@ jobs:
                   r"^TestCatalogContractChunkPlacementsAcrossBackends/postgres$",
                   r"^TestCatalogContractRestorePlansAcrossBackends/postgres$",
               ],
-              "github.com/franchoy/coldkeep/internal/db": [
+              "github.com/franchoy/coldkeep/v2/internal/db": [
                   r"^TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve$",
                   r"^TestSCH001AndSCH002BootstrapVersionAndIdempotency/postgres$",
                   r"^TestSCH003CurrentSchemaMetadata/postgres$",
@@ -595,7 +697,7 @@ jobs:
                   r"^TestBackendBlockedLockCancellationAcrossBackends/postgres$",
                   r"^TestMutationRowsAffectedContractAcrossBackends/postgres$",
               ],
-              "github.com/franchoy/coldkeep/internal/engine": [
+              "github.com/franchoy/coldkeep/v2/internal/engine": [
                   r"^TestRemoveByIDPostgresPreservesSharedChunks$",
                   r"^TestEngineCurrentFilesAndConfigurationAcrossBackends/postgres$",
                   r"^TestEngineDoctorAcrossBackends/postgres$",
@@ -619,13 +721,13 @@ jobs:
                   r"^TestEngineRepairTypedBoundaryErrors/postgres$",
                   r"^TestEngineRepairFailFastOnInvariantViolation/postgres$",
               ],
-              "github.com/franchoy/coldkeep/internal/maintenance": [
+              "github.com/franchoy/coldkeep/v2/internal/maintenance": [
                   r"^TestGCAdvisoryLockUsesDedicatedSessionAndReleases$",
                   r"^TestRunGCReleasesAdvisoryLockAfterOperationFailure$",
                   r"^TestRunGCAdvisoryCleanupFailureReturnsErrorAndDiscardsSession$",
                   r"^TestRunGCLiveRefusesSingleConnectionPool$",
               ],
-              "github.com/franchoy/coldkeep/internal/container": [
+              "github.com/franchoy/coldkeep/v2/internal/container": [
                   r"^TestContainerRowLockIntegrationAcrossBackends/postgres$",
               ],
           }
@@ -691,6 +793,50 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Install recovery PostgreSQL 16 clients
+        if: ${{ matrix.codec == 'plain' }}
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+
+      - name: Run passive inventory PostgreSQL contracts
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_PHASE1B_TEST: 1
+          COLDKEEP_PHASE1C_TEST: 1
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: ''
+          COLDKEEP_RECOVERY_IMAGE: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+          COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump
+          COLDKEEP_PG_RESTORE: /usr/lib/postgresql/16/bin/pg_restore
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: bash scripts/run_passive_inventory_tests.sh "$RUNNER_TEMP/integration-diag/passive-inventory"
+
+      - name: Setup generation DTO JSON consumer
+        if: ${{ matrix.codec == 'plain' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.2'
+
+      - name: Run recovery copy PostgreSQL contracts
+        if: ${{ matrix.codec == 'plain' }}
+        env:
+          COLDKEEP_PHASE1B_TEST: 1
+          COLDKEEP_PHASE1C_TEST: 1
+          COLDKEEP_RECOVERY_IMAGE: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+          COLDKEEP_PG_DUMP: /usr/lib/postgresql/16/bin/pg_dump
+          COLDKEEP_PG_RESTORE: /usr/lib/postgresql/16/bin/pg_restore
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: bash scripts/run_recovery_export_tests.sh "$RUNNER_TEMP/integration-diag/recovery-export"
+
       - name: Upload correctness-matrix execution evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -716,7 +862,7 @@ jobs:
 
   legacy-compatibility:
     runs-on: ubuntu-latest
-    needs: quality
+    needs: [quality, package-tests]
     timeout-minutes: 20
     services:
       postgres:
@@ -743,7 +889,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -794,7 +940,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -845,7 +991,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -898,7 +1044,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -954,7 +1100,7 @@ jobs:
           import sys
 
           log_file = sys.argv[1]
-          package = "github.com/franchoy/coldkeep/tests/adversarial"
+          package = "github.com/franchoy/coldkeep/v2/tests/adversarial"
           expected = [
               r"^TestAdversarialG6IndependentProcessRepositoryContention/plain$",
               r"^TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm$",
@@ -1120,7 +1266,7 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
-    needs: [quality, correctness-matrix]
+    needs: [quality, correctness-matrix, package-tests]
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -1148,7 +1294,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -1182,7 +1328,7 @@ jobs:
   benchmark-integrity:
     name: Benchmark integrity (${{ matrix.profile }})
     runs-on: ubuntu-24.04
-    needs: quality
+    needs: [quality, package-tests]
     timeout-minutes: 30
     services:
       postgres:
@@ -1227,7 +1373,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -1307,7 +1453,7 @@ jobs:
   benchmark-timing-advisory:
     name: Benchmark timing advisory (${{ matrix.profile }})
     runs-on: ubuntu-24.04
-    needs: quality
+    needs: [quality, package-tests]
     timeout-minutes: 20
     services:
       postgres:
@@ -1356,7 +1502,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -1469,7 +1615,7 @@ jobs:
   critical-coverage-report:
     name: critical coverage report
     runs-on: ubuntu-latest
-    needs: quality
+    needs: [quality, package-tests]
     timeout-minutes: 15
 
     steps:
@@ -1479,7 +1625,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -1510,7 +1656,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -1553,7 +1699,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -1579,7 +1725,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: true
 
@@ -1588,12 +1734,12 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$(go env GOVERSION)" = "go1.26.10"
+          test "$(go env GOVERSION)" = "go1.26.11"
           test "$(go env GOTOOLCHAIN)" = "local"
           cc --version
           CGO_ENABLED=1 go build ./cmd/coldkeep
           CGO_ENABLED=1 go install ./cmd/coldkeep
-          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 1.13.19'
+          "$(go env GOPATH)/bin/coldkeep" version | grep -Fx 'coldkeep version 2.0.0-dev.0'
           {
             echo "GO_VERSION=$(go version)"
             echo "GOTOOLCHAIN=$(go env GOTOOLCHAIN)"
@@ -1608,7 +1754,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if ((go env GOVERSION) -ne 'go1.26.10') { throw 'Go version drift' }
+          if ((go env GOVERSION) -ne 'go1.26.11') { throw 'Go version drift' }
           if ((go env GOTOOLCHAIN) -ne 'local') { throw 'GOTOOLCHAIN drift' }
           if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { throw 'native gcc is unavailable' }
           gcc --version
@@ -1616,7 +1762,7 @@ jobs:
           go build ./cmd/coldkeep
           go install ./cmd/coldkeep
           $binary = Join-Path (go env GOPATH) 'bin/coldkeep.exe'
-          if ((& $binary version) -ne 'coldkeep version 1.13.19') { throw 'binary identity mismatch' }
+          if ((& $binary version) -ne 'coldkeep version 2.0.0-dev.0') { throw 'binary identity mismatch' }
           "GO_VERSION=$(go version)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOTOOLCHAIN=$(go env GOTOOLCHAIN)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOOS=$(go env GOOS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
@@ -1644,16 +1790,181 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.10'
+          go-version: '1.26.11'
           check-latest: false
           cache: false
 
-      - name: Install exact public candidate outside a module (Unix)
-        if: runner.os != 'Windows'
+      - name: Install exact public candidate through an isolated consumer
+        if: github.ref_type != 'tag'
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+          import tempfile
+
+          MODULE = 'github.com/franchoy/coldkeep/v2'
+          COMMAND = MODULE + '/cmd/coldkeep'
+
+          def require(condition, message):
+              if not condition:
+                  raise ValueError(message)
+
+          def inside(path, parent):
+              return Path(path).resolve().is_relative_to(Path(parent).resolve())
+
+          def origin(info, expected):
+              require(info.get('Path') == MODULE and not info.get('Error') and not info.get('Replace'), 'module identity or replacement')
+              require(re.fullmatch(r'v2\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', info.get('Version', '')), 'noncanonical module version')
+              provenance = info.get('Origin', {})
+              require(provenance.get('VCS') == 'git', 'module origin VCS')
+              require(provenance.get('URL', '').removesuffix('.git') == 'https://github.com/franchoy/coldkeep', 'module origin repository')
+              require(provenance.get('Hash') == expected, 'full module origin mismatch')
+
+          def directives(info):
+              require(not info.get('Replace') and not info.get('Exclude'), 'replace/exclude directives refused')
+
+          def decode_stream(raw):
+              decoder = json.JSONDecoder()
+              values = []
+              while raw.strip():
+                  value, end = decoder.raw_decode(raw.lstrip())
+                  values.append(value)
+                  raw = raw.lstrip()[end:]
+              return values
+
+          def graph(raw, version, download, cache):
+              values = decode_stream(raw)
+              require(not any(x.get('Error') or x.get('Replace') for x in values), 'graph error or replacement')
+              candidates = [x for x in values if x.get('Path') == MODULE]
+              require(len(candidates) == 1, 'candidate graph cardinality')
+              candidate = candidates[0]
+              require(candidate.get('Version') == version and candidate.get('Main', False) is False, 'selected candidate version/main mismatch')
+              require(candidate.get('Dir') == download['Dir'] and inside(candidate['Dir'], cache), 'selected candidate source outside downloaded cache')
+              require(candidate.get('GoMod') == download['GoMod'], 'selected candidate go.mod mismatch')
+              for field in ('Sum', 'GoModSum'):
+                  if candidate.get(field):
+                      require(candidate[field] == download[field], 'selected candidate checksum mismatch')
+
+          def binary_identity(raw, version, checksum):
+              lines = raw.splitlines()
+              require(lines and lines[0].endswith(': go1.26.11'), 'binary compiler identity mismatch')
+              fields = [line.strip().split('\t') for line in lines[1:]]
+              require(['path', COMMAND] in fields, 'binary command identity mismatch')
+              require(not any(row and row[0] == '=>' for row in fields), 'binary replacement refused')
+              modules = [row for row in fields if row and row[0] == 'mod']
+              require(len(modules) == 1 and modules[0][1:3] == [MODULE, version], 'binary module identity mismatch')
+              require(len(modules[0]) == 4 and modules[0][3] == checksum, 'binary checksum mismatch')
+              require(['build', 'CGO_ENABLED=1'] in fields, 'binary CGO identity mismatch')
+
+          def main():
+              expected = os.environ['TRIGGER_SHA']
+              require(re.fullmatch(r'[0-9a-f]{40}', expected), 'trigger must be a full commit SHA')
+              require(os.environ['CANDIDATE_QUERY'] == expected, 'query must equal independent trigger SHA')
+              require(os.environ['EVENT_REF_TYPE'] != 'tag', 'consumer method is only for non-tag candidates')
+              require(os.environ['PUBLIC_REPOSITORY_URL'] == 'https://github.com/franchoy/coldkeep.git', 'unexpected public repository')
+              evidence = Path(os.environ['RUNNER_TEMP']) / 'remote-install-evidence'
+              evidence.mkdir(mode=0o700)
+              root = Path(tempfile.mkdtemp(prefix='coldkeep-consumer-', dir=os.environ['RUNNER_TEMP'])).resolve()
+              environment = {k: v for k, v in os.environ.items() if not k.startswith(('GO', 'CGO_', 'GIT_CONFIG_'))}
+              environment.update(GOTOOLCHAIN='local', GOENV='off', GOFLAGS='', GOWORK='off', GOPROXY='direct',
+                                 GOSUMDB='sum.golang.org', GONOSUMDB='', GOPRIVATE='', GONOPROXY='', CGO_ENABLED='1',
+                                 GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', CC='gcc' if os.name == 'nt' else 'cc')
+              for variable, name in [('GOBIN', 'bin'), ('GOMODCACHE', 'mod'), ('GOCACHE', 'cache'), ('GOPATH', 'gopath')]:
+                  directory = root / name
+                  directory.mkdir(mode=0o700)
+                  environment[variable] = str(directory)
+              cwd = root
+              status = {'expected_sha': expected, 'method': 'isolated remote consumer', 'success': False}
+
+              def command(label, args):
+                  with (evidence / (label + '.stdout')).open('wb') as output, (evidence / (label + '.stderr')).open('wb') as error:
+                      result = subprocess.run(args, cwd=cwd, env=environment, stdout=output, stderr=error, timeout=1200)
+                  require(result.returncode == 0, label + ' command failed: ' + str(result.returncode))
+                  return (evidence / (label + '.stdout')).read_text(encoding='utf-8')
+
+              def go_environment(label, consumer=None):
+                  effective = json.loads(command(label, ['go', 'env', '-json', 'GOVERSION', 'GOTOOLCHAIN', 'GOENV', 'GOWORK', 'GOMOD',
+                                                         'GOMODCACHE', 'GOCACHE', 'GOPATH', 'GOBIN', 'GOFLAGS', 'GOPROXY', 'GOSUMDB', 'CGO_ENABLED', 'GOOS', 'GOARCH', 'CC']))
+                  for key in ('GOTOOLCHAIN', 'GOENV', 'GOWORK', 'GOMODCACHE', 'GOCACHE', 'GOPATH', 'GOBIN', 'GOFLAGS', 'GOPROXY', 'GOSUMDB', 'CGO_ENABLED', 'CC'):
+                      require(effective[key] == ('' if key == 'GOENV' else environment[key]), 'effective Go environment mismatch: ' + key)
+                  require(effective['GOVERSION'] == 'go1.26.11', 'Go toolchain mismatch')
+                  if consumer is None:
+                      require(effective['GOMOD'].lower() in ('', os.devnull.lower()), 'ambient parent module refused')
+                  else:
+                      require(Path(effective['GOMOD']).resolve() == consumer / 'go.mod', 'consumer go.mod selection mismatch')
+                  return effective
+
+              try:
+                  require(not (root / 'go.mod').exists() and not (root / 'go.work').exists(), 'installation root is not empty')
+                  initial_env = go_environment('environment-before')
+                  command('compiler', [environment['CC'], '--version'])
+                  resolved = json.loads(command('resolve', ['go', 'list', '-m', '-json', MODULE + '@' + expected]))
+                  origin(resolved, expected)
+                  version = resolved['Version']
+                  download = json.loads(command('download', ['go', 'mod', 'download', '-json', MODULE + '@' + version]))
+                  require(download.get('Path') == MODULE and download.get('Version') == version and not download.get('Error'), 'download identity mismatch')
+                  require(download.get('Sum') and download.get('GoModSum'), 'download checksums missing')
+                  require(inside(download['Dir'], environment['GOMODCACHE']) and inside(download['GoMod'], environment['GOMODCACHE']), 'download outside private cache')
+                  if download.get('Origin'):
+                      origin(download, expected)
+                  directives(json.loads(command('download-go-mod', ['go', 'mod', 'edit', '-json', download['GoMod']])))
+                  shutil.copyfile(download['GoMod'], evidence / 'downloaded.go.mod')
+                  consumer = root / 'consumer'
+                  consumer.mkdir(mode=0o700)
+                  cwd = consumer
+                  command('consumer-init', ['go', 'mod', 'init', 'coldkeep-ci-consumer'])
+                  command('consumer-require', ['go', 'mod', 'edit', '-require=' + MODULE + '@' + version])
+                  go_environment('environment-consumer', consumer)
+                  directives(json.loads(command('consumer-before', ['go', 'mod', 'edit', '-json'])))
+                  # Materialize the pruned graph before checking its actual selected source.
+                  command('prepare-graph', ['go', 'list', '-mod=mod', '-deps', COMMAND])
+                  graph(command('graph-before', ['go', 'list', '-mod=readonly', '-m', '-json', 'all']), version, download, environment['GOMODCACHE'])
+                  command('install', ['go', 'install', '-mod=readonly', COMMAND])
+                  graph(command('graph-after', ['go', 'list', '-mod=readonly', '-m', '-json', 'all']), version, download, environment['GOMODCACHE'])
+                  directives(json.loads(command('consumer-after', ['go', 'mod', 'edit', '-json'])))
+                  final_origin = json.loads(command('resolve-after', ['go', 'list', '-m', '-json', MODULE + '@' + version]))
+                  origin(final_origin, expected)
+                  require(final_origin['Version'] == version, 'post-install version mismatch')
+                  for field in ('Sum', 'GoModSum'):
+                      if final_origin.get(field):
+                          require(final_origin[field] == download[field], 'post-install checksum mismatch')
+                  go_environment('environment-after', consumer)
+                  binary = Path(environment['GOBIN']) / ('coldkeep.exe' if os.name == 'nt' else 'coldkeep')
+                  require(command('binary-version', [str(binary), 'version']).strip() == 'coldkeep version 2.0.0-dev.0', 'binary application version mismatch')
+                  binary_identity(command('binary-build-info', ['go', 'version', '-m', str(binary)]), version, download['Sum'])
+                  shutil.copyfile(consumer / 'go.mod', evidence / 'consumer.go.mod')
+                  shutil.copyfile(consumer / 'go.sum', evidence / 'consumer.go.sum')
+                  status.update(success=True, resolved_version=version, origin=final_origin['Origin'], sum=download['Sum'],
+                                binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(), platform=initial_env)
+              finally:
+                  # Only the freshly created private root is removed; retain small evidence on failure.
+                  try:
+                      def writable_remove(function, path, _error):
+                          os.chmod(path, 0o700)
+                          function(path)
+                      for directory, _dirs, _files in os.walk(root):
+                          os.chmod(directory, 0o700)
+                      shutil.rmtree(root, onerror=writable_remove)
+                      status['cleanup_complete'] = not root.exists()
+                  finally:
+                      (evidence / 'result.json').write_text(json.dumps(status, indent=2) + '\n')
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                  summary.write(json.dumps(status, indent=2) + '\n')
+
+          if __name__ == '__main__':
+              main()
+
+      - name: Install exact public tag outside a module (Unix)
+        if: runner.os != 'Windows' && github.ref_type == 'tag'
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$(go env GOVERSION)" = "go1.26.10"
+          test "$(go env GOVERSION)" = "go1.26.11"
           test "$(go env GOTOOLCHAIN)" = "local"
           cc --version
 
@@ -1664,7 +1975,7 @@ jobs:
           export GOPROXY=direct
           export GOWORK=off
 
-          module='github.com/franchoy/coldkeep'
+          module='github.com/franchoy/coldkeep/v2'
           EXPECTED_ORIGIN_SHA="${TRIGGER_SHA}"
           EXPECTED_VERSION=''
           PUBLIC_TAG_OBJECT_SHA=''
@@ -1672,7 +1983,7 @@ jobs:
 
           if [[ "${EVENT_REF_TYPE}" == "tag" ]]; then
             test "${CANDIDATE_QUERY}" = "${EVENT_REF_NAME}"
-            [[ "${CANDIDATE_QUERY}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]
+            [[ "${CANDIDATE_QUERY}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
 
             tag_ref="refs/tags/${CANDIDATE_QUERY}"
             peeled_ref="${tag_ref}^{}"
@@ -1701,9 +2012,9 @@ jobs:
           fi
 
           go install "${module}/cmd/coldkeep@${CANDIDATE_QUERY}"
-          "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 1.13.19'
+          "${GOBIN}/coldkeep" version | grep -Fx 'coldkeep version 2.0.0-dev.0'
           go version -m "${GOBIN}/coldkeep" > binary-build-info.txt
-          head -n 1 binary-build-info.txt | grep -E ': go1\.26\.10$'
+          head -n 1 binary-build-info.txt | grep -E ': go1\.26\.11$'
           grep -F "$(printf 'mod\t%s\t%s' "${module}" "${resolved_version}")" binary-build-info.txt
 
           {
@@ -1725,11 +2036,11 @@ jobs:
             echo 'EOF'
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Install exact public candidate outside a module (Windows)
-        if: runner.os == 'Windows'
+      - name: Install exact public tag outside a module (Windows)
+        if: runner.os == 'Windows' && github.ref_type == 'tag'
         shell: pwsh
         run: |
-          if ((go env GOVERSION) -ne 'go1.26.10') { throw 'Go version drift' }
+          if ((go env GOVERSION) -ne 'go1.26.11') { throw 'Go version drift' }
           if ((go env GOTOOLCHAIN) -ne 'local') { throw 'GOTOOLCHAIN drift' }
           if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { throw 'native gcc is unavailable' }
           gcc --version
@@ -1742,7 +2053,7 @@ jobs:
           $env:GOPROXY = 'direct'
           $env:GOWORK = 'off'
 
-          $module = 'github.com/franchoy/coldkeep'
+          $module = 'github.com/franchoy/coldkeep/v2'
           $env:EXPECTED_ORIGIN_SHA = $env:TRIGGER_SHA
           $env:EXPECTED_VERSION = ''
           $publicTagObjectSha = ''
@@ -1750,7 +2061,7 @@ jobs:
 
           if ($env:EVENT_REF_TYPE -eq 'tag') {
             if ($env:CANDIDATE_QUERY -ne $env:EVENT_REF_NAME) { throw 'tag query does not match event ref name' }
-            if ($env:CANDIDATE_QUERY -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$') {
+            if ($env:CANDIDATE_QUERY -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') {
               throw 'tag query is not release-version-shaped'
             }
 
@@ -1791,10 +2102,10 @@ jobs:
           go install "$module/cmd/coldkeep@$env:CANDIDATE_QUERY"
           if ($LASTEXITCODE -ne 0) { throw 'remote candidate installation failed' }
           $binary = Join-Path $env:GOBIN 'coldkeep.exe'
-          if ((& $binary version) -ne 'coldkeep version 1.13.19') { throw 'binary identity mismatch' }
+          if ((& $binary version) -ne 'coldkeep version 2.0.0-dev.0') { throw 'binary identity mismatch' }
           $buildInfo = go version -m $binary
           $buildInfo | Out-File -FilePath binary-build-info.txt -Encoding utf8
-          if ($buildInfo[0] -notmatch ': go1\.26\.10$') { throw 'binary Go toolchain identity mismatch' }
+          if ($buildInfo[0] -notmatch ': go1\.26\.11$') { throw 'binary Go toolchain identity mismatch' }
           if (($buildInfo -join "`n") -notmatch [regex]::Escape("mod`t$module`t$($moduleInfo.Version)")) {
             throw 'installed module build identity mismatch'
           }
@@ -1813,6 +2124,15 @@ jobs:
           "GOOS=$(go env GOOS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "GOARCH=$(go env GOARCH)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           'C_COMPILER=gcc' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload remote consumer identity evidence
+        if: ${{ always() && github.ref_type != 'tag' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: remote-consumer-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/remote-install-evidence/*
+          if-no-files-found: error
+          retention-days: 14
 
   product-container:
     name: Product container (linux/${{ matrix.arch }})
@@ -1881,18 +2201,19 @@ jobs:
           docker compose --project-name "$project" -f .devcontainer/docker-compose.yml up -d postgres workspace
           docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash .devcontainer/post-create.sh
           docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash .devcontainer/post-create.sh
-          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash -lc 'test "$(go env GOVERSION)" = go1.26.10 && test "$(go env GOTOOLCHAIN)" = local && gcc --version'
+          docker compose --project-name "$project" -f .devcontainer/docker-compose.yml exec -T workspace bash -lc 'test "$(go env GOVERSION)" = go1.26.11 && test "$(go env GOTOOLCHAIN)" = local && gcc --version'
 
   ci-required:
     name: CI Required Gate
     runs-on: ubuntu-latest
-    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer]
+    needs: [quality, correctness-matrix, package-tests, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer]
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
       - name: Evaluate upstream jobs
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
+          PACKAGE_TESTS_RESULT: ${{ needs['package-tests'].result }}
           CORRECTNESS_MATRIX_RESULT: ${{ needs['correctness-matrix'].result }}
           INTEGRATION_STRESS_RESULT: ${{ needs['integration-stress'].result }}
           INTEGRATION_LONG_RUN_RESULT: ${{ needs['integration-long-run'].result }}
@@ -1909,6 +2230,7 @@ jobs:
           DEVCONTAINER_RESULT: ${{ needs.devcontainer.result }}
         run: |
           echo "quality=${QUALITY_RESULT}"
+          echo "package-tests=${PACKAGE_TESTS_RESULT}"
           echo "correctness-matrix=${CORRECTNESS_MATRIX_RESULT}"
           echo "integration-stress=${INTEGRATION_STRESS_RESULT}"
           echo "integration-long-run=${INTEGRATION_LONG_RUN_RESULT}"
@@ -1925,6 +2247,7 @@ jobs:
           echo "devcontainer=${DEVCONTAINER_RESULT}"
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
+             [ "${PACKAGE_TESTS_RESULT}" != "success" ] || \
              [ "${CORRECTNESS_MATRIX_RESULT}" != "success" ] || \
              [ "${INTEGRATION_STRESS_RESULT}" != "success" ] || \
              [ "${INTEGRATION_LONG_RUN_RESULT}" != "success" ] || \

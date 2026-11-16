@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 // Compile-time check: DefaultEngine satisfies the Engine interface.

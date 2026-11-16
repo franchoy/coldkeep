@@ -11,11 +11,20 @@ import (
 )
 
 func acquireNativeLockPlatform(lockPath string) (*nativeLockHandle, error) {
+	return openNativeLockPlatform(lockPath, false)
+}
+
+func acquireExistingNativeLockPlatform(lockPath string) (*nativeLockHandle, error) {
+	return openNativeLockPlatform(lockPath, true)
+}
+
+func openNativeLockPlatform(lockPath string, existing bool) (*nativeLockHandle, error) {
 	if err := inspectNativeLockArtifact(lockPath); err != nil {
 		return nil, err
 	}
 
-	fd, err := unix.Open(lockPath, unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	flags := nativeLockOpenFlags(existing)
+	fd, err := unix.Open(lockPath, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("coordination: open native repository lock: %w", err)
 	}
@@ -41,10 +50,18 @@ func acquireNativeLockPlatform(lockPath string) (*nativeLockHandle, error) {
 	}
 
 	return &nativeLockHandle{
+		matchesArtifact: func(expected os.FileInfo) bool { return os.SameFile(expected, info) },
 		releaseFn: func() error {
 			return releaseNativeLockFile(file, fd)
 		},
 	}, nil
+}
+
+func nativeLockOpenFlags(existing bool) int {
+	if existing {
+		return unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
+	}
+	return unix.O_RDWR | unix.O_CREAT | unix.O_CLOEXEC | unix.O_NOFOLLOW
 }
 
 func inspectNativeLockArtifact(lockPath string) error {

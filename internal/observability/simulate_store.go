@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 // SimulateStoreReport collects read-only aggregate stats for simulate store/store-folder.

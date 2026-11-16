@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	storagecompression "github.com/franchoy/coldkeep/v2/internal/storage/compression"
 )
 
 type orderingSpyCompressor struct {

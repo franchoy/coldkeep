@@ -4,12 +4,18 @@
 from __future__ import annotations
 
 import hashlib
+import argparse
 from pathlib import Path
 import re
 import sys
 
 from release_state_support import (
     Document,
+    CURRENT_AUTHORITY_PATH,
+    ValidationResult,
+    parse_source_version,
+    validate_v2_authority,
+    version_core,
     load_final_source_snapshot,
     load_security_toolchain_progression,
     load_terminal_disposition,
@@ -880,30 +886,26 @@ def _v18_selected(root: Path) -> bool:
     return bool(
         state_path.is_file()
         and not state_path.is_symlink()
-        and re.search(r"(?m)^\s*Patch\s*=\s*18\s*$", version_text)
+        and _declared_version(root) == "1.13.18"
     )
 
 
-def _declared_patch(root: Path) -> int | None:
-    """Return the one literal source patch value, or None if it is ambiguous."""
+def _declared_version(root: Path) -> str | None:
+    """Resolve the whole identity; a patch number never selects a family."""
     version_path = root / "internal/version/version.go"
     if not version_path.is_file() or version_path.is_symlink():
         return None
     try:
-        version_text = version_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
+        return parse_source_version(root, ValidationResult(None, None))
+    except (OSError, UnicodeDecodeError):
         return None
-    matches = re.findall(r"(?m)^\s*Patch\s*=\s*([0-9]+)\s*$", version_text)
-    if len(matches) != 1:
-        return None
-    return int(matches[0])
 
 
 def _v19_selected(root: Path) -> bool:
     """Return whether source and canonical state select the finite v1.13.19 route."""
     state_path = root / V19_CANONICAL_CURRENT_STATE_FILE
     return bool(
-        _declared_patch(root) == 19
+        _declared_version(root) == "1.13.19"
         and state_path.is_file()
         and not state_path.is_symlink()
     )
@@ -1995,9 +1997,9 @@ def validate_v19_contract(root: Path, texts: dict[Path, str]) -> list[str]:
     return violations
 
 
-def validate(root: Path = ROOT) -> list[str]:
+def validate_historical_v1(root: Path = ROOT) -> list[str]:
     violations = validate_release_body(root)
-    patch = _declared_patch(root)
+    version = _declared_version(root)
     v19_selected = _v19_selected(root)
     v18_selected = _v18_selected(root)
     files = ACTIVE_PROVIDER_FILES + CURRENT_AUTHORITY_FILES + (HISTORICAL_PROVIDER_FILE,)
@@ -2017,16 +2019,16 @@ def validate(root: Path = ROOT) -> list[str]:
 
     if v19_selected:
         violations.extend(validate_v19_contract(root, texts))
-    elif patch == 19:
+    elif version == "1.13.19":
         violations.append(
-            "internal/version/version.go: Patch=19 requires the finite "
+            "internal/version/version.go: v1.13.19 requires the finite "
             f"{V19_CANONICAL_CURRENT_STATE_FILE} route"
         )
     elif v18_selected:
         violations.extend(validate_v18_contract(root, texts))
-    elif patch == 18:
+    elif version == "1.13.18":
         violations.append(
-            "internal/version/version.go: Patch=18 requires the finite "
+            "internal/version/version.go: v1.13.18 requires the finite "
             f"{V18_CANONICAL_CURRENT_STATE_FILE} route"
         )
     else:
@@ -2142,8 +2144,26 @@ def validate(root: Path = ROOT) -> list[str]:
     return violations
 
 
+def validate(root: Path = ROOT, authority: str = "auto") -> list[str]:
+    version = _declared_version(root)
+    if version is None:
+        return ["missing or invalid complete source version"]
+    selected = (root / CURRENT_AUTHORITY_PATH).exists()
+    if authority == "historical-v1":
+        if version_core(version)[0] != "1" or "-" in version or selected:
+            return ["historical-v1 requires a frozen v1 checkout without active v2 authority"]
+        return validate_historical_v1(root)
+    if selected or version_core(version)[0] != "1":
+        return [f"{item.path}: {item.message}" for item in validate_v2_authority(root, version).ordered()]
+    return validate_historical_v1(root)
+
+
 def main() -> int:
-    violations = validate()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-root", type=Path, default=ROOT)
+    parser.add_argument("--authority", choices=("auto", "historical-v1"), default="auto")
+    args = parser.parse_args()
+    violations = validate(args.repo_root, args.authority)
     if violations:
         for violation in sorted(violations):
             print(f"GOVERNANCE_ERROR: {violation}", file=sys.stderr)

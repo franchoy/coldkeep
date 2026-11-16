@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 func TestStoreInterleavingSameChunkClaimDoesNotForkPlacement(t *testing.T) {

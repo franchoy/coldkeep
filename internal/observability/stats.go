@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
 )
 
 func (s *Service) Stats(ctx context.Context, opts StatsOptions) (*StatsResult, error) {

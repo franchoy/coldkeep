@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/invariants"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/tests/testdb"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/tests/testdb"
 )
 
 func insertSnapshotRowForVerify(t *testing.T, dbconn *sql.DB, snapshotID string) {

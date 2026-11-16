@@ -29,7 +29,7 @@ func TestCatalogDependencyDirection(t *testing.T) {
 	}
 
 	pkgs := decodeGoListOutput(t, out)
-	catalogPkg := findPkg(pkgs, "github.com/franchoy/coldkeep/internal/catalog")
+	catalogPkg := findPkg(pkgs, "github.com/franchoy/coldkeep/v2/internal/catalog")
 	if catalogPkg == nil {
 		t.Fatal("internal/catalog package not found in go list output")
 	}
@@ -38,10 +38,10 @@ func TestCatalogDependencyDirection(t *testing.T) {
 		prefix string
 		label  string
 	}{
-		{"github.com/franchoy/coldkeep/internal/engine", "internal/engine"},
-		{"github.com/franchoy/coldkeep/cmd/coldkeep", "cmd/coldkeep"},
+		{"github.com/franchoy/coldkeep/v2/internal/engine", "internal/engine"},
+		{"github.com/franchoy/coldkeep/v2/cmd/coldkeep", "cmd/coldkeep"},
 		{"github.com/spf13/cobra", "cobra (CLI renderer)"},
-		{"github.com/franchoy/coldkeep/internal/cli", "internal/cli"},
+		{"github.com/franchoy/coldkeep/v2/internal/cli", "internal/cli"},
 	}
 
 	for _, dep := range catalogPkg.Deps {
