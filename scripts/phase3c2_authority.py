@@ -46,8 +46,12 @@ PREDECESSORS.update({
     "phase3c2-quality-q5-result.md": "13091b495d3b63fe89374c4f7cbbf4f50c634d305c64333aad3eff80c1688c24",
     "phase3c2-quality-q5-qualification.json": "8d6dfb604511a0d6a820309e564ca8a401c5bc1e34b7410cb72de074ad046645",
 })
-RESULT = "phase3c2-quality-q5-r1-result.md"
-QUALIFICATION = "phase3c2-quality-q5-r1-qualification.json"
+PREDECESSORS.update({
+    "phase3c2-quality-q5-r1-result.md": "91bcb0743023056f8b44b2a9de48a1c2e5516bcd7a3b02c294e2b0a3f01f2f66",
+    "phase3c2-quality-q5-r1-qualification.json": "b349d61ef137c6b2a395a50ba7e79ce77131514deb8ec427d129cfcab108898e",
+})
+RESULT = "phase3c2-quality-q6-result.md"
+QUALIFICATION = "phase3c2-quality-q6-qualification.json"
 
 CHECKS = {
     "provenance-regressions", "real-staged-admission", "source-reuse-accounting",
@@ -58,6 +62,7 @@ CHECKS = {
     "documentation-quality", "generation-metrics", "recovery-command-metrics-equivalence",
     "coordination-preparation-metrics-equivalence", "existing-lease-metrics-equivalence",
     "proof-caller-context-metrics-equivalence", "parameterized-fixture-equivalence",
+    "remove-dispatch-and-test-oracle-equivalence",
 }
 # Qualification inputs are executable source, tests, embedded inputs, fixtures,
 # tool configuration and workflow/staging source. Docs may follow separately.
@@ -177,8 +182,8 @@ def complete(root: Path) -> bool:
             "Phase 3C2": "COMPLETE", "Phase 3C": "COMPLETE",
             "Local-profile action 2.04": "COMPLETE", "Implementation": "ACTIVE",
             "Product gates": "INCOMPLETE", "Profile": "installed Linux/PostgreSQL16 schema20",
-            "Governing BUILD": "coldkeep_phase3c2_quality_q5_r1_build_2026-11-15.md",
-            "Quality unit C2-Q5-R1": "COMPLETE", "Final Phase 3C2 acceptance": "WITHHELD_CODACY", "Accepted C1": C1,
+            "Governing BUILD": "coldkeep_phase3c2_quality_q6_build_2026-11-22.md",
+            "Quality unit C2-Q6": "COMPLETE", "Final Phase 3C2 acceptance": "WITHHELD_CODACY", "Accepted C1": C1,
             "Qualification HEAD": record["head"], "Qualification tree": record["tree"],
             "Qualification SHA-256": hashlib.sha256(raw).hexdigest(),
             "Ordinary schema18/19/20 writers and reclamation": "REFUSED",

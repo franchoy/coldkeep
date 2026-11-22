@@ -337,12 +337,7 @@ func mutationBackendRows(t *testing.T, dbconn *sql.DB, query string, args ...any
 		}
 		parts := make([]string, len(values))
 		for i, value := range values {
-			switch typed := value.(type) {
-			case []byte:
-				parts[i] = hex.EncodeToString(typed)
-			default:
-				parts[i] = fmt.Sprint(typed)
-			}
+			parts[i] = mutationBackendValueFingerprint(value)
 		}
 		result = append(result, strings.Join(parts, "|"))
 	}
@@ -350,6 +345,15 @@ func mutationBackendRows(t *testing.T, dbconn *sql.DB, query string, args ...any
 		t.Fatalf("iterate mutation fingerprint rows: %v", err)
 	}
 	return result
+}
+
+func mutationBackendValueFingerprint(value any) string {
+	switch typed := value.(type) {
+	case []byte:
+		return hex.EncodeToString(typed)
+	default:
+		return fmt.Sprint(typed)
+	}
 }
 
 func mutationBackendInt64(t *testing.T, dbconn *sql.DB, query string, args ...any) int64 {

@@ -1,32 +1,22 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q5-R1 local qualification complete; outgoing and terminal
-review pending**, under `coldkeep_phase3c2_quality_q5_r1_build_2026-11-15.md`.
-The [current result](phase3c2-quality-q5-r1-result.md) binds all 28 independently
-approved obligations: seven fresh, eight retained and thirteen composed.
-Qualifying implementation `656910df2f7dd9865ac1328ca77426b517528291`, tree `5aa832cee962bee2a592fd158d68cd48feafc8a3`, retains input SHA-256
-`a4080bc0611869293bce8b9cff780faf9cc1ddb9924c4c4f849832e7ab10f4b6` across 896 inputs through four-document finalization.
-
-Only the cancellation fixture helper uses explicit equivalent values. Fresh full
-engine race runs pass 837 tests under each codec, including 53 PostgreSQL
-identities and all 30 cancellation cases. Application ten and Q4 unaffected
-4,112 tests per codec remain historical/composed. Python projection 693,
-authority 24, staged enforcement 17, Go CI 397, metrics and current static/scan
-checks pass. Synthetic projection fields never completed this owner.
-
-All 30 protected records remain exact. Held Q5 remains terminally held in its
-immutable original delivery. Genuine local review precedes actual-root checks,
-independent outgoing/patch review and one guarded successor publication. Both
-fresh hosted events and complete native review precede the conditional PR update.
-The two new SQL targets must close; account separately for the companion, other
-41 subjects, 28 prior absences and six historical Fixed. Totals alone do not pass.
+Current workflow: **C2-Q6 held at inherited full-file metric violations**, under
+`coldkeep_phase3c2_quality_q6_build_2026-11-22.md`. The
+[current result](phase3c2-quality-q6-result.md) remains incomplete until all 29
+source-bound obligations and independent local review pass. Accepted Q5-R1 and
+all 32 protected records remain immutable. Q6 extracts stored-path mode dispatch,
+mutation fingerprint formatting and the legacy CLI result projection.
+Fresh affected runtime evidence is required for the production-engine change.
 
 Final Phase3C2 WITHHELD_CODACY; implementation ACTIVE; product gates INCOMPLETE;
-action2.05 NOT IMPLEMENTED; PR #129 open/draft. Source, schemas, pins, ordinary
-writer/reclamation and IMPORT_READY fences remain unchanged. No later quality
-unit, merge, release/tag or installation switch is included. Preserve historical
-scope and optional/platform/physical-independence limits. Actual backend settings
-remain UNKNOWN; requested implementation/review is GPT-6 Astra / Extra High.
+action2.05 NOT IMPLEMENTED; PR #129 open/draft. The adopted BUILD conditionally
+authorizes one guarded release/v2.0 fast-forward and a current-status PR body
+update after their qualification and independent review gates. Ordinary writers,
+reclamation and IMPORT_READY maintenance/activation remain refused. No merge,
+release/tag, installation switch or provider setting change is included.
+Requested implementation settings are GPT-6.2 Sol / Medium / Standard; one
+independent reviewer uses GPT-6.2 Astra / High / Standard. Backend telemetry is
+UNKNOWN unless separately observable.
 
 See the [bounded handoff](next-slice.md), [generation model](generation-model.md),
 [bounded reads](generation-read.md) and [current authority](../current.json).

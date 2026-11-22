@@ -199,7 +199,10 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 		}
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
 	}
-	item := res.Items[0]
+	return projectLegacyRemoveResult(fileID, dryRun, res.Items[0])
+}
+
+func projectLegacyRemoveResult(fileID int64, dryRun bool, item engine.RemoveItemResult) batch.ItemResult {
 	if item.Status == engine.BatchItemFailed {
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: item.Error, InvariantCode: item.InvariantCode, RecommendedAction: item.RecommendedAction}
 	}
