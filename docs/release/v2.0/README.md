@@ -1,22 +1,18 @@
 # Coldkeep v2.0 active charter
 
-Current workflow: **C2-Q6 held at inherited full-file metric violations**, under
-`coldkeep_phase3c2_quality_q6_build_2026-11-22.md`. The
-[current result](phase3c2-quality-q6-result.md) remains incomplete until all 29
-source-bound obligations and independent local review pass. Accepted Q5-R1 and
-all 32 protected records remain immutable. Q6 extracts stored-path mode dispatch,
-mutation fingerprint formatting and the legacy CLI result projection.
-Fresh affected runtime evidence is required for the production-engine change.
+Current workflow: **C2-Q6 local qualification complete**, under
+`coldkeep_phase3c2_quality_q6_build_2026-11-22.md` and its adopted metric amendment.
+The [current result](phase3c2-quality-q6-result.md) binds the 29 approved
+obligations at implementation `0097b5a8f2a8f4e7397f012079e7cccdfa6206ba`.
+Accepted Q5-R1 and all 32 protected records remain immutable.
 
-Final Phase3C2 WITHHELD_CODACY; implementation ACTIVE; product gates INCOMPLETE;
-action2.05 NOT IMPLEMENTED; PR #129 open/draft. The adopted BUILD conditionally
-authorizes one guarded release/v2.0 fast-forward and a current-status PR body
-update after their qualification and independent review gates. Ordinary writers,
-reclamation and IMPORT_READY maintenance/activation remain refused. No merge,
-release/tag, installation switch or provider setting change is included.
-Requested implementation settings are GPT-6.2 Sol / Medium / Standard; one
-independent reviewer uses GPT-6.2 Astra / High / Standard. Backend telemetry is
-UNKNOWN unless separately observable.
+Exact outgoing approval, guarded publication, actual-head hosted and native
+reconciliation and terminal review are pending. Final Phase 3C2 is
+WITHHELD_CODACY. Implementation is ACTIVE, product gates are INCOMPLETE,
+and action 2.05 is NOT IMPLEMENTED. PR #129 stays open and draft. Ordinary
+writers, reclamation, and IMPORT_READY maintenance/activation remain refused.
+Requested campaign settings were GPT-6.2 Sol / Medium / Standard, with one
+GPT-6.2 Astra / High / Standard reviewer. Actual backend telemetry is UNKNOWN.
 
 See the [bounded handoff](next-slice.md), [generation model](generation-model.md),
 [bounded reads](generation-read.md) and [current authority](../current.json).

@@ -1,26 +1,23 @@
-# Current bounded handoff: C2-Q6 qualification and terminal workflow
+# Current bounded handoff: C2-Q6 outgoing and terminal review
 
-Execute the owner-adopted `coldkeep_phase3c2_quality_q6_build_2026-11-22.md`.
-Accepted entry is Q5-R1 `823c26b4ee694762008051a80ae8f901f38d3b82`, tree
-`ae2fccb3d26053bfe380417a3629b12259d08224`. Q5-R1 is complete and preserved.
+The [Q6 owner](phase3c2-quality-q6-result.md) binds independently qualified
+implementation `0097b5a8f2a8f4e7397f012079e7cccdfa6206ba` and all 29 local obligations. The governing
+BUILD and its metric amendment retain their original scope. All predecessor
+reports and the held Q6 result remain preserved.
 
-The three extractions and fixed-output coverage require fresh affected codec,
-recovery, passive, current-oracle and Phase 2 campaigns at a clean checkpoint.
-Retain every prior obligation and add remove-dispatch-and-test-oracle-equivalence;
-all 29 must pass exact-source independent review before local completion.
-The Q6 owning result remains INCOMPLETE until genuine evidence is available.
+Verify the actual-root authority and unchanged execution-input digest. Require
+exact outgoing review and patch replay. Read the publication and PR receipts
+before any interrupted write is resumed. The adopted BUILD authorizes one
+expected-head-guarded fast-forward from Q5-R1
+`823c26b4ee694762008051a80ae8f901f38d3b82`.
 
-After independent outgoing approval, perform the authorized expected-head-guarded
-fast-forward, collect actual hosted/native evidence, obtain terminal review and
-update only the existing PR #129 current-status block with preimage/readback.
-Read publication and PR receipts before resuming any interrupted write.
+Collect the actual-head push and pull-request CI and CodeQL routes and
+read-only native records. Reconcile all three Q6 targets, remaining subjects,
+historical Fixed records and prior absences by source identity. Record
+analyzer-health limits. After independent terminal approval, update only the
+current-status block of draft PR #129 and verify the preimage and readback.
 
-Final Phase3C2 WITHHELD_CODACY; implementation ACTIVE; product gates INCOMPLETE;
-action2.05 NOT IMPLEMENTED. No later quality work, merge, tag/release, provider
-setting change, reanalysis, live data operation or installation switch is included.
-
-Current hold: unchanged openLegacyApplicationSession (CCN 17),
-openLegacyDBSession (CCN 9), and captureMutationRepositoryFingerprint (NLOC 85)
-exceed the BUILD full-file limits 8/50. Resolve this concrete scope/gate conflict
-before resuming qualification. The local anonymous-closure measurement gap also
-remains explicit; do not infer a native closure from a missing function metric.
+Final Phase 3C2 stays WITHHELD_CODACY, implementation ACTIVE, products
+INCOMPLETE and action 2.05 NOT IMPLEMENTED. Ordinary schema18/19/20 writers,
+reclamation, and IMPORT_READY maintenance/activation remain refused. This
+handoff grants no merge, tag, release, reanalysis or live installation action.
