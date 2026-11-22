@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	dbschema "github.com/franchoy/coldkeep/db"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/observability"
+	dbschema "github.com/franchoy/coldkeep/v2/db"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
 )
 
 func requireParityDB(t *testing.T) {

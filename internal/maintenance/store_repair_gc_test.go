@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/retention"
+	"github.com/franchoy/coldkeep/v2/internal/retention"
 )
 
 func TestStoreRepairGCSweepsRetiredPackedMembershipBeforeBlock(t *testing.T) {

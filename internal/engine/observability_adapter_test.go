@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
 )
 
 func TestValueFromAnyPreservesExactNumericKinds(t *testing.T) {

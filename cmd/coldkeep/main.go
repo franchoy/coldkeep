@@ -24,29 +24,29 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/batch"
-	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/chunk"
-	chunkbenchmark "github.com/franchoy/coldkeep/internal/chunk/benchmark"
-	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
-	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
-	clirender "github.com/franchoy/coldkeep/internal/cli/render"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/coordination"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/execution"
-	internalgc "github.com/franchoy/coldkeep/internal/gc"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/iodebug"
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/observability"
-	"github.com/franchoy/coldkeep/internal/recovery"
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	"github.com/franchoy/coldkeep/internal/storage"
-	"github.com/franchoy/coldkeep/internal/verify"
-	"github.com/franchoy/coldkeep/internal/version"
+	"github.com/franchoy/coldkeep/v2/internal/batch"
+	corebenchmark "github.com/franchoy/coldkeep/v2/internal/benchmark"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
+	chunkbenchmark "github.com/franchoy/coldkeep/v2/internal/chunk/benchmark"
+	"github.com/franchoy/coldkeep/v2/internal/chunk/fastcdc"
+	"github.com/franchoy/coldkeep/v2/internal/chunk/simplecdc"
+	clirender "github.com/franchoy/coldkeep/v2/internal/cli/render"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/coordination"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/execution"
+	internalgc "github.com/franchoy/coldkeep/v2/internal/gc"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/iodebug"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/recovery"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/version"
 )
 
 const (
@@ -885,7 +885,11 @@ func runVersionCommand(mode cliOutputMode) error {
 			"status":  "ok",
 			"command": "version",
 			"data": map[string]any{
-				"version": version.String(),
+				"version":      version.String(),
+				"base_version": version.Base(),
+				"prerelease":   version.Prerelease,
+				"channel":      version.Channel(),
+				"build":        version.Build(),
 			},
 		}
 		encoded, _ := json.Marshal(payload)

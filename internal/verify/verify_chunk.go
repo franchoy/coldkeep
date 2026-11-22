@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/franchoy/coldkeep/internal/container"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/utils_print"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/utils_print"
 )
 
 func checkReferenceCountsContext(ctx context.Context, dbconn *sql.DB) error {

@@ -193,7 +193,7 @@ coldkeep benchmark run \
 ### Go API
 
 ```go
-import "github.com/franchoy/coldkeep/internal/benchmark"
+import "github.com/franchoy/coldkeep/v2/internal/benchmark"
 
 // Create registry
 registry := benchmark.NewCorpusRegistry(basePath)

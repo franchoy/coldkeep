@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
+	storagecompression "github.com/franchoy/coldkeep/v2/internal/storage/compression"
 )
 
 const repositoryDefaultChunkerKey = "default_chunker"

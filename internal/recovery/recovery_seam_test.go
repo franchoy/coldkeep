@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/fsx"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
 )
 
 // TestRecoverySeamDefaultFSPreservesScanBehavior verifies that the default

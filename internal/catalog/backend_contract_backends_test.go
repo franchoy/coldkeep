@@ -3,7 +3,7 @@ package catalog_test
 import (
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
+	"github.com/franchoy/coldkeep/v2/internal/testutil/backendtest"
 )
 
 // forEachCatalogBackend delegates fixture lifecycle to the reusable harness.

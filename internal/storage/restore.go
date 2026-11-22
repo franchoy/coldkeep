@@ -16,15 +16,15 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/fsx"
-	"github.com/franchoy/coldkeep/internal/fsx/secureinstall"
-	"github.com/franchoy/coldkeep/internal/pathsafe"
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
+	"github.com/franchoy/coldkeep/v2/internal/fsx/secureinstall"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 )
 
 // RestoreFileResult contains structured metadata about a restore operation.

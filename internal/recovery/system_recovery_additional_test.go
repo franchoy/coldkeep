@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
 

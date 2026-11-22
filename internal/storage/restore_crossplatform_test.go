@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/pathsafe"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
 )
 
 // restoreDestinationPathFormCases drives TestRestoreCrossPlatformDestinationPathForms.

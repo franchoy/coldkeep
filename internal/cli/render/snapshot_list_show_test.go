@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
 )
 
 func TestRenderSnapshotListHumanFlatAndTree(t *testing.T) {

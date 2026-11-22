@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 func installSnapshotReadEngineStub(t *testing.T, stub engine.Engine) {

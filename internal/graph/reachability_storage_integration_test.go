@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"testing"
 
-	idb "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/graph"
-	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/storage"
+	idb "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/graph"
+	filestate "github.com/franchoy/coldkeep/v2/internal/status"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
 

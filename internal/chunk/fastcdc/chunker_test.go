@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/chunk/shared"
+	"github.com/franchoy/coldkeep/v2/internal/chunk/shared"
 )
 
 func writeFixture(t *testing.T, name string, data []byte) string {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
 )
 
 func RenderSnapshotDiffSummaryHuman(w io.Writer, baseID, targetID string, summary snapshot.SnapshotDiffSummary) error {

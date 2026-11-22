@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/execution"
+	"github.com/franchoy/coldkeep/v2/internal/execution"
 )
 
 func TestRunBenchmarkRunsCasesInOrderWithIsolatedContexts(t *testing.T) {

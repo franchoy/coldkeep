@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/batch"
-	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/batch"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
 )
 
 func phase13README(t *testing.T) string {

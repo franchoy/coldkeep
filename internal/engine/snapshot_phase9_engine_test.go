@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 func TestSnapshotDiffLimitAppliesAfterFilteringWithTruthfulCounts(t *testing.T) {

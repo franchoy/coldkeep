@@ -11,14 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/observability"
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	"github.com/franchoy/coldkeep/internal/storage"
-	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/chunk"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/verify"
 )
 
 // Config holds configuration for a DefaultEngine.
@@ -47,6 +48,9 @@ type Config struct {
 // It preserves existing command behavior while routing supported operations
 // through typed engine methods and lower domain packages.
 type DefaultEngine struct {
+	// batchItemCompleted is a per-instance observation seam for deterministic
+	// cancellation tests. It runs after an item result is recorded.
+	batchItemCompleted  func()
 	config              Config
 	obs                 *observability.Service
 	snapshotIDGenerator snapshotIDGenerator
@@ -62,6 +66,13 @@ type DefaultEngine struct {
 func New(cfg Config) (*DefaultEngine, error) {
 	if cfg.DB == nil {
 		return nil, fmt.Errorf("engine: Config.DB is required")
+	}
+	// A caller-supplied PostgreSQL handle must not bypass ordinary admission.
+	// SQLite retains its existing constructor contract; adoption is unsupported.
+	if db.BackendFromDB(cfg.DB) == db.BackendPostgres {
+		if _, err := db.CurrentSchemaVersion(cfg.DB); err != nil {
+			return nil, fmt.Errorf("engine catalog admission: %w", err)
+		}
 	}
 	obs, err := observability.NewService(cfg.DB)
 	if err != nil {

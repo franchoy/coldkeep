@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	idb "github.com/franchoy/coldkeep/internal/db"
+	idb "github.com/franchoy/coldkeep/v2/internal/db"
 	_ "github.com/mattn/go-sqlite3"
 )
 

@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"github.com/franchoy/coldkeep/internal/application"
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/application"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 type commandSession interface {

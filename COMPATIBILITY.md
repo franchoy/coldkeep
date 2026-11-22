@@ -1,7 +1,26 @@
 # Compatibility Contract
 
+Phase 3A adds explicit PostgreSQL17-to-18 identity adoption; Phase 3B adds
+checkpointed 18-to-19 physical binding with a separate exact recovery profile.
+See [identity/adoption](docs/release/v2.0/identity-adoption.md) and
+[physical binding](docs/release/v2.0/physical-binding.md).
+Parent 2.04 remains ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
+Ordinary schema18/19 mutation and SQLite adoption are refused. Schema17/package1,
+schema18/package2 and schema19/package3 have distinct exact reader/receipt
+contracts. IMPORT_READY maintenance and activation refuse for every profile.
+Run the complete fresh recovery/binding gate, Phase 2 proof and fixed oracle.
+
 This document defines what coldkeep guarantees across versions, especially for
 chunker evolution and restore behavior.
+
+Active v2 action 2.01 freezes a source-linked
+[baseline and version-domain ledger](docs/release/v2.0/baseline-compatibility.md),
+[product/profile/result contract](docs/release/v2.0/product-contract.md) and
+[executable fixture oracle](testdata/product-fixtures/README.md). Existing v1
+guarantees below remain bounded by their original scope. Application 2.0.0-dev.0
+and the `/v2` Go module do not change schema 17 or payload formats. Fixture
+evidence includes expected refusals and known name/format-metadata limitations;
+it does not certify v2 adoption, passive opening or recovery export.
 
 It complements:
 

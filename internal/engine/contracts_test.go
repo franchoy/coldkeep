@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
 )
 
 // allEngineContractTypes returns one zero value per engine request/result type
@@ -295,7 +295,7 @@ func activeSnapshotMutationContractTypes() []struct {
 var allowedFieldPackages = map[string]bool{
 	"":     true, // built-in types (string, int, bool, []byte, ...)
 	"time": true,
-	"github.com/franchoy/coldkeep/internal/engine": true,
+	"github.com/franchoy/coldkeep/v2/internal/engine": true,
 }
 
 // TestEngineContractFieldTypesAreNeutral walks every engine contract type
@@ -351,7 +351,7 @@ func assertNeutralType(t *testing.T, rt reflect.Type, path string, seen map[refl
 		return
 	}
 
-	if rt.Kind() == reflect.Struct && rt.PkgPath() == "github.com/franchoy/coldkeep/internal/engine" {
+	if rt.Kind() == reflect.Struct && rt.PkgPath() == "github.com/franchoy/coldkeep/v2/internal/engine" {
 		assertNeutralStruct(t, rt, path, seen)
 	}
 }

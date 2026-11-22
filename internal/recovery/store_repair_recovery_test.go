@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/v2/internal/container"
 )
 
 func TestStoreRepairRecoveryCleansOnlyAbandonedPrePublicationState(t *testing.T) {

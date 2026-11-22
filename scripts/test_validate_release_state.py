@@ -254,6 +254,9 @@ def copy_successor_fixture_source(
             paths.add(relative)
     paths.difference_update(SUCCESSOR_TERMINAL_ONLY_PATHS)
     paths.difference_update(validate_governance.V18_AUTHORITY_FILES)
+    # Current v2 authority must never leak into a deliberately historical v1
+    # fixture, regardless of whether the new selector has entered the index.
+    paths.discard(Path(release_state_support.CURRENT_AUTHORITY_PATH))
     for relative in sorted(paths):
         source = source_root / relative
         destination = destination_root / relative
@@ -4519,6 +4522,20 @@ class SuccessorFixtureSourceCopyTests(unittest.TestCase):
             self.assertEqual(observed[0], observed[1])
             self.assertEqual(observed[0], (body, f"{digest}  {pair[0].as_posix()}\n".encode("ascii")))
 
+    def test_v2_selector_is_excluded_regardless_of_index_membership(self) -> None:
+        relative = Path(release_state_support.CURRENT_AUTHORITY_PATH)
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            base = self.make_source(source)
+            write(source, relative.as_posix(), '{"family":"v2.0"}\n')
+            for membership in ("untracked", "tracked"):
+                if membership == "tracked":
+                    git(source, "add", relative.as_posix())
+                destination = Path(directory) / membership
+                copy_successor_fixture_source(source, destination, compatibility_base=base)
+                self.assertFalse((destination / relative).exists())
+
     def test_terminal_reference_is_excluded_regardless_of_index_membership(self) -> None:
         relative = validate_governance.TERMINAL_DISPOSITION_REFERENCE_FILE
         with tempfile.TemporaryDirectory() as directory:
@@ -7299,6 +7316,7 @@ class TerminalSerializationContractTests(unittest.TestCase):
             check=True,
         ).stdout.split("\0")
         inventory = {Path(item) for item in committed if item}
+        inventory.discard(Path(release_state_support.CURRENT_AUTHORITY_PATH))
         inventory.difference_update(validate_governance.V18_AUTHORITY_FILES)
         inventory.update(Path(item) for item in self.TERMINAL_DOCS)
         for relative in sorted(inventory):
@@ -9172,7 +9190,7 @@ class _V2ProgressionFixture:
             check=True,
         ).stdout.split("\0")
         for name in tracked:
-            if not name:
+            if not name or name == release_state_support.CURRENT_AUTHORITY_PATH:
                 continue
             relative = Path(name)
             target = self.root / relative
@@ -13480,14 +13498,19 @@ class V11319FinalSnapshotContractTests(unittest.TestCase):
             delta_paths.isdisjoint(path for _, _, path in spec.frozen_blobs)
         )
 
-    def test_diagnostic_v6_uses_only_active_v19_sources(self) -> None:
+    def test_diagnostic_v6_uses_only_historical_v19_sources(self) -> None:
         recorder = release_state_support.DiagnosticRecorder("auto", {})
-        recorder.bind_sources(
-            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT,
-            ACTIVE_FINAL_SNAPSHOT_TEST_ROOT
-            / "scripts"
-            / "validate_release_state.py",
-        )
+        # The live tree is now v2. Bind this historical parser test to the
+        # immutable v19 source identity, rather than inheriting current HEAD.
+        with tempfile.TemporaryDirectory(prefix="coldkeep-v19-diagnostic-") as directory:
+            root = Path(directory)
+            version_source = run_process(
+                [resolved_executable("git"), "-C", str(ACTIVE_FINAL_SNAPSHOT_TEST_ROOT),
+                 "show", release_state_support.V11319_RELEASE_COMMIT + ":internal/version/version.go"],
+                check=True,
+            ).stdout
+            write(root, "internal/version/version.go", version_source)
+            recorder.bind_sources(root, SCRIPT)
         self.assertEqual(
             recorder.source_paths,
             (

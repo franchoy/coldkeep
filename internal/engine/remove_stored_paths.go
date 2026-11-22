@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 type preparedRemoveStoredPathTarget struct {
@@ -135,13 +135,11 @@ func (e *DefaultEngine) removeStoredPaths(ctx context.Context, req RemoveStoredP
 			continue
 		}
 
-		var item RemoveStoredPathItemResult
-		if req.DryRun {
-			item = e.dryRunRemoveStoredPath(ctx, target)
-		} else {
-			item = e.removeStoredPath(ctx, target)
-		}
+		item := e.removeStoredPathForMode(ctx, req.DryRun, target)
 		appendRemoveStoredPathItem(&result, item)
+		if e.batchItemCompleted != nil {
+			e.batchItemCompleted()
+		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
@@ -151,6 +149,13 @@ func (e *DefaultEngine) removeStoredPaths(ctx context.Context, req RemoveStoredP
 	}
 
 	return result, nil
+}
+
+func (e *DefaultEngine) removeStoredPathForMode(ctx context.Context, dryRun bool, target preparedRemoveStoredPathTarget) RemoveStoredPathItemResult {
+	if dryRun {
+		return e.dryRunRemoveStoredPath(ctx, target)
+	}
+	return e.removeStoredPath(ctx, target)
 }
 
 func (e *DefaultEngine) dryRunRemoveStoredPath(ctx context.Context, target preparedRemoveStoredPathTarget) RemoveStoredPathItemResult {

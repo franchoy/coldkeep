@@ -12,12 +12,12 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/application"
-	"github.com/franchoy/coldkeep/internal/batch"
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/engine"
-	"github.com/franchoy/coldkeep/internal/snapshot"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/application"
+	"github.com/franchoy/coldkeep/v2/internal/batch"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/engine"
+	"github.com/franchoy/coldkeep/v2/internal/snapshot"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
@@ -199,7 +199,10 @@ var removeByIDPhase = func(sgctx *storage.StorageContext, fileID int64, dryRun b
 		}
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
 	}
-	item := res.Items[0]
+	return projectLegacyRemoveResult(fileID, dryRun, res.Items[0])
+}
+
+func projectLegacyRemoveResult(fileID int64, dryRun bool, item engine.RemoveItemResult) batch.ItemResult {
 	if item.Status == engine.BatchItemFailed {
 		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: item.Error, InvariantCode: item.InvariantCode, RecommendedAction: item.RecommendedAction}
 	}

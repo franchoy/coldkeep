@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/fsx"
-	"github.com/franchoy/coldkeep/internal/fsx/faultfs"
-	"github.com/franchoy/coldkeep/internal/fsx/secureinstall"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
+	"github.com/franchoy/coldkeep/v2/internal/fsx/faultfs"
+	"github.com/franchoy/coldkeep/v2/internal/fsx/secureinstall"
 )
 
 func storeRestoreFaultFSTestFile(t *testing.T) (*TestRepository, StoreFileResult, []byte) {

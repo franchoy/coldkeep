@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	dbpkg "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/fsx"
+	dbpkg "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/fsx"
 	_ "github.com/mattn/go-sqlite3"
 )
 

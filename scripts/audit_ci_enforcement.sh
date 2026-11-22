@@ -178,12 +178,14 @@ require_executable_file() {
   fi
 }
 
+# Phase 0: approved wrapper bodies differ from v1 only by the /v2 package identity.
+# Preserve exact body checking and all fail-closed structural/evidence checks.
 ck015_expected_wrapper_sha256() {
   case "$1" in
-    hosted-sqlite) printf '%s\n' '3865079f0a221bc1ed0fe3ef6b6617214e6054944a849b09d2874cc705662aa8' ;;
-    hosted-postgres) printf '%s\n' '6a0567977980e428115791a843cc2a515bb8880429af309ac5f9f4d1f63a329f' ;;
-    local-sqlite) printf '%s\n' '4caf6517976adcd50eee7c416c679b4653086ac0a61fc1a10e48df74f7799357' ;;
-    local-postgres) printf '%s\n' '8d84858ae08bab569980bdc5e1b466168c9a4441507834770b3e6907eda31f89' ;;
+    hosted-sqlite) printf '%s\n' 'f6925c8a42961f5892bffa71cdc2b3a44e7b2ff2d72d7d810cab1ace10ea107d' ;;
+    hosted-postgres) printf '%s\n' 'e7c53249e99aec80750c7d7ca6e8c1c0c79e493a30f65893219e32b4905a7f1d' ;;
+    local-sqlite) printf '%s\n' '92b9319651a035042c2cc83ecfcaa64b319dfd0a9d376e671f2ff2b0d9b38040' ;;
+    local-postgres) printf '%s\n' 'aa7b7f5ea152e74b87caa0e0a7ec3fda570295ef8e5566de7167a4b19cf681e5' ;;
     *)
       echo "[audit] ERROR: unknown CK-015 approved wrapper slot: $1" >&2
       return 1
@@ -1230,7 +1232,7 @@ check_local_workflow() {
     echo "[audit] ok: benchmark source validation has no broad failure suppression"
   fi
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'runs-on: ubuntu-24\.04' 'benchmark calibration pins the runner family' || check_status=1
-  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" "go-version: '1\\.26\\.10'" 'benchmark calibration pins the certified Go patch' || check_status=1
+  require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" "go-version: '1\\.26\\.11'" 'benchmark calibration pins the certified Go patch' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'benchmark calibration disables automatic toolchain switching' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" '^\s+check-latest: false$' 'benchmark calibration disables latest-version resolution' || check_status=1
   require_pattern "$BENCHMARK_BASELINE_WORKFLOW_FILE" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'benchmark calibration pins the PostgreSQL image digest' || check_status=1
@@ -1269,7 +1271,7 @@ check_local_workflow() {
     echo "[audit] ok: integrity matrix retains exactly two pre/post database observations"
   fi
   require_content_pattern "$benchmark_integrity_block" '--command-timeout-seconds 600' 'integrity matrix fixes the 600-second command timeout' || check_status=1
-  require_content_pattern "$benchmark_integrity_block" "go-version: '1\.26\.10'" 'integrity matrix pins the certified Go patch version' || check_status=1
+  require_content_pattern "$benchmark_integrity_block" "go-version: '1\.26\.11'" 'integrity matrix pins the certified Go patch version' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20' 'integrity matrix pins PostgreSQL by digest' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'if-no-files-found: error' 'integrity artifact rejects missing evidence' || check_status=1
   require_content_pattern "$benchmark_integrity_block" 'if: \$\{\{ always\(\) \}\}' 'integrity artifact finalization and upload always run' || check_status=1
@@ -1426,13 +1428,13 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  workflow_dispatch:\s*$' 'CI workflow_dispatch trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
   ci_setup_go_count="$(grep -Ec 'uses: actions/setup-go@' "$WORKFLOW_FILE")"
-  ci_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.10'$" "$WORKFLOW_FILE")"
+  ci_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.11'$" "$WORKFLOW_FILE")"
   ci_check_latest_false_count="$(grep -Ec '^\s+check-latest: false$' "$WORKFLOW_FILE")"
   if [[ "$ci_setup_go_count" -eq 0 || "$ci_exact_go_count" -ne "$ci_setup_go_count" ]]; then
-    echo "[audit] ERROR: every required CI setup-go step must pin Go 1.26.10 exactly" >&2
+    echo "[audit] ERROR: every required CI setup-go step must pin Go 1.26.11 exactly" >&2
     check_status=1
   else
-    echo "[audit] ok: every required CI setup-go step pins Go 1.26.10 exactly"
+    echo "[audit] ok: every required CI setup-go step pins Go 1.26.11 exactly"
   fi
   if [[ "$ci_check_latest_false_count" -ne "$ci_setup_go_count" ]]; then
     echo "[audit] ERROR: every required CI setup-go step must disable latest-version resolution" >&2
@@ -1442,34 +1444,34 @@ check_local_workflow() {
   fi
   require_pattern "$WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'required CI disables automatic toolchain switching' || check_status=1
   codeql_setup_go_count="$(grep -Ec 'uses: actions/setup-go@' "$CODEQL_WORKFLOW_FILE")"
-  codeql_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.10'$" "$CODEQL_WORKFLOW_FILE")"
+  codeql_exact_go_count="$(grep -Ec "^\s+go-version: '1\\.26\\.11'$" "$CODEQL_WORKFLOW_FILE")"
   codeql_check_latest_false_count="$(grep -Ec '^\s+check-latest: false$' "$CODEQL_WORKFLOW_FILE")"
   if [[ "$codeql_setup_go_count" -eq 0 || "$codeql_exact_go_count" -ne "$codeql_setup_go_count" || "$codeql_check_latest_false_count" -ne "$codeql_setup_go_count" ]]; then
-    echo "[audit] ERROR: CodeQL setup-go must pin Go 1.26.10 and disable latest-version resolution" >&2
+    echo "[audit] ERROR: CodeQL setup-go must pin Go 1.26.11 and disable latest-version resolution" >&2
     check_status=1
   else
-    echo "[audit] ok: CodeQL setup-go pins Go 1.26.10 without latest-version resolution"
+    echo "[audit] ok: CodeQL setup-go pins Go 1.26.11 without latest-version resolution"
   fi
   require_pattern "$CODEQL_WORKFLOW_FILE" '^  GOTOOLCHAIN: local$' 'CodeQL disables automatic toolchain switching' || check_status=1
   upload_v5_count=$(grep -c 'actions/upload-artifact@v5' "$WORKFLOW_FILE" || true)
   upload_v6_count=$(grep -c 'actions/upload-artifact@v6' "$WORKFLOW_FILE" || true)
   upload_v7_count=$(grep -c 'actions/upload-artifact@v7' "$WORKFLOW_FILE" || true)
-  if [[ "$upload_v7_count" -ne 6 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
-    echo "[audit] ERROR: required CI expects exactly six upload-artifact@v7 uses and zero v5/v6 uses" >&2
+  if [[ "$upload_v7_count" -ne 9 || "$upload_v5_count" -ne 0 || "$upload_v6_count" -ne 0 ]]; then
+    echo "[audit] ERROR: required CI expects exactly nine upload-artifact@v7 uses and zero v5/v6 uses" >&2
     check_status=1
   else
-    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly six times"
+    echo "[audit] ok: CI artifact uploads use actions/upload-artifact@v7 exactly nine times"
   fi
+  python3 "$REPO_ROOT/scripts/check_ci_followup.py" "$WORKFLOW_FILE" || check_status=1
   quality_block="$(extract_job_block quality)"
   if [[ -z "$quality_block" ]]; then
     echo "[audit] ERROR: missing quality job block content" >&2
     check_status=1
   else
     quality_checkout_block="$(extract_step_block_from_content "$quality_block" "Checkout")"
-    quality_plain_block="$(extract_step_block_from_content "$quality_block" "Test packages (plain codec)")"
-    quality_aes_gcm_block="$(extract_step_block_from_content "$quality_block" "Test packages (aes-gcm codec)")"
     validator_test_block="$(extract_step_block_from_content "$quality_block" "Test release-state validator")"
     python_suite_block="$(extract_step_block_from_content "$quality_block" "Run complete Python validation suite")"
+    product_fixture_block="$(extract_step_block_from_content "$quality_block" "Run product baseline fixtures")"
     validator_real_block="$(extract_step_block_from_content "$quality_block" "Validate repository release state")"
     require_content_pattern "$quality_checkout_block" '^        uses: actions/checkout@v6$' 'quality checkout uses actions/checkout@v6' || check_status=1
     require_content_pattern "$quality_checkout_block" '^          fetch-depth: 0$' 'quality checkout fetch-depth is 0' || check_status=1
@@ -1477,6 +1479,12 @@ check_local_workflow() {
     require_content_pattern "$validator_test_block" '^        run: python3 scripts/test_validate_release_state\.py$' 'release-state validator test command' || check_status=1
     require_content_pattern "$python_suite_block" '^      - name: Run complete Python validation suite$' 'complete Python validation suite step' || check_status=1
     require_content_pattern "$python_suite_block" "^        run: python3 -m unittest discover -s scripts -p 'test_\\*\\.py' -v$" 'canonical complete Python validation command' || check_status=1
+    # shellcheck disable=SC2016 # Match the literal runner variable in the workflow command.
+    require_content_pattern "$product_fixture_block" '^        run: python3 scripts/run_product_fixtures\.py --reader current --output "\$RUNNER_TEMP/product-fixtures"$' 'ordinary CI executes the product fixture oracle' || check_status=1
+    if grep -Eq 'continue-on-error|^[[:space:]]+if:' <<<"$product_fixture_block"; then
+      echo "[audit] ERROR: product fixture oracle must be unconditional and blocking" >&2
+      check_status=1
+    fi
     require_content_pattern "$validator_real_block" '^      - name: Validate repository release state$' 'release-state validator real-state step' || check_status=1
     require_content_pattern "$validator_real_block" 'python3 scripts/validate_release_state\.py --state auto' 'release-state validator real-state command' || check_status=1
     require_content_pattern "$validator_real_block" 'refs/heads/release/' 'release-state validator release branch condition' || check_status=1
@@ -1484,10 +1492,6 @@ check_local_workflow() {
     require_content_pattern "$validator_real_block" 'refs/tags/v' 'release-state validator tag condition' || check_status=1
     require_content_pattern "$validator_real_block" 'github\.event_name == .pull_request.' 'release-state validator pull-request condition' || check_status=1
     require_content_pattern "$validator_real_block" 'github\.head_ref' 'release-state validator pull-request head condition' || check_status=1
-    require_content_pattern "$quality_plain_block" '^          COLDKEEP_CODEC: plain$' 'SQLite quality plain codec environment' || check_status=1
-    require_content_pattern "$quality_plain_block" '^        run: go test -race -count=1 \./cmd/\.\.\. \./internal/\.\.\.$' 'SQLite quality plain package command' || check_status=1
-    require_content_pattern "$quality_aes_gcm_block" '^          COLDKEEP_CODEC: aes-gcm$' 'SQLite quality AES-GCM codec environment' || check_status=1
-    require_content_pattern "$quality_aes_gcm_block" '^        run: go test -race -count=1 \./cmd/\.\.\. \./internal/\.\.\.$' 'SQLite quality AES-GCM package command' || check_status=1
     if grep -Eq 'continue-on-error|\|\| true' <<<"$validator_test_block$validator_real_block$python_suite_block"; then
       echo "[audit] ERROR: release-state and Python validation steps must remain blocking" >&2
       check_status=1
@@ -1495,7 +1499,32 @@ check_local_workflow() {
       echo "[audit] ok: release-state and Python validation steps are blocking"
     fi
   fi
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, package-tests\]' 'smoke job depends on quality, correctness-matrix and package-tests' || check_status=1
+  local phase2_block phase2_tools phase2_browser
+  phase2_block="$(extract_step_block_from_content "$quality_block" "Run Phase 2 delivery proof")"
+  phase2_tools="$(extract_step_block_from_content "$quality_block" "Setup Phase 2 frontend tools")"
+  phase2_browser="$(extract_step_block_from_content "$quality_block" "Install Phase 2 browser tooling")"
+  # shellcheck disable=SC2016 # Literal runner path is part of the gate contract.
+  require_content_pattern "$phase2_block" '^        run: python3 scripts/run_phase2_proof\.py --output "\$RUNNER_TEMP/phase2-proof"$' 'Phase 2 delivery proof command' || check_status=1
+  require_content_pattern "$phase2_tools" "^          node-version: '24[.]22[.]2'$" 'Phase 2 delivery proof pins Node' || check_status=1
+  require_content_pattern "$phase2_browser" '^          npm --prefix web ci --ignore-scripts$' 'Phase 2 delivery proof installs locked frontend' || check_status=1
+  require_content_pattern "$phase2_browser" '^          node web/node_modules/playwright/cli[.]js install --with-deps chromium$' 'Phase 2 delivery proof installs real browser' || check_status=1
+  if grep -Eq 'continue-on-error|^[[:space:]]+if:|\|\| true|; true' <<<"$phase2_block$phase2_tools$phase2_browser"; then
+    echo '[audit] ERROR: Phase 2 delivery proof must be unconditional and blocking' >&2
+    check_status=1
+  fi
+  local recovery_copy_block
+  recovery_copy_block="$(extract_step_block_from_content "$(extract_job_block correctness-matrix)" "Run recovery copy PostgreSQL contracts")"
+  # shellcheck disable=SC2016 # Match literal runner and matrix variables.
+  require_content_pattern "$recovery_copy_block" '^        run: bash scripts/run_recovery_export_tests\.sh "\$RUNNER_TEMP/integration-diag/recovery-export"$' 'recovery copy contract command remains blocking' || check_status=1
+  # shellcheck disable=SC2016
+  require_content_pattern "$recovery_copy_block" '^        if: [$][{][{] matrix[.]codec == .plain. [}][}]$' 'recovery copy contract executes in plain matrix' || check_status=1
+  require_content_pattern "$recovery_copy_block" '^          COLDKEEP_PHASE1C_TEST: 1$' 'recovery copy contract explicitly opts into disposable tests' || check_status=1
+  require_content_pattern "$recovery_copy_block" '^          COLDKEEP_RECOVERY_IMAGE: postgres:16[.]15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825$' 'recovery copy contract requires isolated recovery image' || check_status=1
+  if grep -Eq 'continue-on-error' <<<"$recovery_copy_block"; then
+    echo '[audit] ERROR: recovery copy contract must remain blocking' >&2
+    check_status=1
+  fi
 	correctness_matrix_block="$(extract_job_block correctness-matrix)"
 	if [[ -z "$correctness_matrix_block" ]]; then
 	  echo "[audit] ERROR: missing correctness-matrix job block content" >&2
@@ -1581,7 +1610,7 @@ check_local_workflow() {
 	    require_content_pattern "$ck015_sqlite_block" '^          COLDKEEP_CODEC: plain$' 'CK-015 SQLite proof freezes plain codec' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" 'unset COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'CK-015 SQLite proof clears inherited compression and long-run settings' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" 'profile=ck015-initial-lookup-sqlite' 'CK-015 SQLite proof freezes checker profile' || check_status=1
-	    require_content_pattern "$ck015_sqlite_block" 'package=github\.com/franchoy/coldkeep/internal/storage' 'CK-015 SQLite proof binds storage package' || check_status=1
+	    require_content_pattern "$ck015_sqlite_block" 'package=github\.com/franchoy/coldkeep/v2/internal/storage' 'CK-015 SQLite proof binds storage package' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" 'prefix="ck015-sqlite-\$\{GITHUB_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{GITHUB_JOB\}-plain"' 'CK-015 SQLite evidence prefix binds candidate/run/attempt/job/leg' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" "selector='\\^\\(.*TestCKV11316015InitialLookupSupportedStatusRoutingSQLite.*\\)\\$'" 'CK-015 SQLite selector is top-level anchored' || check_status=1
 	    require_content_pattern "$ck015_sqlite_block" 'TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite' 'CK-015 SQLite operational-error selector' || check_status=1
@@ -1614,7 +1643,7 @@ check_local_workflow() {
 	    require_content_pattern "$ck015_postgres_block" 'DB_SSLMODE:\s*disable' 'CK-015 PostgreSQL proof sets DB SSL mode' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" 'unset COLDKEEP_SCHEMA_PATH COLDKEEP_COMPRESSION COLDKEEP_COMPRESSION_LEVEL COLDKEEP_LONG_RUN' 'CK-015 PostgreSQL proof clears schema/compression/long-run inheritance' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" 'profile=ck015-initial-lookup-postgres' 'CK-015 PostgreSQL proof freezes checker profile' || check_status=1
-	    require_content_pattern "$ck015_postgres_block" 'package=github\.com/franchoy/coldkeep/internal/storage' 'CK-015 PostgreSQL proof binds storage package' || check_status=1
+	    require_content_pattern "$ck015_postgres_block" 'package=github\.com/franchoy/coldkeep/v2/internal/storage' 'CK-015 PostgreSQL proof binds storage package' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" 'prefix="ck015-postgres-\$\{GITHUB_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{GITHUB_JOB\}-plain"' 'CK-015 PostgreSQL evidence prefix binds candidate/run/attempt/job/leg' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" "selector='\\^\\(.*TestCKV11316015PostgresSharedChunkHealingBetweenValidationAndPlanReclassifies.*\\)\\$'" 'CK-015 PostgreSQL selector is top-level anchored' || check_status=1
 	    require_content_pattern "$ck015_postgres_block" 'TestCKV11316015PostgresInitialLookupOperationalErrorStopsStoreBeforeFallback' 'CK-015 PostgreSQL operational-error selector' || check_status=1
@@ -1765,12 +1794,12 @@ check_local_workflow() {
   product_container_block="$(extract_job_block product-container)"
   devcontainer_block="$(extract_job_block devcontainer)"
   require_content_pattern "$source_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'source installation covers Linux, macOS, and Windows' || check_status=1
-  require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.10'" 'source installation pins Go 1.26.10' || check_status=1
+  require_content_pattern "$source_install_block" "go-version:\s*'1\.26\.11'" 'source installation pins Go 1.26.11' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED=1 go install ./cmd/coldkeep' 'Unix source installation uses the native C toolchain' || check_status=1
   require_content_pattern "$source_install_block" 'CGO_ENABLED = '\''1'\''' 'Windows source installation uses the native C toolchain' || check_status=1
-  require_content_pattern "$source_install_block" "coldkeep version 1\.13\.19" 'source installation proves binary identity' || check_status=1
+  require_content_pattern "$source_install_block" "coldkeep version 2\.0\.0-dev\.0" 'source installation proves binary identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'os:\s*\[ubuntu-latest, macos-latest, windows-latest\]' 'remote candidate installation covers Linux, macOS, and Windows' || check_status=1
-  require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.10'" 'remote candidate installation pins Go 1.26.10' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "go-version:\s*'1\.26\.11'" 'remote candidate installation pins Go 1.26.11' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'cache:\s*false' 'remote candidate installation does not require checkout-backed Go caching' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'EVENT_REF_TYPE:\s*\$\{\{ github\.ref_type \}\}' 'remote candidate installation detects tag events explicitly' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'EVENT_REF_NAME:\s*\$\{\{ github\.ref_name \}\}' 'remote candidate installation retains the triggering ref name' || check_status=1
@@ -1820,9 +1849,9 @@ check_local_workflow() {
   require_content_pattern "$remote_candidate_install_block" 'go install "\$\{module\}/cmd/coldkeep@\$\{CANDIDATE_QUERY\}"' 'Unix public installation uses the selected candidate query' || check_status=1
   # shellcheck disable=SC2016 # PowerShell variables are intentionally literal regex text.
   require_content_pattern "$remote_candidate_install_block" 'go install "\$module/cmd/coldkeep@\$env:CANDIDATE_QUERY"' 'Windows public installation uses the selected candidate query' || check_status=1
-  require_content_pattern "$remote_candidate_install_block" "coldkeep version 1\.13\.19" 'remote candidate installation proves binary identity' || check_status=1
-  require_content_literal "$remote_candidate_install_block" "head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.10\$'" 'Unix remote candidate installation proves binary compiler identity' || check_status=1
-  require_content_literal "$remote_candidate_install_block" "-notmatch ': go1\\.26\\.10\$') { throw 'binary Go toolchain identity mismatch' }" 'Windows remote candidate installation proves binary compiler identity' || check_status=1
+  require_content_pattern "$remote_candidate_install_block" "coldkeep version 2\.0\.0-dev\.0" 'remote candidate installation proves binary identity' || check_status=1
+  require_content_literal "$remote_candidate_install_block" "head -n 1 binary-build-info.txt | grep -E ': go1\\.26\\.11\$'" 'Unix remote candidate installation proves binary compiler identity' || check_status=1
+  require_content_literal "$remote_candidate_install_block" "-notmatch ': go1\\.26\\.11\$') { throw 'binary Go toolchain identity mismatch' }" 'Windows remote candidate installation proves binary compiler identity' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'grep -F .*resolved_version.*binary-build-info\.txt' 'Unix remote installation proves module build metadata' || check_status=1
   require_content_pattern "$remote_candidate_install_block" 'installed module build identity mismatch' 'Windows remote installation proves module build metadata' || check_status=1
   if grep -Eq 'actions/checkout|continue-on-error|\|\| true' <<<"$remote_candidate_install_block"; then
@@ -1836,7 +1865,7 @@ check_local_workflow() {
   require_content_pattern "$product_container_block" 'name:\s*Smoke product image' 'product container runs the version smoke' || check_status=1
   require_content_pattern "$devcontainer_block" 'validate_phase3_contracts\.py' 'development container runs the static safety contract' || check_status=1
   require_content_pattern "$devcontainer_block" 'post-create\.sh' 'development container runs its bootstrap' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer\]' 'required gate depends on security and hosted reproducibility jobs' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, package-tests, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-integrity, benchmark-timing-advisory, cross-platform, vulnerability, source-install, remote-candidate-install, product-container, devcontainer\]' 'required gate depends on security and hosted reproducibility jobs' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'CORRECTNESS_MATRIX_RESULT:\s*\$\{\{ needs\['\''correctness-matrix'\''\]\.result \}\}' 'required gate captures correctness-matrix result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'VULNERABILITY_RESULT:\s*\$\{\{ needs\.vulnerability\.result \}\}' 'required gate captures vulnerability result' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SOURCE_INSTALL_RESULT:\s*\$\{\{ needs\['\''source-install'\''\]\.result \}\}' 'required gate captures source-install result' || check_status=1
@@ -1929,9 +1958,9 @@ check_local_workflow() {
     check_ck015_proof_wrapper "$ck015_postgres_local_block" 'local CK-015 PostgreSQL wrapper' 'ck015-initial-lookup-postgres' 'refusing to reuse CK-015 PostgreSQL evidence path' local local-postgres
   fi
 
-  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
-  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/verify' 1 'required-event profiles bind the internal verify profile' || check_status=1
-  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/internal/storage' 2 'required-event profiles bind storage package for both CK-015 profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/v2/tests/integration' 2 'required-event profiles bind integration package for both integration profiles' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/v2/internal/verify' 1 'required-event profiles bind the internal verify profile' || check_status=1
+  require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'github\.com/franchoy/coldkeep/v2/internal/storage' 2 'required-event profiles bind storage package for both CK-015 profiles' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" '"ck015-initial-lookup-sqlite"' 1 'required-event profiles contain exact CK-015 SQLite profile once' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" '"ck015-initial-lookup-postgres"' 1 'required-event profiles contain exact CK-015 PostgreSQL profile once' || check_status=1
   require_pattern_count "$REQUIRED_TEST_EVENTS_FILE" 'TestCKV11316015InitialLookupOperationalErrorStopsStoreBeforeFallbackSQLite' 1 'CK-015 SQLite profile requires operational-error proof' || check_status=1
@@ -1988,7 +2017,7 @@ check_local_workflow() {
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6IndependentProcessRepositoryContention/aes-gcm' 'independent-process AES-GCM execution proof' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6KilledLeaseHolderReleasesRepository' 'killed-holder execution proof' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'TestAdversarialG6LiveGCExcludesIndependentStoreProcess' 'live-GC execution proof' || check_status=1
-      require_content_pattern "$adversarial_validation_block" 'github.com/franchoy/coldkeep/tests/adversarial' 'adversarial coordination execution proof binds the adversarial package' || check_status=1
+      require_content_pattern "$adversarial_validation_block" 'github.com/franchoy/coldkeep/v2/tests/adversarial' 'adversarial coordination execution proof binds the adversarial package' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'json\.loads\(raw_line\)' 'adversarial coordination execution proof rejects malformed JSON' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'if not events:' 'adversarial coordination execution proof rejects empty JSON' || check_status=1
       require_content_pattern "$adversarial_validation_block" 'event\.get\("Action"\) == "skip"' 'adversarial coordination execution proof rejects required skips' || check_status=1

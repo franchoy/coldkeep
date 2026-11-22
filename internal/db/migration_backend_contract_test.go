@@ -3,8 +3,8 @@ package db_test
 import (
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/testutil/backendtest"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/testutil/backendtest"
 )
 
 // SCH-008 is a representative supported SQLite v12 upgrade.  The existing

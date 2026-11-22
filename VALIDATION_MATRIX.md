@@ -1,5 +1,22 @@
 # Validation Matrix
 
+Phase 3A adds explicit PostgreSQL17-to-18 identity adoption and exact recovery
+profiles. See [identity/adoption contract](docs/release/v2.0/identity-adoption.md).
+Parent 2.04 remains ACTIVE; implementation ACTIVE; product gates INCOMPLETE.
+Ordinary schema18 mutation and SQLite adoption are refused. Run the complete
+fresh recovery/adoption gate plus the retained Phase 2 proof and fixed oracle.
+
+The P1–P3 follow-up makes restore-root aliases, complete scalar byte bounds and
+TCP reachability controls mandatory in that gate. Its selected fresh/reuse
+schedule is recorded in the charter; all 244 recovery requirements remain intact.
+
+Phase 2 / action 2.02 adds the bounded internal delivery/native-feasibility
+profile in [the current charter](docs/release/v2.0/README.md). Required evidence
+includes packaged browser/engine restoration, owned runtime/security bounds,
+real SQLite persistence, PostgreSQL Docker and the retained 244-event recovery
+gate and 23-case oracle. Full Python and CI enforcement mutations are fresh.
+Product gates remain INCOMPLETE; native support and later actions are unqualified.
+
 This document is the authoritative mapping between public guarantees (README)
 and enforced evidence (tests and verify checks).
 
@@ -43,6 +60,14 @@ container, decompression, JSON-fidelity, SQL-mutation, and required-CI proof —
 none of which introduce new guarantee IDs.
 
 ## Scope
+
+Action 2.01 adds the [product fixture oracle](testdata/product-fixtures/README.md)
+and source-linked [compatibility ledger](docs/release/v2.0/baseline-compatibility.md).
+`TestProductFixtures` runs 23 declared restore/refusal/known-limit cases on copied
+SQLite fixtures; the evidence runner requires named non-skipped execution and
+matching content hashes. Ordinary Linux quality CI runs the current reader with
+the race detector. Exact D19 execution supplies the bounded historical baseline;
+this adds no platform/product qualification claim or runtime behavior.
 
 - Target: single-node trust model for v1.0 core plus maintained v1.x
   interface, observability, block-abstraction, same-host coordination, and
@@ -139,3 +164,18 @@ and fail-closed hosted execution proof.
    and benchmark-timing-advisory evaluation all complete successfully; required
    named pass events are present with no matching required skip.
 3. Contract-sensitive checks (doctor and verify JSON shape, exit codes, failure typing) stay stable.
+
+## Phase 1B passive full-catalog inventory (local unit)
+
+The `LOCAL_ACTION_2_03_PASSIVE_INVENTORY_ONLY` scope keeps parent action 2.03
+ACTIVE and product gates incomplete. `scripts/run_passive_inventory_tests.sh`
+requires explicit disposable PostgreSQL inputs and rejects skipped/missing
+acceptance events. `internal/recoveryexport` covers passive full-catalog/physical
+closure, schema/format/key/graph refusals, source mutation events, snapshot and
+resource lifetime, cancellation and actual row/byte limits.
+`internal/coordination` covers open-existing preparation refusal, unchanged
+owner/lock material, aliases and legacy contention in/across processes.
+The current 23-case product oracle is unchanged; D19 evidence remains accepted.
+See [the API contract](docs/release/v2.0/passive-inventory.md) and
+[unit result](docs/release/v2.0/phase1b-result.md). No recovery-package/import,
+passive SQLite or cross-platform runtime qualification is implied.

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	dbschema "github.com/franchoy/coldkeep/db"
+	dbschema "github.com/franchoy/coldkeep/v2/db"
 	_ "github.com/mattn/go-sqlite3"
 )
 

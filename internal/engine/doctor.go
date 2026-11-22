@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
 )
 
 func (e *DefaultEngine) Doctor(ctx context.Context, req DoctorRequest) (_ DoctorResult, outErr error) {

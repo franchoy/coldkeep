@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/invariants"
-	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/v2/internal/invariants"
+	"github.com/franchoy/coldkeep/v2/internal/maintenance"
 )
 
 func (e *DefaultEngine) Repair(ctx context.Context, req RepairRequest) (_ RepairResult, outErr error) {

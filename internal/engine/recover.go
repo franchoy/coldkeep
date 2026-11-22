@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/v2/internal/recovery"
 )
 
 // Recover executes real corrective recovery. It intentionally has no dry-run

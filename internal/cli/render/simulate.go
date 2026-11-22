@@ -6,7 +6,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/franchoy/coldkeep/internal/observability"
+	"github.com/franchoy/coldkeep/v2/internal/observability"
 )
 
 func (HumanRenderer) RenderSimulation(w io.Writer, r *SimulationResult) error {

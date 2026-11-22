@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/catalog"
-	"github.com/franchoy/coldkeep/internal/container"
-	idb "github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/retention"
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/catalog"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	idb "github.com/franchoy/coldkeep/v2/internal/db"
+	"github.com/franchoy/coldkeep/v2/internal/retention"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )

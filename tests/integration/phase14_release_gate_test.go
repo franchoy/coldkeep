@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	testutils "github.com/franchoy/coldkeep/tests/utils"
+	testutils "github.com/franchoy/coldkeep/v2/tests/utils"
 )
 
 func TestSchemaStartupOperatorMessagingReleaseGateUsesIsolatedAbsoluteStorage(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
 )
 
 func TestPackedBlockTargetPhase11StoreSemanticsTable(t *testing.T) {

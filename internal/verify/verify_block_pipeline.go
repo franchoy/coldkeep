@@ -6,9 +6,9 @@ import (
 	"math"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/container"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/container"
+	storagecompression "github.com/franchoy/coldkeep/v2/internal/storage/compression"
 )
 
 // BlockStorageMetadata carries the persisted block metadata required to verify

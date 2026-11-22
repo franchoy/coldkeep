@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/batch"
-	"github.com/franchoy/coldkeep/internal/coordination"
-	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/v2/internal/batch"
+	"github.com/franchoy/coldkeep/v2/internal/coordination"
+	"github.com/franchoy/coldkeep/v2/internal/recovery"
 )
 
 func TestRunCLIRepositoryLeaseOrdering(t *testing.T) {

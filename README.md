@@ -18,7 +18,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 ## Project Status
 
-![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
+![v2 development CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg?branch=release%2Fv2.0)
 ![Go Version](https://img.shields.io/badge/go-1.25+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Status](https://img.shields.io/badge/status-v1.13.19%20stable%20v1.x%20closed-blue)
@@ -31,71 +31,58 @@ Coldkeep uses a visual identity based on an ice cube vault:
 
 <!-- coldkeep-current-state:start -->
 ```text
-SOURCE_VERSION: 1.13.19
-RELEASE_ROUTE: FINAL_V1_SOURCE_SNAPSHOT_RECOVERY
-CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
-RELEASE_STATE: POST_RELEASE_CLOSED
-TRACKED_PUBLICATION_MATERIAL: FROZEN
-V1_13_15_STATE: PUBLISHED_STABLE_IMMUTABLE
-V1_13_16_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_17_STATE: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-V1_13_18_STATE: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-V1_13_19_STATE: PUBLISHED_STABLE_IMMUTABLE_LATEST
-CK-V11316-007: CLOSED_AT_V1.13.16_SOURCE_SCOPE
-FINDINGS_CONFIRMED: 15
-FINDINGS_CLOSED: 15/15
-V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
-V1_13_19_PUBLICATION: COMPLETE
-V1_X: CLOSED_AND_FROZEN
-V2_IMPLEMENTATION: NOT_STARTED
+SOURCE_VERSION: 2.0.0-dev.0
+RELEASE_FAMILY: v2.0
+RELEASE_STATE: development
+CURRENT_PHASE: 2.04
+CURRENT_AUTHORITY: docs/release/current.json
+LATEST_STABLE: 1.13.19
+V2_IMPLEMENTATION: ACTIVE
+PRODUCT_GATES: INCOMPLETE
 ```
 <!-- coldkeep-current-state:end -->
 
-v1.13.19 — Final v1.x Tag-Certification Recovery is the latest stable release.
-Protected integration completed at D19
-`d3581602aee2599547564322fe083baae1d52063`; annotated A19
-`60b6878114f936b295c415605e8af31def2aba5a` directly targets D19, and immutable
-source-only GitHub Release `431395975` is stable and latest. Natural tag CI run
-`41422511098` passed 36/36 jobs on attempt 1 and CodeQL run `41422511135`
-passed 4/4 jobs on attempt 1. Public archive, module, and executable readback
-passed, and independent owner acceptance was granted. V1.x product/runtime
-development is complete and frozen. The released source remains the finite
-34-path descendant of exact M18 that preserves Go 1.26.10, compress v1.20.2,
-all product/dependency bytes, 13 technical tuples, and the frozen
-v1.13.17/v1.13.18 release records. It adds no product feature or format change.
+Action 2.02 adds an [internal fixture daemon proof](docs/release/v2.0/phase2-build.md)
+with embedded UI. Product/native gates remain incomplete; the existing CLI remains
+independently installable.
 
-v1.13.18 remains a public annotated-tag certification NONPASS with no GitHub
-Release. A18/M18 and the failed natural CI remain immutable; passing CodeQL,
-installations, and accepted Route A evidence retain their bounded scopes but
-are not the v1.13.19 certificate. v1.13.17 remains immutable at M17/A17 and Release
-`400460267`; v1.13.16 remains an immutable failed-publication predecessor.
+Active development is **2.0.0-dev.0**. The [v2.0 charter](docs/release/v2.0/README.md)
+records **action 2.04 ACTIVE** and **product gates INCOMPLETE**. The development
+CI badge refers specifically to `release/v2.0`; hosted status is separate from
+the bounded local evidence below.
 
-v1.13.15 remains the immutable final planned v1.x product baseline. Its
-annotated tag object `38b48ef60e1cd8cc9a6966bfaa1fda074fdf6f12` peels to
-`6a2417e8189631b018779c2fd24fc559ed761f3f`, and Release `378768097`, canonical
-body, checksum, and attestation remain immutable historical identities.
+| Work | Current scope and status |
+| --- | --- |
+| 2.01 | Baseline fixtures, compatibility ledger and product contracts complete. |
+| 2.02 | Internal delivery and selected Linux feasibility proof complete. |
+| 2.03 | Linux/manual PostgreSQL recovery profile complete. |
+| 2.04 | Active: identity adoption and bounded physical binding qualified locally; Phase 3B R1 accepted on 9 November 2026; Phase 3C outstanding. |
+| v2.0 product | Incomplete; later product, support and release gates remain open. |
 
-V2 planning review is authorized. V2 implementation has not started and
-requires a separate plan.
+The preserved development history is public on `release/v2.0` and
+[draft PR #129](https://github.com/franchoy/coldkeep/pull/129). The authorized
+bounded CI correction is described in the
+[development contract](docs/release/v2.0/development-visibility.md) and
+[measured follow-up result](docs/release/v2.0/ci-followup-result.md).
+Both complete codec package routes, dedicated recovery, fixed product oracle
+and integrated proof are locally qualified in that record. Hosted correction
+checks are PENDING until observed at the actual pushed head.
+Local phase completion does not establish a release-ready product or a green
+hosted suite; Phase 3C and product gates remain incomplete.
+The embedded daemon remains an internal proof and needs the
+[prepared-asset build](docs/release/v2.0/phase2-build.md).
 
-Current v1.13.19 lifecycle summary
+Active v2 development builds use exact Go **1.26.11** with `GOTOOLCHAIN=local`
+and the unchanged Go 1.25.0 language floor. The v1.13.19 installation instructions
+below retain their frozen Go 1.26.10 certification; they are not the active v2
+build profile. See the [v2 build instructions](docs/release/v2.0/phase2-build.md).
 
-    V1_13_15: PUBLISHED_STABLE_HISTORICAL_PRODUCT_BASELINE
-    V1_13_16: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-    V1_13_17: PUBLISHED_IMMUTABLE_TERMINAL_EFFECTIVE_QUALIFIED
-    V1_13_18: PUBLIC_TAG_FAILED_CERTIFICATION_NO_GITHUB_RELEASE
-    V1_13_19: PUBLISHED_STABLE_IMMUTABLE_LATEST
-    RELEASE_STATE: POST_RELEASE_CLOSED
-    CURRENT_PHASE: NONE_POST_RELEASE_CLOSED
-    FINDINGS_CONFIRMED: 15
-    FINDINGS_CLOSED: 15/15
-    CK_V11316_007: CLOSED
-    V1_X_TECHNICAL_CORRECTNESS: ESTABLISHED
-    V1_X_FULL_CLOSURE: COMPLETE_EFFECTIVE
-    V1_13_19_PUBLICATION: COMPLETE
-    V1_X: CLOSED_AND_FROZEN
-    V2_IMPLEMENTATION: NOT_STARTED
+Latest published stable remains **v1.13.19**, source-only, immutable at
+D19 `d3581602aee2599547564322fe083baae1d52063`, tag object
+`60b6878114f936b295c415605e8af31def2aba5a`, GitHub Release `431395975`.
+The [frozen closure](docs/release/v1.13/v1.13.19-post-publication-closure.md)
+retains its certification and predecessor qualifications. No v2 release or
+support qualification is claimed.
 
 ## Historical release-state narrative through v1.13.14
 

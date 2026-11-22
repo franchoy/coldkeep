@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/coordination"
+	"github.com/franchoy/coldkeep/v2/internal/coordination"
 )
 
 func TestRunCLIRestoreVerifyAndGCRuntimeWithinLease(t *testing.T) {

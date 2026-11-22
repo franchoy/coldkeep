@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/v2/internal/blocks"
 )
 
 // TestPhase3ReadPathV17CompatibilityPreserved validates that v1.7 restore paths remain unchanged.

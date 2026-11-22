@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/pathsafe"
+	"github.com/franchoy/coldkeep/v2/internal/pathsafe"
 )
 
 // pathResolverDB is the DB surface required by the path resolver helpers.

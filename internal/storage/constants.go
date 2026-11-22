@@ -3,7 +3,7 @@ package storage
 import (
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/utils_env"
+	"github.com/franchoy/coldkeep/v2/internal/utils_env"
 )
 
 var logicalFileWaitingtime = loadLogicalFileWaitingTime()

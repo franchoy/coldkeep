@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/v2/internal/storage"
 )
 
 type restoreRoutingOptions struct {

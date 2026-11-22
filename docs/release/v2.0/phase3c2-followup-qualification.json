@@ -1,0 +1,31 @@
+{
+  "schema": "coldkeep-phase3c2-local-qualification/v1",
+  "accepted_c1": "06bde38380dd3a42be5c180beb99bf1aa509b8ac",
+  "head": "1ef5aed5f581279ed5c11af4001209aeb04cded7",
+  "tree": "07db7a67f9d9aab93cb32173e9234b94892c8cb0",
+  "input_sha256": "cd2f43bfa520b4ea7ad2caab0a59f51f44a19c40793f2421025ea3c05a83b440",
+  "compiler": "go1.26.11",
+  "checks": {
+    "aes-gcm-packages": "PASS",
+    "build-vet-lint": "PASS",
+    "ci-audit-mutations": "PASS",
+    "current-oracle": "PASS",
+    "d19-oracle": "PASS",
+    "dependency-boundaries": "PASS",
+    "dto-consumer": "PASS",
+    "fixture-cleanup": "PASS",
+    "focused-race": "PASS",
+    "go-ci-enforcement": "PASS",
+    "index-continuity": "PASS",
+    "passive": "PASS",
+    "phase2-integrated": "PASS",
+    "plain-packages": "PASS",
+    "provenance-regressions": "PASS",
+    "python": "PASS",
+    "query-work": "PASS",
+    "reachable-vulnerability": "PASS",
+    "real-staged-admission": "PASS",
+    "recovery": "PASS",
+    "source-reuse-accounting": "PASS"
+  }
+}
